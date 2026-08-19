@@ -19,7 +19,7 @@ pub fn default_tool_name(ident: &Ident) -> String {
         .unwrap_or(name)
 }
 
-pub fn default_command_id(ident: &Ident) -> String {
+pub fn default_operation_id(ident: &Ident) -> String {
     let name = ident_to_snake_case(ident);
     ["command_", "cmd_", "invoke_", "dispatch_", "handle_"]
         .into_iter()
@@ -27,7 +27,7 @@ pub fn default_command_id(ident: &Ident) -> String {
         .unwrap_or(name)
 }
 
-pub fn command_title_from_id(id: &str) -> String {
+pub fn operation_title_from_id(id: &str) -> String {
     id.split(['.', '_', '-'])
         .filter(|part| !part.is_empty())
         .map(|part| {

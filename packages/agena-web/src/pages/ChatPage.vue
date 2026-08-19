@@ -25,7 +25,7 @@ import { useChatScrollNav } from './chat/useChatScrollNav'
 import { useChatComposerLayout } from './chat/useChatComposerLayout'
 import { useChatModelSelection } from './chat/useChatModelSelection'
 import { useChatCommands, matchSlashCommand } from './chat/useChatCommands'
-import type { BuiltInCommand, Command, PluginCommand } from './chat/useChatCommands'
+import type { BuiltInCommand, Command } from './chat/useChatCommands'
 import { useChatSessionActions } from './chat/useChatSessionActions'
 import { useChatRunUi } from './chat/useChatRunUi'
 import { useChatTranscriptVim } from './chat/useChatTranscriptVim'
@@ -51,6 +51,7 @@ import type { OptionMenuGroup, OptionMenuItem } from '@/components/ui/optionMenu
 import type { TranscriptDisplayPart } from '@/components/chat/messageList.types'
 import type { MessageEntry, MessageFold } from '@/types/chat'
 import type { JsonObject, JsonValue } from '@/types/json'
+import type { PluginOperationResult } from '@/lib/pluginOperations'
 import {
   DEFAULT_CHAT_ACTIVITY_EXPANDED_TOOL_FILTERS,
   chatActivityKindIdForTranscriptPart,
@@ -1411,7 +1412,7 @@ async function refreshPlanProgress() {
     return
   }
   try {
-    const response = await apiJson<JsonValue>('/api/v1/plugins/ui/invoke-tool', {
+    const response = await apiJson<JsonValue>('/api/v1/plugins/tools/invoke', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -1731,7 +1732,7 @@ async function submitPromptFromCommand(prompt: string) {
 }
 
 async function runReviewCommand(sid: string, focus: string) {
-  const response = await apiJson<JsonValue>('/api/v1/plugins/ui/invoke-tool', {
+  const response = await apiJson<JsonValue>('/api/v1/plugins/tools/invoke', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
@@ -1979,36 +1980,60 @@ async function executeBuiltInCommand(command: BuiltInCommand, rawArgs = ''): Pro
   }
 }
 
+function showPluginOperationFeedback(result: PluginOperationResult) {
+  const message = [result.title, result.summary].filter((value) => String(value || '').trim()).join(': ')
+  if (result.status === 'succeeded') {
+    toasts.push('success', message || 'Plugin operation completed')
+  } else if (result.status === 'failed') {
+    toasts.push('error', result.detail?.trim() || message || 'Plugin operation failed')
+  } else {
+    toasts.push('info', result.detail?.trim() || message || `Plugin operation ${result.status}`)
+  }
+  for (const diagnostic of result.diagnostics || []) {
+    const path = diagnostic.path ? `${diagnostic.path}: ` : ''
+    const detail = `${path}${diagnostic.message}`.trim()
+    if (detail) toasts.push(result.status === 'failed' ? 'error' : 'info', detail)
+  }
+}
+
+async function applyPluginOperationResult(
+  result: PluginOperationResult,
+  promptMode: 'submit' | 'return',
+): Promise<string | null> {
+  showPluginOperationFeedback(result)
+  let returnedPrompt: string | null = null
+  for (const effect of result.effects || []) {
+    if (effect.kind === 'insert_prompt') {
+      const prompt = effect.prompt.trim()
+      if (!prompt) continue
+      if (promptMode === 'return') returnedPrompt = prompt
+      else await submitPromptFromCommand(prompt)
+      continue
+    }
+    if (effect.kind === 'navigate') {
+      if (!effect.path.startsWith('/')) throw new Error('Plugin navigation must use an application-relative path.')
+      await router.push(effect.path)
+      continue
+    }
+    if (effect.kind === 'open_url') {
+      const url = new URL(effect.url, window.location.href)
+      if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+        throw new Error('Plugin URLs must use HTTP or HTTPS.')
+      }
+      window.open(url.toString(), '_blank', 'noopener,noreferrer')
+    }
+  }
+  return returnedPrompt
+}
+
 async function handleCommandSelected(command: Command) {
   try {
     if (command.kind === 'builtin') {
       await executeBuiltInCommand(command)
       return
     }
-    const sid = commandSessionId()
-    if (!sid) throw new Error('Open a session before running plugin commands.')
-    const effect = await chatCommands.runPluginSlashCommand(`/${command.name}`, sid)
-    if (!effect || effect.kind === 'none') return
-    if (effect.kind === 'submit_prompt') {
-      await submitPromptFromCommand(effect.prompt)
-      return
-    }
-    if (effect.kind === 'message') {
-      if (effect.text.trim()) toasts.push('info', effect.text.trim())
-      return
-    }
-    if (effect.kind === 'open_plugin_workbench') {
-      await router.push({
-        path: '/settings/plugins',
-        query: { ...route.query, plugin: effect.pluginId, ...(effect.tab ? { pluginTab: effect.tab } : {}) },
-      })
-      return
-    }
-    if (effect.kind === 'open_url') {
-      const url = new URL(effect.url, window.location.href)
-      if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error('Plugin URLs must use HTTP or HTTPS.')
-      window.open(url.toString(), '_blank', 'noopener,noreferrer')
-    }
+    const result = await chatCommands.runPluginSlashOperation(`/${command.name}`, commandSessionId() || '')
+    if (result) await applyPluginOperationResult(result, 'submit')
   } catch (err) {
     toasts.push('error', err instanceof Error ? err.message : String(err))
   }
@@ -2032,36 +2057,14 @@ async function send() {
         await executeBuiltInCommand(matchedCommand.command, matchedCommand.args)
         return
       }
-      if (!sid) return
-      const effect = await chatCommands.runPluginSlashCommand(text, sid)
-      if (effect) {
-        if (effect.kind === 'submit_prompt') {
-          text = effect.prompt.trim()
-          if (!text) {
-            draft.value = ''
-            return
-          }
+      const result = await chatCommands.runPluginSlashOperation(text, sid || '')
+      if (result) {
+        const prompt = await applyPluginOperationResult(result, 'return')
+        if (prompt) {
+          text = prompt
         } else {
           draft.value = ''
           closeCommandPalette()
-          if (effect.kind === 'message' && effect.text.trim()) {
-            toasts.push('info', effect.text.trim())
-          } else if (effect.kind === 'open_plugin_workbench') {
-            await router.push({
-              path: '/settings/plugins',
-              query: {
-                ...route.query,
-                plugin: effect.pluginId,
-                ...(effect.tab ? { pluginTab: effect.tab } : {}),
-              },
-            })
-          } else if (effect.kind === 'open_url') {
-            const url = new URL(effect.url, window.location.href)
-            if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-              throw new Error('Plugin URLs must use HTTP or HTTPS.')
-            }
-            window.open(url.toString(), '_blank', 'noopener,noreferrer')
-          }
           return
         }
       }

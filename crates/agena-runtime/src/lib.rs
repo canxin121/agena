@@ -217,7 +217,7 @@ pub use agena_runtime_session::{
     SessionExecutionCommandError, SessionExecutionCommandOutcome, SessionExecutionCommandService,
 };
 pub use agena_runtime_session::{
-    SessionPluginCommandError, SessionPluginCommandRequest, SessionPluginCommandService,
+    SessionPluginOperationError, SessionPluginOperationRequest, SessionPluginOperationService,
 };
 pub use agena_runtime_session::{
     SessionToolExecutionError, SessionToolExecutionOutcome, SessionToolExecutionService,

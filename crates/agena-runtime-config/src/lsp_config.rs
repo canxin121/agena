@@ -25,6 +25,7 @@ pub struct LspServerDefaultsConfig {
     #[serde(default)]
     pub root_markers: Vec<String>,
     #[serde(default)]
+    #[schemars(schema_with = "agena_plugin_host::sdk::bounded_json_schema")]
     pub initialization_options: Option<serde_json::Value>,
 }
 
@@ -63,6 +64,7 @@ pub struct LspServerRoutingConfig {
 /// Per-session settings of an LSP server.
 pub struct LspServerSessionConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(schema_with = "agena_plugin_host::sdk::bounded_json_schema")]
     pub initialization_options: Option<serde_json::Value>,
 }
 
@@ -74,7 +76,7 @@ pub fn lsp_config_from_plugins(plugins: &PluginsConfig) -> Result<LspConfig, Str
         return Ok(LspConfig::default());
     }
     serde_json::from_value(configured_plugin.config().clone())
-        .map_err(|error| format!("plugins.list.\"{LSP_PLUGIN_ID}\".config: {error}"))
+        .map_err(|error| format!("plugins.list.\"{LSP_PLUGIN_ID}\".settings: {error}"))
 }
 
 #[cfg(test)]

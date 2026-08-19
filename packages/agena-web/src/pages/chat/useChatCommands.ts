@@ -8,60 +8,43 @@ import {
   findBuiltInCommand,
   normalizeCommandPaletteQuery,
   parseSlashInvocation,
-  schemaNeedsPluginInput,
   shouldResetCommandPaletteSelection,
   type BuiltInCommandSpec,
 } from './chatCommandsCatalog'
 import {
-  executePluginSlashCommand,
-  type PluginCommandEffect,
-  type PluginSlashCommand,
-  type PluginUiAction,
-} from '@/lib/pluginUiCommands'
+  executePluginSlashOperation,
+  type PluginOperationCatalogItem,
+  type PluginOperationResult,
+} from '@/lib/pluginOperations'
 
 export type BuiltInCommand = BuiltInCommandSpec & {
   description: string
 }
 
-export type PluginCommand = {
+export type PluginOperation = {
   kind: 'plugin'
   name: string
   description?: string
   scope?: string
   aliases: string[]
   pluginId: string
-  commandId: string
+  operationId: string
   slash: string
-  inputSchema?: unknown
-  action: PluginUiAction
+  acceptsEmptyInput: boolean
+  operation: PluginOperationCatalogItem
   requiresArguments: boolean
   arguments: string
 }
 
-export type Command = BuiltInCommand | PluginCommand
+export type Command = BuiltInCommand | PluginOperation
 
 type ComposerExpose = {
   textareaEl?: HTMLTextAreaElement | { value: HTMLTextAreaElement | null } | null
 }
 
-type PluginCatalogCommand = {
-  plugin_id?: string
-  id?: string
-  title?: string
-  description?: string
-  category?: string
-  slash?: string | null
-  aliases?: string[]
-  input_schema?: unknown
-  handler?: string | null
-  action?: PluginUiAction
-}
-
-type PluginUiCatalog = {
+type PluginSurfaceCatalog = {
   catalog?: {
-    studio?: {
-      commands?: PluginCatalogCommand[]
-    }
+    operations?: PluginOperationCatalogItem[]
   }
 }
 
@@ -104,9 +87,9 @@ export function matchSlashCommand(commands: Command[], raw: string): { command: 
 export function matchPluginSlashCommand(
   commands: Command[],
   raw: string,
-): { command: PluginCommand; args: string } | null {
+): { command: PluginOperation; args: string } | null {
   const matched = matchSlashCommand(commands, raw)
-  return matched?.command.kind === 'plugin' ? (matched as { command: PluginCommand; args: string }) : null
+  return matched?.command.kind === 'plugin' ? (matched as { command: PluginOperation; args: string }) : null
 }
 
 export function commandNeedsArguments(command: Command): boolean {
@@ -155,42 +138,36 @@ export function useChatCommands(opts: {
     if (commands.value.length === 0) void loadCommands()
   }
 
-  function pluginCommandFromCatalog(command: PluginCatalogCommand): PluginCommand | null {
-    const pluginId = text(command.plugin_id)
-    const commandId = text(command.id)
-    const slash = text(command.slash)
+  function pluginOperationFromCatalog(operation: PluginOperationCatalogItem): PluginOperation | null {
+    const pluginId = text(operation.plugin_id)
+    const operationId = text(operation.id)
+    const slash = text(operation.slash)
     const name = slash.replace(/^\/+/, '').toLowerCase()
-    // Match the TUI's slash-name projection: commands without a slash name,
-    // or with whitespace inside that name, are not invocable palette entries.
-    if (!pluginId || !commandId || !name || /\s/.test(name)) return null
-    const declaredAction = command.action || { kind: 'none' }
-    const action =
-      declaredAction.kind === 'none' && text(command.handler)
-        ? ({ kind: 'invoke_command', command: commandId } satisfies PluginUiAction)
-        : declaredAction
+    if (
+      !pluginId ||
+      !operationId ||
+      !name ||
+      /\s/.test(name) ||
+      operation.discoverability?.slash === false
+    ) {
+      return null
+    }
+    const requiresArguments = operation.accepts_empty_input !== true
     return {
       kind: 'plugin',
       name,
-      description: text(command.description) || text(command.title),
-      aliases: Array.isArray(command.aliases)
-        ? command.aliases.map((alias) => text(alias).replace(/^\/+/, '').toLowerCase()).filter(Boolean)
+      description: text(operation.description) || text(operation.title),
+      aliases: Array.isArray(operation.aliases)
+        ? operation.aliases.map((alias) => text(alias).replace(/^\/+/, '').toLowerCase()).filter(Boolean)
         : [],
-      scope: text(command.category) || 'plugin',
+      scope: text(operation.category) || text(operation.group) || 'plugin',
       pluginId,
-      commandId,
+      operationId,
       slash,
-      inputSchema: command.input_schema,
-      action,
-      requiresArguments:
-        action.kind === 'open_plugin_workbench' || action.kind === 'open_url' || action.kind === 'submit_prompt'
-          ? false
-          : schemaNeedsPluginInput(command.input_schema),
-      arguments:
-        action.kind === 'open_plugin_workbench' || action.kind === 'open_url' || action.kind === 'submit_prompt'
-          ? ''
-          : schemaNeedsPluginInput(command.input_schema)
-            ? '<args>'
-            : '',
+      acceptsEmptyInput: !requiresArguments,
+      operation,
+      requiresArguments,
+      arguments: requiresArguments ? '<args>' : '',
     }
   }
 
@@ -202,9 +179,9 @@ export function useChatCommands(opts: {
       const builtIns = builtInCommands.value
       const next = new Map<string, Command>(builtIns.map((command) => [command.name, command]))
       try {
-        const pluginCatalog = await apiJson<PluginUiCatalog>('/api/v1/plugins/ui')
-        for (const rawCommand of pluginCatalog?.catalog?.studio?.commands || []) {
-          const command = pluginCommandFromCatalog(rawCommand)
+        const pluginCatalog = await apiJson<PluginSurfaceCatalog>('/api/v1/plugins/surface')
+        for (const rawOperation of pluginCatalog?.catalog?.operations || []) {
+          const command = pluginOperationFromCatalog(rawOperation)
           if (!command) continue
           // TUI gives a built-in command precedence over a plugin primary
           // name. Apply the same rule to aliases so the two clients never
@@ -371,33 +348,14 @@ export function useChatCommands(opts: {
     }
   }
 
-  async function runPluginSlashCommand(raw: string, sessionId: string): Promise<PluginCommandEffect | null> {
+  async function runPluginSlashOperation(raw: string, sessionId: string): Promise<PluginOperationResult | null> {
     if (commands.value.length === 0) await loadCommands()
     const matched = matchPluginSlashCommand(commands.value, raw)
     if (!matched) return null
     const numericSessionId = Number(sessionId)
-    if (!Number.isSafeInteger(numericSessionId) || numericSessionId <= 0) {
-      throw new Error('Open a session before running plugin commands.')
-    }
-    const catalog: PluginSlashCommand[] = commands.value
-      .filter((command): command is PluginCommand => command.kind === 'plugin')
-      .map((command) => ({
-        pluginId: command.pluginId,
-        id: command.commandId,
-        slash: command.slash,
-        inputSchema: command.inputSchema,
-        action: command.action,
-      }))
-    return await executePluginSlashCommand({
-      command: {
-        pluginId: matched.command.pluginId,
-        id: matched.command.commandId,
-        slash: matched.command.slash,
-        inputSchema: matched.command.inputSchema,
-        action: matched.command.action,
-      },
-      catalog,
-      sessionId: numericSessionId,
+    return await executePluginSlashOperation({
+      operation: matched.command.operation,
+      sessionId: Number.isSafeInteger(numericSessionId) && numericSessionId > 0 ? numericSessionId : null,
       rawArgs: matched.args,
     })
   }
@@ -423,7 +381,7 @@ export function useChatCommands(opts: {
     handleCommandPaletteKeydown,
     moveCommandSelection,
     selectCommand,
-    runPluginSlashCommand,
+    runPluginSlashOperation,
     commandIcon,
   }
 }

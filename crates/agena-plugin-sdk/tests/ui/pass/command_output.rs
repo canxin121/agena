@@ -1,44 +1,38 @@
 use agena_plugin_sdk::prelude::*;
 
 #[derive(Default)]
-struct CommandOutputPlugin;
+struct OutputPlugin;
 
 #[agena_plugin(
     namespace = "test",
-    name = "command-output",
+    name = "operation-output",
     version = "0.0.0",
-    summary = "Command output macro test plugin."
+    summary = "Operation output compile-pass fixture."
 )]
-impl CommandOutputPlugin {
-    #[tool(summary = "Plain string tool.", read_only)]
-    fn raw_echo(&self, text: String) -> String {
-        text
+impl OutputPlugin {
+    #[operation(id = "test.inline", title = "Inline")]
+    fn inline(&self) -> String {
+        "inline".to_string()
     }
 
-    #[command(id = "test.inline", title = "Inline")]
-    fn inline(&self, #[arg(trim, non_empty)] name: String) -> String {
-        name
+    #[operation(id = "test.effect", title = "Effect")]
+    fn effect(&self) -> PluginOperationResult {
+        PluginOperationResult::succeeded("effect").with_effect(PluginHostEffect::InsertPrompt {
+            prompt: "continue".to_string(),
+        })
     }
 
-    #[command(id = "test.chain", title = "Chain")]
-    fn chain(&self) -> PluginCommandOutput {
-        PluginCommandOutput::invoke_command(
-            "test.inline",
-            Some(agena_plugin_sdk::serde_json::json!({ "name": "Ada" })),
-        )
+    #[operation(id = "test.maybe_prompt", title = "Maybe Prompt")]
+    fn maybe_prompt(&self, #[arg(default)] enabled: bool) -> Option<PluginOperationResult> {
+        enabled.then(|| {
+            PluginOperationResult::succeeded("prompt").with_effect(PluginHostEffect::InsertPrompt {
+                prompt: "hello prompt".to_string(),
+            })
+        })
     }
 
-    #[command(id = "test.maybe_prompt", title = "Maybe Prompt")]
-    fn maybe_prompt(&self, #[arg(default)] enabled: bool) -> Option<PluginCommandOutput> {
-        if enabled {
-            Some(PluginCommandOutput::submit_prompt("hello prompt"))
-        } else {
-            None
-        }
-    }
-
-    #[command(id = "test.flag", title = "Flag")]
-    fn flag(&self, enabled: bool) -> String {
+    #[operation(id = "test.flag", title = "Flag")]
+    fn flag(&self, #[arg(default)] enabled: bool) -> String {
         enabled.to_string()
     }
 }

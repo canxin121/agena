@@ -13,15 +13,27 @@ use agena_plugin_host::{ConfigInput, ConfiguredPlugin, PluginHost, PluginsConfig
 pub fn merge_bundled_plugin_config(
     configured: PluginsConfig,
     bundled: BTreeMap<String, ConfiguredPlugin>,
-) -> PluginsConfig {
+) -> Result<PluginsConfig, String> {
     let PluginsConfig {
         host,
         policy,
         list: configured_list,
+        profiles,
+        active_profiles,
+        profile_resolution,
     } = configured;
     let mut list = bundled;
     list.extend(configured_list);
-    PluginsConfig { host, policy, list }
+    let mut resolved = PluginsConfig {
+        host,
+        policy,
+        list,
+        profiles,
+        active_profiles,
+        profile_resolution,
+    };
+    resolved.resolve_profiles_in_place()?;
+    Ok(resolved)
 }
 
 /// Notify non-empty plugin hosts of a resolved configuration value.
@@ -54,11 +66,67 @@ mod tests {
             ConfiguredPlugin::static_config(serde_json::json!({"origin": "user"})),
         );
 
-        let merged = merge_bundled_plugin_config(configured, bundled);
+        let merged =
+            merge_bundled_plugin_config(configured, bundled).expect("merge bundled plugin config");
 
         assert_eq!(
             merged.list["example"].config(),
             &serde_json::json!({"origin": "user"})
         );
+    }
+
+    #[test]
+    fn active_profiles_apply_after_bundled_and_user_entries() {
+        use agena_plugin_host::{PluginProfile, PluginProfileEntry};
+
+        let bundled = BTreeMap::from([(
+            "example.plugin".to_owned(),
+            ConfiguredPlugin::static_config(serde_json::json!({
+                "origin": "bundled",
+                "nested": {"keep": true}
+            })),
+        )]);
+        let mut configured = PluginsConfig::default();
+        configured.list.insert(
+            "example.plugin".to_owned(),
+            ConfiguredPlugin::static_config(serde_json::json!({
+                "origin": "user",
+                "nested": {"user": true}
+            })),
+        );
+        configured.profiles.insert(
+            "coding".to_owned(),
+            PluginProfile {
+                plugins: BTreeMap::from([(
+                    "example.plugin".to_owned(),
+                    PluginProfileEntry::Patch {
+                        enabled: None,
+                        package: None,
+                        config_patch: Some(serde_json::json!({
+                            "origin": "profile",
+                            "nested": {"profile": true}
+                        })),
+                        timeouts: None,
+                        activation: None,
+                    },
+                )]),
+                ..PluginProfile::default()
+            },
+        );
+        configured.active_profiles = vec!["coding".to_owned()];
+
+        let merged = merge_bundled_plugin_config(configured, bundled)
+            .expect("resolve profiles over bundled config");
+
+        assert_eq!(
+            merged.list["example.plugin"].config(),
+            &serde_json::json!({
+                "origin": "profile",
+                "nested": {"user": true, "profile": true}
+            })
+        );
+        assert_eq!(merged.profile_resolution.applied_profiles, ["coding"]);
+        assert!(merged.profiles.is_empty());
+        assert!(merged.active_profiles.is_empty());
     }
 }

@@ -521,7 +521,7 @@ async function load() {
       apiJson<SettingsResponse>('/api/v1/settings?source=effective&path=permission'),
       apiJson<SettingsResponse>('/api/v1/settings/layers/global?path=permission'),
       apiJson<SettingsResponse>('/api/v1/settings/layers/workspace?path=permission'),
-      apiJson<ToolCatalogResponse>('/api/v1/plugins/ui'),
+      apiJson<ToolCatalogResponse>('/api/v1/plugins/surface'),
     ])
     globalConfig.value = asConfig(global?.value)
     workspaceConfig.value = asConfig(workspace?.value)

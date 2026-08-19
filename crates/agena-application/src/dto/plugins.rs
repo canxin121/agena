@@ -4,10 +4,14 @@ pub struct PluginInspectResponse {
     pub plugin: agena_plugin_host::PluginInspect,
 }
 
+fn empty_object() -> serde_json::Value {
+    serde_json::json!({})
+}
+
 #[derive(Debug, Clone, Serialize)]
-/// Plugin UI catalog with the tool registry generation it reflects.
-pub struct PluginUiCatalogResponse {
-    pub catalog: agena_plugin_host::PluginUiCatalog,
+/// Neutral plugin surface with the tool registry generation it reflects.
+pub struct PluginSurfaceCatalogResponse {
+    pub catalog: agena_plugin_host::PluginSurfaceCatalog,
     /// Registered tools available to permission-policy editors.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub permission_tools: Vec<PermissionToolCatalogResource>,
@@ -33,10 +37,10 @@ pub struct PermissionToolCatalogResource {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-/// Context of a plugin UI request.
-pub struct PluginUiRequestContext {
-    #[serde(default)]
-    pub input: Option<serde_json::Value>,
+/// Context of a user-driven plugin operation/tool request.
+pub struct PluginOperationRequestContext {
+    #[serde(default = "empty_object")]
+    pub input: serde_json::Value,
     #[serde(default)]
     pub session_id: Option<i64>,
     /// Slash spelling and raw argument text are presentation context exposed
@@ -48,13 +52,45 @@ pub struct PluginUiRequestContext {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-/// Request to invoke a tool from plugin UI.
-pub struct PluginUiInvokeToolRequest {
+/// Request to invoke a registered plugin tool explicitly.
+pub struct PluginToolInvokeRequest {
     pub tool: String,
     #[serde(default)]
     pub plugin_id: Option<String>,
     #[serde(flatten)]
-    pub context: PluginUiRequestContext,
+    pub context: PluginOperationRequestContext,
+}
+
+#[derive(Debug, Clone, Serialize)]
+/// Complete settings state rendered by every plugin workbench client.
+pub struct PluginSettingsResponse {
+    pub plugin_id: String,
+    pub contract: agena_plugin_host::sdk::SettingsContract,
+    pub defaults: serde_json::Value,
+    pub configured: serde_json::Value,
+    pub effective: serde_json::Value,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub diagnostics: Vec<PluginSettingsDiagnostic>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+/// One safe, field-addressed settings diagnostic.
+pub struct PluginSettingsDiagnostic {
+    pub path: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+/// Replace the complete plugin-owned configuration value.
+pub struct PluginSettingsUpdateRequest {
+    pub value: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize)]
+/// Persisted settings and Runtime reload outcome.
+pub struct PluginSettingsUpdateResponse {
+    pub settings: PluginSettingsResponse,
+    pub reload_required: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]

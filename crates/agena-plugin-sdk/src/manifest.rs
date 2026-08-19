@@ -13,8 +13,25 @@ pub use agena_domain::{
     ActivityKind, InputNetworkSpec, InputPathSpec, NetworkAccessSpec, PathAccessSpec, PathKind,
     ToolPermissionContract,
 };
+pub use agena_plugin_contracts::{
+    MAX_JSON_ESCAPE_BYTES, MAX_JSON_ESCAPE_DEPTH, OperationDiscoverability, PathInputKind,
+    PluginHostEffect, PluginOperationDefinition, PluginOperationDiagnostic,
+    PluginOperationInvokeInput, PluginOperationResult, PluginOperationStatus,
+    PluginOperationTarget, PluginServiceDeclarations, PluginServiceExport, PluginServiceImport,
+    PluginServiceInvokeInput, PluginServiceInvokeOutput, PluginServiceMethod, SettingsConstraints,
+    SettingsContract, SettingsNode, SettingsNodeKind, SettingsOption, SettingsVariant,
+};
+
+/// Explicit marker for plugins that intentionally expose an empty editable
+/// settings object. This is different from omitting `settings = ...`: hosts
+/// can render a real (empty) contract and validation still rejects unknown
+/// keys instead of treating configuration as open-ended JSON.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct EmptyPluginSettings {}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 /// Declared manifest of a plugin.
 pub struct PluginManifest {
     pub schema_version: u32,
@@ -36,7 +53,11 @@ pub struct PluginManifest {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tools: Vec<ToolDefinition>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub commands: Vec<PluginCommandDefinition>,
+    pub operations: Vec<PluginOperationDefinition>,
+    /// Declared service seams. The host resolves imports before initialization
+    /// and is the only component allowed to bind a consumer to a provider.
+    #[serde(default, skip_serializing_if = "PluginServiceDeclarations::is_empty")]
+    pub services: PluginServiceDeclarations,
     /// Activity kinds contributed by this plugin. Hosts merge these into the
     /// built-in catalog so new kinds appear in transcript expansion settings
     /// automatically while the plugin is loaded.
@@ -52,17 +73,13 @@ pub struct PluginManifest {
     /// activation, and allowed-tool policies before injecting instructions.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub skills: Vec<PluginSkillDefinition>,
-    /// UI contributions owned by this plugin. TUI-facing content and Studio
-    /// Web-facing views/controls are intentionally split so each host can
-    /// consume only the view it can render.
-    #[serde(default, skip_serializing_if = "PluginUiContributions::is_empty")]
-    pub ui: PluginUiContributions,
+    /// Neutral plugin surface contributions. Operations are kept in the
+    /// manifest's `operations` collection; this field is terminal-only
+    /// presentation and never defines configuration or executable behavior.
+    #[serde(default, skip_serializing_if = "PluginSurfaceContributions::is_empty")]
+    pub surface: PluginSurfaceContributions,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub config_schema: Option<serde_json::Value>,
-    /// Optional localized schema overlays keyed by locale, for hosts that
-    /// render generic JSON Schema config editors.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub config_schema_i18n: BTreeMap<String, serde_json::Value>,
+    pub settings: Option<SettingsContract>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -525,49 +542,34 @@ pub enum ToolResultRenderKind {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
-/// UI contributions declared by a plugin.
-pub struct PluginUiContributions {
+#[serde(deny_unknown_fields)]
+/// Terminal-only presentation contributions declared by a plugin.
+pub struct PluginSurfaceContributions {
     /// Declarative display contributions (Phase 6): pure content plus a kind,
     /// no location/color. The host decides placement and priority.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub display: Vec<PluginDisplayContribution>,
-    #[serde(default, skip_serializing_if = "PluginTuiUiContributions::is_empty")]
-    pub tui: PluginTuiUiContributions,
-    #[serde(default, skip_serializing_if = "PluginStudioUiContributions::is_empty")]
-    pub studio: PluginStudioUiContributions,
+    #[serde(default, skip_serializing_if = "PluginTerminalContributions::is_empty")]
+    pub terminal: PluginTerminalContributions,
 }
 
-impl PluginUiContributions {
+impl PluginSurfaceContributions {
     pub fn is_empty(&self) -> bool {
-        self.display.is_empty() && self.tui.is_empty() && self.studio.is_empty()
+        self.display.is_empty() && self.terminal.is_empty()
     }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
-/// TUI UI contributions of a plugin.
-pub struct PluginTuiUiContributions {
+#[serde(deny_unknown_fields)]
+/// Terminal-only presentation contributions of a plugin.
+pub struct PluginTerminalContributions {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub themes: Vec<PluginUiThemePalette>,
+    pub themes: Vec<PluginTerminalThemePalette>,
 }
 
-impl PluginTuiUiContributions {
+impl PluginTerminalContributions {
     pub fn is_empty(&self) -> bool {
         self.themes.is_empty()
-    }
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
-/// Studio UI contributions of a plugin.
-pub struct PluginStudioUiContributions {
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub controls: Vec<PluginStudioControl>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub views: Vec<PluginStudioView>,
-}
-
-impl PluginStudioUiContributions {
-    pub fn is_empty(&self) -> bool {
-        self.controls.is_empty() && self.views.is_empty()
     }
 }
 
@@ -606,19 +608,19 @@ pub enum PluginDisplayContent {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 /// A plugin theme palette.
-pub struct PluginUiThemePalette {
+pub struct PluginTerminalThemePalette {
     pub id: String,
     pub display_name: String,
     #[serde(default)]
-    pub colors: PluginTuiThemeColors,
+    pub colors: PluginTerminalThemeColors,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(transparent)]
 /// A TUI color value.
-pub struct PluginTuiColor(String);
+pub struct PluginTerminalColor(String);
 
-impl PluginTuiColor {
+impl PluginTerminalColor {
     pub fn new(value: impl Into<String>) -> Result<Self, String> {
         let value = value.into();
         if is_tui_color(&value) {
@@ -633,7 +635,7 @@ impl PluginTuiColor {
     }
 }
 
-impl std::str::FromStr for PluginTuiColor {
+impl std::str::FromStr for PluginTerminalColor {
     type Err = String;
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
@@ -641,7 +643,7 @@ impl std::str::FromStr for PluginTuiColor {
     }
 }
 
-impl<'de> Deserialize<'de> for PluginTuiColor {
+impl<'de> Deserialize<'de> for PluginTerminalColor {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
@@ -679,187 +681,32 @@ fn is_tui_color(value: &str) -> bool {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
 /// Colors of a plugin TUI theme.
-pub struct PluginTuiThemeColors {
+pub struct PluginTerminalThemeColors {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub muted: Option<PluginTuiColor>,
+    pub muted: Option<PluginTerminalColor>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub accent: Option<PluginTuiColor>,
+    pub accent: Option<PluginTerminalColor>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub info: Option<PluginTuiColor>,
+    pub info: Option<PluginTerminalColor>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub success: Option<PluginTuiColor>,
+    pub success: Option<PluginTerminalColor>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub warning: Option<PluginTuiColor>,
+    pub warning: Option<PluginTerminalColor>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub danger: Option<PluginTuiColor>,
+    pub danger: Option<PluginTerminalColor>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub special: Option<PluginTuiColor>,
+    pub special: Option<PluginTerminalColor>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub selection_fg: Option<PluginTuiColor>,
+    pub selection_fg: Option<PluginTerminalColor>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub selection_bg: Option<PluginTuiColor>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-/// Definition of a plugin command.
-pub struct PluginCommandDefinition {
-    pub id: String,
-    pub title: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub description: String,
-    #[serde(default = "default_studio_category")]
-    pub category: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub slash: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub aliases: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub usage: Option<String>,
-    #[serde(default = "default_studio_command_location")]
-    pub location: String,
-    /// Optional JSON schema for command arguments accepted by the plugin
-    /// command handler.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub input_schema: Option<serde_json::Value>,
-    /// Plugin method-backed commands set this to the command id. Hosts can use
-    /// it to route UI/slash invocations back through `command/invoke`.
-    ///
-    /// A command is an explicit control/UI route and has no independent tool
-    /// permission identity. Protected effects must be delegated to a
-    /// registered tool or a permission-enforcing Host API.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub handler: Option<String>,
-    #[serde(default)]
-    pub action: PluginUiAction,
-}
-
-/// A plugin studio command (alias of [`PluginCommandDefinition`]).
-pub type PluginStudioCommand = PluginCommandDefinition;
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-/// A plugin studio control.
-pub struct PluginStudioControl {
-    pub id: String,
-    pub title: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub description: String,
-    #[serde(default = "default_studio_control_location")]
-    pub location: String,
-    #[serde(default = "default_studio_control_kind")]
-    pub kind: String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub options: Vec<PluginStudioControlOption>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub value: Option<serde_json::Value>,
-    #[serde(default)]
-    pub action: PluginUiAction,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-/// An option of a plugin studio control.
-pub struct PluginStudioControlOption {
-    pub label: String,
-    pub value: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub description: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-/// A plugin studio view.
-pub struct PluginStudioView {
-    pub id: String,
-    pub title: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub description: String,
-    #[serde(default = "default_studio_view_location")]
-    pub location: String,
-    #[serde(default = "default_studio_view_kind")]
-    pub kind: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub content: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub url: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub controls: Vec<PluginStudioControl>,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-/// Action triggered by a plugin UI element.
-pub enum PluginUiAction {
-    #[default]
-    None,
-    InvokeTool {
-        /// A tool owned by the same plugin. Hosts must execute this through
-        /// the normal tool authorization path.
-        tool: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        input: Option<serde_json::Value>,
-        #[serde(default)]
-        submit_output_as_prompt: bool,
-    },
-    OpenPluginWorkbench {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        tab: Option<String>,
-    },
-    OpenUrl {
-        url: String,
-    },
-    SubmitPrompt {
-        prompt: String,
-    },
-    InvokeCommand {
-        command: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        input: Option<serde_json::Value>,
-    },
-}
-
-pub const PLUGIN_WORKBENCH_TAB_IDS: [&str; 6] = [
-    "config",
-    "tools",
-    "commands",
-    "capabilities",
-    "logs",
-    "diagnostics",
-];
-
-pub fn plugin_workbench_tab_id_is_supported(value: &str) -> bool {
-    let value = value.trim();
-    PLUGIN_WORKBENCH_TAB_IDS
-        .iter()
-        .any(|candidate| candidate.eq_ignore_ascii_case(value))
-}
-
-fn default_studio_category() -> String {
-    "Plugin".to_string()
-}
-
-fn default_studio_command_location() -> String {
-    "command_palette".to_string()
-}
-
-fn default_studio_control_location() -> String {
-    "plugin_panel".to_string()
-}
-
-fn default_studio_control_kind() -> String {
-    "button".to_string()
-}
-
-fn default_studio_view_location() -> String {
-    "plugins".to_string()
-}
-
-fn default_studio_view_kind() -> String {
-    "markdown".to_string()
+    pub selection_bg: Option<PluginTerminalColor>,
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        ContributionKind, PluginDisplayContent, PluginDisplayContribution, PluginTuiColor,
-        PluginTuiThemeColors, PluginUiContributions,
+        ContributionKind, PluginDisplayContent, PluginDisplayContribution,
+        PluginSurfaceContributions, PluginTerminalColor, PluginTerminalThemeColors,
     };
     use crate::manifest_support::normalize_schema_json;
     use serde_json::json;
@@ -885,7 +732,7 @@ mod tests {
 
     #[test]
     fn ui_contributions_accept_declarative_display_channel() {
-        let manifest_ui = PluginUiContributions {
+        let manifest_ui = PluginSurfaceContributions {
             display: vec![PluginDisplayContribution {
                 id: "terminal.activity".to_owned(),
                 kind: ContributionKind::TerminalActivity,
@@ -894,7 +741,7 @@ mod tests {
                     value: "idle".to_owned(),
                 },
             }],
-            ..PluginUiContributions::default()
+            ..PluginSurfaceContributions::default()
         };
         let wire = serde_json::to_value(&manifest_ui).expect("serialize");
         assert!(wire.get("display").is_some());
@@ -929,12 +776,12 @@ mod tests {
 
     #[test]
     fn tui_theme_schema_rejects_noncanonical_keys_and_colors() {
-        assert!("light_red".parse::<PluginTuiColor>().is_ok());
-        assert!("#12aBcF".parse::<PluginTuiColor>().is_ok());
-        assert!("light-red".parse::<PluginTuiColor>().is_err());
-        assert!("default".parse::<PluginTuiColor>().is_err());
+        assert!("light_red".parse::<PluginTerminalColor>().is_ok());
+        assert!("#12aBcF".parse::<PluginTerminalColor>().is_ok());
+        assert!("light-red".parse::<PluginTerminalColor>().is_err());
+        assert!("default".parse::<PluginTerminalColor>().is_err());
         assert!(
-            serde_json::from_value::<PluginTuiThemeColors>(json!({
+            serde_json::from_value::<PluginTerminalThemeColors>(json!({
                 "flash_error": "red"
             }))
             .is_err()
@@ -1083,13 +930,13 @@ impl PluginManifest {
             transports: Vec::new(),
             hooks: HookSubscription::INIT | HookSubscription::SHUTDOWN,
             tools: Vec::new(),
-            commands: Vec::new(),
+            operations: Vec::new(),
+            services: PluginServiceDeclarations::default(),
             activity_kinds: Vec::new(),
             tags: Vec::new(),
             skills: Vec::new(),
-            ui: PluginUiContributions::default(),
-            config_schema: None,
-            config_schema_i18n: BTreeMap::new(),
+            surface: PluginSurfaceContributions::default(),
+            settings: None,
         }
     }
 

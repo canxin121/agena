@@ -1,6 +1,6 @@
 use super::super::{
     Line, Modifier, PluginWorkbenchOverlay, PluginWorkbenchPlugin, Span, Style, Text, clean,
-    command_argument_count, command_schema_and_value, default_value_for_schema, fixed_columns,
+    default_value_for_schema, fixed_columns, operation_argument_count, operation_schema_and_value,
     plugin_package_preview, schema_property_count,
 };
 use super::append_schema_editor_lines;
@@ -28,7 +28,7 @@ pub(crate) fn plugin_header_text(
             "plugin-workbench-header-summary",
             &agena_tui::fl_args![
                 "tools" => plugin.tools.len(),
-                "commands" => plugin.commands.len(),
+                "operations" => plugin.operations.len(),
                 "config" => plugin.config_status.kind.label(&dialog.i18n),
             ],
         )),
@@ -171,18 +171,21 @@ pub(crate) fn plugin_tools_text(
     Text::from(lines)
 }
 
-pub(crate) fn plugin_commands_text(
+pub(crate) fn plugin_operations_text(
     dialog: &PluginWorkbenchOverlay,
     plugin: &PluginWorkbenchPlugin,
 ) -> Text<'static> {
-    if plugin.commands.is_empty() {
-        return Text::from(dialog.i18n.text("plugin-workbench-no-commands"));
+    if plugin.operations.is_empty() {
+        return Text::from(dialog.i18n.text("plugin-workbench-no-operations"));
     }
     let mut lines = vec![Line::from(Span::styled(
         fixed_columns(
             &[
                 (
-                    dialog.i18n.text("plugin-workbench-column-command").as_str(),
+                    dialog
+                        .i18n
+                        .text("plugin-workbench-column-operation")
+                        .as_str(),
                     30,
                 ),
                 (
@@ -205,28 +208,34 @@ pub(crate) fn plugin_commands_text(
         ),
         Style::default().add_modifier(Modifier::BOLD),
     ))];
-    for command in &plugin.commands {
-        let args = command_argument_count(plugin, command);
+    for operation in &plugin.operations {
+        let args = operation_argument_count(plugin, operation);
         lines.push(Line::from(fixed_columns(
             &[
-                (command.title.as_str(), 30),
-                (command.description.as_str(), 64),
+                (operation.title.as_str(), 30),
+                (operation.description.as_str(), 64),
                 (args.to_string().as_str(), 8),
-                (command.category.as_str(), 18),
+                (
+                    operation
+                        .category
+                        .as_deref()
+                        .unwrap_or(operation.group.as_str()),
+                    18,
+                ),
             ],
             124,
         )));
     }
-    if let Some(command) = plugin.commands.first() {
+    if let Some(operation) = plugin.operations.first() {
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
             dialog.i18n.text_args(
-                "plugin-workbench-command-arguments",
-                &agena_tui::fl_args!["command" => command.title.clone()],
+                "plugin-workbench-operation-arguments",
+                &agena_tui::fl_args!["operation" => operation.title.clone()],
             ),
             Style::default().add_modifier(Modifier::BOLD),
         )));
-        match command_schema_and_value(plugin, command) {
+        match operation_schema_and_value(plugin, operation) {
             Some((schema, value)) => append_schema_editor_lines(
                 &mut lines,
                 &dialog.i18n,

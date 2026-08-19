@@ -58,7 +58,7 @@ pub struct PluginVersion {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub env: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
-    pub config: serde_json::Value,
+    pub settings: serde_json::Value,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min_agena_version: Option<String>,
     /// When set, the artifact bytes are treated as an archive and extracted

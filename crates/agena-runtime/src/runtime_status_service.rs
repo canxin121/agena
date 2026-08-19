@@ -37,7 +37,7 @@ pub struct RuntimeStatusSnapshot {
     pub lsp: RuntimeLspStatus,
     pub skills: RuntimeSkillsStatus,
     pub agent_id: String,
-    pub plugin_ui_catalog: agena_plugin_host::PluginUiCatalog,
+    pub plugin_surface_catalog: agena_plugin_host::PluginSurfaceCatalog,
     pub tool_registry_generation: u64,
     pub tool_registry_last_event:
         Option<agena_plugin_host::sdk::host_api::ToolRegistryChangedEvent>,

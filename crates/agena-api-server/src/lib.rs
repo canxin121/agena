@@ -145,23 +145,30 @@ pub fn router(state: AppState) -> Router {
                     .delete(rest::delete_memory),
             )
             .route("/api/v1/plugins", get(rest::list_plugins))
-            .route("/api/v1/plugins/ui", get(rest::get_plugin_ui_catalog))
+            .route(
+                "/api/v1/plugins/surface",
+                get(rest::get_plugin_surface_catalog),
+            )
+            .route(
+                "/api/v1/plugins/architecture",
+                get(rest::get_plugin_architecture_catalog),
+            )
             .route(
                 "/api/v1/plugins/tools/changes",
                 get(rest::list_plugin_tool_registry_changes),
             )
             .route(
-                "/api/v1/plugins/ui/invoke-tool",
-                post(rest::invoke_plugin_ui_tool),
+                "/api/v1/plugins/tools/invoke",
+                post(rest::invoke_plugin_tool),
             )
             .route("/api/v1/plugins/{plugin_id}", get(rest::get_plugin))
             .route(
-                "/api/v1/plugins/{plugin_id}/ui/actions/{action_id}",
-                post(rest::run_plugin_ui_action),
+                "/api/v1/plugins/{plugin_id}/settings",
+                get(rest::get_plugin_settings).put(rest::update_plugin_settings),
             )
             .route(
-                "/api/v1/plugins/{plugin_id}/commands/{command_id}",
-                post(rest::run_plugin_command),
+                "/api/v1/plugins/{plugin_id}/operations/{operation_id}/invoke",
+                post(rest::run_plugin_operation),
             )
             .route(
                 "/api/v1/plugins/{plugin_id}/logs",
@@ -932,29 +939,59 @@ mod router_contract_tests {
         let response = app
             .clone()
             .oneshot(
-                Request::get("/api/v1/plugins/ui")
+                Request::get("/api/v1/plugins/surface")
                     .body(axum::body::Body::empty())
-                    .expect("build plugin UI request"),
+                    .expect("build plugin surface request"),
             )
             .await
-            .expect("serve plugin UI request");
+            .expect("serve plugin surface request");
         assert_eq!(response.status(), http::StatusCode::OK);
         let body = to_bytes(response.into_body(), usize::MAX)
             .await
-            .expect("read plugin UI response");
-        let plugin_ui: serde_json::Value =
-            serde_json::from_slice(&body).expect("decode plugin UI response");
+            .expect("read plugin surface response");
+        let plugin_surface: serde_json::Value =
+            serde_json::from_slice(&body).expect("decode plugin surface response");
         assert!(
-            plugin_ui
+            plugin_surface
                 .get("permission_tools")
                 .and_then(serde_json::Value::as_array)
                 .is_some_and(|tools| !tools.is_empty())
         );
         assert!(
-            plugin_ui
+            plugin_surface
                 .get("activity_kinds")
                 .and_then(serde_json::Value::as_array)
                 .is_some_and(|kinds| kinds.iter().any(|kind| kind["id"] == "reasoning"))
+        );
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::get("/api/v1/plugins/architecture")
+                    .body(axum::body::Body::empty())
+                    .expect("build plugin architecture request"),
+            )
+            .await
+            .expect("serve plugin architecture request");
+        assert_eq!(response.status(), http::StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("read plugin architecture response");
+        let architecture: serde_json::Value =
+            serde_json::from_slice(&body).expect("decode plugin architecture response");
+        assert!(architecture["plugins"].is_array());
+        assert!(architecture["dependencies"].is_array());
+        assert!(architecture["pipelines"].is_array());
+        assert!(architecture["operation_registrations"].is_array());
+        assert!(architecture["tool_registrations"].is_array());
+        assert!(architecture["reload"]["decisions"].is_array());
+        assert!(
+            architecture["pipelines"]
+                .as_array()
+                .is_some_and(|pipelines| pipelines.iter().any(|pipeline| {
+                    pipeline["definition"]["id"] == "tool.before"
+                        && pipeline["definition"]["mode"] == "transform_bail"
+                }))
         );
 
         let response = app
@@ -980,109 +1017,14 @@ mod router_contract_tests {
         let workspace_resource: agena_api::resource::WorkspaceResource =
             serde_json::from_slice(&body).expect("decode workspace response");
 
-        let command = plugin_ui
-            .pointer("/catalog/studio/commands")
-            .and_then(serde_json::Value::as_array)
-            .and_then(|commands| {
-                commands.iter().find(|command| {
-                    command
-                        .pointer("/action/kind")
-                        .and_then(serde_json::Value::as_str)
-                        == Some("invoke_command")
-                })
-            })
-            .expect("built-in catalog exposes a server-executed command");
-        let plugin_id = command["plugin_id"]
-            .as_str()
-            .expect("command plugin id")
-            .to_owned();
-        let action_id = command["id"]
-            .as_str()
-            .expect("command action id")
-            .to_owned();
-        let command_id = command["action"]["command"]
-            .as_str()
-            .expect("server command id")
-            .to_owned();
-        let response = app
-            .clone()
-            .oneshot(
-                Request::post("/api/v1/sessions")
-                    .header(http::header::CONTENT_TYPE, "application/json")
-                    .body(axum::body::Body::from(
-                        serde_json::json!({
-                            "workspace_id": workspace_resource.id,
-                            "title": "plugin action contract"
-                        })
-                        .to_string(),
-                    ))
-                    .expect("build plugin action session request"),
-            )
-            .await
-            .expect("create plugin action session");
-        assert_eq!(response.status(), http::StatusCode::OK);
-        let body = to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("read plugin action session");
-        let session: agena_api::resource::SessionResource =
-            serde_json::from_slice(&body).expect("decode plugin action session");
-
-        let response = app
-            .clone()
-            .oneshot(
-                Request::post(format!(
-                    "/api/v1/plugins/{plugin_id}/ui/actions/{action_id}"
-                ))
-                .header(http::header::CONTENT_TYPE, "application/json")
-                .body(axum::body::Body::from(
-                    serde_json::json!({
-                        "session_id": session.id,
-                        "input": {},
-                        "slash": "/contract",
-                        "raw": ""
-                    })
-                    .to_string(),
-                ))
-                .expect("build plugin action request"),
-            )
-            .await
-            .expect("serve plugin action request");
-        assert_eq!(response.status(), http::StatusCode::OK);
-        let body = to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("read plugin action response");
-        let action: serde_json::Value =
-            serde_json::from_slice(&body).expect("decode plugin action response");
-        assert_eq!(action["plugin_id"], plugin_id);
-        assert_eq!(action["action_id"], action_id);
-        assert!(action.get("result").is_some());
-
-        let response = app
-            .clone()
-            .oneshot(
-                Request::post(format!("/api/v1/plugins/{plugin_id}/commands/{command_id}"))
-                    .header(http::header::CONTENT_TYPE, "application/json")
-                    .body(axum::body::Body::from(
-                        serde_json::json!({
-                            "session_id": session.id,
-                            "input": {},
-                            "slash": "/contract",
-                            "raw": "nested"
-                        })
-                        .to_string(),
-                    ))
-                    .expect("build direct plugin command request"),
-            )
-            .await
-            .expect("serve direct plugin command request");
-        assert_eq!(response.status(), http::StatusCode::OK);
-        let body = to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("read direct plugin command response");
-        let direct: serde_json::Value =
-            serde_json::from_slice(&body).expect("decode direct plugin command response");
-        assert_eq!(direct["command_id"], command_id);
-        assert!(direct.get("result").is_some());
+        let catalog = plugin_surface
+            .get("catalog")
+            .and_then(serde_json::Value::as_object)
+            .expect("plugin surface catalog object");
+        assert!(catalog.get("operations").is_some());
+        assert!(catalog.get("terminal").is_some());
+        assert!(catalog.get("studio").is_none());
+        assert!(catalog.get("tui").is_none());
 
         let response = app
             .clone()

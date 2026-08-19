@@ -6,10 +6,11 @@ use syn::punctuated::Punctuated;
 use syn::{Field, FnArg, ImplItemFn, LitStr, Meta, PathArguments, Result, Token, Type};
 
 use crate::{
-    PluginCommandPlan, PluginGeneratedInputField, PluginInputFieldAliasSpec, PluginMethodInfo,
-    PluginToolOutputPlan, PluginToolPlan, SerdeRenameRule, append_constraint_path_suffix,
-    input_type_semantic_shape, parse_input_field_arg_attrs, prepare_input_field_names,
-    type_first_generic_arg, type_is_unit, type_last_segment_is, type_without_reference,
+    PluginGeneratedInputField, PluginInputFieldAliasSpec, PluginMethodInfo, PluginOperationPlan,
+    PluginServicePlan, PluginServiceTargetPlan, PluginToolOutputPlan, PluginToolPlan,
+    SerdeRenameRule, append_constraint_path_suffix, input_type_semantic_shape,
+    parse_input_field_arg_attrs, prepare_input_field_names, type_first_generic_arg, type_is_unit,
+    type_last_segment_is, type_without_reference,
 };
 
 #[derive(Clone)]
@@ -18,6 +19,42 @@ pub struct NestedInputShapeSpec {
     pub inner_ty: Type,
     pub optional: bool,
     pub array: bool,
+}
+
+pub fn reject_duplicate_service_plans(services: &[PluginServicePlan]) -> Result<()> {
+    for (index, service) in services.iter().enumerate() {
+        let PluginServiceTargetPlan::Inline {
+            service: service_id,
+            api_version,
+            method,
+        } = &service.target
+        else {
+            continue;
+        };
+        if services.iter().skip(index + 1).any(|other| {
+            matches!(
+                &other.target,
+                PluginServiceTargetPlan::Inline {
+                    service: other_service,
+                    api_version: other_version,
+                    method: other_method,
+                } if other_service.value() == service_id.value()
+                    && other_version == api_version
+                    && other_method.value() == method.value()
+            )
+        }) {
+            return Err(syn::Error::new_spanned(
+                method,
+                format!(
+                    "duplicate #[service] method `{}@v{}::{}`",
+                    service_id.value(),
+                    api_version,
+                    method.value()
+                ),
+            ));
+        }
+    }
+    Ok(())
 }
 
 #[derive(Clone)]
@@ -338,17 +375,17 @@ pub fn reject_duplicate_tool_plans(tools: &[PluginToolPlan]) -> Result<()> {
     Ok(())
 }
 
-pub fn reject_duplicate_command_plans(commands: &[PluginCommandPlan]) -> Result<()> {
-    for (index, command) in commands.iter().enumerate() {
-        let id = &command.id;
-        if commands
+pub fn reject_duplicate_operation_plans(operations: &[PluginOperationPlan]) -> Result<()> {
+    for (index, operation) in operations.iter().enumerate() {
+        let id = &operation.id;
+        if operations
             .iter()
             .skip(index + 1)
             .any(|other| other.id.value() == id.value())
         {
             return Err(syn::Error::new_spanned(
-                &command.id,
-                format!("duplicate #[command] id '{}'", id.value()),
+                &operation.id,
+                format!("duplicate #[operation] id '{}'", id.value()),
             ));
         }
     }

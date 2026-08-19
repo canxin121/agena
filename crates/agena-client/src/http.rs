@@ -882,10 +882,16 @@ impl AgenaClient {
         self.get_json("/api/v1/plugins").await
     }
 
-    /// Fetch the combined TUI/studio plugin UI catalog (display contributions,
-    /// theme palettes, slash commands).
-    pub async fn plugin_ui_catalog(&self) -> Result<serde_json::Value, ClientError> {
-        self.get_json("/api/v1/plugins/ui").await
+    /// Fetch the neutral plugin operation catalog plus terminal decorations.
+    pub async fn plugin_surface_catalog(&self) -> Result<serde_json::Value, ClientError> {
+        self.get_json("/api/v1/plugins/surface").await
+    }
+
+    /// Fetch the unified live plugin architecture catalog: resolved profiles,
+    /// dependency/service graph, reload decisions, effect ownership, typed
+    /// pipeline handlers, and scoped registrations.
+    pub async fn plugin_architecture_catalog(&self) -> Result<serde_json::Value, ClientError> {
+        self.get_json("/api/v1/plugins/architecture").await
     }
 
     pub async fn plugin_inspect(&self, plugin_id: &str) -> Result<serde_json::Value, ClientError> {
@@ -923,9 +929,9 @@ impl AgenaClient {
         self.parse_json(response).await
     }
 
-    /// Invoke a plugin Tool API endpoint through `POST /api/v1/plugins/ui/invoke-tool`,
+    /// Invoke a plugin Tool API endpoint through `POST /api/v1/plugins/tools/invoke`,
     /// returning the raw plugin tool invoke response JSON.
-    pub async fn invoke_plugin_ui_tool(
+    pub async fn invoke_plugin_tool(
         &self,
         plugin_id: &str,
         tool_name: &str,
@@ -933,7 +939,7 @@ impl AgenaClient {
         session_id: Option<i64>,
     ) -> Result<serde_json::Value, ClientError> {
         self.post_json(
-            "/api/v1/plugins/ui/invoke-tool",
+            "/api/v1/plugins/tools/invoke",
             serde_json::json!({
                 "plugin_id": plugin_id,
                 "tool": tool_name,
@@ -944,12 +950,11 @@ impl AgenaClient {
         .await
     }
 
-    /// Invoke a declarative plugin UI action. Command actions execute on the
-    /// server so command hooks retain server-owned session/runtime context.
-    pub async fn invoke_plugin_ui_action(
+    /// Invoke one server-owned plugin operation.
+    pub async fn invoke_plugin_operation(
         &self,
         plugin_id: &str,
-        action_id: &str,
+        operation_id: &str,
         input: serde_json::Value,
         session_id: Option<i64>,
         slash: Option<&str>,
@@ -959,38 +964,9 @@ impl AgenaClient {
         url.path_segments_mut()
             .map_err(|()| ClientError::Protocol("server URL cannot carry path segments".into()))?
             .push(plugin_id)
-            .push("ui")
-            .push("actions")
-            .push(action_id);
-        let body = serde_json::json!({
-            "input": input,
-            "session_id": session_id,
-            "slash": slash,
-            "raw": raw,
-        });
-        let response = self
-            .send_request(reqwest::Method::POST, url, Some(&body), None)
-            .await?;
-        self.parse_json(response).await
-    }
-
-    /// Invoke a plugin command directly in a server-owned session. This is
-    /// also the continuation path for `PluginCommandOutput::InvokeCommand`.
-    pub async fn invoke_plugin_command(
-        &self,
-        plugin_id: &str,
-        command_id: &str,
-        input: serde_json::Value,
-        session_id: i64,
-        slash: Option<&str>,
-        raw: &str,
-    ) -> Result<serde_json::Value, ClientError> {
-        let mut url = self.endpoint("/api/v1/plugins");
-        url.path_segments_mut()
-            .map_err(|()| ClientError::Protocol("server URL cannot carry path segments".into()))?
-            .push(plugin_id)
-            .push("commands")
-            .push(command_id);
+            .push("operations")
+            .push(operation_id)
+            .push("invoke");
         let body = serde_json::json!({
             "input": input,
             "session_id": session_id,
@@ -2426,6 +2402,27 @@ mod sse_contract_tests {
         }))
     }
 
+    async fn fixture_plugin_architecture() -> Json<serde_json::Value> {
+        Json(serde_json::json!({
+            "profiles": { "applied_profiles": ["coding"], "changes": [] },
+            "reload": { "decisions": [] },
+            "plugins": [],
+            "dependencies": [],
+            "effects": [],
+            "pipelines": [{
+                "definition": {
+                    "id": "operation.invoke",
+                    "mode": "around",
+                    "durable": false,
+                    "scoped": true
+                },
+                "handlers": []
+            }],
+            "operation_registrations": [],
+            "tool_registrations": []
+        }))
+    }
+
     async fn fixture_workspace_download(
         State(state): State<ThinClientFixture>,
         AxumPath(workspace_id): AxumPath<i64>,
@@ -2468,44 +2465,32 @@ mod sse_contract_tests {
         )
     }
 
-    async fn fixture_plugin_action(
+    async fn fixture_plugin_operation(
         State(state): State<ThinClientFixture>,
-        AxumPath((plugin_id, action_id)): AxumPath<(String, String)>,
+        AxumPath((plugin_id, operation_id)): AxumPath<(String, String)>,
         Json(body): Json<serde_json::Value>,
     ) -> Json<serde_json::Value> {
         state.requests.lock().expect("fixture lock").push((
-            "plugin_action".to_owned(),
+            "plugin_operation".to_owned(),
             serde_json::json!({
                 "plugin_id": plugin_id,
-                "action_id": action_id,
+                "operation_id": operation_id,
                 "body": body
             }),
         ));
         Json(serde_json::json!({
             "plugin_id": plugin_id,
-            "action_id": action_id,
-            "action": { "kind": "invoke_command", "command": "run" },
-            "result": { "kind": "message", "text": "done" }
-        }))
-    }
-
-    async fn fixture_plugin_command(
-        State(state): State<ThinClientFixture>,
-        AxumPath((plugin_id, command_id)): AxumPath<(String, String)>,
-        Json(body): Json<serde_json::Value>,
-    ) -> Json<serde_json::Value> {
-        state.requests.lock().expect("fixture lock").push((
-            "plugin_command".to_owned(),
-            serde_json::json!({
-                "plugin_id": plugin_id,
-                "command_id": command_id,
-                "body": body
-            }),
-        ));
-        Json(serde_json::json!({
-            "plugin_id": plugin_id,
-            "command_id": command_id,
-            "result": { "kind": "submit_prompt", "prompt": "continue" }
+            "operation_id": operation_id,
+            "result": {
+                "status": "succeeded",
+                "title": "Continue",
+                "summary": "continue",
+                "detail": null,
+                "output": null,
+                "diagnostics": [],
+                "retryable": false,
+                "effects": [{ "kind": "insert_prompt", "prompt": "continue" }]
+            }
         }))
     }
 
@@ -2597,12 +2582,12 @@ mod sse_contract_tests {
                 get(fixture_session_media_download),
             )
             .route(
-                "/api/v1/plugins/{plugin_id}/ui/actions/{action_id}",
-                post(fixture_plugin_action),
+                "/api/v1/plugins/{plugin_id}/operations/{operation_id}/invoke",
+                post(fixture_plugin_operation),
             )
             .route(
-                "/api/v1/plugins/{plugin_id}/commands/{command_id}",
-                post(fixture_plugin_command),
+                "/api/v1/plugins/architecture",
+                get(fixture_plugin_architecture),
             )
             .route(
                 "/api/v1/providers/{provider_id}/configured-models",
@@ -2643,30 +2628,25 @@ mod sse_contract_tests {
             .expect("download server workspace file");
         assert_eq!(filename, "result.txt");
         assert_eq!(bytes, b"server bytes");
-        let action = client
-            .invoke_plugin_ui_action(
-                "example.plugin",
-                "open",
-                serde_json::json!({ "value": 7 }),
-                Some(9),
-                Some("/example"),
-                "value=7",
-            )
-            .await
-            .expect("invoke plugin action");
-        assert_eq!(action["result"]["text"], "done");
-        let command = client
-            .invoke_plugin_command(
+        let operation = client
+            .invoke_plugin_operation(
                 "example.plugin",
                 "continue",
                 serde_json::json!({ "step": 2 }),
-                9,
+                Some(9),
                 Some("/example"),
                 "step=2",
             )
             .await
-            .expect("invoke nested plugin command");
-        assert_eq!(command["result"]["prompt"], "continue");
+            .expect("invoke plugin operation");
+        assert_eq!(operation["result"]["status"], "succeeded");
+        assert_eq!(operation["result"]["effects"][0]["prompt"], "continue");
+        let architecture = client
+            .plugin_architecture_catalog()
+            .await
+            .expect("load plugin architecture");
+        assert_eq!(architecture["profiles"]["applied_profiles"][0], "coding");
+        assert_eq!(architecture["pipelines"][0]["definition"]["mode"], "around");
         let configured = client
             .configured_provider_adapter_models("example.provider")
             .await
@@ -2709,24 +2689,22 @@ mod sse_contract_tests {
         assert_eq!(requests[0].1["query"]["respect_ignores"], "true");
         assert_eq!(requests[1].1["query"]["path"], "src/result.txt");
         assert_eq!(requests[2].1["plugin_id"], "example.plugin");
-        assert_eq!(requests[2].1["action_id"], "open");
+        assert_eq!(requests[2].1["operation_id"], "continue");
         assert_eq!(requests[2].1["body"]["session_id"], 9);
         assert_eq!(requests[2].1["body"]["slash"], "/example");
-        assert_eq!(requests[2].1["body"]["raw"], "value=7");
-        assert_eq!(requests[3].1["command_id"], "continue");
-        assert_eq!(requests[3].1["body"]["input"]["step"], 2);
-        assert_eq!(requests[3].1["body"]["raw"], "step=2");
+        assert_eq!(requests[2].1["body"]["input"]["step"], 2);
+        assert_eq!(requests[2].1["body"]["raw"], "step=2");
+        assert_eq!(requests[3].1["provider_id"], "example.provider");
         assert_eq!(requests[4].1["provider_id"], "example.provider");
-        assert_eq!(requests[5].1["provider_id"], "example.provider");
-        assert_eq!(requests[6].1["session_id"], 9);
+        assert_eq!(requests[5].1["session_id"], 9);
         assert_eq!(
-            requests[6].1["query"]["path"],
+            requests[5].1["query"]["path"],
             "/server/managed/generated.png"
         );
+        assert_eq!(requests[6].1["workspace_id"], 42);
+        assert_eq!(requests[6].1["message"], "bind workspace");
         assert_eq!(requests[7].1["workspace_id"], 42);
-        assert_eq!(requests[7].1["message"], "bind workspace");
-        assert_eq!(requests[8].1["workspace_id"], 42);
-        assert_eq!(requests[8].1["base"], "main");
+        assert_eq!(requests[7].1["base"], "main");
         server.abort();
     }
 

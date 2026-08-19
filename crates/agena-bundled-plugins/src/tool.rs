@@ -6,7 +6,7 @@ pub use agena_runtime_tools::tool::*;
 
 use crate::plugins::provided::{
     code, cron, fs, image, interaction, lsp, mcp, monitor, notebook, planning, repo, report,
-    schema_lab, session, settings, shell, skills, tasks, terminal, tool_api,
+    session, settings, shell, skills, tasks, terminal, tool_api,
 };
 
 pub fn skills_plugin_id() -> &'static str {
@@ -151,18 +151,6 @@ pub fn snapshot_plugin_id() -> &'static str {
 
 pub fn new_snapshot_plugin() -> impl agena_plugin_host::sdk::Plugin {
     repo::SnapshotPlugin::new()
-}
-
-pub const fn schema_lab_builtin_enabled() -> bool {
-    cfg!(feature = "schema-lab")
-}
-
-pub fn schema_lab_plugin_id() -> &'static str {
-    schema_lab::SCHEMA_LAB_PLUGIN_ID
-}
-
-pub fn new_schema_lab_plugin() -> impl agena_plugin_host::sdk::Plugin {
-    schema_lab::SchemaLabPlugin::new()
 }
 
 pub fn mcp_plugin_id() -> &'static str {

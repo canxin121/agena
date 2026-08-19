@@ -14,92 +14,89 @@ use agena_plugin_host::PluginError;
 use agena_plugin_host::sdk::host_api::{HostClient, HostLspListServersResponse};
 use agena_plugin_host::sdk::{Result as SdkResult, ToolInvokeContext, ToolInvokeOutput};
 
-fn lsp_config_schema() -> serde_json::Value {
-    agena_runtime_tools::tool::definition::json_schema_for_default_with_metadata(
-        LspConfig::default(),
-        &[
-            (
-                "",
-                "LSP Plugin Config",
-                "Shared defaults and per-server settings for the agena.lsp plugin.",
-            ),
-            (
-                "/properties/defaults",
-                "Defaults",
-                "Shared runtime settings applied to language servers unless a server overrides them.",
-            ),
-            (
-                "/properties/defaults/properties/env",
-                "Environment",
-                "Environment variables injected into every configured language server process by default.",
-            ),
-            (
-                "/properties/defaults/properties/root_markers",
-                "Root Markers",
-                "Marker files used to discover project roots when a server does not define its own routing markers.",
-            ),
-            (
-                "/properties/defaults/properties/initialization_options",
-                "Initialization Options",
-                "Default JSON initialization options sent during server startup.",
-            ),
-            (
-                "/properties/servers",
-                "Servers",
-                "Named language server definitions keyed by server identifier.",
-            ),
-            (
-                "/properties/servers/additionalProperties",
-                "Server",
-                "A single named language server definition.",
-            ),
-            (
-                "/properties/servers/additionalProperties/properties/process",
-                "Process",
-                "Executable command, arguments, and environment for this language server.",
-            ),
-            (
-                "/properties/servers/additionalProperties/properties/routing",
-                "Routing",
-                "File matching and root detection rules for this server.",
-            ),
-            (
-                "/properties/servers/additionalProperties/properties/session",
-                "Session",
-                "Per-server LSP session settings such as initialization options.",
-            ),
-            (
-                "/properties/servers/additionalProperties/properties/process/properties/command",
-                "Command",
-                "Executable used to start the language server.",
-            ),
-            (
-                "/properties/servers/additionalProperties/properties/process/properties/args",
-                "Arguments",
-                "Command-line arguments passed to the language server process.",
-            ),
-            (
-                "/properties/servers/additionalProperties/properties/process/properties/env",
-                "Environment",
-                "Environment variables merged on top of the shared LSP defaults for this server.",
-            ),
-            (
-                "/properties/servers/additionalProperties/properties/routing/properties/file_extensions",
-                "File Extensions",
-                "File extensions routed to this server. Leave empty to match all files.",
-            ),
-            (
-                "/properties/servers/additionalProperties/properties/routing/properties/root_markers",
-                "Root Markers",
-                "Project-root markers used for this server. Leave empty to inherit the shared defaults.",
-            ),
-            (
-                "/properties/servers/additionalProperties/properties/session/properties/initialization_options",
-                "Initialization Options",
-                "Server-specific JSON initialization options. Leave unset to inherit the shared defaults.",
-            ),
-        ],
-    )
+fn lsp_settings_metadata() -> &'static [(&'static str, &'static str, &'static str)] {
+    &[
+        (
+            "",
+            "LSP Plugin Config",
+            "Shared defaults and per-server settings for the agena.lsp plugin.",
+        ),
+        (
+            "/defaults",
+            "Defaults",
+            "Shared runtime settings applied to language servers unless a server overrides them.",
+        ),
+        (
+            "/defaults/env",
+            "Environment",
+            "Environment variables injected into every configured language server process by default.",
+        ),
+        (
+            "/defaults/root_markers",
+            "Root Markers",
+            "Marker files used to discover project roots when a server does not define its own routing markers.",
+        ),
+        (
+            "/defaults/initialization_options",
+            "Initialization Options",
+            "Default JSON initialization options sent during server startup.",
+        ),
+        (
+            "/servers",
+            "Servers",
+            "Named language server definitions keyed by server identifier.",
+        ),
+        (
+            "/servers/*",
+            "Server",
+            "A single named language server definition.",
+        ),
+        (
+            "/servers/*/process",
+            "Process",
+            "Executable command, arguments, and environment for this language server.",
+        ),
+        (
+            "/servers/*/routing",
+            "Routing",
+            "File matching and root detection rules for this server.",
+        ),
+        (
+            "/servers/*/session",
+            "Session",
+            "Per-server LSP session settings such as initialization options.",
+        ),
+        (
+            "/servers/*/process/command",
+            "Command",
+            "Executable used to start the language server.",
+        ),
+        (
+            "/servers/*/process/args",
+            "Arguments",
+            "Command-line arguments passed to the language server process.",
+        ),
+        (
+            "/servers/*/process/env",
+            "Environment",
+            "Environment variables merged on top of the shared LSP defaults for this server.",
+        ),
+        (
+            "/servers/*/routing/file_extensions",
+            "File Extensions",
+            "File extensions routed to this server. Leave empty to match all files.",
+        ),
+        (
+            "/servers/*/routing/root_markers",
+            "Root Markers",
+            "Project-root markers used for this server. Leave empty to inherit the shared defaults.",
+        ),
+        (
+            "/servers/*/session/initialization_options",
+            "Initialization Options",
+            "Server-specific JSON initialization options. Leave unset to inherit the shared defaults.",
+        ),
+    ]
 }
 
 pub(crate) struct LspPlugin {
@@ -157,7 +154,9 @@ struct LspServerSummary {
     name = "lsp",
     version = env!("CARGO_PKG_VERSION"),
     summary = "LSP read-only observability and navigation tools.",
-    config_schema = lsp_config_schema(),
+    settings = LspConfig,
+    settings_default = default,
+    settings_metadata = lsp_settings_metadata(),
 )]
 impl LspPlugin {
     #[hook(init)]
@@ -266,5 +265,53 @@ impl LspPlugin {
         args: LspDiagnosticsToolInput,
     ) -> SdkResult<ToolInvokeOutput> {
         self.invoke_routed_tool("lsp_diagnostics", args, context.session_id, context.call_id)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use agena_plugin_host::sdk::{
+        MAX_JSON_ESCAPE_BYTES, MAX_JSON_ESCAPE_DEPTH, Plugin, SettingsNode, SettingsNodeKind,
+    };
+
+    use super::LspPlugin;
+
+    fn node_at<'a>(node: &'a SettingsNode, path: &str) -> Option<&'a SettingsNode> {
+        if node.path == path {
+            return Some(node);
+        }
+        match &node.kind {
+            SettingsNodeKind::Object { fields } => {
+                fields.iter().find_map(|field| node_at(field, path))
+            }
+            SettingsNodeKind::List { item } => node_at(item, path),
+            SettingsNodeKind::Record { value } => node_at(value, path),
+            SettingsNodeKind::TaggedVariant { variants, .. } => variants
+                .iter()
+                .flat_map(|variant| variant.fields.iter())
+                .find_map(|field| node_at(field, path)),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn manifest_uses_typed_settings_and_bounded_json_initialization_options() {
+        let manifest = LspPlugin::new().manifest();
+        let settings = manifest.settings.expect("typed LSP settings contract");
+        settings.validate().expect("valid LSP settings contract");
+        assert_eq!(settings.root.title, "LSP Plugin Config");
+        for path in [
+            "/defaults/initialization_options",
+            "/servers/*/session/initialization_options",
+        ] {
+            let node = node_at(&settings.root, path).expect("LSP initialization options node");
+            assert!(matches!(
+                node.kind,
+                SettingsNodeKind::Json {
+                    max_bytes: MAX_JSON_ESCAPE_BYTES,
+                    max_depth: MAX_JSON_ESCAPE_DEPTH,
+                }
+            ));
+        }
     }
 }

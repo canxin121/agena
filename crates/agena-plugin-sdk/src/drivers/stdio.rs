@@ -484,6 +484,20 @@ impl HostClient for StdioHostClient {
         .await
     }
 
+    async fn invoke_service(
+        &self,
+        req: crate::PluginServiceInvokeInput,
+    ) -> crate::error::Result<crate::PluginServiceInvokeOutput> {
+        self.call(
+            method::HOST_SERVICE_INVOKE,
+            serde_json::json!({
+                "request": req,
+                "context": crate::host_api::current_host_callback_context(),
+            }),
+        )
+        .await
+    }
+
     async fn ask_user(&self, req: AskUserRequest) -> crate::error::Result<AskUserResponse> {
         self.call(
             method::HOST_ASK_USER,

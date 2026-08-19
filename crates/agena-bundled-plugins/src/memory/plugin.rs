@@ -8,9 +8,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
 use agena_memory_index::{MemoryIndex, MemorySearchDocument};
-use agena_plugin_host::sdk::{
-    PluginCommandOutput, PluginUiAction, Result as SdkResult, ToolInvokeOutput,
-};
+use agena_plugin_host::sdk::{Result as SdkResult, ToolInvokeOutput};
 use agena_plugin_host::{
     ChatMessage, ChatMessagesTransformInput, ChatMessagesTransformPatch, PluginError,
 };
@@ -47,44 +45,34 @@ impl Default for MemoryRetrievalConfig {
     }
 }
 
-fn memory_config_schema() -> serde_json::Value {
-    let mut schema =
-        agena_plugin_sdk::macro_support::json_schema_for_default(default_memory_config());
-    for (pointer, title, description) in [
+fn memory_settings_metadata() -> &'static [(&'static str, &'static str, &'static str)] {
+    &[
         (
             "",
             "Memory Plugin Config",
             "Controls memory retrieval defaults for agena.memory.",
         ),
         (
-            "/properties/retrieval",
+            "/retrieval",
             "Retrieval",
             "Defaults for memory search behavior.",
         ),
         (
-            "/properties/retrieval/properties/enabled",
+            "/retrieval/enabled",
             "Enabled",
             "Allows memory search results to be retrieved automatically.",
         ),
         (
-            "/properties/retrieval/properties/limit",
+            "/retrieval/limit",
             "Default Limit",
             "Default number of memory results returned when a search call omits limit.",
         ),
         (
-            "/properties/retrieval/properties/min_query_chars",
+            "/retrieval/min_query_chars",
             "Minimum Query Characters",
             "Shortest query length required before automatic retrieval runs.",
         ),
-    ] {
-        agena_plugin_sdk::macro_support::set_schema_metadata(
-            &mut schema,
-            pointer,
-            Some(title),
-            Some(description),
-        );
-    }
-    schema
+    ]
 }
 
 fn default_memory_config() -> MemoryConfig {
@@ -177,7 +165,9 @@ struct MemoryRecordOutput {
     name = "memory",
     version = env!("CARGO_PKG_VERSION"),
     summary = "Persistent memory with searchable retrieval and write tools.",
-    config_schema = memory_config_schema(),
+    settings = MemoryConfig,
+    settings_default = default_memory_config(),
+    settings_metadata = memory_settings_metadata(),
 )]
 impl MemoryPlugin {
     pub fn new() -> Self {
@@ -186,19 +176,6 @@ impl MemoryPlugin {
             workspace_root: OnceLock::new(),
             sync_lock: Arc::new(Mutex::new(())),
         }
-    }
-
-    #[command(
-        id = "memory.open",
-        title = "Open Memory",
-        description = "Open Memory configuration in Plugin Workbench.",
-        slash = "/memory",
-        aliases("mem"),
-        usage = "/memory",
-        action = PluginUiAction::OpenPluginWorkbench { tab: Some("config".to_string()) }
-    )]
-    async fn command_open(&self) -> PluginCommandOutput {
-        PluginCommandOutput::open_plugin_workbench(Some("config"))
     }
 
     #[hook(init)]
@@ -698,27 +675,24 @@ where
 
 #[cfg(test)]
 mod tests {
-    use agena_plugin_host::sdk::{Plugin, PluginUiAction};
+    use agena_plugin_host::sdk::{Plugin, SettingsNodeKind};
 
     use super::MemoryPlugin;
 
     #[test]
-    fn manifest_exposes_memory_slash_command() {
+    fn manifest_exposes_memory_settings_contract() {
         let manifest = MemoryPlugin::new().manifest();
-        let command = manifest
-            .commands
-            .iter()
-            .find(|command| command.id == "memory.open")
-            .expect("memory command");
-
-        assert_eq!(command.slash.as_deref(), Some("/memory"));
-        assert_eq!(command.aliases, ["mem"]);
-        assert!(matches!(
-            &command.action,
-            PluginUiAction::OpenPluginWorkbench { tab } if tab.as_deref() == Some("config")
-        ));
-        let schema = manifest.config_schema.expect("memory config schema");
-        assert!(schema["properties"].get("project_instructions").is_none());
-        assert!(schema["properties"].get("retrieval").is_some());
+        let settings = manifest.settings.expect("memory settings contract");
+        settings.validate().expect("valid memory settings contract");
+        let SettingsNodeKind::Object { fields } = settings.root.kind else {
+            panic!("memory settings root must be a fixed object");
+        };
+        assert!(fields.iter().any(|field| field.id == "retrieval"));
+        assert!(
+            !manifest
+                .operations
+                .iter()
+                .any(|operation| operation.id == "memory.open")
+        );
     }
 }

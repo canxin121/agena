@@ -165,54 +165,55 @@ pub struct RuntimeAutomationResource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-/// Runtime operator surface: MCP, LSP, agent, skills, and plugin UI.
+/// Runtime operator surface: MCP, LSP, agent, skills, and plugins.
 pub struct RuntimeOperatorResource {
     pub mcp: RuntimeMcpResource,
     pub lsp: RuntimeLspResource,
     pub agent_id: String,
     pub skills: RuntimeSkillsResource,
-    pub ui: RuntimePluginUiResource,
+    pub plugins: RuntimePluginSurfaceResource,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-/// Plugin UI catalog with the tool registry generation it reflects.
-pub struct RuntimePluginUiResource {
+/// Neutral plugin surface with the tool registry generation it reflects.
+pub struct RuntimePluginSurfaceResource {
     #[serde(default)]
-    pub catalog: PluginUiCatalogResource,
+    pub catalog: PluginSurfaceCatalogResource,
     pub tool_registry_generation: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_registry_last_event: Option<agena_plugin_sdk::host_api::ToolRegistryChangedEvent>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
-/// Plugin UI catalog combining TUI and studio contributions.
-pub struct PluginUiCatalogResource {
-    pub tui: PluginTuiUiCatalogResource,
-    pub studio: PluginStudioUiCatalogResource,
+/// Presentation-neutral plugin operations plus terminal-only decoration.
+pub struct PluginSurfaceCatalogResource {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub operations: Vec<PluginOperationResource>,
+    #[serde(default)]
+    pub terminal: PluginTerminalSurfaceCatalogResource,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
-/// TUI plugin UI contributions (display blocks and themes).
-pub struct PluginTuiUiCatalogResource {
+/// Terminal-only plugin decoration. No executable action is represented here.
+pub struct PluginTerminalSurfaceCatalogResource {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub display: Vec<PluginDisplayContributionResource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub themes: Vec<PluginThemePaletteResource>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
-/// Studio plugin UI contributions (commands, controls, and views).
-pub struct PluginStudioUiCatalogResource {
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub commands: Vec<PluginCommandResource>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub controls: Vec<PluginStudioControlResource>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub views: Vec<PluginStudioViewResource>,
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+/// One server-owned plugin operation.
+pub struct PluginOperationResource {
+    pub plugin_id: String,
+    pub accepts_empty_input: bool,
+    pub default_input: serde_json::Value,
+    #[serde(flatten)]
+    pub operation: agena_plugin_sdk::PluginOperationDefinition,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-/// A display contribution provided by a plugin.
+/// A passive display contribution provided by a plugin.
 pub struct PluginDisplayContributionResource {
     pub plugin_id: String,
     pub id: String,
@@ -223,7 +224,7 @@ pub struct PluginDisplayContributionResource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-/// A plugin-provided theme palette.
+/// A plugin-provided terminal theme palette.
 pub struct PluginThemePaletteResource {
     pub id: String,
     pub plugin_id: String,
@@ -233,7 +234,7 @@ pub struct PluginThemePaletteResource {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
-/// Colors of a plugin theme palette.
+/// Colors of a plugin terminal theme palette.
 pub struct PluginThemeColorsResource {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub muted: Option<String>,
@@ -255,162 +256,58 @@ pub struct PluginThemeColorsResource {
     pub selection_bg: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-/// A plugin studio command.
-pub struct PluginCommandResource {
-    pub plugin_id: String,
-    pub id: String,
-    pub title: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub description: String,
-    pub category: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub slash: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub aliases: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub usage: Option<String>,
-    pub location: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub input_schema: Option<serde_json::Value>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub handler: Option<String>,
-    #[serde(default)]
-    pub action: PluginUiActionResource,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-/// A plugin studio control.
-pub struct PluginStudioControlResource {
-    pub plugin_id: String,
-    pub id: String,
-    pub title: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub description: String,
-    pub location: String,
-    pub kind: String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub options: Vec<PluginStudioControlOptionResource>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub value: Option<serde_json::Value>,
-    #[serde(default)]
-    pub action: PluginUiActionResource,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-/// An option of a plugin studio control.
-pub struct PluginStudioControlOptionResource {
-    pub label: String,
-    pub value: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub description: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-/// A plugin studio view.
-pub struct PluginStudioViewResource {
-    pub plugin_id: String,
-    pub id: String,
-    pub title: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub description: String,
-    pub location: String,
-    pub kind: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub content: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub url: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub controls: Vec<PluginStudioControlResource>,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-/// Action triggered by a plugin UI element.
-pub enum PluginUiActionResource {
-    #[default]
-    None,
-    InvokeTool {
-        tool: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        input: Option<serde_json::Value>,
-        #[serde(default)]
-        submit_output_as_prompt: bool,
-    },
-    OpenPluginWorkbench {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        tab: Option<String>,
-    },
-    OpenUrl {
-        url: String,
-    },
-    SubmitPrompt {
-        prompt: String,
-    },
-    InvokeCommand {
-        command: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        input: Option<serde_json::Value>,
-    },
-}
-
 #[cfg(test)]
-mod plugin_ui_catalog_contract_tests {
-    use super::{
-        PluginCommandResource, PluginStudioUiCatalogResource, PluginTuiUiCatalogResource,
-        PluginUiActionResource, PluginUiCatalogResource,
+mod plugin_surface_catalog_contract_tests {
+    use super::{PluginOperationResource, PluginSurfaceCatalogResource};
+    use agena_plugin_sdk::{
+        OperationDiscoverability, PluginOperationDefinition, PluginOperationTarget,
+        SettingsConstraints, SettingsContract, SettingsNode, SettingsNodeKind,
     };
 
     #[test]
-    fn plugin_ui_catalog_has_an_api_owned_typed_action_shape() {
-        let catalog = PluginUiCatalogResource {
-            tui: PluginTuiUiCatalogResource::default(),
-            studio: PluginStudioUiCatalogResource {
-                commands: vec![PluginCommandResource {
-                    plugin_id: "example.tools".to_owned(),
+    fn plugin_surface_catalog_has_one_server_owned_operation_shape() {
+        let catalog = PluginSurfaceCatalogResource {
+            operations: vec![PluginOperationResource {
+                plugin_id: "example.tools".to_owned(),
+                accepts_empty_input: true,
+                default_input: serde_json::json!({}),
+                operation: PluginOperationDefinition {
                     id: "summarize".to_owned(),
                     title: "Summarize".to_owned(),
                     description: String::new(),
-                    category: "Plugin".to_owned(),
-                    slash: Some("/summarize".to_owned()),
+                    group: "Plugin".to_owned(),
+                    category: None,
+                    slash: Some("summarize".to_owned()),
                     aliases: Vec::new(),
                     usage: None,
-                    location: "command_palette".to_owned(),
-                    input_schema: None,
-                    handler: Some("summarize".to_owned()),
-                    action: PluginUiActionResource::InvokeTool {
+                    input: SettingsContract::new(SettingsNode {
+                        id: "input".to_owned(),
+                        path: String::new(),
+                        title: "Input".to_owned(),
+                        description: String::new(),
+                        required: true,
+                        default: Some(serde_json::json!({})),
+                        constraints: SettingsConstraints::default(),
+                        sensitive: false,
+                        secret: false,
+                        kind: SettingsNodeKind::Object { fields: Vec::new() },
+                    }),
+                    discoverability: OperationDiscoverability::default(),
+                    target: PluginOperationTarget::Tool {
                         tool: "summarize".to_owned(),
-                        input: None,
-                        submit_output_as_prompt: true,
                     },
-                }],
-                controls: Vec::new(),
-                views: Vec::new(),
-            },
+                },
+            }],
+            ..PluginSurfaceCatalogResource::default()
         };
 
-        assert_eq!(
-            serde_json::to_value(catalog).expect("serialize plugin catalog"),
-            serde_json::json!({
-                "tui": {},
-                "studio": {
-                    "commands": [{
-                        "plugin_id": "example.tools",
-                        "id": "summarize",
-                        "title": "Summarize",
-                        "category": "Plugin",
-                        "slash": "/summarize",
-                        "location": "command_palette",
-                        "handler": "summarize",
-                        "action": {
-                            "kind": "invoke_tool",
-                            "tool": "summarize",
-                            "submit_output_as_prompt": true
-                        }
-                    }]
-                }
-            })
-        );
+        let wire = serde_json::to_value(catalog).expect("serialize plugin catalog");
+        assert_eq!(wire["operations"][0]["plugin_id"], "example.tools");
+        assert_eq!(wire["operations"][0]["accepts_empty_input"], true);
+        assert_eq!(wire["operations"][0]["id"], "summarize");
+        assert_eq!(wire["operations"][0]["target"]["kind"], "tool");
+        assert!(wire["operations"][0].get("action").is_none());
+        assert!(wire.get("studio").is_none());
     }
 }
 

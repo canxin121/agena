@@ -774,6 +774,7 @@ pub(crate) fn session_from_view(view: SessionView) -> Result<Session, AppError> 
     session.task_id = meta.task_id.clone();
     session.updated_at = timestamp_millis_to_utc(meta.updated_at_ms)?;
     apply_meta_runtime(&mut session.runtime, &meta);
+    session.bind_runtime_scope();
     session.install_projected_parts(parts);
     Ok(session)
 }

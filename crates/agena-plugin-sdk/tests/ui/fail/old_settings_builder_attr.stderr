@@ -1,0 +1,5 @@
+error: plugin-level `settings_builder = ...` was removed; use `settings = Type`, optional `settings_default`, and presentation-only `settings_metadata`
+  --> tests/ui/fail/old_settings_builder_attr.rs:11:5
+   |
+11 |     settings_builder = SettingsContract::empty_object("Settings", "")
+   |     ^^^^^^^^^^^^^^^^

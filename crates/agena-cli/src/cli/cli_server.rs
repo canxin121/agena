@@ -18,19 +18,19 @@ use super::{
     McpStatusArgs, MemoryCommand, MemoryListArgs, MemoryListOutput, MemorySubcommand,
     MemorySummaryOutput, OutputFormat, PermissionModeArg, PermissionReplyKindArg,
     PermissionScopeArg, PermissionsArgs, PermissionsListArgs, PermissionsOutput,
-    PermissionsSubcommand, PermissionsWriteArgs, PluginInspectArgs, PluginInspectOutput,
-    PluginLogOutputFormat, PluginLogsArgs, PluginLogsOutput, PluginStatusArgs, PluginStatusOutput,
-    PrArgs, PrOutput, ProviderCapabilitiesOutput, ProviderCommand, ProviderDefaultsSummary,
-    ProviderListArgs, ProviderListOutput, ProviderModelsOutput, ProviderSubcommand,
-    ProviderSummary, ResumeArgs, ReviewArgs, SessionDetail, SessionForkOutput, SessionImportOutput,
-    SessionListArgs, SessionListOutput, SessionListView, SessionOutput, SessionSummary,
-    SessionsCommand, SessionsSubcommand, SnapshotArgs, SnapshotBackendSupportOutput,
-    SnapshotCapabilitiesOutput, SnapshotOutput, ToolDescriptor, UsageArgs, WorkflowState,
-    async_trait, browser_login_redirect_uri, filter_session_summaries_by_view, format_apply_output,
-    format_debug_session_output, format_plugin_logs_output, memory_type_label,
-    normalize_login_provider, paginate_session_summaries, permission_rule_output,
-    prompt_browser_login, prompt_device_login, render_serialized, review_prompt, title_from_prompt,
-    usage_stats_query_from_args,
+    PermissionsSubcommand, PermissionsWriteArgs, PluginArchitectureArgs, PluginInspectArgs,
+    PluginInspectOutput, PluginLogOutputFormat, PluginLogsArgs, PluginLogsOutput, PluginStatusArgs,
+    PluginStatusOutput, PrArgs, PrOutput, ProviderCapabilitiesOutput, ProviderCommand,
+    ProviderDefaultsSummary, ProviderListArgs, ProviderListOutput, ProviderModelsOutput,
+    ProviderSubcommand, ProviderSummary, ResumeArgs, ReviewArgs, SessionDetail, SessionForkOutput,
+    SessionImportOutput, SessionListArgs, SessionListOutput, SessionListView, SessionOutput,
+    SessionSummary, SessionsCommand, SessionsSubcommand, SnapshotArgs,
+    SnapshotBackendSupportOutput, SnapshotCapabilitiesOutput, SnapshotOutput, ToolDescriptor,
+    UsageArgs, WorkflowState, async_trait, browser_login_redirect_uri,
+    filter_session_summaries_by_view, format_apply_output, format_debug_session_output,
+    format_plugin_logs_output, memory_type_label, normalize_login_provider,
+    paginate_session_summaries, permission_rule_output, prompt_browser_login, prompt_device_login,
+    render_serialized, review_prompt, title_from_prompt, usage_stats_query_from_args,
 };
 use agena_api::{
     commands::{
@@ -1262,6 +1262,20 @@ impl AgenaCli {
         render_serialized(args.format, &PluginInspectOutput { plugin })
     }
 
+    pub(super) async fn render_server_plugin_architecture(
+        &self,
+        args: PluginArchitectureArgs,
+    ) -> Result<String, AppError> {
+        let client = connect_server_client(self).await?;
+        let value = client
+            .plugin_architecture_catalog()
+            .await
+            .map_err(|error| {
+                client_error("failed to read plugin architecture from server", error)
+            })?;
+        render_serialized(args.format, &value)
+    }
+
     pub(super) async fn render_server_plugin_logs(
         &self,
         args: PluginLogsArgs,
@@ -2288,7 +2302,7 @@ fn mcp_plugin_record(
         Some(serde_json::Value::Object(_)) => {}
         Some(_) => {
             return Err(AppError::Config(
-                "plugins.list.\"agena.mcp\".config must be an object".to_owned(),
+                "plugins.list.\"agena.mcp\".settings must be an object".to_owned(),
             ));
         }
         None => {

@@ -41,7 +41,7 @@ pub struct Application {
     execution_control: Option<Arc<dyn agena_runtime::SessionExecutionControl>>,
     execution_commands: Option<Arc<dyn agena_runtime::SessionExecutionCommandService>>,
     tool_execution: Option<Arc<dyn agena_runtime::SessionToolExecutionService>>,
-    plugin_commands: Option<Arc<dyn agena_runtime::SessionPluginCommandService>>,
+    plugin_operations: Option<Arc<dyn agena_runtime::SessionPluginOperationService>>,
 }
 
 #[derive(Default)]
@@ -72,7 +72,7 @@ pub struct ApplicationSessionServices {
     pub queries: Arc<dyn agena_runtime::SessionQueryService>,
     pub commands: Arc<dyn agena_runtime::SessionExecutionCommandService>,
     pub tool_execution: Arc<dyn agena_runtime::SessionToolExecutionService>,
-    pub plugin_commands: Arc<dyn agena_runtime::SessionPluginCommandService>,
+    pub plugin_operations: Arc<dyn agena_runtime::SessionPluginOperationService>,
 }
 
 /// Authentication flow selected by a transport or terminal command.
@@ -118,7 +118,7 @@ impl Application {
             execution_control,
             execution_commands,
             tool_execution,
-            plugin_commands,
+            plugin_operations,
         } = runtime;
         let application = Self {
             provider_catalog,
@@ -151,7 +151,7 @@ impl Application {
             execution_control,
             execution_commands,
             tool_execution,
-            plugin_commands,
+            plugin_operations,
         };
         application.spawn_notification_aggregator();
         Ok(application)
@@ -815,7 +815,7 @@ impl Application {
             tool_execution: self.tool_execution.clone().ok_or_else(|| {
                 ApplicationError::service_unavailable("session runtime not initialised")
             })?,
-            plugin_commands: self.plugin_commands.clone().ok_or_else(|| {
+            plugin_operations: self.plugin_operations.clone().ok_or_else(|| {
                 ApplicationError::service_unavailable("session runtime not initialised")
             })?,
         })
@@ -849,7 +849,7 @@ impl Application {
         use agena_api::resource::{
             DefaultSelectionResource, ModelCatalogResponse, RuntimeAutomationResource,
             RuntimeLspResource, RuntimeLspServerResource, RuntimeMcpResource,
-            RuntimeMcpServerResource, RuntimeOperatorResource, RuntimePluginUiResource,
+            RuntimeMcpServerResource, RuntimeOperatorResource, RuntimePluginSurfaceResource,
             RuntimeSessionCacheResource, RuntimeSkillResource, RuntimeSkillsResource,
             RuntimeStatusResponse, RuntimeTaskResource,
         };
@@ -1000,8 +1000,10 @@ impl Application {
                 lsp,
                 agent_id: status.agent_id,
                 skills,
-                ui: RuntimePluginUiResource {
-                    catalog: plugin_ui_catalog_resource_from_domain(status.plugin_ui_catalog),
+                plugins: RuntimePluginSurfaceResource {
+                    catalog: plugin_surface_catalog_resource_from_domain(
+                        status.plugin_surface_catalog,
+                    ),
                     tool_registry_generation: status.tool_registry_generation,
                     tool_registry_last_event: status.tool_registry_last_event,
                 },
@@ -1300,20 +1302,29 @@ pub fn model_catalog_source_kind_from_domain(
     }
 }
 
-fn plugin_ui_catalog_resource_from_domain(
-    value: agena_plugin_host::PluginUiCatalog,
-) -> agena_api::resource::PluginUiCatalogResource {
+fn plugin_surface_catalog_resource_from_domain(
+    value: agena_plugin_host::PluginSurfaceCatalog,
+) -> agena_api::resource::PluginSurfaceCatalogResource {
     use agena_api::resource::{
-        PluginCommandResource, PluginDisplayContributionResource,
-        PluginStudioControlOptionResource, PluginStudioControlResource,
-        PluginStudioUiCatalogResource, PluginStudioViewResource, PluginThemeColorsResource,
-        PluginThemePaletteResource, PluginTuiUiCatalogResource, PluginUiCatalogResource,
+        PluginDisplayContributionResource, PluginOperationResource, PluginSurfaceCatalogResource,
+        PluginTerminalSurfaceCatalogResource, PluginThemeColorsResource,
+        PluginThemePaletteResource,
     };
 
-    PluginUiCatalogResource {
-        tui: PluginTuiUiCatalogResource {
+    PluginSurfaceCatalogResource {
+        operations: value
+            .operations
+            .into_iter()
+            .map(|item| PluginOperationResource {
+                plugin_id: item.plugin_id.to_string(),
+                accepts_empty_input: item.accepts_empty_input,
+                default_input: item.default_input,
+                operation: item.operation,
+            })
+            .collect(),
+        terminal: PluginTerminalSurfaceCatalogResource {
             display: value
-                .tui
+                .terminal
                 .display
                 .into_iter()
                 .map(|item| PluginDisplayContributionResource {
@@ -1325,7 +1336,7 @@ fn plugin_ui_catalog_resource_from_domain(
                 })
                 .collect(),
             themes: value
-                .tui
+                .terminal
                 .themes
                 .into_iter()
                 .map(|theme| PluginThemePaletteResource {
@@ -1352,130 +1363,6 @@ fn plugin_ui_catalog_resource_from_domain(
                 })
                 .collect(),
         },
-        studio: PluginStudioUiCatalogResource {
-            commands: value
-                .studio
-                .commands
-                .into_iter()
-                .map(|item| PluginCommandResource {
-                    plugin_id: item.plugin_id.to_string(),
-                    id: item.command.id,
-                    title: item.command.title,
-                    description: item.command.description,
-                    category: item.command.category,
-                    slash: item.command.slash,
-                    aliases: item.command.aliases,
-                    usage: item.command.usage,
-                    location: item.command.location,
-                    input_schema: item.command.input_schema,
-                    handler: item.command.handler,
-                    action: plugin_ui_action_resource_from_domain(item.command.action),
-                })
-                .collect(),
-            controls: value
-                .studio
-                .controls
-                .into_iter()
-                .map(plugin_studio_control_resource_from_domain)
-                .collect(),
-            views: value
-                .studio
-                .views
-                .into_iter()
-                .map(|item| PluginStudioViewResource {
-                    plugin_id: item.plugin_id.to_string(),
-                    id: item.view.id,
-                    title: item.view.title,
-                    description: item.view.description,
-                    location: item.view.location,
-                    kind: item.view.kind,
-                    content: item.view.content,
-                    url: item.view.url,
-                    controls: item
-                        .view
-                        .controls
-                        .into_iter()
-                        .map(|control| PluginStudioControlResource {
-                            plugin_id: item.plugin_id.to_string(),
-                            id: control.id,
-                            title: control.title,
-                            description: control.description,
-                            location: control.location,
-                            kind: control.kind,
-                            options: control
-                                .options
-                                .into_iter()
-                                .map(|option| PluginStudioControlOptionResource {
-                                    label: option.label,
-                                    value: option.value,
-                                    description: option.description,
-                                })
-                                .collect(),
-                            value: control.value,
-                            action: plugin_ui_action_resource_from_domain(control.action),
-                        })
-                        .collect(),
-                })
-                .collect(),
-        },
-    }
-}
-
-fn plugin_studio_control_resource_from_domain(
-    item: agena_plugin_host::PluginStudioControlCatalogItem,
-) -> agena_api::resource::PluginStudioControlResource {
-    agena_api::resource::PluginStudioControlResource {
-        plugin_id: item.plugin_id.to_string(),
-        id: item.control.id,
-        title: item.control.title,
-        description: item.control.description,
-        location: item.control.location,
-        kind: item.control.kind,
-        options: item
-            .control
-            .options
-            .into_iter()
-            .map(
-                |option| agena_api::resource::PluginStudioControlOptionResource {
-                    label: option.label,
-                    value: option.value,
-                    description: option.description,
-                },
-            )
-            .collect(),
-        value: item.control.value,
-        action: plugin_ui_action_resource_from_domain(item.control.action),
-    }
-}
-
-fn plugin_ui_action_resource_from_domain(
-    value: agena_plugin_host::sdk::PluginUiAction,
-) -> agena_api::resource::PluginUiActionResource {
-    match value {
-        agena_plugin_host::sdk::PluginUiAction::None => {
-            agena_api::resource::PluginUiActionResource::None
-        }
-        agena_plugin_host::sdk::PluginUiAction::InvokeTool {
-            tool,
-            input,
-            submit_output_as_prompt,
-        } => agena_api::resource::PluginUiActionResource::InvokeTool {
-            tool,
-            input,
-            submit_output_as_prompt,
-        },
-        agena_plugin_host::sdk::PluginUiAction::OpenPluginWorkbench { tab } => {
-            agena_api::resource::PluginUiActionResource::OpenPluginWorkbench { tab }
-        }
-        agena_plugin_host::sdk::PluginUiAction::OpenUrl { url } => {
-            agena_api::resource::PluginUiActionResource::OpenUrl { url }
-        }
-        agena_plugin_host::sdk::PluginUiAction::SubmitPrompt { prompt } => {
-            agena_api::resource::PluginUiActionResource::SubmitPrompt { prompt }
-        }
-        agena_plugin_host::sdk::PluginUiAction::InvokeCommand { command, input } => {
-            agena_api::resource::PluginUiActionResource::InvokeCommand { command, input }
-        }
     }
 }
 

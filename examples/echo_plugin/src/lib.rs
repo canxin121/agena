@@ -14,10 +14,10 @@ struct EchoPluginConfig {
     uppercase: bool,
 }
 
-#[derive(Default, PluginConfigStore)]
+#[derive(Default, PluginSettingsStore)]
 pub struct EchoPlugin {
-    #[config(default)]
-    config: PluginConfig<EchoPluginConfig>,
+    #[settings(default)]
+    settings: PluginSettings<EchoPluginConfig>,
 }
 
 #[agena_plugin(
@@ -25,12 +25,12 @@ pub struct EchoPlugin {
     name = "echo",
     version = env!("CARGO_PKG_VERSION"),
     summary = "Sample plugin: echo + before/after/shell hooks.",
-    config,
+    settings,
     export = cdylib
 )]
 impl EchoPlugin {
     fn uppercase(&self) -> bool {
-        self.config.get().is_some_and(|config| config.uppercase)
+        self.settings.get().is_some_and(|config| config.uppercase)
     }
 
     #[tool(

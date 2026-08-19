@@ -105,98 +105,6 @@ impl Default for WorkflowPlanConfig {
     }
 }
 
-pub(crate) fn tool_discovery_config_schema() -> serde_json::Value {
-    let mut schema = agena_runtime_tools::tool::definition::json_schema_for_default(
-        ToolDiscoveryConfig::default(),
-    );
-    for (pointer, title, description) in [
-        (
-            "",
-            "Tool Discovery Settings",
-            "Defaults for listing and searching available Agena execution tools.",
-        ),
-        (
-            "/properties/list",
-            "List",
-            "Pagination and summary limits for execution-tool listing.",
-        ),
-        (
-            "/properties/list/properties/default_limit",
-            "Default Limit",
-            "Number of tools returned when tools_list omits limit.",
-        ),
-        (
-            "/properties/list/properties/max_summary_chars",
-            "Max Summary Characters",
-            "Maximum single-line summary length for each listed tool.",
-        ),
-        (
-            "/properties/search",
-            "Search",
-            "Pagination, query, and summary limits for execution-tool search.",
-        ),
-        (
-            "/properties/search/properties/default_limit",
-            "Default Limit",
-            "Number of tool search results returned when the caller omits limit.",
-        ),
-        (
-            "/properties/search/properties/max_query_length",
-            "Max Query Length",
-            "Upper bound enforced for the tool search query length.",
-        ),
-        (
-            "/properties/search/properties/max_summary_chars",
-            "Max Summary Characters",
-            "Maximum single-line summary length for each matching tool.",
-        ),
-        (
-            "/properties/tags",
-            "Tags",
-            "Pagination limits for listing execution-tool tags.",
-        ),
-        (
-            "/properties/tags/properties/default_limit",
-            "Default Limit",
-            "Number of tags returned when tools_tags omits limit.",
-        ),
-    ] {
-        agena_runtime_tools::tool::definition::set_schema_metadata(
-            &mut schema,
-            pointer,
-            Some(title),
-            Some(description),
-        );
-    }
-    schema
-}
-
-pub(crate) fn planning_plugin_config_schema() -> serde_json::Value {
-    let mut schema = agena_runtime_tools::tool::definition::json_schema_for_default(
-        WorkflowPlanConfig::default(),
-    );
-    for (pointer, title, description) in [
-        (
-            "",
-            "Planning Plugin Config",
-            "Defaults for the planning plugin's shared-storage plan state machine.",
-        ),
-        (
-            "/properties/default_autorun",
-            "Default Autorun",
-            "Default autorun value applied when plan.set omits the override.",
-        ),
-    ] {
-        crate::tool::definition::set_schema_metadata(
-            &mut schema,
-            pointer,
-            Some(title),
-            Some(description),
-        );
-    }
-    schema
-}
-
 mod planning_tools;
 mod repo_tools;
 mod runtime_tools;
@@ -444,7 +352,7 @@ mod tests {
         PlanEditTarget, PlanPhaseInput, ToolApiHelpInput, ToolApiStringBatch, ToolDescriptor,
         ToolDiscoveryConfig, WorkflowPlan, WorkflowPlanCheckpoint, WorkflowPlanExecutor,
         WorkflowPlanPhase, WorkflowPlanStep, WorkflowPlanStepStatus, WorkflowPlugin,
-        compact_tool_summary, tool_discovery_config_schema, validate_tool_discovery_config,
+        compact_tool_summary, validate_tool_discovery_config,
     };
     use agena_plugin_host::sdk::{
         Plugin, PluginErrorKind, PluginKey, ToolDefinition, ToolKey, ToolTag,
@@ -477,22 +385,11 @@ mod tests {
         assert_eq!(discovery_limit(Some(0), 20), 1);
         assert_eq!(discovery_limit(Some(10_000), 20), 10_000);
         assert_eq!(discovery_limit(Some(u32::MAX), 20), u32::MAX);
-        let schema = tool_discovery_config_schema();
-        assert!(
-            schema
-                .pointer("/properties/list/properties/max_limit")
-                .is_none()
-        );
-        assert!(
-            schema
-                .pointer("/properties/search/properties/max_limit")
-                .is_none()
-        );
-        assert!(
-            schema
-                .pointer("/properties/tags/properties/max_limit")
-                .is_none()
-        );
+        let contract =
+            agena_plugin_sdk::settings_contract_for_default(ToolDiscoveryConfig::default())
+                .expect("typed tool discovery settings contract");
+        let wire = serde_json::to_string(&contract).expect("serialize tool discovery contract");
+        assert!(!wire.contains("max_limit"));
     }
 
     #[test]

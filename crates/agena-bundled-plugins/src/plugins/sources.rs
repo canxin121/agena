@@ -18,7 +18,7 @@ fn static_entry(config: serde_json::Value) -> ConfiguredPlugin {
 }
 
 pub fn bundled_plugin_entries() -> BTreeMap<String, ConfiguredPlugin> {
-    let mut entries = BTreeMap::from([
+    let entries = BTreeMap::from([
         (
             crate::tool::chatgpt_plugin_id().to_string(),
             static_entry(serde_json::Value::Null),
@@ -112,12 +112,6 @@ pub fn bundled_plugin_entries() -> BTreeMap<String, ConfiguredPlugin> {
             static_entry(serde_json::Value::Null),
         ),
     ]);
-    if crate::tool::schema_lab_builtin_enabled() {
-        entries.insert(
-            crate::tool::schema_lab_plugin_id().to_string(),
-            static_entry(serde_json::Value::Null),
-        );
-    }
     entries
 }
 
@@ -214,12 +208,6 @@ pub fn static_plugin_registrations(
             crate::tool::new_memory_plugin(),
         ),
     ];
-    if crate::tool::schema_lab_builtin_enabled() {
-        registrations.push(StaticPluginRegistration::new(
-            plugin_key(crate::tool::schema_lab_plugin_id()),
-            crate::tool::new_schema_lab_plugin(),
-        ));
-    }
     if let Some(manager) = mcp_manager {
         registrations.push(StaticPluginRegistration::new(
             plugin_key(crate::tool::mcp_plugin_id()),

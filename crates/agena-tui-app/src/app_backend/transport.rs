@@ -140,10 +140,10 @@ struct RemoteBackend {
     runtime_status: tokio::sync::RwLock<Option<agena_api::resource::RuntimeStatusResponse>>,
     /// Cached control projection for Agena's own HTTP MCP surface.
     mcp_server_control: tokio::sync::RwLock<Option<serde_json::Value>>,
-    /// Cached plugin UI catalog (display contributions, theme palettes, slash
+    /// Cached plugin surface catalog (display contributions, theme palettes, slash
     /// commands) fetched from the server. Plugin reads are synchronous in the
     /// TUI event loop.
-    plugin_catalog: tokio::sync::RwLock<Option<agena_plugin_host::PluginUiCatalog>>,
+    plugin_catalog: tokio::sync::RwLock<Option<agena_plugin_host::PluginSurfaceCatalog>>,
     /// Cached plugin statuses fetched from the server.
     plugin_statuses: tokio::sync::RwLock<Vec<agena_plugin_host::status::PluginStatus>>,
     /// Cached plugin details and logs used by the synchronous workbench model.
@@ -705,8 +705,8 @@ impl TuiBackend {
         Ok(())
     }
 
-    /// The cached plugin UI catalog, if loaded from the server.
-    pub(crate) fn plugin_catalog(&self) -> Option<agena_plugin_host::PluginUiCatalog> {
+    /// The cached plugin surface catalog, if loaded from the server.
+    pub(crate) fn plugin_catalog(&self) -> Option<agena_plugin_host::PluginSurfaceCatalog> {
         self.inner
             .plugin_catalog
             .try_read()
@@ -783,13 +783,13 @@ impl TuiBackend {
     /// intentionally separate from workbench status/inspect/log reads so a
     /// run lifecycle signal costs one HTTP request instead of one per plugin.
     pub(crate) async fn refresh_plugin_presentation_snapshot(&self) -> Result<()> {
-        let catalog_response = self.inner.client.plugin_ui_catalog().await?;
+        let catalog_response = self.inner.client.plugin_surface_catalog().await?;
         let catalog = catalog_response
             .get("catalog")
             .cloned()
             .unwrap_or(serde_json::Value::Null);
-        let catalog = serde_json::from_value::<agena_plugin_host::PluginUiCatalog>(catalog)
-            .context("the server returned an undecodable plugin UI catalog")?;
+        let catalog = serde_json::from_value::<agena_plugin_host::PluginSurfaceCatalog>(catalog)
+            .context("the server returned an undecodable plugin surface catalog")?;
         let permission_tools = catalog_response
             .get("permission_tools")
             .cloned()
@@ -1140,19 +1140,19 @@ impl TuiBackend {
         records
     }
 
-    pub async fn invoke_plugin_ui_tool(
+    pub async fn invoke_plugin_tool(
         &self,
         plugin_id: &str,
         tool_name: &str,
         input: serde_json::Value,
         session_id: Option<i64>,
     ) -> std::result::Result<
-        agena_plugin_host::PluginUiToolInvokeResponse,
+        agena_plugin_host::PluginToolInvokeResponse,
         agena_application::ApplicationError,
     > {
         let response = self
             .client()
-            .invoke_plugin_ui_tool(plugin_id, tool_name, input, session_id)
+            .invoke_plugin_tool(plugin_id, tool_name, input, session_id)
             .await
             .map_err(|error| {
                 agena_application::ApplicationError::internal(format!(

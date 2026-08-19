@@ -1,0 +1,5 @@
+error: #[service] requires an explicit `version = N`
+  --> tests/ui/fail/bad_service_missing_version.rs:13:5
+   |
+13 |     #[service("test.echo")]
+   |     ^^^^^^^^^^^^^^^^^^^^^^^

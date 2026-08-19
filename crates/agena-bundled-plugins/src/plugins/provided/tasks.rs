@@ -9,7 +9,7 @@ use agena_plugin_host::sdk::host_api::{
     CancelSubtaskRequest, HostCallbackContext, HostStorageGetRequest, HostStorageListRequest,
     HostStorageScope, HostStorageSetRequest, MessageSubtaskRequest, ReadSubtaskOutputRequest,
     RunSubtaskAccess, RunSubtaskModelSelection, RunSubtaskRequest, RunSubtaskResponse,
-    RunSubtaskStatus, run_in_host_callback_context,
+    RunSubtaskStatus, current_host_callback_context, run_in_host_callback_context,
 };
 use agena_plugin_host::sdk::{
     InitContext, InitOutcome, Result as SdkResult, SessionEndInput, ToolInvokeContext,
@@ -42,8 +42,9 @@ struct AsyncTaskState {
     task_id: String,
     parent_session_id: i64,
     description: String,
-    /// Original instruction is retained only in session-private storage so a
-    /// user can make an explicit post-restart recovery decision. It is never
+    /// Original instruction is retained only in plugin-private durable storage,
+    /// keyed by the parent session, so a user can make an explicit post-restart
+    /// recovery decision. It is never
     /// replayed automatically, because the child session may already contain
     /// that user message when a process died before acknowledging completion.
     prompt: String,
@@ -244,7 +245,7 @@ impl TasksPlugin {
             &entry_state(&self.tasks, &task_id)?,
         )
         .await?;
-        spawn_task(host, Arc::clone(&entry), request, callback_context(context));
+        spawn_task(host, Arc::clone(&entry), request);
         Ok(task_output(
             "Start task",
             format!(
@@ -519,7 +520,7 @@ impl TasksPlugin {
             &entry_state_for_parent(&self.tasks, input.task_id.as_str(), context.session_id)?,
         )
         .await?;
-        spawn_task(host, Arc::clone(&entry), request, callback_context(context));
+        spawn_task(host, Arc::clone(&entry), request);
         Ok(task_output(
             "Follow up task",
             format!("Resumed task '{}' with a follow-up prompt.", input.task_id),
@@ -557,7 +558,7 @@ impl TasksPlugin {
         let callback = HostCallbackContext {
             plugin_id: Some(TASKS_PLUGIN_ID.to_string()),
             session_id: Some(input.session_id),
-            ..Default::default()
+            ..current_host_callback_context().unwrap_or_default()
         };
         for (entry, state) in entries {
             if let Err(error) = run_in_host_callback_context(
@@ -590,8 +591,10 @@ impl TasksPlugin {
         Ok(())
     }
 
-    /// Rebuild task handles for the invoking parent session from
-    /// session-private plugin storage. The child session transcript remains
+    /// Rebuild task handles for the invoking parent session from plugin-private
+    /// durable storage. Keys are namespaced by parent session id so background
+    /// task fibers never need to retain/replay a foreground session authority.
+    /// The child session transcript remains
     /// the source of truth for output; this registry supplies task metadata
     /// after plugin reconstruction.
     ///
@@ -604,16 +607,16 @@ impl TasksPlugin {
         let host = self.inner.host()?;
         let records = host
             .storage_list(HostStorageListRequest {
-                scope: HostStorageScope::Session,
+                scope: HostStorageScope::Global,
                 visibility: Default::default(),
                 namespace: Some(TASK_STORAGE_NAMESPACE.to_string()),
-                prefix: None,
+                prefix: Some(task_storage_prefix(context.session_id)),
             })
             .await?;
         for record in records.records {
             let response = host
                 .storage_get(HostStorageGetRequest {
-                    scope: HostStorageScope::Session,
+                    scope: HostStorageScope::Global,
                     visibility: Default::default(),
                     namespace: TASK_STORAGE_NAMESPACE.to_string(),
                     key: record.key,
@@ -671,7 +674,27 @@ fn callback_context(context: &ToolInvokeContext<'_>) -> HostCallbackContext {
         call_id: Some(context.call_id),
         workspace_root: Some(context.workspace_root.to_string()),
         tool_name: Some(context.tool_name.to_string()),
+        ..current_host_callback_context().unwrap_or_default()
     }
+}
+
+fn detached_task_context() -> HostCallbackContext {
+    HostCallbackContext {
+        plugin_id: Some(TASKS_PLUGIN_ID.to_string()),
+        ..HostCallbackContext::default()
+    }
+}
+
+fn task_storage_prefix(parent_session_id: i64) -> String {
+    format!("{parent_session_id}/")
+}
+
+fn task_storage_key(state: &AsyncTaskState) -> String {
+    format!(
+        "{}{task_id}",
+        task_storage_prefix(state.parent_session_id),
+        task_id = state.task_id
+    )
 }
 
 async fn persist_task_state(
@@ -685,23 +708,23 @@ async fn persist_task_state(
     run_in_host_callback_context(
         context,
         host.storage_set(HostStorageSetRequest {
-            scope: HostStorageScope::Session,
+            scope: HostStorageScope::Global,
             visibility: Default::default(),
             namespace: TASK_STORAGE_NAMESPACE.to_string(),
-            key: state.task_id.clone(),
+            key: task_storage_key(state),
             value,
         }),
     )
     .await
 }
 
-fn spawn_task(
-    host: Arc<dyn HostClient>,
-    entry: Arc<AsyncTaskEntry>,
-    request: RunSubtaskRequest,
-    context: HostCallbackContext,
-) {
+fn spawn_task(host: Arc<dyn HostClient>, entry: Arc<AsyncTaskEntry>, request: RunSubtaskRequest) {
     tokio::spawn(async move {
+        // Detached work deliberately drops session/call/tool authority. The
+        // subtask request carries its parent session explicitly and task state
+        // lives in plugin-private global storage, so the background fiber only
+        // needs the plugin identity granted by ScopedHostClient/transport.
+        let context = detached_task_context();
         let result = run_in_host_callback_context(context.clone(), host.run_subtask(request)).await;
         let persisted = if let Ok(mut state) = entry.state.lock() {
             state.finished_at_ms = Some(chrono::Utc::now().timestamp_millis());

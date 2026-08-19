@@ -865,50 +865,39 @@ pub(crate) struct SkillsPlugin {
     watcher_generation: Arc<AtomicU64>,
 }
 
-fn skills_config_schema() -> serde_json::Value {
-    let mut schema = agena_runtime_tools::tool::definition::json_schema_for_default(
-        SkillsPluginConfig::default(),
-    );
-    for (pointer, title, description) in [
+fn skills_settings_metadata() -> &'static [(&'static str, &'static str, &'static str)] {
+    &[
         (
             "",
             "Skills Plugin Config",
             "Controls discovery policy for filesystem-backed Skills and slash commands.",
         ),
         (
-            "/properties/disabled",
+            "/disabled",
             "Disabled Skills",
             "Canonical Skill or command names to hide from list and get.",
         ),
         (
-            "/properties/additional_roots",
+            "/additional_roots",
             "Additional Skill Roots",
             "Workspace-relative directories scanned after the standard roots.",
         ),
         (
-            "/properties/additional_command_roots",
+            "/additional_command_roots",
             "Additional Command Roots",
             "Workspace-relative directories scanned after the standard command roots.",
         ),
         (
-            "/properties/watcher",
+            "/watcher",
             "Filesystem Watcher",
             "Use the platform filesystem watcher to invalidate the Skill catalog after on-disk changes.",
         ),
         (
-            "/properties/watcher/properties/enabled",
+            "/watcher/enabled",
             "Enabled",
             "Disable only the OS-level watcher; request-driven discovery remains active for every Skill Tool.",
         ),
-    ] {
-        agena_runtime_tools::tool::definition::set_schema_metadata(
-            &mut schema,
-            pointer,
-            Some(title),
-            Some(description),
-        );
-    }
-    schema
+    ]
 }
 
 #[agena_plugin_host::sdk::agena_plugin(
@@ -916,7 +905,9 @@ fn skills_config_schema() -> serde_json::Value {
     name = "skills",
     version = env!("CARGO_PKG_VERSION"),
     summary = "Discover and read plain-text skills and slash commands.",
-    config_schema = skills_config_schema(),
+    settings = SkillsPluginConfig,
+    settings_default = default,
+    settings_metadata = skills_settings_metadata(),
 )]
 impl SkillsPlugin {
     pub(crate) fn new() -> Self {
@@ -954,7 +945,7 @@ impl SkillsPlugin {
     #[hook(init)]
     async fn init(&self, ctx: InitContext, _host: Arc<dyn HostClient>) -> SdkResult<InitOutcome> {
         let config: SkillsPluginConfig =
-            agena_plugin_host::sdk::macro_support::parse_defaulted_config(
+            agena_plugin_host::sdk::macro_support::parse_defaulted_settings(
                 ctx.config,
                 "invalid skills plugin config",
             )?;

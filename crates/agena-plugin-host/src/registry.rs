@@ -266,6 +266,13 @@ impl PluginToolRegistry {
         self.generation
     }
 
+    /// Advance the shared catalog epoch for a mutation stored outside the
+    /// global manifest registry (for example a session-scoped overlay).
+    pub fn touch_generation(&mut self) -> u64 {
+        self.generation = self.generation.saturating_add(1);
+        self.generation
+    }
+
     pub fn snapshot(&self) -> ToolRegistrySnapshot {
         ToolRegistrySnapshot {
             generation: self.generation,

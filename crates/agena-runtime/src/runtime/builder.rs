@@ -1076,8 +1076,14 @@ impl agena_runtime::PluginRuntimeService for AgenaRuntime {
             .plugin_status(plugin_id)
     }
 
-    fn plugin_ui_catalog(&self) -> agena_plugin_host::PluginUiCatalog {
-        self.current_snapshot().plugin_manager().ui_catalog()
+    fn plugin_surface_catalog(&self) -> agena_plugin_host::PluginSurfaceCatalog {
+        self.current_snapshot().plugin_manager().surface_catalog()
+    }
+
+    fn plugin_architecture_catalog(&self) -> agena_plugin_host::PluginArchitectureCatalog {
+        self.current_snapshot()
+            .plugin_manager()
+            .architecture_catalog()
     }
 
     fn permission_tool_catalog(&self) -> Vec<agena_runtime::RuntimePluginToolCatalogItem> {
@@ -1122,8 +1128,8 @@ impl agena_runtime::PluginRuntimeService for AgenaRuntime {
         self.current_snapshot().plugin_manager().theme_palettes()
     }
 
-    fn studio_commands(&self) -> Vec<agena_plugin_host::PluginCommandCatalogItem> {
-        self.current_snapshot().plugin_manager().studio_commands()
+    fn operation_catalog(&self) -> Vec<agena_plugin_host::PluginOperationCatalogItem> {
+        self.current_snapshot().plugin_manager().operation_catalog()
     }
 
     fn tool_registry_generation(&self) -> u64 {
@@ -1159,16 +1165,6 @@ impl agena_runtime::PluginRuntimeService for AgenaRuntime {
             .plugin_logs(plugin_id, after_seq, limit)
     }
 
-    fn resolve_studio_action(
-        &self,
-        plugin_id: &str,
-        action_id: &str,
-    ) -> Option<agena_plugin_host::PluginUiAction> {
-        self.current_snapshot()
-            .plugin_manager()
-            .resolve_studio_action(plugin_id, action_id)
-    }
-
     fn resolve_plugin_tool(
         &self,
         plugin_id: Option<&str>,
@@ -1186,13 +1182,13 @@ impl agena_runtime::PluginRuntimeService for AgenaRuntime {
         })
     }
 
-    async fn invoke_plugin_command(
+    async fn invoke_plugin_operation(
         &self,
         plugin_id: &str,
-        input: agena_plugin_host::sdk::PluginCommandInvokeInput,
-    ) -> Result<agena_plugin_host::sdk::PluginCommandOutput, String> {
+        input: agena_plugin_host::sdk::PluginOperationInvokeInput,
+    ) -> Result<agena_plugin_host::sdk::PluginOperationResult, String> {
         let host = self.current_snapshot().plugin_manager();
-        host.invoke_plugin_command_async(plugin_id, input)
+        host.invoke_plugin_operation_async(plugin_id, input)
             .await
             .map_err(|error| error.to_string())
     }
@@ -2076,7 +2072,7 @@ impl agena_runtime::RuntimeStatusService for AgenaRuntime {
             lsp,
             skills,
             agent_id: agena_runtime_contracts::identity::AGENA_AGENT_ID.to_string(),
-            plugin_ui_catalog: plugin_manager.ui_catalog(),
+            plugin_surface_catalog: plugin_manager.surface_catalog(),
             tool_registry_generation: plugin_manager.tool_registry_generation(),
             tool_registry_last_event: plugin_manager
                 .tool_registry_events_since(None, 1)
@@ -2251,9 +2247,9 @@ impl AgenaRuntime {
         let tool_execution = session_manager
             .as_ref()
             .map(|manager| manager.clone() as Arc<dyn agena_runtime::SessionToolExecutionService>);
-        let plugin_commands = session_manager
-            .as_ref()
-            .map(|manager| manager.clone() as Arc<dyn agena_runtime::SessionPluginCommandService>);
+        let plugin_operations = session_manager.as_ref().map(|manager| {
+            manager.clone() as Arc<dyn agena_runtime::SessionPluginOperationService>
+        });
         agena_runtime::compose_runtime_application_services(
             agena_runtime::RuntimeApplicationServiceCompositionInputs {
                 workspace_root: self.workspace_root().to_path_buf(),
@@ -2291,7 +2287,7 @@ impl AgenaRuntime {
                 execution_control,
                 execution_commands,
                 tool_execution,
-                plugin_commands,
+                plugin_operations,
             },
         )
     }

@@ -6,7 +6,7 @@ import test from 'node:test'
 test('appearance settings enumerate Agena tools and persist exact expansion overrides', () => {
   const source = readFileSync(resolve(import.meta.dir, '../src/pages/SettingsPage.vue'), 'utf8')
 
-  assert.ok(source.includes("apiJson<ToolCatalogResponse>('/api/v1/plugins/ui')"))
+  assert.ok(source.includes("apiJson<ToolCatalogResponse>('/api/v1/plugins/surface')"))
   assert.ok(source.includes('response?.permission_tools'))
   assert.ok(source.includes('chatToolActivityDefaultExpandedOverrides'))
   assert.ok(source.includes('normalizeChatToolPreferenceId'))

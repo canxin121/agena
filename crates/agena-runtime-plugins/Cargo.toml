@@ -51,8 +51,7 @@ url = { workspace = true }
 tempfile = { workspace = true }
 
 [features]
-default = ["schema-lab"]
-schema-lab = []
+default = []
 plugin-wasm = ["agena-plugin-host/wasm"]
 plugin-signing = ["agena-plugin-host/signing"]
 

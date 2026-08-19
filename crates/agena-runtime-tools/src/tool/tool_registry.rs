@@ -611,6 +611,10 @@ pub struct ToolExecutor {
     pub(super) principal: ExecutionPrincipal,
     pub(super) allowed_tool_names: Option<std::collections::HashSet<String>>,
     pub(super) model_id: Option<String>,
+    /// Opaque plugin capability scope selected from the runtime-only session
+    /// carrier. All catalog/permission/execution lookups for this executor use
+    /// this exact scope snapshot.
+    pub(super) plugin_scope: Option<agena_plugin_host::PluginScopeKey>,
     /// Definition-hook output captured for one scoped request/turn.
     ///
     /// Tool identity, permission, availability, and execution must all see

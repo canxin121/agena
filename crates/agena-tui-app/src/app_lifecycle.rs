@@ -528,10 +528,10 @@ fn tui_palette_with_plugin(
     })
 }
 
-fn tui_plugin_color(color: Option<&agena_plugin_sdk::PluginTuiColor>) -> Option<Color> {
+fn tui_plugin_color(color: Option<&agena_plugin_sdk::PluginTerminalColor>) -> Option<Color> {
     color.map(|color| {
         agena_tui_components::theme::parse_color(color.as_str())
-            .expect("PluginTuiColor guarantees the canonical TUI color grammar")
+            .expect("PluginTerminalColor guarantees the canonical TUI color grammar")
     })
 }
 

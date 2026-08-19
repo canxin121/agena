@@ -63,10 +63,10 @@ pub(crate) fn trimmed_owned(value: &str) -> Option<String> {
 // Config JSON helpers (migrated from backend_config.rs)
 // ---------------------------------------------------------------------------
 
-/// Resolve a `plugins.list.<id>.config.*` path into its plugin id and the
+/// Resolve a `plugins.list.<id>.settings.*` path into its plugin id and the
 /// remaining config segments. Returns `None` when the path is not a plugin
 /// config target.
-pub(crate) fn plugin_config_setting_target(
+pub(crate) fn plugin_settings_setting_target(
     path: &str,
 ) -> anyhow::Result<Option<(String, Vec<String>)>> {
     let segments =
@@ -89,7 +89,7 @@ pub(crate) fn default_static_plugin_record() -> JsonValue {
     })
 }
 
-pub(crate) fn plugin_record_for_config_edit(
+pub(crate) fn plugin_record_for_settings_edit(
     sources: &crate::dto::ConfigJsonSources,
     plugin_id: &str,
 ) -> JsonValue {
@@ -105,7 +105,7 @@ pub(crate) fn plugin_record_for_config_edit(
         .unwrap_or_else(default_static_plugin_record)
 }
 
-pub(crate) fn normalize_plugin_record_for_config_edit(
+pub(crate) fn normalize_plugin_record_for_settings_edit(
     record: &mut JsonValue,
 ) -> anyhow::Result<&mut JsonValue> {
     if !record.is_object() {

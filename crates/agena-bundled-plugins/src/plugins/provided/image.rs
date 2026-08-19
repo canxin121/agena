@@ -327,13 +327,14 @@ impl OpenAiToolsPlugin {
     name = "openai",
     version = env!("CARGO_PKG_VERSION"),
     summary = "OpenAI official service capabilities exposed as ordinary Agena tools.",
-    config_schema = agena_plugin_sdk::macro_support::json_schema_for_default(OpenAiToolsConfig::default()),
+    settings = OpenAiToolsConfig,
+    settings_default = default,
 )]
 impl OpenAiToolsPlugin {
     #[hook(init)]
     async fn init(&self, ctx: InitContext, _host: Arc<dyn HostClient>) -> SdkResult<InitOutcome> {
         let config: OpenAiToolsConfig =
-            agena_plugin_host::sdk::macro_support::parse_defaulted_config(
+            agena_plugin_host::sdk::macro_support::parse_defaulted_settings(
                 ctx.config,
                 "invalid OpenAI tools plugin config",
             )?;

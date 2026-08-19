@@ -1,0 +1,5 @@
+error: plugin-level `exports(...)` was removed; define provider methods with method-level `#[service(...)]` or `#[service(Endpoint)]`
+  --> tests/ui/fail/old_plugin_exports_attr.rs:11:5
+   |
+11 |     exports(PluginServiceExport::new("test.echo", 1))
+   |     ^^^^^^^

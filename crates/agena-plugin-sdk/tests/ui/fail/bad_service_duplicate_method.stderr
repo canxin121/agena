@@ -1,0 +1,5 @@
+error: duplicate #[service] method `test.echo@v1::query`
+  --> tests/ui/fail/bad_service_duplicate_method.rs:13:50
+   |
+13 |     #[service("test.echo", version = 1, method = "query")]
+   |                                                  ^^^^^^^

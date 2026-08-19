@@ -86,70 +86,59 @@ impl Default for SettingsEditDefaultsConfig {
     }
 }
 
-fn settings_config_schema() -> JsonValue {
-    let mut schema = agena_runtime_tools::tool::definition::json_schema_for_default(
-        SettingsPluginConfig::default(),
-    );
-    for (pointer, title, description) in [
+fn settings_plugin_metadata() -> &'static [(&'static str, &'static str, &'static str)] {
+    &[
         (
             "",
             "Settings Plugin Config",
             "Default read and edit behavior for the agena.settings plugin.",
         ),
         (
-            "/properties/reads",
+            "/reads",
             "Reads",
             "Defaults applied when reading or listing settings through settings.",
         ),
         (
-            "/properties/reads/properties/source",
+            "/reads/source",
             "Default Source",
             "Which settings source is used when get/list calls omit source.",
         ),
         (
-            "/properties/reads/properties/file_layer",
+            "/reads/file_layer",
             "Default Read Layer",
             "Which persisted config file is read when source=file and layer is omitted.",
         ),
         (
-            "/properties/reads/properties/effective_scope",
+            "/reads/effective_scope",
             "Effective Scope",
             "Which branch of the effective settings snapshot is read when source=effective and scope is omitted.",
         ),
         (
-            "/properties/reads/properties/list_recursive",
+            "/reads/list_recursive",
             "List Recursively",
             "Whether list calls recurse into nested structures when recursive is omitted.",
         ),
         (
-            "/properties/edits",
+            "/edits",
             "Edits",
             "Defaults applied when mutating agena.json through set, delete, or patch.",
         ),
         (
-            "/properties/edits/properties/file_layer",
+            "/edits/file_layer",
             "Default Edit Layer",
             "Which persisted config file is edited when layer is omitted.",
         ),
         (
-            "/properties/edits/properties/validate_by_default",
+            "/edits/validate_by_default",
             "Validate by Default",
             "Runs config validation unless the caller explicitly disables it.",
         ),
         (
-            "/properties/edits/properties/reload_after_write",
+            "/edits/reload_after_write",
             "Reload After Write",
             "Reloads the active runtime configuration after a successful write unless the caller overrides it.",
         ),
-    ] {
-        agena_runtime_tools::tool::definition::set_schema_metadata(
-            &mut schema,
-            pointer,
-            Some(title),
-            Some(description),
-        );
-    }
-    schema
+    ]
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInput, Default)]
@@ -343,7 +332,9 @@ struct SettingsInspectResponse {
     name = "settings",
     version = env!("CARGO_PKG_VERSION"),
     summary = "Inspect and edit Agena's global and workspace agena.json settings.",
-    config_schema = settings_config_schema(),
+    settings = SettingsPluginConfig,
+    settings_default = default,
+    settings_metadata = settings_plugin_metadata(),
 )]
 impl SettingsPlugin {
     pub(crate) fn new() -> Self {
@@ -359,7 +350,7 @@ impl SettingsPlugin {
         ctx: agena_plugin_host::sdk::InitContext,
         host: Arc<dyn HostClient>,
     ) -> SdkResult<agena_plugin_host::sdk::InitOutcome> {
-        let config = agena_plugin_host::sdk::macro_support::parse_defaulted_config(
+        let config = agena_plugin_host::sdk::macro_support::parse_defaulted_settings(
             ctx.config,
             "invalid settings plugin config",
         )?;

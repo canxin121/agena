@@ -63,9 +63,9 @@ impl App {
         let Some((name, _)) = commands::parse_invocation(input) else {
             return false;
         };
-        self.plugin_slash_commands()
+        self.plugin_slash_operations()
             .iter()
-            .any(|entry| plugin_command_matches_name(entry, name))
+            .any(|entry| plugin_operation_matches_name(entry, name))
     }
 
     /// Primary submit action (Ctrl+Enter by default). When the AI is
@@ -207,11 +207,11 @@ impl App {
                 return;
             }
             if let Some(entry) = self
-                .plugin_slash_commands()
+                .plugin_slash_operations()
                 .into_iter()
-                .find(|entry| plugin_command_matches_name(entry, name))
+                .find(|entry| plugin_operation_matches_name(entry, name))
             {
-                self.execute_plugin_slash_command(entry, args);
+                self.execute_plugin_slash_operation(entry, args);
                 return;
             }
         }
@@ -302,5 +302,5 @@ use crate::{
     App, AppMessage, ComposerDraft, Instant, PermissionReplyKind, PermissionRequest,
     PermissionScope, RunActivityTarget, RunOperation, commands,
     composer_draft_with_text_prefix_stripped, derive_session_title, draft_title_source,
-    plugin_command_matches_name, run_status_line_command, ui_text,
+    plugin_operation_matches_name, run_status_line_command, ui_text,
 };

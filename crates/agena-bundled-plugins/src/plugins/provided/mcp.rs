@@ -31,107 +31,94 @@ pub(crate) struct McpPlugin {
     manager: Arc<McpConnectionManager>,
 }
 
-fn mcp_config_schema() -> Value {
-    agena_runtime_tools::tool::definition::json_schema_for_default_with_metadata(
-        default_mcp_config(),
-        &[
-            (
-                "",
-                "MCP Plugin Config",
-                "Runtime settings and named server definitions for the agena.mcp bridge.",
-            ),
-            (
-                "/properties/runtime",
-                "Runtime",
-                "Bridge-level settings that apply to all MCP servers.",
-            ),
-            (
-                "/properties/runtime/properties/token_store",
-                "Token Store",
-                "Controls whether the default MCP token store is available for bearer-from-store authentication.",
-            ),
-            (
-                "/properties/runtime/properties/token_store/properties/enabled",
-                "Enabled",
-                "Enables MCP credential lookup for bearer-from-store authentication.",
-            ),
-            (
-                "/properties/runtime/properties/token_store/properties/backend",
-                "Credential Backend",
-                "Uses the operating-system keyring by default. Select file only for explicit legacy compatibility.",
-            ),
-            (
-                "/properties/runtime/properties/token_store/properties/file_fallback",
-                "Legacy File Fallback",
-                "When keyring is selected, optionally read the legacy chmod-600 token file after keyring lookup misses or is unavailable; this never writes credentials into configuration.",
-            ),
-            (
-                "/properties/servers",
-                "Servers",
-                "Named MCP server definitions keyed by server identifier.",
-            ),
-            (
-                "/properties/servers/additionalProperties",
-                "Server",
-                "A single MCP server transport definition.",
-            ),
-            (
-                "/properties/servers/additionalProperties/oneOf/0",
-                "Stdio Server",
-                "Launches an MCP server as a child process and communicates over stdio.",
-            ),
-            (
-                "/properties/servers/additionalProperties/oneOf/0/properties/process",
-                "Process",
-                "Command, arguments, environment, and working directory for the stdio MCP server.",
-            ),
-            (
-                "/properties/servers/additionalProperties/oneOf/0/properties/process/properties/command",
-                "Command",
-                "Executable used to launch the stdio MCP server.",
-            ),
-            (
-                "/properties/servers/additionalProperties/oneOf/0/properties/process/properties/args",
-                "Arguments",
-                "Command-line arguments passed to the stdio MCP server.",
-            ),
-            (
-                "/properties/servers/additionalProperties/oneOf/0/properties/process/properties/env",
-                "Environment",
-                "Environment variables injected into the stdio MCP server process.",
-            ),
-            (
-                "/properties/servers/additionalProperties/oneOf/0/properties/process/properties/cwd",
-                "Working Directory",
-                "Working directory used when starting the stdio MCP server process.",
-            ),
-            (
-                "/properties/servers/additionalProperties/oneOf/1",
-                "HTTP Server",
-                "Connects to a streamable HTTP MCP server.",
-            ),
-            (
-                "/properties/servers/additionalProperties/oneOf/1/properties/endpoint",
-                "Endpoint",
-                "HTTP endpoint and headers used to connect to the MCP server.",
-            ),
-            (
-                "/properties/servers/additionalProperties/oneOf/1/properties/endpoint/properties/url",
-                "URL",
-                "Base URL for the HTTP MCP server.",
-            ),
-            (
-                "/properties/servers/additionalProperties/oneOf/1/properties/endpoint/properties/headers",
-                "Headers",
-                "Static HTTP headers attached to each request to this MCP server.",
-            ),
-            (
-                "/properties/servers/additionalProperties/oneOf/1/properties/auth",
-                "Authentication",
-                "Optional authentication strategy used for the HTTP MCP server.",
-            ),
-        ],
-    )
+fn mcp_settings_metadata() -> &'static [(&'static str, &'static str, &'static str)] {
+    &[
+        (
+            "",
+            "MCP Plugin Config",
+            "Runtime settings and named server definitions for the agena.mcp bridge.",
+        ),
+        (
+            "/runtime",
+            "Runtime",
+            "Bridge-level settings that apply to all MCP servers.",
+        ),
+        (
+            "/runtime/token_store",
+            "Token Store",
+            "Controls whether the default MCP token store is available for bearer-from-store authentication.",
+        ),
+        (
+            "/runtime/token_store/enabled",
+            "Enabled",
+            "Enables MCP credential lookup for bearer-from-store authentication.",
+        ),
+        (
+            "/runtime/token_store/backend",
+            "Credential Backend",
+            "Uses the operating-system keyring by default. Select file only for explicit legacy compatibility.",
+        ),
+        (
+            "/runtime/token_store/file_fallback",
+            "Legacy File Fallback",
+            "When keyring is selected, optionally read the legacy chmod-600 token file after keyring lookup misses or is unavailable; this never writes credentials into configuration.",
+        ),
+        (
+            "/servers",
+            "Servers",
+            "Named MCP server definitions keyed by server identifier.",
+        ),
+        (
+            "/servers/*",
+            "Server",
+            "A single MCP server transport definition.",
+        ),
+        (
+            "/servers/*/process",
+            "Process",
+            "Command, arguments, environment, and working directory for the stdio MCP server.",
+        ),
+        (
+            "/servers/*/process/command",
+            "Command",
+            "Executable used to launch the stdio MCP server.",
+        ),
+        (
+            "/servers/*/process/args",
+            "Arguments",
+            "Command-line arguments passed to the stdio MCP server.",
+        ),
+        (
+            "/servers/*/process/env",
+            "Environment",
+            "Environment variables injected into the stdio MCP server process.",
+        ),
+        (
+            "/servers/*/process/cwd",
+            "Working Directory",
+            "Working directory used when starting the stdio MCP server process.",
+        ),
+        (
+            "/servers/*/endpoint",
+            "Endpoint",
+            "HTTP endpoint and headers used to connect to the MCP server.",
+        ),
+        (
+            "/servers/*/endpoint/url",
+            "URL",
+            "Base URL for the HTTP MCP server.",
+        ),
+        (
+            "/servers/*/endpoint/headers",
+            "Headers",
+            "Static HTTP headers attached to each request to this MCP server.",
+        ),
+        (
+            "/servers/*/auth",
+            "Authentication",
+            "Optional authentication strategy used for the HTTP MCP server.",
+        ),
+    ]
 }
 
 fn default_mcp_config() -> McpConfig {
@@ -146,7 +133,9 @@ fn default_mcp_config() -> McpConfig {
     name = "mcp",
     version = env!("CARGO_PKG_VERSION"),
     summary = "MCP discovery and bridge tools.",
-    config_schema = mcp_config_schema(),
+    settings = McpConfig,
+    settings_default = default_mcp_config(),
+    settings_metadata = mcp_settings_metadata(),
 )]
 impl McpPlugin {
     pub(crate) fn new(manager: Arc<McpConnectionManager>) -> Self {
@@ -1159,9 +1148,27 @@ fn content_block_summary(block: &ContentBlock) -> String {
 mod tests {
     use std::sync::Arc;
 
-    use agena_plugin_host::sdk::Plugin;
+    use agena_plugin_host::sdk::{Plugin, SettingsNode, SettingsNodeKind};
 
     use super::{McpConnectionManager, McpPlugin, mcp_tool_index_fingerprint};
+
+    fn node_at<'a>(node: &'a SettingsNode, path: &str) -> Option<&'a SettingsNode> {
+        if node.path == path {
+            return Some(node);
+        }
+        match &node.kind {
+            SettingsNodeKind::Object { fields } => {
+                fields.iter().find_map(|field| node_at(field, path))
+            }
+            SettingsNodeKind::List { item } => node_at(item, path),
+            SettingsNodeKind::Record { value } => node_at(value, path),
+            SettingsNodeKind::TaggedVariant { variants, .. } => variants
+                .iter()
+                .flat_map(|variant| variant.fields.iter())
+                .find_map(|field| node_at(field, path)),
+            _ => None,
+        }
+    }
 
     #[test]
     fn manifest_exposes_search_health_and_reconnect() {
@@ -1174,6 +1181,23 @@ mod tests {
         for name in ["tools.search", "servers.status", "servers.reconnect"] {
             assert!(names.contains(&name), "missing {name}");
         }
+        let settings = manifest.settings.expect("typed MCP settings contract");
+        settings.validate().expect("valid MCP settings contract");
+        assert_eq!(settings.root.title, "MCP Plugin Config");
+        let servers = node_at(&settings.root, "/servers").expect("MCP servers node");
+        let SettingsNodeKind::Record { value } = &servers.kind else {
+            panic!("MCP servers must remain a typed record");
+        };
+        let SettingsNodeKind::TaggedVariant { variants, .. } = &value.kind else {
+            panic!("MCP server values must remain tagged variants");
+        };
+        assert_eq!(
+            variants
+                .iter()
+                .map(|variant| variant.title.as_str())
+                .collect::<Vec<_>>(),
+            ["Stdio", "HTTP"]
+        );
     }
 
     #[test]

@@ -5,22 +5,10 @@ use crate::plugins::provided::workflow::{
 };
 use agena_plugin_host::sdk::host_api::HostClient;
 use agena_plugin_host::sdk::{
-    InitContext, InitOutcome, PluginCommandOutput, PluginUiAction, Result as SdkResult,
-    ToolInvokeOutput,
+    EmptyPluginSettings, InitContext, InitOutcome, Result as SdkResult, ToolInvokeOutput,
 };
 
 pub(crate) const SNAPSHOT_PLUGIN_ID: &str = "agena.snapshot";
-
-fn snapshot_config_schema() -> serde_json::Value {
-    serde_json::json!({
-        "title": "Snapshot Plugin Config",
-        "description": "Snapshot behavior is selected per invocation; this plugin has no persistent settings.",
-        "type": "object",
-        "properties": {},
-        "additionalProperties": false,
-        "default": {}
-    })
-}
 
 pub(crate) struct SnapshotPlugin {
     inner: WorkflowPlugin,
@@ -31,25 +19,14 @@ pub(crate) struct SnapshotPlugin {
     name = "snapshot",
     version = env!("CARGO_PKG_VERSION"),
     summary = "Managed snapshot tools backed by Rift or git worktree.",
-    config_schema = snapshot_config_schema(),
+    settings = EmptyPluginSettings,
+    settings_default = default,
 )]
 impl SnapshotPlugin {
     pub(crate) fn new() -> Self {
         Self {
             inner: WorkflowPlugin::new(),
         }
-    }
-
-    #[command(
-        id = "snapshot.open",
-        title = "Open Snapshot",
-        description = "Open Snapshot tools in Plugin Workbench.",
-        slash = "/snapshot",
-        usage = "/snapshot",
-        action = PluginUiAction::OpenPluginWorkbench { tab: Some("tools".to_string()) }
-    )]
-    async fn command_open(&self) -> PluginCommandOutput {
-        PluginCommandOutput::open_plugin_workbench(Some("tools"))
     }
 
     #[hook(init)]
@@ -125,30 +102,18 @@ impl SnapshotPlugin {
 
 #[cfg(test)]
 mod tests {
-    use agena_plugin_host::sdk::{Plugin, PluginUiAction, ToolTag};
+    use agena_plugin_host::sdk::{Plugin, SettingsNodeKind, ToolTag};
 
     use super::SnapshotPlugin;
 
     #[test]
-    fn manifest_exposes_snapshot_slash_command() {
+    fn manifest_exposes_snapshot_settings_contract() {
         let manifest = SnapshotPlugin::new().manifest();
-        let command = manifest
-            .commands
-            .iter()
-            .find(|command| command.id == "snapshot.open")
-            .expect("snapshot command");
-
-        assert_eq!(command.slash.as_deref(), Some("/snapshot"));
-        assert!(matches!(
-            &command.action,
-            PluginUiAction::OpenPluginWorkbench { tab } if tab.as_deref() == Some("tools")
-        ));
-        let schema = manifest
-            .config_schema
-            .expect("explicit empty config schema");
-        assert_eq!(schema["type"], "object");
-        assert_eq!(schema["additionalProperties"], false);
-        assert_eq!(schema["properties"], serde_json::json!({}));
+        let settings = manifest.settings.expect("explicit empty settings contract");
+        settings.validate().expect("valid empty settings contract");
+        assert!(
+            matches!(settings.root.kind, SettingsNodeKind::Object { ref fields } if fields.is_empty())
+        );
         assert_eq!(manifest.tools[0].name, "status");
         assert!(
             manifest.tools[0].tags.contains(&ToolTag::Snapshot),

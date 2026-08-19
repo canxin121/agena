@@ -5,8 +5,8 @@
 //! Demonstrates the recommended plugin shape: a single `agena_plugin`
 //! attribute macro on the plugin `impl`, one `#[tool(...)]` method per
 //! model-visible tool (`format`, `write`), derived `ToolInput` structs,
-//! structured outputs, a custom streaming path, and plugin configuration via
-//! `PluginConfig<T>`.
+//! structured outputs, a custom streaming path, and plugin settings via
+//! `PluginSettings<T>`.
 
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -63,10 +63,10 @@ struct WriteNoteOutput {
     bytes: usize,
 }
 
-#[derive(Default, PluginConfigStore)]
+#[derive(Default, PluginSettingsStore)]
 struct NotesPlugin {
-    #[config(default)]
-    config: PluginConfig<NotesConfig>,
+    #[settings(default)]
+    settings: PluginSettings<NotesConfig>,
 }
 
 #[agena_plugin(
@@ -74,16 +74,16 @@ struct NotesPlugin {
     name = "notes",
     version = env!("CARGO_PKG_VERSION"),
     summary = "Multi-tool stdio plugin example for notes formatting and file writes.",
-    config,
+    settings,
     export = stdio
 )]
 impl NotesPlugin {
-    fn config(&self) -> NotesConfig {
-        self.config.get().cloned().unwrap_or_default()
+    fn settings(&self) -> NotesConfig {
+        self.settings.get().cloned().unwrap_or_default()
     }
 
     fn render(&self, text: &str) -> String {
-        let config = self.config();
+        let config = self.settings();
         let rendered = format!("{}{}", config.prefix, text);
         if config.uppercase {
             rendered.to_uppercase()

@@ -348,7 +348,7 @@ async function loadChatToolCatalog() {
   toolCatalogLoading.value = true
   toolCatalogError.value = ''
   try {
-    const response = await apiJson<ToolCatalogResponse>('/api/v1/plugins/ui')
+    const response = await apiJson<ToolCatalogResponse>('/api/v1/plugins/surface')
     toolCatalogItems.value = Array.isArray(response?.permission_tools) ? response.permission_tools : []
     const activityKinds = normalizeChatActivityKindCatalog(response?.activity_kinds)
     activityKindCatalogItems.value = activityKinds.length ? activityKinds : BUILTIN_CHAT_ACTIVITY_KINDS.slice()

@@ -85,10 +85,10 @@ async function loadCatalog() {
   loadingCatalog.value = true
   catalogError.value = ''
   try {
-    const response = await apiJson<ToolCatalogResponse>('/api/v1/plugins/ui')
+    const response = await apiJson<ToolCatalogResponse>('/api/v1/plugins/surface')
     const kinds = normalizeChatActivityKindCatalog(response?.activity_kinds)
     activityKinds.value = kinds
-    themeOptions.value = (Array.isArray(response?.catalog?.tui?.themes) ? response.catalog.tui.themes : [])
+    themeOptions.value = (Array.isArray(response?.catalog?.terminal?.themes) ? response.catalog.terminal.themes : [])
       .map((theme) => {
         const id = String(theme?.id || '').trim()
         const label = String(theme?.display_name || id).trim()

@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use crate::plugins::provided::workflow::{
-    ToolApiHelpInput, ToolApiListInput, ToolApiSearchInput, ToolApiTagsInput, WorkflowPlanConfig,
-    WorkflowPlugin, WorkflowPluginConfig, tool_discovery_config_schema,
+    ToolApiHelpInput, ToolApiListInput, ToolApiSearchInput, ToolApiTagsInput, ToolDiscoveryConfig,
+    WorkflowPlanConfig, WorkflowPlugin, WorkflowPluginConfig,
 };
 use agena_plugin_host::sdk::host_api::HostClient;
 use agena_plugin_host::sdk::{InitContext, InitOutcome, Result as SdkResult, ToolInvokeOutput};
@@ -18,7 +18,8 @@ pub(crate) struct ToolApiPlugin {
     name = "tools",
     version = env!("CARGO_PKG_VERSION"),
     summary = "Tool API discovery functions. The runtime resolves tools_call directly to its execution target.",
-    config_schema = tool_discovery_config_schema(),
+    settings = ToolDiscoveryConfig,
+    settings_default = default,
 )]
 impl ToolApiPlugin {
     pub(crate) fn new() -> Self {
@@ -29,7 +30,7 @@ impl ToolApiPlugin {
 
     #[hook(init)]
     async fn init(&self, ctx: InitContext, host: Arc<dyn HostClient>) -> SdkResult<InitOutcome> {
-        let tool_discovery = agena_plugin_host::sdk::macro_support::parse_defaulted_config(
+        let tool_discovery = agena_plugin_host::sdk::macro_support::parse_defaulted_settings(
             ctx.config.clone(),
             "invalid tools config",
         )?;

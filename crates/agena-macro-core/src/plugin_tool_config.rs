@@ -6,7 +6,7 @@ use syn::punctuated::Punctuated;
 use syn::{Attribute, Expr, Ident, LitStr, Meta, Result, Token, parse_quote};
 
 use crate::{
-    PluginToolAttrConfig, PluginToolCommandConfig, PluginToolNetworkPermissionRule,
+    PluginToolAttrConfig, PluginToolNetworkPermissionRule, PluginToolOperationConfig,
     PluginToolPathPermissionRule, default_tool_name, empty_tool_spec_config, expr_lit_bool,
     expr_lit_str, expr_path, expr_path_ident, parse_expr_list, parse_item_lit_str_list,
     parse_item_path_expr_constraint, parse_item_path_expr_list_constraint,
@@ -41,7 +41,7 @@ fn parse_plugin_inline_tool_config(
     let mut stream_method = None;
     let mut permission_path_rules = Vec::new();
     let mut permission_network_rules = Vec::new();
-    let mut command = None;
+    let mut operation = None;
 
     for meta in metas {
         match meta {
@@ -79,14 +79,11 @@ fn parse_plugin_inline_tool_config(
                         spec.concurrency_safe = expr_lit_bool(&value.value, "concurrency_safe")?
                     }
                     "strict" => spec.strict = expr_lit_bool(&value.value, "strict")?,
-                    "command" => {
-                        let config = PluginToolCommandConfig {
-                            slash: Some(expr_lit_str(&value.value, "command")?),
-                            ..PluginToolCommandConfig::default()
-                        };
-                        if command.replace(config).is_some() {
-                            return Err(syn::Error::new_spanned(ident, "duplicate command config"));
-                        }
+                    "operation" => {
+                        return Err(syn::Error::new_spanned(
+                            ident,
+                            "use `operation(...)` for operation metadata",
+                        ));
                     }
                     other => {
                         return Err(syn::Error::new_spanned(
@@ -273,12 +270,15 @@ fn parse_plugin_inline_tool_config(
                         let rules = parse_inline_network_permission_rules(list.tokens)?;
                         permission_network_rules.extend(rules);
                     }
-                    "command" => {
-                        if command
-                            .replace(parse_inline_tool_command_config(list.tokens)?)
+                    "operation" => {
+                        if operation
+                            .replace(parse_inline_tool_operation_config(list.tokens)?)
                             .is_some()
                         {
-                            return Err(syn::Error::new_spanned(ident, "duplicate command config"));
+                            return Err(syn::Error::new_spanned(
+                                ident,
+                                "duplicate operation config",
+                            ));
                         }
                     }
                     other => {
@@ -296,12 +296,15 @@ fn parse_plugin_inline_tool_config(
                 match ident.to_string().as_str() {
                     "concurrency_safe" => spec.concurrency_safe = true,
                     "strict" => spec.strict = true,
-                    "command" => {
-                        if command
-                            .replace(PluginToolCommandConfig::default())
+                    "operation" => {
+                        if operation
+                            .replace(PluginToolOperationConfig::default())
                             .is_some()
                         {
-                            return Err(syn::Error::new_spanned(ident, "duplicate command config"));
+                            return Err(syn::Error::new_spanned(
+                                ident,
+                                "duplicate operation config",
+                            ));
                         }
                     }
                     // Authority-bearing capability flags. These live on the
@@ -333,17 +336,17 @@ fn parse_plugin_inline_tool_config(
         stream_method,
         permission_path_rules,
         permission_network_rules,
-        command,
+        operation,
     })
 }
 
-fn parse_inline_tool_command_config(
+fn parse_inline_tool_operation_config(
     tokens: proc_macro2::TokenStream,
-) -> Result<PluginToolCommandConfig> {
-    let args = syn::parse2::<crate::PluginCommandAttrArgs>(tokens)?;
-    let mut config = PluginToolCommandConfig {
+) -> Result<PluginToolOperationConfig> {
+    let args = syn::parse2::<crate::PluginOperationAttrArgs>(tokens)?;
+    let mut config = PluginToolOperationConfig {
         slash: args.slash,
-        ..PluginToolCommandConfig::default()
+        ..PluginToolOperationConfig::default()
     };
     for meta in args.metas {
         match meta {
@@ -352,9 +355,9 @@ fn parse_inline_tool_command_config(
                     return Err(syn::Error::new_spanned(value.path, "expected identifier"));
                 };
                 match ident.to_string().as_str() {
-                    "id" | "name" => config.id = Some(expr_lit_str(&value.value, "id")?),
+                    "id" => config.id = Some(expr_lit_str(&value.value, "id")?),
                     "title" => config.title = Some(expr_lit_str(&value.value, "title")?),
-                    "description" | "summary" => {
+                    "description" => {
                         config.description = Some(expr_lit_str(&value.value, "description")?)
                     }
                     "category" => config.category = Some(expr_lit_str(&value.value, "category")?),
@@ -368,15 +371,11 @@ fn parse_inline_tool_command_config(
                         }
                     }
                     "usage" => config.usage = Some(expr_lit_str(&value.value, "usage")?),
-                    "location" => config.location = Some(expr_lit_str(&value.value, "location")?),
-                    "submit_output_as_prompt" => {
-                        config.submit_output_as_prompt =
-                            expr_lit_bool(&value.value, "submit_output_as_prompt")?
-                    }
+                    "group" => config.group = Some(expr_lit_str(&value.value, "group")?),
                     other => {
                         return Err(syn::Error::new_spanned(
                             ident,
-                            format!("unsupported tool command argument '{other}'"),
+                            format!("unsupported tool operation argument '{other}'"),
                         ));
                     }
                 }
@@ -390,7 +389,7 @@ fn parse_inline_tool_command_config(
                     other => {
                         return Err(syn::Error::new_spanned(
                             ident,
-                            format!("unsupported tool command list '{other}'"),
+                            format!("unsupported tool operation list '{other}'"),
                         ));
                     }
                 }
@@ -400,11 +399,10 @@ fn parse_inline_tool_command_config(
                     return Err(syn::Error::new_spanned(path, "expected identifier"));
                 };
                 match ident.to_string().as_str() {
-                    "submit_output_as_prompt" => config.submit_output_as_prompt = true,
                     other => {
                         return Err(syn::Error::new_spanned(
                             ident,
-                            format!("unsupported tool command flag '{other}'"),
+                            format!("unsupported tool operation flag '{other}'"),
                         ));
                     }
                 }
@@ -416,7 +414,7 @@ fn parse_inline_tool_command_config(
     {
         return Err(syn::Error::new_spanned(
             slash,
-            "tool command slash value must start with `/`",
+            "tool operation slash value must start with `/`",
         ));
     }
     Ok(config)

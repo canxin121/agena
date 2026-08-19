@@ -98,29 +98,71 @@ pub(super) fn validate_plugin_target(
     } else if value.get("package").is_some() {
         target_kind = "configured_plugin".to_string();
         validate_configured_plugin_value("$", &value, base_dir, &BTreeMap::new(), &mut messages);
-    } else if let Some(plugin_list) = value.pointer("/plugins/list").and_then(|v| v.as_object()) {
+    } else if let Some(plugins_value) = value.get("plugins") {
         target_kind = "agena_config".to_string();
         let trusted_keys = value
             .pointer("/plugins/host/trusted_keys")
             .cloned()
-            .and_then(|v| serde_json::from_value::<BTreeMap<String, String>>(v).ok())
+            .and_then(|value| serde_json::from_value::<BTreeMap<String, String>>(value).ok())
             .unwrap_or_default();
-        if plugin_list.is_empty() {
-            push_warning(
+        match serde_json::from_value::<agena_plugin_host::PluginsConfig>(plugins_value.clone()) {
+            Ok(plugins) => match plugins.resolved_profile_view() {
+                Ok(resolution) => {
+                    if resolution.list.is_empty() {
+                        push_warning(
+                            &mut messages,
+                            "config.plugins.empty",
+                            "resolved plugins.list is empty",
+                            Some("$.plugins.list"),
+                        );
+                    }
+                    for (plugin_id, configured) in &resolution.list {
+                        let configured_value =
+                            serde_json::to_value(configured).map_err(|error| {
+                                AppError::Internal(format!(
+                                    "failed to serialize resolved plugin `{plugin_id}`: {error}"
+                                ))
+                            })?;
+                        validate_configured_plugin_value(
+                            &format!("$.plugins.list.{plugin_id}"),
+                            &configured_value,
+                            base_dir,
+                            &trusted_keys,
+                            &mut messages,
+                        );
+                    }
+                    match agena_plugin_host::plan_plugin_activation(&resolution.list) {
+                        Ok(plan) => {
+                            for block in plan.blocked.values() {
+                                push_error(
+                                    &mut messages,
+                                    format!("config.plugin.activation.{}", block.code),
+                                    block.message.clone(),
+                                    Some(format!("$.plugins.list.{}.activation", block.plugin_id)),
+                                );
+                            }
+                        }
+                        Err(message) => push_error(
+                            &mut messages,
+                            "config.plugin.activation.invalid",
+                            message,
+                            Some("$.plugins.list"),
+                        ),
+                    }
+                }
+                Err(message) => push_error(
+                    &mut messages,
+                    "config.plugin.profile.invalid",
+                    message,
+                    Some("$.plugins.profiles"),
+                ),
+            },
+            Err(error) => push_error(
                 &mut messages,
-                "config.plugins.empty",
-                "plugins.list is empty",
-                Some("$.plugins.list"),
-            );
-        }
-        for (plugin_id, plugin_value) in plugin_list {
-            validate_configured_plugin_value(
-                &format!("$.plugins.list.{plugin_id}"),
-                plugin_value,
-                base_dir,
-                &trusted_keys,
-                &mut messages,
-            );
+                "config.plugins.decode",
+                error.to_string(),
+                Some("$.plugins"),
+            ),
         }
     } else {
         push_error(
@@ -191,20 +233,22 @@ pub(super) fn validate_plugin_manifest_value(
         path,
         &[
             "schema_version",
+            "namespace",
             "name",
             "version",
-            "description",
             "summary",
             "help",
             "authors",
             "transports",
             "hooks",
             "tools",
-            "commands",
-            "plugin_capabilities",
-            "ui",
-            "config_schema",
-            "config_schema_i18n",
+            "operations",
+            "services",
+            "activity_kinds",
+            "tags",
+            "skills",
+            "surface",
+            "settings",
         ],
         "manifest.unknown_field",
         output,
@@ -278,16 +322,24 @@ pub(super) fn validate_plugin_manifest_value(
         }
     }
     validate_tool_name_collisions(&manifest, path, output);
-    validate_manifest_ui_actions(&manifest, path, output);
-
-    if let Some(schema) = manifest.config_schema.as_ref() {
-        validate_schema_defaults(&format!("{path}.config_schema"), schema, output);
-    }
-    for (locale, schema) in &manifest.config_schema_i18n {
-        validate_schema_defaults(
-            &format!("{path}.config_schema_i18n.{locale}"),
-            schema,
+    validate_manifest_operations(&manifest, path, output);
+    if let Err(error) = manifest.services.validate() {
+        push_error(
             output,
+            "manifest.services.invalid",
+            error.to_string(),
+            Some(format!("{path}.services")),
+        );
+    }
+
+    if let Some(settings) = manifest.settings.as_ref()
+        && let Err(error) = settings.validate()
+    {
+        push_error(
+            output,
+            "manifest.settings.invalid",
+            error.to_string(),
+            Some(format!("{path}.settings")),
         );
     }
 
@@ -450,55 +502,45 @@ pub(super) fn validate_tool_name_collisions(
     }
 }
 
-pub(super) fn validate_manifest_ui_actions(
+pub(super) fn validate_manifest_operations(
     manifest: &agena_plugin_host::PluginManifest,
     path: &str,
     output: &mut PluginValidationMessages,
 ) {
+    use agena_plugin_host::sdk::PluginOperationTarget;
+
     let known_tools = manifest
         .tools
         .iter()
         .map(|tool| tool.name.as_str())
         .collect::<HashSet<_>>();
-    for (idx, command) in manifest.commands.iter().enumerate() {
-        validate_ui_action_tool(
-            &command.action,
-            &known_tools,
-            &format!("{path}.commands[{idx}].action"),
-            output,
-        );
-    }
-    for (idx, control) in manifest.ui.studio.controls.iter().enumerate() {
-        validate_ui_action_tool(
-            &control.action,
-            &known_tools,
-            &format!("{path}.ui.studio.controls[{idx}].action"),
-            output,
-        );
-    }
-}
-
-pub(super) fn validate_ui_action_tool(
-    action: &agena_plugin_host::PluginUiAction,
-    known_tools: &HashSet<&str>,
-    path: &str,
-    output: &mut PluginValidationMessages,
-) {
-    if let agena_plugin_host::PluginUiAction::InvokeTool { tool, .. } = action {
-        if tool.contains('/') {
+    let mut ids = HashSet::new();
+    for (idx, operation) in manifest.operations.iter().enumerate() {
+        let operation_path = format!("{path}.operations[{idx}]");
+        if !ids.insert(operation.id.as_str()) {
             push_error(
                 output,
-                "ui.action.tool.invalid",
-                "UI action tool must use the local tool name or model-visible dotted tool name, not plugin/tool",
-                Some(format!("{path}.tool")),
+                "operation.id.duplicate",
+                format!("duplicate operation id `{}`", operation.id),
+                Some(format!("{operation_path}.id")),
             );
         }
-        if !known_tools.contains(tool.as_str()) && !tool.contains("__") && !tool.contains('.') {
-            push_warning(
+        if let Err(error) = operation.validate() {
+            push_error(
                 output,
-                "ui.action.tool.unknown",
-                format!("UI action references unknown local tool `{tool}`"),
-                Some(format!("{path}.tool")),
+                "operation.invalid",
+                error.to_string(),
+                Some(operation_path.clone()),
+            );
+        }
+        if let PluginOperationTarget::Tool { tool } = &operation.target
+            && !known_tools.contains(tool.as_str())
+        {
+            push_error(
+                output,
+                "operation.target.tool.unknown",
+                format!("operation references unknown local tool `{tool}`"),
+                Some(format!("{operation_path}.target.tool")),
             );
         }
     }
@@ -663,125 +705,6 @@ pub(super) fn validate_raw_hook_array(
                 Some(item_path),
             );
         }
-    }
-}
-
-pub(super) fn validate_schema_defaults(
-    path: &str,
-    schema: &serde_json::Value,
-    output: &mut PluginValidationMessages,
-) {
-    let Some(object) = schema.as_object() else {
-        return;
-    };
-    if let Some(default_value) = object.get("default") {
-        validate_default_matches_schema(path, schema, default_value, output);
-    }
-    for key in ["properties", "$defs", "definitions"] {
-        if let Some(children) = object.get(key).and_then(|v| v.as_object()) {
-            for (name, child) in children {
-                validate_schema_defaults(&format!("{path}.{key}.{name}"), child, output);
-            }
-        }
-    }
-    if let Some(items) = object.get("items") {
-        validate_schema_defaults(&format!("{path}.items"), items, output);
-    }
-    for key in ["oneOf", "anyOf", "allOf"] {
-        if let Some(items) = object.get(key).and_then(|v| v.as_array()) {
-            for (idx, child) in items.iter().enumerate() {
-                validate_schema_defaults(&format!("{path}.{key}[{idx}]"), child, output);
-            }
-        }
-    }
-}
-
-pub(super) fn validate_default_matches_schema(
-    path: &str,
-    schema: &serde_json::Value,
-    default_value: &serde_json::Value,
-    output: &mut PluginValidationMessages,
-) {
-    if let Some(enum_values) = schema.get("enum").and_then(|v| v.as_array())
-        && !enum_values.iter().any(|value| value == default_value)
-    {
-        push_error(
-            output,
-            "config_schema.default.enum",
-            "default value is not present in enum",
-            Some(format!("{path}.default")),
-        );
-    }
-    if let Some(type_names) = schema_type_names(schema)
-        && !type_names
-            .iter()
-            .any(|type_name| json_value_matches_type(default_value, type_name))
-    {
-        push_error(
-            output,
-            "config_schema.default.type",
-            format!(
-                "default value does not match schema type {}",
-                type_names.join("|")
-            ),
-            Some(format!("{path}.default")),
-        );
-    }
-    if let Some(required) = schema.get("required").and_then(|v| v.as_array())
-        && let Some(default_object) = default_value.as_object()
-    {
-        for required_name in required.iter().filter_map(|v| v.as_str()) {
-            if !default_object.contains_key(required_name) {
-                push_error(
-                    output,
-                    "config_schema.default.required",
-                    format!("default object is missing required field `{required_name}`"),
-                    Some(format!("{path}.default")),
-                );
-            }
-        }
-    }
-    if let (Some(properties), Some(default_object)) = (
-        schema.get("properties").and_then(|v| v.as_object()),
-        default_value.as_object(),
-    ) {
-        for (name, property_schema) in properties {
-            if let Some(child_default) = default_object.get(name) {
-                validate_default_matches_schema(
-                    &format!("{path}.properties.{name}"),
-                    property_schema,
-                    child_default,
-                    output,
-                );
-            }
-        }
-    }
-}
-
-pub(super) fn schema_type_names(schema: &serde_json::Value) -> Option<Vec<String>> {
-    let value = schema.get("type")?;
-    if let Some(name) = value.as_str() {
-        return Some(vec![name.to_string()]);
-    }
-    Some(
-        value
-            .as_array()?
-            .iter()
-            .filter_map(|item| item.as_str().map(str::to_string))
-            .collect(),
-    )
-}
-
-pub(super) fn json_value_matches_type(value: &serde_json::Value, type_name: &str) -> bool {
-    match type_name {
-        "null" => value.is_null(),
-        "boolean" => value.is_boolean(),
-        "string" => value.is_string(),
-        "number" => value.is_number(),
-        "integer" => value.as_i64().is_some() || value.as_u64().is_some(),
-        "object" => value.is_object(),
-        "array" => value.is_array(),
-        _ => true,
     }
 }
 
@@ -1038,4 +961,188 @@ pub(super) fn push_warning(
         message: message.into(),
         path: path.map(Into::into),
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use super::validate_plugin_target;
+
+    static VALIDATION_FIXTURE_COUNTER: AtomicU64 = AtomicU64::new(1);
+
+    fn validate_config(value: serde_json::Value) -> super::PluginValidateOutput {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time after epoch")
+            .as_nanos();
+        let counter = VALIDATION_FIXTURE_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let path = PathBuf::from(format!(
+            "/tmp/agena-plugin-validation-{}-{nonce}-{counter}.json",
+            std::process::id()
+        ));
+        std::fs::write(
+            &path,
+            serde_json::to_vec_pretty(&value).expect("encode validation fixture"),
+        )
+        .expect("write validation fixture");
+        let output = validate_plugin_target(&path, false).expect("validate fixture");
+        let _ = std::fs::remove_file(path);
+        output
+    }
+
+    #[test]
+    fn plugin_validation_reports_missing_required_dependencies() {
+        let output = validate_config(serde_json::json!({
+            "plugins": {
+                "list": {
+                    "example.consumer": {
+                        "package": { "kind": "static" },
+                        "activation": { "requires": ["example.provider"] }
+                    }
+                }
+            }
+        }));
+
+        assert!(!output.ok);
+        assert!(output.errors.iter().any(|message| {
+            message.code == "config.plugin.activation.required_dependency_unavailable"
+                && message.message.contains("example.provider")
+        }));
+    }
+
+    #[test]
+    fn plugin_validation_accepts_missing_soft_ordering_hints() {
+        let output = validate_config(serde_json::json!({
+            "plugins": {
+                "list": {
+                    "example.consumer": {
+                        "package": { "kind": "static" },
+                        "activation": { "after": ["example.optional-observer"] }
+                    }
+                }
+            }
+        }));
+
+        assert!(output.ok, "soft ordering hints must not block: {output:#?}");
+    }
+
+    #[test]
+    fn plugin_validation_reports_required_dependency_cycles() {
+        let output = validate_config(serde_json::json!({
+            "plugins": {
+                "list": {
+                    "example.a": {
+                        "package": { "kind": "static" },
+                        "activation": { "requires": ["example.b"] }
+                    },
+                    "example.b": {
+                        "package": { "kind": "static" },
+                        "activation": { "requires": ["example.a"] }
+                    }
+                }
+            }
+        }));
+
+        assert_eq!(
+            output
+                .errors
+                .iter()
+                .filter(|message| {
+                    message.code == "config.plugin.activation.required_dependency_cycle"
+                })
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn plugin_validation_applies_inherited_profiles_before_activation() {
+        let output = validate_config(serde_json::json!({
+            "plugins": {
+                "list": {
+                    "example.consumer": {
+                        "package": { "kind": "static" },
+                        "activation": { "requires": ["example.provider"] },
+                        "config": { "mode": "base" }
+                    },
+                    "example.provider": {
+                        "enabled": false,
+                        "package": { "kind": "static" }
+                    }
+                },
+                "profiles": {
+                    "base": {
+                        "plugins": {
+                            "example.provider": {
+                                "action": "patch",
+                                "enabled": true
+                            }
+                        }
+                    },
+                    "coding": {
+                        "extends": ["base"],
+                        "plugins": {
+                            "example.consumer": {
+                                "action": "patch",
+                                "config_patch": { "mode": "coding" }
+                            }
+                        }
+                    }
+                },
+                "active_profiles": ["coding"]
+            }
+        }));
+
+        assert!(
+            output.ok,
+            "profile must enable provider before activation: {output:#?}"
+        );
+    }
+
+    #[test]
+    fn plugin_validation_reports_invalid_profile_patch_targets() {
+        let output = validate_config(serde_json::json!({
+            "plugins": {
+                "profiles": {
+                    "workspace": {
+                        "plugins": {
+                            "example.missing": {
+                                "action": "patch",
+                                "enabled": false
+                            }
+                        }
+                    }
+                },
+                "active_profiles": ["workspace"]
+            }
+        }));
+
+        assert!(!output.ok);
+        assert!(output.errors.iter().any(|message| {
+            message.code == "config.plugin.profile.invalid"
+                && message.message.contains("example.missing")
+                && message.message.contains("action=replace")
+        }));
+    }
+
+    #[test]
+    fn plugin_validation_reports_profile_inheritance_cycles() {
+        let output = validate_config(serde_json::json!({
+            "plugins": {
+                "profiles": {
+                    "a": { "extends": ["b"] },
+                    "b": { "extends": ["a"] }
+                },
+                "active_profiles": ["a"]
+            }
+        }));
+
+        assert!(!output.ok);
+        assert!(output.errors.iter().any(|message| {
+            message.code == "config.plugin.profile.invalid" && message.message.contains("cycle")
+        }));
+    }
 }

@@ -53,18 +53,6 @@ fn tool_input_format_constraints_apply_to_parse_schema_and_usage() {
         PathFormatInput::input_usage().as_deref(),
         Some("https://example.com")
     );
-
-    let manifest = Plugin::manifest(&ManifestPlugin);
-    let path_command = command_by_id(&manifest, "path_format");
-    assert_eq!(
-        path_command.usage.as_deref(),
-        Some("/path-format https://example.com")
-    );
-    let renamed_command = command_by_id(&manifest, "renamed_format");
-    assert_eq!(
-        renamed_command.usage.as_deref(),
-        Some("/renamed-format https://example.com")
-    );
 }
 
 #[test]
@@ -140,15 +128,6 @@ fn tool_input_pattern_constraints_apply_to_parse_schema_and_usage() {
         RenamedPatternInput::input_usage().as_deref(),
         Some("<slug>")
     );
-
-    let manifest = Plugin::manifest(&ManifestPlugin);
-    let path_command = command_by_id(&manifest, "path_pattern");
-    assert_eq!(path_command.usage.as_deref(), Some("/path-pattern <slug>"));
-    let renamed_command = command_by_id(&manifest, "renamed_pattern");
-    assert_eq!(
-        renamed_command.usage.as_deref(),
-        Some("/renamed-pattern <slug>")
-    );
 }
 
 #[test]
@@ -218,12 +197,6 @@ fn tool_input_numeric_constraints_apply_to_parse_schema_and_usage() {
         Some(&json!(["count_value", "legacyCount"]))
     );
     assert_eq!(RenamedNumericInput::input_usage().as_deref(), Some("2"));
-
-    let manifest = Plugin::manifest(&ManifestPlugin);
-    let path_command = command_by_id(&manifest, "path_number");
-    assert_eq!(path_command.usage.as_deref(), Some("/path-number 2"));
-    let renamed_command = command_by_id(&manifest, "renamed_number");
-    assert_eq!(renamed_command.usage.as_deref(), Some("/renamed-number 2"));
 }
 
 #[test]
@@ -290,18 +263,6 @@ fn tool_input_exclusive_numeric_constraints_apply_to_parse_schema_and_usage() {
     assert_eq!(
         RenamedExclusiveNumericInput::input_usage().as_deref(),
         Some("3")
-    );
-
-    let manifest = Plugin::manifest(&ManifestPlugin);
-    let path_command = command_by_id(&manifest, "path_exclusive_number");
-    assert_eq!(
-        path_command.usage.as_deref(),
-        Some("/path-exclusive-number 3")
-    );
-    let renamed_command = command_by_id(&manifest, "renamed_exclusive_number");
-    assert_eq!(
-        renamed_command.usage.as_deref(),
-        Some("/renamed-exclusive-number 3")
     );
 }
 
@@ -379,24 +340,6 @@ fn tool_input_object_property_constraints_apply_to_parse_and_schema() {
     assert_eq!(
         renamed_schema.pointer("/properties/metadata/x-agena-aliases"),
         Some(&json!(["metadata_value", "legacyMetadata"]))
-    );
-
-    let manifest = Plugin::manifest(&ManifestPlugin);
-    let path_command = command_by_id(&manifest, "path_object");
-    assert_eq!(
-        path_command
-            .input_schema
-            .as_ref()
-            .and_then(|schema| schema.pointer("/properties/labels/minProperties")),
-        Some(&json!(1))
-    );
-    let renamed_command = command_by_id(&manifest, "renamed_object");
-    assert_eq!(
-        renamed_command
-            .input_schema
-            .as_ref()
-            .and_then(|schema| schema.pointer("/properties/metadata/maxProperties")),
-        Some(&json!(2))
     );
 }
 
@@ -485,24 +428,6 @@ fn tool_input_item_constraints_apply_to_parse_and_schema() {
         renamed_schema.pointer("/properties/tags/x-agena-aliases"),
         Some(&json!(["tag_values", "legacyTags"]))
     );
-
-    let manifest = Plugin::manifest(&ManifestPlugin);
-    let path_command = command_by_id(&manifest, "path_item_pattern");
-    assert_eq!(
-        path_command
-            .input_schema
-            .as_ref()
-            .and_then(|schema| schema.pointer("/properties/tags/items/pattern")),
-        Some(&json!("^[a-z0-9-]+$"))
-    );
-    let renamed_command = command_by_id(&manifest, "renamed_item_pattern");
-    assert_eq!(
-        renamed_command
-            .input_schema
-            .as_ref()
-            .and_then(|schema| schema.pointer("/properties/tags/items/maxLength")),
-        Some(&json!(16))
-    );
 }
 
 #[test]
@@ -567,24 +492,6 @@ fn tool_input_item_choice_constraints_apply_to_parse_and_schema() {
         renamed_schema.pointer("/properties/tools/x-agena-aliases"),
         Some(&json!(["tool_values", "legacyTools"]))
     );
-
-    let manifest = Plugin::manifest(&ManifestPlugin);
-    let path_command = command_by_id(&manifest, "path_item_choice");
-    assert_eq!(
-        path_command
-            .input_schema
-            .as_ref()
-            .and_then(|schema| schema.pointer("/properties/tools/items/enum")),
-        Some(&json!(["cargo", "git"]))
-    );
-    let renamed_command = command_by_id(&manifest, "renamed_item_choice");
-    assert_eq!(
-        renamed_command
-            .input_schema
-            .as_ref()
-            .and_then(|schema| schema.pointer("/properties/tools/items/enum")),
-        Some(&json!(["cargo", "git"]))
-    );
 }
 
 #[test]
@@ -644,32 +551,6 @@ fn tool_input_item_format_constraints_apply_to_parse_and_schema() {
     assert_eq!(
         RenamedItemFormatInput::input_usage().as_deref(),
         Some("[\"550e8400-e29b-41d4-a716-446655440000\"]")
-    );
-
-    let manifest = Plugin::manifest(&ManifestPlugin);
-    let path_command = command_by_id(&manifest, "path_item_format");
-    assert_eq!(
-        path_command.usage.as_deref(),
-        Some("/path-item-format [\"550e8400-e29b-41d4-a716-446655440000\"]")
-    );
-    assert_eq!(
-        path_command
-            .input_schema
-            .as_ref()
-            .and_then(|schema| schema.pointer("/properties/ids/items/format")),
-        Some(&json!("uuid"))
-    );
-    let renamed_command = command_by_id(&manifest, "renamed_item_format");
-    assert_eq!(
-        renamed_command.usage.as_deref(),
-        Some("/renamed-item-format [\"550e8400-e29b-41d4-a716-446655440000\"]")
-    );
-    assert_eq!(
-        renamed_command
-            .input_schema
-            .as_ref()
-            .and_then(|schema| schema.pointer("/properties/ids/items/format")),
-        Some(&json!("uuid"))
     );
 }
 
@@ -754,24 +635,6 @@ fn tool_input_item_numeric_constraints_apply_to_parse_and_schema() {
         renamed_schema.pointer("/properties/counts/x-agena-aliases"),
         Some(&json!(["count_values", "legacyCounts"]))
     );
-
-    let manifest = Plugin::manifest(&ManifestPlugin);
-    let path_command = command_by_id(&manifest, "path_item_number");
-    assert_eq!(
-        path_command
-            .input_schema
-            .as_ref()
-            .and_then(|schema| schema.pointer("/properties/counts/items/minimum")),
-        Some(&json!(2))
-    );
-    let renamed_command = command_by_id(&manifest, "renamed_item_number");
-    assert_eq!(
-        renamed_command
-            .input_schema
-            .as_ref()
-            .and_then(|schema| schema.pointer("/properties/counts/items/maximum")),
-        Some(&json!(4))
-    );
 }
 
 #[test]
@@ -851,18 +714,6 @@ fn tool_input_item_exclusive_numeric_constraints_apply_to_parse_and_schema() {
     assert_eq!(
         RenamedItemExclusiveNumericInput::input_usage().as_deref(),
         Some("[3]")
-    );
-
-    let manifest = Plugin::manifest(&ManifestPlugin);
-    let path_command = command_by_id(&manifest, "path_item_exclusive_number");
-    assert_eq!(
-        path_command.usage.as_deref(),
-        Some("/path-item-exclusive-number [3]")
-    );
-    let renamed_command = command_by_id(&manifest, "renamed_item_exclusive_number");
-    assert_eq!(
-        renamed_command.usage.as_deref(),
-        Some("/renamed-item-exclusive-number [3]")
     );
 }
 
@@ -947,24 +798,6 @@ fn tool_input_item_object_constraints_apply_to_parse_and_schema() {
         renamed_schema.pointer("/properties/entries/x-agena-aliases"),
         Some(&json!(["entry_values", "legacyEntries"]))
     );
-
-    let manifest = Plugin::manifest(&ManifestPlugin);
-    let path_command = command_by_id(&manifest, "path_item_object");
-    assert_eq!(
-        path_command
-            .input_schema
-            .as_ref()
-            .and_then(|schema| schema.pointer("/properties/entries/items/minProperties")),
-        Some(&json!(1))
-    );
-    let renamed_command = command_by_id(&manifest, "renamed_item_object");
-    assert_eq!(
-        renamed_command
-            .input_schema
-            .as_ref()
-            .and_then(|schema| schema.pointer("/properties/entries/items/maxProperties")),
-        Some(&json!(2))
-    );
 }
 
 #[test]
@@ -1017,24 +850,6 @@ fn tool_input_item_normalization_and_non_empty_sugar_apply_to_parse_and_schema()
     assert_eq!(
         renamed_schema.pointer("/properties/tags/x-agena-aliases"),
         Some(&json!(["tag_values", "legacyTags"]))
-    );
-
-    let manifest = Plugin::manifest(&ManifestPlugin);
-    let path_command = command_by_id(&manifest, "path_item_normalize");
-    assert_eq!(
-        path_command
-            .input_schema
-            .as_ref()
-            .and_then(|schema| schema.pointer("/properties/tags/items/minLength")),
-        Some(&json!(1))
-    );
-    let renamed_command = command_by_id(&manifest, "renamed_item_normalize");
-    assert_eq!(
-        renamed_command
-            .input_schema
-            .as_ref()
-            .and_then(|schema| schema.pointer("/properties/tags/items/minLength")),
-        Some(&json!(1))
     );
 }
 
@@ -1090,24 +905,6 @@ fn tool_input_item_non_empty_if_present_sugar_applies_to_optional_arrays() {
     assert_eq!(
         renamed_schema.pointer("/properties/tags/x-agena-aliases"),
         Some(&json!(["tag_values", "legacyTags"]))
-    );
-
-    let manifest = Plugin::manifest(&ManifestPlugin);
-    let path_command = command_by_id(&manifest, "path_item_optional_non_empty");
-    assert_eq!(
-        path_command
-            .input_schema
-            .as_ref()
-            .and_then(|schema| schema.pointer("/properties/tags/items/minLength")),
-        Some(&json!(1))
-    );
-    let renamed_command = command_by_id(&manifest, "renamed_item_optional_non_empty");
-    assert_eq!(
-        renamed_command
-            .input_schema
-            .as_ref()
-            .and_then(|schema| schema.pointer("/properties/tags/items/minLength")),
-        Some(&json!(1))
     );
 }
 
@@ -1242,24 +1039,6 @@ fn tool_input_direct_array_string_constraints_auto_target_items() {
         renamed_schema.pointer("/properties/tags/x-agena-aliases"),
         Some(&json!(["tag_values", "legacyTags"]))
     );
-
-    let manifest = Plugin::manifest(&ManifestPlugin);
-    let path_command = command_by_id(&manifest, "path_auto_item_string");
-    assert_eq!(
-        path_command
-            .input_schema
-            .as_ref()
-            .and_then(|schema| schema.pointer("/properties/tags/items/minLength")),
-        Some(&json!(3))
-    );
-    let renamed_command = command_by_id(&manifest, "renamed_auto_item_string");
-    assert_eq!(
-        renamed_command
-            .input_schema
-            .as_ref()
-            .and_then(|schema| schema.pointer("/properties/tags/items/pattern")),
-        Some(&json!("^[a-z0-9-]+$"))
-    );
 }
 
 #[test]
@@ -1321,26 +1100,7 @@ fn tool_input_direct_array_numeric_constraints_auto_target_items() {
         renamed_schema.pointer("/properties/counts/x-agena-aliases"),
         Some(&json!(["count_values", "legacyCounts"]))
     );
-
-    let manifest = Plugin::manifest(&ManifestPlugin);
-    let path_command = command_by_id(&manifest, "path_auto_item_number");
-    assert_eq!(
-        path_command
-            .input_schema
-            .as_ref()
-            .and_then(|schema| schema.pointer("/properties/counts/items/minimum")),
-        Some(&json!(2))
-    );
-    let renamed_command = command_by_id(&manifest, "renamed_auto_item_number");
-    assert_eq!(
-        renamed_command
-            .input_schema
-            .as_ref()
-            .and_then(|schema| schema.pointer("/properties/counts/items/maximum")),
-        Some(&json!(4))
-    );
 }
-use super::ManifestPlugin;
 use super::{
     PathAutoItemNumericInput, PathAutoItemStringInput, PathExclusiveNumericInput, PathFormatInput,
     PathItemChoiceInput, PathItemExclusiveNumericInput, PathItemFormatInput,
@@ -1351,6 +1111,6 @@ use super::{
     RenamedItemExclusiveNumericInput, RenamedItemFormatInput, RenamedItemNormalizeInput,
     RenamedItemNumericInput, RenamedItemObjectInput, RenamedItemPatternInput,
     RenamedItemValueRelationInput, RenamedNumericInput, RenamedObjectInput,
-    RenamedOptionalItemNonEmptyInput, RenamedPatternInput, command_by_id, schema_relation_labels,
+    RenamedOptionalItemNonEmptyInput, RenamedPatternInput, schema_relation_labels,
 };
 use agena_plugin_sdk::prelude::*;

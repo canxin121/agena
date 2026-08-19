@@ -1,0 +1,1542 @@
+/// Versions for chrome.
+pub mod versions;
+
+/// Builder types.
+pub mod configs;
+/// Custom static profiles.
+pub mod profiles;
+/// GPU spoofs.
+pub mod spoof_gpu;
+#[cfg(feature = "headers")]
+/// Spoof HTTP headers.
+pub mod spoof_headers;
+/// Spoof mouse-movement.
+pub mod spoof_mouse_movement;
+/// Referer headers.
+pub mod spoof_refererer;
+/// User agent.
+pub mod spoof_user_agent;
+/// Spoof viewport.
+pub mod spoof_viewport;
+/// WebGL spoofs.
+pub mod spoof_webgl;
+/// Generic spoofs.
+pub mod spoofs;
+
+/// Referrer domains index.
+mod referrers_domains_index;
+/// High quality referrer index.
+mod referrers_hq_index;
+
+#[cfg(feature = "headers")]
+pub use spoof_headers::emulate_headers;
+pub use spoof_refererer::spoof_referrer;
+
+use configs::{AgentOs, Tier};
+use profiles::{
+    gpu::{select_random_gpu_profile, GpuProfile},
+    gpu_limits::{build_gpu_request_adapter_script_from_limits, GpuLimits},
+};
+use rand::prelude::IndexedRandom;
+use rand::Rng;
+use spoof_gpu::{
+    build_gpu_spoof_script_wgsl, FP_JS, FP_JS_GPU_LINUX, FP_JS_GPU_MAC, FP_JS_GPU_WINDOWS,
+    FP_JS_LINUX, FP_JS_MAC, FP_JS_WINDOWS,
+};
+use spoofs::{
+    resolve_dpr, spoof_device_memory, spoof_history_length_script, spoof_media_codecs_script,
+    spoof_media_labels_script, spoof_screen_script_rng, spoof_touch_screen, CLEANUP_CDP_MARKERS,
+    DISABLE_DIALOGS, HIDE_SELENIUM_MARKERS, SPOOF_NOTIFICATIONS, SPOOF_PERMISSIONS_QUERY,
+};
+
+#[cfg(feature = "headers")]
+pub use http;
+pub use url;
+
+pub use versions::{
+    BASE_CHROME_VERSION, CHROME_NOT_A_BRAND_VERSION, CHROME_VERSIONS_BY_MAJOR, CHROME_VERSION_FULL,
+    LATEST_CHROME_FULL_VERSION_FULL,
+};
+
+use crate::spoofs::{
+    PATCH_SPEECH_SYNTHESIS, PLUGIN_AND_MIMETYPE_SPOOF, PLUGIN_AND_MIMETYPE_SPOOF_CHROME,
+};
+
+/// The kind of browser.
+#[derive(Debug, PartialEq, Eq)]
+pub enum BrowserKind {
+    /// Chrome
+    Chrome,
+    /// Brave
+    Brave,
+    /// Firefox
+    Firefox,
+    /// Safari
+    Safari,
+    /// Edge
+    Edge,
+    /// Opera
+    Opera,
+    /// Other
+    Other,
+}
+
+impl BrowserKind {
+    /// Is the browser chromium based.
+    fn is_chromium(&self) -> bool {
+        match &self {
+            BrowserKind::Chrome | BrowserKind::Opera | BrowserKind::Brave | BrowserKind::Edge => {
+                true
+            }
+            _ => false,
+        }
+    }
+}
+const P_EDG: usize = 0; // "edg/"
+const P_OPR: usize = 1; // "opr/"
+const P_CHR: usize = 2; // "chrome/"
+const P_AND: usize = 3; // "android"
+
+lazy_static::lazy_static! {
+    /// Common mobile device patterns.
+    pub(crate) static ref MOBILE_PATTERNS: [&'static str; 38] = [
+        // Apple
+        "iphone", "ipad", "ipod",
+        // Android
+        "android",
+        // Generic mobile
+        "mobi", "mobile", "touch",
+        // Specific Android browsers/devices
+        "silk", "nexus", "pixel", "huawei", "honor", "xiaomi", "miui", "redmi",
+        "oneplus", "samsung", "galaxy", "lenovo", "oppo", "vivo", "realme",
+        // Mobile browsers
+        "opera mini", "opera mobi", "ucbrowser", "ucweb", "baidubrowser", "qqbrowser",
+        "dolfin", "crmo", "fennec", "iemobile", "webos", "blackberry", "bb10",
+        "playbook", "palm", "nokia"
+    ];
+
+    /// Common mobile indicators for user-agent detection.
+    pub(crate) static ref MOBILE_MATCHER: aho_corasick::AhoCorasick = aho_corasick::AhoCorasickBuilder::new()
+        .ascii_case_insensitive(true)
+        .build(MOBILE_PATTERNS.as_ref())
+        .expect("failed to compile AhoCorasick patterns");
+
+
+    /// Allowed ua data for chromium based browsers.
+    pub(crate) static ref ALLOWED_UA_DATA: aho_corasick::AhoCorasick = aho_corasick::AhoCorasickBuilder::new()
+            .ascii_case_insensitive(true)
+            .match_kind(aho_corasick::MatchKind::LeftmostFirst)
+            .build(&["edg/", "opr/", "chrome/", "android"])
+            .expect("valid device patterns");
+
+    pub(crate) static ref BROWSER_MATCH: aho_corasick::AhoCorasick = aho_corasick::AhoCorasickBuilder::new()
+            .ascii_case_insensitive(true)
+            .build(&[
+                "edg/", "edgios", "edge/",        // Edge
+                "opr/", "opera", "opios",         // Opera
+                "firefox", "fxios",               // Firefox
+                "chrome/", "crios", "chromium",   // Chrome
+                "safari",                         // Safari
+                "brave",                          // Brave (incase future changes add.)
+            ])
+            .expect("valid device patterns");
+
+
+        // Detect Chrome/CriOS first (we only classify Chrome-family UAs).
+        static ref CHROME_AC: aho_corasick::AhoCorasick = aho_corasick::AhoCorasickBuilder::new()
+                .ascii_case_insensitive(true)
+                .build(["Chrome", "CriOS"]) .expect("valid device patterns");
+
+        /// OS patterns. Order doesn’t matter; we store priorities separately.
+        static ref OS_PATTERNS:[&'static str; 12] =[
+            // iOS family first (iPad/iPhone contain "Mac OS X" too, so give them better priority)
+            "iPhone", "iPad", "iOS",
+            // Android
+            "Android",
+            // Windows
+            "Windows NT", "Windows", "Win64",
+            // Mac
+            "Macintosh", "Mac OS X", "Mac",
+            // Linux
+            "Linux",
+            // ChromeOS if you later add an enum variant:
+            "CrOS",
+        ];
+
+        static ref OS_AC: aho_corasick::AhoCorasick = aho_corasick::AhoCorasickBuilder::new()
+                .ascii_case_insensitive(true)
+                .build(*OS_PATTERNS)
+                .expect("valid device patterns");
+
+        /// Map each pattern index -> (AgentOs, priority). Lower priority wins on ties.
+        static ref OS_MAP: [ (AgentOs, u8); 12 ] = [
+            (AgentOs::IPhone,  0),
+            (AgentOs::IPad,    0),
+            (AgentOs::IPhone,  1),
+            (AgentOs::Android, 0),
+            (AgentOs::Windows, 2),
+            (AgentOs::Windows, 3),
+            (AgentOs::Windows, 4),
+            (AgentOs::Mac,     5),
+            (AgentOs::Mac,     6),
+            (AgentOs::Mac,     7),
+            (AgentOs::Linux,   9),
+            (AgentOs::Linux,   8), // CrOS → Linux fallback
+        ];
+
+        static ref FF_PATTERNS: [&'static str; 6] = [
+            "iPad", "iPhone", "iPod", "Android", "Mobile", "Tablet",
+        ];
+
+        static ref FF_AC: aho_corasick::AhoCorasick = aho_corasick::AhoCorasickBuilder::new()
+                .ascii_case_insensitive(true)
+                .build(*FF_PATTERNS)
+                .expect("valid device patterns");
+}
+
+#[inline]
+fn scan_flags(ua: &str) -> (bool, bool, bool, bool, bool, bool) {
+    // (ipad, iphone, ipod, android, mobile, tablet)
+    let (mut ipad, mut iphone, mut ipod, mut android, mut mobile, mut tablet) =
+        (false, false, false, false, false, false);
+    for m in FF_AC.find_iter(ua) {
+        match m.pattern().as_u32() {
+            0 => ipad = true,
+            1 => iphone = true,
+            2 => ipod = true,
+            3 => android = true,
+            4 => mobile = true,
+            5 => tablet = true,
+            _ => {}
+        }
+    }
+    (ipad, iphone, ipod, android, mobile, tablet)
+}
+
+/// Return "?1" (mobile) or "?0" (not mobile).
+pub fn detect_is_mobile(ua: &str) -> &'static str {
+    let (ipad, iphone, ipod, android, mobile, tablet) = scan_flags(ua);
+
+    // Tablet devices are considered "mobile = true" per your C++ mapping.
+    if ipad || iphone || ipod || android || mobile || tablet {
+        "?1"
+    } else {
+        "?0"
+    }
+}
+
+/// Return the form factor: "Mobile" | "Tablet" | "Desktop".
+pub fn detect_form_factor(ua: &str) -> &'static str {
+    let (ipad, iphone, ipod, android, mobile, tablet) = scan_flags(ua);
+
+    // Priority:
+    // 1) iPad => Tablet (even if "Mobile" token appears)
+    if ipad {
+        return "Tablet";
+    }
+    // 2) iPhone/iPod => Mobile
+    if iphone || ipod {
+        return "Mobile";
+    }
+    // 3) Android: "Mobile" token => Mobile phone, otherwise Tablet
+    if android {
+        return if mobile { "Mobile" } else { "Tablet" };
+    }
+    // 4) Explicit "Tablet" token
+    if tablet {
+        return "Tablet";
+    }
+    // 5) Generic "Mobile" token
+    if mobile {
+        return "Mobile";
+    }
+    "Desktop"
+}
+
+/// Detect the browser type.
+pub fn detect_browser(ua: &str) -> &'static str {
+    let mut edge = false;
+    let mut opera = false;
+    let mut firefox = false;
+    let mut chrome = false;
+    let mut safari = false;
+    let mut brave = false;
+
+    for m in BROWSER_MATCH.find_iter(ua) {
+        match m.pattern().as_u32() {
+            0..=2 => edge = true,    // edg..., edge/
+            3..=5 => opera = true,   // opr/opera/opios
+            6 | 7 => firefox = true, // firefox/fxios
+            8..=10 => chrome = true, // chrome/, crios, chromium
+            11 => safari = true,     // safari
+            12 => brave = true,      // brave
+            _ => (),
+        }
+    }
+
+    if brave && chrome && !edge && !opera {
+        "brave"
+    } else if chrome && !edge && !opera {
+        "chrome"
+    } else if safari && !chrome && !edge && !opera && !firefox {
+        "safari"
+    } else if edge {
+        "edge"
+    } else if firefox {
+        "firefox"
+    } else if opera {
+        "opera"
+    } else {
+        "unknown"
+    }
+}
+
+/// Detect the browser type to BrowserKind.
+pub fn detect_browser_kind(ua: &str) -> BrowserKind {
+    let s = detect_browser(ua);
+
+    match s {
+        "chrome" => BrowserKind::Chrome,
+        "brave" => BrowserKind::Brave,
+        "safari" => BrowserKind::Safari,
+        "edge" => BrowserKind::Edge,
+        "firefox" => BrowserKind::Firefox,
+        "opera" => BrowserKind::Opera,
+        "unknown" => BrowserKind::Other,
+        _ => BrowserKind::Other,
+    }
+}
+
+#[inline]
+/// Parse the major after.
+pub fn parse_major_after(s: &str, end_token: usize) -> Option<u32> {
+    if end_token >= s.len() {
+        return None;
+    }
+    let bytes = s.as_bytes();
+    let mut i = end_token;
+    let mut n: u32 = 0;
+    let mut saw = false;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if (b'0'..=b'9').contains(&b) {
+            saw = true;
+            n = n.saturating_mul(10) + (b - b'0') as u32;
+            i += 1;
+        } else {
+            break;
+        }
+    }
+    saw.then_some(n)
+}
+
+/// The user-agent allows navigator.userAgentData.getHighEntropyValues
+pub fn ua_allows_gethighentropy(ua: &str) -> bool {
+    let mut seen: u32 = 0;
+    let mut endpos: [Option<usize>; 4] = [None; 4];
+
+    for m in ALLOWED_UA_DATA.find_iter(ua) {
+        let idx = m.pattern().as_usize();
+        if endpos[idx].is_none() {
+            endpos[idx] = Some(m.end());
+            seen |= 1u32 << idx;
+        }
+    }
+
+    let has = |i: usize| (seen & (1u32 << i)) != 0;
+    let is_android = has(P_AND);
+
+    if let Some(end) = endpos[P_EDG] {
+        if is_android {
+            return false;
+        }
+        return parse_major_after(ua, end).is_some_and(|v| v >= 90);
+    }
+    if let Some(end) = endpos[P_OPR] {
+        return parse_major_after(ua, end).is_some_and(
+            |v| {
+                if is_android {
+                    v >= 64
+                } else {
+                    v >= 76
+                }
+            },
+        );
+    }
+    if let Some(end) = endpos[P_CHR] {
+        return parse_major_after(ua, end).is_some_and(|v| v >= 90);
+    }
+    false
+}
+
+/// Returns `true` if the user-agent is likely a mobile browser.
+pub fn is_mobile_user_agent(user_agent: &str) -> bool {
+    MOBILE_MATCHER.find(user_agent).is_some()
+}
+
+/// Does the user-agent matches a mobile device indicator.
+pub fn mobile_model_from_user_agent(user_agent: &str) -> Option<&'static str> {
+    MOBILE_MATCHER
+        .find(user_agent)
+        .map(|m| MOBILE_PATTERNS[m.pattern()])
+}
+
+/// Get a random device hardware concurrency.
+pub fn get_random_hardware_concurrency(user_agent: &str) -> usize {
+    let gpu_profile = select_random_gpu_profile(get_agent_os(user_agent));
+    gpu_profile.hardware_concurrency
+}
+
+/// Generate the initial stealth script to send in one command.
+fn build_stealth_script_base(
+    gpu_profile: &'static GpuProfile,
+    tier: Tier,
+    os: AgentOs,
+    concurrency: bool,
+    browser: BrowserKind,
+) -> String {
+    use crate::spoofs::{
+        spoof_hardware_concurrency, unified_worker_override, worker_override, HIDE_CHROME,
+        HIDE_CONSOLE, HIDE_WEBDRIVER, NAVIGATOR_SCRIPT, REMOVE_CHROME,
+    };
+
+    // Only spoof window.chrome for Chromium-based browsers.
+    // Non-Chromium browsers (Safari, Firefox) should never get a fake window.chrome
+    // even when agent_os is manually overridden, as it creates a detectable mismatch.
+    let chrome = browser.is_chromium();
+
+    let spoof_worker = if tier == Tier::BasicNoWorker {
+        Default::default()
+    } else if concurrency {
+        unified_worker_override(
+            gpu_profile.hardware_concurrency,
+            gpu_profile.webgl_vendor,
+            gpu_profile.webgl_renderer,
+            !matches!(
+                tier,
+                |Tier::BasicNoWebglWithGPU| Tier::BasicNoWebglWithGPUNoExtra
+                    | Tier::BasicNoWebglWithGPUcWithConsole
+            ),
+        )
+    } else {
+        worker_override(gpu_profile.webgl_vendor, gpu_profile.webgl_renderer)
+    };
+
+    let spoof_concurrency = if concurrency {
+        spoof_hardware_concurrency(gpu_profile.hardware_concurrency)
+    } else {
+        Default::default()
+    };
+
+    let gpu_limit = GpuLimits::for_os(os).with_variation(gpu_profile.hardware_concurrency);
+
+    let spoof_gpu_adapter = build_gpu_request_adapter_script_from_limits(
+        gpu_profile.webgpu_vendor,
+        gpu_profile.webgpu_architecture,
+        "",
+        "",
+        &gpu_limit,
+    );
+
+    let chrome_spoof = if chrome { HIDE_CHROME } else { REMOVE_CHROME };
+
+    match tier {
+        Tier::Basic | Tier::BasicNoWorker | Tier::BasicNoExtra => {
+            format!(
+                r#"{chrome_spoof};{HIDE_CONSOLE};{spoof_worker};{spoof_gpu_adapter};{NAVIGATOR_SCRIPT}"#
+            )
+        }
+        Tier::BasicWithConsole => {
+            format!(
+                r#"{chrome_spoof};{spoof_worker};{spoof_concurrency};{spoof_gpu_adapter};{NAVIGATOR_SCRIPT}"#
+            )
+        }
+        Tier::BasicNoWebgl | Tier::BasicNoWebglWithGPU | Tier::BasicNoWebglWithGPUNoExtra => {
+            format!(
+                r#"{chrome_spoof};{HIDE_CONSOLE};{spoof_worker};{spoof_concurrency};{NAVIGATOR_SCRIPT}"#
+            )
+        }
+        Tier::BasicNoWebglWithGPUcWithConsole => {
+            format!(r#"{chrome_spoof};{spoof_worker};{spoof_concurrency};{NAVIGATOR_SCRIPT}"#)
+        }
+        Tier::HideOnly => {
+            format!(r#"{chrome_spoof};{HIDE_CONSOLE};{HIDE_WEBDRIVER}"#)
+        }
+        Tier::HideOnlyWithConsole => {
+            format!(r#"{chrome_spoof};{HIDE_WEBDRIVER}"#)
+        }
+        Tier::HideOnlyChrome => chrome_spoof.into(),
+        Tier::Low => {
+            format!(
+                r#"{chrome_spoof};{HIDE_CONSOLE};{spoof_worker};{spoof_concurrency};{spoof_gpu_adapter};{HIDE_WEBDRIVER}"#
+            )
+        }
+        Tier::LowWithPlugins => {
+            format!(
+                r#"{chrome_spoof};{HIDE_CONSOLE};{spoof_worker};{spoof_concurrency};{spoof_gpu_adapter};{HIDE_WEBDRIVER}"#
+            )
+        }
+        Tier::LowWithNavigator => {
+            format!(
+                r#"{chrome_spoof};{HIDE_CONSOLE};{spoof_worker};{spoof_concurrency};{spoof_gpu_adapter};{HIDE_WEBDRIVER};{NAVIGATOR_SCRIPT}"#
+            )
+        }
+        Tier::Mid => {
+            format!(
+                r#"{chrome_spoof};{HIDE_CONSOLE};{spoof_worker};{spoof_concurrency};{spoof_gpu_adapter};{NAVIGATOR_SCRIPT};{HIDE_WEBDRIVER}"#
+            )
+        }
+        Tier::Full => {
+            let spoof_gpu = build_gpu_spoof_script_wgsl(gpu_profile.canvas_format);
+
+            format!("{chrome_spoof};{HIDE_CONSOLE};{spoof_worker};{spoof_concurrency};{spoof_gpu_adapter};{HIDE_WEBDRIVER};{NAVIGATOR_SCRIPT};{spoof_gpu}")
+        }
+        _ => Default::default(),
+    }
+}
+
+/// Generate the initial stealth script to send in one command.
+pub fn build_stealth_script(tier: Tier, os: AgentOs) -> String {
+    let gpu_profile = select_random_gpu_profile(os);
+    build_stealth_script_base(gpu_profile, tier, os, true, BrowserKind::Other)
+}
+
+/// Generate the initial stealth script to send in one command without hardware concurrency.
+pub fn build_stealth_script_no_concurrency(tier: Tier, os: AgentOs) -> String {
+    let gpu_profile = select_random_gpu_profile(os);
+    build_stealth_script_base(gpu_profile, tier, os, false, BrowserKind::Other)
+}
+
+/// Generate the initial stealth script to send in one command and profile.
+pub fn build_stealth_script_with_profile(
+    gpu_profile: &'static GpuProfile,
+    tier: Tier,
+    os: AgentOs,
+) -> String {
+    build_stealth_script_base(gpu_profile, tier, os, true, BrowserKind::Other)
+}
+
+/// Generate the initial stealth script to send in one command and profile.
+pub fn build_stealth_script_with_profile_and_browser(
+    gpu_profile: &'static GpuProfile,
+    tier: Tier,
+    os: AgentOs,
+    browser: BrowserKind,
+) -> String {
+    build_stealth_script_base(gpu_profile, tier, os, true, browser)
+}
+
+/// Generate the initial stealth script to send in one command without hardware concurrency and profile.
+pub fn build_stealth_script_no_concurrency_with_profile_and_browser(
+    gpu_profile: &'static GpuProfile,
+    tier: Tier,
+    os: AgentOs,
+    browser: BrowserKind,
+) -> String {
+    build_stealth_script_base(gpu_profile, tier, os, false, browser)
+}
+
+/// Generate the initial stealth script to send in one command without hardware concurrency and profile.
+pub fn build_stealth_script_no_concurrency_with_profile(
+    gpu_profile: &'static GpuProfile,
+    tier: Tier,
+    os: AgentOs,
+) -> String {
+    build_stealth_script_base(gpu_profile, tier, os, false, BrowserKind::Other)
+}
+
+/// Generate the hide plugins script.
+pub fn generate_hide_plugins() -> String {
+    format!(
+        "{}{}",
+        crate::spoofs::NAVIGATOR_SCRIPT,
+        crate::spoofs::PLUGIN_AND_MIMETYPE_SPOOF
+    )
+}
+
+/// Simple function to wrap the eval script safely.
+pub fn wrap_eval_script(source: &str) -> String {
+    format!(r#"(()=>{{{}}})();"#, source)
+}
+
+/// The fingerprint type to use.
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum Fingerprint {
+    /// Basic finterprint that includes webgl and gpu attempt spoof.
+    Basic,
+    /// Basic fingerprint that does not spoof the gpu. Used for real gpu based headless instances.
+    /// This will bypass the most advanced anti-bots without the speed reduction of a virtual display.
+    NativeGPU,
+    /// None - no fingerprint and use the default browser fingerprinting. This may be a good option to use at times.
+    #[default]
+    None,
+}
+
+impl Fingerprint {
+    /// Fingerprint should be used.
+    pub fn valid(&self) -> bool {
+        matches!(self, Self::Basic | Self::NativeGPU)
+    }
+}
+/// Configuration options for browser fingerprinting and automation.
+#[derive(Default, Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct EmulationConfiguration {
+    /// Enables stealth mode to help avoid detection by anti-bot mechanisms.
+    pub tier: configs::Tier,
+    /// The detailed fingerprint configuration for the browser session.
+    pub fingerprint: Fingerprint,
+    /// The agent os.
+    pub agent_os: AgentOs,
+    /// Is this firefox?
+    pub firefox_agent: bool,
+    /// Add userAgentData. Usually can be disabled when set via CDP for accuracy.
+    pub user_agent_data: Option<bool>,
+    /// Touch screen enabling or disabling emulation based on device?
+    pub touch_screen: bool,
+    /// Hardware concurrency emulation?
+    pub hardware_concurrency: bool,
+    /// If enabled, will auto-dismiss browser popups and dialogs.
+    pub dismiss_dialogs: bool,
+    /// Disable notification emulation.
+    pub disable_notifications: bool,
+    /// Disable permissions emulation.
+    pub disable_permissions: bool,
+    /// Disable media codecs emulation.
+    pub disable_media_codecs: bool,
+    /// Disable speech syntheses.
+    pub disable_speech_syntheses: bool,
+    /// Disable media labels.
+    pub disable_media_labels: bool,
+    /// Disable navigator history length
+    pub disable_history_length: bool,
+    /// Disable the user agent data emulation - extra guard for user_agent_data.
+    pub disable_user_agent_data: bool,
+    /// Disable screen emulation.
+    pub disable_screen: bool,
+    /// Disable touch screen emulation.
+    pub disable_touch_screen: bool,
+    /// Disable the plugins spoof.
+    pub disable_plugins: bool,
+    /// Disable the stealth emulation.
+    pub disable_stealth: bool,
+    /// Enable device memory spoofing (navigator.deviceMemory).
+    /// Disabled by default - opt-in for extra stealth.
+    pub enable_device_memory: bool,
+    /// Enable cleanup of CDP/automation markers (cdc_, $cdc_, etc).
+    /// Disabled by default - opt-in, useful when using ChromeDriver or WebDriver.
+    pub enable_cdp_marker_cleanup: bool,
+    /// Enable cleanup of Selenium-specific markers.
+    /// Disabled by default - opt-in, useful when using Selenium.
+    pub enable_selenium_marker_cleanup: bool,
+}
+
+/// Fast Chrome-only OS detection using Aho-Corasick (ASCII case-insensitive).
+pub fn get_agent_os(user_agent: &str) -> AgentOs {
+    if !CHROME_AC.is_match(user_agent) {
+        return AgentOs::Unknown;
+    }
+    let mut best: Option<(u8, usize, AgentOs)> = None;
+    for m in OS_AC.find_iter(user_agent) {
+        let (os, pri) = OS_MAP[m.pattern()];
+        let cand = (pri, m.len(), os);
+        best = match best {
+            None => Some(cand),
+            Some(cur) => {
+                if cand.0 < cur.0 || (cand.0 == cur.0 && cand.1 > cur.1) {
+                    Some(cand)
+                } else {
+                    Some(cur)
+                }
+            }
+        };
+    }
+    best.map(|t| t.2).unwrap_or(AgentOs::Unknown)
+}
+
+/// Agent Operating system to string
+pub fn agent_os_strings(os: AgentOs) -> &'static str {
+    match os {
+        AgentOs::Android => "Android",
+        AgentOs::IPhone | AgentOs::IPad => "iOS",
+        AgentOs::Mac => "macOS",
+        AgentOs::Windows => "Windows",
+        AgentOs::Linux => "Linux",
+        AgentOs::ChromeOS => "Chrome OS",
+        AgentOs::Unknown => "Unknown",
+    }
+}
+
+/// Setup the emulation defaults.
+impl EmulationConfiguration {
+    /// Setup the defaults.
+    pub fn setup_defaults(user_agent: &str) -> EmulationConfiguration {
+        let mut firefox_agent = false;
+
+        let agent_os = get_agent_os(user_agent);
+
+        if agent_os == AgentOs::Unknown {
+            firefox_agent = user_agent.contains("Firefox");
+        }
+
+        let mut emulation_config = Self::default();
+
+        emulation_config.firefox_agent = firefox_agent;
+        emulation_config.agent_os = agent_os;
+        emulation_config.touch_screen = false; // by default spider_chrome emulates touch over CDP.
+        emulation_config.hardware_concurrency = true; // should be disabled and moved to CDP to cover all frames.
+        emulation_config.disable_notifications = true; // fix
+        emulation_config.disable_media_codecs = true; // fix
+        emulation_config.disable_plugins = true; // fix
+
+        emulation_config
+    }
+}
+
+/// Join the scrips pre-allocated.
+pub fn join_scripts<I: IntoIterator<Item = impl AsRef<str>>>(parts: I) -> String {
+    let mut script = String::with_capacity(4096);
+    for part in parts {
+        script.push_str(part.as_ref());
+    }
+    script
+}
+
+/// Join the scrips pre-allocated.
+pub fn join_scripts_with_capacity<I: IntoIterator<Item = impl AsRef<str>>>(
+    parts: I,
+    capacity: usize,
+) -> String {
+    let mut script = String::with_capacity(capacity);
+    for part in parts {
+        script.push_str(part.as_ref());
+    }
+    script
+}
+
+/// Emulate a real chrome browser.
+pub fn emulate_base(
+    user_agent: &str,
+    config: &EmulationConfiguration,
+    viewport: &Option<&crate::spoof_viewport::Viewport>,
+    evaluate_on_new_document: &Option<Box<String>>,
+    gpu_profile: Option<&'static GpuProfile>,
+) -> Option<String> {
+    let stealth = config.tier.stealth();
+    let agent_os = if config.agent_os == AgentOs::Unknown {
+        get_agent_os(user_agent)
+    } else {
+        config.agent_os
+    };
+    let spoof_user_agent_data = if stealth
+        && config.user_agent_data.unwrap_or(true)
+        && ua_allows_gethighentropy(user_agent)
+    {
+        &crate::spoof_user_agent::spoof_user_agent_data_high_entropy_values(
+            &crate::spoof_user_agent::build_high_entropy_data(&Some(user_agent)),
+        )
+    } else {
+        &Default::default()
+    };
+
+    let spoof_speech_syn = if stealth && agent_os != AgentOs::Unknown {
+        PATCH_SPEECH_SYNTHESIS
+    } else {
+        Default::default()
+    };
+    let linux = agent_os == AgentOs::Linux;
+
+    let no_extra =
+        config.tier == Tier::BasicNoExtra || config.tier == Tier::BasicNoWebglWithGPUNoExtra;
+
+    let (fingerprint, fingerprint_gpu) = match config.fingerprint {
+        Fingerprint::Basic => (true, false),
+        Fingerprint::NativeGPU => (true, true),
+        _ => (false, false),
+    };
+
+    let fp_script = if fingerprint {
+        if linux {
+            if fingerprint_gpu {
+                &*FP_JS_GPU_LINUX
+            } else {
+                &*FP_JS_LINUX
+            }
+        } else if agent_os == AgentOs::Mac {
+            if fingerprint_gpu {
+                &*FP_JS_GPU_MAC
+            } else {
+                &*FP_JS_MAC
+            }
+        } else if agent_os == AgentOs::Windows {
+            if fingerprint_gpu {
+                &*FP_JS_GPU_WINDOWS
+            } else {
+                &*FP_JS_WINDOWS
+            }
+        } else {
+            &*FP_JS
+        }
+    } else {
+        &Default::default()
+    };
+
+    let mut mobile_device = false;
+
+    let screen_spoof = if let Some(viewport) = &viewport {
+        mobile_device = viewport.emulating_mobile;
+        let dpr = resolve_dpr(
+            viewport.emulating_mobile,
+            viewport.device_scale_factor,
+            agent_os,
+        );
+
+        spoof_screen_script_rng(
+            viewport.width,
+            viewport.height,
+            dpr,
+            viewport.emulating_mobile,
+            &mut rand::rng(),
+            agent_os,
+        )
+    } else {
+        Default::default()
+    };
+
+    let gpu_profile = gpu_profile.unwrap_or(select_random_gpu_profile(agent_os));
+    let browser_kind = detect_browser_kind(user_agent);
+
+    let plugin_spoof = if browser_kind == BrowserKind::Chrome {
+        PLUGIN_AND_MIMETYPE_SPOOF_CHROME
+    } else {
+        PLUGIN_AND_MIMETYPE_SPOOF
+    };
+
+    let st = if config.hardware_concurrency {
+        crate::build_stealth_script_with_profile_and_browser(
+            gpu_profile,
+            config.tier,
+            agent_os,
+            browser_kind,
+        )
+    } else {
+        crate::build_stealth_script_no_concurrency_with_profile_and_browser(
+            gpu_profile,
+            config.tier,
+            agent_os,
+            browser_kind,
+        )
+    };
+
+    let touch_screen_script = if config.touch_screen {
+        spoof_touch_screen(mobile_device)
+    } else {
+        Default::default()
+    };
+
+    let eval_script = if let Some(script) = evaluate_on_new_document.as_deref() {
+        wrap_eval_script(script)
+    } else {
+        Default::default()
+    };
+
+    // Device memory spoof (opt-in) - realistic values per platform
+    let device_memory_script = if config.enable_device_memory {
+        let memory = match agent_os {
+            AgentOs::Android | AgentOs::IPhone | AgentOs::IPad => {
+                *[2, 3, 4].choose(&mut rand::rng()).unwrap_or(&4)
+            }
+            _ => *[4, 8].choose(&mut rand::rng()).unwrap_or(&8),
+        };
+        spoof_device_memory(memory)
+    } else {
+        Default::default()
+    };
+
+    let stealth_scripts = if stealth {
+        join_scripts([
+            if no_extra || config.disable_speech_syntheses {
+                Default::default()
+            } else {
+                spoof_speech_syn
+            },
+            if no_extra || config.disable_user_agent_data {
+                Default::default()
+            } else {
+                spoof_user_agent_data
+            },
+            if no_extra || config.dismiss_dialogs {
+                DISABLE_DIALOGS
+            } else {
+                ""
+            },
+            if no_extra || config.disable_screen {
+                Default::default()
+            } else {
+                &screen_spoof
+            },
+            if no_extra || config.disable_notifications {
+                Default::default()
+            } else {
+                SPOOF_NOTIFICATIONS
+            },
+            if no_extra || config.disable_permissions {
+                Default::default()
+            } else {
+                SPOOF_PERMISSIONS_QUERY
+            },
+            if no_extra || config.disable_media_codecs {
+                Default::default()
+            } else {
+                spoof_media_codecs_script()
+            },
+            if no_extra || config.disable_touch_screen {
+                Default::default()
+            } else {
+                touch_screen_script
+            },
+            &if no_extra || config.disable_media_labels {
+                Default::default()
+            } else {
+                spoof_media_labels_script(agent_os)
+            },
+            &if no_extra || config.disable_history_length {
+                Default::default()
+            } else {
+                spoof_history_length_script(rand::rng().random_range(1..=6))
+            },
+            &if no_extra || config.disable_plugins && config.tier != Tier::LowWithPlugins {
+                Default::default()
+            } else {
+                plugin_spoof
+            },
+            // Opt-in spoofs for extra stealth (non-intrusive, safe across profiles)
+            &device_memory_script,
+            if config.enable_cdp_marker_cleanup {
+                CLEANUP_CDP_MARKERS
+            } else {
+                ""
+            },
+            if config.enable_selenium_marker_cleanup {
+                HIDE_SELENIUM_MARKERS
+            } else {
+                ""
+            },
+            &if config.disable_stealth {
+                Default::default()
+            } else {
+                st
+            },
+        ])
+    } else {
+        Default::default()
+    };
+
+    // Final combined script to inject
+    if stealth || fingerprint {
+        Some(join_scripts_with_capacity(
+            [fp_script, &stealth_scripts, &eval_script],
+            fp_script.capacity() + stealth_scripts.capacity() + eval_script.capacity(),
+        ))
+    } else if !eval_script.is_empty() {
+        Some(eval_script)
+    } else {
+        None
+    }
+}
+
+/// Emulate a real chrome browser.
+pub fn emulate(
+    user_agent: &str,
+    config: &EmulationConfiguration,
+    viewport: &Option<&crate::spoof_viewport::Viewport>,
+    evaluate_on_new_document: &Option<Box<String>>,
+) -> Option<String> {
+    emulate_base(user_agent, config, viewport, evaluate_on_new_document, None)
+}
+
+/// Emulate a real chrome browser with a gpu profile.
+pub fn emulate_with_profile(
+    user_agent: &str,
+    config: &EmulationConfiguration,
+    viewport: &Option<&crate::spoof_viewport::Viewport>,
+    evaluate_on_new_document: &Option<Box<String>>,
+    gpu_profile: &'static GpuProfile,
+) -> Option<String> {
+    emulate_base(
+        user_agent,
+        config,
+        viewport,
+        evaluate_on_new_document,
+        Some(gpu_profile),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        detect_browser, detect_browser_kind, detect_form_factor, detect_is_mobile, emulate,
+        get_agent_os, ua_allows_gethighentropy, AgentOs, BrowserKind, EmulationConfiguration,
+    };
+    use crate::configs::Tier;
+    use crate::spoofs::{HIDE_CHROME, REMOVE_CHROME};
+
+    #[test]
+    fn emulation() {
+        let ua = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36";
+        let config: EmulationConfiguration = EmulationConfiguration::setup_defaults(&ua);
+        let data = emulate(ua, &config, &None, &None);
+        assert!(data.is_some());
+        if let Some(data) = data {
+            println!("{}", data);
+        }
+    }
+
+    #[test]
+    fn ua_green_supported_positive() {
+        // Chrome desktop ≥90
+        let chrome_win = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) \
+            AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36";
+
+        // Chrome Android ≥90
+        let chrome_android = "Mozilla/5.0 (Linux; Android 11; Pixel 4) \
+            AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.5735.61 Mobile Safari/537.36";
+
+        // Edge (Chromium) desktop ≥90
+        let edge_win = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) \
+            AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36 Edg/114.0.1823.55";
+
+        // Opera desktop ≥76 (has OPR and Chrome base)
+        let opera_win = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) \
+            AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0.4430.93 Safari/537.36 OPR/76.0.4017.94";
+
+        // Opera Android ≥64
+        let opera_android = "Mozilla/5.0 (Linux; Android 10; SM-G973F) \
+            AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.45 Mobile Safari/537.36 OPR/64.0.2254.62069";
+
+        for ua in [
+            chrome_win,
+            chrome_android,
+            edge_win,
+            opera_win,
+            opera_android,
+        ] {
+            assert!(ua_allows_gethighentropy(ua), "expected supported: {ua}");
+        }
+    }
+
+    #[test]
+    fn ua_green_supported_negative() {
+        // Chrome desktop 89 (below threshold)
+        let chrome_89 = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) \
+            AppleWebKit/537.36 (KHTML, like Gecko) Chrome/89.0.4389.90 Safari/537.36";
+
+        // Firefox (no support)
+        let firefox = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:118.0) \
+            Gecko/20100101 Firefox/118.0";
+
+        // Safari desktop (no Chrome token)
+        let safari_mac = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) \
+            AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15";
+
+        for ua in [chrome_89, firefox, safari_mac] {
+            assert!(
+                !ua_allows_gethighentropy(ua),
+                "expected NOT supported: {ua}"
+            );
+        }
+    }
+
+    #[test]
+    fn detects_agent_os_across_platforms() {
+        let cases: &[(&str, AgentOs)] = &[
+            // Windows (Chrome)
+            ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+             AgentOs::Windows),
+
+            // macOS (Chrome)
+            ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+             AgentOs::Mac),
+
+            // Linux (Chrome)
+            ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+             AgentOs::Linux),
+
+            // Android (Chrome)
+            ("Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
+             AgentOs::Android),
+
+            // iPhone (Chrome on iOS uses CriOS)
+            ("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/124.0.0.0 Mobile/15E148 Safari/604.1",
+             AgentOs::IPhone),
+
+            // iPad (CriOS) — should still resolve to iOS
+            ("Mozilla/5.0 (iPad; CPU OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/123.0.0.0 Mobile/15E148 Safari/604.1",
+             AgentOs::IPad),
+
+            // Edge (Chromium) still contains Chrome token -> Windows
+            ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0",
+             AgentOs::Windows),
+
+            // Mixed case (should be matched case-insensitively) -> Linux
+            ("mozilla/5.0 (x11; linux x86_64) applewebkit/537.36 (khtml, like gecko) chrome/120.0.0.0 safari/537.36",
+             AgentOs::Linux),
+
+            // Non-Chrome (Firefox) -> Unknown due to Chrome/CriOS gate
+            ("Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0",
+             AgentOs::Unknown),
+
+            // Not a browser UA
+            ("curl/8.0.1",
+             AgentOs::Unknown),
+        ];
+
+        for (ua, expected) in cases {
+            let got = get_agent_os(ua);
+            assert_eq!(got, *expected, "UA: {}", ua);
+        }
+    }
+
+    #[test]
+    fn prioritizes_ios_over_mac_tokens() {
+        let ua = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/124.0.0.0 Mobile/15E148 Safari/604.1";
+        assert_eq!(get_agent_os(ua), AgentOs::IPhone);
+    }
+
+    #[test]
+    fn android_phone() {
+        let ua = "Mozilla/5.0 (Linux; Android 13; Pixel 7) ... Mobile Safari/537.36";
+        assert_eq!(detect_is_mobile(ua), "?1");
+        assert_eq!(detect_form_factor(ua), "Mobile");
+    }
+
+    #[test]
+    fn android_tablet() {
+        let ua = "Mozilla/5.0 (Linux; Android 12; SM-T970) ... Safari/537.36";
+        assert_eq!(detect_is_mobile(ua), "?1");
+        assert_eq!(detect_form_factor(ua), "Tablet");
+    }
+
+    #[test]
+    fn iphone_and_ipad() {
+        let iphone = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 ...) CriOS/124.0.0.0 Mobile/15E148";
+        assert_eq!(detect_is_mobile(iphone), "?1");
+        assert_eq!(detect_form_factor(iphone), "Mobile");
+
+        let ipad = "Mozilla/5.0 (iPad; CPU OS 16_6 ...) CriOS/123.0.0.0 Mobile/15E148";
+        assert_eq!(detect_is_mobile(ipad), "?1");
+        assert_eq!(detect_form_factor(ipad), "Tablet");
+    }
+
+    #[test]
+    fn desktop_linux() {
+        let ua = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 ... Chrome/124 Safari/537.36";
+        assert_eq!(detect_is_mobile(ua), "?0");
+        assert_eq!(detect_form_factor(ua), "Desktop");
+    }
+
+    // --- Browser detection tests ---
+
+    #[test]
+    fn detect_browser_chrome() {
+        let ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
+        assert_eq!(detect_browser(ua), "chrome");
+        assert_eq!(detect_browser_kind(ua), BrowserKind::Chrome);
+        assert!(detect_browser_kind(ua).is_chromium());
+    }
+
+    #[test]
+    fn detect_browser_safari() {
+        let ua = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15";
+        assert_eq!(detect_browser(ua), "safari");
+        assert_eq!(detect_browser_kind(ua), BrowserKind::Safari);
+        assert!(!detect_browser_kind(ua).is_chromium());
+    }
+
+    #[test]
+    fn detect_browser_firefox() {
+        let ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0";
+        assert_eq!(detect_browser(ua), "firefox");
+        assert_eq!(detect_browser_kind(ua), BrowserKind::Firefox);
+        assert!(!detect_browser_kind(ua).is_chromium());
+    }
+
+    #[test]
+    fn detect_browser_edge() {
+        let ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0";
+        assert_eq!(detect_browser(ua), "edge");
+        assert_eq!(detect_browser_kind(ua), BrowserKind::Edge);
+        assert!(detect_browser_kind(ua).is_chromium());
+    }
+
+    #[test]
+    fn detect_browser_opera() {
+        let ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0.4430.93 Safari/537.36 OPR/76.0.4017.94";
+        assert_eq!(detect_browser(ua), "opera");
+        assert!(detect_browser_kind(ua).is_chromium());
+    }
+
+    #[test]
+    fn detect_browser_brave() {
+        let ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Brave/124";
+        assert_eq!(detect_browser(ua), "brave");
+        assert!(detect_browser_kind(ua).is_chromium());
+    }
+
+    // --- window.chrome spoof correctness ---
+
+    #[test]
+    fn hide_chrome_does_not_bail_when_chrome_missing() {
+        // HIDE_CHROME should NOT contain `if('chrome' in window){return}` which would
+        // skip spoofing on headless Chrome where window.chrome is incomplete.
+        assert!(
+            !HIDE_CHROME.contains("if('chrome' in window){return}"),
+            "HIDE_CHROME should not bail when window.chrome exists but is incomplete"
+        );
+    }
+
+    #[test]
+    fn hide_chrome_guards_on_fully_formed_chrome() {
+        // Should skip only if window.chrome is already fully formed (has csi and loadTimes)
+        assert!(
+            HIDE_CHROME.contains("c.csi&&c.loadTimes"),
+            "HIDE_CHROME should guard on csi+loadTimes to detect fully-formed window.chrome"
+        );
+    }
+
+    #[test]
+    fn hide_chrome_creates_required_properties() {
+        assert!(HIDE_CHROME.contains("csi"), "HIDE_CHROME must create csi");
+        assert!(
+            HIDE_CHROME.contains("loadTimes"),
+            "HIDE_CHROME must create loadTimes"
+        );
+        assert!(
+            HIDE_CHROME.contains("metricsPrivate"),
+            "HIDE_CHROME must create metricsPrivate"
+        );
+        assert!(
+            HIDE_CHROME.contains("runtime"),
+            "HIDE_CHROME must create runtime"
+        );
+    }
+
+    #[test]
+    fn remove_chrome_deletes_window_chrome() {
+        assert!(REMOVE_CHROME.contains("delete window.chrome"));
+    }
+
+    // --- Stealth script: chrome spoof only for Chromium browsers ---
+
+    #[test]
+    fn stealth_script_chromium_gets_hide_chrome() {
+        let gpu = crate::profiles::gpu::select_random_gpu_profile(AgentOs::Windows);
+        let script = super::build_stealth_script_base(
+            gpu,
+            Tier::Basic,
+            AgentOs::Windows,
+            true,
+            BrowserKind::Chrome,
+        );
+        // Chromium browser -> should contain HIDE_CHROME content, not REMOVE_CHROME
+        assert!(
+            !script.contains("delete window.chrome"),
+            "Chrome should get HIDE_CHROME, not REMOVE_CHROME"
+        );
+    }
+
+    #[test]
+    fn stealth_script_edge_gets_hide_chrome() {
+        let gpu = crate::profiles::gpu::select_random_gpu_profile(AgentOs::Windows);
+        let script = super::build_stealth_script_base(
+            gpu,
+            Tier::Basic,
+            AgentOs::Windows,
+            true,
+            BrowserKind::Edge,
+        );
+        assert!(
+            !script.contains("delete window.chrome"),
+            "Edge (Chromium) should get HIDE_CHROME, not REMOVE_CHROME"
+        );
+    }
+
+    #[test]
+    fn stealth_script_safari_never_gets_hide_chrome() {
+        let gpu = crate::profiles::gpu::select_random_gpu_profile(AgentOs::Mac);
+        let script = super::build_stealth_script_base(
+            gpu,
+            Tier::Basic,
+            AgentOs::Mac,
+            true,
+            BrowserKind::Safari,
+        );
+        // Safari must NEVER get a fake window.chrome - it should get REMOVE_CHROME
+        assert!(
+            script.contains("delete window.chrome"),
+            "Safari must get REMOVE_CHROME, not HIDE_CHROME"
+        );
+        assert!(
+            !script.contains("metricsPrivate"),
+            "Safari must not have chrome.metricsPrivate injected"
+        );
+    }
+
+    #[test]
+    fn stealth_script_firefox_never_gets_hide_chrome() {
+        let gpu = crate::profiles::gpu::select_random_gpu_profile(AgentOs::Windows);
+        let script = super::build_stealth_script_base(
+            gpu,
+            Tier::Basic,
+            AgentOs::Windows,
+            true,
+            BrowserKind::Firefox,
+        );
+        assert!(
+            script.contains("delete window.chrome"),
+            "Firefox must get REMOVE_CHROME, not HIDE_CHROME"
+        );
+    }
+
+    #[test]
+    fn stealth_script_firefox_with_manual_os_override_no_hide_chrome() {
+        // Even when agent_os is manually set (not Unknown), Firefox should not get HIDE_CHROME.
+        // This was the original bug: `browser.is_chromium() || os != AgentOs::Unknown`
+        let gpu = crate::profiles::gpu::select_random_gpu_profile(AgentOs::Linux);
+        let script = super::build_stealth_script_base(
+            gpu,
+            Tier::Basic,
+            AgentOs::Linux,
+            true,
+            BrowserKind::Firefox,
+        );
+        assert!(
+            script.contains("delete window.chrome"),
+            "Firefox + manual Linux OS must still get REMOVE_CHROME"
+        );
+        assert!(
+            !script.contains("metricsPrivate"),
+            "Firefox must never have chrome.metricsPrivate"
+        );
+    }
+
+    #[test]
+    fn stealth_script_safari_with_manual_os_override_no_hide_chrome() {
+        let gpu = crate::profiles::gpu::select_random_gpu_profile(AgentOs::Mac);
+        let script = super::build_stealth_script_base(
+            gpu,
+            Tier::Basic,
+            AgentOs::Mac,
+            true,
+            BrowserKind::Safari,
+        );
+        assert!(
+            script.contains("delete window.chrome"),
+            "Safari + manual Mac OS must still get REMOVE_CHROME"
+        );
+    }
+
+    #[test]
+    fn stealth_script_unknown_browser_gets_remove_chrome() {
+        let gpu = crate::profiles::gpu::select_random_gpu_profile(AgentOs::Unknown);
+        let script = super::build_stealth_script_base(
+            gpu,
+            Tier::Basic,
+            AgentOs::Unknown,
+            true,
+            BrowserKind::Other,
+        );
+        assert!(
+            script.contains("delete window.chrome"),
+            "Unknown browser must get REMOVE_CHROME"
+        );
+    }
+
+    // --- Full emulation pipeline tests ---
+
+    #[test]
+    fn emulation_chrome_mac() {
+        let ua = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36";
+        let config = EmulationConfiguration::setup_defaults(ua);
+        let data = emulate(ua, &config, &None, &None);
+        assert!(data.is_some());
+        let script = data.unwrap();
+        // Chrome on Mac should have HIDE_CHROME, not REMOVE_CHROME
+        assert!(!script.contains("delete window.chrome"));
+    }
+
+    #[test]
+    fn emulation_firefox_no_chrome_spoof() {
+        let ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0";
+        let config = EmulationConfiguration::setup_defaults(ua);
+        let data = emulate(ua, &config, &None, &None);
+        assert!(data.is_some());
+        let script = data.unwrap();
+        // Firefox should get REMOVE_CHROME, never HIDE_CHROME
+        assert!(
+            script.contains("delete window.chrome"),
+            "Firefox emulation must use REMOVE_CHROME"
+        );
+        assert!(
+            !script.contains("metricsPrivate"),
+            "Firefox emulation must not inject chrome.metricsPrivate"
+        );
+    }
+
+    #[test]
+    fn emulation_safari_no_chrome_spoof() {
+        let ua = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15";
+        let config = EmulationConfiguration::setup_defaults(ua);
+        let data = emulate(ua, &config, &None, &None);
+        assert!(data.is_some());
+        let script = data.unwrap();
+        assert!(
+            script.contains("delete window.chrome"),
+            "Safari emulation must use REMOVE_CHROME"
+        );
+        assert!(
+            !script.contains("metricsPrivate"),
+            "Safari emulation must not inject chrome.metricsPrivate"
+        );
+    }
+
+    // --- Plugin spoof selection tests ---
+
+    #[test]
+    fn chrome_gets_chrome_plugin_spoof() {
+        let ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
+        let browser = detect_browser_kind(ua);
+        assert_eq!(browser, BrowserKind::Chrome);
+        // Chrome-specific plugin spoof is selected for BrowserKind::Chrome only
+    }
+
+    #[test]
+    fn edge_gets_generic_plugin_spoof() {
+        let ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0";
+        let browser = detect_browser_kind(ua);
+        assert_eq!(browser, BrowserKind::Edge);
+        // Edge should get generic plugin spoof (not Chrome-specific)
+    }
+
+    // --- Agent OS detection edge cases ---
+
+    #[test]
+    fn safari_ua_returns_unknown_os() {
+        // Safari-only UAs don't contain Chrome/CriOS, so get_agent_os returns Unknown.
+        // This is critical — it prevents Safari from accidentally getting Chrome spoofs.
+        let ua = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15";
+        assert_eq!(get_agent_os(ua), AgentOs::Unknown);
+    }
+
+    #[test]
+    fn firefox_ua_returns_unknown_os() {
+        let ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0";
+        assert_eq!(get_agent_os(ua), AgentOs::Unknown);
+    }
+
+    // --- Tier-specific tests ---
+
+    #[test]
+    fn hide_only_chrome_tier_only_has_chrome_spoof() {
+        let gpu = crate::profiles::gpu::select_random_gpu_profile(AgentOs::Mac);
+        let script = super::build_stealth_script_base(
+            gpu,
+            Tier::HideOnlyChrome,
+            AgentOs::Mac,
+            true,
+            BrowserKind::Chrome,
+        );
+        // HideOnlyChrome should only contain the chrome spoof, no webdriver or console hiding
+        assert!(!script.contains("delete window.chrome"));
+        assert!(!script.contains("webdriver"));
+    }
+
+    #[test]
+    fn hide_only_tier_has_webdriver() {
+        let gpu = crate::profiles::gpu::select_random_gpu_profile(AgentOs::Mac);
+        let script = super::build_stealth_script_base(
+            gpu,
+            Tier::HideOnly,
+            AgentOs::Mac,
+            true,
+            BrowserKind::Chrome,
+        );
+        assert!(script.contains("webdriver"));
+    }
+
+    // --- Webdriver spoof tests ---
+
+    #[test]
+    fn hide_webdriver_only_patches_when_true() {
+        let webdriver = crate::spoofs::HIDE_WEBDRIVER;
+        // The guard: if(!navigator.webdriver){return} — only patches when webdriver is true
+        assert!(webdriver.contains("if(!navigator.webdriver){return}"));
+    }
+
+    // --- GPU profile tests ---
+
+    #[test]
+    fn gpu_profiles_mac_has_m5_variants() {
+        use crate::profiles::gpu_mac::GPU_PROFILES_MAC;
+        let has_m5 = GPU_PROFILES_MAC
+            .iter()
+            .any(|p| p.webgl_renderer.contains("Apple M5,"));
+        let has_m5_pro = GPU_PROFILES_MAC
+            .iter()
+            .any(|p| p.webgl_renderer.contains("Apple M5 Pro"));
+        let has_m5_max = GPU_PROFILES_MAC
+            .iter()
+            .any(|p| p.webgl_renderer.contains("Apple M5 Max"));
+        assert!(has_m5, "Missing M5 base GPU profile");
+        assert!(has_m5_pro, "Missing M5 Pro GPU profile");
+        assert!(has_m5_max, "Missing M5 Max GPU profile");
+    }
+
+    #[test]
+    fn gpu_profiles_all_platforms_nonempty() {
+        use crate::profiles::gpu::select_random_gpu_profile;
+        for os in [
+            AgentOs::Mac,
+            AgentOs::Windows,
+            AgentOs::Linux,
+            AgentOs::Android,
+            AgentOs::IPhone,
+        ] {
+            let p = select_random_gpu_profile(os);
+            assert!(!p.webgl_vendor.is_empty(), "Empty vendor for {:?}", os);
+            assert!(!p.webgl_renderer.is_empty(), "Empty renderer for {:?}", os);
+            assert!(
+                p.hardware_concurrency > 0,
+                "Zero concurrency for {:?}",
+                os
+            );
+        }
+    }
+
+    // --- Navigator script guards ---
+
+    #[test]
+    fn navigator_pdf_viewer_guards_existing() {
+        let nav = crate::spoofs::NAVIGATOR_SCRIPT;
+        // Should not overwrite if pdfViewerEnabled already exists
+        assert!(nav.contains("'pdfViewerEnabled'in navigator"));
+    }
+
+    // --- Speech synthesis only for known OS ---
+
+    #[test]
+    fn speech_synthesis_not_applied_for_unknown_os() {
+        let ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0";
+        let config = EmulationConfiguration::setup_defaults(ua);
+        assert_eq!(config.agent_os, AgentOs::Unknown);
+        // When OS is unknown, speech synthesis should not be in the output
+        let data = emulate(ua, &config, &None, &None);
+        if let Some(script) = data {
+            assert!(
+                !script.contains("speechSynthesis"),
+                "Speech synthesis should not be spoofed for unknown OS"
+            );
+        }
+    }
+}

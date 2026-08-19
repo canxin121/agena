@@ -524,6 +524,7 @@ version = "0.1.0-beta.5"
 dependencies = [
  "agena-storage",
  "serde",
+ "serde_json",
  "tantivy",
  "thiserror 2.0.19",
  "tracing",
@@ -9860,8 +9861,6 @@ dependencies = [
 [[package]]
 name = "spider_fingerprint"
 version = "2.39.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a74484e5e741d794810fa463c1b276d8913edf797abbfe83cbd55c4a6f141c40"
 dependencies = [
  "aho-corasick",
  "case_insensitive_string",
@@ -11354,9 +11353,9 @@ dependencies = [
 
 [[package]]
 name = "tree-sitter"
-version = "0.26.11"
+version = "0.26.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "af1c71c1c4cc0920b20d6b0f6572e7682cd07a6a2faec71067a31fa394c586df"
+checksum = "83c567a8e18ae93f20982c90370b16fd24023aeaf52f6052b96957ab253a0fec"
 dependencies = [
  "cc",
  "regex",

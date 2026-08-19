@@ -317,7 +317,7 @@ ast-grep-language = { version = "0.44.1", default-features = false, features = [
     "tree-sitter-typescript",
     "tree-sitter-yaml",
 ] }
-tree-sitter = "0.26.11"
+tree-sitter = "0.26.12"
 rmcp = "3.1.3"
 wasmtime = { version = "46.0.1", default-features = false, features = ["cranelift", "runtime", "std"] }
 wasmtime-wasi = { version = "46.0.1", default-features = false, features = ["p1"] }
@@ -368,6 +368,7 @@ debug = false
 incremental = false
 
 [patch.crates-io]
+spider_fingerprint = { path = "third_party/spider_fingerprint" }
 # Agena performs response-bearing terminal queries while the TUI is running.
 # Upstream Crossterm 0.29 treats OSC replies as Alt-key input because its
 # public event model has no terminal-response event. Keep the parser extension

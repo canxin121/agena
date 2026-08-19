@@ -1,0 +1,216 @@
+use super::gpu_profile::GpuProfile;
+
+pub static GPU_PROFILES_LINUX: &[GpuProfile] = &[
+    // NVIDIA GTX 1050
+    GpuProfile {
+        webgl_vendor: "NVIDIA Corporation",
+        webgl_renderer: "NVIDIA GeForce GTX 1050/PCIe/SSE2",
+        webgpu_vendor: "nvidia",
+        webgpu_architecture: "vulkan",
+        canvas_format: "rgba8unorm",
+        hardware_concurrency: 8,
+    },
+    // Intel UHD Graphics 620 with Mesa
+    GpuProfile {
+        webgl_vendor: "Intel Open Source Technology Center",
+        webgl_renderer: "Mesa Intel(R) UHD Graphics 620 (KBL GT2)",
+        webgpu_vendor: "intel",
+        webgpu_architecture: "vulkan",
+        canvas_format: "rgba8unorm",
+        hardware_concurrency: 8,
+    },
+    // AMD Radeon RX 580 with Mesa
+    GpuProfile {
+        webgl_vendor: "AMD",
+        webgl_renderer:
+            "AMD Radeon RX 580 Series (POLARIS10, DRM 3.42.0, 6.2.12-arch1-1, LLVM 15.0.7)",
+        webgpu_vendor: "amd",
+        webgpu_architecture: "vulkan",
+        canvas_format: "rgba8unorm",
+        hardware_concurrency: 12,
+    },
+    // NVIDIA RTX 3060 with proprietary driver
+    GpuProfile {
+        webgl_vendor: "NVIDIA Corporation",
+        webgl_renderer: "NVIDIA GeForce RTX 3060/PCIe/SSE2",
+        webgpu_vendor: "nvidia",
+        webgpu_architecture: "vulkan",
+        canvas_format: "rgba8unorm",
+        hardware_concurrency: 16,
+    },
+    // Intel Arc A770 (modern Intel GPU)
+    GpuProfile {
+        webgl_vendor: "Intel Open Source Technology Center",
+        webgl_renderer: "Mesa Intel Arc A770 Graphics (DG2)",
+        webgpu_vendor: "intel",
+        webgpu_architecture: "vulkan",
+        canvas_format: "rgba8unorm",
+        hardware_concurrency: 16,
+    },
+    // Additional exact data derived from provided prompt:
+    // Mesa/X.org (Common Linux open-source default renderer using LLVMpipe)
+    GpuProfile {
+        webgl_vendor: "Mesa/X.org",
+        webgl_renderer: "llvmpipe (LLVM 15.0.7, 256 bits)",
+        webgpu_vendor: "mesa",
+        webgpu_architecture: "vulkan",
+        canvas_format: "rgba8unorm",
+        hardware_concurrency: 4,
+    },
+    // Mesa (Open-source OpenGL implementation, software rendering fallback)
+    GpuProfile {
+        webgl_vendor: "Mesa",
+        webgl_renderer: "llvmpipe (LLVM 15.0.7, 256 bits)",
+        webgpu_vendor: "mesa",
+        webgpu_architecture: "vulkan",
+        canvas_format: "rgba8unorm",
+        hardware_concurrency: 4,
+    },
+    // Intel Inc Integrated Graphics common variant
+    GpuProfile {
+        webgl_vendor: "Intel Open Source Technology Center",
+        webgl_renderer: "Mesa Intel(R) HD Graphics 520 (SKL GT2)",
+        webgpu_vendor: "intel",
+        webgpu_architecture: "vulkan",
+        canvas_format: "rgba8unorm",
+        hardware_concurrency: 4,
+    },
+    // AMD integrated GPU (e.g., Ryzen integrated graphics)
+    GpuProfile {
+        webgl_vendor: "AMD",
+        webgl_renderer: "AMD Radeon Graphics (RENOIR, DRM 3.40.0, 5.10.0-8-amd64, LLVM 11.0.1)",
+        webgpu_vendor: "amd",
+        webgpu_architecture: "vulkan",
+        canvas_format: "rgba8unorm",
+        hardware_concurrency: 8,
+    },
+    // NVIDIA legacy profile (GTX 1080 variant)
+    GpuProfile {
+        webgl_vendor: "NVIDIA Corporation",
+        webgl_renderer: "NVIDIA GeForce GTX 1080/PCIe/SSE2",
+        webgpu_vendor: "nvidia",
+        webgpu_architecture: "vulkan",
+        canvas_format: "rgba8unorm",
+        hardware_concurrency: 8,
+    },
+    // NVIDIA RTX 4090 (desktop, proprietary)
+    GpuProfile {
+        webgl_vendor: "NVIDIA Corporation",
+        webgl_renderer: "NVIDIA GeForce RTX 4090/PCIe/SSE2",
+        webgpu_vendor: "nvidia",
+        webgpu_architecture: "vulkan",
+        canvas_format: "rgba8unorm",
+        hardware_concurrency: 32,
+    },
+    // NVIDIA RTX 3070 (desktop, proprietary)
+    GpuProfile {
+        webgl_vendor: "NVIDIA Corporation",
+        webgl_renderer: "NVIDIA GeForce RTX 3070/PCIe/SSE2",
+        webgpu_vendor: "nvidia",
+        webgpu_architecture: "vulkan",
+        canvas_format: "rgba8unorm",
+        hardware_concurrency: 16,
+    },
+    // NVIDIA Tesla T4 (cloud / servers, proprietary)
+    GpuProfile {
+        webgl_vendor: "NVIDIA Corporation",
+        webgl_renderer: "NVIDIA Tesla T4/PCIe/SSE2",
+        webgpu_vendor: "nvidia",
+        webgpu_architecture: "vulkan",
+        canvas_format: "rgba8unorm",
+        hardware_concurrency: 8,
+    },
+    // NVIDIA A100 PCIe (cloud / HPC, proprietary)
+    GpuProfile {
+        webgl_vendor: "NVIDIA Corporation",
+        webgl_renderer: "NVIDIA A100-PCIE-40GB/PCIe/SSE2",
+        webgpu_vendor: "nvidia",
+        webgpu_architecture: "vulkan",
+        canvas_format: "rgba8unorm",
+        hardware_concurrency: 32,
+    },
+    // AMD Radeon RX 6600 XT (RDNA2, Mesa)
+    GpuProfile {
+        webgl_vendor: "AMD",
+        webgl_renderer: "AMD Radeon RX 6600 XT (NAVI23, DRM 3.49.0, 6.4.0-arch1-1, LLVM 16.0.6)",
+        webgpu_vendor: "amd",
+        webgpu_architecture: "vulkan",
+        canvas_format: "rgba8unorm",
+        hardware_concurrency: 12,
+    },
+    // AMD Radeon RX 7900 XTX (RDNA3, Mesa)
+    GpuProfile {
+        webgl_vendor: "AMD",
+        webgl_renderer: "AMD Radeon RX 7900 XTX (GFX1100, DRM 3.52.0, 6.6.0, LLVM 17.0.6)",
+        webgpu_vendor: "amd",
+        webgpu_architecture: "vulkan",
+        canvas_format: "rgba8unorm",
+        hardware_concurrency: 24,
+    },
+    // ── Chrome ANGLE format (newer Chrome on Linux uses ANGLE by default) ──
+    GpuProfile {
+        webgl_vendor: "Google Inc. (NVIDIA Corporation)",
+        webgl_renderer: "ANGLE (NVIDIA, NVIDIA GeForce RTX 2080 Ti/PCIe/SSE2, OpenGL 4.5.0)",
+        webgpu_vendor: "nvidia",
+        webgpu_architecture: "vulkan",
+        canvas_format: "rgba8unorm",
+        hardware_concurrency: 16,
+    },
+    GpuProfile {
+        webgl_vendor: "Google Inc. (NVIDIA Corporation)",
+        webgl_renderer: "ANGLE (NVIDIA, NVIDIA GeForce RTX 3080/PCIe/SSE2, OpenGL 4.5.0)",
+        webgpu_vendor: "nvidia",
+        webgpu_architecture: "vulkan",
+        canvas_format: "rgba8unorm",
+        hardware_concurrency: 16,
+    },
+    GpuProfile {
+        webgl_vendor: "Google Inc. (NVIDIA Corporation)",
+        webgl_renderer: "ANGLE (NVIDIA, NVIDIA GeForce GTX 1070/PCIe/SSE2, OpenGL 4.5.0)",
+        webgpu_vendor: "nvidia",
+        webgpu_architecture: "vulkan",
+        canvas_format: "rgba8unorm",
+        hardware_concurrency: 8,
+    },
+    GpuProfile {
+        webgl_vendor: "Google Inc. (AMD)",
+        webgl_renderer: "ANGLE (AMD, AMD Radeon RX 6700 XT (NAVY_FLOUNDER, DRM 3.49.0, 6.5.0, LLVM 16.0.6), OpenGL 4.6)",
+        webgpu_vendor: "amd",
+        webgpu_architecture: "vulkan",
+        canvas_format: "rgba8unorm",
+        hardware_concurrency: 12,
+    },
+    GpuProfile {
+        webgl_vendor: "Google Inc. (AMD)",
+        webgl_renderer: "ANGLE (AMD, AMD Radeon RX 7800 XT (GFX1101, DRM 3.54.0, 6.7.0, LLVM 17.0.6), OpenGL 4.6)",
+        webgpu_vendor: "amd",
+        webgpu_architecture: "vulkan",
+        canvas_format: "rgba8unorm",
+        hardware_concurrency: 16,
+    },
+    GpuProfile {
+        webgl_vendor: "Google Inc. (Intel)",
+        webgl_renderer: "ANGLE (Intel, Mesa Intel(R) UHD Graphics 770 (ADL-S GT1), OpenGL 4.6)",
+        webgpu_vendor: "intel",
+        webgpu_architecture: "vulkan",
+        canvas_format: "rgba8unorm",
+        hardware_concurrency: 8,
+    },
+    GpuProfile {
+        webgl_vendor: "Google Inc. (Intel)",
+        webgl_renderer: "ANGLE (Intel, Mesa Intel(R) Arc(TM) A770 Graphics (DG2), OpenGL 4.6)",
+        webgpu_vendor: "intel",
+        webgpu_architecture: "vulkan",
+        canvas_format: "rgba8unorm",
+        hardware_concurrency: 16,
+    },
+    // SwiftShader (headless/CI environments — common for automated browsing)
+    GpuProfile {
+        webgl_vendor: "Google Inc. (Google)",
+        webgl_renderer: "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)",
+        webgpu_vendor: "google",
+        webgpu_architecture: "vulkan",
+        canvas_format: "rgba8unorm",
+        hardware_concurrency: 4,
+    },
+];

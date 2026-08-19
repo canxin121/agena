@@ -1,6 +1,13 @@
 use std::path::{Path, PathBuf};
 
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(
+    target_os = "android",
+    target_os = "emscripten",
+    target_os = "ios",
+    target_os = "tvos",
+    target_os = "watchos",
+    target_os = "visionos"
+)))]
 use tempfile::Builder;
 
 #[cfg(target_os = "linux")]
@@ -56,7 +63,14 @@ pub struct PastedImageInfo {
     pub height: u32,
 }
 
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(
+    target_os = "android",
+    target_os = "emscripten",
+    target_os = "ios",
+    target_os = "tvos",
+    target_os = "watchos",
+    target_os = "visionos"
+)))]
 pub fn paste_image_to_temp_png() -> Result<(PathBuf, PastedImageInfo), PasteImageError> {
     match paste_image_as_png() {
         Ok((png, info)) => {
@@ -85,14 +99,28 @@ pub fn paste_image_to_temp_png() -> Result<(PathBuf, PastedImageInfo), PasteImag
     }
 }
 
-#[cfg(target_os = "android")]
+#[cfg(any(
+    target_os = "android",
+    target_os = "emscripten",
+    target_os = "ios",
+    target_os = "tvos",
+    target_os = "watchos",
+    target_os = "visionos"
+))]
 pub fn paste_image_to_temp_png() -> Result<(PathBuf, PastedImageInfo), PasteImageError> {
     Err(PasteImageError::ClipboardUnavailable(
-        "clipboard image paste is unsupported on Android".to_string(),
+        "clipboard image paste is unsupported on this platform".to_string(),
     ))
 }
 
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(
+    target_os = "android",
+    target_os = "emscripten",
+    target_os = "ios",
+    target_os = "tvos",
+    target_os = "watchos",
+    target_os = "visionos"
+)))]
 fn paste_image_as_png() -> Result<(Vec<u8>, PastedImageInfo), PasteImageError> {
     let mut clipboard = arboard::Clipboard::new()
         .map_err(|error| PasteImageError::ClipboardUnavailable(error.to_string()))?;

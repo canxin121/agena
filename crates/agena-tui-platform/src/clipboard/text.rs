@@ -1,7 +1,21 @@
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(
+    target_os = "android",
+    target_os = "emscripten",
+    target_os = "ios",
+    target_os = "tvos",
+    target_os = "watchos",
+    target_os = "visionos"
+)))]
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(
+    target_os = "android",
+    target_os = "emscripten",
+    target_os = "ios",
+    target_os = "tvos",
+    target_os = "watchos",
+    target_os = "visionos"
+)))]
 use crate::terminal::TerminalContext;
 
 #[derive(Debug, Clone)]
@@ -30,7 +44,14 @@ impl ClipboardCopyMethod {
     }
 }
 
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(
+    target_os = "android",
+    target_os = "emscripten",
+    target_os = "ios",
+    target_os = "tvos",
+    target_os = "watchos",
+    target_os = "visionos"
+)))]
 pub fn set_clipboard_text(
     text: &str,
     context: &TerminalContext,
@@ -39,12 +60,26 @@ pub fn set_clipboard_text(
     ClipboardService::new(context).copy_text(text, &mut write_terminal)
 }
 
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(
+    target_os = "android",
+    target_os = "emscripten",
+    target_os = "ios",
+    target_os = "tvos",
+    target_os = "watchos",
+    target_os = "visionos"
+)))]
 struct ClipboardService<'a> {
     context: &'a TerminalContext,
 }
 
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(
+    target_os = "android",
+    target_os = "emscripten",
+    target_os = "ios",
+    target_os = "tvos",
+    target_os = "watchos",
+    target_os = "visionos"
+)))]
 impl<'a> ClipboardService<'a> {
     fn new(context: &'a TerminalContext) -> Self {
         Self { context }
@@ -101,7 +136,14 @@ impl<'a> ClipboardService<'a> {
     }
 }
 
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(
+    target_os = "android",
+    target_os = "emscripten",
+    target_os = "ios",
+    target_os = "tvos",
+    target_os = "watchos",
+    target_os = "visionos"
+)))]
 fn set_clipboard_text_native(text: &str) -> Result<(), ClipboardTextError> {
     let mut clipboard =
         arboard::Clipboard::new().map_err(|error| ClipboardTextError(error.to_string()))?;
@@ -110,7 +152,14 @@ fn set_clipboard_text_native(text: &str) -> Result<(), ClipboardTextError> {
         .map_err(|error| ClipboardTextError(error.to_string()))
 }
 
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(
+    target_os = "android",
+    target_os = "emscripten",
+    target_os = "ios",
+    target_os = "tvos",
+    target_os = "watchos",
+    target_os = "visionos"
+)))]
 fn set_clipboard_text_via_tmux(text: &str) -> Result<(), ClipboardTextError> {
     use std::{process::Command, time::Duration};
 
@@ -132,23 +181,47 @@ fn set_clipboard_text_via_tmux(text: &str) -> Result<(), ClipboardTextError> {
     }
 }
 
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(
+    target_os = "android",
+    target_os = "emscripten",
+    target_os = "ios",
+    target_os = "tvos",
+    target_os = "watchos",
+    target_os = "visionos"
+)))]
 fn osc52_copy_sequence(text: &str) -> Vec<u8> {
     format!("\x1b]52;c;{}\x07", STANDARD.encode(text.as_bytes())).into_bytes()
 }
 
-#[cfg(target_os = "android")]
+#[cfg(any(
+    target_os = "android",
+    target_os = "emscripten",
+    target_os = "ios",
+    target_os = "tvos",
+    target_os = "watchos",
+    target_os = "visionos"
+))]
 pub fn set_clipboard_text(
     _: &str,
     _: &crate::terminal::TerminalContext,
     _: impl FnMut(&[u8]) -> Result<(), ClipboardTextError>,
 ) -> Result<ClipboardCopyMethod, ClipboardTextError> {
     Err(ClipboardTextError(
-        "clipboard text copy is unsupported on Android".to_string(),
+        "clipboard text copy is unsupported on this platform".to_string(),
     ))
 }
 
-#[cfg(all(test, not(target_os = "android")))]
+#[cfg(all(
+    test,
+    not(any(
+        target_os = "android",
+        target_os = "emscripten",
+        target_os = "ios",
+        target_os = "tvos",
+        target_os = "watchos",
+        target_os = "visionos"
+    ))
+))]
 mod tests {
     use super::osc52_copy_sequence;
 

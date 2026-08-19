@@ -11,6 +11,7 @@ pub enum CrawlError {
     Url(#[from] url::ParseError),
     #[error("json error: {0}")]
     Json(#[from] serde_json::Error),
+    #[cfg(target_endian = "little")]
     #[error("tantivy error: {0}")]
     Tantivy(#[from] tantivy::TantivyError),
     #[error("metadata error: {0}")]

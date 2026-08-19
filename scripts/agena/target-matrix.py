@@ -11,12 +11,17 @@ MANIFEST = Path(__file__).with_name("universal-targets.json")
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("group", choices=("hosted-cross", "native"))
+    parser.add_argument("group", choices=("hosted-cross", "native", "portable"))
     parser.add_argument("--compact", action="store_true")
     args = parser.parse_args()
 
     payload = json.loads(MANIFEST.read_text(encoding="utf-8"))
-    key = "hosted_cross" if args.group == "hosted-cross" else "native"
+    if args.group == "hosted-cross":
+        key = "hosted_cross"
+    elif args.group == "native":
+        key = "native"
+    else:
+        key = "portable"
     matrix = {"include": payload[key]}
     print(json.dumps(matrix, separators=(",", ":") if args.compact else None))
 

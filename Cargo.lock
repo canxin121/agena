@@ -658,6 +658,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "agena-portable-core"
+version = "0.1.0-beta.5"
+
+[[package]]
 name = "agena-process"
 version = "0.1.0-beta.5"
 dependencies = [

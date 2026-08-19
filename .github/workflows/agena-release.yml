@@ -78,6 +78,7 @@ jobs:
     outputs:
       hosted: ${{ steps.matrix.outputs.hosted }}
       native: ${{ steps.matrix.outputs.native }}
+      portable: ${{ steps.matrix.outputs.portable }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -89,13 +90,16 @@ jobs:
           set -euo pipefail
           hosted="$(python3 scripts/agena/target-matrix.py hosted-cross --compact)"
           native="$(python3 scripts/agena/target-matrix.py native --compact)"
+          portable="$(python3 scripts/agena/target-matrix.py portable --compact)"
           echo "hosted=$hosted" >> "$GITHUB_OUTPUT"
           echo "native=$native" >> "$GITHUB_OUTPUT"
+          echo "portable=$portable" >> "$GITHUB_OUTPUT"
           python3 - <<'PY'
           import json
           data = json.load(open("scripts/agena/universal-targets.json", encoding="utf-8"))
           print(f"Hosted/cross targets: {len(data['hosted_cross'])}")
           print(f"Native targets: {len(data['native'])}")
+          print(f"Portable targets: {len(data['portable'])}")
           PY
 
   web:
@@ -275,16 +279,48 @@ jobs:
             artifacts/agena/*.sha256
           if-no-files-found: error
 
+  portable-core:
+    name: portable ${{ matrix.target }}
+    needs:
+      - metadata
+      - targets
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      max-parallel: 24
+      matrix: ${{ fromJSON(needs.targets.outputs.portable) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.metadata.outputs.source_sha }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          toolchain: 1.97.0
+          targets: ${{ matrix.target }}
+      - name: Build and package portable core
+        run: bash scripts/agena/package-portable-core.sh '${{ matrix.target }}'
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: agena-release-${{ matrix.target }}
+          path: |
+            artifacts/agena/*.tar.gz
+            artifacts/agena/*.sha256
+          if-no-files-found: error
+
   publish:
     if: >-
       always() &&
       needs.metadata.outputs.publish_release == 'true' &&
       needs.hosted-backend.result == 'success' &&
-      needs.native-backend.result == 'success'
+      needs.native-backend.result == 'success' &&
+      needs.portable-core.result == 'success'
     needs:
       - metadata
       - hosted-backend
       - native-backend
+      - portable-core
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -298,8 +334,8 @@ jobs:
           set -euo pipefail
           find release-assets -maxdepth 1 -type f -print | sort
           count="$(find release-assets -maxdepth 1 -type f \( -name '*.tar.gz' -o -name '*.zip' \) | wc -l | tr -d ' ')"
-          if [[ "$count" -lt 55 ]]; then
-            echo "expected at least 55 release archives, found $count" >&2
+          if [[ "$count" -lt 117 ]]; then
+            echo "expected at least 117 release archives, found $count" >&2
             exit 1
           fi
           (

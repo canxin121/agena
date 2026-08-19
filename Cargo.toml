@@ -57,6 +57,7 @@ members = [
     "crates/agena-macros",
     "crates/agena-macro-core",
     "crates/agena-plugin-sdk",
+    "crates/agena-portable-core",
     "crates/agena-rollout",
     "crates/agena-scheduler",
     "crates/agena-skills",

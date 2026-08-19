@@ -1,0 +1,13 @@
+[package]
+name = "agena-portable-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "No-std Agena ABI/version core for non-hosted and embedded targets"
+
+[lib]
+crate-type = ["rlib"]
+
+[lints]
+workspace = true

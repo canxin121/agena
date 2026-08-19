@@ -435,5 +435,255 @@
       "shell": "pwsh",
       "artifact_kind": "backend"
     }
+  ],
+  "portable": [
+    {
+      "target": "aarch64-apple-ios",
+      "artifact_kind": "portable-core"
+    },
+    {
+      "target": "aarch64-apple-ios-macabi",
+      "artifact_kind": "portable-core"
+    },
+    {
+      "target": "aarch64-apple-ios-sim",
+      "artifact_kind": "portable-core"
+    },
+    {
+      "target": "aarch64-apple-tvos",
+      "artifact_kind": "portable-core"
+    },
+    {
+      "target": "aarch64-apple-tvos-sim",
+      "artifact_kind": "portable-core"
+    },
+    {
+      "target": "aarch64-apple-visionos",
+      "artifact_kind": "portable-core"
+    },
+    {
+      "target": "aarch64-apple-visionos-sim",
+      "artifact_kind": "portable-core"
+    },
+    {
+      "target": "aarch64-apple-watchos",
+      "artifact_kind": "portable-core"
+    },
+    {
+      "target": "aarch64-apple-watchos-sim",
+      "artifact_kind": "portable-core"
+    },
+    {
+      "target": "aarch64-pc-windows-gnullvm",
+      "artifact_kind": "portable-core"
+    },
+    {
+      "target": "aarch64-unknown-fuchsia",
+      "artifact_kind": "portable-core"
+    },
+    {
+      "target": "aarch64-unknown-linux-ohos",
+      "artifact_kind": "portable-core"
+    },
+    {
+      "target": "aarch64-unknown-none",
+      "artifact_kind": "portable-core"
+    },
+    {
+      "target": "aarch64-unknown-none-softfloat",
+      "artifact_kind": "portable-core"
+    },
+    {
+      "target": "aarch64-unknown-uefi",
+      "artifact_kind": "portable-core"
+    },
+    {
+      "target": "arm64ec-pc-windows-msvc",
+      "artifact_kind": "portable-core"
+    },
+    {
+      "target": "armv7-unknown-linux-ohos",
+      "artifact_kind": "portable-core"
+    },
+    {
+      "target": "armv7a-none-eabi",
+      "artifact_kind": "portable-core"
+    },
+    {
+      "target": "armv7a-none-eabihf",
+      "artifact_kind": "portable-core"
+    },
+    {
+      "target": "armv7r-none-eabi",
+      "artifact_kind": "portable-core"
+    },
+    {
+      "target": "armv7r-none-eabihf",
+      "artifact_kind": "portable-core"
+    },
+    {
+      "target": "armv8r-none-eabihf",
+      "artifact_kind": "portable-core"
+    },
+    {
+      "target": "i686-pc-windows-gnullvm",
+      "artifact_kind": "portable-core"
+    },
+    {
+      "target": "i686-unknown-uefi",
+      "artifact_kind": "portable-core"
+    },
+    {
+      "target": "loongarch64-unknown-none",
+      "artifact_kind": "portable-core"
+    },
+    {
+      "target": "loongarch64-unknown-none-softfloat",
+      "artifact_kind": "portable-core"
+    },
+    {
+      "target": "nvptx64-nvidia-cuda",
+      "artifact_kind": "portable-core"
+    },
+    {
+      "target": "powerpc64-unknown-linux-musl",
+      "artifact_kind": "portable-core"
+    },
+    {
+      "target": "powerpc64le-unknown-linux-musl",
+      "artifact_kind": "portable-core"
+    },
+    {
+      "target": "riscv32i-unknown-none-elf",
+      "artifact_kind": "portable-core"
+    },
+    {
+      "target": "riscv32im-unknown-none-elf",
+      "artifact_kind": "portable-core"
+    },
+    {
+      "target": "riscv32imac-unknown-none-elf",
+      "artifact_kind": "portable-core"
+    },
+    {
+      "target": "riscv32imafc-unknown-none-elf",
+      "artifact_kind": "portable-core"
+    },
+    {
+      "target": "riscv32imc-unknown-none-elf",
+      "artifact_kind": "portable-core"
+    },
+    {
+      "target": "riscv64a23-unknown-linux-gnu",
+      "artifact_kind": "portable-core"
+    },
+    {
+      "target": "riscv64gc-unknown-none-elf",
+      "artifact_kind": "portable-core"
+    },
+    {
+      "target": "riscv64imac-unknown-none-elf",
+      "artifact_kind": "portable-core"
+    },
+    {
+      "target": "thumbv6m-none-eabi",
+      "artifact_kind": "portable-core"
+    },
+    {
+      "target": "thumbv7em-none-eabi",
+      "artifact_kind": "portable-core"
+    },
+    {
+      "target": "thumbv7em-none-eabihf",
+      "artifact_kind": "portable-core"
+    },
+    {
+      "target": "thumbv7m-none-eabi",
+      "artifact_kind": "portable-core"
+    },
+    {
+      "target": "thumbv8m.base-none-eabi",
+      "artifact_kind": "portable-core"
+    },
+    {
+      "target": "thumbv8m.main-none-eabi",
+      "artifact_kind": "portable-core"
+    },
+    {
+      "target": "thumbv8m.main-none-eabihf",
+      "artifact_kind": "portable-core"
+    },
+    {
+      "target": "wasm32-unknown-unknown",
+      "artifact_kind": "portable-core"
+    },
+    {
+      "target": "wasm32-wasip1",
+      "artifact_kind": "portable-core"
+    },
+    {
+      "target": "wasm32-wasip1-threads",
+      "artifact_kind": "portable-core"
+    },
+    {
+      "target": "wasm32-wasip2",
+      "artifact_kind": "portable-core"
+    },
+    {
+      "target": "wasm32v1-none",
+      "artifact_kind": "portable-core"
+    },
+    {
+      "target": "x86_64-apple-ios",
+      "artifact_kind": "portable-core"
+    },
+    {
+      "target": "x86_64-apple-ios-macabi",
+      "artifact_kind": "portable-core"
+    },
+    {
+      "target": "x86_64-fortanix-unknown-sgx",
+      "artifact_kind": "portable-core"
+    },
+    {
+      "target": "x86_64-pc-windows-gnullvm",
+      "artifact_kind": "portable-core"
+    },
+    {
+      "target": "x86_64-unknown-fuchsia",
+      "artifact_kind": "portable-core"
+    },
+    {
+      "target": "x86_64-unknown-linux-gnuasan",
+      "artifact_kind": "portable-core"
+    },
+    {
+      "target": "x86_64-unknown-linux-gnumsan",
+      "artifact_kind": "portable-core"
+    },
+    {
+      "target": "x86_64-unknown-linux-gnutsan",
+      "artifact_kind": "portable-core"
+    },
+    {
+      "target": "x86_64-unknown-linux-gnux32",
+      "artifact_kind": "portable-core"
+    },
+    {
+      "target": "x86_64-unknown-linux-ohos",
+      "artifact_kind": "portable-core"
+    },
+    {
+      "target": "x86_64-unknown-none",
+      "artifact_kind": "portable-core"
+    },
+    {
+      "target": "x86_64-unknown-redox",
+      "artifact_kind": "portable-core"
+    },
+    {
+      "target": "x86_64-unknown-uefi",
+      "artifact_kind": "portable-core"
+    }
   ]
 }

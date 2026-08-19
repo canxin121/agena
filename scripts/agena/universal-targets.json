@@ -847,7 +847,7 @@
       "target": "amdgcn-amd-amdhsa",
       "artifact_kind": "portable-core-build-std",
       "build_std": true,
-      "rustflags": ""
+      "rustflags": "-Ctarget-cpu=gfx900"
     },
     {
       "target": "arm64_32-apple-watchos",

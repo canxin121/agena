@@ -345,17 +345,20 @@ pub(crate) fn schema_constraints(schema: &JsonValue) -> Vec<String> {
 }
 
 pub fn plugin_workbench_summary(dialog: &PluginWorkbenchOverlay) -> String {
-    format!(
-        "Search: {} · Transport: {} · Config: {} · {}/{} shown",
-        if dialog.list.query.text().is_empty() {
-            "all"
-        } else {
-            dialog.list.query.text()
-        },
-        dialog.list.transport_filter.label(),
-        dialog.list.config_filter.label(),
-        dialog.list.visible_len(),
-        dialog.plugins.len()
+    let query = if dialog.list.query.text().is_empty() {
+        dialog.i18n.text("plugin-workbench-filter-all")
+    } else {
+        dialog.list.query.text().to_owned()
+    };
+    dialog.i18n.text_args(
+        "plugin-workbench-summary",
+        &agena_tui::fl_args![
+            "query" => query,
+            "transport" => dialog.list.transport_filter.label(&dialog.i18n),
+            "config" => dialog.list.config_filter.label(&dialog.i18n),
+            "shown" => dialog.list.visible_len(),
+            "total" => dialog.plugins.len(),
+        ],
     )
 }
 
@@ -456,13 +459,6 @@ pub(crate) fn plugin_package_preview(value: &JsonValue) -> String {
         .unwrap_or_else(|| preview_value(value))
 }
 
-pub(crate) fn diagnostic_severity_label(severity: DiagnosticSeverity) -> &'static str {
-    match severity {
-        DiagnosticSeverity::Error => "error",
-        DiagnosticSeverity::Warning => "warning",
-    }
-}
-
 pub(crate) fn plugin_workbench_selection_highlight_style() -> Style {
     agena_tui_components::theme::selection_style()
 }
@@ -551,9 +547,9 @@ pub fn clean(text: impl AsRef<str>) -> String {
         .collect()
 }
 use super::{
-    BTreeSet, DiagnosticSeverity, JsonMap, JsonValue, PluginDetailTab, PluginWorkbenchOverlay,
-    PluginWorkbenchPlugin, Style, active_schema_for_value, json, object_property_schema,
-    pattern_key_matches, preview_value, schema_has_array_shape, schema_has_object_shape,
-    section_row_count, settings_contract_editor_schema,
+    BTreeSet, JsonMap, JsonValue, PluginDetailTab, PluginWorkbenchOverlay, PluginWorkbenchPlugin,
+    Style, active_schema_for_value, json, object_property_schema, pattern_key_matches,
+    preview_value, schema_has_array_shape, schema_has_object_shape, section_row_count,
+    settings_contract_editor_schema,
 };
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};

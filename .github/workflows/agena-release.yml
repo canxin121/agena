@@ -1,13 +1,15 @@
 name: Agena Release
+run-name: Agena Release ${{ inputs.tag_name || inputs.source_sha || github.sha }}
 
 on:
-  push:
-    tags:
-      - agena-v*
   workflow_dispatch:
     inputs:
       tag_name:
         description: "Release tag name, for example agena-v0.1.0"
+        required: false
+        type: string
+      source_sha:
+        description: "Commit SHA to build; defaults to the selected workflow ref"
         required: false
         type: string
       publish_release:
@@ -19,17 +21,28 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: agena-release-${{ inputs.tag_name || inputs.source_sha || github.sha }}
+  cancel-in-progress: false
+
 jobs:
   metadata:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.meta.outputs.version }}
       tag: ${{ steps.meta.outputs.tag }}
+      source_sha: ${{ steps.meta.outputs.source_sha }}
       publish_release: ${{ steps.meta.outputs.publish_release }}
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.source_sha || github.sha }}
+          persist-credentials: false
 
       - id: meta
+        env:
+          REQUESTED_TAG: ${{ inputs.tag_name }}
+          PUBLISH_RELEASE: ${{ inputs.publish_release }}
         shell: bash
         run: |
           set -euo pipefail
@@ -39,15 +52,9 @@ jobs:
             exit 1
           fi
 
-          if [[ "${GITHUB_EVENT_NAME}" == "push" ]]; then
-            tag="${GITHUB_REF_NAME}"
-            publish_release="true"
-          else
-            tag="${{ inputs.tag_name }}"
-            if [[ -z "$tag" ]]; then
-              tag="agena-v${version}"
-            fi
-            publish_release="${{ inputs.publish_release }}"
+          tag="$REQUESTED_TAG"
+          if [[ -z "$tag" ]]; then
+            tag="agena-v${version}"
           fi
 
           if [[ "$tag" != "agena-v${version}" ]]; then
@@ -55,9 +62,11 @@ jobs:
             exit 1
           fi
 
+          source_sha="$(git rev-parse HEAD)"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          echo "publish_release=$publish_release" >> "$GITHUB_OUTPUT"
+          echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
+          echo "publish_release=$PUBLISH_RELEASE" >> "$GITHUB_OUTPUT"
 
   backend:
     needs: metadata
@@ -69,7 +78,7 @@ jobs:
             target: x86_64-unknown-linux-gnu
             artifact_suffix: linux-x86_64
             shell: bash
-          - runner: macos-13
+          - runner: macos-15-intel
             target: x86_64-apple-darwin
             artifact_suffix: macos-x86_64
             shell: bash
@@ -78,20 +87,54 @@ jobs:
             artifact_suffix: windows-x86_64
             shell: pwsh
     runs-on: ${{ matrix.runner }}
+    env:
+      # Cargo incremental state is not portable across ephemeral runners.
+      # Disable it so sccache can reuse rustc outputs across workflow runs.
+      CARGO_INCREMENTAL: "0"
+      SCCACHE_BASEDIRS: ${{ github.workspace }}
+      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_GHA_VERSION: agena-v1
+      SCCACHE_IGNORE_SERVER_IO_ERROR: "1"
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.metadata.outputs.source_sha }}
+          persist-credentials: false
 
-      - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # master
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
         with:
           toolchain: 1.97.0
 
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        with:
+          version: v0.17.0
+
+      - name: Configure Cargo sccache wrapper
+        uses: ./.github/actions/configure-sccache-wrapper
+
+      - name: Restore Cargo dependency cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          prefix-key: v1-rust-sccache
+          key: release-${{ matrix.target }}
+          cache-bin: false
+          cache-on-failure: true
 
       - name: Set up Bun (Unix)
         if: matrix.shell == 'bash'
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version-file: .bun-version
+
+      - name: Restore Agena Web dependencies (Unix)
+        if: matrix.shell == 'bash'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.bun/install/cache
+            packages/agena-web/node_modules
+          key: agena-web-bun-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.bun-version', 'packages/agena-web/bun.lock') }}
 
       - name: Build Backend Package (Unix)
         if: matrix.shell == 'bash'
@@ -102,7 +145,13 @@ jobs:
         shell: pwsh
         run: ./scripts/agena/package-backend.ps1 -TargetTriple ${{ matrix.target }}
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      - name: Verify sccache compiler activity
+        uses: ./.github/actions/verify-sccache
+        with:
+          label: release-${{ matrix.target }}
+          minimum-requests: "1"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: agena-backend-${{ matrix.artifact_suffix }}
           path: artifacts/agena/agena-backend-*
@@ -118,12 +167,15 @@ jobs:
       - backend
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           path: release-assets
 
-      - uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3
+      - uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
+          name: Agena ${{ needs.metadata.outputs.version }}
           tag_name: ${{ needs.metadata.outputs.tag }}
+          target_commitish: ${{ needs.metadata.outputs.source_sha }}
+          prerelease: ${{ contains(needs.metadata.outputs.version, '-') }}
           generate_release_notes: true
           files: release-assets/**/*

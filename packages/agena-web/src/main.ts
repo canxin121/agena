@@ -15,6 +15,7 @@ import App from './App.vue'
 import { router } from './router'
 import { i18n, ensureDefaultLocale, setAppLocale } from './i18n'
 import { DEFAULT_LOCALE, normalizeAppLocale } from './i18n/locale'
+import { settingsText } from './i18n/settingsText'
 import { useToastsStore } from './stores/toasts'
 import { useAuthStore } from './stores/auth'
 import { sessionStorageKeys } from './lib/persistence/storageKeys'
@@ -24,6 +25,7 @@ import {
   clearAuthRequiredFromStorage,
   type AuthRequiredDetail,
 } from './lib/authEvents.ts'
+import { readUiAuthTokenVersion } from './lib/uiAuthToken'
 
 // Capture initial page-load context so components that mount lazily (e.g. mobile sidebar)
 // can still tell whether a session query came from a fresh load vs in-app navigation.
@@ -42,6 +44,7 @@ const pinia = createPinia()
 app.use(pinia)
 app.use(i18n)
 app.use(router)
+app.config.globalProperties.$st = settingsText
 
 // Keep <html lang> in sync with i18n locale.
 ensureDefaultLocale()
@@ -65,6 +68,14 @@ function ensureAuthRefreshSoon() {
 }
 
 function handleAuthRequired(detail?: AuthRequiredDetail) {
+  // Requests started before login can finish with 401 after the new token has
+  // been written. Their event is stale and must not bounce the app back to the
+  // login page. The version is intentionally metadata only; the bearer token
+  // itself is never placed in the event or sessionStorage.
+  if (typeof detail?.authTokenVersion === 'number' && detail.authTokenVersion !== readUiAuthTokenVersion()) {
+    return
+  }
+
   const msg =
     String(detail?.message || i18n.global.t('auth.uiAuthRequired')).trim() ||
     String(i18n.global.t('auth.uiAuthRequired'))

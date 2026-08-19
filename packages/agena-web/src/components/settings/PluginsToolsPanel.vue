@@ -1,19 +1,46 @@
 <script setup lang="ts">
-import PluginsPanel from '@/components/settings/PluginsPanel.vue'
 import HarnessSettingsPanel from '@/components/settings/HarnessSettingsPanel.vue'
 import McpServerControlPanel from '@/components/settings/McpServerControlPanel.vue'
+import PluginsPanel from '@/components/settings/PluginsPanel.vue'
+import SettingsSectionWorkbench from '@/components/settings/workbench/SettingsSectionWorkbench.vue'
+import type { SettingsSubpageDefinition } from '@/components/settings/workbench/settingsSectionNavigation'
+import { settingsText as st } from '@/i18n/settingsText'
+
+const pages: SettingsSubpageDefinition[] = [
+  {
+    id: 'plugin-workbench',
+    label: st('Plugin Workbench'),
+    description: st('Configure plugins, run tools and commands, and inspect capabilities, logs, and diagnostics.'),
+    keywords: ['plugins', 'schema', 'config', 'tools', 'commands', 'logs'],
+  },
+  {
+    id: 'mcp-server',
+    label: st('MCP Server'),
+    description: st('Manage the connected server’s MCP listener, OAuth policy, public identity, and tool exposure.'),
+    keywords: ['mcp', 'oauth', 'chatgpt', 'public url', 'tools'],
+  },
+  {
+    id: 'harnesses',
+    label: st('Tool harnesses'),
+    description: st('Create named browser, shell, and editor harness configurations.'),
+    keywords: ['browser', 'shell', 'editor', 'environment', 'commands'],
+  },
+]
 </script>
 
 <template>
-  <div class="space-y-6">
-    <div>
-      <div class="text-lg font-medium">Plugins &amp; Tools</div>
-      <div class="mt-1 max-w-3xl text-sm text-muted-foreground">
-        {{ 'Plugin configuration, tools, commands, harnesses, and diagnostics.' }}
-      </div>
-    </div>
-    <McpServerControlPanel />
-    <PluginsPanel />
-    <HarnessSettingsPanel />
-  </div>
+  <SettingsSectionWorkbench
+    section="plugins-tools"
+    :title="$st('Plugins & Tools')"
+    :description="
+      $st('Operate the plugin runtime, expose Agena through MCP, and configure provider-native tool harnesses.')
+    "
+    :pages="pages"
+    default-page="plugin-workbench"
+    v-slot="{ activePage }"
+  >
+    <PluginsPanel v-if="activePage === 'plugin-workbench'" />
+    <McpServerControlPanel v-else-if="activePage === 'mcp-server'" />
+    <HarnessSettingsPanel v-else />
+  </SettingsSectionWorkbench>
 </template>

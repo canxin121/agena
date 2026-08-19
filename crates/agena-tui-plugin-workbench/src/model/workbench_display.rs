@@ -19,9 +19,22 @@ pub(crate) fn compact_plugin_label(plugin: &PluginWorkbenchPlugin) -> String {
         .to_owned()
 }
 
-pub(crate) fn compact_config_header_line(plugin: &PluginWorkbenchPlugin) -> String {
-    let save_state = if plugin.dirty { "Dirty" } else { "Saved" };
-    let config_label = format!("Config: {} / {}", plugin.config_status.label, save_state);
+pub(crate) fn compact_config_header_line(
+    dialog: &PluginWorkbenchOverlay,
+    plugin: &PluginWorkbenchPlugin,
+) -> String {
+    let save_state = if plugin.dirty {
+        dialog.i18n.text("plugin-workbench-config-dirty")
+    } else {
+        dialog.i18n.text("plugin-workbench-config-saved")
+    };
+    let config_label = dialog.i18n.text_args(
+        "plugin-workbench-config-summary",
+        &agena_tui::fl_args![
+            "status" => plugin.config_status.kind.label(&dialog.i18n),
+            "save_state" => save_state,
+        ],
+    );
     let label = compact_plugin_label(plugin);
     let version_label = format!("v{}", plugin.version);
     fixed_columns(
@@ -40,31 +53,52 @@ pub(crate) fn compact_config_view_line(
     dialog: &PluginWorkbenchOverlay,
 ) -> String {
     let cell_label = selected_config_row_context(dialog)
-        .map(|context| config_row_cell_label(&context.row, context.layout, context.cell).to_owned())
-        .unwrap_or_else(|| "Value".to_owned());
-    format!(
-        "Changed: {}  Cell: {}  Tab/Shift+Tab moves focus; Enter activates the selected cell",
-        override_leaf_count(&plugin.draft_override),
-        cell_label,
+        .map(|context| {
+            config_row_cell_label(&dialog.i18n, &context.row, context.layout, context.cell)
+        })
+        .unwrap_or_else(|| dialog.i18n.text("plugin-workbench-config-value"));
+    dialog.i18n.text_args(
+        "plugin-workbench-config-view-summary",
+        &agena_tui::fl_args![
+            "changed" => override_leaf_count(&plugin.draft_override),
+            "cell" => cell_label,
+        ],
     )
 }
 
 pub(crate) fn drilldown_footer_text(
-    _dialog: &PluginWorkbenchOverlay,
+    dialog: &PluginWorkbenchOverlay,
     _overlay: &PluginConfigDrilldownOverlay,
 ) -> String {
-    "Arrows navigate cells  Enter activates the selected cell  Ctrl+D removes selected  Esc returns"
-        .to_owned()
+    dialog.i18n.text("plugin-workbench-config-drilldown-footer")
 }
 
-pub(crate) fn compact_config_toolbar_text() -> Text<'static> {
+pub(crate) fn compact_config_toolbar_text(dialog: &PluginWorkbenchOverlay) -> Text<'static> {
     agena_tui_components::build_shortcut_bar([
-        agena_tui_components::ShortcutHint::new("Ctrl+K", "validate"),
-        agena_tui_components::ShortcutHint::new("Ctrl+U", "reset all"),
-        agena_tui_components::ShortcutHint::new("Ctrl+P", "diff"),
-        agena_tui_components::ShortcutHint::new("Ctrl+S", "save"),
-        agena_tui_components::ShortcutHint::new("Ctrl+R", "restart"),
-        agena_tui_components::ShortcutHint::new("Ctrl+D", "remove selected"),
+        agena_tui_components::ShortcutHint::new(
+            "Ctrl+K",
+            dialog.i18n.text("plugin-workbench-action-validate"),
+        ),
+        agena_tui_components::ShortcutHint::new(
+            "Ctrl+U",
+            dialog.i18n.text("plugin-workbench-action-reset-all"),
+        ),
+        agena_tui_components::ShortcutHint::new(
+            "Ctrl+P",
+            dialog.i18n.text("plugin-workbench-action-diff"),
+        ),
+        agena_tui_components::ShortcutHint::new(
+            "Ctrl+S",
+            dialog.i18n.text("plugin-workbench-action-save"),
+        ),
+        agena_tui_components::ShortcutHint::new(
+            "Ctrl+R",
+            dialog.i18n.text("plugin-workbench-action-restart"),
+        ),
+        agena_tui_components::ShortcutHint::new(
+            "Ctrl+D",
+            dialog.i18n.text("plugin-workbench-action-remove-selected"),
+        ),
     ])
 }
 
@@ -74,7 +108,7 @@ pub(crate) fn compact_config_sections_text(
     width: u16,
 ) -> Text<'static> {
     let mut lines = vec![Line::from(Span::styled(
-        "Sections",
+        dialog.i18n.text("plugin-workbench-sections"),
         Style::default().add_modifier(Modifier::BOLD),
     ))];
     lines.push(Line::from(""));
@@ -84,7 +118,9 @@ pub(crate) fn compact_config_sections_text(
         if section.issue_count > 0 {
             label.push_str(format!(" !{}", section.issue_count).as_str());
         } else if section.dirty {
-            label.push_str(" dirty");
+            label.push_str(
+                format!(" {}", dialog.i18n.text("plugin-workbench-config-dirty")).as_str(),
+            );
         }
         let focused =
             dialog.config_focus == PluginConfigFocus::Structure && index == dialog.selected_section;

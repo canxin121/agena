@@ -15,7 +15,7 @@ impl App {
                         },
                         |app, result| match result {
                             Ok(_) => {
-                                app.flash_success("Agena MCP public URL updated".to_owned());
+                                app.flash_success(app.i18n.text("settings-mcp-public-url-updated"));
                                 app.refresh_current_route_after_local_edit();
                             }
                             Err(error) => app.flash_error(error),
@@ -32,7 +32,9 @@ impl App {
                         },
                         |app, result| match result {
                             Ok(_) => {
-                                app.flash_success("Agena MCP OAuth issuer URL updated".to_owned());
+                                app.flash_success(
+                                    app.i18n.text("settings-mcp-oauth-issuer-updated"),
+                                );
                                 app.refresh_current_route_after_local_edit();
                             }
                             Err(error) => app.flash_error(error),
@@ -47,7 +49,9 @@ impl App {
                         },
                         |app, result| match result {
                             Ok(_) => {
-                                app.flash_success("Agena MCP OAuth password updated".to_owned());
+                                app.flash_success(
+                                    app.i18n.text("settings-mcp-oauth-password-updated"),
+                                );
                                 app.refresh_current_route_after_local_edit();
                             }
                             Err(error) => app.flash_error(error),

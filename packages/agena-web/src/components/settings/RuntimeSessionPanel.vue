@@ -3,14 +3,34 @@ import { ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { RiRefreshLine } from '@remixicon/vue'
 
-import Button from '@/components/ui/Button.vue'
 import ServerSettingField from '@/components/settings/ServerSettingField.vue'
+import SettingsSectionWorkbench from '@/components/settings/workbench/SettingsSectionWorkbench.vue'
+import type { SettingsSubpageDefinition } from '@/components/settings/workbench/settingsSectionNavigation'
+import Button from '@/components/ui/Button.vue'
 import { apiJson } from '@/lib/api'
+import { settingsText as st } from '@/i18n/settingsText'
 
 const { t } = useI18n()
 const refreshBusy = ref(false)
 const refreshError = ref('')
 const clientVersionNonce = ref(0)
+
+const pages: SettingsSubpageDefinition[] = [
+  {
+    id: 'client-versions',
+    label: st('Provider client versions'),
+    description: st(
+      'Pin or refresh the compatibility client versions presented by Codex, Claude, and Gemini adapters.',
+    ),
+    keywords: ['client', 'version', 'codex', 'claude', 'gemini', 'npm'],
+  },
+  {
+    id: 'compaction',
+    label: st('Session compaction'),
+    description: st('Control automatic compaction and the token reserve used when deciding when to compact.'),
+    keywords: ['session', 'compaction', 'context', 'tokens', 'reserve'],
+  },
+]
 
 async function refreshClientVersions() {
   if (refreshBusy.value) return
@@ -28,17 +48,19 @@ async function refreshClientVersions() {
 </script>
 
 <template>
-  <div class="space-y-6">
-    <div>
-      <div class="text-lg font-medium">{{ t('settings.tabs.runtimeSession') }}</div>
-      <div class="mt-1 max-w-3xl text-sm text-muted-foreground">{{ t('settings.tui.runtimeDescription') }}</div>
-    </div>
-
-    <section class="grid gap-3">
+  <SettingsSectionWorkbench
+    section="runtime-session"
+    :title="String(t('settings.tabs.runtimeSession'))"
+    :description="String(t('settings.tui.runtimeDescription'))"
+    :pages="pages"
+    default-page="client-versions"
+    v-slot="{ activePage }"
+  >
+    <section v-if="activePage === 'client-versions'" class="grid gap-4">
       <div class="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 class="text-sm font-medium">{{ t('settings.tui.clientVersionsTitle') }}</h2>
-          <p class="mt-1 text-xs text-muted-foreground">{{ t('settings.tui.clientVersionsDescription') }}</p>
+          <h2 class="text-base font-semibold">{{ t('settings.tui.clientVersionsTitle') }}</h2>
+          <p class="mt-1 max-w-3xl text-sm text-muted-foreground">{{ t('settings.tui.clientVersionsDescription') }}</p>
         </div>
         <Button variant="outline" size="sm" :disabled="refreshBusy" @click="refreshClientVersions">
           <RiRefreshLine class="mr-2 h-4 w-4" :class="refreshBusy ? 'animate-spin' : ''" />
@@ -79,10 +101,10 @@ async function refreshClientVersions() {
       </div>
     </section>
 
-    <section class="grid gap-2 border-t border-border/60 pt-5">
+    <section v-else class="grid gap-3">
       <div>
-        <h2 class="text-sm font-medium">{{ t('settings.tui.compactionTitle') }}</h2>
-        <p class="mt-1 text-xs text-muted-foreground">{{ t('settings.tui.compactionDescription') }}</p>
+        <h2 class="text-base font-semibold">{{ t('settings.tui.compactionTitle') }}</h2>
+        <p class="mt-1 max-w-3xl text-sm text-muted-foreground">{{ t('settings.tui.compactionDescription') }}</p>
       </div>
       <ServerSettingField
         path="session.compaction.auto"
@@ -102,5 +124,5 @@ async function refreshClientVersions() {
         compact
       />
     </section>
-  </div>
+  </SettingsSectionWorkbench>
 </template>

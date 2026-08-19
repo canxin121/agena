@@ -52,6 +52,7 @@ use agena_application::dto::{
     GitStatusResource, MemoryResource, OperatorToolResource, SnapshotStatusResource,
 };
 use agena_client::{AgenaClient, ClientError};
+use agena_mcp_server::{StatelessMcpToolMetadata, is_stateless_mcp_tool_exposed};
 
 struct ServerSessionClient {
     client: AgenaClient,
@@ -77,32 +78,13 @@ pub(super) struct ServerMcpBackend {
     workspace_id: i64,
 }
 
-const HIDDEN_MCP_PLUGIN_IDS: &[&str] = &["agena.chatgpt", "agena.gemini", "agena.claude"];
-
-fn name_belongs_to_plugin(name: &str, plugin_id: &str) -> bool {
-    name == plugin_id
-        || name
-            .strip_prefix(plugin_id)
-            .is_some_and(|suffix| suffix.starts_with('.'))
-}
-
-fn mcp_tool_uses_hidden_provider(tool: &OperatorToolResource) -> bool {
-    if let Some(plugin_id) = tool.plugin_id.as_deref() {
-        return HIDDEN_MCP_PLUGIN_IDS.contains(&plugin_id);
-    }
-
-    // Older Agena servers do not send plugin_id yet. Their compact tool names
-    // still carry the provider name, so retain a conservative compatibility
-    // fallback until those servers are upgraded.
-    HIDDEN_MCP_PLUGIN_IDS.iter().any(|plugin_id| {
-        let compact_plugin_id = plugin_id.strip_prefix("agena.").unwrap_or(plugin_id);
-        name_belongs_to_plugin(tool.name.as_str(), compact_plugin_id)
-            || name_belongs_to_plugin(tool.name.as_str(), plugin_id)
-    })
-}
-
 fn mcp_tool_is_exposed(tool: &OperatorToolResource) -> bool {
-    !tool.interactive && !mcp_tool_uses_hidden_provider(tool)
+    is_stateless_mcp_tool_exposed(StatelessMcpToolMetadata {
+        name: tool.name.as_str(),
+        plugin_id: tool.plugin_id.as_deref(),
+        interactive: tool.interactive,
+        task: tool.task,
+    })
 }
 
 fn mcp_tool_is_callable(tools: &[OperatorToolResource], name: &str) -> bool {
@@ -2535,7 +2517,7 @@ mod tests {
     }
 
     #[test]
-    fn mcp_catalog_hides_interactive_tools_and_provider_plugins() {
+    fn mcp_catalog_uses_the_shared_stateless_tool_policy() {
         assert!(mcp_tool_is_exposed(&operator_tool(
             "fs.stat",
             false,
@@ -2547,13 +2529,36 @@ mod tests {
             Some("agena.interaction")
         )));
 
-        for plugin_id in HIDDEN_MCP_PLUGIN_IDS {
+        for plugin_id in [
+            "agena.chatgpt",
+            "agena.gemini",
+            "agena.claude",
+            "agena.openai",
+            "agena.schema_lab",
+            "agena.interaction",
+            "agena.session",
+            "agena.plan",
+            "agena.tasks",
+            "agena.cron",
+            "agena.monitor",
+            "agena.snapshot",
+            "agena.report",
+            "agena.mcp",
+            "agena.settings",
+            "agena.memory",
+            "agena.skills",
+            "agena.tools",
+        ] {
             assert!(!mcp_tool_is_exposed(&operator_tool(
                 &format!("{plugin_id}.tool"),
                 false,
                 Some(plugin_id),
             )));
         }
+
+        let mut task = operator_tool("vendor.task", false, Some("vendor.plugin"));
+        task.task = true;
+        assert!(!mcp_tool_is_exposed(&task));
     }
 
     #[test]
@@ -2562,12 +2567,18 @@ mod tests {
             operator_tool("fs.stat", false, Some("agena.fs")),
             operator_tool("interaction.ask", true, Some("agena.interaction")),
             operator_tool("chatgpt.web_search", false, Some("agena.chatgpt")),
+            operator_tool("plan.get", false, Some("agena.plan")),
+            operator_tool("settings.get", false, Some("agena.settings")),
+            operator_tool("mcp.tools.call", false, Some("agena.mcp")),
         ];
 
         assert!(mcp_tool_is_callable(&tools, "fs.stat"));
         assert!(!mcp_tool_is_callable(&tools, "interaction.ask"));
         assert!(!mcp_tool_is_callable(&tools, "chatgpt.web_search"));
         assert!(!mcp_tool_is_callable(&tools, "agena.chatgpt.web_search"));
+        assert!(!mcp_tool_is_callable(&tools, "plan.get"));
+        assert!(!mcp_tool_is_callable(&tools, "settings.get"));
+        assert!(!mcp_tool_is_callable(&tools, "mcp.tools.call"));
         assert!(!mcp_tool_is_callable(&tools, "unknown.tool"));
     }
 
@@ -2580,6 +2591,19 @@ mod tests {
         )));
         assert!(!mcp_tool_is_exposed(&operator_tool(
             "agena.gemini.google_search",
+            false,
+            None,
+        )));
+        assert!(!mcp_tool_is_exposed(&operator_tool(
+            "plan.get", false, None,
+        )));
+        assert!(!mcp_tool_is_exposed(&operator_tool(
+            "agena.settings.get",
+            false,
+            None,
+        )));
+        assert!(!mcp_tool_is_exposed(&operator_tool(
+            "mcp.tools.call",
             false,
             None,
         )));

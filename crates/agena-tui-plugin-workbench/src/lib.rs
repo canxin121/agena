@@ -10,6 +10,7 @@ mod model;
 pub use model::api;
 pub use model::*;
 
+use agena_tui::i18n::I18n;
 use std::borrow::Cow;
 
 use crossterm::event::KeyEvent;
@@ -53,15 +54,15 @@ pub enum PluginTransportFilter {
 }
 
 impl PluginTransportFilter {
-    pub fn label(self) -> &'static str {
+    pub fn label(self, i18n: &I18n) -> String {
         match self {
-            Self::All => "All",
-            Self::Static => "native",
-            Self::Stdio => "stdio",
-            Self::Cdylib => "cdylib",
-            Self::Http => "http",
-            Self::Wasm => "wasm",
-            Self::Other => "other",
+            Self::All => i18n.text("plugin-workbench-filter-all"),
+            Self::Static => "native".to_owned(),
+            Self::Stdio => "stdio".to_owned(),
+            Self::Cdylib => "cdylib".to_owned(),
+            Self::Http => "http".to_owned(),
+            Self::Wasm => "wasm".to_owned(),
+            Self::Other => i18n.text("plugin-workbench-filter-other"),
         }
     }
 
@@ -106,15 +107,15 @@ pub enum PluginConfigFilter {
 }
 
 impl PluginConfigFilter {
-    pub fn label(self) -> &'static str {
+    pub fn label(self, i18n: &I18n) -> String {
         match self {
-            Self::All => "All",
-            Self::Valid => "Valid",
-            Self::Missing => "Missing",
-            Self::SchemaMissing => "Schema missing",
-            Self::Issues => "Issues",
-            Self::NeedsRestart => "Needs restart",
-            Self::RuntimeIssue => "Runtime issue",
+            Self::All => i18n.text("plugin-workbench-filter-all"),
+            Self::Valid => i18n.text("plugin-workbench-status-valid"),
+            Self::Missing => i18n.text("plugin-workbench-status-missing"),
+            Self::SchemaMissing => i18n.text("plugin-workbench-status-schema-missing"),
+            Self::Issues => i18n.text("plugin-workbench-status-issues"),
+            Self::NeedsRestart => i18n.text("plugin-workbench-status-needs-restart"),
+            Self::RuntimeIssue => i18n.text("plugin-workbench-status-runtime-issue"),
         }
     }
 
@@ -539,14 +540,14 @@ impl PluginDetailTab {
         Self::Diagnostics,
     ];
 
-    pub fn label(self) -> &'static str {
+    pub fn label(self, i18n: &I18n) -> String {
         match self {
-            Self::Config => "Config",
-            Self::Tools => "Tools",
-            Self::Operations => "Operations",
-            Self::Capabilities => "Capabilities",
-            Self::Logs => "Logs",
-            Self::Diagnostics => "Diagnostics",
+            Self::Config => i18n.text("plugin-workbench-tab-config"),
+            Self::Tools => i18n.text("plugin-workbench-tab-tools"),
+            Self::Operations => i18n.text("plugin-workbench-tab-operations"),
+            Self::Capabilities => i18n.text("plugin-workbench-tab-capabilities"),
+            Self::Logs => i18n.text("plugin-workbench-tab-logs"),
+            Self::Diagnostics => i18n.text("plugin-workbench-tab-diagnostics"),
         }
     }
 

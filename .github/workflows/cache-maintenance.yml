@@ -1,0 +1,175 @@
+name: Actions cache maintenance
+
+on:
+  schedule:
+    - cron: "15 5 * * 1"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Report deletions without applying them
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: actions-cache-maintenance
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || false }}
+      MAX_CACHE_BYTES: "9126805504"
+      TARGET_CACHE_BYTES: "7516192768"
+      SCCACHE_MAX_AGE_DAYS: "21"
+      MAX_DELETIONS: "3000"
+    steps:
+      - name: Remove obsolete caches and enforce the cache budget
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          import json
+          import os
+          import re
+          import subprocess
+          from datetime import datetime, timedelta, timezone
+
+          repository = os.environ["GITHUB_REPOSITORY"]
+          dry_run = os.environ.get("DRY_RUN", "false").lower() == "true"
+          max_bytes = int(os.environ["MAX_CACHE_BYTES"])
+          target_bytes = int(os.environ["TARGET_CACHE_BYTES"])
+          max_age = timedelta(days=int(os.environ["SCCACHE_MAX_AGE_DAYS"]))
+          max_deletions = int(os.environ["MAX_DELETIONS"])
+          now = datetime.now(timezone.utc)
+
+          raw = subprocess.check_output(
+              [
+                  "gh",
+                  "api",
+                  "--paginate",
+                  "--slurp",
+                  f"repos/{repository}/actions/caches?per_page=100",
+              ],
+              text=True,
+          )
+          pages = json.loads(raw)
+          caches = [cache for page in pages for cache in page.get("actions_caches", [])]
+
+          def parse_time(value: str) -> datetime:
+              normalized = value.replace("Z", "+00:00")
+              normalized = re.sub(r"\.(\d{6})\d+(?=[+-])", r".\1", normalized)
+              return datetime.fromisoformat(normalized)
+
+          selected: dict[int, tuple[dict, str]] = {}
+
+          def select(cache: dict, reason: str) -> None:
+              selected.setdefault(int(cache["id"]), (cache, reason))
+
+          rust_cache_generations: dict[str, list[dict]] = {}
+          for cache in caches:
+              ref = str(cache.get("ref", ""))
+              key = str(cache.get("key", ""))
+              last_accessed = parse_time(cache["last_accessed_at"])
+              if "/refs/tags/" in ref or ref.startswith("refs/tags/"):
+                  select(cache, "obsolete tag-scoped cache")
+              elif key.startswith("v0-rust-"):
+                  select(cache, "legacy Rust cache namespace")
+              elif key.startswith("sccache/") and now - last_accessed > max_age:
+                  select(cache, f"sccache object unused for more than {max_age.days} days")
+
+              generation = re.match(
+                  r"^(v1-rust-sccache-.+)-[0-9a-f]{8}-[0-9a-f]{8}$",
+                  key,
+              )
+              if generation:
+                  rust_cache_generations.setdefault(generation.group(1), []).append(cache)
+
+          # rust-cache keys include environment and lock hashes. Once a newer
+          # generation exists for the same stable job/target prefix, older 1 GiB
+          # archives are redundant and otherwise crowd out content-addressed
+          # compiler objects.
+          for generation_caches in rust_cache_generations.values():
+              newest = max(generation_caches, key=lambda cache: parse_time(cache["created_at"]))
+              for cache in generation_caches:
+                  if int(cache["id"]) != int(newest["id"]):
+                      select(cache, "superseded Rust target cache generation")
+
+          total_bytes = sum(int(cache.get("size_in_bytes", 0)) for cache in caches)
+          projected_bytes = total_bytes - sum(
+              int(cache.get("size_in_bytes", 0)) for cache, _ in selected.values()
+          )
+
+          if projected_bytes > max_bytes:
+              protected_since = now - timedelta(minutes=30)
+              candidates = sorted(
+                  (
+                      cache
+                      for cache in caches
+                      if int(cache["id"]) not in selected
+                      and str(cache.get("key", "")).startswith("sccache/")
+                      and parse_time(cache["last_accessed_at"]) < protected_since
+                  ),
+                  key=lambda cache: parse_time(cache["last_accessed_at"]),
+              )
+              for cache in candidates:
+                  if projected_bytes <= target_bytes:
+                      break
+                  select(cache, "least-recently-used sccache object over budget")
+                  projected_bytes -= int(cache.get("size_in_bytes", 0))
+
+          planned = sorted(
+              selected.values(),
+              key=lambda item: parse_time(item[0]["last_accessed_at"]),
+          )[:max_deletions]
+          planned_bytes = sum(int(cache.get("size_in_bytes", 0)) for cache, _ in planned)
+
+          print(
+              f"cache entries={len(caches)} total={total_bytes / 1024**3:.2f} GiB; "
+              f"planned deletions={len(planned)} size={planned_bytes / 1024**3:.2f} GiB; "
+              f"dry_run={dry_run}"
+          )
+          for cache, reason in planned:
+              print(
+                  f"{cache['id']}\t{cache['last_accessed_at']}\t"
+                  f"{int(cache.get('size_in_bytes', 0)) / 1024**2:.2f} MiB\t"
+                  f"{reason}\t{cache.get('key', '')}"
+              )
+              if not dry_run:
+                  subprocess.run(
+                      [
+                          "gh",
+                          "api",
+                          "--method",
+                          "DELETE",
+                          f"repos/{repository}/actions/caches/{cache['id']}",
+                      ],
+                      check=True,
+                  )
+
+          summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+          if summary_path:
+              with open(summary_path, "a", encoding="utf-8") as summary:
+                  summary.write("## Actions cache maintenance\n\n")
+                  summary.write(f"- Cache entries before cleanup: {len(caches)}\n")
+                  summary.write(f"- Size before cleanup: {total_bytes / 1024**3:.2f} GiB\n")
+                  summary.write(f"- Planned deletions: {len(planned)}\n")
+                  summary.write(f"- Planned reclaimed space: {planned_bytes / 1024**3:.2f} GiB\n")
+                  summary.write(
+                      f"- Projected size after planned cleanup: "
+                      f"{(total_bytes - planned_bytes) / 1024**3:.2f} GiB\n"
+                  )
+                  summary.write(f"- Dry run: {dry_run}\n")
+
+          if len(selected) > max_deletions:
+              print(
+                  f"Deletion plan was capped at {max_deletions}; "
+                  f"{len(selected) - max_deletions} entries remain for the next run."
+              )
+          PY

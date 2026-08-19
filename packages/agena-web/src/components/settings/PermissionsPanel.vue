@@ -9,6 +9,7 @@ import Input from '@/components/ui/Input.vue'
 import OptionPicker from '@/components/ui/OptionPicker.vue'
 import { apiJson } from '@/lib/api'
 import { useToastsStore } from '@/stores/toasts'
+import { settingsText as st } from '@/i18n/settingsText'
 
 type PermissionMode = 'allow' | 'auto' | 'ask' | 'deny'
 type PermissionScope = 'workspace' | 'global'
@@ -56,15 +57,15 @@ const newMode = ref<PermissionMode>('ask')
 const newScope = ref<PermissionScope>('workspace')
 
 const modeOptions = [
-  { value: 'allow', label: 'Allow', description: 'Approve matching tool calls.' },
-  { value: 'auto', label: 'Auto', description: 'Let Agena evaluate matching calls automatically.' },
-  { value: 'ask', label: 'Ask', description: 'Request confirmation before running.' },
-  { value: 'deny', label: 'Deny', description: 'Block matching tool calls.' },
+  { value: 'allow', label: st('Allow'), description: st('Approve matching tool calls.') },
+  { value: 'auto', label: st('Auto'), description: st('Let Agena evaluate matching calls automatically.') },
+  { value: 'ask', label: st('Ask'), description: st('Request confirmation before running.') },
+  { value: 'deny', label: st('Deny'), description: st('Block matching tool calls.') },
 ]
 
 const scopeOptions = [
-  { value: 'workspace', label: 'Workspace', description: 'Apply only to this workspace.' },
-  { value: 'global', label: 'Global', description: 'Apply across all workspaces.' },
+  { value: 'workspace', label: st('Workspace'), description: st('Apply only to this workspace.') },
+  { value: 'global', label: st('Global'), description: st('Apply across all workspaces.') },
 ]
 
 const canCreate = computed(() => !createBusy.value && newToolName.value.trim().length > 0)
@@ -78,10 +79,12 @@ const sortedRules = computed(() =>
 
 function ruleTitle(rule: PermissionRule): string {
   if (rule.subject_kind === 'tool' && rule.tool_name) {
-    return rule.qualifier ? `${rule.tool_name} · ${rule.qualifier}` : rule.tool_name
+    return rule.qualifier
+      ? st('{tool_name} · {qualifier}', { tool_name: rule.tool_name, qualifier: rule.qualifier })
+      : rule.tool_name
   }
   if (rule.subject_kind === 'path_access') {
-    return `${rule.path_access_kind || 'path'} · ${rule.target_path || ''}`
+    return st('{path} · {target_path}', { path: rule.path_access_kind || 'path', target_path: rule.target_path || '' })
   }
   if (rule.subject_kind === 'network_access') return rule.network_target || 'Network access'
   return rule.action_key
@@ -122,7 +125,7 @@ async function createRule() {
     })
     newToolName.value = ''
     newQualifier.value = ''
-    toasts.push('success', 'Permission rule created')
+    toasts.push('success', st('Permission rule created'))
     await refresh()
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
@@ -136,7 +139,7 @@ async function createRule() {
 async function removeRule(id: number) {
   try {
     await apiJson(`/api/v1/permission-rules/${id}`, { method: 'DELETE' })
-    toasts.push('success', 'Permission rule removed')
+    toasts.push('success', st('Permission rule removed'))
     await refresh()
   } catch (err) {
     toasts.push('error', err instanceof Error ? err.message : String(err))
@@ -152,14 +155,16 @@ onMounted(() => {
   <div class="space-y-6">
     <div class="flex items-start justify-between gap-3">
       <div>
-        <div class="text-lg font-medium">Permissions</div>
-        <div class="mt-1 text-sm text-muted-foreground">Persistent rules Agena applies to tool approval decisions.</div>
+        <div class="text-lg font-medium">{{ $st('Permissions') }}</div>
+        <div class="mt-1 text-sm text-muted-foreground">
+          {{ $st('Persistent rules Agena applies to tool approval decisions.') }}
+        </div>
       </div>
       <IconButton
         variant="outline"
         size="md"
-        :tooltip="loading ? 'Refreshing permission rules' : 'Refresh permission rules'"
-        :aria-label="loading ? 'Refreshing permission rules' : 'Refresh permission rules'"
+        :tooltip="loading ? $st('Refreshing permission rules') : $st('Refresh permission rules')"
+        :aria-label="loading ? $st('Refreshing permission rules') : $st('Refresh permission rules')"
         :disabled="loading"
         @click="refresh"
       >
@@ -168,10 +173,10 @@ onMounted(() => {
     </div>
 
     <div class="grid gap-3 border-b border-border/60 pb-4">
-      <div class="text-sm font-medium">Create tool rule</div>
+      <div class="text-sm font-medium">{{ $st('Create tool rule') }}</div>
       <div class="grid gap-3 sm:grid-cols-2">
         <label class="grid gap-1.5">
-          <span class="text-xs text-muted-foreground">Tool name</span>
+          <span class="text-xs text-muted-foreground">{{ $st('Tool name') }}</span>
           <Input
             v-model="newToolName"
             placeholder="shell"
@@ -181,10 +186,10 @@ onMounted(() => {
           />
         </label>
         <label class="grid gap-1.5">
-          <span class="text-xs text-muted-foreground">Qualifier</span>
+          <span class="text-xs text-muted-foreground">{{ $st('Qualifier') }}</span>
           <Input
             v-model="newQualifier"
-            placeholder="Optional command or operation"
+            :placeholder="$st('Optional command or operation')"
             :disabled="createBusy"
             class="h-10 font-mono"
             @keydown.enter="createRule"
@@ -193,34 +198,34 @@ onMounted(() => {
       </div>
       <div class="grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] sm:items-end">
         <label class="grid gap-1.5">
-          <span class="text-xs text-muted-foreground">Mode</span>
+          <span class="text-xs text-muted-foreground">{{ $st('Mode') }}</span>
           <OptionPicker
             v-model="newMode"
             :options="modeOptions"
-            title="Permission mode"
+            :title="$st('Permission mode')"
             :include-empty="false"
             :disabled="createBusy"
           />
         </label>
         <label class="grid gap-1.5">
-          <span class="text-xs text-muted-foreground">Scope</span>
+          <span class="text-xs text-muted-foreground">{{ $st('Scope') }}</span>
           <OptionPicker
             v-model="newScope"
             :options="scopeOptions"
-            title="Permission scope"
+            :title="$st('Permission scope')"
             :include-empty="false"
             :disabled="createBusy"
           />
         </label>
         <Button class="h-10" :disabled="!canCreate" @click="createRule">
-          {{ createBusy ? 'Creating...' : 'Create rule' }}
+          {{ createBusy ? 'Creating...' : $st('Create rule') }}
         </Button>
       </div>
       <div v-if="createError" class="break-words text-xs text-destructive">{{ createError }}</div>
     </div>
 
     <div class="grid gap-3">
-      <div v-if="loading" class="text-sm text-muted-foreground">Loading permission rules...</div>
+      <div v-if="loading" class="text-sm text-muted-foreground">{{ $st('Loading permission rules...') }}</div>
       <div
         v-else-if="error"
         class="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
@@ -228,7 +233,7 @@ onMounted(() => {
         {{ error }}
       </div>
       <div v-else-if="sortedRules.length === 0" class="text-sm text-muted-foreground">
-        No permission rules configured.
+        {{ $st('No permission rules configured.') }}
       </div>
 
       <div v-else class="space-y-2">
@@ -242,15 +247,15 @@ onMounted(() => {
             <div class="break-words font-mono text-sm font-semibold">{{ ruleTitle(rule) }}</div>
             <div class="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
               <span>#{{ rule.id }}</span>
-              <span>mode: {{ rule.mode }}</span>
-              <span>scope: {{ rule.scope }}</span>
-              <span>source: {{ rule.source }}</span>
-              <span v-if="rule.revoked_at" class="text-destructive">revoked</span>
+              <span>{{ $st('mode:') }} {{ rule.mode }}</span>
+              <span>{{ $st('scope:') }} {{ rule.scope }}</span>
+              <span>{{ $st('source:') }} {{ rule.source }}</span>
+              <span v-if="rule.revoked_at" class="text-destructive">{{ $st('revoked') }}</span>
             </div>
           </div>
 
           <ConfirmPopover
-            title="Remove permission rule?"
+            :title="$st('Remove permission rule?')"
             :description="ruleTitle(rule)"
             confirm-text="Remove"
             cancel-text="Cancel"
@@ -261,8 +266,8 @@ onMounted(() => {
               variant="outline"
               size="sm"
               class="shrink-0 text-destructive"
-              tooltip="Remove rule"
-              aria-label="Remove rule"
+              :tooltip="$st('Remove rule')"
+              :aria-label="$st('Remove rule')"
             >
               <RiDeleteBinLine class="h-4 w-4" />
             </IconButton>
@@ -270,7 +275,7 @@ onMounted(() => {
         </div>
       </div>
       <div v-if="hasMore" class="text-xs text-muted-foreground">
-        More than 200 rules exist. Refine or manage older rules through the CLI.
+        {{ $st('More than 200 rules exist. Refine or manage older rules through the CLI.') }}
       </div>
     </div>
   </div>

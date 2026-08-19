@@ -16,10 +16,9 @@ import PermissionsWorkbenchPanel from '@/components/settings/PermissionsWorkbenc
 import PluginsToolsPanel from '@/components/settings/PluginsToolsPanel.vue'
 import RuntimeSessionPanel from '@/components/settings/RuntimeSessionPanel.vue'
 import InterfaceSettingsPanel from '@/components/settings/InterfaceSettingsPanel.vue'
-import DiagnosticsPanel from '@/components/settings/DiagnosticsPanel.vue'
-import ActivitiesPanel from '@/components/settings/ActivitiesPanel.vue'
-import MemoriesPanel from '@/components/settings/MemoriesPanel.vue'
-import UsagePanel from '@/components/settings/UsagePanel.vue'
+import DiagnosticsWorkbenchPanel from '@/components/settings/DiagnosticsWorkbenchPanel.vue'
+import SettingsSectionWorkbench from '@/components/settings/workbench/SettingsSectionWorkbench.vue'
+import type { SettingsSubpageDefinition } from '@/components/settings/workbench/settingsSectionNavigation'
 import {
   buildSettingsSidebarTabs,
   normalizeRememberedSettingsRoute,
@@ -36,7 +35,6 @@ import { useWorkspacePaneContext } from '@/app/workspace/workspacePaneContext'
 import { WORKSPACE_SIDEBAR_PANEL_HOST_SELECTOR } from '@/layout/workspaceSidebarHost'
 import {
   BUILTIN_CHAT_ACTIVITY_KINDS,
-  DEFAULT_CHAT_TOOL_ACTIVITY_FILTERS,
   DEFAULT_CHAT_ACTIVITY_EXPANDED_TOOL_FILTERS,
   normalizeChatActivityKindCatalog,
   normalizeChatActivityKindDefaultExpanded,
@@ -49,6 +47,7 @@ import {
   type ChatToolExpansionOverrides,
   type ChatToolActivityType,
 } from '@/lib/chatActivity'
+import { settingsText as st } from '@/i18n/settingsText'
 
 const settings = useSettingsStore()
 const ui = useUiStore()
@@ -61,6 +60,29 @@ const { t, te } = useI18n()
 const SETTINGS_LAST_SECTION_KEY = localStorageKeys.settings.lastRoute
 
 const DEFAULT_SECTION: SettingsTab = 'interface'
+
+const interfacePages = computed<SettingsSubpageDefinition[]>(() => [
+  {
+    id: 'tui',
+    label: st('TUI preferences'),
+    description: st(
+      'Server-backed language, color, graphics, plugin theme, and transcript expansion defaults shared with the TUI.',
+    ),
+    keywords: ['tui', 'locale', 'color', 'graphics', 'theme', 'transcript'],
+  },
+  {
+    id: 'web-appearance',
+    label: st('Web appearance'),
+    description: st('Browser-only theme, fonts, density, spacing, and geometry preferences.'),
+    keywords: ['web', 'appearance', 'font', 'padding', 'radius', 'language'],
+  },
+  {
+    id: 'conversation',
+    label: st('Conversation display'),
+    description: st('Web transcript timestamps, reasoning visibility, activity expansion, and exact tool overrides.'),
+    keywords: ['chat', 'conversation', 'reasoning', 'timestamps', 'activity', 'tools'],
+  },
+])
 
 function readInitialSection(): SettingsTab {
   const routeSection = settingsTabFromRouteValue(route.params.section)
@@ -75,10 +97,25 @@ function readInitialSection(): SettingsTab {
 }
 
 const activeSection = ref<SettingsTab>(readInitialSection())
+const settingsRefreshNonce = ref(0)
+
+watch(
+  () => i18n.global.locale.value,
+  () => {
+    // Most dense Settings panels build option catalogs during setup. Remount
+    // the active workbench so every script-side label changes immediately
+    // when the browser locale changes.
+    settingsRefreshNonce.value += 1
+  },
+)
 
 function goToSection(id: SettingsTab) {
   const path = settingsPathForTab(id)
-  void router.push({ path, query: route.query, hash: route.hash })
+  // A subpage/plugin deep link belongs to its current top-level section. Keep
+  // workspace/window scope query keys, but do not leak stale Settings routing
+  // state into the next domain.
+  const { view: _view, plugin: _plugin, pluginTab: _pluginTab, ...query } = route.query
+  void router.push({ path, query, hash: route.hash })
   if (ui.isCompactLayout) ui.setSessionSwitcherOpen(false)
 }
 
@@ -101,8 +138,10 @@ const showSidebar = computed(() => {
 const tabs = computed(() => buildSettingsSidebarTabs((_id, labelKey) => String(t(labelKey))))
 
 async function refreshSettingsSidebar() {
-  // The settings store is client-side UI prefs only; server-backed panels have
-  // their own refresh buttons.
+  // Remount the active server-backed workbench as well as refreshing the
+  // browser-only preference store. This gives the sidebar refresh control the
+  // same practical meaning as opening Settings again in the TUI.
+  settingsRefreshNonce.value += 1
   await settings.refresh()
 }
 
@@ -287,16 +326,16 @@ type ToolExpansionOption = {
   description: string
 }
 
-const TOOL_API_FUNCTIONS: ToolExpansionOption[] = [
-  { id: 'tools_list', label: 'tools_list', description: 'Enumerate execution tools.' },
-  { id: 'tools_search', label: 'tools_search', description: 'Search execution tools.' },
-  { id: 'tools_help', label: 'tools_help', description: 'Inspect execution-tool contracts.' },
-  { id: 'tools_tags', label: 'tools_tags', description: 'List execution-tool tags.' },
-  { id: 'tools_call', label: 'tools_call', description: 'Invoke an execution tool.' },
-  { id: 'plugins_list', label: 'plugins_list', description: 'Enumerate tool plugins.' },
-  { id: 'plugins_search', label: 'plugins_search', description: 'Search tool plugins.' },
-  { id: 'plugins_tags', label: 'plugins_tags', description: 'List tool-plugin tags.' },
-]
+const toolApiFunctions = computed<ToolExpansionOption[]>(() => [
+  { id: 'tools_list', label: 'tools_list', description: st('Enumerate execution tools.') },
+  { id: 'tools_search', label: 'tools_search', description: st('Search execution tools.') },
+  { id: 'tools_help', label: 'tools_help', description: st('Inspect execution-tool contracts.') },
+  { id: 'tools_tags', label: 'tools_tags', description: st('List execution-tool tags.') },
+  { id: 'tools_call', label: 'tools_call', description: st('Invoke an execution tool.') },
+  { id: 'plugins_list', label: 'plugins_list', description: st('Enumerate tool plugins.') },
+  { id: 'plugins_search', label: 'plugins_search', description: st('Search tool plugins.') },
+  { id: 'plugins_tags', label: 'plugins_tags', description: st('List tool-plugin tags.') },
+])
 
 const toolCatalogItems = ref<ToolCatalogItem[]>([])
 const activityKindCatalogItems = ref<ChatActivityKindCatalogItem[]>(BUILTIN_CHAT_ACTIVITY_KINDS.slice())
@@ -336,7 +375,7 @@ function activityKindDescription(item: ChatActivityKindCatalogItem): string {
 
 const toolActivityOptions = computed<ToolExpansionOption[]>(() => {
   const byId = new Map<string, ToolExpansionOption>()
-  for (const option of TOOL_API_FUNCTIONS) byId.set(option.id, option)
+  for (const option of toolApiFunctions.value) byId.set(option.id, option)
   for (const item of toolCatalogItems.value) {
     const label = String(item.name || '').trim()
     const id = normalizeChatToolPreferenceId(label)
@@ -443,14 +482,31 @@ const dirtyHint = computed(() => (settings.error ? settings.error : null))
             {{ dirtyHint }}
           </div>
 
-          <!-- Interface: server-backed TUI settings plus browser-only preferences. -->
-          <div v-if="activeSection === 'interface'" class="space-y-6">
-            <InterfaceSettingsPanel />
-            <div class="space-y-6 border-t border-border/60 pt-6">
-              <div class="text-lg font-medium">{{ t('settings.appearance.intro') }}</div>
+          <!-- Interface: TUI, Web appearance, and conversation display are independent subpages. -->
+          <SettingsSectionWorkbench
+            v-if="activeSection === 'interface'"
+            :key="`interface-${settingsRefreshNonce}`"
+            section="interface"
+            :title="String(t('settings.tabs.interface'))"
+            :description="
+              $st(
+                'Configure server-backed TUI behavior and browser-only Web appearance without mixing unrelated settings into one page.',
+              )
+            "
+            :pages="interfacePages"
+            default-page="tui"
+            v-slot="{ activePage }"
+          >
+            <InterfaceSettingsPanel v-if="activePage === 'tui'" />
+            <div v-else class="space-y-6">
+              <div class="text-lg font-medium">
+                {{
+                  activePage === 'web-appearance' ? t('settings.appearance.intro') : t('settings.appearance.chat.label')
+                }}
+              </div>
 
               <div class="grid gap-6">
-                <div class="grid gap-2">
+                <div v-if="activePage === 'web-appearance'" class="grid gap-2">
                   <label class="text-sm font-medium leading-none">{{ t('settings.appearance.language.label') }}</label>
                   <div class="text-xs text-muted-foreground">{{ t('settings.appearance.language.help') }}</div>
                   <div class="w-56 max-w-full">
@@ -464,7 +520,7 @@ const dirtyHint = computed(() => (settings.error ? settings.error : null))
                   </div>
                 </div>
 
-                <div class="grid gap-2">
+                <div v-if="activePage === 'web-appearance'" class="grid gap-2">
                   <label class="text-sm font-medium leading-none">{{ t('settings.appearance.theme.label') }}</label>
                   <div class="flex items-center gap-3 flex-wrap">
                     <label class="inline-flex items-center gap-2 text-sm">
@@ -484,7 +540,7 @@ const dirtyHint = computed(() => (settings.error ? settings.error : null))
                   </div>
                 </div>
 
-                <div class="grid gap-2">
+                <div v-if="activePage === 'web-appearance'" class="grid gap-2">
                   <label class="text-sm font-medium leading-none">{{ t('settings.appearance.fonts.label') }}</label>
                   <div class="grid grid-cols-1 lg:grid-cols-2 gap-3">
                     <div class="grid gap-1">
@@ -510,7 +566,7 @@ const dirtyHint = computed(() => (settings.error ? settings.error : null))
                   </div>
                 </div>
 
-                <div class="grid gap-2">
+                <div v-if="activePage === 'web-appearance'" class="grid gap-2">
                   <label class="text-sm font-medium leading-none">{{ t('settings.appearance.sizing.label') }}</label>
                   <div class="grid grid-cols-1 lg:grid-cols-2 gap-3">
                     <label class="grid gap-1">
@@ -560,7 +616,7 @@ const dirtyHint = computed(() => (settings.error ? settings.error : null))
                   </div>
                 </div>
 
-                <div class="grid gap-2">
+                <div v-if="activePage === 'conversation'" class="grid gap-2">
                   <label class="text-sm font-medium leading-none">{{ t('settings.appearance.chat.label') }}</label>
                   <div class="grid gap-3">
                     <label class="inline-flex items-center gap-2 text-sm">
@@ -661,11 +717,11 @@ const dirtyHint = computed(() => (settings.error ? settings.error : null))
                               <th class="px-3 py-2 text-center font-medium">
                                 {{ t('settings.appearance.chat.toolDetailsTable.expand') }}
                               </th>
-                              <th class="w-10 px-2 py-2" aria-label="Reset"></th>
+                              <th class="w-10 px-2 py-2" :aria-label="$st('Reset')"></th>
                             </tr>
                           </thead>
                           <tbody>
-                            <tr v-if="toolCatalogLoading && toolActivityOptions.length === TOOL_API_FUNCTIONS.length">
+                            <tr v-if="toolCatalogLoading && toolActivityOptions.length === toolApiFunctions.length">
                               <td
                                 colspan="3"
                                 class="border-t border-border/50 px-3 py-6 text-center text-xs text-muted-foreground"
@@ -673,9 +729,7 @@ const dirtyHint = computed(() => (settings.error ? settings.error : null))
                                 {{ t('settings.appearance.chat.loadingTools') }}
                               </td>
                             </tr>
-                            <tr
-                              v-else-if="toolCatalogError && toolActivityOptions.length === TOOL_API_FUNCTIONS.length"
-                            >
+                            <tr v-else-if="toolCatalogError && toolActivityOptions.length === toolApiFunctions.length">
                               <td
                                 colspan="3"
                                 class="border-t border-border/50 px-3 py-4 text-xs text-rose-700 dark:text-rose-300"
@@ -731,37 +785,36 @@ const dirtyHint = computed(() => (settings.error ? settings.error : null))
                 </div>
               </div>
             </div>
-          </div>
+          </SettingsSectionWorkbench>
 
           <!-- Models & Providers -->
-          <ModelsProvidersPanel v-else-if="activeSection === 'models-providers'" />
+          <ModelsProvidersPanel
+            v-else-if="activeSection === 'models-providers'"
+            :key="`models-providers-${settingsRefreshNonce}`"
+          />
 
           <!-- Permissions -->
-          <PermissionsWorkbenchPanel v-else-if="activeSection === 'permissions'" />
+          <PermissionsWorkbenchPanel
+            v-else-if="activeSection === 'permissions'"
+            :key="`permissions-${settingsRefreshNonce}`"
+          />
 
           <!-- Plugins & Tools -->
-          <PluginsToolsPanel v-else-if="activeSection === 'plugins-tools'" />
+          <PluginsToolsPanel
+            v-else-if="activeSection === 'plugins-tools'"
+            :key="`plugins-tools-${settingsRefreshNonce}`"
+          />
 
           <!-- Runtime & Session -->
-          <RuntimeSessionPanel v-else-if="activeSection === 'runtime-session'" />
+          <RuntimeSessionPanel
+            v-else-if="activeSection === 'runtime-session'"
+            :key="`runtime-session-${settingsRefreshNonce}`"
+          />
 
-          <!-- Diagnostics also keeps the legacy operational views available
-               without making them top-level TUI settings sections. -->
-          <div v-else-if="activeSection === 'diagnostics'" class="space-y-8">
-            <DiagnosticsPanel />
-            <details class="rounded-lg border border-border/60 p-4">
-              <summary class="cursor-pointer text-sm font-medium">Operational activity history</summary>
-              <div class="mt-5"><ActivitiesPanel /></div>
-            </details>
-            <details class="rounded-lg border border-border/60 p-4">
-              <summary class="cursor-pointer text-sm font-medium">Memories</summary>
-              <div class="mt-5"><MemoriesPanel /></div>
-            </details>
-            <details class="rounded-lg border border-border/60 p-4">
-              <summary class="cursor-pointer text-sm font-medium">Usage</summary>
-              <div class="mt-5"><UsagePanel /></div>
-            </details>
-          </div>
+          <DiagnosticsWorkbenchPanel
+            v-else-if="activeSection === 'diagnostics'"
+            :key="`diagnostics-${settingsRefreshNonce}`"
+          />
 
           <div v-else class="flex flex-col items-center justify-center h-64 text-muted-foreground">
             <p>{{ t('settings.unknownTab') }}</p>

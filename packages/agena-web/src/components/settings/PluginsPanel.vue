@@ -7,6 +7,9 @@ import MarkdownRenderer from '@/components/markdown/MarkdownRenderer.vue'
 import PluginContractEditor from '@/components/settings/PluginContractEditor.vue'
 import Button from '@/components/ui/Button.vue'
 import IconButton from '@/components/ui/IconButton.vue'
+import OptionPicker from '@/components/ui/OptionPicker.vue'
+import SearchInput from '@/components/ui/SearchInput.vue'
+import { settingsText as st } from '@/i18n/settingsText'
 import { apiJson } from '@/lib/api'
 import {
   clonePluginJson,
@@ -239,12 +242,12 @@ type PluginLogsResponse = { plugin_id: string; logs?: PluginLog[] }
 type PanelTab = 'overview' | 'settings' | 'operations' | 'tools' | 'logs' | 'diagnostics'
 
 const PANEL_TABS: Array<{ id: PanelTab; label: string }> = [
-  { id: 'overview', label: 'Overview' },
-  { id: 'settings', label: 'Settings' },
-  { id: 'operations', label: 'Operations' },
-  { id: 'tools', label: 'Tools' },
-  { id: 'logs', label: 'Logs' },
-  { id: 'diagnostics', label: 'Diagnostics' },
+  { id: 'overview', label: st('Overview') },
+  { id: 'settings', label: st('Settings') },
+  { id: 'operations', label: st('Operations') },
+  { id: 'tools', label: st('Tools') },
+  { id: 'logs', label: st('Logs') },
+  { id: 'diagnostics', label: st('Diagnostics') },
 ]
 
 const PANEL_TAB_IDS = new Set<PanelTab>(PANEL_TABS.map((tab) => tab.id))
@@ -271,8 +274,28 @@ const settingsSaving = ref(false)
 const operationDrafts = ref<Record<string, JsonValue>>({})
 const busyOperationKey = ref('')
 const lastOperationResult = ref<PluginOperationResult | null>(null)
+const pluginQuery = ref('')
+const transportFilter = ref('')
+const stateFilter = ref('')
 
 const sortedStatuses = computed(() => [...statuses.value].sort((left, right) => left.plugin_id.localeCompare(right.plugin_id)))
+const transportOptions = computed(() =>
+  [...new Set(sortedStatuses.value.map((status) => status.kind).filter(Boolean))].map((value) => ({ value, label: value })),
+)
+const stateOptions = computed(() =>
+  [...new Set(sortedStatuses.value.map((status) => status.state).filter(Boolean))].map((value) => ({ value, label: value })),
+)
+const filteredStatuses = computed(() => {
+  const query = pluginQuery.value.trim().toLowerCase()
+  return sortedStatuses.value.filter((status) => {
+    if (transportFilter.value && status.kind !== transportFilter.value) return false
+    if (stateFilter.value && status.state !== stateFilter.value) return false
+    if (!query) return true
+    return `${status.plugin_id}
+${status.kind}
+${status.state}`.toLowerCase().includes(query)
+  })
+})
 const selectedStatus = computed(() => statuses.value.find((status) => status.plugin_id === selectedPluginId.value) || null)
 const selectedPlugin = computed(() => selectedInspect.value?.plugin || null)
 const selectedManifest = computed(() => selectedPlugin.value?.manifest || null)
@@ -395,27 +418,27 @@ function resultPayload(value: JsonValue | undefined): string {
 
 function showOperationFeedback(result: PluginOperationResult) {
   const message = [result.title, result.summary].filter((value) => String(value || '').trim()).join(': ')
-  if (result.status === 'succeeded') toasts.push('success', message || 'Plugin operation completed')
-  else if (result.status === 'failed') toasts.push('error', result.detail?.trim() || message || 'Plugin operation failed')
-  else toasts.push('info', result.detail?.trim() || message || `Plugin operation ${result.status}`)
+  if (result.status === 'succeeded') toasts.push('success', message || st('Plugin operation completed'))
+  else if (result.status === 'failed') toasts.push('error', result.detail?.trim() || message || st('Plugin operation failed'))
+  else toasts.push('info', result.detail?.trim() || message || st('Plugin operation {status}', { status: result.status }))
 }
 
 async function applyOperationEffect(effect: PluginHostEffect) {
   if (effect.kind === 'navigate') {
-    if (!effect.path.startsWith('/')) throw new Error('Plugin navigation must use an application-relative path.')
+    if (!effect.path.startsWith('/')) throw new Error(st('Plugin navigation must use an application-relative path.'))
     await router.push(effect.path)
     return
   }
   if (effect.kind === 'open_url') {
     const url = new URL(effect.url, window.location.href)
-    if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error('Plugin URLs must use HTTP or HTTPS.')
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error(st('Plugin URLs must use HTTP or HTTPS.'))
     window.open(url.toString(), '_blank', 'noopener,noreferrer')
     return
   }
   if (effect.kind === 'insert_prompt') {
     const sessionId = String(chat.selectedSessionId || '').trim()
     if (!sessionId) {
-      toasts.push('info', 'Open a chat session before inserting this prompt.')
+      toasts.push('info', st('Open a chat session before inserting this prompt.'))
       return
     }
     const previous = chat.getComposerDraft(sessionId).trim()
@@ -445,7 +468,7 @@ async function runOperation(operation: PluginOperationCatalogItem) {
         }),
       },
     )
-    if (!response?.result) throw new Error('The server omitted the plugin operation result.')
+    if (!response?.result) throw new Error(st('The server omitted the plugin operation result.'))
     lastOperationResult.value = response.result
     showOperationFeedback(response.result)
     for (const effect of response.result.effects || []) await applyOperationEffect(effect)
@@ -470,7 +493,7 @@ async function saveSettings() {
     )
     settingsState.value = response.settings
     settingsDraft.value = clonePluginJson(response.settings.effective)
-    toasts.push('success', response.reload_required ? 'Plugin settings saved and Runtime reloaded' : 'Plugin settings saved')
+    toasts.push('success', response.reload_required ? st('Plugin settings saved and Runtime reloaded') : st('Plugin settings saved'))
     await refresh()
   } catch (err) {
     toasts.push('error', err instanceof Error ? err.message : String(err))
@@ -536,7 +559,6 @@ async function refresh() {
     statuses.value = []
     catalog.value = null
     architecture.value = null
-    architecture.value = null
   } finally {
     loading.value = false
   }
@@ -574,16 +596,16 @@ onMounted(() => void refresh())
   <div class="space-y-6">
     <div class="flex items-start justify-between gap-3">
       <div>
-        <div class="text-lg font-medium">Plugin workbench</div>
+        <div class="text-lg font-medium">{{ $st('Plugin Workbench') }}</div>
         <div class="mt-1 text-sm text-muted-foreground">
-          Dependency-aware lifecycle, shared settings contracts, server-owned operations, tools, logs and diagnostics.
+          {{ $st('Dependency-aware lifecycle, shared settings contracts, server-owned operations, tools, logs and diagnostics.') }}
         </div>
       </div>
       <IconButton
         variant="outline"
         size="md"
-        :tooltip="loading ? 'Refreshing plugins' : 'Refresh plugins'"
-        :aria-label="loading ? 'Refreshing plugins' : 'Refresh plugins'"
+        :tooltip="loading ? $st('Refreshing plugins') : $st('Refresh plugins')"
+        :aria-label="loading ? $st('Refreshing plugins') : $st('Refresh plugins')"
         :disabled="loading"
         @click="refresh"
       >
@@ -594,13 +616,34 @@ onMounted(() => void refresh())
     <div v-if="error" class="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
       {{ error }}
     </div>
-    <div v-if="loading && statuses.length === 0" class="text-sm text-muted-foreground">Loading plugins...</div>
-    <div v-else-if="statuses.length === 0" class="text-sm text-muted-foreground">No plugins are configured.</div>
+
+    <section class="grid gap-3 rounded-lg border border-border/60 bg-muted/10 p-3 md:grid-cols-[minmax(0,1fr)_12rem_12rem]">
+      <SearchInput
+        v-model="pluginQuery"
+        :placeholder="$st('Search plugins')"
+        :show-search-button="false"
+        :input-aria-label="$st('Search plugins')"
+      />
+      <OptionPicker
+        v-model="transportFilter"
+        :options="transportOptions"
+        :title="$st('Transport filter')"
+        :empty-label="$st('All transports')"
+      />
+      <OptionPicker
+        v-model="stateFilter"
+        :options="stateOptions"
+        :title="$st('State filter')"
+        :empty-label="$st('All states')"
+      />
+    </section>
+    <div v-if="loading && statuses.length === 0" class="text-sm text-muted-foreground">{{ $st('Loading plugins…') }}</div>
+    <div v-else-if="statuses.length === 0" class="text-sm text-muted-foreground">{{ $st('No plugins are loaded.') }}</div>
 
     <div v-else class="grid min-h-[38rem] grid-cols-1 border-y border-border/60 md:grid-cols-[15rem_minmax(0,1fr)]">
-      <nav class="border-b border-border/60 py-3 md:border-b-0 md:border-r md:pr-3" aria-label="Configured plugins">
+      <nav class="border-b border-border/60 py-3 md:border-b-0 md:border-r md:pr-3" :aria-label="$st('Configured plugins')">
         <button
-          v-for="status in sortedStatuses"
+          v-for="status in filteredStatuses"
           :key="status.plugin_id"
           type="button"
           class="flex w-full items-start justify-between gap-2 rounded px-2.5 py-2 text-left hover:bg-muted/40"
@@ -613,10 +656,13 @@ onMounted(() => void refresh())
           </span>
           <span class="mt-0.5 h-2 w-2 shrink-0 rounded-full bg-current" :class="statusTone(status.state)" />
         </button>
+        <div v-if="filteredStatuses.length === 0" class="px-3 py-8 text-center text-xs text-muted-foreground">
+          {{ $st('No matching plugins.') }}
+        </div>
       </nav>
 
       <div class="min-w-0 py-4 md:pl-5">
-        <div v-if="detailLoading" class="text-sm text-muted-foreground">Loading plugin details...</div>
+        <div v-if="detailLoading" class="text-sm text-muted-foreground">{{ $st('Loading plugin details…') }}</div>
         <div v-else-if="detailError" class="break-words text-sm text-destructive">{{ detailError }}</div>
         <template v-else-if="selectedStatus">
           <header class="flex flex-wrap items-start justify-between gap-3">
@@ -625,11 +671,11 @@ onMounted(() => void refresh())
               <p v-if="selectedManifest?.summary" class="mt-1 text-sm text-muted-foreground">{{ selectedManifest.summary }}</p>
               <div class="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
                 <span :class="statusTone(selectedStatus.state)">{{ selectedStatus.state }}</span>
-                <span>transport: {{ selectedStatus.kind }}</span>
-                <span v-if="selectedManifest?.version">version: {{ selectedManifest.version }}</span>
-                <span>{{ selectedOperations.length }} operations</span>
-                <span>{{ selectedTools.length }} tools</span>
-                <span v-if="catalog?.tool_registry_generation !== undefined">tool registry: {{ catalog.tool_registry_generation }}</span>
+                <span>{{ $st('transport:') }} {{ selectedStatus.kind }}</span>
+                <span v-if="selectedManifest?.version">{{ $st('version:') }} {{ selectedManifest.version }}</span>
+                <span>{{ selectedOperations.length }} {{ $st('operations') }}</span>
+                <span>{{ selectedTools.length }} {{ $st('tools') }}</span>
+                <span v-if="catalog?.tool_registry_generation !== undefined">{{ $st('tool registry:') }} {{ catalog.tool_registry_generation }}</span>
               </div>
             </div>
           </header>
@@ -655,12 +701,12 @@ onMounted(() => void refresh())
                 <div class="font-mono text-xs font-semibold text-destructive">{{ selectedBlocked.code }}</div>
                 <div class="mt-2 text-sm text-destructive">{{ selectedBlocked.message }}</div>
                 <div v-if="selectedBlocked.dependencies?.length" class="mt-2 text-xs text-destructive/80">
-                  Dependencies: {{ selectedBlocked.dependencies.join(', ') }}
+                  {{ $st('Dependencies:') }} {{ selectedBlocked.dependencies.join(', ') }}
                 </div>
               </div>
 
               <div v-if="appliedProfiles.length" class="rounded-md border border-border/60 bg-muted/20 p-4">
-                <div class="text-xs font-medium text-muted-foreground">Applied plugin profiles</div>
+                <div class="text-xs font-medium text-muted-foreground">{{ $st('Applied plugin profiles') }}</div>
                 <div class="mt-2 flex flex-wrap gap-1.5">
                   <span v-for="profile in appliedProfiles" :key="profile" class="rounded bg-muted px-2 py-1 font-mono text-[10px]">
                     {{ profile }}
@@ -687,55 +733,55 @@ onMounted(() => void refresh())
 
               <div v-if="selectedReloadDecision" class="rounded-md border border-border/60 bg-muted/20 p-4">
                 <div class="flex flex-wrap items-center justify-between gap-2">
-                  <div class="text-xs font-medium text-muted-foreground">Current reload decision</div>
+                  <div class="text-xs font-medium text-muted-foreground">{{ $st('Current reload decision') }}</div>
                   <span class="rounded bg-muted px-2 py-1 font-mono text-[10px]">{{ selectedReloadDecision.action }}</span>
                 </div>
                 <div class="mt-2 text-xs text-muted-foreground">
-                  {{ selectedReloadDecision.reasons?.length ? selectedReloadDecision.reasons.join(' · ') : 'No restart reason; the transport is reusable.' }}
+                  {{ selectedReloadDecision.reasons?.length ? selectedReloadDecision.reasons.join(' · ') : $st('No restart reason; the transport is reusable.') }}
                 </div>
                 <div v-if="selectedReloadDecision.triggered_by?.length" class="mt-2 text-xs text-muted-foreground">
-                  Triggered by: <span class="font-mono">{{ selectedReloadDecision.triggered_by.join(', ') }}</span>
+                  {{ $st('Triggered by:') }} <span class="font-mono">{{ selectedReloadDecision.triggered_by.join(', ') }}</span>
                 </div>
               </div>
 
               <dl class="grid gap-x-6 gap-y-4 sm:grid-cols-2">
                 <div>
-                  <dt class="text-xs text-muted-foreground">Required plugins</dt>
-                  <dd class="mt-1 text-sm">{{ selectedActivation?.requires?.join(', ') || 'None' }}</dd>
+                  <dt class="text-xs text-muted-foreground">{{ $st('Required plugins') }}</dt>
+                  <dd class="mt-1 text-sm">{{ selectedActivation?.requires?.join(', ') || $st('None') }}</dd>
                 </div>
                 <div>
-                  <dt class="text-xs text-muted-foreground">Load after</dt>
-                  <dd class="mt-1 text-sm">{{ selectedActivation?.after?.join(', ') || 'None' }}</dd>
+                  <dt class="text-xs text-muted-foreground">{{ $st('Load after') }}</dt>
+                  <dd class="mt-1 text-sm">{{ selectedActivation?.after?.join(', ') || $st('None') }}</dd>
                 </div>
                 <div>
-                  <dt class="text-xs text-muted-foreground">Activation epoch</dt>
-                  <dd class="mt-1 break-all font-mono text-xs">{{ selectedArchitectureNode?.activation_epoch || 'Not computed' }}</dd>
+                  <dt class="text-xs text-muted-foreground">{{ $st('Activation epoch') }}</dt>
+                  <dd class="mt-1 break-all font-mono text-xs">{{ selectedArchitectureNode?.activation_epoch || $st('Not computed') }}</dd>
                 </div>
                 <div>
-                  <dt class="text-xs text-muted-foreground">Effect scope</dt>
+                  <dt class="text-xs text-muted-foreground">{{ $st('Effect scope') }}</dt>
                   <dd class="mt-1 font-mono text-sm">{{ selectedEffectLifecycle }}</dd>
                 </div>
                 <div>
-                  <dt class="text-xs text-muted-foreground">Trust level</dt>
-                  <dd class="mt-1 font-mono text-sm">{{ selectedAuthority?.trust_level || 'Not reported' }}</dd>
+                  <dt class="text-xs text-muted-foreground">{{ $st('Trust level') }}</dt>
+                  <dd class="mt-1 font-mono text-sm">{{ selectedAuthority?.trust_level || $st('Not reported') }}</dd>
                 </div>
                 <div>
-                  <dt class="text-xs text-muted-foreground">Authors</dt>
-                  <dd class="mt-1 text-sm">{{ selectedManifest?.authors?.join(', ') || 'Not reported' }}</dd>
+                  <dt class="text-xs text-muted-foreground">{{ $st('Authors') }}</dt>
+                  <dd class="mt-1 text-sm">{{ selectedManifest?.authors?.join(', ') || $st('Not reported') }}</dd>
                 </div>
                 <div>
-                  <dt class="text-xs text-muted-foreground">Provenance</dt>
-                  <dd class="mt-1 text-xs">{{ selectedAuthority?.provenance?.join(' · ') || 'Not reported' }}</dd>
+                  <dt class="text-xs text-muted-foreground">{{ $st('Provenance') }}</dt>
+                  <dd class="mt-1 text-xs">{{ selectedAuthority?.provenance?.join(' · ') || $st('Not reported') }}</dd>
                 </div>
                 <div>
-                  <dt class="text-xs text-muted-foreground">Restarts</dt>
+                  <dt class="text-xs text-muted-foreground">{{ $st('Restarts') }}</dt>
                   <dd class="mt-1 font-mono text-sm">{{ selectedStatus.restart_count }}</dd>
                 </div>
               </dl>
 
               <div v-if="selectedIncomingDependencies.length || selectedOutgoingDependencies.length" class="grid gap-4 lg:grid-cols-2">
                 <div v-if="selectedIncomingDependencies.length">
-                  <h3 class="text-xs font-medium text-muted-foreground">Depends on</h3>
+                  <h3 class="text-xs font-medium text-muted-foreground">{{ $st('Depends on') }}</h3>
                   <div class="mt-2 divide-y divide-border/50 rounded-md border border-border/60">
                     <div
                       v-for="edge in selectedIncomingDependencies"
@@ -753,7 +799,7 @@ onMounted(() => void refresh())
                   </div>
                 </div>
                 <div v-if="selectedOutgoingDependencies.length">
-                  <h3 class="text-xs font-medium text-muted-foreground">Required by</h3>
+                  <h3 class="text-xs font-medium text-muted-foreground">{{ $st('Required by') }}</h3>
                   <div class="mt-2 divide-y divide-border/50 rounded-md border border-border/60">
                     <div
                       v-for="edge in selectedOutgoingDependencies"
@@ -774,7 +820,7 @@ onMounted(() => void refresh())
 
               <div v-if="selectedServiceImports.length || selectedServiceExports.length" class="grid gap-4 lg:grid-cols-2">
                 <div v-if="selectedServiceImports.length">
-                  <h3 class="text-xs font-medium text-muted-foreground">Service imports</h3>
+                  <h3 class="text-xs font-medium text-muted-foreground">{{ $st('Service imports') }}</h3>
                   <div class="mt-2 divide-y divide-border/50 rounded-md border border-border/60">
                     <div
                       v-for="service in selectedServiceImports"
@@ -786,7 +832,7 @@ onMounted(() => void refresh())
                         <span class="font-mono text-muted-foreground">{{ service.state }}</span>
                       </div>
                       <div class="mt-1 text-muted-foreground">
-                        {{ service.resolved_provider || service.provider || 'No provider bound' }} · {{ service.optional ? 'optional' : 'required' }}
+                        {{ service.resolved_provider || service.provider || $st('No provider bound') }} · {{ service.optional ? $st('optional') : $st('required') }}
                       </div>
                       <div v-if="service.methods?.length" class="mt-2 flex flex-wrap gap-1.5">
                         <span v-for="method in service.methods" :key="method.id" class="rounded bg-muted px-2 py-1 font-mono text-[10px]">
@@ -797,7 +843,7 @@ onMounted(() => void refresh())
                   </div>
                 </div>
                 <div v-if="selectedServiceExports.length">
-                  <h3 class="text-xs font-medium text-muted-foreground">Service exports</h3>
+                  <h3 class="text-xs font-medium text-muted-foreground">{{ $st('Service exports') }}</h3>
                   <div class="mt-2 divide-y divide-border/50 rounded-md border border-border/60">
                     <div
                       v-for="service in selectedServiceExports"
@@ -806,7 +852,7 @@ onMounted(() => void refresh())
                     >
                       <div class="flex flex-wrap items-center justify-between gap-2">
                         <span class="font-mono">{{ service.id }}@v{{ service.api_version }}</span>
-                        <span class="text-muted-foreground">provider</span>
+                        <span class="text-muted-foreground">{{ $st('provider') }}</span>
                       </div>
                       <div v-if="service.methods?.length" class="mt-2 flex flex-wrap gap-1.5">
                         <span v-for="method in service.methods" :key="method.id" class="rounded bg-muted px-2 py-1 font-mono text-[10px]">
@@ -823,45 +869,45 @@ onMounted(() => void refresh())
                 class="grid gap-4 lg:grid-cols-2"
               >
                 <div v-if="selectedPipelineHandlers.length">
-                  <h3 class="text-xs font-medium text-muted-foreground">Typed pipeline handlers</h3>
+                  <h3 class="text-xs font-medium text-muted-foreground">{{ $st('Typed pipeline handlers') }}</h3>
                   <div class="mt-2 divide-y divide-border/50 rounded-md border border-border/60">
                     <div v-for="pipeline in selectedPipelineHandlers" :key="pipeline.definition.id" class="px-3 py-2 text-xs">
                       <div class="flex flex-wrap items-center justify-between gap-2">
                         <span class="font-mono">{{ pipeline.definition.id }}</span>
                         <span class="text-muted-foreground">
                           {{ pipeline.definition.mode }}
-                          · {{ pipeline.definition.durable ? 'durable' : 'live' }}
-                          · {{ pipeline.definition.scoped ? 'scoped' : 'global' }}
-                          <template v-if="pipeline.failure_policy"> · {{ pipeline.failure_policy }} on error</template>
+                          · {{ pipeline.definition.durable ? $st('durable') : $st('live') }}
+                          · {{ pipeline.definition.scoped ? $st('scoped') : $st('global') }}
+                          <template v-if="pipeline.failure_policy"> · {{ pipeline.failure_policy }} {{ $st('on error') }}</template>
                         </span>
                       </div>
                       <div class="mt-2 space-y-1">
                         <div v-for="handler in pipeline.handlers" :key="handler.registration" class="flex items-center justify-between gap-2">
                           <span>{{ handler.id }}</span>
-                          <span class="font-mono text-[10px] text-muted-foreground">priority {{ handler.priority }}</span>
+                          <span class="font-mono text-[10px] text-muted-foreground">{{ $st('priority') }} {{ handler.priority }}</span>
                         </div>
                       </div>
                     </div>
                   </div>
                 </div>
                 <div v-if="selectedToolRegistrations.length">
-                  <h3 class="text-xs font-medium text-muted-foreground">Scoped tool registrations</h3>
+                  <h3 class="text-xs font-medium text-muted-foreground">{{ $st('Scoped tool registrations') }}</h3>
                   <div class="mt-2 divide-y divide-border/50 rounded-md border border-border/60">
                     <div v-for="entry in selectedToolRegistrations" :key="`${entry.generation}:${entry.key}`" class="px-3 py-2 text-xs">
                       <div class="font-mono">{{ entry.key }}</div>
                       <div class="mt-1 text-muted-foreground">
-                        {{ entry.layer.kind === 'global' ? 'global' : entry.layer.scope }} · generation {{ entry.generation }}
+                        {{ entry.layer.kind === 'global' ? $st('global') : entry.layer.scope }} · {{ $st('generation') }} {{ entry.generation }}
                       </div>
                     </div>
                   </div>
                 </div>
                 <div v-if="selectedOperationRegistrations.length">
-                  <h3 class="text-xs font-medium text-muted-foreground">Scoped operation registrations</h3>
+                  <h3 class="text-xs font-medium text-muted-foreground">{{ $st('Scoped operation registrations') }}</h3>
                   <div class="mt-2 divide-y divide-border/50 rounded-md border border-border/60">
                     <div v-for="entry in selectedOperationRegistrations" :key="`${entry.generation}:${entry.key}`" class="px-3 py-2 text-xs">
                       <div class="font-mono">{{ entry.key }}</div>
                       <div class="mt-1 text-muted-foreground">
-                        {{ entry.layer.kind === 'global' ? 'global' : entry.layer.scope }} · generation {{ entry.generation }}
+                        {{ entry.layer.kind === 'global' ? $st('global') : entry.layer.scope }} · {{ $st('generation') }} {{ entry.generation }}
                       </div>
                     </div>
                   </div>
@@ -869,7 +915,7 @@ onMounted(() => void refresh())
               </div>
 
               <div v-if="selectedAuthority?.plugin_capabilities?.length">
-                <h3 class="text-xs font-medium text-muted-foreground">Plugin capabilities</h3>
+                <h3 class="text-xs font-medium text-muted-foreground">{{ $st('Plugin capabilities') }}</h3>
                 <div class="mt-2 flex flex-wrap gap-1.5">
                   <span v-for="capability in selectedAuthority.plugin_capabilities" :key="capability" class="rounded bg-muted px-2 py-1 font-mono text-[11px]">
                     {{ capability }}
@@ -879,7 +925,7 @@ onMounted(() => void refresh())
             </section>
 
             <section v-else-if="activeTab === 'settings'" class="space-y-5">
-              <div v-if="!selectedManifest?.settings" class="text-sm text-muted-foreground">This plugin does not expose editable settings.</div>
+              <div v-if="!selectedManifest?.settings" class="text-sm text-muted-foreground">{{ $st('This plugin does not expose editable settings.') }}</div>
               <template v-else-if="settingsState">
                 <PluginContractEditor
                   :node="settingsState.contract.root"
@@ -893,16 +939,16 @@ onMounted(() => void refresh())
                   </div>
                 </div>
                 <div class="flex flex-wrap justify-end gap-2 border-t border-border/60 pt-4">
-                  <Button variant="outline" size="sm" :disabled="settingsSaving" @click="resetSettings">Reset to defaults</Button>
+                  <Button variant="outline" size="sm" :disabled="settingsSaving" @click="resetSettings">{{ $st('Reset to defaults') }}</Button>
                   <Button size="sm" :disabled="settingsSaving || !settingsDirty" @click="saveSettings">
-                    {{ settingsSaving ? 'Saving...' : 'Save settings' }}
+                    {{ settingsSaving ? $st('Saving...') : $st('Save settings') }}
                   </Button>
                 </div>
               </template>
             </section>
 
             <section v-else-if="activeTab === 'operations'" class="space-y-5">
-              <div v-if="selectedOperations.length === 0" class="text-sm text-muted-foreground">This plugin does not expose user operations.</div>
+              <div v-if="selectedOperations.length === 0" class="text-sm text-muted-foreground">{{ $st('This plugin does not expose user operations.') }}</div>
               <article v-for="operation in selectedOperations" :key="operationKey(operation)" class="space-y-3 border-b border-border/60 pb-5 last:border-b-0">
                 <div class="flex flex-wrap items-start justify-between gap-3">
                   <div class="min-w-0">
@@ -920,7 +966,7 @@ onMounted(() => void refresh())
                   </div>
                   <Button size="sm" :disabled="Boolean(busyOperationKey)" @click="runOperation(operation)">
                     <RiPlayLine class="mr-2 h-4 w-4" />
-                    {{ busyOperationKey === operationKey(operation) ? 'Running...' : 'Run' }}
+                    {{ busyOperationKey === operationKey(operation) ? $st('Running...') : $st('Run') }}
                   </Button>
                 </div>
                 <PluginContractEditor
@@ -946,10 +992,10 @@ onMounted(() => void refresh())
             </section>
 
             <section v-else-if="activeTab === 'tools'" class="space-y-4">
-              <div v-if="selectedTools.length === 0" class="text-sm text-muted-foreground">This plugin does not register tools.</div>
+              <div v-if="selectedTools.length === 0" class="text-sm text-muted-foreground">{{ $st('This plugin does not register tools.') }}</div>
               <div v-for="tool in selectedTools" :key="String(tool.name || '')" class="border-b border-border/60 pb-4 last:border-b-0">
-                <div class="font-mono text-sm font-semibold">{{ tool.name || 'Unnamed tool' }}</div>
-                <p class="mt-1 text-xs text-muted-foreground">{{ tool.summary || tool.docs?.summary || tool.description || 'No summary.' }}</p>
+                <div class="font-mono text-sm font-semibold">{{ tool.name || $st('Unnamed tool') }}</div>
+                <p class="mt-1 text-xs text-muted-foreground">{{ tool.summary || tool.docs?.summary || tool.description || $st('No summary.') }}</p>
                 <div v-if="tool.tags?.length" class="mt-2 flex flex-wrap gap-1.5">
                   <span v-for="tag in tool.tags" :key="tag" class="rounded bg-muted px-2 py-1 font-mono text-[10px]">{{ tag }}</span>
                 </div>
@@ -957,7 +1003,7 @@ onMounted(() => void refresh())
             </section>
 
             <section v-else-if="activeTab === 'logs'" class="space-y-2">
-              <div v-if="logs.length === 0" class="text-sm text-muted-foreground">No plugin logs recorded.</div>
+              <div v-if="logs.length === 0" class="text-sm text-muted-foreground">{{ $st('No plugin logs recorded.') }}</div>
               <div v-for="entry in logs" :key="entry.seq" class="border-b border-border/50 py-2 last:border-b-0">
                 <div class="flex flex-wrap gap-x-3 text-[10px] text-muted-foreground">
                   <span>#{{ entry.seq }}</span>
@@ -981,7 +1027,7 @@ onMounted(() => void refresh())
                 <span v-if="diagnostic.path" class="font-mono">{{ diagnostic.path }}:</span> {{ diagnostic.message }}
               </div>
               <div v-if="selectedEffects.length" class="space-y-2">
-                <h3 class="text-xs font-medium text-muted-foreground">Owned effects</h3>
+                <h3 class="text-xs font-medium text-muted-foreground">{{ $st('Owned effects') }}</h3>
                 <div v-for="effect in selectedEffects" :key="effect.id" class="rounded-md border border-border/60 px-3 py-2 text-xs">
                   <div class="flex flex-wrap items-center justify-between gap-2">
                     <span class="font-mono">#{{ effect.id }} · {{ effect.kind }}</span>
@@ -992,7 +1038,7 @@ onMounted(() => void refresh())
                 </div>
               </div>
               <div v-if="!statusFailure(selectedStatus) && !selectedBlocked && settingsDiagnostics.length === 0 && selectedEffects.every((effect) => effect.state !== 'failed')" class="text-sm text-muted-foreground">
-                No plugin diagnostics are currently reported.
+                {{ $st('No plugin diagnostics are currently reported.') }}
               </div>
             </section>
           </div>

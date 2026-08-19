@@ -159,6 +159,34 @@ export function speedModeOptionsForModel(model: ProviderModel | null | undefined
     .filter((item): item is ModelModeOption => Boolean(item))
 }
 
+function modelMetadataValue(model: ProviderModel | null | undefined, key: string): JsonValue {
+  if (!model) return null
+  if (Object.prototype.hasOwnProperty.call(model, key)) return model[key] ?? null
+  const metadata = model.metadata
+  if (metadata && Object.prototype.hasOwnProperty.call(metadata, key)) return metadata[key] ?? null
+  return null
+}
+
+export function verbosityOptionsForModel(model: ProviderModel | null | undefined): ModelModeOption[] {
+  const supported = modelMetadataValue(model, 'supports_verbosity') === true
+  const configuredDefault = readString(modelMetadataValue(model, 'default_verbosity'))
+  if (!supported && !configuredDefault) return []
+
+  const modelId = readString(model?.id).toLowerCase()
+  const values = modelId.includes('gpt-5') && modelId.includes('-chat') ? ['medium'] : ['low', 'medium', 'high']
+  if (configuredDefault && !values.includes(configuredDefault)) values.push(configuredDefault)
+  return values.map((value) => ({
+    value,
+    label: value,
+    description: value === configuredDefault ? 'Model default verbosity' : '',
+    isDefault: value === configuredDefault,
+  }))
+}
+
+export function supportsParallelToolCallsForModel(model: ProviderModel | null | undefined): boolean {
+  return modelMetadataValue(model, 'supports_parallel_tool_calls') === true
+}
+
 export function defaultModeValue(options: ModelModeOption[]): string {
   return options.find((option) => option.isDefault)?.value || ''
 }

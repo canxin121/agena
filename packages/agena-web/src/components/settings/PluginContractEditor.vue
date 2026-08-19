@@ -2,6 +2,7 @@
 import { computed, ref, watch } from 'vue'
 
 import Button from '@/components/ui/Button.vue'
+import { settingsText as st } from '@/i18n/settingsText'
 import type { JsonValue } from '@/types/json'
 import {
   clonePluginJson,
@@ -53,7 +54,7 @@ function update(value: JsonValue) {
 }
 
 function requireNode(node: PluginSettingsNode | null | undefined): PluginSettingsNode {
-  if (!node) throw new Error('The plugin settings contract is missing a recursive child node.')
+  if (!node) throw new Error(st('The plugin settings contract is missing a recursive child node.'))
   return node
 }
 
@@ -237,10 +238,10 @@ function textInputType() {
       <span>{{ node.title || node.id }}</span>
       <span v-if="node.required" class="text-destructive">*</span>
       <span v-if="node.secret" class="rounded bg-muted px-1.5 py-0.5 font-mono text-[9px] text-muted-foreground">
-        secret reference
+        {{ $st('secret reference') }}
       </span>
       <span v-else-if="node.sensitive" class="rounded bg-muted px-1.5 py-0.5 font-mono text-[9px] text-muted-foreground">
-        sensitive
+        {{ $st('sensitive') }}
       </span>
     </legend>
     <p v-if="node.description" class="text-xs leading-relaxed text-muted-foreground">{{ node.description }}</p>
@@ -251,7 +252,7 @@ function textInputType() {
         :checked="modelValue === true"
         @change="update(($event.target as HTMLInputElement).checked)"
       />
-      {{ modelValue === true ? 'On' : 'Off' }}
+      {{ modelValue === true ? $st('On') : $st('Off') }}
     </label>
 
     <input
@@ -262,7 +263,7 @@ function textInputType() {
       :minlength="node.constraints?.min_length || undefined"
       :maxlength="node.constraints?.max_length || undefined"
       :pattern="node.constraints?.pattern || undefined"
-      :placeholder="node.kind === 'secret_reference' ? 'Host-managed secret reference' : ''"
+      :placeholder="node.kind === 'secret_reference' ? $st('Host-managed secret reference') : ''"
       @input="update(($event.target as HTMLInputElement).value)"
     />
 
@@ -304,7 +305,7 @@ function textInputType() {
     </div>
 
     <div v-else-if="node.kind === 'object'" class="space-y-4 rounded-md border border-border/70 p-3">
-      <div v-if="fields.length === 0" class="text-xs text-muted-foreground">No fields.</div>
+      <div v-if="fields.length === 0" class="text-xs text-muted-foreground">{{ $st('No fields.') }}</div>
       <div v-for="field in fields" :key="field.id" class="space-y-2 border-b border-border/50 pb-4 last:border-b-0 last:pb-0">
         <PluginContractEditor
           v-if="field.required || hasField(field)"
@@ -316,24 +317,24 @@ function textInputType() {
         />
         <div v-if="!field.required" class="flex justify-end">
           <Button v-if="hasField(field)" size="sm" variant="ghost" type="button" @click="removeField(field)">
-            Use default / unset
+            {{ $st('Use default / unset') }}
           </Button>
           <Button v-else size="sm" variant="outline" type="button" @click="enableField(field)">
-            Set {{ field.title || field.id }}
+            {{ $st('Set') }} {{ field.title || field.id }}
           </Button>
         </div>
       </div>
     </div>
 
     <div v-else-if="node.kind === 'list' && listItemNode" class="space-y-3 rounded-md border border-border/70 p-3">
-      <div v-if="arrayValue.length === 0" class="text-xs text-muted-foreground">No items.</div>
+      <div v-if="arrayValue.length === 0" class="text-xs text-muted-foreground">{{ $st('No items.') }}</div>
       <div v-for="(item, index) in arrayValue" :key="index" class="space-y-2 rounded-md border border-border/60 p-3">
         <div class="flex items-center justify-between gap-2">
-          <span class="font-mono text-[10px] text-muted-foreground">Item {{ index + 1 }}</span>
+          <span class="font-mono text-[10px] text-muted-foreground">{{ $st('Item') }} {{ index + 1 }}</span>
           <div class="flex gap-1">
-            <Button size="sm" variant="ghost" type="button" :disabled="index === 0" @click="moveListItem(index, -1)">Up</Button>
-            <Button size="sm" variant="ghost" type="button" :disabled="index + 1 === arrayValue.length" @click="moveListItem(index, 1)">Down</Button>
-            <Button size="sm" variant="ghost" type="button" @click="removeListItem(index)">Remove</Button>
+            <Button size="sm" variant="ghost" type="button" :disabled="index === 0" @click="moveListItem(index, -1)">{{ $st('Up') }}</Button>
+            <Button size="sm" variant="ghost" type="button" :disabled="index + 1 === arrayValue.length" @click="moveListItem(index, 1)">{{ $st('Down') }}</Button>
+            <Button size="sm" variant="ghost" type="button" @click="removeListItem(index)">{{ $st('Remove') }}</Button>
           </div>
         </div>
         <PluginContractEditor
@@ -344,15 +345,15 @@ function textInputType() {
           @update:model-value="setListItem(index, $event)"
         />
       </div>
-      <Button size="sm" variant="outline" type="button" @click="addListItem">Add item</Button>
+      <Button size="sm" variant="outline" type="button" @click="addListItem">{{ $st('Add item') }}</Button>
     </div>
 
     <div v-else-if="node.kind === 'record' && recordValueNode" class="space-y-3 rounded-md border border-border/70 p-3">
-      <div v-if="Object.keys(record).length === 0" class="text-xs text-muted-foreground">No entries.</div>
+      <div v-if="Object.keys(record).length === 0" class="text-xs text-muted-foreground">{{ $st('No entries.') }}</div>
       <div v-for="key in Object.keys(record).sort()" :key="key" class="space-y-2 rounded-md border border-border/60 p-3">
         <div class="flex items-center justify-between gap-2">
           <span class="font-mono text-xs">{{ key }}</span>
-          <Button size="sm" variant="ghost" type="button" @click="removeRecordEntry(key)">Remove</Button>
+          <Button size="sm" variant="ghost" type="button" @click="removeRecordEntry(key)">{{ $st('Remove') }}</Button>
         </div>
         <PluginContractEditor
           :node="requireNode(recordValueNode)"
@@ -366,10 +367,10 @@ function textInputType() {
         <input
           v-model="recordKey"
           class="h-9 min-w-0 flex-1 rounded-md border border-input bg-background px-3 text-sm"
-          placeholder="New entry name"
+          :placeholder="$st('New entry name')"
           @keydown.enter.prevent="addRecordEntry"
         />
-        <Button size="sm" variant="outline" type="button" :disabled="!recordKey.trim()" @click="addRecordEntry">Add</Button>
+        <Button size="sm" variant="outline" type="button" :disabled="!recordKey.trim()" @click="addRecordEntry">{{ $st('Add') }}</Button>
       </div>
     </div>
 
@@ -393,8 +394,8 @@ function textInputType() {
             @update:model-value="setField(field, $event)"
           />
           <div v-if="!field.required" class="flex justify-end">
-            <Button v-if="hasField(field)" size="sm" variant="ghost" type="button" @click="removeField(field)">Unset</Button>
-            <Button v-else size="sm" variant="outline" type="button" @click="enableField(field)">Set {{ field.title }}</Button>
+            <Button v-if="hasField(field)" size="sm" variant="ghost" type="button" @click="removeField(field)">{{ $st('Unset') }}</Button>
+            <Button v-else size="sm" variant="outline" type="button" @click="enableField(field)">{{ $st('Set') }} {{ field.title }}</Button>
           </div>
         </div>
       </div>
@@ -409,8 +410,8 @@ function textInputType() {
         @keydown.ctrl.enter.prevent="commitJson"
       />
       <div class="flex items-center justify-between gap-2">
-        <span class="text-[10px] text-muted-foreground">Explicit bounded JSON field</span>
-        <Button size="sm" variant="outline" type="button" @click="commitJson">Apply JSON</Button>
+        <span class="text-[10px] text-muted-foreground">{{ $st('Explicit bounded JSON field') }}</span>
+        <Button size="sm" variant="outline" type="button" @click="commitJson">{{ $st('Apply JSON') }}</Button>
       </div>
       <p v-if="jsonError" class="text-xs text-destructive">{{ jsonError }}</p>
     </div>

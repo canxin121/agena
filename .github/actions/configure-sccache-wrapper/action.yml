@@ -1,0 +1,51 @@
+name: Configure sccache wrapper
+description: Configure Cargo to use the exact sccache executable installed by sccache-action
+
+runs:
+  using: composite
+  steps:
+    - name: Configure sccache wrapper (Unix)
+      if: runner.os != 'Windows'
+      shell: bash
+      run: |
+        set -euo pipefail
+        if [[ -z "${SCCACHE_PATH:-}" || ! -x "$SCCACHE_PATH" ]]; then
+          echo "sccache executable not found at SCCACHE_PATH=${SCCACHE_PATH:-<unset>}" >&2
+          exit 1
+        fi
+
+        wrapper="$(cd "$(dirname "$SCCACHE_PATH")" && pwd -P)/$(basename "$SCCACHE_PATH")"
+        export SCCACHE_IDLE_TIMEOUT=0
+        {
+          printf 'RUSTC_WRAPPER=%s\n' "$wrapper"
+          printf 'SCCACHE_IDLE_TIMEOUT=0\n'
+        } >> "$GITHUB_ENV"
+        printf 'Configured RUSTC_WRAPPER=%s with SCCACHE_IDLE_TIMEOUT=0\n' "$wrapper"
+        "$wrapper" --version
+        "$wrapper" --zero-stats
+
+    - name: Configure sccache wrapper (Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        $wrapper = $env:SCCACHE_PATH
+        if (-not (Test-Path -LiteralPath $wrapper)) {
+          $wrapper = "$wrapper.exe"
+        }
+        if (-not (Test-Path -LiteralPath $wrapper)) {
+          throw "sccache executable not found at SCCACHE_PATH=$env:SCCACHE_PATH"
+        }
+
+        $wrapper = (Resolve-Path -LiteralPath $wrapper).Path
+        $env:SCCACHE_IDLE_TIMEOUT = "0"
+        @("RUSTC_WRAPPER=$wrapper", "SCCACHE_IDLE_TIMEOUT=0") |
+          Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+        Write-Host "Configured RUSTC_WRAPPER=$wrapper with SCCACHE_IDLE_TIMEOUT=0"
+        & $wrapper --version
+        if ($LASTEXITCODE -ne 0) {
+          throw "failed to execute sccache at $wrapper"
+        }
+        & $wrapper --zero-stats
+        if ($LASTEXITCODE -ne 0) {
+          throw "failed to reset sccache statistics"
+        }

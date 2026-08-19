@@ -7,6 +7,7 @@ import ConfirmPopover from '@/components/ui/ConfirmPopover.vue'
 import IconButton from '@/components/ui/IconButton.vue'
 import { apiJson } from '../../lib/api'
 import { useToastsStore } from '../../stores/toasts'
+import { settingsText as st } from '@/i18n/settingsText'
 
 type ActivityControl = 'stop' | 'pause' | 'resume' | 'delete' | 'dismiss'
 
@@ -85,7 +86,7 @@ async function runAction(id: string, action: ActivityControl) {
   busyId.value = id
   try {
     await apiJson(`/api/v1/activities/${encodeURIComponent(id)}/${action}`, { method: 'POST' })
-    toasts.push('success', `${controlLabel(action)} requested`)
+    toasts.push('success', st('{action} requested', { action: controlLabel(action) }))
     await refresh()
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
@@ -100,7 +101,7 @@ async function clearFinished() {
   busyId.value = '__clear_finished__'
   try {
     await apiJson('/api/v1/activities/clear-finished', { method: 'POST' })
-    toasts.push('success', 'Finished activities cleared')
+    toasts.push('success', st('Finished activities cleared'))
     await refresh()
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
@@ -118,12 +119,14 @@ onMounted(() => {
 <template>
   <div class="space-y-6">
     <div>
-      <div class="text-lg font-medium">Activities</div>
-      <div class="mt-1 text-sm text-muted-foreground">Background activities running on the Agena server.</div>
+      <div class="text-lg font-medium">{{ $st('Activities') }}</div>
+      <div class="mt-1 text-sm text-muted-foreground">
+        {{ $st('Background activities running on the Agena server.') }}
+      </div>
     </div>
 
     <div class="grid gap-3">
-      <div v-if="loading" class="text-sm text-muted-foreground">Loading activities...</div>
+      <div v-if="loading" class="text-sm text-muted-foreground">{{ $st('Loading activities...') }}</div>
       <div
         v-else-if="error"
         class="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
@@ -131,7 +134,7 @@ onMounted(() => {
         {{ error }}
       </div>
       <div v-else-if="sortedActivities.length === 0" class="text-sm text-muted-foreground">
-        No background activities.
+        {{ $st('No background activities.') }}
       </div>
 
       <div v-else class="space-y-2">
@@ -176,7 +179,7 @@ onMounted(() => {
               </Button>
               <ConfirmPopover
                 v-if="activityControls(activity).includes('delete')"
-                :title="'Delete activity?'"
+                :title="$st('Delete activity?')"
                 :description="activityId(activity)"
                 :confirm-text="'Delete'"
                 :cancel-text="'Cancel'"
@@ -188,7 +191,7 @@ onMounted(() => {
                   size="sm"
                   class="shrink-0 text-destructive border-destructive/30 hover:bg-destructive/10"
                 >
-                  Delete
+                  {{ $st('Delete') }}
                 </Button>
               </ConfirmPopover>
             </div>
@@ -201,15 +204,15 @@ onMounted(() => {
       <IconButton
         variant="outline"
         size="md"
-        :tooltip="loading ? 'Refreshing...' : 'Refresh'"
-        :aria-label="loading ? 'Refreshing...' : 'Refresh'"
+        :tooltip="loading ? 'Refreshing...' : $st('Refresh')"
+        :aria-label="loading ? 'Refreshing...' : $st('Refresh')"
         :disabled="loading"
         @click="refresh"
       >
         <RiRefreshLine class="h-4 w-4" :class="loading ? 'animate-spin' : ''" />
       </IconButton>
       <Button variant="outline" size="sm" :disabled="loading" @click="refresh">
-        {{ loading ? 'Refreshing...' : 'Refresh' }}
+        {{ loading ? 'Refreshing...' : $st('Refresh') }}
       </Button>
       <Button
         variant="outline"
@@ -217,7 +220,7 @@ onMounted(() => {
         :disabled="busyId !== null || sortedActivities.length === 0"
         @click="clearFinished"
       >
-        {{ busyId === '__clear_finished__' ? 'Clearing...' : 'Clear finished' }}
+        {{ busyId === '__clear_finished__' ? $st('Clearing...') : $st('Clear finished') }}
       </Button>
     </div>
   </div>

@@ -10,6 +10,7 @@ import { reloadAgenaRuntime } from '@/lib/reload'
 import { validateRuntimeSettings } from '@/lib/runtimeSettings'
 import { useToastsStore } from '@/stores/toasts'
 import type { JsonValue } from '@/types/json'
+import { settingsText as st } from '@/i18n/settingsText'
 
 type RuntimeStatus = {
   generation?: number
@@ -83,7 +84,7 @@ async function validate() {
   error.value = ''
   try {
     validation.value = await validateRuntimeSettings()
-    toasts.push('success', 'Runtime settings are valid')
+    toasts.push('success', st('Runtime settings are valid'))
   } catch (reason) {
     error.value = reason instanceof Error ? reason.message : String(reason)
   } finally {
@@ -97,7 +98,7 @@ async function reload() {
   try {
     reloadInfo.value = await reloadAgenaRuntime()
     await refresh()
-    toasts.push('success', 'Runtime reloaded')
+    toasts.push('success', st('Runtime reloaded'))
   } catch (reason) {
     error.value = reason instanceof Error ? reason.message : String(reason)
   } finally {
@@ -117,11 +118,11 @@ onMounted(() => void refresh())
       </div>
       <div class="flex gap-2">
         <Button variant="outline" size="sm" :disabled="loading || actionBusy" @click="refresh"
-          ><RiRefreshLine class="mr-2 h-4 w-4" :class="loading ? 'animate-spin' : ''" /> Refresh</Button
+          ><RiRefreshLine class="mr-2 h-4 w-4" :class="loading ? 'animate-spin' : ''" /> {{ $st('Refresh') }}</Button
         >
-        <Button variant="outline" size="sm" :disabled="actionBusy" @click="validate">Validate</Button>
+        <Button variant="outline" size="sm" :disabled="actionBusy" @click="validate">{{ $st('Validate') }}</Button>
         <Button size="sm" :disabled="actionBusy" @click="reload"
-          ><RiRestartLine class="mr-2 h-4 w-4" /> Reload runtime</Button
+          ><RiRestartLine class="mr-2 h-4 w-4" /> {{ $st('Reload runtime') }}</Button
         >
       </div>
     </div>
@@ -133,7 +134,7 @@ onMounted(() => void refresh())
     </div>
 
     <section class="grid gap-3">
-      <div class="text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">Tracing</div>
+      <div class="text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">{{ $st('Tracing') }}</div>
       <ServerSettingField
         path="tracing.filter"
         :label="t('settings.tui.fields.tracingFilter')"
@@ -167,56 +168,62 @@ onMounted(() => void refresh())
     </section>
 
     <section v-if="runtime" class="grid gap-3 border-t border-border/60 pt-5">
-      <div class="text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">Runtime snapshot</div>
+      <div class="text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+        {{ $st('Runtime snapshot') }}
+      </div>
       <dl class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <div class="rounded-md border border-border/60 p-3">
-          <dt class="text-[11px] text-muted-foreground">Generation</dt>
+          <dt class="text-[11px] text-muted-foreground">{{ $st('Generation') }}</dt>
           <dd class="mt-1 font-mono text-sm">{{ runtime.generation ?? '—' }}</dd>
         </div>
         <div class="rounded-md border border-border/60 p-3">
-          <dt class="text-[11px] text-muted-foreground">Loaded at</dt>
+          <dt class="text-[11px] text-muted-foreground">{{ $st('Loaded at') }}</dt>
           <dd class="mt-1 break-all font-mono text-xs">{{ runtime.loaded_at || '—' }}</dd>
         </div>
         <div class="rounded-md border border-border/60 p-3">
-          <dt class="text-[11px] text-muted-foreground">Providers</dt>
+          <dt class="text-[11px] text-muted-foreground">{{ $st('Providers') }}</dt>
           <dd class="mt-1 font-mono text-sm">{{ runtime.provider_ids?.length ?? 0 }}</dd>
         </div>
         <div class="rounded-md border border-border/60 p-3">
-          <dt class="text-[11px] text-muted-foreground">Plugins</dt>
+          <dt class="text-[11px] text-muted-foreground">{{ $st('Plugins') }}</dt>
           <dd class="mt-1 font-mono text-sm">{{ runtime.plugin_count ?? 0 }}</dd>
         </div>
       </dl>
       <div class="grid gap-1 text-xs text-muted-foreground">
         <div>
-          <span class="font-medium text-foreground">Workspace:</span> <code>{{ runtime.workspace_root || '—' }}</code>
+          <span class="font-medium text-foreground">{{ $st('Workspace:') }}</span>
+          <code>{{ runtime.workspace_root || '—' }}</code>
         </div>
         <div>
-          <span class="font-medium text-foreground">Config:</span> <code>{{ runtime.config_path || '—' }}</code> ·
-          {{ runtime.config_found ? 'found' : 'not found' }}
+          <span class="font-medium text-foreground">{{ $st('Config:') }}</span>
+          <code>{{ runtime.config_path || '—' }}</code> ·
+          {{ runtime.config_found ? $st('found') : $st('not found') }}
         </div>
         <div>
-          <span class="font-medium text-foreground">Session runtime:</span>
-          {{ runtime.session_runtime_available ? 'available' : 'unavailable' }}
+          <span class="font-medium text-foreground">{{ $st('Session runtime:') }}</span>
+          {{ runtime.session_runtime_available ? $st('available') : $st('unavailable') }}
         </div>
       </div>
     </section>
 
     <section v-if="resolved" class="grid gap-3 border-t border-border/60 pt-5">
-      <div class="text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">Configuration sources</div>
+      <div class="text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+        {{ $st('Configuration sources') }}
+      </div>
       <div class="grid gap-2 text-xs">
         <div>
-          <span class="font-medium">Global file:</span>
+          <span class="font-medium">{{ $st('Global file:') }}</span>
           <code>{{ resolved.meta?.config_path || runtime?.config_path || '—' }}</code> ·
-          {{ resolved.meta?.config_found ? 'found' : 'not found' }}
+          {{ resolved.meta?.config_found ? $st('found') : $st('not found') }}
         </div>
         <div>
-          <span class="font-medium">Workspace file:</span>
+          <span class="font-medium">{{ $st('Workspace file:') }}</span>
           <code>{{ resolved.meta?.project_config_path || '—' }}</code> ·
-          {{ resolved.meta?.project_config_found ? 'found' : 'not found' }}
+          {{ resolved.meta?.project_config_found ? $st('found') : $st('not found') }}
         </div>
       </div>
       <div class="grid gap-1">
-        <div class="text-sm font-medium">Active layers</div>
+        <div class="text-sm font-medium">{{ $st('Active layers') }}</div>
         <div
           v-for="(layer, index) in appliedLayers"
           :key="`${layer.source}-${index}`"
@@ -227,7 +234,9 @@ onMounted(() => void refresh())
         </div>
       </div>
       <details class="rounded-md border border-border/60">
-        <summary class="cursor-pointer px-3 py-2 text-sm font-medium">Resolved configuration document</summary>
+        <summary class="cursor-pointer px-3 py-2 text-sm font-medium">
+          {{ $st('Resolved configuration document') }}
+        </summary>
         <pre class="max-h-[32rem] overflow-auto border-t border-border/60 p-3 font-mono text-[11px] leading-5">{{
           resolvedJson
         }}</pre>
@@ -235,7 +244,9 @@ onMounted(() => void refresh())
     </section>
 
     <section v-if="validation || reloadInfo" class="grid gap-2 border-t border-border/60 pt-5">
-      <div class="text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">Last action</div>
+      <div class="text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+        {{ $st('Last action') }}
+      </div>
       <pre v-if="validation" class="overflow-auto rounded-md border border-border/60 p-3 font-mono text-xs">{{
         JSON.stringify(validation, null, 2)
       }}</pre>

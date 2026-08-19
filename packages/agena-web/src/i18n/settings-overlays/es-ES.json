@@ -1,0 +1,126 @@
+{
+  "appearance": {
+    "chat": {
+      "activityDetails": "Por defectos de parte plegable",
+      "activityTable": {
+        "expand": "Default open",
+        "type": "Tipo de pieza"
+      },
+      "autoCollapseActivity": "Actividad de colapso automático después de los acabados auxiliares",
+      "label": "Chat",
+      "loadingTools": "Cargando herramientas registradas...",
+      "noTools": "Sin herramientas coincidentes.",
+      "pluginActivityKind": "Una clase de presentación de parte registrada por un plugin.",
+      "refreshTools": "Catálogo de herramientas",
+      "resetToolDefault": "Uso predeterminado heredado",
+      "searchTools": "Herramientas de búsqueda",
+      "showReasoning": "Mostrar rastros de razonamiento",
+      "showTimestamps": "Mostrar horarios",
+      "toolDetails": "Predeterminados de la herramienta",
+      "toolDetailsCount": "{shown} of {total} tools",
+      "toolDetailsHint": "Cada herramienta de ejecución registrada y la función Tool API tiene su propio estado abierto predeterminado. Reset elimina la anulación exacta y restaura el predeterminado de la categoría heredada.",
+      "toolDetailsTable": {
+        "expand": "Default open",
+        "tool": "Herramienta"
+      }
+    },
+    "fonts": {
+      "label": "Fuentes",
+      "mono": "Fuente Mono",
+      "options": {
+        "atkinson": "Atkinson Hyperlegible",
+        "ibmPlexMono": "IBM Plex Mono",
+        "ibmPlexSans": "IBM Plex Sans",
+        "jetbrainsMono": "JetBrains Mono",
+        "serif": "Serif",
+        "system": "Sistema"
+      },
+      "search": "Buscar fuentes",
+      "ui": "UI font"
+    },
+    "intro": "Ajustes de tema y tipografía.",
+    "language": {
+      "help": "Aplica al Studio UI.",
+      "label": "Idioma"
+    },
+    "sizing": {
+      "cornerRadius": "Radio de esquina (px)",
+      "fontSize": "Tamaño de la fuente (%)",
+      "inputBarOffset": "Input bar offset (px)",
+      "label": "Sizing",
+      "padding": "Bodas (%)"
+    },
+    "theme": {
+      "label": "Tema",
+      "options": {
+        "dark": "oscuro",
+        "light": "Luz"
+      },
+      "pickerSearch": "Temas de búsqueda",
+      "pickerTitle": "Tema",
+      "useSystem": "Tema del sistema"
+    }
+  },
+  "groups": {
+    "application": "Aplicación",
+    "core": "Principal",
+    "system": "Sistema"
+  },
+  "refresh": "Actualizar",
+  "refreshAria": "Actualizar configuración",
+  "tabs": {
+    "diagnostics": "Diagnósticos",
+    "interface": "Interfaz",
+    "modelsProviders": "Modelos y proveedores",
+    "permissions": "Permisos",
+    "pluginsTools": "Complementos y herramientas",
+    "runtimeSession": "Runtime y sesión"
+  },
+  "title": "Configuración",
+  "tui": {
+    "activityKindsDescription": "Elige qué grupos de actividad de transcripción comienzan a ampliarse.",
+    "activityKindsTitle": "Tipos de actividad",
+    "clientVersionsDescription": "Pin o refresca las versiones instaladas del cliente utilizadas por las integraciones del proveedor.",
+    "clientVersionsTitle": "Versiones del cliente del proveedor",
+    "compactionDescription": "Controle la compactación del contexto automático y la reserva de token utilizada antes de la compactación.",
+    "compactionTitle": "Compactación de sesión",
+    "diagnosticsDescription": "Ajustes de diagnóstico de localización y tiempo de ejecución expuestos por el TUI Settings Studio.",
+    "effectiveReadOnly": "Los ajustes efectivos son solo lectura. Elige Global, Workspace o Session para editar una capa persistente.",
+    "fields": {
+      "activityDefaultExpanded": "Actividades ampliadas por defecto",
+      "activityDefaultExpandedDescription": "Si los grupos de actividad de transcripción comienzan a ampliarse.",
+      "autoCompaction": "Compactación automática",
+      "autoCompactionDescription": "Compactar el período de sesiones automáticamente cuando el presupuesto contextual lo requiera.",
+      "claudeVersion": "Versión cliente de Claude",
+      "claudeVersionDescription": "Limitación de la versión o liberación seleccionada para el cliente Claude.",
+      "codexVersion": "Versión cliente Codex",
+      "codexVersionDescription": "Limitación de la versión o liberación seleccionada para el cliente Codex.",
+      "colorScheme": "Esquema de color",
+      "colorSchemeDescription": "Esquema de color claro, oscuro o sistema para la renderización TUI.",
+      "geminiVersion": "Versión cliente de Gemini",
+      "geminiVersionDescription": "Limitación de la versión o liberación seleccionada para el cliente Gemini.",
+      "graphics": "Gráficos",
+      "graphicsDescription": "Activar o deshabilitar la renderización de terminal gráfica.",
+      "locale": "Locale",
+      "localeDescription": "Idioma utilizado por el tiempo de ejecución y TUI.",
+      "reservedTokens": "fichas reservadas",
+      "reservedTokensDescription": "Las fichas se mantienen disponibles antes de la compactación automática se activa.",
+      "theme": "Tema",
+      "themeDescription": "TUI nombre de tema o identificador de tema.",
+      "tracingAdapter": "Adaptador de localización",
+      "tracingAdapterDescription": "Adaptador de localización utilizado para exportar eventos de tiempo de ejecución.",
+      "tracingDatabase": "Base de datos",
+      "tracingDatabaseDescription": "Localización de la base de datos o objetivo.",
+      "tracingFilter": "Filtro de localización",
+      "tracingFilterDescription": "Tracing filter directive utilizado por el tiempo de ejecución."
+    },
+    "interfaceDescription": "Apariencia, idioma, defectos de transcripción y visibilidad de la actividad por-herramienta compartida con el TUI.",
+    "noTools": "No hay anulaciones de actividad de herramienta disponibles.",
+    "refreshFromNpm": "Refresh desde npm",
+    "refreshing": "Refrescando...",
+    "runtimeDescription": "Las versiones del cliente del proveedor y los ajustes de compactación de sesión compartidos con el tiempo de ejecución TUI.",
+    "toolOverridesDescription": "Superar el estado ampliado para herramientas individuales, incluyendo nombres de herramientas.",
+    "toolOverridesTitle": "La actividad de la herramienta anula"
+  },
+  "unknownTab": "Pestaña de configuración desconocida."
+}

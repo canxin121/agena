@@ -17,13 +17,14 @@ import {
   type RuntimeSettingsReadBundle,
 } from '@/lib/runtimeSettings'
 import type { JsonValue } from '@/types/json'
+import { settingsText as st } from '@/i18n/settingsText'
 
 type SettingKind = 'text' | 'number' | 'boolean' | 'select'
 type SettingOption = { value: string; label: string; description?: string }
 
 const booleanOptions: SettingOption[] = [
-  { value: 'true', label: 'Enabled' },
-  { value: 'false', label: 'Disabled' },
+  { value: 'true', label: st('Enabled') },
+  { value: 'false', label: st('Disabled') },
 ]
 
 const props = withDefaults(
@@ -53,7 +54,7 @@ const props = withDefaults(
     monospace: false,
     allowCustom: false,
     includeEmpty: false,
-    emptyLabel: 'No value',
+    emptyLabel: st('No value'),
     targetLayer: 'global',
     reload: true,
     disabled: false,
@@ -80,7 +81,7 @@ const selectOptions = computed<SettingOption[]>(() => {
   // Keep a value from an older/unavailable plugin visible and selectable. It
   // can still be saved unchanged while the user decides whether to replace
   // it, instead of silently making the field look unset.
-  return [{ value: current, label: current, description: 'Current configured value' }, ...props.options]
+  return [{ value: current, label: current, description: st('Current configured value') }, ...props.options]
 })
 
 const busy = computed(() => loading.value || saving.value || props.disabled)
@@ -228,8 +229,8 @@ onMounted(() => void refresh())
       <IconButton
         variant="ghost"
         size="sm"
-        :tooltip="loading ? 'Refreshing setting' : 'Refresh setting'"
-        :aria-label="loading ? 'Refreshing setting' : 'Refresh setting'"
+        :tooltip="loading ? $st('Refreshing setting') : $st('Refresh setting')"
+        :aria-label="loading ? $st('Refreshing setting') : $st('Refresh setting')"
         :disabled="loading || saving || disabled"
         @click="refresh"
       >
@@ -240,14 +241,14 @@ onMounted(() => void refresh())
     <div class="flex min-w-0 flex-wrap items-end gap-2">
       <label v-if="kind === 'boolean' && !includeEmpty" class="inline-flex min-h-9 items-center gap-2 text-sm">
         <input v-model="localValue" type="checkbox" :disabled="busy" />
-        <span>{{ localValue ? 'Enabled' : 'Disabled' }}</span>
+        <span>{{ localValue ? $st('Enabled') : $st('Disabled') }}</span>
       </label>
       <OptionPicker
         v-else-if="kind === 'boolean' && includeEmpty"
         :model-value="localValue === true ? 'true' : localValue === false ? 'false' : ''"
         :options="booleanOptions"
         :title="label"
-        :placeholder="placeholder || 'Select value'"
+        :placeholder="placeholder || $st('Select value')"
         :search-placeholder="placeholder || label"
         :include-empty="true"
         :empty-label="emptyLabel"
@@ -259,7 +260,7 @@ onMounted(() => void refresh())
         :model-value="String(localValue)"
         :options="selectOptions"
         :title="label"
-        :placeholder="placeholder || 'Select value'"
+        :placeholder="placeholder || $st('Select value')"
         :search-placeholder="placeholder || label"
         :include-empty="includeEmpty"
         :empty-label="emptyLabel"
@@ -292,32 +293,32 @@ onMounted(() => void refresh())
       />
       <Button size="sm" :disabled="busy" @click="save">
         <RiSave3Line class="mr-1.5 h-4 w-4" />
-        {{ saving ? 'Saving…' : 'Save' }}
+        {{ saving ? $st('Saving…') : $st('Save') }}
       </Button>
       <Button
         v-if="hasOverride"
         variant="ghost"
         size="sm"
         :disabled="busy"
-        :title="`Clear ${targetLayer} override`"
+        :title="$st('Clear {layer} override', { layer: targetLayer })"
         @click="clearOverride"
       >
         <RiDeleteBinLine class="mr-1.5 h-4 w-4" />
-        Clear
+        {{ $st('Clear') }}
       </Button>
     </div>
 
     <div class="grid gap-x-4 gap-y-1 text-[11px] text-muted-foreground sm:grid-cols-3">
       <div>
-        <span class="font-medium text-foreground/80">Effective:</span>
+        <span class="font-medium text-foreground/80">{{ $st('Effective:') }}</span>
         <code class="break-all">{{ effectiveLabel(effectiveResponse) }}</code>
       </div>
       <div>
-        <span class="font-medium text-foreground/80">Global layer:</span>
+        <span class="font-medium text-foreground/80">{{ $st('Global layer:') }}</span>
         <code class="break-all">{{ effectiveLabel(globalResponse) }}</code>
       </div>
       <div>
-        <span class="font-medium text-foreground/80">Workspace layer:</span>
+        <span class="font-medium text-foreground/80">{{ $st('Workspace layer:') }}</span>
         <code class="break-all">{{ effectiveLabel(workspaceResponse) }}</code>
       </div>
     </div>

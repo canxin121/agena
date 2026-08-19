@@ -1,0 +1,126 @@
+{
+  "appearance": {
+    "chat": {
+      "activityDetails": "Pièces collapsibles par défaut",
+      "activityTable": {
+        "expand": "Ouverture par défaut",
+        "type": "Type de pièce"
+      },
+      "autoCollapseActivity": "Activité d'effondrement automatique après la fin de l'assistant",
+      "label": "Chat",
+      "loadingTools": "Chargement des outils enregistrés...",
+      "noTools": "Aucun outil correspondant.",
+      "pluginActivityKind": "Une présentation en partie enregistrée par un plugin.",
+      "refreshTools": "Rafraîchir le catalogue des outils",
+      "resetToolDefault": "Utiliser par défaut hérité",
+      "searchTools": "Outils de recherche",
+      "showReasoning": "Afficher les traces de raisonnement",
+      "showTimestamps": "Afficher les horodatages",
+      "toolDetails": "Par défaut de l'outil",
+      "toolDetailsCount": "{shown} des outils {total}",
+      "toolDetailsHint": "Chaque outil d'exécution enregistré et fonction API Outil a son propre état d'ouverture par défaut. Reset supprime la redéfinition exacte et restaure la catégorie héritée par défaut.",
+      "toolDetailsTable": {
+        "expand": "Ouverture par défaut",
+        "tool": "Outil"
+      }
+    },
+    "fonts": {
+      "label": "Polices",
+      "mono": "Police mono",
+      "options": {
+        "atkinson": "Atkinson Hyperlégible",
+        "ibmPlexMono": "IBM Plex Mono",
+        "ibmPlexSans": "IBM Plex Sans",
+        "jetbrainsMono": "JetBrains Mono",
+        "serif": "Serif",
+        "system": "Système"
+      },
+      "search": "Recherche de polices",
+      "ui": "Police UI"
+    },
+    "intro": "Paramètres thématiques et typographiques.",
+    "language": {
+      "help": "S'applique à l'interface utilisateur Studio.",
+      "label": "Langue"
+    },
+    "sizing": {
+      "cornerRadius": "Rayon d'angle (px)",
+      "fontSize": "Taille de la police (%)",
+      "inputBarOffset": "Dépassement de la barre d'entrée (px)",
+      "label": "Taille",
+      "padding": "Pading (%)"
+    },
+    "theme": {
+      "label": "Thème",
+      "options": {
+        "dark": "Sombre",
+        "light": "Lumière"
+      },
+      "pickerSearch": "Thèmes de recherche",
+      "pickerTitle": "Thème",
+      "useSystem": "Utiliser le thème système"
+    }
+  },
+  "groups": {
+    "application": "Application",
+    "core": "Principal",
+    "system": "Système"
+  },
+  "refresh": "Actualiser",
+  "refreshAria": "Actualiser les paramètres",
+  "tabs": {
+    "diagnostics": "Diagnostics",
+    "interface": "Interface",
+    "modelsProviders": "Modèles et fournisseurs",
+    "permissions": "Autorisations",
+    "pluginsTools": "Plugins et outils",
+    "runtimeSession": "Runtime et session"
+  },
+  "title": "Paramètres",
+  "tui": {
+    "activityKindsDescription": "Choisissez quels groupes d'activité de transcription commencent à s'étendre.",
+    "activityKindsTitle": "Types d'activités",
+    "clientVersionsDescription": "Pin ou rafraîchir les versions client installées utilisées par les intégrations de fournisseurs.",
+    "clientVersionsTitle": "Versions client du fournisseur",
+    "compactionDescription": "Contrôler le compactage automatique du contexte et la réserve de jeton utilisée avant le compactage.",
+    "compactionTitle": "Compactage de session",
+    "diagnosticsDescription": "Paramètres de repérage et de diagnostic d'exécution exposés par le studio TUI Settings.",
+    "effectiveReadOnly": "Les paramètres efficaces sont en lecture seule. Choisissez Global, Workspace ou Session pour modifier une couche persistante.",
+    "fields": {
+      "activityDefaultExpanded": "Activités élargies par défaut",
+      "activityDefaultExpandedDescription": "Indique si les groupes d'activités de transcription commencent à s'étendre.",
+      "autoCompaction": "Compactage automatique",
+      "autoCompactionDescription": "Compactez automatiquement la session lorsque le budget contextuel l'exige.",
+      "claudeVersion": "Version client Claude",
+      "claudeVersionDescription": "Contrainte ou version sélectionnée pour le client Claude.",
+      "codexVersion": "Version client Codex",
+      "codexVersionDescription": "Contrainte de version ou publication sélectionnée pour le client Codex.",
+      "colorScheme": "Schéma de couleur",
+      "colorSchemeDescription": "Schéma de couleur claire, sombre ou système pour le rendu TUI.",
+      "geminiVersion": "Version client Gemini",
+      "geminiVersionDescription": "Contrainte ou version sélectionnée pour le client Gemini.",
+      "graphics": "Graphiques",
+      "graphicsDescription": "Activer ou désactiver le rendu de terminal graphique.",
+      "locale": "Locale",
+      "localeDescription": "Langue utilisée par l'exécution et TUI.",
+      "reservedTokens": "Jetons réservés",
+      "reservedTokensDescription": "Jetons maintenus disponibles avant le déclenchement du compactage automatique.",
+      "theme": "Thème",
+      "themeDescription": "Nom ou identificateur de thème TUI.",
+      "tracingAdapter": "Adaptateur de repérage",
+      "tracingAdapterDescription": "Adaptateur de repérage utilisé pour exporter les événements d'exécution.",
+      "tracingDatabase": "Base de données de repérage",
+      "tracingDatabaseDescription": "Traçage du puits ou de la cible de la base de données.",
+      "tracingFilter": "Filtre de repérage",
+      "tracingFilterDescription": "Directive de filtrage utilisée par l'exécution."
+    },
+    "interfaceDescription": "Apparence, langue, par défaut de transcription et visibilité de l'activité par outil partagée avec le TUI.",
+    "noTools": "Aucune activité d'outil n'est disponible.",
+    "refreshFromNpm": "Actualiser à partir de npm",
+    "refreshing": "Rafraîchir...",
+    "runtimeDescription": "Les versions client du fournisseur et les paramètres de compactage de session sont partagés avec l'exécution TUI.",
+    "toolOverridesDescription": "Surpasser l'état élargi pour les outils individuels, y compris les noms d'outils pointillés.",
+    "toolOverridesTitle": "L'activité de l'outil remplace"
+  },
+  "unknownTab": "Onglet de paramètres inconnu."
+}

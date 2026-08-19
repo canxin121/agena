@@ -2,7 +2,7 @@ import type { JsonValue as JsonLike } from '@/types/json'
 
 import { emitAuthRequired } from './authEvents.ts'
 import { readActiveBackendBaseUrl, resolveBackendUrl } from './backend'
-import { buildActiveUiAuthHeaders } from './uiAuthToken'
+import { buildActiveUiAuthHeaders, readUiAuthTokenVersion } from './uiAuthToken'
 
 export class ApiError extends Error {
   status: number
@@ -118,6 +118,7 @@ export function apiErrorBodyRecord(error: Error | JsonLike): Record<string, Json
 
 export async function apiJson<T>(url: string, init?: RequestInit): Promise<T> {
   const authHeaders = buildActiveUiAuthHeaders()
+  const authTokenVersion = readUiAuthTokenVersion()
   const resp = await fetch(apiUrl(url), {
     ...init,
     // Token auth works without cookies; keep cookie compatibility unless caller overrides.
@@ -158,7 +159,13 @@ export async function apiJson<T>(url: string, init?: RequestInit): Promise<T> {
           .trim()
           .toLowerCase() === 'ui authentication required')
     if (isUiAuthRequired) {
-      emitAuthRequired({ message: err.message, status: err.status, code: code || 'auth_required', url })
+      emitAuthRequired({
+        message: err.message,
+        status: err.status,
+        code: code || 'auth_required',
+        url,
+        authTokenVersion,
+      })
     }
     throw err
   }
@@ -168,6 +175,7 @@ export async function apiJson<T>(url: string, init?: RequestInit): Promise<T> {
 
 export async function apiText(url: string, init?: RequestInit): Promise<string> {
   const authHeaders = buildActiveUiAuthHeaders()
+  const authTokenVersion = readUiAuthTokenVersion()
   const resp = await fetch(apiUrl(url), {
     ...init,
     credentials: init?.credentials ?? (authHeaders.authorization ? 'omit' : 'include'),
@@ -205,7 +213,13 @@ export async function apiText(url: string, init?: RequestInit): Promise<string> 
           .trim()
           .toLowerCase() === 'ui authentication required')
     if (isUiAuthRequired) {
-      emitAuthRequired({ message: err.message, status: err.status, code: code || 'auth_required', url })
+      emitAuthRequired({
+        message: err.message,
+        status: err.status,
+        code: code || 'auth_required',
+        url,
+        authTokenVersion,
+      })
     }
 
     throw err
@@ -215,6 +229,7 @@ export async function apiText(url: string, init?: RequestInit): Promise<string> 
 
 export async function apiBlob(url: string, init?: RequestInit): Promise<Blob> {
   const authHeaders = buildActiveUiAuthHeaders()
+  const authTokenVersion = readUiAuthTokenVersion()
   const resp = await fetch(apiUrl(url), {
     ...init,
     credentials: init?.credentials ?? (authHeaders.authorization ? 'omit' : 'include'),
@@ -252,7 +267,13 @@ export async function apiBlob(url: string, init?: RequestInit): Promise<Blob> {
           .trim()
           .toLowerCase() === 'ui authentication required')
     if (isUiAuthRequired) {
-      emitAuthRequired({ message: err.message, status: err.status, code: code || 'auth_required', url })
+      emitAuthRequired({
+        message: err.message,
+        status: err.status,
+        code: code || 'auth_required',
+        url,
+        authTokenVersion,
+      })
     }
 
     throw err

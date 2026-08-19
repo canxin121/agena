@@ -966,17 +966,21 @@ pub(super) fn push_warning(
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::validate_plugin_target;
+
+    static VALIDATION_FIXTURE_COUNTER: AtomicU64 = AtomicU64::new(1);
 
     fn validate_config(value: serde_json::Value) -> super::PluginValidateOutput {
         let nonce = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("system time after epoch")
             .as_nanos();
+        let counter = VALIDATION_FIXTURE_COUNTER.fetch_add(1, Ordering::Relaxed);
         let path = PathBuf::from(format!(
-            "/tmp/agena-plugin-validation-{}-{nonce}.json",
+            "/tmp/agena-plugin-validation-{}-{nonce}-{counter}.json",
             std::process::id()
         ));
         std::fs::write(

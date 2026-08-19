@@ -1,0 +1,174 @@
+name: Verify sccache activity
+description: Fail when a Rust build bypasses the configured sccache compiler wrapper
+
+inputs:
+  label:
+    description: Human-readable build label used in the job summary
+    required: false
+    default: Rust build
+  minimum-requests:
+    description: Minimum number of compiler requests sccache must observe
+    required: false
+    default: "1"
+  minimum-hits:
+    description: Minimum number of remote cache hits required
+    required: false
+    default: "0"
+  minimum-hit-rate:
+    description: Minimum cache hit percentage across hits, misses, and cache errors
+    required: false
+    default: "0"
+
+runs:
+  using: composite
+  steps:
+    - name: Verify sccache activity (Unix)
+      if: runner.os != 'Windows'
+      shell: bash
+      env:
+        CACHE_LABEL: ${{ inputs.label }}
+        MINIMUM_REQUESTS: ${{ inputs.minimum-requests }}
+        MINIMUM_HITS: ${{ inputs.minimum-hits }}
+        MINIMUM_HIT_RATE: ${{ inputs.minimum-hit-rate }}
+      run: |
+        set -euo pipefail
+        if [[ -z "${RUSTC_WRAPPER:-}" || ! -x "$RUSTC_WRAPPER" ]]; then
+          echo "RUSTC_WRAPPER does not point to an executable: ${RUSTC_WRAPPER:-<unset>}" >&2
+          exit 1
+        fi
+
+        stats_file="$RUNNER_TEMP/sccache-stats-${GITHUB_JOB}.json"
+        "$RUSTC_WRAPPER" --show-stats --stats-format=json > "$stats_file"
+        python3 - "$stats_file" <<'PY'
+        import json
+        import os
+        import sys
+        from pathlib import Path
+
+        stats_path = Path(sys.argv[1])
+        payload = json.loads(stats_path.read_text(encoding="utf-8"))
+        stats = payload.get("stats", {})
+
+        def counter_total(name: str) -> int:
+            counter = stats.get(name, {}) or {}
+            # adv_counts breaks the same requests down by an additional dimension;
+            # adding it to counts would double-count cache activity.
+            return sum(int(value) for value in (counter.get("counts", {}) or {}).values())
+
+        requests = int(stats.get("compile_requests", 0) or 0)
+        executed = int(stats.get("requests_executed", 0) or 0)
+        hits = counter_total("cache_hits")
+        misses = counter_total("cache_misses")
+        errors = counter_total("cache_errors")
+        writes = int(stats.get("cache_writes", 0) or 0)
+        write_errors = int(stats.get("cache_write_errors", 0) or 0)
+        denominator = hits + misses + errors
+        hit_rate = (100.0 * hits / denominator) if denominator else 0.0
+
+        minimum_requests = int(os.environ["MINIMUM_REQUESTS"])
+        minimum_hits = int(os.environ["MINIMUM_HITS"])
+        minimum_hit_rate = float(os.environ["MINIMUM_HIT_RATE"])
+        label = os.environ["CACHE_LABEL"]
+
+        summary = (
+            f"### sccache: {label}\n\n"
+            f"| Metric | Value |\n|---|---:|\n"
+            f"| Compile requests | {requests} |\n"
+            f"| Requests executed | {executed} |\n"
+            f"| Cache hits | {hits} |\n"
+            f"| Cache misses | {misses} |\n"
+            f"| Cache errors | {errors} |\n"
+            f"| Cache writes | {writes} |\n"
+            f"| Cache write errors | {write_errors} |\n"
+            f"| Cache hit rate | {hit_rate:.2f}% |\n"
+        )
+        print(summary)
+        summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+        if summary_path:
+            with open(summary_path, "a", encoding="utf-8") as handle:
+                handle.write(summary + "\n")
+
+        failures = []
+        if requests < minimum_requests:
+            failures.append(f"observed {requests} compile requests; expected at least {minimum_requests}")
+        if hits < minimum_hits:
+            failures.append(f"observed {hits} cache hits; expected at least {minimum_hits}")
+        if hit_rate < minimum_hit_rate:
+            failures.append(
+                f"observed {hit_rate:.2f}% cache hit rate; expected at least {minimum_hit_rate:.2f}%"
+            )
+        if failures:
+            raise SystemExit("sccache verification failed: " + "; ".join(failures))
+        PY
+
+    - name: Verify sccache activity (Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      env:
+        CACHE_LABEL: ${{ inputs.label }}
+        MINIMUM_REQUESTS: ${{ inputs.minimum-requests }}
+        MINIMUM_HITS: ${{ inputs.minimum-hits }}
+        MINIMUM_HIT_RATE: ${{ inputs.minimum-hit-rate }}
+      run: |
+        if (-not $env:RUSTC_WRAPPER -or -not (Test-Path -LiteralPath $env:RUSTC_WRAPPER)) {
+          throw "RUSTC_WRAPPER does not point to an executable: $env:RUSTC_WRAPPER"
+        }
+
+        $json = & $env:RUSTC_WRAPPER --show-stats --stats-format=json
+        if ($LASTEXITCODE -ne 0) {
+          throw "failed to read sccache statistics"
+        }
+        $payload = $json | ConvertFrom-Json
+        $stats = $payload.stats
+
+        function Get-CounterTotal($counter) {
+          [int64]$sum = 0
+          if ($null -ne $counter.counts) {
+            foreach ($property in $counter.counts.PSObject.Properties) {
+              $sum += [int64]$property.Value
+            }
+          }
+          # adv_counts is an alternate breakdown of the same requests and is
+          # deliberately not added to the primary counts.
+          return $sum
+        }
+
+        [int64]$requests = $stats.compile_requests
+        [int64]$executed = $stats.requests_executed
+        [int64]$hits = Get-CounterTotal $stats.cache_hits
+        [int64]$misses = Get-CounterTotal $stats.cache_misses
+        [int64]$errors = Get-CounterTotal $stats.cache_errors
+        [int64]$writes = $stats.cache_writes
+        [int64]$writeErrors = $stats.cache_write_errors
+        [int64]$denominator = $hits + $misses + $errors
+        [double]$hitRate = if ($denominator -gt 0) { 100.0 * $hits / $denominator } else { 0.0 }
+
+        $summary = @"
+        ### sccache: $env:CACHE_LABEL
+
+        | Metric | Value |
+        |---|---:|
+        | Compile requests | $requests |
+        | Requests executed | $executed |
+        | Cache hits | $hits |
+        | Cache misses | $misses |
+        | Cache errors | $errors |
+        | Cache writes | $writes |
+        | Cache write errors | $writeErrors |
+        | Cache hit rate | $($hitRate.ToString("F2"))% |
+        "@
+        Write-Host $summary
+        Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value $summary
+
+        [int64]$minimumRequests = $env:MINIMUM_REQUESTS
+        [int64]$minimumHits = $env:MINIMUM_HITS
+        [double]$minimumHitRate = $env:MINIMUM_HIT_RATE
+        if ($requests -lt $minimumRequests) {
+          throw "sccache verification failed: observed $requests compile requests; expected at least $minimumRequests"
+        }
+        if ($hits -lt $minimumHits) {
+          throw "sccache verification failed: observed $hits cache hits; expected at least $minimumHits"
+        }
+        if ($hitRate -lt $minimumHitRate) {
+          throw "sccache verification failed: observed $($hitRate.ToString('F2'))% cache hit rate; expected at least $($minimumHitRate.ToString('F2'))%"
+        }

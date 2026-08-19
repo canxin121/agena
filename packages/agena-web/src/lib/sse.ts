@@ -2,7 +2,7 @@ import type { JsonValue as JsonLike } from '@/types/json'
 
 import { emitAuthRequired, extractAuthRequiredMessageFromBodyText } from './authEvents.ts'
 import { apiUrl } from './api'
-import { buildActiveUiAuthHeaders } from './uiAuthToken'
+import { buildActiveUiAuthHeaders, readUiAuthTokenVersion } from './uiAuthToken'
 
 export type SseEvent = {
   type: string
@@ -414,6 +414,7 @@ export function connectSse(opts: SseClientOptions): SseClient {
         if (lastEventId) headers.set('last-event-id', lastEventId)
 
         const auth = buildActiveUiAuthHeaders()
+        const authTokenVersion = readUiAuthTokenVersion()
         if (auth.authorization) {
           try {
             headers.set('authorization', auth.authorization)
@@ -447,6 +448,7 @@ export function connectSse(opts: SseClientOptions): SseClient {
               status: resp.status,
               code: 'auth_required',
               url,
+              authTokenVersion,
             })
             // Stop reconnect loop until the app is re-authenticated.
             closed = true

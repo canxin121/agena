@@ -137,7 +137,7 @@ impl App {
                 tool_name,
             }) => PermissionStudioTextTarget::ToolRuleName { tool_name },
             _ => {
-                self.flash_warning("This entry cannot be renamed; delete and recreate it instead.");
+                self.flash_warning(self.i18n.text("permission-studio-rename-unsupported"));
                 return;
             }
         };

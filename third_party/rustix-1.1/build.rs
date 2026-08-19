@@ -24,9 +24,11 @@ fn main() {
     let is_x32 = arch == "x86_64" && pointer_width == "32";
     let is_arm64_ilp32 = arch == "aarch64" && pointer_width == "32";
     let is_powerpc64be = arch == "powerpc64" && endian == "big";
+    let is_aarch64be = arch == "aarch64" && endian == "big";
     let is_mipseb = (arch == "mips" || arch == "mips32r6") && endian == "big";
     let is_mips64eb = arch.contains("mips64") && endian == "big";
-    let is_unsupported_abi = is_x32 || is_arm64_ilp32 || is_powerpc64be || is_mipseb || is_mips64eb;
+    let is_unsupported_abi =
+        is_x32 || is_arm64_ilp32 || is_powerpc64be || is_aarch64be || is_mipseb || is_mips64eb;
 
     // Check for `--features=use-libc`. This allows crate users to enable the
     // libc backend.

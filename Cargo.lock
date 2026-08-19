@@ -10714,8 +10714,6 @@ dependencies = [
 [[package]]
 name = "term-maths"
 version = "1.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "26ccccf7b1e429ef47ef4a82726346feefdb67169e6a9d8d97fc6d3707640a05"
 dependencies = [
  "rust-latex-parser",
  "unicode-segmentation",

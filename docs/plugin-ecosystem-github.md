@@ -78,6 +78,15 @@ marketplace owner; entries can also be `featured`. These fields never replace
 source provenance or digest verification: authenticity and curation are
 separate trust axes.
 
+```toml
+[plugins."acme.example"]
+review_tier = "verified"
+featured = true
+```
+
+Review policy entries must resolve to an actual plugin release in the generated
+catalog, so a typo cannot silently create a badge for a nonexistent slug.
+
 The generated marketplace CI:
 
 - rebuilds and byte-compares the generated index;

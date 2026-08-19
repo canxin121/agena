@@ -9,8 +9,9 @@
 //! The runtime subscription (Phase 2 application wiring) will feed this store
 //! later; until then the TUI's own emit helpers are the producers.
 
+use portable_atomic::AtomicU64;
 use std::collections::HashSet;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::Ordering;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use agena_notification::{

@@ -1,12 +1,10 @@
 //! REST client. Wraps `reqwest` and serializes [`agena_api`] commands/queries
 //! into the v2 endpoints.
 
+use portable_atomic::AtomicU64;
 use std::{
     fmt,
-    sync::{
-        Arc, RwLock,
-        atomic::{AtomicU64, Ordering},
-    },
+    sync::{Arc, RwLock, atomic::Ordering},
 };
 
 use agena_api::{

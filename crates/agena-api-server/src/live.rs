@@ -5,8 +5,9 @@
 //! This module merges both best-effort sources without inventing persistence,
 //! replay, or a global sequence.
 
+use portable_atomic::AtomicU64;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::Ordering;
 
 use agena_api::{
     Scope,

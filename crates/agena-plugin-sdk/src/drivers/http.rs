@@ -1,8 +1,9 @@
 //! HTTP driver. Plugin author serves an axum router on their own port; one
 //! POST endpoint receives JSON-RPC envelopes and forwards them to dispatch.
 
+use portable_atomic::AtomicI64;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use axum::{Json, Router, extract::State, routing::post};

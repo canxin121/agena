@@ -1,10 +1,8 @@
+use portable_atomic::AtomicU64;
 use std::{
     collections::{BTreeSet, HashMap, VecDeque},
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
-    sync::{
-        Arc, LazyLock, Mutex,
-        atomic::{AtomicU64, Ordering},
-    },
+    sync::{Arc, LazyLock, Mutex, atomic::Ordering},
     time::{Duration, Instant},
 };
 

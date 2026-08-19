@@ -4,8 +4,9 @@
 //! fsync.  This is fine because rollouts are not in the hot path of LLM
 //! calls — they record events that already happened.
 
+use portable_atomic::AtomicU64;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::Ordering;
 
 use chrono::Utc;
 use tokio::fs::{File, OpenOptions, create_dir_all};

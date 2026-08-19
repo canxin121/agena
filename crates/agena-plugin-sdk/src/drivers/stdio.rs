@@ -8,11 +8,9 @@
 //!   - one writer task drains an mpsc channel → flushes stdout
 //!   - dispatcher runs on the tokio runtime; responses go back via the channel
 
+use portable_atomic::AtomicI64;
 use std::collections::HashMap;
-use std::sync::{
-    Arc, Mutex as StdMutex,
-    atomic::{AtomicI64, Ordering},
-};
+use std::sync::{Arc, Mutex as StdMutex, atomic::Ordering};
 use std::time::Duration;
 
 use agena_stdio_codec::ContentLengthCodec;

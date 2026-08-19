@@ -1,12 +1,10 @@
+use portable_atomic::AtomicU64;
 use std::{
     collections::{BTreeMap, HashSet},
     convert::Infallible,
     hash::{Hash, Hasher},
     path::{Path, PathBuf},
-    sync::{
-        Arc, LazyLock,
-        atomic::{AtomicU64, Ordering},
-    },
+    sync::{Arc, LazyLock, atomic::Ordering},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 

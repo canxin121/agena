@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 [dependencies]
+portable-atomic = { workspace = true }
 agena-process = { workspace = true }
 agena-stdio-codec = { workspace = true }
 async-trait = { workspace = true }

@@ -21,12 +21,10 @@
 //! synchronous compatibility surface for non-async consumers; those reads sleep
 //! on a condition variable and async callers isolate them with `spawn_blocking`.
 
+use portable_atomic::{AtomicI64, AtomicU64};
 use std::collections::{HashMap, VecDeque};
 use std::process::Stdio;
-use std::sync::{
-    Arc, Condvar, Mutex,
-    atomic::{AtomicI64, AtomicU64, Ordering},
-};
+use std::sync::{Arc, Condvar, Mutex, atomic::Ordering};
 use std::time::{Duration, Instant};
 
 use chrono::Utc;

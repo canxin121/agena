@@ -13,6 +13,7 @@ doc = false
 path = "src/main.rs"
 
 [dependencies]
+portable-atomic = { workspace = true }
 agena-api = { workspace = true }
 agena-api-server = { workspace = true, features = ["jsonrpc"] }
 agena-application = { workspace = true }

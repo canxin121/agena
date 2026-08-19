@@ -531,10 +531,8 @@ fn merge_json_object(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{
-        collections::BTreeMap,
-        sync::atomic::{AtomicU64, Ordering},
-    };
+    use portable_atomic::AtomicU64;
+    use std::{collections::BTreeMap, sync::atomic::Ordering};
 
     #[derive(Default)]
     struct TestEnvironment;

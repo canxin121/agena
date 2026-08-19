@@ -24,10 +24,11 @@
 //! in the [`MemoryLayer`] and flushed after a bounded number of deltas or when
 //! the run ends (D10); ordinary semantic checkpoints remain commit-synchronous.
 
+use portable_atomic::AtomicU64;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::Ordering;
 
 use async_trait::async_trait;
 use serde_json::{Value, json};
@@ -2197,7 +2198,7 @@ mod tests {
         ReconcileOutcome, SessionChange, SessionListQuery, SessionState,
     };
     use agena_domain::SessionRelationKind;
-    use std::sync::atomic::AtomicI64;
+    use portable_atomic::AtomicI64;
 
     /// Deterministic clock shared with the facade so tests can advance time.
     #[derive(Clone)]

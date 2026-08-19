@@ -72,7 +72,7 @@ impl ToolExecutor {
             },
         ));
 
-        let output_sequence = std::sync::atomic::AtomicU64::new(0);
+        let output_sequence = portable_atomic::AtomicU64::new(0);
         let output_callback = |stream: agena_domain::CommandOutputStream, bytes: &[u8]| {
             let sequence = output_sequence.fetch_add(1, std::sync::atomic::Ordering::AcqRel) + 1;
             (sink)(agena_tool::ToolRuntimeEvent::CommandOutputDelta(

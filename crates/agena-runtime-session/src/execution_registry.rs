@@ -7,11 +7,12 @@
 //! so the manager never holds a lease outside a facade call. `register` here
 //! only guarantees that one process does not run the same session twice.
 
+use portable_atomic::{AtomicI64, AtomicU64};
 use std::{
     collections::HashMap,
     sync::{
         Arc, Mutex as StdMutex,
-        atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering},
+        atomic::{AtomicBool, Ordering},
     },
     time::Duration,
 };

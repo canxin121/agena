@@ -3,11 +3,12 @@
 //! exits, the transport reconnects according to the configured
 //! [`crate::config::RestartPolicy`].
 
+use portable_atomic::{AtomicI64, AtomicU64};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicI64, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
 use agena_process::ManagedChild;

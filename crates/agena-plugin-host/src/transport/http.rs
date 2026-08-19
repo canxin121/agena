@@ -1,8 +1,9 @@
 //! HTTP transport — POSTs JSON-RPC envelopes to a remote plugin server.
 
+use portable_atomic::AtomicI64;
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use async_trait::async_trait;

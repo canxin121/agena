@@ -10,6 +10,7 @@ description = "Media, image, SVG, and mathematical rendering for Agena's TUI"
 test-support = []
 
 [dependencies]
+portable-atomic = { workspace = true }
 agena-tui = { workspace = true }
 agena-tui-components = { workspace = true }
 base64 = { workspace = true }

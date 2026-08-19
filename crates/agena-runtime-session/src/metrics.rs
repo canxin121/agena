@@ -1,6 +1,7 @@
 //! Lightweight process-local runtime metrics shared by composition adapters.
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use portable_atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 
 pub static PROVIDER_CALLS_TOTAL: AtomicU64 = AtomicU64::new(0);
 pub static PROVIDER_CALLS_ERROR: AtomicU64 = AtomicU64::new(0);

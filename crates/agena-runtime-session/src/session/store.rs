@@ -706,7 +706,8 @@ impl StoreAdapter {
 
 /// Process-local, monotonic source of negative placeholder ids.
 fn next_placeholder_id() -> i64 {
-    use std::sync::atomic::{AtomicI64, Ordering};
+    use portable_atomic::AtomicI64;
+    use std::sync::atomic::Ordering;
     static NEXT: AtomicI64 = AtomicI64::new(-1);
     NEXT.fetch_sub(1, Ordering::Relaxed)
 }

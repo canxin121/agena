@@ -2,7 +2,8 @@
 //! a background reader_loop demultiplexes inbound frames, request/response
 //! correlation lives in a DashMap keyed by request id.
 
-use std::sync::atomic::{AtomicI64, Ordering};
+use portable_atomic::AtomicI64;
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 

@@ -1,9 +1,7 @@
 //! Shared application state held by the HTTP/WS/SSE/JSON-RPC transports.
 
-use std::sync::{
-    Arc,
-    atomic::{AtomicI64, Ordering},
-};
+use portable_atomic::AtomicI64;
+use std::sync::{Arc, atomic::Ordering};
 
 use agena_application::Application;
 

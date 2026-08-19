@@ -123,6 +123,7 @@ dependencies = [
  "ignore",
  "jsonwebtoken",
  "libc",
+ "portable-atomic",
  "portable-pty",
  "regex",
  "reqwest 0.13.4",
@@ -183,6 +184,7 @@ dependencies = [
  "chrono",
  "futures-util",
  "http 1.4.2",
+ "portable-atomic",
  "reqwest 0.13.4",
  "semver",
  "serde",
@@ -259,6 +261,7 @@ dependencies = [
  "globset",
  "hex",
  "notify",
+ "portable-atomic",
  "process_control",
  "reqwest 0.13.4",
  "schemars",
@@ -315,6 +318,7 @@ dependencies = [
  "axum",
  "chrono",
  "futures-util",
+ "portable-atomic",
  "reqwest 0.13.4",
  "secrecy",
  "serde",
@@ -442,6 +446,7 @@ dependencies = [
  "dashmap",
  "futures-util",
  "lsp-types",
+ "portable-atomic",
  "serde",
  "serde_json",
  "thiserror 2.0.19",
@@ -491,6 +496,7 @@ dependencies = [
  "async-trait",
  "http 1.4.2",
  "oauth2",
+ "portable-atomic",
  "reqwest 0.13.4",
  "rmcp",
  "serde",
@@ -582,6 +588,7 @@ dependencies = [
  "futures-util",
  "hex",
  "jsonschema",
+ "portable-atomic",
  "regex",
  "reqwest 0.13.4",
  "serde",
@@ -632,6 +639,7 @@ dependencies = [
  "bytes",
  "futures-util",
  "indexmap",
+ "portable-atomic",
  "proc-macro-error2",
  "ratatui-image",
  "ratex-unicode-font",
@@ -727,6 +735,7 @@ name = "agena-rollout"
 version = "0.1.0-beta.5"
 dependencies = [
  "chrono",
+ "portable-atomic",
  "serde",
  "serde_json",
  "thiserror 2.0.19",
@@ -827,6 +836,7 @@ dependencies = [
  "agena-runtime-contracts",
  "async-trait",
  "merge",
+ "portable-atomic",
  "schemars",
  "serde",
  "serde_json",
@@ -1036,6 +1046,7 @@ dependencies = [
  "merge",
  "parking_lot",
  "path-clean",
+ "portable-atomic",
  "reqwest 0.13.4",
  "schemars",
  "sea-orm",
@@ -1102,6 +1113,7 @@ dependencies = [
  "mime_guess",
  "parking_lot",
  "path-clean",
+ "portable-atomic",
  "process_control",
  "regex",
  "reqwest 0.13.4",
@@ -1173,6 +1185,7 @@ version = "0.1.0-beta.5"
 dependencies = [
  "agena-domain",
  "async-trait",
+ "portable-atomic",
  "schemars",
  "serde",
  "serde_json",
@@ -1274,6 +1287,7 @@ dependencies = [
  "ignore",
  "image",
  "indexmap",
+ "portable-atomic",
  "ratatui",
  "regex",
  "serde",
@@ -1313,6 +1327,7 @@ dependencies = [
  "base64 0.22.1",
  "image",
  "imagesize 0.15.0",
+ "portable-atomic",
  "pulldown-latex",
  "ratatui",
  "ratatui-image",
@@ -7683,9 +7698,9 @@ dependencies = [
 
 [[package]]
 name = "portable-atomic"
-version = "1.14.0"
+version = "1.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3d20d5497ef88037a52ff98267d066e7f11fcc5e99bbfbd58a42336193aacec3"
+checksum = "05c8b63e8d9609db387f0324918f81d68fe27748f084ef092fb35954d0539a85"
 
 [[package]]
 name = "portable-pty"

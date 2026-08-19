@@ -158,6 +158,7 @@ ed25519-dalek = { version = "3.0.0", default-features = false, features = ["pkcs
 jsonwebtoken = { version = "11.0.0", default-features = false, features = ["rust_crypto"] }
 hex = "0.4.3"
 parking_lot = "0.12.5"
+portable-atomic = { version = "1.15.0", features = ["fallback"] }
 os_info = "=3.12.0"
 sha2 = "0.11.0"
 smol_str = { version = "0.3.6", features = ["serde"] }

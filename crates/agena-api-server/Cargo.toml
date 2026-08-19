@@ -13,6 +13,7 @@ ipc = ["ws"]
 jsonrpc = []
 
 [dependencies]
+portable-atomic = { workspace = true }
 agena-application = { workspace = true }
 agena-api = { workspace = true }
 agena-failure = { workspace = true }

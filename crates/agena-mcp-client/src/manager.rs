@@ -5,9 +5,10 @@
     reason = "MCP roots remain required for compatible servers"
 )]
 
+use portable_atomic::AtomicU64;
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 

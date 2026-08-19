@@ -9,8 +9,9 @@
 //! created, updated, and deleted through this plugin. The plugin deliberately
 //! owns no session activation state.
 
+use portable_atomic::AtomicU64;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use std::{collections::BTreeMap, fmt};

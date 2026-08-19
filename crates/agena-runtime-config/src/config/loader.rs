@@ -78,11 +78,8 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        collections::BTreeMap,
-        path::PathBuf,
-        sync::atomic::{AtomicU64, Ordering},
-    };
+    use portable_atomic::AtomicU64;
+    use std::{collections::BTreeMap, path::PathBuf, sync::atomic::Ordering};
 
     use super::*;
     use crate::{TuiColorSchemeConfig, TuiGraphicsModeConfig};

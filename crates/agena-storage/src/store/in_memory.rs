@@ -6,11 +6,12 @@
 //! lease write-ownership), and state derivation as the production SQLite
 //! engine. The facade cannot distinguish the two (design 15.4).
 
+use portable_atomic::AtomicI64;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::RwLock;
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::atomic::Ordering;
 
 use agena_domain::{SessionLifecycleState, SessionRelationKind};
 use async_trait::async_trait;

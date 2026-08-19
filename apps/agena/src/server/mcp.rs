@@ -5,12 +5,10 @@
 //! anonymous by default; the Web/TUI control plane can enable the OAuth
 //! resource server when a client requires it.
 
+use portable_atomic::AtomicI64;
 use std::{
     collections::{HashMap, HashSet},
-    sync::{
-        Arc, RwLock,
-        atomic::{AtomicI64, Ordering},
-    },
+    sync::{Arc, RwLock, atomic::Ordering},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 

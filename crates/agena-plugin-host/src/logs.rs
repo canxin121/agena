@@ -1,8 +1,9 @@
 //! Plugin log capture and storage.
 
+use portable_atomic::AtomicU64;
 use std::collections::{HashMap, VecDeque};
 use std::sync::RwLock;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::Ordering;
 
 use serde::{Deserialize, Serialize};
 

@@ -6,6 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 description = "Agena plugin SDK: write plugins as async traits, ship them as in-process / cdylib / stdio / http."
 [dependencies]
+portable-atomic = { workspace = true }
 agena-domain = { workspace = true }
 agena-failure = { workspace = true }
 agena-macros = { workspace = true }

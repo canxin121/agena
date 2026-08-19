@@ -230,27 +230,27 @@ pub async fn readyz(State(state): State<AppState>) -> impl IntoResponse {
 /// Process-wide counters surfaced via `/metrics`. These are intentionally
 /// lightweight (raw atomics + bucket histograms, no real meter provider)
 /// until a richer metrics backend is wired up.
-pub(crate) static METRIC_HTTP_REQUESTS: std::sync::atomic::AtomicU64 =
-    std::sync::atomic::AtomicU64::new(0);
-pub(crate) static METRIC_RUNTIME_RELOADS: std::sync::atomic::AtomicU64 =
-    std::sync::atomic::AtomicU64::new(0);
-pub(crate) static METRIC_HTTP_DURATION_SUM_MICROS: std::sync::atomic::AtomicU64 =
-    std::sync::atomic::AtomicU64::new(0);
+pub(crate) static METRIC_HTTP_REQUESTS: portable_atomic::AtomicU64 =
+    portable_atomic::AtomicU64::new(0);
+pub(crate) static METRIC_RUNTIME_RELOADS: portable_atomic::AtomicU64 =
+    portable_atomic::AtomicU64::new(0);
+pub(crate) static METRIC_HTTP_DURATION_SUM_MICROS: portable_atomic::AtomicU64 =
+    portable_atomic::AtomicU64::new(0);
 /// Buckets in microseconds: 1ms, 5ms, 10ms, 50ms, 100ms, 500ms, 1s, 5s, 10s, +Inf
 pub(crate) static HTTP_LATENCY_BUCKETS_US: [u64; 9] = [
     1_000, 5_000, 10_000, 50_000, 100_000, 500_000, 1_000_000, 5_000_000, 10_000_000,
 ];
-pub(crate) static METRIC_HTTP_LATENCY_BUCKETS: [std::sync::atomic::AtomicU64; 10] = [
-    std::sync::atomic::AtomicU64::new(0),
-    std::sync::atomic::AtomicU64::new(0),
-    std::sync::atomic::AtomicU64::new(0),
-    std::sync::atomic::AtomicU64::new(0),
-    std::sync::atomic::AtomicU64::new(0),
-    std::sync::atomic::AtomicU64::new(0),
-    std::sync::atomic::AtomicU64::new(0),
-    std::sync::atomic::AtomicU64::new(0),
-    std::sync::atomic::AtomicU64::new(0),
-    std::sync::atomic::AtomicU64::new(0),
+pub(crate) static METRIC_HTTP_LATENCY_BUCKETS: [portable_atomic::AtomicU64; 10] = [
+    portable_atomic::AtomicU64::new(0),
+    portable_atomic::AtomicU64::new(0),
+    portable_atomic::AtomicU64::new(0),
+    portable_atomic::AtomicU64::new(0),
+    portable_atomic::AtomicU64::new(0),
+    portable_atomic::AtomicU64::new(0),
+    portable_atomic::AtomicU64::new(0),
+    portable_atomic::AtomicU64::new(0),
+    portable_atomic::AtomicU64::new(0),
+    portable_atomic::AtomicU64::new(0),
 ];
 pub(crate) static METRIC_PROCESS_START_UNIX: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
 

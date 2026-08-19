@@ -31,6 +31,11 @@ case "$TARGET_TRIPLE" in
   mips64-unknown-linux-gnuabi64|mips64el-unknown-linux-gnuabi64)
     export RUSTFLAGS="${RUSTFLAGS:-} -C relocation-model=static"
     ;;
+  aarch64_be-unknown-linux-gnu)
+    # Rustix's linux_raw backend does not support big-endian AArch64. Force
+    # every transitive Rustix version onto its libc backend.
+    export RUSTFLAGS="${RUSTFLAGS:-} --cfg rustix_use_libc"
+    ;;
 esac
 
 PACKAGE="agena"

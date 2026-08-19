@@ -203,7 +203,7 @@ tower-http = { version = "0.7.0" }
 reqwest = { version = "0.13.4", default-features = false }
 crw-extract = { version = "0.24.0", default-features = false }
 scraper = "0.27.0"
-spider = { version = "2.52.9", default-features = false, features = ["sync", "cookies", "encoding", "headers", "time", "chrome", "chrome_headless_new"] }
+spider = { version = "2.52.9", default-features = false, features = ["sync", "cookies", "encoding", "headers", "time"] }
 sea-orm = { version = "1.1.20", default-features = false, features = ["sqlx-sqlite", "runtime-tokio-rustls", "macros", "with-json"] }
 url = "2.5.8"
 

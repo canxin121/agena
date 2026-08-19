@@ -1,5 +1,9 @@
 use std::time::Duration;
 
+#[cfg(all(
+    any(target_os = "linux", target_os = "macos", target_os = "windows"),
+    any(target_arch = "aarch64", target_arch = "x86_64")
+))]
 use spider::features::chrome_common::{WaitForDelay, WaitForIdleNetwork, WaitForSelector};
 use spider::website::Website;
 use tokio::sync::broadcast::error::RecvError;
@@ -77,18 +81,7 @@ pub async fn fetch_page_with_spider(
         .with_request_timeout(Some(options.timeout))
         .with_respect_robots_txt(options.respect_robots_txt)
         .with_user_agent(Some(options.user_agent.as_str()));
-    let browser_connection = if options.browser.enabled {
-        let local_browser = options.browser.local_browser.clone();
-        Some(
-            tokio::task::spawn_blocking(move || local_browser_endpoint(&local_browser))
-                .await
-                .map_err(|error| {
-                    CrawlError::InvalidInput(format!("browser launcher worker failed: {error}"))
-                })??,
-        )
-    } else {
-        None
-    };
+    let browser_connection = browser_connection(&options.browser).await?;
     configure_browser(
         &mut website,
         &options.browser,
@@ -155,6 +148,42 @@ fn page_from_spider_page(
     ))
 }
 
+#[cfg(all(
+    any(target_os = "linux", target_os = "macos", target_os = "windows"),
+    any(target_arch = "aarch64", target_arch = "x86_64")
+))]
+async fn browser_connection(options: &BrowserRenderOptions) -> Result<Option<String>, CrawlError> {
+    if !options.enabled {
+        return Ok(None);
+    }
+    let local_browser = options.local_browser.clone();
+    let endpoint = tokio::task::spawn_blocking(move || local_browser_endpoint(&local_browser))
+        .await
+        .map_err(|error| {
+            CrawlError::InvalidInput(format!("browser launcher worker failed: {error}"))
+        })??;
+    Ok(Some(endpoint))
+}
+
+#[cfg(not(all(
+    any(target_os = "linux", target_os = "macos", target_os = "windows"),
+    any(target_arch = "aarch64", target_arch = "x86_64")
+)))]
+async fn browser_connection(options: &BrowserRenderOptions) -> Result<Option<String>, CrawlError> {
+    if options.enabled {
+        return Err(CrawlError::InvalidInput(format!(
+            "browser rendering is unsupported on target {}-{}",
+            std::env::consts::OS,
+            std::env::consts::ARCH
+        )));
+    }
+    Ok(None)
+}
+
+#[cfg(all(
+    any(target_os = "linux", target_os = "macos", target_os = "windows"),
+    any(target_arch = "aarch64", target_arch = "x86_64")
+))]
 fn configure_browser(
     website: &mut Website,
     options: &BrowserRenderOptions,
@@ -179,4 +208,17 @@ fn configure_browser(
     if let Some(delay) = options.delay {
         website.with_wait_for_delay(Some(WaitForDelay::new(Some(delay))));
     }
+}
+
+#[cfg(not(all(
+    any(target_os = "linux", target_os = "macos", target_os = "windows"),
+    any(target_arch = "aarch64", target_arch = "x86_64")
+)))]
+fn configure_browser(
+    _website: &mut Website,
+    options: &BrowserRenderOptions,
+    connection_url: Option<&str>,
+) {
+    debug_assert!(!options.enabled);
+    debug_assert!(connection_url.is_none());
 }

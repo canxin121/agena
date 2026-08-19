@@ -1,9 +1,7 @@
-name: CI
+name: Universal target diagnostic
+run-name: Universal target diagnostic ${{ github.sha }}
 
 on:
-  # Automatic push/PR runs are disabled while GitHub Actions billing is
-  # unavailable. Keep the workflow manually runnable without deleting its
-  # checks so the automatic triggers can be restored in one small change.
   workflow_dispatch:
 
 permissions:
@@ -11,73 +9,57 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
 
 jobs:
-  fmt:
-    name: rustfmt
+  cross-tool:
+    name: Build pinned cross tool
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
         with:
           toolchain: 1.97.0
-          components: rustfmt
-      - run: cargo fmt --all --check
+      - name: Build cross
+        run: |
+          cargo install cross \
+            --git https://github.com/cross-rs/cross \
+            --rev c5c9de4a8f54ed3f40c0ca9f9cc8be60c4bc4019 \
+            --locked \
+            --root "$RUNNER_TEMP/cross"
+          "$RUNNER_TEMP/cross/bin/cross" --version
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: cross-linux-x86_64
+          path: ${{ runner.temp }}/cross/bin/cross
+          if-no-files-found: error
+          retention-days: 1
 
-  clippy:
-    name: clippy
+  representative-targets:
+    name: check ${{ matrix.target }}
+    needs: cross-tool
     runs-on: ubuntu-latest
-    env:
-      # Use portable compiler outputs instead of runner-local Cargo incremental state.
-      CARGO_INCREMENTAL: "0"
-      SCCACHE_BASEDIRS: ${{ github.workspace }}
-      SCCACHE_GHA_ENABLED: "true"
-      SCCACHE_GHA_VERSION: agena-v1
-      SCCACHE_IGNORE_SERVER_IO_ERROR: "1"
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
-        with:
-          toolchain: 1.97.0
-          components: clippy
-      - name: Set up sccache
-        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
-        with:
-          version: v0.17.0
-
-      - name: Configure Cargo sccache wrapper
-        uses: ./.github/actions/configure-sccache-wrapper
-
-      - name: Restore Cargo dependency cache
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          prefix-key: v1-rust-sccache
-          cache-bin: false
-          cache-on-failure: true
-      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
-      - name: Verify sccache compiler activity
-        uses: ./.github/actions/verify-sccache
-        with:
-          label: clippy
-          minimum-requests: "1"
-
-  test:
-    name: regression tests (${{ matrix.os }})
+    timeout-minutes: 90
     strategy:
       fail-fast: false
+      max-parallel: 16
       matrix:
-        os: [ubuntu-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
-    env:
-      CARGO_INCREMENTAL: "0"
-      SCCACHE_BASEDIRS: ${{ github.workspace }}
-      SCCACHE_GHA_ENABLED: "true"
-      SCCACHE_GHA_VERSION: agena-v1
-      SCCACHE_IGNORE_SERVER_IO_ERROR: "1"
+        target:
+          - x86_64-unknown-linux-musl
+          - aarch64-unknown-linux-gnu
+          - armv7-unknown-linux-gnueabihf
+          - i686-unknown-linux-gnu
+          - loongarch64-unknown-linux-gnu
+          - mipsel-unknown-linux-gnu
+          - powerpc64le-unknown-linux-gnu
+          - riscv64gc-unknown-linux-gnu
+          - s390x-unknown-linux-gnu
+          - aarch64-linux-android
+          - i686-linux-android
+          - x86_64-pc-windows-gnu
+          - x86_64-unknown-freebsd
+          - x86_64-unknown-netbsd
+          - x86_64-unknown-illumos
+          - sparcv9-sun-solaris
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -85,145 +67,20 @@ jobs:
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
         with:
           toolchain: 1.97.0
-      - name: Set up sccache
-        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          version: v0.17.0
-
-      - name: Configure Cargo sccache wrapper
-        uses: ./.github/actions/configure-sccache-wrapper
-
-      - name: Restore Cargo dependency cache
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          prefix-key: v1-rust-sccache
-          cache-bin: false
-          cache-on-failure: true
-      - name: failure semantics architecture gate
-        run: python3 scripts/refactors/check-refactor-invariants.py --manifest scripts/refactors/failure-semantics-invariants.json --root .
-      - run: cargo check --workspace --locked
-      - name: capability identity snapshot drift
-        run: cargo test -p agena-bundled-plugins capability_identity_snapshot_matches_committed_json --locked
-      - run: cargo test --workspace --locked
-      - run: cargo test -p agena-e2e --locked
-      - run: cargo test -p agena --locked git_
-      - name: build examples
+          name: cross-linux-x86_64
+          path: ${{ runner.temp }}/cross/bin
+      - name: Install cross tool
         run: |
-          cargo build --manifest-path examples/echo_plugin/Cargo.toml --locked
-          cargo build --manifest-path examples/echo_plugin_stdio/Cargo.toml --locked
-      - name: Verify sccache compiler activity
-        uses: ./.github/actions/verify-sccache
-        with:
-          label: regression-tests-${{ matrix.os }}
-          minimum-requests: "1"
-
-  deny:
-    name: cargo-deny
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
-        with:
-          command: check bans licenses sources advisories
-
-  audit:
-    name: cargo-audit
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2.0.0
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          # rsa is present only behind sqlx-mysql, which Agena does not enable.
-          ignore: "RUSTSEC-2023-0071"
-
-  lockfile:
-    name: lockfile freshness
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
-        with:
-          toolchain: 1.97.0
-      - run: cargo update --workspace --locked
-
-  unused-dependencies:
-    name: unused Cargo dependencies
-    runs-on: ubuntu-latest
-    env:
-      CARGO_INCREMENTAL: "0"
-      SCCACHE_BASEDIRS: ${{ github.workspace }}
-      SCCACHE_GHA_ENABLED: "true"
-      SCCACHE_GHA_VERSION: agena-v1
-      SCCACHE_IGNORE_SERVER_IO_ERROR: "1"
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
-        with:
-          toolchain: 1.97.0
-      - name: Set up sccache
-        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
-        with:
-          version: v0.17.0
-
-      - name: Configure Cargo sccache wrapper
-        uses: ./.github/actions/configure-sccache-wrapper
-
-      - name: Restore Cargo tool cache
+          chmod +x "$RUNNER_TEMP/cross/bin/cross"
+          echo "$RUNNER_TEMP/cross/bin" >> "$GITHUB_PATH"
+      - name: Restore Cargo source cache
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          prefix-key: v1-rust-sccache
-          key: cargo-machete-0.9.2
-          cache-all-crates: true
+          prefix-key: universal-target-check
+          key: ${{ matrix.target }}
+          cache-targets: false
           cache-on-failure: true
-      - run: cargo install cargo-machete --version 0.9.2 --locked
-      - run: cargo machete
-
-  feature-checks:
-    name: feature checks
-    runs-on: ubuntu-latest
-    env:
-      CARGO_INCREMENTAL: "0"
-      SCCACHE_BASEDIRS: ${{ github.workspace }}
-      SCCACHE_GHA_ENABLED: "true"
-      SCCACHE_GHA_VERSION: agena-v1
-      SCCACHE_IGNORE_SERVER_IO_ERROR: "1"
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
-        with:
-          toolchain: 1.97.0
-      - name: Set up sccache
-        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
-        with:
-          version: v0.17.0
-
-      - name: Configure Cargo sccache wrapper
-        uses: ./.github/actions/configure-sccache-wrapper
-
-      - name: Restore Cargo dependency cache
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          prefix-key: v1-rust-sccache
-          cache-bin: false
-          cache-on-failure: true
-      - run: cargo check -p agena-marketplace-server --features server --locked
-      - run: cargo check -p agena-plugin-host --all-features --locked
-      - run: cargo check -p agena-runtime --all-features --locked
-      - run: cargo check -p agena-api-server --all-features --locked
-      - run: cargo check -p agena-cli --all-features --locked
-      - name: Verify sccache compiler activity
-        uses: ./.github/actions/verify-sccache
-        with:
-          label: feature-checks
-          minimum-requests: "1"
+      - name: Check target
+        run: bash scripts/ci/cross-check-target.sh '${{ matrix.target }}'

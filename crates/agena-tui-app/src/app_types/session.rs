@@ -48,7 +48,7 @@ pub(crate) struct CommandPaletteOverlay {
 #[derive(Debug, Clone)]
 pub(crate) enum CommandPaletteCommand {
     BuiltIn(&'static CommandSpec),
-    Plugin(Box<agena_plugin_host::PluginCommandCatalogItem>),
+    Plugin(Box<agena_plugin_host::PluginOperationCatalogItem>),
 }
 
 /// App-owned Skill catalog page. The presentation remains a generic search

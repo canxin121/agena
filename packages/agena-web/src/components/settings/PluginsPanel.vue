@@ -1,14 +1,22 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { RiCommandLine, RiExternalLinkLine, RiPlayLine, RiRefreshLine } from '@remixicon/vue'
+import { RiCommandLine, RiPlayLine, RiRefreshLine } from '@remixicon/vue'
 
 import MarkdownRenderer from '@/components/markdown/MarkdownRenderer.vue'
+import PluginContractEditor from '@/components/settings/PluginContractEditor.vue'
 import Button from '@/components/ui/Button.vue'
 import IconButton from '@/components/ui/IconButton.vue'
-import Input from '@/components/ui/Input.vue'
-import OptionPicker from '@/components/ui/OptionPicker.vue'
 import { apiJson } from '@/lib/api'
+import {
+  clonePluginJson,
+  type PluginHostEffect,
+  type PluginOperationCatalogItem,
+  type PluginOperationResult,
+  type PluginSettingsContract,
+  type PluginSettingsState,
+  type PluginSettingsUpdateResponse,
+} from '@/lib/pluginOperations'
 import { useChatStore } from '@/stores/chat'
 import { useToastsStore } from '@/stores/toasts'
 import type { JsonValue } from '@/types/json'
@@ -28,86 +36,102 @@ type PluginStatus = {
   } | null
 }
 
-type PluginUiAction = {
-  kind: 'none' | 'invoke_tool' | 'open_plugin_workbench' | 'open_url' | 'submit_prompt' | 'invoke_command' | string
-  tool?: string
-  command?: string
-  input?: JsonValue
-  tab?: string | null
-  url?: string
-  prompt?: string
-  submit_output_as_prompt?: boolean
+type PluginTool = {
+  name?: string
+  summary?: string
+  description?: string
+  tags?: string[]
+  docs?: { summary?: string; help?: string }
 }
 
-type PluginControlOption = { label: string; value: string; description?: string }
+type PluginManifest = {
+  namespace?: string
+  name?: string
+  version?: string
+  summary?: string | null
+  help?: string | null
+  authors?: string[]
+  transports?: string[]
+  tools?: PluginTool[]
+  operations?: Array<{ id?: string; title?: string }>
+  skills?: Array<{ name?: string; description?: string }>
+  settings?: PluginSettingsContract | null
+}
 
-type PluginControl = {
-  plugin_id: string
+type PluginActivationBlock = {
+  code: string
+  message: string
+  dependencies?: string[]
+}
+
+type PluginActivation = {
+  requires?: string[]
+  after?: string[]
+  blocked?: PluginActivationBlock | null
+}
+
+type PluginServiceMethod = {
   id: string
-  title: string
-  description?: string
-  location: string
+  input: PluginSettingsContract
+  output: PluginSettingsContract
+}
+
+type PluginServiceExport = {
+  id: string
+  api_version: number
+  methods?: PluginServiceMethod[]
+}
+
+type PluginServiceImport = {
+  id: string
+  api_version: number
+  optional: boolean
+  provider?: string | null
+}
+
+type PluginServiceImportInspect = PluginServiceImport & {
+  resolved_provider?: string | null
+  methods?: PluginServiceMethod[]
+  state: string
+}
+
+type PluginServiceInspect = {
+  exports?: PluginServiceExport[]
+  imports?: PluginServiceImportInspect[]
+}
+
+type PluginEffectDescriptor = {
+  id: number
   kind: string
-  options?: PluginControlOption[]
-  value?: JsonValue
-  action: PluginUiAction
+  label: string
+  registered_at_ms: number
+  state: 'active' | 'disposing' | 'disposed' | 'failed' | string
+  error?: string | null
 }
 
-type PluginCommand = {
+type PluginEffectScopeInspect = {
   plugin_id: string
-  id: string
-  title: string
-  description?: string
-  category: string
-  slash?: string | null
-  aliases?: string[]
-  usage?: string | null
-  location: string
-  input_schema?: JsonValue
-  handler?: string | null
-  action: PluginUiAction
+  generation: number
+  lifecycle: 'active' | 'disposing' | 'disposed' | 'failed' | string
+  accepting: boolean
+  active_leases: number
+  cancelled: boolean
+  effects?: PluginEffectDescriptor[]
+  errors?: string[]
 }
-
-type PluginView = {
-  plugin_id: string
-  id: string
-  title: string
-  description?: string
-  location: string
-  kind: string
-  content?: string | null
-  url?: string | null
-  controls?: Array<Omit<PluginControl, 'plugin_id'>>
-}
-
-type PluginUiCatalogResponse = {
-  catalog?: {
-    studio?: {
-      commands?: PluginCommand[]
-      controls?: PluginControl[]
-      views?: PluginView[]
-    }
-  }
-  tool_registry_generation?: number
-}
-
-type PluginStatusListResponse = { items?: PluginStatus[] }
 
 type PluginInspectResponse = {
   plugin?: {
     status?: PluginStatus
-    manifest?: {
-      namespace?: string
-      name?: string
-      version?: string
-      summary?: string | null
-      help?: string | null
-      authors?: string[]
-      transports?: string[]
-      tools?: Array<{ name?: string; summary?: string; description?: string }>
-      commands?: Array<{ id?: string; title?: string }>
-      skills?: Array<{ name?: string; description?: string }>
-      config_schema?: JsonValue
+    manifest?: PluginManifest | null
+    activation?: PluginActivation | null
+    services?: PluginServiceInspect | null
+    effects?: PluginEffectScopeInspect | null
+    configured_plugin?: {
+      enabled?: boolean
+      package?: JsonValue
+      config?: JsonValue
+      activation?: { requires?: string[]; after?: string[] }
     } | null
     authority?: {
       trust_level?: string
@@ -117,6 +141,90 @@ type PluginInspectResponse = {
     } | null
   }
 }
+
+type PluginReloadDecision = {
+  plugin_id: string
+  action: 'add' | 'reuse' | 'restart' | 'remove' | 'disabled' | 'blocked' | string
+  reasons?: string[]
+  triggered_by?: string[]
+}
+
+type PluginArchitectureNode = {
+  plugin_id: string
+  enabled: boolean
+  status: PluginStatus
+  activation_epoch?: string | null
+  blocked?: PluginActivationBlock | null
+  service_exports?: PluginServiceExport[]
+  service_imports?: PluginServiceImport[]
+}
+
+type PluginDependencyEdge = {
+  consumer_id: string
+  provider_id: string
+  kind: 'explicit' | 'required_service' | 'optional_service' | string
+  service_id?: string | null
+  api_version?: number | null
+}
+
+type PluginArchitectureEffect = PluginEffectDescriptor & {
+  plugin_id: string
+}
+
+type PluginPipelineHandler = {
+  owner: string
+  id: string
+  priority: number
+  registration: number
+}
+
+type PluginArchitecturePipeline = {
+  definition: {
+    id: string
+    mode: string
+    durable: boolean
+    scoped: boolean
+  }
+  failure_policy?: 'abort' | 'continue' | null
+  handlers?: PluginPipelineHandler[]
+}
+
+type PluginScopedRegistration = {
+  key: string
+  owner: string
+  generation: number
+  layer: { kind: 'global' } | { kind: 'scope'; scope: string }
+}
+
+type PluginProfileChange = {
+  profile: string
+  plugin_id: string
+  action: 'replace' | 'patch' | 'disable' | 'remove' | string
+  paths?: string[]
+}
+
+type PluginArchitectureCatalog = {
+  profiles?: {
+    applied_profiles?: string[]
+    changes?: PluginProfileChange[]
+  }
+  reload?: { decisions?: PluginReloadDecision[] }
+  plugins?: PluginArchitectureNode[]
+  dependencies?: PluginDependencyEdge[]
+  effects?: PluginArchitectureEffect[]
+  pipelines?: PluginArchitecturePipeline[]
+  tool_registrations?: PluginScopedRegistration[]
+  operation_registrations?: PluginScopedRegistration[]
+}
+
+type PluginSurfaceCatalogResponse = {
+  catalog?: {
+    operations?: PluginOperationCatalogItem[]
+  }
+  tool_registry_generation?: number
+}
+
+type PluginStatusListResponse = { items?: PluginStatus[] }
 
 type PluginLog = {
   seq: number
@@ -128,365 +236,277 @@ type PluginLog = {
 }
 
 type PluginLogsResponse = { plugin_id: string; logs?: PluginLog[] }
-type PanelTab = 'overview' | 'views' | 'controls' | 'commands' | 'logs'
+type PanelTab = 'overview' | 'settings' | 'operations' | 'tools' | 'logs' | 'diagnostics'
 
-const router = useRouter()
+const PANEL_TABS: Array<{ id: PanelTab; label: string }> = [
+  { id: 'overview', label: 'Overview' },
+  { id: 'settings', label: 'Settings' },
+  { id: 'operations', label: 'Operations' },
+  { id: 'tools', label: 'Tools' },
+  { id: 'logs', label: 'Logs' },
+  { id: 'diagnostics', label: 'Diagnostics' },
+]
+
+const PANEL_TAB_IDS = new Set<PanelTab>(PANEL_TABS.map((tab) => tab.id))
+
 const route = useRoute()
+const router = useRouter()
 const chat = useChatStore()
 const toasts = useToastsStore()
 
 const loading = ref(false)
 const error = ref('')
 const statuses = ref<PluginStatus[]>([])
-const catalog = ref<PluginUiCatalogResponse | null>(null)
+const catalog = ref<PluginSurfaceCatalogResponse | null>(null)
+const architecture = ref<PluginArchitectureCatalog | null>(null)
 const selectedPluginId = ref('')
 const selectedInspect = ref<PluginInspectResponse | null>(null)
 const logs = ref<PluginLog[]>([])
 const detailLoading = ref(false)
 const detailError = ref('')
 const activeTab = ref<PanelTab>('overview')
-const busyActionKey = ref('')
-const controlValues = ref<Record<string, JsonValue>>({})
-const commandInputs = ref<Record<string, string>>({})
-const lastResult = ref<JsonValue>(null)
+const settingsState = ref<PluginSettingsState | null>(null)
+const settingsDraft = ref<JsonValue>({})
+const settingsSaving = ref(false)
+const operationDrafts = ref<Record<string, JsonValue>>({})
+const busyOperationKey = ref('')
+const lastOperationResult = ref<PluginOperationResult | null>(null)
 
-const panelTabs: Array<{ id: PanelTab; label: string }> = [
-  { id: 'overview', label: 'Overview' },
-  { id: 'views', label: 'Views' },
-  { id: 'controls', label: 'Controls' },
-  { id: 'commands', label: 'Commands' },
-  { id: 'logs', label: 'Logs' },
-]
-
-function panelTabFromRequest(value: unknown): PanelTab | null {
-  const requested = String(value || '').trim()
-  const tabMap: Record<string, PanelTab> = {
-    config: 'overview',
-    tools: 'controls',
-    commands: 'commands',
-    capabilities: 'overview',
-    logs: 'logs',
-    diagnostics: 'logs',
-    overview: 'overview',
-    views: 'views',
-    controls: 'controls',
-  }
-  return tabMap[requested] || null
-}
-
-const sortedStatuses = computed(() => [...statuses.value].sort((a, b) => a.plugin_id.localeCompare(b.plugin_id)))
-
-const selectedStatus = computed(
-  () => statuses.value.find((status) => status.plugin_id === selectedPluginId.value) || null,
+const sortedStatuses = computed(() => [...statuses.value].sort((left, right) => left.plugin_id.localeCompare(right.plugin_id)))
+const selectedStatus = computed(() => statuses.value.find((status) => status.plugin_id === selectedPluginId.value) || null)
+const selectedPlugin = computed(() => selectedInspect.value?.plugin || null)
+const selectedManifest = computed(() => selectedPlugin.value?.manifest || null)
+const selectedActivation = computed(() => selectedPlugin.value?.activation || null)
+const selectedAuthority = computed(() => selectedPlugin.value?.authority || null)
+const selectedArchitectureNode = computed(
+  () => architecture.value?.plugins?.find((node) => node.plugin_id === selectedPluginId.value) || null,
 )
-
-const selectedManifest = computed(() => selectedInspect.value?.plugin?.manifest || null)
-const selectedAuthority = computed(() => selectedInspect.value?.plugin?.authority || null)
-
-const studioCatalog = computed(() => catalog.value?.catalog?.studio || {})
-const selectedViews = computed(() =>
-  (Array.isArray(studioCatalog.value.views) ? studioCatalog.value.views : []).filter(
-    (item) => item.plugin_id === selectedPluginId.value,
-  ),
+const selectedReloadDecision = computed(
+  () => architecture.value?.reload?.decisions?.find((decision) => decision.plugin_id === selectedPluginId.value) || null,
 )
-const topLevelControls = computed(() =>
-  (Array.isArray(studioCatalog.value.controls) ? studioCatalog.value.controls : []).filter(
-    (item) => item.plugin_id === selectedPluginId.value,
-  ),
+const appliedProfiles = computed(() => architecture.value?.profiles?.applied_profiles || [])
+const selectedProfileChanges = computed(() =>
+  (architecture.value?.profiles?.changes || []).filter((change) => change.plugin_id === selectedPluginId.value),
 )
-const selectedCommands = computed(() =>
-  (Array.isArray(studioCatalog.value.commands) ? studioCatalog.value.commands : []).filter(
-    (item) => item.plugin_id === selectedPluginId.value,
-  ),
+const selectedBlocked = computed(
+  () => selectedActivation.value?.blocked || selectedArchitectureNode.value?.blocked || null,
 )
-const nestedControls = computed<PluginControl[]>(() =>
-  selectedViews.value.flatMap((view) =>
-    (view.controls || []).map((control) => ({ ...control, plugin_id: view.plugin_id })),
-  ),
+const selectedServiceExports = computed(() =>
+  Array.isArray(selectedPlugin.value?.services?.exports)
+    ? selectedPlugin.value!.services!.exports!
+    : Array.isArray(selectedArchitectureNode.value?.service_exports)
+      ? selectedArchitectureNode.value!.service_exports!
+      : [],
 )
-const selectedControls = computed(() => [...topLevelControls.value, ...nestedControls.value])
-
-function preferredPluginId(): string {
-  const contributedIds = new Set(
-    [
-      ...(Array.isArray(studioCatalog.value.commands) ? studioCatalog.value.commands : []),
-      ...(Array.isArray(studioCatalog.value.controls) ? studioCatalog.value.controls : []),
-      ...(Array.isArray(studioCatalog.value.views) ? studioCatalog.value.views : []),
-    ]
-      .map((item) => String(item.plugin_id || '').trim())
-      .filter(Boolean),
-  )
-  return (
-    sortedStatuses.value.find((status) => contributedIds.has(status.plugin_id))?.plugin_id ||
-    sortedStatuses.value[0]?.plugin_id ||
-    ''
-  )
-}
-
+const selectedServiceImports = computed(() =>
+  Array.isArray(selectedPlugin.value?.services?.imports) ? selectedPlugin.value!.services!.imports! : [],
+)
+const selectedEffects = computed<PluginEffectDescriptor[]>(() => {
+  if (Array.isArray(selectedPlugin.value?.effects?.effects)) return selectedPlugin.value!.effects!.effects!
+  return (architecture.value?.effects || []).filter((effect) => effect.plugin_id === selectedPluginId.value)
+})
+const selectedEffectLifecycle = computed(() => selectedPlugin.value?.effects?.lifecycle || 'not_started')
+const selectedPipelineHandlers = computed(() =>
+  (architecture.value?.pipelines || [])
+    .map((pipeline) => ({
+      ...pipeline,
+      handlers: (pipeline.handlers || []).filter((handler) => handler.owner === selectedPluginId.value),
+    }))
+    .filter((pipeline) => pipeline.handlers.length > 0),
+)
+const selectedOperationRegistrations = computed(() =>
+  (architecture.value?.operation_registrations || []).filter((entry) => entry.owner === selectedPluginId.value),
+)
+const selectedToolRegistrations = computed(() =>
+  (architecture.value?.tool_registrations || []).filter((entry) => entry.owner === selectedPluginId.value),
+)
+const selectedIncomingDependencies = computed(() =>
+  (architecture.value?.dependencies || []).filter((edge) => edge.consumer_id === selectedPluginId.value),
+)
+const selectedOutgoingDependencies = computed(() =>
+  (architecture.value?.dependencies || []).filter((edge) => edge.provider_id === selectedPluginId.value),
+)
+const allOperations = computed(() => (Array.isArray(catalog.value?.catalog?.operations) ? catalog.value!.catalog!.operations! : []))
+const selectedOperations = computed(() => allOperations.value.filter((operation) => operation.plugin_id === selectedPluginId.value))
+const selectedTools = computed(() => (Array.isArray(selectedManifest.value?.tools) ? selectedManifest.value!.tools! : []))
+const settingsDiagnostics = computed(() => (Array.isArray(settingsState.value?.diagnostics) ? settingsState.value!.diagnostics! : []))
+const settingsDirty = computed(() => {
+  if (!settingsState.value) return false
+  return JSON.stringify(settingsDraft.value) !== JSON.stringify(settingsState.value.effective)
+})
 const activeSessionId = computed(() => {
   const id = Number(chat.selectedSessionId)
   return Number.isSafeInteger(id) && id > 0 ? id : null
 })
 
-const contributionCount = computed(
-  () => selectedViews.value.length + selectedControls.value.length + selectedCommands.value.length,
+watch(
+  selectedOperations,
+  (operations) => {
+    const next: Record<string, JsonValue> = {}
+    for (const operation of operations) {
+      const key = operationKey(operation)
+      next[key] = Object.prototype.hasOwnProperty.call(operationDrafts.value, key)
+        ? operationDrafts.value[key]
+        : clonePluginJson(operation.default_input)
+    }
+    operationDrafts.value = next
+  },
+  { immediate: true },
 )
 
+function panelTabFromRequest(value: unknown): PanelTab | null {
+  const tab = String(value || '').trim() as PanelTab
+  return PANEL_TAB_IDS.has(tab) ? tab : null
+}
+
 function statusFailure(status: PluginStatus | null): string {
-  return String(
-    status?.last_failure?.user?.fallback || status?.last_failure?.rendered || status?.last_failure?.message || '',
-  ).trim()
+  return String(status?.last_failure?.user?.fallback || status?.last_failure?.rendered || status?.last_failure?.message || '').trim()
 }
 
 function statusTone(state: string): string {
   if (state === 'running') return 'text-success'
   if (state === 'restarting') return 'text-warning'
+  if (state === 'stopped') return 'text-muted-foreground'
   return 'text-destructive'
 }
 
-function controlKey(control: PluginControl): string {
-  return `${control.plugin_id}:${control.id}`
+function preferredPluginId(): string {
+  const contributedIds = new Set(allOperations.value.map((operation) => operation.plugin_id))
+  return sortedStatuses.value.find((status) => contributedIds.has(status.plugin_id))?.plugin_id || sortedStatuses.value[0]?.plugin_id || ''
 }
 
-function controlValue(control: PluginControl): JsonValue {
-  const key = controlKey(control)
-  return Object.prototype.hasOwnProperty.call(controlValues.value, key)
-    ? controlValues.value[key]
-    : (control.value ?? null)
+function operationKey(operation: PluginOperationCatalogItem): string {
+  return `${operation.plugin_id}:${operation.id}`
 }
 
-function setControlValue(control: PluginControl, value: JsonValue) {
-  controlValues.value = { ...controlValues.value, [controlKey(control)]: value }
+function operationValue(operation: PluginOperationCatalogItem): JsonValue {
+  const current = operationDrafts.value[operationKey(operation)]
+  return current === undefined ? clonePluginJson(operation.default_input) : current
 }
 
-function stringControlValue(control: PluginControl): string {
-  const value = controlValue(control)
-  if (typeof value === 'string' || typeof value === 'number') return String(value)
-  return ''
+function setOperationValue(operation: PluginOperationCatalogItem, value: JsonValue) {
+  operationDrafts.value = { ...operationDrafts.value, [operationKey(operation)]: value }
 }
 
-function boolControlValue(control: PluginControl): boolean {
-  return controlValue(control) === true
+function resultPayload(value: JsonValue | undefined): string {
+  if (value === undefined || value === null) return ''
+  return JSON.stringify(value, null, 2)
 }
 
-function commandKey(command: PluginCommand): string {
-  return `${command.plugin_id}:${command.id}`
+function showOperationFeedback(result: PluginOperationResult) {
+  const message = [result.title, result.summary].filter((value) => String(value || '').trim()).join(': ')
+  if (result.status === 'succeeded') toasts.push('success', message || 'Plugin operation completed')
+  else if (result.status === 'failed') toasts.push('error', result.detail?.trim() || message || 'Plugin operation failed')
+  else toasts.push('info', result.detail?.trim() || message || `Plugin operation ${result.status}`)
 }
 
-function hasCommandInput(command: PluginCommand): boolean {
-  return command.input_schema !== undefined && command.input_schema !== null
-}
-
-function parseCommandInput(command: PluginCommand): JsonValue {
-  const raw = String(commandInputs.value[commandKey(command)] || '').trim()
-  if (!raw) return {}
-  const parsed = JSON.parse(raw) as JsonValue
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    throw new Error('Command input must be a JSON object.')
-  }
-  return parsed
-}
-
-function resultText(value: JsonValue): string {
-  if (value === null || value === undefined) return ''
-  try {
-    return JSON.stringify(value, null, 2)
-  } catch {
-    return String(value)
-  }
-}
-
-function asRecord(value: JsonValue): Record<string, JsonValue> | null {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
-  return value as Record<string, JsonValue>
-}
-
-function openExternalUrl(raw: string) {
-  const url = new URL(raw, window.location.href)
-  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-    throw new Error('Plugin URLs must use HTTP or HTTPS.')
-  }
-  window.open(url.toString(), '_blank', 'noopener,noreferrer')
-}
-
-async function submitPrompt(prompt: string) {
-  const sessionId = String(chat.selectedSessionId || '').trim()
-  if (!sessionId) throw new Error('Open a session before submitting a plugin prompt.')
-  const previous = chat.getComposerDraft(sessionId).trim()
-  chat.setComposerDraft(sessionId, previous ? `${previous}\n${prompt}` : prompt)
-  await router.push('/chat')
-}
-
-async function handleClientAction(action: PluginUiAction | null | undefined): Promise<boolean> {
-  if (!action || action.kind === 'none') return false
-  if (action.kind === 'open_url') {
-    openExternalUrl(String(action.url || ''))
-    return true
-  }
-  if (action.kind === 'submit_prompt') {
-    await submitPrompt(String(action.prompt || ''))
-    return true
-  }
-  if (action.kind === 'open_plugin_workbench') {
-    const tab = panelTabFromRequest(action.tab)
-    if (tab) activeTab.value = tab
-    return true
-  }
-  return false
-}
-
-async function invokePluginTool(pluginId: string, tool: string, input: JsonValue): Promise<JsonValue> {
-  if (!activeSessionId.value) throw new Error('Open a session before running plugin tools.')
-  return await apiJson<JsonValue>('/api/v1/plugins/ui/invoke-tool', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      plugin_id: pluginId,
-      tool,
-      input: asRecord(input) || {},
-      session_id: activeSessionId.value,
-    }),
-  })
-}
-
-async function handlePluginToolResult(value: JsonValue, submitOutputAsPrompt = false) {
-  const result = asRecord(value)
-  if (!result) return
-  const outputText = typeof result.output_text === 'string' ? result.output_text.trim() : ''
-  if (submitOutputAsPrompt && outputText) {
-    await submitPrompt(outputText)
+async function applyOperationEffect(effect: PluginHostEffect) {
+  if (effect.kind === 'navigate') {
+    if (!effect.path.startsWith('/')) throw new Error('Plugin navigation must use an application-relative path.')
+    await router.push(effect.path)
     return
   }
-  if (outputText) {
-    toasts.push('success', outputText)
-  }
-}
-
-async function handleCommandOutput(pluginId: string, value: JsonValue, depth = 0) {
-  if (depth > 5) throw new Error('Plugin command output recursion limit reached.')
-  const output = asRecord(value)
-  if (!output) return
-  const kind = String(output.kind || '')
-  if (kind === 'message' && typeof output.text === 'string') {
-    toasts.push('success', output.text)
+  if (effect.kind === 'open_url') {
+    const url = new URL(effect.url, window.location.href)
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error('Plugin URLs must use HTTP or HTTPS.')
+    window.open(url.toString(), '_blank', 'noopener,noreferrer')
     return
   }
-  if (await handleClientAction(output as PluginUiAction)) return
-  if (kind === 'invoke_tool') {
-    const tool = String(output.tool || '').trim()
-    if (!tool) throw new Error('Plugin command did not provide a tool name.')
-    const response = await invokePluginTool(pluginId, tool, output.input ?? {})
-    lastResult.value = response
-    await handlePluginToolResult(response, output.submit_output_as_prompt === true)
-    return
-  }
-  if (kind === 'invoke_command') {
-    const command = String(output.command || '').trim()
-    if (!command) throw new Error('Plugin command did not provide a command id.')
-    const response = await postPluginAction(
-      `/api/v1/plugins/${encodeURIComponent(pluginId)}/commands/${encodeURIComponent(command)}`,
-      output.input ?? {},
-    )
-    lastResult.value = response
-    const record = asRecord(response)
-    await handleCommandOutput(pluginId, record?.result, depth + 1)
-  }
-}
-
-async function handleActionResponse(pluginId: string, response: JsonValue, fallbackAction: PluginUiAction) {
-  const record = asRecord(response)
-  if (!record) return
-  const action = (asRecord(record.action) || fallbackAction) as PluginUiAction
-  if (action.kind === 'invoke_command') {
-    await handleCommandOutput(pluginId, record.result)
-  } else if (action.kind === 'invoke_tool') {
-    await handlePluginToolResult(record.result, action.submit_output_as_prompt === true)
-  }
-}
-
-async function postPluginAction(path: string, input: JsonValue): Promise<JsonValue> {
-  if (!activeSessionId.value) throw new Error('Open a session before running plugin actions.')
-  return await apiJson<JsonValue>(path, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ input, session_id: activeSessionId.value }),
-  })
-}
-
-async function runControl(control: PluginControl, input: JsonValue = controlValue(control)) {
-  const key = controlKey(control)
-  if (busyActionKey.value) return
-  busyActionKey.value = key
-  lastResult.value = null
-  try {
-    if (await handleClientAction(control.action)) return
-    const response = await postPluginAction(
-      `/api/v1/plugins/${encodeURIComponent(control.plugin_id)}/ui/actions/${encodeURIComponent(control.id)}`,
-      { value: input },
-    )
-    lastResult.value = response
-    await handleActionResponse(control.plugin_id, response, control.action)
-    toasts.push('success', `${control.title} completed`)
-  } catch (err) {
-    toasts.push('error', err instanceof Error ? err.message : String(err))
-  } finally {
-    busyActionKey.value = ''
-  }
-}
-
-async function updateToggle(control: PluginControl, event: Event) {
-  const checked = (event.target as HTMLInputElement | null)?.checked === true
-  setControlValue(control, checked)
-  await runControl(control, checked)
-}
-
-async function updateSelect(control: PluginControl, value: string) {
-  setControlValue(control, value)
-  await runControl(control, value)
-}
-
-async function runCommand(command: PluginCommand) {
-  const key = commandKey(command)
-  if (busyActionKey.value) return
-  busyActionKey.value = key
-  lastResult.value = null
-  try {
-    if (await handleClientAction(command.action)) return
-    const input = parseCommandInput(command)
-    const endpoint = command.handler
-      ? `/api/v1/plugins/${encodeURIComponent(command.plugin_id)}/commands/${encodeURIComponent(command.id)}`
-      : `/api/v1/plugins/${encodeURIComponent(command.plugin_id)}/ui/actions/${encodeURIComponent(command.id)}`
-    const response = await postPluginAction(endpoint, input)
-    lastResult.value = response
-    if (command.handler) {
-      const record = asRecord(response)
-      await handleCommandOutput(command.plugin_id, record?.result)
-    } else {
-      await handleActionResponse(command.plugin_id, response, command.action)
+  if (effect.kind === 'insert_prompt') {
+    const sessionId = String(chat.selectedSessionId || '').trim()
+    if (!sessionId) {
+      toasts.push('info', 'Open a chat session before inserting this prompt.')
+      return
     }
-    toasts.push('success', `${command.title} completed`)
+    const previous = chat.getComposerDraft(sessionId).trim()
+    chat.setComposerDraft(sessionId, previous ? `${previous}\n${effect.prompt}` : effect.prompt)
+    await router.push('/chat')
+    return
+  }
+  if (effect.kind === 'refresh_plugin_surface') await loadSelectedPlugin()
+}
+
+async function runOperation(operation: PluginOperationCatalogItem) {
+  const key = operationKey(operation)
+  if (busyOperationKey.value) return
+  busyOperationKey.value = key
+  lastOperationResult.value = null
+  try {
+    const response = await apiJson<{ result: PluginOperationResult }>(
+      `/api/v1/plugins/${encodeURIComponent(operation.plugin_id)}/operations/${encodeURIComponent(operation.id)}/invoke`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          input: operationValue(operation),
+          session_id: activeSessionId.value,
+          slash: operation.slash || null,
+          raw: '',
+        }),
+      },
+    )
+    if (!response?.result) throw new Error('The server omitted the plugin operation result.')
+    lastOperationResult.value = response.result
+    showOperationFeedback(response.result)
+    for (const effect of response.result.effects || []) await applyOperationEffect(effect)
   } catch (err) {
     toasts.push('error', err instanceof Error ? err.message : String(err))
   } finally {
-    busyActionKey.value = ''
+    busyOperationKey.value = ''
   }
+}
+
+async function saveSettings() {
+  if (!settingsState.value || settingsSaving.value) return
+  settingsSaving.value = true
+  try {
+    const response = await apiJson<PluginSettingsUpdateResponse>(
+      `/api/v1/plugins/${encodeURIComponent(settingsState.value.plugin_id)}/settings`,
+      {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ value: settingsDraft.value }),
+      },
+    )
+    settingsState.value = response.settings
+    settingsDraft.value = clonePluginJson(response.settings.effective)
+    toasts.push('success', response.reload_required ? 'Plugin settings saved and Runtime reloaded' : 'Plugin settings saved')
+    await refresh()
+  } catch (err) {
+    toasts.push('error', err instanceof Error ? err.message : String(err))
+  } finally {
+    settingsSaving.value = false
+  }
+}
+
+function resetSettings() {
+  if (settingsState.value) settingsDraft.value = clonePluginJson(settingsState.value.defaults)
 }
 
 async function loadSelectedPlugin() {
   const id = selectedPluginId.value
   selectedInspect.value = null
   logs.value = []
+  settingsState.value = null
+  settingsDraft.value = {}
   detailError.value = ''
-  lastResult.value = null
+  lastOperationResult.value = null
   if (!id) return
   detailLoading.value = true
   try {
     const [inspect, logResponse] = await Promise.all([
       apiJson<PluginInspectResponse>(`/api/v1/plugins/${encodeURIComponent(id)}`),
-      apiJson<PluginLogsResponse>(`/api/v1/plugins/${encodeURIComponent(id)}/logs?limit=100`),
+      apiJson<PluginLogsResponse>(`/api/v1/plugins/${encodeURIComponent(id)}/logs?limit=200`),
     ])
     selectedInspect.value = inspect
     logs.value = Array.isArray(logResponse?.logs) ? logResponse.logs : []
+    if (inspect.plugin?.manifest?.settings) {
+      const loadedSettings = await apiJson<PluginSettingsState>(
+        `/api/v1/plugins/${encodeURIComponent(id)}/settings`,
+      )
+      settingsState.value = loadedSettings
+      settingsDraft.value = clonePluginJson(loadedSettings.effective)
+    }
   } catch (err) {
     detailError.value = err instanceof Error ? err.message : String(err)
   } finally {
@@ -498,32 +518,38 @@ async function refresh() {
   loading.value = true
   error.value = ''
   try {
-    const [statusData, catalogData] = await Promise.all([
+    const [statusData, catalogData, architectureData] = await Promise.all([
       apiJson<PluginStatusListResponse | PluginStatus[]>('/api/v1/plugins'),
-      apiJson<PluginUiCatalogResponse>('/api/v1/plugins/ui'),
+      apiJson<PluginSurfaceCatalogResponse>('/api/v1/plugins/surface'),
+      apiJson<PluginArchitectureCatalog>('/api/v1/plugins/architecture'),
     ])
     statuses.value = Array.isArray(statusData) ? statusData : Array.isArray(statusData?.items) ? statusData.items : []
     catalog.value = catalogData && typeof catalogData === 'object' ? catalogData : null
+    architecture.value = architectureData && typeof architectureData === 'object' ? architectureData : null
     const ids = new Set(statuses.value.map((status) => status.plugin_id))
-    const requestedPlugin = String(route.query.plugin || '').trim()
-    const targetPluginId =
-      requestedPlugin && ids.has(requestedPlugin)
-        ? requestedPlugin
-        : selectedPluginId.value && ids.has(selectedPluginId.value)
-          ? selectedPluginId.value
-          : preferredPluginId()
-    if (selectedPluginId.value === targetPluginId) {
-      await loadSelectedPlugin()
-    } else {
-      selectedPluginId.value = targetPluginId
-    }
+    const requested = String(route.query.plugin || '').trim()
+    const target = requested && ids.has(requested) ? requested : ids.has(selectedPluginId.value) ? selectedPluginId.value : preferredPluginId()
+    if (selectedPluginId.value === target) await loadSelectedPlugin()
+    else selectedPluginId.value = target
   } catch (err) {
     error.value = err instanceof Error ? err.message : String(err)
     statuses.value = []
     catalog.value = null
+    architecture.value = null
+    architecture.value = null
   } finally {
     loading.value = false
   }
+}
+
+async function selectPlugin(pluginId: string) {
+  selectedPluginId.value = pluginId
+  await router.replace({ query: { ...route.query, plugin: pluginId, pluginTab: activeTab.value } })
+}
+
+async function selectTab(tab: PanelTab) {
+  activeTab.value = tab
+  await router.replace({ query: { ...route.query, plugin: selectedPluginId.value, pluginTab: tab } })
 }
 
 watch(selectedPluginId, () => {
@@ -534,18 +560,14 @@ watch(selectedPluginId, () => {
 watch(
   () => [route.query.plugin, route.query.pluginTab] as const,
   ([plugin, tab]) => {
-    const requestedPlugin = String(plugin || '').trim()
-    if (requestedPlugin && statuses.value.some((status) => status.plugin_id === requestedPlugin)) {
-      selectedPluginId.value = requestedPlugin
-    }
+    const requested = String(plugin || '').trim()
+    if (requested && statuses.value.some((status) => status.plugin_id === requested)) selectedPluginId.value = requested
     const requestedTab = panelTabFromRequest(tab)
     if (requestedTab) activeTab.value = requestedTab
   },
 )
 
-onMounted(() => {
-  void refresh()
-})
+onMounted(() => void refresh())
 </script>
 
 <template>
@@ -554,7 +576,7 @@ onMounted(() => {
       <div>
         <div class="text-lg font-medium">Plugin workbench</div>
         <div class="mt-1 text-sm text-muted-foreground">
-          Loaded plugins and their server-declared views, controls, commands, and logs.
+          Dependency-aware lifecycle, shared settings contracts, server-owned operations, tools, logs and diagnostics.
         </div>
       </div>
       <IconButton
@@ -569,25 +591,21 @@ onMounted(() => {
       </IconButton>
     </div>
 
-    <div
-      v-if="error"
-      class="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
-    >
+    <div v-if="error" class="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
       {{ error }}
     </div>
-
     <div v-if="loading && statuses.length === 0" class="text-sm text-muted-foreground">Loading plugins...</div>
-    <div v-else-if="statuses.length === 0" class="text-sm text-muted-foreground">No plugins are loaded.</div>
+    <div v-else-if="statuses.length === 0" class="text-sm text-muted-foreground">No plugins are configured.</div>
 
-    <div v-else class="grid min-h-[34rem] grid-cols-1 border-y border-border/60 md:grid-cols-[15rem_minmax(0,1fr)]">
-      <nav class="border-b border-border/60 py-3 md:border-b-0 md:border-r md:pr-3" aria-label="Loaded plugins">
+    <div v-else class="grid min-h-[38rem] grid-cols-1 border-y border-border/60 md:grid-cols-[15rem_minmax(0,1fr)]">
+      <nav class="border-b border-border/60 py-3 md:border-b-0 md:border-r md:pr-3" aria-label="Configured plugins">
         <button
           v-for="status in sortedStatuses"
           :key="status.plugin_id"
           type="button"
           class="flex w-full items-start justify-between gap-2 rounded px-2.5 py-2 text-left hover:bg-muted/40"
           :class="selectedPluginId === status.plugin_id ? 'bg-muted/60 text-foreground' : 'text-foreground/80'"
-          @click="selectedPluginId = status.plugin_id"
+          @click="selectPlugin(status.plugin_id)"
         >
           <span class="min-w-0">
             <span class="block truncate font-mono text-xs font-semibold">{{ status.plugin_id }}</span>
@@ -604,45 +622,99 @@ onMounted(() => {
           <header class="flex flex-wrap items-start justify-between gap-3">
             <div class="min-w-0">
               <h2 class="break-all font-mono text-base font-semibold">{{ selectedPluginId }}</h2>
-              <p v-if="selectedManifest?.summary" class="mt-1 text-sm text-muted-foreground">
-                {{ selectedManifest.summary }}
-              </p>
+              <p v-if="selectedManifest?.summary" class="mt-1 text-sm text-muted-foreground">{{ selectedManifest.summary }}</p>
               <div class="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
                 <span :class="statusTone(selectedStatus.state)">{{ selectedStatus.state }}</span>
                 <span>transport: {{ selectedStatus.kind }}</span>
                 <span v-if="selectedManifest?.version">version: {{ selectedManifest.version }}</span>
-                <span>{{ contributionCount }} UI contributions</span>
-                <span v-if="catalog?.tool_registry_generation !== undefined">
-                  tool registry: {{ catalog.tool_registry_generation }}
-                </span>
-              </div>
-              <div v-if="statusFailure(selectedStatus)" class="mt-2 text-xs text-destructive">
-                {{ statusFailure(selectedStatus) }}
+                <span>{{ selectedOperations.length }} operations</span>
+                <span>{{ selectedTools.length }} tools</span>
+                <span v-if="catalog?.tool_registry_generation !== undefined">tool registry: {{ catalog.tool_registry_generation }}</span>
               </div>
             </div>
           </header>
 
           <div class="mt-5 flex gap-1 overflow-x-auto border-b border-border/60" role="tablist">
             <button
-              v-for="tab in panelTabs"
+              v-for="tab in PANEL_TABS"
               :key="tab.id"
               type="button"
               role="tab"
               :aria-selected="activeTab === tab.id"
               class="shrink-0 border-b-2 px-3 py-2 text-xs font-medium"
-              :class="
-                activeTab === tab.id ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground'
-              "
-              @click="activeTab = tab.id"
+              :class="activeTab === tab.id ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground'"
+              @click="selectTab(tab.id)"
             >
               {{ tab.label }}
             </button>
           </div>
 
           <div class="mt-5">
-            <div v-if="activeTab === 'overview'" class="space-y-5">
-              <MarkdownRenderer v-if="selectedManifest?.help" :content="selectedManifest.help" source-path="" />
+            <section v-if="activeTab === 'overview'" class="space-y-6">
+              <div v-if="selectedBlocked" class="rounded-md border border-destructive/30 bg-destructive/5 p-4">
+                <div class="font-mono text-xs font-semibold text-destructive">{{ selectedBlocked.code }}</div>
+                <div class="mt-2 text-sm text-destructive">{{ selectedBlocked.message }}</div>
+                <div v-if="selectedBlocked.dependencies?.length" class="mt-2 text-xs text-destructive/80">
+                  Dependencies: {{ selectedBlocked.dependencies.join(', ') }}
+                </div>
+              </div>
+
+              <div v-if="appliedProfiles.length" class="rounded-md border border-border/60 bg-muted/20 p-4">
+                <div class="text-xs font-medium text-muted-foreground">Applied plugin profiles</div>
+                <div class="mt-2 flex flex-wrap gap-1.5">
+                  <span v-for="profile in appliedProfiles" :key="profile" class="rounded bg-muted px-2 py-1 font-mono text-[10px]">
+                    {{ profile }}
+                  </span>
+                </div>
+                <div v-if="selectedProfileChanges.length" class="mt-3 divide-y divide-border/50 rounded-md border border-border/50">
+                  <div
+                    v-for="change in selectedProfileChanges"
+                    :key="`${change.profile}:${change.action}`"
+                    class="px-3 py-2 text-xs"
+                  >
+                    <div class="flex flex-wrap items-center justify-between gap-2">
+                      <span class="font-mono">{{ change.profile }}</span>
+                      <span class="text-muted-foreground">{{ change.action }}</span>
+                    </div>
+                    <div v-if="change.paths?.length" class="mt-2 flex flex-wrap gap-1.5">
+                      <span v-for="path in change.paths" :key="path" class="rounded bg-background px-2 py-1 font-mono text-[10px] text-muted-foreground">
+                        {{ path }}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div v-if="selectedReloadDecision" class="rounded-md border border-border/60 bg-muted/20 p-4">
+                <div class="flex flex-wrap items-center justify-between gap-2">
+                  <div class="text-xs font-medium text-muted-foreground">Current reload decision</div>
+                  <span class="rounded bg-muted px-2 py-1 font-mono text-[10px]">{{ selectedReloadDecision.action }}</span>
+                </div>
+                <div class="mt-2 text-xs text-muted-foreground">
+                  {{ selectedReloadDecision.reasons?.length ? selectedReloadDecision.reasons.join(' · ') : 'No restart reason; the transport is reusable.' }}
+                </div>
+                <div v-if="selectedReloadDecision.triggered_by?.length" class="mt-2 text-xs text-muted-foreground">
+                  Triggered by: <span class="font-mono">{{ selectedReloadDecision.triggered_by.join(', ') }}</span>
+                </div>
+              </div>
+
               <dl class="grid gap-x-6 gap-y-4 sm:grid-cols-2">
+                <div>
+                  <dt class="text-xs text-muted-foreground">Required plugins</dt>
+                  <dd class="mt-1 text-sm">{{ selectedActivation?.requires?.join(', ') || 'None' }}</dd>
+                </div>
+                <div>
+                  <dt class="text-xs text-muted-foreground">Load after</dt>
+                  <dd class="mt-1 text-sm">{{ selectedActivation?.after?.join(', ') || 'None' }}</dd>
+                </div>
+                <div>
+                  <dt class="text-xs text-muted-foreground">Activation epoch</dt>
+                  <dd class="mt-1 break-all font-mono text-xs">{{ selectedArchitectureNode?.activation_epoch || 'Not computed' }}</dd>
+                </div>
+                <div>
+                  <dt class="text-xs text-muted-foreground">Effect scope</dt>
+                  <dd class="mt-1 font-mono text-sm">{{ selectedEffectLifecycle }}</dd>
+                </div>
                 <div>
                   <dt class="text-xs text-muted-foreground">Trust level</dt>
                   <dd class="mt-1 font-mono text-sm">{{ selectedAuthority?.trust_level || 'Not reported' }}</dd>
@@ -652,164 +724,239 @@ onMounted(() => {
                   <dd class="mt-1 text-sm">{{ selectedManifest?.authors?.join(', ') || 'Not reported' }}</dd>
                 </div>
                 <div>
-                  <dt class="text-xs text-muted-foreground">Tools</dt>
-                  <dd class="mt-1 font-mono text-sm">{{ selectedManifest?.tools?.length || 0 }}</dd>
+                  <dt class="text-xs text-muted-foreground">Provenance</dt>
+                  <dd class="mt-1 text-xs">{{ selectedAuthority?.provenance?.join(' · ') || 'Not reported' }}</dd>
                 </div>
                 <div>
-                  <dt class="text-xs text-muted-foreground">Skills</dt>
-                  <dd class="mt-1 font-mono text-sm">{{ selectedManifest?.skills?.length || 0 }}</dd>
+                  <dt class="text-xs text-muted-foreground">Restarts</dt>
+                  <dd class="mt-1 font-mono text-sm">{{ selectedStatus.restart_count }}</dd>
                 </div>
               </dl>
+
+              <div v-if="selectedIncomingDependencies.length || selectedOutgoingDependencies.length" class="grid gap-4 lg:grid-cols-2">
+                <div v-if="selectedIncomingDependencies.length">
+                  <h3 class="text-xs font-medium text-muted-foreground">Depends on</h3>
+                  <div class="mt-2 divide-y divide-border/50 rounded-md border border-border/60">
+                    <div
+                      v-for="edge in selectedIncomingDependencies"
+                      :key="`${edge.provider_id}:${edge.kind}:${edge.service_id || ''}:${edge.api_version || ''}`"
+                      class="px-3 py-2 text-xs"
+                    >
+                      <div class="flex flex-wrap items-center justify-between gap-2">
+                        <span class="font-mono">{{ edge.provider_id }}</span>
+                        <span class="text-muted-foreground">{{ edge.kind }}</span>
+                      </div>
+                      <div v-if="edge.service_id" class="mt-1 font-mono text-[10px] text-muted-foreground">
+                        {{ edge.service_id }}@v{{ edge.api_version }}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div v-if="selectedOutgoingDependencies.length">
+                  <h3 class="text-xs font-medium text-muted-foreground">Required by</h3>
+                  <div class="mt-2 divide-y divide-border/50 rounded-md border border-border/60">
+                    <div
+                      v-for="edge in selectedOutgoingDependencies"
+                      :key="`${edge.consumer_id}:${edge.kind}:${edge.service_id || ''}:${edge.api_version || ''}`"
+                      class="px-3 py-2 text-xs"
+                    >
+                      <div class="flex flex-wrap items-center justify-between gap-2">
+                        <span class="font-mono">{{ edge.consumer_id }}</span>
+                        <span class="text-muted-foreground">{{ edge.kind }}</span>
+                      </div>
+                      <div v-if="edge.service_id" class="mt-1 font-mono text-[10px] text-muted-foreground">
+                        {{ edge.service_id }}@v{{ edge.api_version }}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div v-if="selectedServiceImports.length || selectedServiceExports.length" class="grid gap-4 lg:grid-cols-2">
+                <div v-if="selectedServiceImports.length">
+                  <h3 class="text-xs font-medium text-muted-foreground">Service imports</h3>
+                  <div class="mt-2 divide-y divide-border/50 rounded-md border border-border/60">
+                    <div
+                      v-for="service in selectedServiceImports"
+                      :key="`${service.id}:${service.api_version}`"
+                      class="px-3 py-2 text-xs"
+                    >
+                      <div class="flex flex-wrap items-center justify-between gap-2">
+                        <span class="font-mono">{{ service.id }}@v{{ service.api_version }}</span>
+                        <span class="font-mono text-muted-foreground">{{ service.state }}</span>
+                      </div>
+                      <div class="mt-1 text-muted-foreground">
+                        {{ service.resolved_provider || service.provider || 'No provider bound' }} · {{ service.optional ? 'optional' : 'required' }}
+                      </div>
+                      <div v-if="service.methods?.length" class="mt-2 flex flex-wrap gap-1.5">
+                        <span v-for="method in service.methods" :key="method.id" class="rounded bg-muted px-2 py-1 font-mono text-[10px]">
+                          {{ method.id }}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div v-if="selectedServiceExports.length">
+                  <h3 class="text-xs font-medium text-muted-foreground">Service exports</h3>
+                  <div class="mt-2 divide-y divide-border/50 rounded-md border border-border/60">
+                    <div
+                      v-for="service in selectedServiceExports"
+                      :key="`${service.id}:${service.api_version}`"
+                      class="px-3 py-2 text-xs"
+                    >
+                      <div class="flex flex-wrap items-center justify-between gap-2">
+                        <span class="font-mono">{{ service.id }}@v{{ service.api_version }}</span>
+                        <span class="text-muted-foreground">provider</span>
+                      </div>
+                      <div v-if="service.methods?.length" class="mt-2 flex flex-wrap gap-1.5">
+                        <span v-for="method in service.methods" :key="method.id" class="rounded bg-muted px-2 py-1 font-mono text-[10px]">
+                          {{ method.id }}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div
+                v-if="selectedPipelineHandlers.length || selectedToolRegistrations.length || selectedOperationRegistrations.length"
+                class="grid gap-4 lg:grid-cols-2"
+              >
+                <div v-if="selectedPipelineHandlers.length">
+                  <h3 class="text-xs font-medium text-muted-foreground">Typed pipeline handlers</h3>
+                  <div class="mt-2 divide-y divide-border/50 rounded-md border border-border/60">
+                    <div v-for="pipeline in selectedPipelineHandlers" :key="pipeline.definition.id" class="px-3 py-2 text-xs">
+                      <div class="flex flex-wrap items-center justify-between gap-2">
+                        <span class="font-mono">{{ pipeline.definition.id }}</span>
+                        <span class="text-muted-foreground">
+                          {{ pipeline.definition.mode }}
+                          · {{ pipeline.definition.durable ? 'durable' : 'live' }}
+                          · {{ pipeline.definition.scoped ? 'scoped' : 'global' }}
+                          <template v-if="pipeline.failure_policy"> · {{ pipeline.failure_policy }} on error</template>
+                        </span>
+                      </div>
+                      <div class="mt-2 space-y-1">
+                        <div v-for="handler in pipeline.handlers" :key="handler.registration" class="flex items-center justify-between gap-2">
+                          <span>{{ handler.id }}</span>
+                          <span class="font-mono text-[10px] text-muted-foreground">priority {{ handler.priority }}</span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div v-if="selectedToolRegistrations.length">
+                  <h3 class="text-xs font-medium text-muted-foreground">Scoped tool registrations</h3>
+                  <div class="mt-2 divide-y divide-border/50 rounded-md border border-border/60">
+                    <div v-for="entry in selectedToolRegistrations" :key="`${entry.generation}:${entry.key}`" class="px-3 py-2 text-xs">
+                      <div class="font-mono">{{ entry.key }}</div>
+                      <div class="mt-1 text-muted-foreground">
+                        {{ entry.layer.kind === 'global' ? 'global' : entry.layer.scope }} · generation {{ entry.generation }}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div v-if="selectedOperationRegistrations.length">
+                  <h3 class="text-xs font-medium text-muted-foreground">Scoped operation registrations</h3>
+                  <div class="mt-2 divide-y divide-border/50 rounded-md border border-border/60">
+                    <div v-for="entry in selectedOperationRegistrations" :key="`${entry.generation}:${entry.key}`" class="px-3 py-2 text-xs">
+                      <div class="font-mono">{{ entry.key }}</div>
+                      <div class="mt-1 text-muted-foreground">
+                        {{ entry.layer.kind === 'global' ? 'global' : entry.layer.scope }} · generation {{ entry.generation }}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
               <div v-if="selectedAuthority?.plugin_capabilities?.length">
-                <h3 class="text-xs font-medium text-muted-foreground">Capabilities</h3>
+                <h3 class="text-xs font-medium text-muted-foreground">Plugin capabilities</h3>
                 <div class="mt-2 flex flex-wrap gap-1.5">
-                  <span
-                    v-for="capability in selectedAuthority.plugin_capabilities"
-                    :key="capability"
-                    class="rounded bg-muted px-2 py-1 font-mono text-[11px]"
-                  >
+                  <span v-for="capability in selectedAuthority.plugin_capabilities" :key="capability" class="rounded bg-muted px-2 py-1 font-mono text-[11px]">
                     {{ capability }}
                   </span>
                 </div>
               </div>
-            </div>
+            </section>
 
-            <div v-else-if="activeTab === 'views'" class="space-y-5">
-              <div v-if="selectedViews.length === 0" class="text-sm text-muted-foreground">
-                This plugin does not declare Studio views.
-              </div>
-              <section
-                v-for="view in selectedViews"
-                :key="view.id"
-                class="border-b border-border/60 pb-5 last:border-b-0"
-              >
-                <div class="flex flex-wrap items-start justify-between gap-2">
-                  <div>
-                    <h3 class="text-sm font-semibold">{{ view.title }}</h3>
-                    <p v-if="view.description" class="mt-1 text-xs text-muted-foreground">{{ view.description }}</p>
-                    <div class="mt-1 font-mono text-[10px] text-muted-foreground">
-                      {{ view.kind }} · {{ view.location }}
-                    </div>
-                  </div>
-                  <Button v-if="view.url" variant="outline" size="sm" @click="openExternalUrl(view.url)">
-                    <RiExternalLinkLine class="mr-2 h-4 w-4" />
-                    Open
-                  </Button>
-                </div>
-                <MarkdownRenderer
-                  v-if="view.content && view.kind.toLowerCase() === 'markdown'"
-                  class="mt-3"
-                  :content="view.content"
-                  source-path=""
+            <section v-else-if="activeTab === 'settings'" class="space-y-5">
+              <div v-if="!selectedManifest?.settings" class="text-sm text-muted-foreground">This plugin does not expose editable settings.</div>
+              <template v-else-if="settingsState">
+                <PluginContractEditor
+                  :node="settingsState.contract.root"
+                  :model-value="settingsDraft"
+                  :disabled="settingsSaving"
+                  @update:model-value="settingsDraft = $event"
                 />
-                <pre
-                  v-else-if="view.content"
-                  class="mt-3 max-h-80 overflow-auto whitespace-pre-wrap break-words rounded bg-muted/40 p-3 text-xs"
-                  >{{ view.content }}</pre
-                >
-              </section>
-            </div>
-
-            <div v-else-if="activeTab === 'controls'" class="space-y-4">
-              <div v-if="selectedControls.length === 0" class="text-sm text-muted-foreground">
-                This plugin does not declare Studio controls.
-              </div>
-              <div
-                v-for="control in selectedControls"
-                :key="controlKey(control)"
-                class="grid gap-3 border-b border-border/60 pb-4 last:border-b-0 sm:grid-cols-[minmax(0,1fr)_minmax(12rem,20rem)] sm:items-center"
-              >
-                <div>
-                  <div class="text-sm font-medium">{{ control.title }}</div>
-                  <div v-if="control.description" class="mt-1 text-xs text-muted-foreground">
-                    {{ control.description }}
-                  </div>
-                  <div class="mt-1 font-mono text-[10px] text-muted-foreground">
-                    {{ control.kind }} · {{ control.location }}
+                <div v-if="settingsDiagnostics.length" class="rounded-md border border-destructive/30 bg-destructive/5 p-3">
+                  <div v-for="diagnostic in settingsDiagnostics" :key="`${diagnostic.path}:${diagnostic.message}`" class="text-xs text-destructive">
+                    <span v-if="diagnostic.path" class="font-mono">{{ diagnostic.path }}:</span> {{ diagnostic.message }}
                   </div>
                 </div>
-                <div class="flex min-w-0 items-center justify-end gap-2">
-                  <label
-                    v-if="['toggle', 'checkbox', 'switch'].includes(control.kind.toLowerCase())"
-                    class="inline-flex items-center gap-2 text-sm"
-                  >
-                    <input
-                      type="checkbox"
-                      :checked="boolControlValue(control)"
-                      :disabled="Boolean(busyActionKey)"
-                      @change="updateToggle(control, $event)"
-                    />
-                    {{ boolControlValue(control) ? 'On' : 'Off' }}
-                  </label>
-                  <OptionPicker
-                    v-else-if="control.options?.length"
-                    :model-value="stringControlValue(control)"
-                    :options="control.options"
-                    :title="control.title"
-                    :include-empty="false"
-                    :disabled="Boolean(busyActionKey)"
-                    @update:model-value="updateSelect(control, $event)"
-                  />
-                  <template v-else-if="['input', 'text', 'number'].includes(control.kind.toLowerCase())">
-                    <Input
-                      :model-value="stringControlValue(control)"
-                      :type="control.kind.toLowerCase() === 'number' ? 'number' : 'text'"
-                      :disabled="Boolean(busyActionKey)"
-                      class="h-9 min-w-0"
-                      @update:model-value="setControlValue(control, $event)"
-                    />
-                    <Button size="sm" :disabled="Boolean(busyActionKey)" @click="runControl(control)">Apply</Button>
-                  </template>
-                  <Button v-else size="sm" :disabled="Boolean(busyActionKey)" @click="runControl(control)">
-                    <RiPlayLine class="mr-2 h-4 w-4" />
-                    {{ busyActionKey === controlKey(control) ? 'Running...' : control.title }}
+                <div class="flex flex-wrap justify-end gap-2 border-t border-border/60 pt-4">
+                  <Button variant="outline" size="sm" :disabled="settingsSaving" @click="resetSettings">Reset to defaults</Button>
+                  <Button size="sm" :disabled="settingsSaving || !settingsDirty" @click="saveSettings">
+                    {{ settingsSaving ? 'Saving...' : 'Save settings' }}
                   </Button>
                 </div>
-              </div>
-            </div>
+              </template>
+            </section>
 
-            <div v-else-if="activeTab === 'commands'" class="space-y-4">
-              <div v-if="selectedCommands.length === 0" class="text-sm text-muted-foreground">
-                This plugin does not declare Studio commands.
-              </div>
-              <div
-                v-for="command in selectedCommands"
-                :key="commandKey(command)"
-                class="border-b border-border/60 pb-4 last:border-b-0"
-              >
+            <section v-else-if="activeTab === 'operations'" class="space-y-5">
+              <div v-if="selectedOperations.length === 0" class="text-sm text-muted-foreground">This plugin does not expose user operations.</div>
+              <article v-for="operation in selectedOperations" :key="operationKey(operation)" class="space-y-3 border-b border-border/60 pb-5 last:border-b-0">
                 <div class="flex flex-wrap items-start justify-between gap-3">
                   <div class="min-w-0">
                     <div class="flex items-center gap-2 text-sm font-medium">
                       <RiCommandLine class="h-4 w-4 text-muted-foreground" />
-                      <span>{{ command.title }}</span>
+                      <span>{{ operation.title }}</span>
                     </div>
-                    <p v-if="command.description" class="mt-1 text-xs text-muted-foreground">
-                      {{ command.description }}
-                    </p>
+                    <p v-if="operation.description" class="mt-1 text-xs text-muted-foreground">{{ operation.description }}</p>
                     <div class="mt-1 flex flex-wrap gap-x-3 text-[10px] text-muted-foreground">
-                      <span v-if="command.slash" class="font-mono">{{ command.slash }}</span>
-                      <span>{{ command.category }}</span>
-                      <span>{{ command.location }}</span>
+                      <span class="font-mono">{{ operation.id }}</span>
+                      <span v-if="operation.slash" class="font-mono">/{{ String(operation.slash).replace(/^\/+/, '') }}</span>
+                      <span>{{ operation.category || operation.group }}</span>
+                      <span>{{ operation.target.kind }}</span>
                     </div>
                   </div>
-                  <Button size="sm" :disabled="Boolean(busyActionKey)" @click="runCommand(command)">
+                  <Button size="sm" :disabled="Boolean(busyOperationKey)" @click="runOperation(operation)">
                     <RiPlayLine class="mr-2 h-4 w-4" />
-                    {{ busyActionKey === commandKey(command) ? 'Running...' : 'Run' }}
+                    {{ busyOperationKey === operationKey(operation) ? 'Running...' : 'Run' }}
                   </Button>
                 </div>
-                <label v-if="hasCommandInput(command)" class="mt-3 grid gap-1.5">
-                  <span class="text-xs text-muted-foreground">Input (JSON object)</span>
-                  <textarea
-                    v-model="commandInputs[commandKey(command)]"
-                    rows="4"
-                    placeholder="{}"
-                    class="w-full rounded-md border border-input bg-background px-3 py-2 font-mono text-xs"
-                  />
-                </label>
-              </div>
-            </div>
+                <PluginContractEditor
+                  :node="operation.input.root"
+                  :model-value="operationValue(operation)"
+                  :disabled="Boolean(busyOperationKey)"
+                  @update:model-value="setOperationValue(operation, $event)"
+                />
+              </article>
 
-            <div v-else class="space-y-2">
+              <div v-if="lastOperationResult" class="rounded-md border border-border/70 p-4">
+                <div class="flex flex-wrap items-center justify-between gap-2">
+                  <div class="text-sm font-semibold">{{ lastOperationResult.title }}</div>
+                  <span class="rounded bg-muted px-2 py-1 font-mono text-[10px]">{{ lastOperationResult.status }}</span>
+                </div>
+                <p v-if="lastOperationResult.summary" class="mt-2 text-sm text-muted-foreground">{{ lastOperationResult.summary }}</p>
+                <pre v-if="lastOperationResult.detail" class="mt-3 max-h-72 overflow-auto whitespace-pre-wrap break-words rounded bg-muted/40 p-3 text-xs">{{ lastOperationResult.detail }}</pre>
+                <pre v-if="resultPayload(lastOperationResult.output)" class="mt-3 max-h-72 overflow-auto whitespace-pre-wrap break-words rounded bg-muted/40 p-3 text-xs">{{ resultPayload(lastOperationResult.output) }}</pre>
+                <div v-for="diagnostic in lastOperationResult.diagnostics || []" :key="`${diagnostic.code}:${diagnostic.path || ''}`" class="mt-2 text-xs text-destructive">
+                  <span class="font-mono">{{ diagnostic.code }}</span>: {{ diagnostic.message }}
+                </div>
+              </div>
+            </section>
+
+            <section v-else-if="activeTab === 'tools'" class="space-y-4">
+              <div v-if="selectedTools.length === 0" class="text-sm text-muted-foreground">This plugin does not register tools.</div>
+              <div v-for="tool in selectedTools" :key="String(tool.name || '')" class="border-b border-border/60 pb-4 last:border-b-0">
+                <div class="font-mono text-sm font-semibold">{{ tool.name || 'Unnamed tool' }}</div>
+                <p class="mt-1 text-xs text-muted-foreground">{{ tool.summary || tool.docs?.summary || tool.description || 'No summary.' }}</p>
+                <div v-if="tool.tags?.length" class="mt-2 flex flex-wrap gap-1.5">
+                  <span v-for="tag in tool.tags" :key="tag" class="rounded bg-muted px-2 py-1 font-mono text-[10px]">{{ tag }}</span>
+                </div>
+              </div>
+            </section>
+
+            <section v-else-if="activeTab === 'logs'" class="space-y-2">
               <div v-if="logs.length === 0" class="text-sm text-muted-foreground">No plugin logs recorded.</div>
               <div v-for="entry in logs" :key="entry.seq" class="border-b border-border/50 py-2 last:border-b-0">
                 <div class="flex flex-wrap gap-x-3 text-[10px] text-muted-foreground">
@@ -820,14 +967,34 @@ onMounted(() => {
                 </div>
                 <div class="mt-1 whitespace-pre-wrap break-words font-mono text-xs">{{ entry.message }}</div>
               </div>
-            </div>
-          </div>
+            </section>
 
-          <div v-if="resultText(lastResult)" class="mt-6 border-t border-border/60 pt-4">
-            <div class="text-xs font-medium text-muted-foreground">Last result</div>
-            <pre class="mt-2 max-h-72 overflow-auto whitespace-pre-wrap break-words rounded bg-muted/40 p-3 text-xs">{{
-              resultText(lastResult)
-            }}</pre>
+            <section v-else class="space-y-4">
+              <MarkdownRenderer v-if="selectedManifest?.help" :content="selectedManifest.help" source-path="" />
+              <div v-if="statusFailure(selectedStatus)" class="rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
+                {{ statusFailure(selectedStatus) }}
+              </div>
+              <div v-if="selectedBlocked" class="rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
+                {{ selectedBlocked.message }}
+              </div>
+              <div v-for="diagnostic in settingsDiagnostics" :key="`${diagnostic.path}:${diagnostic.message}`" class="rounded-md border border-warning/30 bg-warning/5 p-3 text-xs">
+                <span v-if="diagnostic.path" class="font-mono">{{ diagnostic.path }}:</span> {{ diagnostic.message }}
+              </div>
+              <div v-if="selectedEffects.length" class="space-y-2">
+                <h3 class="text-xs font-medium text-muted-foreground">Owned effects</h3>
+                <div v-for="effect in selectedEffects" :key="effect.id" class="rounded-md border border-border/60 px-3 py-2 text-xs">
+                  <div class="flex flex-wrap items-center justify-between gap-2">
+                    <span class="font-mono">#{{ effect.id }} · {{ effect.kind }}</span>
+                    <span class="font-mono text-muted-foreground">{{ effect.state }}</span>
+                  </div>
+                  <div class="mt-1 text-muted-foreground">{{ effect.label }}</div>
+                  <div v-if="effect.error" class="mt-1 text-destructive">{{ effect.error }}</div>
+                </div>
+              </div>
+              <div v-if="!statusFailure(selectedStatus) && !selectedBlocked && settingsDiagnostics.length === 0 && selectedEffects.every((effect) => effect.state !== 'failed')" class="text-sm text-muted-foreground">
+                No plugin diagnostics are currently reported.
+              </div>
+            </section>
           </div>
         </template>
       </div>

@@ -10,10 +10,12 @@ use crate::config::{ConfiguredPlugin, PluginPackage, PluginSignature};
 use crate::error::{HostError, TransportError};
 use crate::host::{HostHandle, LoadedPlugin};
 use crate::registry::validate_tool_definition;
+use crate::sdk::host_api::HostCallbackContext;
 use crate::sdk::rpc::method;
 use crate::sdk::{InitContext, InitOutcome, PluginKey, PluginManifest};
 use crate::transport::{
-    PluginTransport, cdylib::CdylibTransport, http::HttpTransport, stdio::StdioTransport,
+    PluginTransport, cdylib::CdylibTransport, http::HttpTransport, quiescent::QuiescentTransport,
+    stdio::StdioTransport,
 };
 
 const TRANSPORT_INITIALIZATION_TIMEOUT: Duration = Duration::from_secs(30);
@@ -35,18 +37,46 @@ pub struct StaticRegistration {
     pub builder: Box<dyn FnOnce() -> Arc<dyn PluginTransport> + Send + Sync>,
 }
 
+/// A verified plugin transport whose immutable manifest is known, but whose
+/// `meta/init` hook has not run yet. Preparing every candidate first lets the
+/// host resolve the complete dependency/service graph without exposing a
+/// partially initialized plugin universe.
+pub struct PreparedPlugin {
+    pub kind: &'static str,
+    pub configured_plugin: ConfiguredPlugin,
+    pub manifest: PluginManifest,
+    pub transport: Arc<dyn PluginTransport>,
+    pub effect_scope: Arc<crate::effect_scope::PluginEffectScope>,
+    pub trust_level: String,
+    pub provenance: Vec<String>,
+}
+
+impl PreparedPlugin {
+    pub fn key(&self) -> PluginKey {
+        PluginKey::new(self.manifest.namespace.clone(), self.manifest.name.clone())
+            .expect("prepared plugin manifest key should be valid")
+    }
+
+    pub fn transport(&self) -> Arc<dyn PluginTransport> {
+        Arc::clone(&self.transport)
+    }
+
+    pub fn effect_scope(&self) -> Arc<crate::effect_scope::PluginEffectScope> {
+        Arc::clone(&self.effect_scope)
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
-pub async fn load_entry(
+pub async fn prepare_entry(
     plugin_id: &str,
     configured_plugin: &ConfiguredPlugin,
     static_registry: &mut std::collections::HashMap<PluginKey, StaticRegistration>,
     host_handle: Arc<HostHandle>,
-    agena_version: &str,
     workspace_root: &Path,
     env_lookup: &(dyn Fn(&str) -> Option<String> + Send + Sync),
     trusted_keys: &std::collections::BTreeMap<String, String>,
-) -> Result<LoadedPlugin, HostError> {
-    let transport: Arc<dyn PluginTransport> = match &configured_plugin.package {
+) -> Result<PreparedPlugin, HostError> {
+    let raw_transport: Arc<dyn PluginTransport> = match &configured_plugin.package {
         PluginPackage::Static { .. } => {
             let plugin_key: PluginKey = plugin_id.parse().map_err(|err| HostError::Load {
                 plugin: plugin_id.to_string(),
@@ -61,6 +91,7 @@ pub async fn load_entry(
                     })?;
             (registration.builder)()
         }
+
         PluginPackage::Cdylib {
             path,
             sha256,
@@ -204,39 +235,50 @@ pub async fn load_entry(
             });
         }
     };
+    let transport = QuiescentTransport::wrap(raw_transport);
+    let plugin_key: PluginKey = plugin_id.parse().map_err(|err| HostError::Load {
+        plugin: plugin_id.to_string(),
+        message: format!("invalid plugin id `{plugin_id}`: {err}"),
+    })?;
+    let effect_scope = host_handle.begin_plugin_instance(plugin_key.clone());
 
-    let initialization = initialize_transport(
+    let preparation = prepare_transport(
         plugin_id,
+        &plugin_key,
         configured_plugin,
         &host_handle,
-        agena_version,
-        workspace_root,
+        Arc::clone(&effect_scope),
         trusted_keys,
         Arc::clone(&transport),
     )
     .await;
 
-    if initialization.is_err() {
+    if preparation.is_err() {
         // A stdio transport owns a child process and does not kill it merely
-        // because the final Arc is dropped. Failed initialization must close
+        // because the final Arc is dropped. Failed preparation must close
         // every transport explicitly before the host proceeds.
         let _ = tokio::time::timeout(TRANSPORT_SHUTDOWN_TIMEOUT, transport.close()).await;
+        host_handle
+            .dispose_plugin_resources_for_scope(&plugin_key, &effect_scope)
+            .await;
     }
-    initialization
+    preparation
 }
 
-#[allow(clippy::too_many_arguments)]
-async fn initialize_transport(
+async fn prepare_transport(
     plugin_id: &str,
+    plugin_key: &PluginKey,
     configured_plugin: &ConfiguredPlugin,
     host_handle: &Arc<HostHandle>,
-    agena_version: &str,
-    workspace_root: &Path,
+    effect_scope: Arc<crate::effect_scope::PluginEffectScope>,
     trusted_keys: &std::collections::BTreeMap<String, String>,
     transport: Arc<dyn PluginTransport>,
-) -> Result<LoadedPlugin, HostError> {
+) -> Result<PreparedPlugin, HostError> {
     transport
-        .attach_host(host_handle.scoped_host_client(plugin_id.to_string()))
+        .attach_host(
+            host_handle
+                .scoped_host_client_for_scope(plugin_id.to_string(), Arc::clone(&effect_scope)),
+        )
         .await
         .map_err(|e| HostError::Load {
             plugin: plugin_id.to_string(),
@@ -262,77 +304,113 @@ async fn initialize_transport(
             plugin: plugin_id.to_string(),
             message: e.to_string(),
         })?;
-    let plugin_key: PluginKey = plugin_id.parse().map_err(|err| HostError::Init {
-        plugin: plugin_id.to_string(),
-        message: format!("invalid plugin id `{plugin_id}`: {err}"),
-    })?;
-    validate_manifest(
-        plugin_id,
-        &plugin_key,
-        &prefetched_manifest,
-        "meta/manifest",
-    )?;
-    validate_manifest_config(
-        plugin_id,
-        &prefetched_manifest,
-        configured_plugin.settings(),
-    )?;
+    validate_manifest(plugin_id, plugin_key, &prefetched_manifest, "meta/manifest")?;
+    validate_manifest_config(plugin_id, &prefetched_manifest, configured_plugin.config())?;
     host_handle.set_plugin_manifest_name(plugin_key.clone(), prefetched_manifest.name.clone());
 
+    let trust_level = plugin_trust_level(configured_plugin, trusted_keys);
+    let provenance = plugin_provenance(configured_plugin, trusted_keys);
+
+    Ok(PreparedPlugin {
+        kind: configured_plugin.kind_str(),
+        configured_plugin: configured_plugin.clone(),
+        manifest: prefetched_manifest,
+        transport,
+        effect_scope,
+        trust_level,
+        provenance,
+    })
+}
+
+pub async fn activate_entry(
+    prepared: PreparedPlugin,
+    host_handle: &Arc<HostHandle>,
+    agena_version: &str,
+    workspace_root: &Path,
+) -> Result<LoadedPlugin, HostError> {
+    let plugin_id = prepared.key().to_string();
+    let plugin_key = prepared.key();
     let init_ctx = InitContext {
         agena_version: agena_version.to_string(),
         workspace_root: workspace_root.to_path_buf(),
         plugin_id: plugin_key.clone(),
-        host_callback_url: host_handle.callback_url(plugin_id),
-        host_callback_token: host_handle.callback_token(plugin_id).await,
-        settings: configured_plugin.settings().clone(),
+        host_callback_url: host_handle.callback_url(&plugin_id),
+        host_callback_token: host_handle.callback_token(&plugin_id).await,
+        config: prepared.configured_plugin.config().clone(),
         protocol_version: crate::sdk::rpc::PROTOCOL_VERSION,
     };
-
-    let init_params = serde_json::to_value(&init_ctx).map_err(|e| HostError::Init {
-        plugin: plugin_id.to_string(),
-        message: e.to_string(),
+    let init_params = serde_json::to_value(&init_ctx).map_err(|error| HostError::Init {
+        plugin: plugin_id.clone(),
+        message: error.to_string(),
     })?;
-
-    let outcome_value = dispatch_transport_with_timeout(
-        transport.as_ref(),
-        method::META_INIT,
-        init_params,
-        TRANSPORT_INITIALIZATION_TIMEOUT,
-    )
-    .await
-    .map_err(|error| HostError::Init {
-        plugin: plugin_id.to_string(),
-        message: match error {
-            TransportError::Timeout => "meta/init timed out".to_string(),
-            error => error.to_string(),
+    let init_dispatch = host_handle.run_in_authorized_callback_context(
+        &plugin_key,
+        HostCallbackContext {
+            workspace_root: Some(workspace_root.to_string_lossy().to_string()),
+            ..HostCallbackContext::default()
         },
-    })?;
-
-    let outcome: InitOutcome =
-        serde_json::from_value(outcome_value).map_err(|e| HostError::Init {
-            plugin: plugin_id.to_string(),
-            message: e.to_string(),
+        prepared.transport.dispatch(method::META_INIT, init_params),
+    );
+    let outcome_value = tokio::time::timeout(TRANSPORT_INITIALIZATION_TIMEOUT, init_dispatch)
+        .await
+        .map_err(|_| HostError::Init {
+            plugin: plugin_id.clone(),
+            message: "meta/init timed out".to_string(),
+        })?
+        .map_err(|error| HostError::Init {
+            plugin: plugin_id.clone(),
+            message: error.to_string(),
         })?;
-
-    validate_manifest(plugin_id, &plugin_key, &outcome.manifest, "meta/init")?;
-    if outcome.manifest != prefetched_manifest {
+    let outcome: InitOutcome =
+        serde_json::from_value(outcome_value).map_err(|error| HostError::Init {
+            plugin: plugin_id.clone(),
+            message: error.to_string(),
+        })?;
+    validate_manifest(&plugin_id, &plugin_key, &outcome.manifest, "meta/init")?;
+    if outcome.manifest != prepared.manifest {
         return Err(HostError::Init {
-            plugin: plugin_id.to_string(),
+            plugin: plugin_id,
             message: "plugin manifest changed between `meta/manifest` and `meta/init`; manifests must be immutable during initialization".to_string(),
         });
     }
-    let trust_level = plugin_trust_level(configured_plugin, trusted_keys);
-    let provenance = plugin_provenance(configured_plugin, trusted_keys);
-
-    Ok(LoadedPlugin::new(
-        configured_plugin.kind_str(),
-        configured_plugin.clone(),
-        transport,
+    Ok(LoadedPlugin::new_with_scope(
+        prepared.kind,
+        prepared.configured_plugin,
+        prepared.transport,
+        prepared.effect_scope,
         outcome.manifest,
-        trust_level,
-        provenance,
+        prepared.trust_level,
+        prepared.provenance,
     ))
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn load_entry(
+    plugin_id: &str,
+    configured_plugin: &ConfiguredPlugin,
+    static_registry: &mut std::collections::HashMap<PluginKey, StaticRegistration>,
+    host_handle: Arc<HostHandle>,
+    agena_version: &str,
+    workspace_root: &Path,
+    env_lookup: &(dyn Fn(&str) -> Option<String> + Send + Sync),
+    trusted_keys: &std::collections::BTreeMap<String, String>,
+) -> Result<LoadedPlugin, HostError> {
+    let prepared = prepare_entry(
+        plugin_id,
+        configured_plugin,
+        static_registry,
+        Arc::clone(&host_handle),
+        workspace_root,
+        env_lookup,
+        trusted_keys,
+    )
+    .await?;
+    let transport = prepared.transport();
+    let activation = activate_entry(prepared, &host_handle, agena_version, workspace_root).await;
+    if activation.is_err() {
+        let _ = tokio::time::timeout(TRANSPORT_SHUTDOWN_TIMEOUT, transport.close()).await;
+    }
+    activation
 }
 
 fn plugin_trust_level(
@@ -527,23 +605,21 @@ fn validate_manifest(
         }
     }
 
-    let mut command_ids = BTreeSet::new();
-    let mut action_ids = BTreeSet::new();
-    for command in &manifest.commands {
-        validate_id(command.id.as_str(), "command", &mut command_ids)?;
-        validate_id(command.id.as_str(), "studio action", &mut action_ids)?;
-        if let crate::sdk::PluginUiAction::OpenPluginWorkbench { tab: Some(tab) } = &command.action
-            && !crate::sdk::plugin_workbench_tab_id_is_supported(tab)
-        {
-            return Err(fail(format!(
-                "command '{}' requests unsupported Plugin Workbench tab '{tab}'",
-                command.id
-            )));
-        }
+    let mut operation_ids = BTreeSet::new();
+    for operation in &manifest.operations {
+        validate_id(operation.id.as_str(), "operation", &mut operation_ids)?;
+        operation
+            .validate()
+            .map_err(|error| fail(format!("operation `{}` is invalid: {error}", operation.id)))?;
     }
 
+    manifest
+        .services
+        .validate()
+        .map_err(|error| fail(format!("plugin service declarations are invalid: {error}")))?;
+
     let mut display_ids = BTreeSet::new();
-    for contribution in &manifest.ui.display {
+    for contribution in &manifest.surface.display {
         validate_id(
             contribution.id.as_str(),
             "display contribution",
@@ -551,18 +627,8 @@ fn validate_manifest(
         )?;
     }
     let mut theme_ids = BTreeSet::new();
-    for theme in &manifest.ui.tui.themes {
+    for theme in &manifest.surface.terminal.themes {
         validate_id(theme.id.as_str(), "theme", &mut theme_ids)?;
-    }
-    for control in &manifest.ui.studio.controls {
-        validate_id(control.id.as_str(), "studio action", &mut action_ids)?;
-    }
-    let mut view_ids = BTreeSet::new();
-    for view in &manifest.ui.studio.views {
-        validate_id(view.id.as_str(), "studio view", &mut view_ids)?;
-        for control in &view.controls {
-            validate_id(control.id.as_str(), "studio action", &mut action_ids)?;
-        }
     }
 
     Ok(())
@@ -577,12 +643,14 @@ fn validate_manifest_config(
     if config.is_null() {
         return Ok(());
     }
-    let Some(schema) = manifest.settings_schema.as_ref() else {
-        return Ok(());
+    let Some(settings) = manifest.settings.as_ref() else {
+        return Err(HostError::Config(format!(
+            "plugin `{plugin_id}` supplied config but does not declare settings"
+        )));
     };
-    validate_json_schema_value(schema, config).map_err(|message| {
+    settings.validate_value(config).map_err(|message| {
         HostError::Config(format!(
-            "plugin `{plugin_id}` config does not match manifest schema: {message}"
+            "plugin `{plugin_id}` config does not match manifest settings contract: {message}"
         ))
     })
 }
@@ -715,16 +783,12 @@ fn expand_agena_property_aliases(schema: &mut JsonValue) {
 }
 
 pub async fn shutdown_transport(transport: Arc<dyn PluginTransport>) -> Result<(), TransportError> {
-    let _ = dispatch_transport_with_timeout(
-        transport.as_ref(),
-        method::META_SHUTDOWN,
-        serde_json::Value::Object(Default::default()),
-        TRANSPORT_SHUTDOWN_TIMEOUT,
+    tokio::time::timeout(
+        TRANSPORT_SHUTDOWN_TIMEOUT.saturating_mul(2),
+        transport.shutdown(),
     )
-    .await;
-    tokio::time::timeout(TRANSPORT_SHUTDOWN_TIMEOUT, transport.close())
-        .await
-        .map_err(|_| TransportError::Timeout)?
+    .await
+    .map_err(|_| TransportError::Timeout)?
 }
 
 /// Verify the sha256 of a file against an expected hex digest. Used by both
@@ -802,8 +866,9 @@ mod manifest_tests {
     use super::{dispatch_transport_with_timeout, validate_json_schema_value, validate_manifest};
     use crate::error::TransportError;
     use crate::sdk::{
-        PluginCommandDefinition, PluginKey, PluginManifest, PluginSkillDefinition,
-        PluginStudioControl, ToolDefinition,
+        OperationDiscoverability, PluginKey, PluginManifest, PluginOperationDefinition,
+        PluginOperationTarget, PluginSkillDefinition, SettingsConstraints, SettingsContract,
+        SettingsNode, SettingsNodeKind, ToolDefinition,
     };
     use crate::transport::PluginTransport;
 
@@ -843,6 +908,35 @@ mod manifest_tests {
             })
             .collect();
         manifest
+    }
+
+    fn operation(id: &str, handler: &str) -> PluginOperationDefinition {
+        PluginOperationDefinition {
+            id: id.to_string(),
+            title: id.to_string(),
+            description: String::new(),
+            group: "Test".to_string(),
+            category: None,
+            slash: None,
+            aliases: Vec::new(),
+            usage: None,
+            input: SettingsContract::new(SettingsNode {
+                id: "input".to_string(),
+                path: String::new(),
+                title: "Input".to_string(),
+                description: String::new(),
+                required: true,
+                default: Some(serde_json::json!({})),
+                constraints: SettingsConstraints::default(),
+                sensitive: false,
+                secret: false,
+                kind: SettingsNodeKind::Object { fields: Vec::new() },
+            }),
+            discoverability: OperationDiscoverability::default(),
+            target: PluginOperationTarget::Method {
+                handler: handler.to_string(),
+            },
+        }
     }
 
     fn validation_error(manifest: &PluginManifest) -> String {
@@ -915,42 +1009,22 @@ mod manifest_tests {
     }
 
     #[test]
-    fn manifest_validation_rejects_duplicate_ui_action_ids() {
+    fn manifest_validation_rejects_duplicate_operation_ids() {
         let mut manifest = manifest_with_tools(&[]);
-        manifest.commands.push(
-            serde_json::from_value::<PluginCommandDefinition>(serde_json::json!({
-                "id": "refresh",
-                "title": "Refresh"
-            }))
-            .expect("command definition"),
-        );
-        manifest.ui.studio.controls.push(
-            serde_json::from_value::<PluginStudioControl>(serde_json::json!({
-                "id": "refresh",
-                "title": "Refresh control"
-            }))
-            .expect("studio control"),
-        );
+        manifest.operations.push(operation("refresh", "refresh"));
+        manifest
+            .operations
+            .push(operation("refresh", "refresh_again"));
 
-        assert!(validation_error(&manifest).contains("duplicate studio action id"));
+        assert!(validation_error(&manifest).contains("duplicate operation id"));
     }
 
     #[test]
-    fn manifest_validation_rejects_plugin_defined_workbench_tabs() {
+    fn manifest_validation_rejects_invalid_operation_targets() {
         let mut manifest = manifest_with_tools(&[]);
-        manifest.commands.push(
-            serde_json::from_value::<PluginCommandDefinition>(serde_json::json!({
-                "id": "open",
-                "title": "Open",
-                "action": {
-                    "kind": "open_plugin_workbench",
-                    "tab": "plugin-defined-page"
-                }
-            }))
-            .expect("command definition"),
-        );
+        manifest.operations.push(operation("open", " "));
 
-        assert!(validation_error(&manifest).contains("unsupported Plugin Workbench tab"));
+        assert!(validation_error(&manifest).contains("operation target"));
     }
 
     #[test]

@@ -456,6 +456,11 @@ pub struct SessionRuntimeState {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 /// Execution context of a session.
 pub struct SessionExecutionContext {
+    /// Process-local carrier for plugin scope routing. This is deliberately
+    /// excluded from persisted execution config; the owning Session binds its
+    /// current id after creation/hydration.
+    #[serde(skip, default)]
+    pub scope_session_id: Option<i64>,
     #[serde(flatten)]
     pub selection: ExecutionSelection,
     #[serde(
@@ -496,6 +501,10 @@ impl SessionExecutionContext {
 }
 
 impl agena_runtime_contracts::ToolSessionContext for SessionExecutionContext {
+    fn session_id(&self) -> Option<i64> {
+        self.scope_session_id
+    }
+
     fn effective_workspace_root(&self) -> Option<&std::path::Path> {
         self.effective_workspace_root.as_deref()
     }
@@ -758,7 +767,7 @@ fn operation_from_part(part: &Part) -> Option<agena_runtime_contracts::part::Ope
 
 impl Session {
     pub fn new(id: i64, workspace_id: i64, title: impl Into<String>, now: DateTime<Utc>) -> Self {
-        Self {
+        let mut session = Self {
             id,
             parent_id: None,
             depth: 0,
@@ -777,7 +786,13 @@ impl Session {
             runtime: SessionRuntimeState::default(),
             approx_bytes: 0,
             pending_operations: Vec::new(),
-        }
+        };
+        session.bind_runtime_scope();
+        session
+    }
+
+    pub fn bind_runtime_scope(&mut self) {
+        self.runtime.execution.scope_session_id = Some(self.id);
     }
 
     /// Install a fresh parts projection (the ordered transcript as loaded
@@ -879,6 +894,7 @@ impl Session {
         self.created_at = persisted.created_at;
         self.updated_at = persisted.updated_at;
         self.runtime = persisted.runtime.clone();
+        self.bind_runtime_scope();
     }
 
     // --- Parts projection reads (the A6 execution contract) ----------------

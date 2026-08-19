@@ -4,15 +4,19 @@ use quote::quote;
 use syn::{Attribute, Ident, ImplItem, ImplItemFn, ItemImpl, LitStr, Meta, Result, Type};
 
 use crate::{
-    PluginCommandAttrArgs, PluginCommandHandlerPlan, PluginCommandInputPlan, PluginCommandPlan,
-    PluginGeneratedToolInput, PluginInherentMethodAttrs, PluginMethodInfo, PluginToolAttrConfig,
-    PluginToolInvokeHandler, PluginToolPermissionHandlers, PluginToolPlan, PluginToolStreamHandler,
-    PluginToolStreamSignature, build_plugin_command_input_plan, build_plugin_hook_plan,
-    build_plugin_tool_method_shape, command_title_from_id, default_command_id, doc_summary,
-    doc_text, ensure_plugin_method_shared_receiver, expand_plugin_tool_input_schema, expr_lit_str,
-    lit_str_from_text, parse_lit_str_list, parse_plugin_tool_method_attr,
-    plugin_attr_has_explicit_args, plugin_method_has_shared_receiver, plugin_method_tool_output,
-    stream_sink_is_edge_info, type_display, typed_arg_types_from_inputs, types_equivalent,
+    PluginGeneratedToolInput, PluginInherentMethodAttrs, PluginMethodInfo, PluginOperationAttrArgs,
+    PluginOperationHandlerPlan, PluginOperationInputPlan, PluginOperationPlan,
+    PluginServiceAttrArgs, PluginServiceAttrTarget, PluginServiceInputPlan, PluginServicePlan,
+    PluginServiceTargetPlan, PluginToolAttrConfig, PluginToolInvokeHandler,
+    PluginToolPermissionHandlers, PluginToolPlan, PluginToolStreamHandler,
+    PluginToolStreamSignature, build_plugin_hook_plan, build_plugin_operation_input_plan,
+    build_plugin_tool_method_shape, default_operation_id, doc_summary, doc_text,
+    ensure_plugin_method_shared_receiver, expand_plugin_tool_input_schema, expr_lit_str,
+    expr_lit_usize, lit_str_from_text, operation_title_from_id, parse_lit_str_list,
+    parse_plugin_tool_method_attr, plugin_attr_has_explicit_args,
+    plugin_method_has_shared_receiver, plugin_method_return_value_type, plugin_method_tool_output,
+    stream_sink_is_edge_info, type_display, type_is_reference, type_is_unit,
+    type_without_reference, typed_arg_types_from_inputs, types_equivalent,
 };
 
 pub fn plugin_impl_method_infos(item: &ItemImpl) -> Vec<PluginMethodInfo> {
@@ -128,7 +132,8 @@ pub fn parse_plugin_inherent_method_attrs(
 ) -> Result<PluginInherentMethodAttrs> {
     let mut tools = Vec::new();
     let mut hooks = Vec::new();
-    let mut commands = Vec::new();
+    let mut operations = Vec::new();
+    let mut services = Vec::new();
     let mut kept_attrs = Vec::new();
     let method_ident = method.sig.ident.clone();
     let is_async = method.sig.asyncness.is_some();
@@ -153,14 +158,21 @@ pub fn parse_plugin_inherent_method_attrs(
                 is_async,
                 &attr,
             )?);
-        } else if attr.path().is_ident("command") {
+        } else if attr.path().is_ident("operation") {
             let method_docs = doc_text(&kept_attrs);
-            commands.push(build_plugin_command_plan(
+            operations.push(build_plugin_operation_plan(
                 method,
                 &method_ident,
                 self_label,
                 is_async,
                 method_docs,
+                &attr,
+            )?);
+        } else if attr.path().is_ident("service") {
+            services.push(build_plugin_service_plan(
+                method,
+                &method_ident,
+                is_async,
                 &attr,
             )?);
         } else {
@@ -171,7 +183,136 @@ pub fn parse_plugin_inherent_method_attrs(
     Ok(PluginInherentMethodAttrs {
         tools,
         hooks,
-        commands,
+        operations,
+        services,
+    })
+}
+
+pub fn build_plugin_service_plan(
+    method: &mut ImplItemFn,
+    method_ident: &Ident,
+    is_async: bool,
+    attr: &Attribute,
+) -> Result<PluginServicePlan> {
+    ensure_plugin_method_shared_receiver(method, "#[service] methods")?;
+    let args = attr.parse_args::<PluginServiceAttrArgs>()?;
+    let target = match args.target {
+        PluginServiceAttrTarget::Inline(service) => {
+            let mut api_version = None;
+            let mut method_id = LitStr::new(&method_ident.to_string(), method_ident.span());
+            for meta in args.metas {
+                let Meta::NameValue(value) = meta else {
+                    return Err(syn::Error::new_spanned(
+                        meta,
+                        "#[service] accepts only `version = N` and `method = \"id\"` arguments",
+                    ));
+                };
+                let Some(ident) = value.path.get_ident() else {
+                    return Err(syn::Error::new_spanned(value.path, "expected identifier"));
+                };
+                match ident.to_string().as_str() {
+                    "version" => {
+                        let parsed = expr_lit_usize(&value.value, "version")?;
+                        let parsed = u32::try_from(parsed).map_err(|_| {
+                            syn::Error::new_spanned(
+                                &value.value,
+                                "service version exceeds u32::MAX",
+                            )
+                        })?;
+                        if parsed == 0 {
+                            return Err(syn::Error::new_spanned(
+                                &value.value,
+                                "service version must be positive",
+                            ));
+                        }
+                        if api_version.replace(parsed).is_some() {
+                            return Err(syn::Error::new_spanned(
+                                ident,
+                                "duplicate service version",
+                            ));
+                        }
+                    }
+                    "method" => method_id = expr_lit_str(&value.value, "method")?,
+                    other => {
+                        return Err(syn::Error::new_spanned(
+                            ident,
+                            format!("unsupported service argument '{other}'"),
+                        ));
+                    }
+                }
+            }
+            let api_version = api_version.ok_or_else(|| {
+                syn::Error::new_spanned(attr, "#[service] requires an explicit `version = N`")
+            })?;
+            PluginServiceTargetPlan::Inline {
+                service,
+                api_version,
+                method: method_id,
+            }
+        }
+        PluginServiceAttrTarget::Endpoint(endpoint) => {
+            if let Some(meta) = args.metas.first() {
+                return Err(syn::Error::new_spanned(
+                    meta,
+                    "typed endpoint form `#[service(Endpoint)]` does not accept version/method overrides; define them once on the endpoint",
+                ));
+            }
+            PluginServiceTargetPlan::Endpoint { endpoint }
+        }
+    };
+
+    let typed_args = typed_arg_types_from_inputs(&method.sig.inputs);
+    let input = match (&target, typed_args.as_slice()) {
+        (PluginServiceTargetPlan::Inline { .. }, []) => PluginServiceInputPlan::None,
+        (_, [ty]) => PluginServiceInputPlan::Typed {
+            ty: type_without_reference(ty),
+            by_ref: type_is_reference(ty),
+        },
+        (PluginServiceTargetPlan::Endpoint { .. }, []) => {
+            return Err(syn::Error::new_spanned(
+                &method.sig.inputs,
+                "typed endpoint #[service(Endpoint)] methods require exactly one request argument matching Endpoint::Input",
+            ));
+        }
+        _ => {
+            return Err(syn::Error::new_spanned(
+                &method.sig.inputs,
+                "#[service] methods support zero or one typed input argument; use a request struct to group fields",
+            ));
+        }
+    };
+    for arg in method.sig.inputs.iter() {
+        let syn::FnArg::Typed(arg) = arg else {
+            continue;
+        };
+        if let Some(attr) = arg.attrs.first() {
+            return Err(syn::Error::new_spanned(
+                attr,
+                "#[service] input arguments do not support parameter attributes; put validation metadata on the request type",
+            ));
+        }
+    }
+
+    let Some((output, returns_result)) = plugin_method_return_value_type(method) else {
+        return Err(syn::Error::new_spanned(
+            &method.sig.output,
+            "#[service] methods must return a typed value or Result<T>",
+        ));
+    };
+    if type_is_unit(&output) {
+        return Err(syn::Error::new_spanned(
+            &method.sig.output,
+            "#[service] methods must return a serializable typed value; use an explicit empty response struct instead of ()",
+        ));
+    }
+
+    Ok(PluginServicePlan {
+        target,
+        handler: method_ident.clone(),
+        input,
+        output,
+        returns_result,
+        is_async,
     })
 }
 
@@ -213,31 +354,30 @@ pub fn build_plugin_tool_plan(
         },
         stream,
         permissions,
-        command: spec.command,
+        operation: spec.operation,
     })
 }
 
-pub fn build_plugin_command_plan(
+pub fn build_plugin_operation_plan(
     method: &mut ImplItemFn,
     method_ident: &Ident,
     self_label: &str,
     is_async: bool,
     docs: Option<String>,
     attr: &Attribute,
-) -> Result<PluginCommandPlan> {
-    ensure_plugin_method_shared_receiver(method, "#[command] methods")?;
-    let mut id = LitStr::new(&default_command_id(method_ident), method_ident.span());
+) -> Result<PluginOperationPlan> {
+    ensure_plugin_method_shared_receiver(method, "#[operation] methods")?;
+    let mut id = LitStr::new(&default_operation_id(method_ident), method_ident.span());
     let mut title = None;
     let mut description = lit_str_from_text(docs.as_deref());
     let mut category = LitStr::new("Plugin", method_ident.span());
     let mut slash = None;
     let mut aliases = Vec::new();
     let mut usage = None;
-    let mut location = LitStr::new("command_palette", method_ident.span());
-    let mut action = None;
+    let mut group = LitStr::new("command_palette", method_ident.span());
 
     if plugin_attr_has_explicit_args(attr) {
-        let args = attr.parse_args::<PluginCommandAttrArgs>()?;
+        let args = attr.parse_args::<PluginOperationAttrArgs>()?;
         slash = args.slash;
         for meta in args.metas {
             match meta {
@@ -246,9 +386,9 @@ pub fn build_plugin_command_plan(
                         return Err(syn::Error::new_spanned(value.path, "expected identifier"));
                     };
                     match ident.to_string().as_str() {
-                        "id" | "name" => id = expr_lit_str(&value.value, "id")?,
+                        "id" => id = expr_lit_str(&value.value, "id")?,
                         "title" => title = Some(expr_lit_str(&value.value, "title")?),
-                        "description" | "summary" => {
+                        "description" => {
                             description = Some(expr_lit_str(&value.value, "description")?)
                         }
                         "category" => category = expr_lit_str(&value.value, "category")?,
@@ -261,16 +401,11 @@ pub fn build_plugin_command_plan(
                             }
                         }
                         "usage" => usage = Some(expr_lit_str(&value.value, "usage")?),
-                        "location" => location = expr_lit_str(&value.value, "location")?,
-                        "action" => {
-                            if action.replace(value.value).is_some() {
-                                return Err(syn::Error::new_spanned(ident, "duplicate action"));
-                            }
-                        }
+                        "group" => group = expr_lit_str(&value.value, "group")?,
                         other => {
                             return Err(syn::Error::new_spanned(
                                 ident,
-                                format!("unsupported command argument '{other}'"),
+                                format!("unsupported operation argument '{other}'"),
                             ));
                         }
                     }
@@ -284,7 +419,7 @@ pub fn build_plugin_command_plan(
                         other => {
                             return Err(syn::Error::new_spanned(
                                 ident,
-                                format!("unsupported command list '{other}'"),
+                                format!("unsupported operation list '{other}'"),
                             ));
                         }
                     }
@@ -292,7 +427,7 @@ pub fn build_plugin_command_plan(
                 Meta::Path(path) => {
                     return Err(syn::Error::new_spanned(
                         path,
-                        "unsupported bare command flag",
+                        "unsupported bare operation flag",
                     ));
                 }
             }
@@ -304,25 +439,24 @@ pub fn build_plugin_command_plan(
     {
         return Err(syn::Error::new_spanned(
             slash,
-            "command slash value must start with `/`",
+            "operation slash value must start with `/`",
         ));
     }
 
     let method_shape =
-        build_plugin_command_input_plan(method, method_ident, self_label, docs.clone())?;
+        build_plugin_operation_input_plan(method, method_ident, self_label, docs.clone())?;
 
-    Ok(PluginCommandPlan {
+    Ok(PluginOperationPlan {
         title: title.unwrap_or_else(|| {
-            LitStr::new(&command_title_from_id(&id.value()), method_ident.span())
+            LitStr::new(&operation_title_from_id(&id.value()), method_ident.span())
         }),
         description: description.unwrap_or_else(|| LitStr::new("", method_ident.span())),
+        group,
         category,
         slash,
         aliases,
         usage,
-        location,
-        action,
-        handler: PluginCommandHandlerPlan::Method {
+        handler: PluginOperationHandlerPlan::Method {
             method: method_ident.clone(),
             input: method_shape.input,
             context: method_shape.context,
@@ -332,13 +466,13 @@ pub fn build_plugin_command_plan(
     })
 }
 
-pub fn build_tool_command_plan(tool: &PluginToolPlan) -> Option<Result<PluginCommandPlan>> {
-    let config = tool.command.as_ref()?;
+pub fn build_tool_operation_plan(tool: &PluginToolPlan) -> Option<Result<PluginOperationPlan>> {
+    let config = tool.operation.as_ref()?;
     let id = config.id.clone().unwrap_or_else(|| tool.tool.clone());
     let title = config
         .title
         .clone()
-        .unwrap_or_else(|| LitStr::new(&command_title_from_id(&id.value()), id.span()));
+        .unwrap_or_else(|| LitStr::new(&operation_title_from_id(&id.value()), id.span()));
     let description = config
         .description
         .clone()
@@ -351,10 +485,10 @@ pub fn build_tool_command_plan(tool: &PluginToolPlan) -> Option<Result<PluginCom
     {
         return Some(Err(syn::Error::new_spanned(
             slash,
-            "tool command slash value must start with `/`",
+            "tool operation slash value must start with `/`",
         )));
     }
-    Some(Ok(PluginCommandPlan {
+    Some(Ok(PluginOperationPlan {
         id,
         title,
         description,
@@ -365,48 +499,45 @@ pub fn build_tool_command_plan(tool: &PluginToolPlan) -> Option<Result<PluginCom
         slash,
         aliases: config.aliases.clone(),
         usage: config.usage.clone(),
-        location: config
-            .location
+        group: config
+            .group
             .clone()
             .unwrap_or_else(|| LitStr::new("command_palette", tool.tool.span())),
-        action: None,
-        handler: PluginCommandHandlerPlan::InvokeTool {
+        handler: PluginOperationHandlerPlan::InvokeTool {
             tool: tool.tool.clone(),
             input_model: Box::new(tool.input_model.clone()),
-            submit_output_as_prompt: config.submit_output_as_prompt,
         },
     }))
 }
 
-pub fn command_generated_input_model(
-    command: &PluginCommandPlan,
+pub fn operation_generated_input_model(
+    operation: &PluginOperationPlan,
 ) -> Option<&PluginGeneratedToolInput> {
-    match &command.handler {
-        PluginCommandHandlerPlan::Method {
-            input: PluginCommandInputPlan::Generated { input_model, .. },
+    match &operation.handler {
+        PluginOperationHandlerPlan::Method {
+            input: PluginOperationInputPlan::Generated { input_model, .. },
             ..
         } => Some(input_model),
-        PluginCommandHandlerPlan::Method { .. } | PluginCommandHandlerPlan::InvokeTool { .. } => {
-            None
-        }
+        PluginOperationHandlerPlan::Method { .. }
+        | PluginOperationHandlerPlan::InvokeTool { .. } => None,
     }
 }
 
-pub fn expand_plugin_command_usage_expr(
-    command: &PluginCommandPlan,
+pub fn expand_plugin_operation_usage_expr(
+    operation: &PluginOperationPlan,
 ) -> Result<proc_macro2::TokenStream> {
-    if let Some(usage) = command.usage.as_ref() {
+    if let Some(usage) = operation.usage.as_ref() {
         return Ok(quote! { Some(#usage.to_string()) });
     }
-    let Some(slash) = command.slash.as_ref() else {
+    let Some(slash) = operation.slash.as_ref() else {
         return Ok(quote! { None });
     };
-    let input_usage = match &command.handler {
-        PluginCommandHandlerPlan::Method { input, .. } => match input {
-            PluginCommandInputPlan::Typed { ty, .. } => quote! {
+    let input_usage = match &operation.handler {
+        PluginOperationHandlerPlan::Method { input, .. } => match input {
+            PluginOperationInputPlan::Typed { ty, .. } => quote! {
                 <#ty as ::agena_plugin_sdk::ToolInput>::input_usage()
             },
-            PluginCommandInputPlan::Generated { input_model, .. } => {
+            PluginOperationInputPlan::Generated { input_model, .. } => {
                 let spec = &input_model.spec;
                 if let Some(input_shape_ty) = spec.input_shape.as_ref() {
                     quote! { <#input_shape_ty as ::agena_plugin_sdk::ToolInput>::input_usage() }
@@ -419,9 +550,11 @@ pub fn expand_plugin_command_usage_expr(
                     }
                 }
             }
-            PluginCommandInputPlan::None | PluginCommandInputPlan::Raw { .. } => quote! { None },
+            PluginOperationInputPlan::None | PluginOperationInputPlan::Raw { .. } => {
+                quote! { None }
+            }
         },
-        PluginCommandHandlerPlan::InvokeTool { input_model, .. } => {
+        PluginOperationHandlerPlan::InvokeTool { input_model, .. } => {
             let spec = &input_model.spec;
             if let Some(input_shape_ty) = spec.input_shape.as_ref() {
                 quote! { <#input_shape_ty as ::agena_plugin_sdk::ToolInput>::input_usage() }

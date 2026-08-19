@@ -311,14 +311,15 @@ impl ChatGptToolsPlugin {
     name = "chatgpt",
     version = env!("CARGO_PKG_VERSION"),
     summary = "OpenAI Responses and image service tools exposed as ordinary Agena tools.",
-    settings_schema = agena_plugin_sdk::macro_support::json_schema_for_default(ChatGptToolsConfig::default()),
+    settings = ChatGptToolsConfig,
+    settings_default = default,
 )]
 impl ChatGptToolsPlugin {
     #[hook(init)]
     async fn init(&self, ctx: InitContext, host: Arc<dyn HostClient>) -> SdkResult<InitOutcome> {
         let config: ChatGptToolsConfig =
             agena_plugin_host::sdk::macro_support::parse_defaulted_settings(
-                ctx.settings,
+                ctx.config,
                 "invalid ChatGPT tools plugin config",
             )?;
         self.workspace_root.set(ctx.workspace_root).map_err(|_| {

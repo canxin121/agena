@@ -34,7 +34,7 @@ pub enum PluginWorkbenchMode {
 pub enum PluginDetailTab {
     Config,
     Tools,
-    Commands,
+    Operations,
     Capabilities,
     Logs,
     Diagnostics,
@@ -164,7 +164,7 @@ pub struct PluginWorkbenchListPresentation {
 
 /// Opaque display row for a schema-aware configuration action or value picker.
 /// The App keeps schema paths, JSON values, branch records, and persistence
-/// commands in a key-to-concrete-effect map.
+/// operations in a key-to-concrete-effect map.
 #[derive(Debug, Clone)]
 pub struct PluginConfigPickerItem {
     pub key: String,
@@ -533,7 +533,7 @@ impl PluginDetailTab {
     pub const ALL: [Self; 6] = [
         Self::Config,
         Self::Tools,
-        Self::Commands,
+        Self::Operations,
         Self::Capabilities,
         Self::Logs,
         Self::Diagnostics,
@@ -543,7 +543,7 @@ impl PluginDetailTab {
         match self {
             Self::Config => "Config",
             Self::Tools => "Tools",
-            Self::Commands => "Commands",
+            Self::Operations => "Operations",
             Self::Capabilities => "Capabilities",
             Self::Logs => "Logs",
             Self::Diagnostics => "Diagnostics",
@@ -563,7 +563,7 @@ impl PluginDetailTab {
         match value.trim().to_ascii_lowercase().as_str() {
             "config" => Some(Self::Config),
             "tools" => Some(Self::Tools),
-            "commands" => Some(Self::Commands),
+            "operations" => Some(Self::Operations),
             "capabilities" => Some(Self::Capabilities),
             "logs" => Some(Self::Logs),
             "diagnostics" => Some(Self::Diagnostics),
@@ -738,7 +738,7 @@ mod tests {
             ),
             PluginWorkbenchNavigationEffect::KeepOpen,
         );
-        assert_eq!(navigation.detail_tab, PluginDetailTab::Commands);
+        assert_eq!(navigation.detail_tab, PluginDetailTab::Operations);
         assert_eq!(
             handle_key(
                 &mut navigation,
@@ -754,7 +754,7 @@ mod tests {
         for (id, expected) in [
             ("config", PluginDetailTab::Config),
             ("tools", PluginDetailTab::Tools),
-            ("commands", PluginDetailTab::Commands),
+            ("operations", PluginDetailTab::Operations),
             ("capabilities", PluginDetailTab::Capabilities),
             ("logs", PluginDetailTab::Logs),
             ("diagnostics", PluginDetailTab::Diagnostics),

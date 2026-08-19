@@ -4,10 +4,11 @@
 pub mod agent;
 pub mod auth;
 pub mod chat;
-pub mod command;
 pub mod config;
 pub mod event;
 pub mod notification;
+#[path = "command.rs"]
+pub mod operation;
 pub mod permission;
 pub mod prompt;
 pub mod provider;
@@ -18,10 +19,10 @@ pub mod tool;
 pub use agent::*;
 pub use auth::*;
 pub use chat::*;
-pub use command::*;
 pub use config::*;
 pub use event::*;
 pub use notification::*;
+pub use operation::*;
 pub use permission::*;
 pub use prompt::*;
 pub use provider::*;

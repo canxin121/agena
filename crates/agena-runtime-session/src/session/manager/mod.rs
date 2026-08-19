@@ -566,32 +566,36 @@ impl agena_runtime::SessionToolExecutionService for SessionManager {
 }
 
 #[async_trait::async_trait]
-impl agena_runtime::SessionPluginCommandService for SessionManager {
-    async fn invoke_session_plugin_command(
+impl agena_runtime::SessionPluginOperationService for SessionManager {
+    async fn invoke_session_plugin_operation(
         &self,
-        request: agena_runtime::SessionPluginCommandRequest,
-    ) -> Result<agena_plugin_host::sdk::PluginCommandOutput, agena_runtime::SessionPluginCommandError>
-    {
+        request: agena_runtime::SessionPluginOperationRequest,
+    ) -> Result<
+        agena_plugin_host::sdk::PluginOperationResult,
+        agena_runtime::SessionPluginOperationError,
+    > {
         let session = self
             .get_session(request.session_id)
             .await
             .map_err(|error| {
-                agena_runtime::SessionPluginCommandError::Execution(error.to_string())
+                agena_runtime::SessionPluginOperationError::Execution(error.to_string())
             })?;
         let host = self.tool_executor().plugin_manager().clone();
         let plugin_id = request.plugin_id;
-        let input = agena_plugin_host::sdk::PluginCommandInvokeInput {
+        let input = agena_plugin_host::sdk::PluginOperationInvokeInput {
             session_id: Some(session.id),
             call_id: None,
             workspace_root: request.workspace_root,
-            command_id: request.command_id,
+            operation_id: request.operation_id,
             slash: request.slash,
             raw: request.raw,
             input: request.input,
         };
-        host.invoke_plugin_command_async(plugin_id.as_str(), input)
+        host.invoke_plugin_operation_async(plugin_id.as_str(), input)
             .await
-            .map_err(|error| agena_runtime::SessionPluginCommandError::Execution(error.to_string()))
+            .map_err(|error| {
+                agena_runtime::SessionPluginOperationError::Execution(error.to_string())
+            })
     }
 }
 

@@ -102,9 +102,9 @@ pub use input_shape_support::{
     field_is_flatten, flatten_shape_type, named_field_object_insert_tokens,
 };
 pub use macro_parse_support::{
-    command_title_from_id, default_command_id, default_tool_name, doc_summary, doc_text,
-    expr_array_lit_strs, expr_array_values, expr_lit_bool, expr_lit_i32, expr_lit_str,
-    expr_lit_usize, expr_path, expr_string_like, ident_to_snake_case, lit_str_from_text,
+    default_operation_id, default_tool_name, doc_summary, doc_text, expr_array_lit_strs,
+    expr_array_values, expr_lit_bool, expr_lit_i32, expr_lit_str, expr_lit_usize, expr_path,
+    expr_string_like, ident_to_snake_case, lit_str_from_text, operation_title_from_id,
     parse_expr_list, parse_item_lit_str_list, parse_item_path_expr_constraint,
     parse_item_path_expr_list_constraint, parse_item_path_format_constraint,
     parse_item_path_lit_str_constraint, parse_item_path_pattern_constraint,
@@ -123,7 +123,7 @@ pub use macro_type_support::{
 pub use plugin_hooks::{PluginHookPlan, build_plugin_hook_plan};
 pub use plugin_impl_config::{PluginImplConfig, expr_path_ident, parse_type_list};
 pub use plugin_method_arg_support::{
-    ArgAttrArgs, build_plugin_command_input_plan, build_plugin_tool_method_shape,
+    ArgAttrArgs, build_plugin_operation_input_plan, build_plugin_tool_method_shape,
     ensure_arg_permission_locator_has_semantic,
 };
 pub use plugin_method_support::{
@@ -132,25 +132,26 @@ pub use plugin_method_support::{
     generated_input_nested_shape_fields, input_keys_for_parse_path, nested_input_shape_field,
     nested_input_shape_spec, nested_input_shape_spec_from_type, plugin_method_has_shared_receiver,
     plugin_method_return_type, plugin_method_return_value_type, plugin_method_tool_output,
-    reject_duplicate_command_plans, reject_duplicate_tool_plans, stream_sink_is_edge_info,
-    typed_arg_types, typed_arg_types_from_inputs,
+    reject_duplicate_operation_plans, reject_duplicate_service_plans, reject_duplicate_tool_plans,
+    stream_sink_is_edge_info, typed_arg_types, typed_arg_types_from_inputs,
 };
 pub use plugin_plan_support::{
-    build_tool_command_plan, command_generated_input_model, expand_plugin_command_usage_expr,
+    build_tool_operation_plan, expand_plugin_operation_usage_expr, operation_generated_input_model,
     parse_plugin_inherent_method_attrs, plugin_impl_method_infos,
 };
 pub use plugin_tool_config::parse_plugin_tool_method_attr;
-pub use plugin_tooling::expand_plugin_tool_input_schema;
+pub use plugin_tooling::{expand_plugin_operation_definition, expand_plugin_tool_input_schema};
 pub use plugin_types::{
-    PluginArgConfig, PluginCallInput, PluginCommandAttrArgs, PluginCommandHandlerPlan,
-    PluginCommandInputPlan, PluginCommandMethodShape, PluginCommandPlan, PluginContextArg,
-    PluginGeneratedInputField, PluginGeneratedToolInput, PluginInherentMethodAttrs,
-    PluginInputNetworkSpec, PluginInputPathSpec, PluginMethodInfo, PluginNetworkSemantic,
-    PluginPathPermissionKind, PluginPickerKind, PluginToolAttrConfig, PluginToolCommandConfig,
-    PluginToolInvokeHandler, PluginToolMethodShape, PluginToolNetworkPermissionRule,
-    PluginToolOutputPlan, PluginToolPathPermissionRule, PluginToolPermissionHandlers,
-    PluginToolPlan, PluginToolStreamHandler, PluginToolStreamSignature,
-    plugin_attr_has_explicit_args,
+    PluginArgConfig, PluginCallInput, PluginContextArg, PluginGeneratedInputField,
+    PluginGeneratedToolInput, PluginInherentMethodAttrs, PluginInputNetworkSpec,
+    PluginInputPathSpec, PluginMethodInfo, PluginNetworkSemantic, PluginOperationAttrArgs,
+    PluginOperationHandlerPlan, PluginOperationInputPlan, PluginOperationMethodShape,
+    PluginOperationPlan, PluginPathPermissionKind, PluginPickerKind, PluginServiceAttrArgs,
+    PluginServiceAttrTarget, PluginServiceInputPlan, PluginServicePlan, PluginServiceTargetPlan,
+    PluginToolAttrConfig, PluginToolInvokeHandler, PluginToolMethodShape,
+    PluginToolNetworkPermissionRule, PluginToolOperationConfig, PluginToolOutputPlan,
+    PluginToolPathPermissionRule, PluginToolPermissionHandlers, PluginToolPlan,
+    PluginToolStreamHandler, PluginToolStreamSignature, plugin_attr_has_explicit_args,
 };
 pub use serde_rename_support::{
     SerdeRenameRule, field_has_serde_default, field_schema_aliases,

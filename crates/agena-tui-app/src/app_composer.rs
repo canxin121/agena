@@ -726,28 +726,31 @@ impl App {
             });
         }
         for entry in self
-            .plugin_slash_commands()
+            .plugin_slash_operations()
             .into_iter()
-            .filter(|entry| plugin_command_matches_slash_query(entry, &query))
+            .filter(|entry| plugin_operation_matches_slash_query(entry, &query))
         {
-            let Some(slash_name) = plugin_command_slash_name(&entry) else {
+            let Some(slash_name) = plugin_operation_slash_name(&entry) else {
                 // A plugin may legally declare a command without a slash
                 // name; skip rather than assume the suggestion source
                 // pre-filtered it out.
                 continue;
             };
-            let key = format!("plugin-command:{}:{}", entry.plugin_id, entry.command.id);
+            let key = format!(
+                "plugin-operation:{}:{}",
+                entry.plugin_id, entry.operation.id
+            );
             actions.insert(
                 key.clone(),
                 SlashCommandSuggestionAction {
                     slash_name: slash_name.clone(),
-                    can_submit_without_arguments: plugin_command_accepts_empty_arguments(&entry),
+                    can_submit_without_arguments: plugin_operation_accepts_empty_arguments(&entry),
                 },
             );
             items.push(SlashCommandSuggestionItem {
                 key,
                 label: format!("/{slash_name}"),
-                detail: plugin_command_detail(&entry),
+                detail: plugin_operation_detail(&entry),
             });
         }
         (items, actions)
@@ -793,8 +796,8 @@ use crate::{
     PromptHistorySearchState, SlashCommandSuggestionAction, SlashCommandSuggestionContext,
     SlashCommandSuggestionItem, SlashCommandSuggestionMeta, SlashCommandSuggestionState, UiAction,
     commands, current_spinner_millis, file_mention_suggestion_context_for_text,
-    plugin_command_accepts_empty_arguments, plugin_command_detail,
-    plugin_command_matches_slash_query, plugin_command_slash_name,
+    plugin_operation_accepts_empty_arguments, plugin_operation_detail,
+    plugin_operation_matches_slash_query, plugin_operation_slash_name,
     slash_command_suggestion_context_for_text, spinner_frame, transcript_node_kind_label,
     transcript_spinner_placeholder, ui_text,
 };

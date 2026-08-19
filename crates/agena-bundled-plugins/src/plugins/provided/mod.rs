@@ -10,7 +10,6 @@ pub mod notebook;
 pub mod planning;
 pub mod repo;
 pub mod report;
-pub mod schema_lab;
 pub mod session;
 pub mod settings;
 pub mod shell;

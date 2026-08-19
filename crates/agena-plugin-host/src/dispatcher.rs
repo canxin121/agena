@@ -9,7 +9,7 @@ use serde::{Serialize, de::DeserializeOwned};
 use tracing::Instrument;
 
 use crate::error::TransportError;
-use crate::host::{HookRunRecord, HookRunStatus, LoadedPlugin};
+use crate::host::{HookRunRecord, HookRunStatus, HostHandle, LoadedPlugin};
 use crate::sdk::HookSubscription;
 use crate::sdk::host_api::{self, HostCallbackContext};
 use crate::sdk::rpc::method;
@@ -41,6 +41,7 @@ where
         input,
         apply,
         |_, _| None,
+        None,
         session_id,
         runs,
     )
@@ -56,6 +57,7 @@ pub async fn chain_patch_in_context<I, P, F, C>(
     mut input: I,
     mut apply: F,
     context: C,
+    authority: Option<&HostHandle>,
     session_id: Option<i64>,
     runs: &mut Vec<HookRunRecord>,
 ) -> Result<I, TransportError>
@@ -74,7 +76,15 @@ where
         let params = serde_json::to_value(&input)?;
         let call = call_with_timeout(plugin, method_name, params, timeout);
         let result = if let Some(context) = context(plugin, &input) {
-            match host_api::run_in_host_callback_context(context, call).await {
+            let result = match authority {
+                Some(authority) => {
+                    authority
+                        .run_in_authorized_callback_context(&plugin.key(), context, call)
+                        .await
+                }
+                None => host_api::run_in_host_callback_context(context, call).await,
+            };
+            match result {
                 Ok(v) => v,
                 Err(err) => {
                     record_transport_failure(runs, &hook, &plugin_id, session_id, &err);

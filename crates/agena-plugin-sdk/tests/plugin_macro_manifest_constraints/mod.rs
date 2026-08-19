@@ -49,24 +49,6 @@ fn tool_input_direct_array_choices_auto_target_items() {
         renamed_schema.pointer("/properties/tools/x-agena-aliases"),
         Some(&json!(["tool_values", "legacyTools"]))
     );
-
-    let manifest = Plugin::manifest(&ManifestPlugin);
-    let path_command = command_by_id(&manifest, "path_auto_item_choice");
-    assert_eq!(
-        path_command
-            .input_schema
-            .as_ref()
-            .and_then(|schema| schema.pointer("/properties/tools/items/enum")),
-        Some(&json!(["cargo", "git"]))
-    );
-    let renamed_command = command_by_id(&manifest, "renamed_auto_item_choice");
-    assert_eq!(
-        renamed_command
-            .input_schema
-            .as_ref()
-            .and_then(|schema| schema.pointer("/properties/tools/items/enum")),
-        Some(&json!(["cargo", "git"]))
-    );
 }
 
 #[test]
@@ -113,19 +95,6 @@ fn tool_input_enum_variant_local_normalization_applies_to_parse_and_schema() {
         .expect("enum schema should include the tags variant branch");
     assert_eq!(
         tags_schema.pointer("/properties/tags/items/minLength"),
-        Some(&json!(1))
-    );
-
-    let manifest = Plugin::manifest(&ManifestPlugin);
-    let command = command_by_id(&manifest, "manifest.variant_normalize");
-    let command_schema = command
-        .input_schema
-        .as_ref()
-        .expect("typed command should expose enum input schema");
-    let command_tags_schema = enum_variant_schema_by_action(command_schema, "tags")
-        .expect("typed command schema should include the tags variant branch");
-    assert_eq!(
-        command_tags_schema.pointer("/properties/tags/items/minLength"),
         Some(&json!(1))
     );
 }
@@ -189,7 +158,7 @@ fn tool_input_enum_variant_direct_array_constraints_auto_target_items() {
         auto_tags_schema.pointer("/properties/auto_tags/items/pattern"),
         Some(&json!("^[a-z0-9-]+$"))
     );
-    let auto_tags_relations = schema_relation_labels(auto_tags_schema);
+    let auto_tags_relations = schema_relation_labels(&auto_tags_schema);
     assert!(auto_tags_relations.contains(&"forbid_substrings `auto_tags[]`: \"..\"".to_string()));
     assert!(auto_tags_relations.contains(&"distinct_trimmed `auto_tags[]`".to_string()));
 
@@ -254,23 +223,13 @@ fn tool_input_enum_variant_renamed_fields_resolve_constraint_paths() {
     let schema = VariantRenamedFieldInput::input_schema();
     let run_schema = enum_variant_schema_by_action(&schema, "run")
         .expect("enum schema should include the run variant branch");
-    let run_relations = schema_relation_labels(run_schema);
+    let run_relations = schema_relation_labels(&run_schema);
     assert!(run_relations.contains(&"requires `filePath` -> `mode`".to_string()));
 
     let tags_schema = enum_variant_schema_by_action(&schema, "tags")
         .expect("enum schema should include the tags variant branch");
-    let tags_relations = schema_relation_labels(tags_schema);
+    let tags_relations = schema_relation_labels(&tags_schema);
     assert!(tags_relations.contains(&"distinct_trimmed `tagValues[]`".to_string()));
-
-    let manifest = Plugin::manifest(&ManifestPlugin);
-    let command = command_by_id(&manifest, "manifest.variant_renamed_fields");
-    let command_schema = command
-        .input_schema
-        .as_ref()
-        .expect("typed command should expose renamed enum input schema");
-    let query_schema = enum_variant_schema_by_action(command_schema, "query")
-        .expect("typed command schema should include the query variant branch");
-    assert!(query_schema.pointer("/properties/filePath").is_some());
 }
 
 #[test]
@@ -341,21 +300,8 @@ fn tool_input_enum_variant_field_args_support_name_alias_default_and_constraints
 
     let tags_schema = enum_variant_schema_by_action(&schema, "tags")
         .expect("enum schema should include the tags variant branch");
-    let tags_relations = schema_relation_labels(tags_schema);
+    let tags_relations = schema_relation_labels(&tags_schema);
     assert!(tags_relations.contains(&"distinct_trimmed `tagValues[]`".to_string()));
-
-    let manifest = Plugin::manifest(&ManifestPlugin);
-    let command = command_by_id(&manifest, "manifest.variant_field_args");
-    let command_schema = command
-        .input_schema
-        .as_ref()
-        .expect("typed command should expose variant field arg schema");
-    let command_run_schema = enum_variant_schema_by_action(command_schema, "run")
-        .expect("typed command schema should include the run variant branch");
-    assert_eq!(
-        command_run_schema.pointer("/properties/mode/default"),
-        Some(&json!("read"))
-    );
 }
 
 #[test]
@@ -578,32 +524,6 @@ fn tool_input_field_relation_constraints_apply_to_parse_and_schema() {
         renamed_schema.pointer("/properties/tags/x-agena-aliases"),
         Some(&json!(["tag_values", "legacyTags"]))
     );
-
-    let manifest = Plugin::manifest(&ManifestPlugin);
-    let path_command = command_by_id(&manifest, "path_relation");
-    let path_command_relations = schema_relation_labels(
-        path_command
-            .input_schema
-            .as_ref()
-            .expect("tool command schema"),
-    );
-    assert!(path_command_relations.contains(&"requires `path` -> `mode`".to_string()));
-    assert!(
-        path_command_relations
-            .contains(&"required_unless_present `fallback` unless `mode` present".to_string())
-    );
-    let renamed_command = command_by_id(&manifest, "renamed_relation");
-    let renamed_command_relations = schema_relation_labels(
-        renamed_command
-            .input_schema
-            .as_ref()
-            .expect("renamed schema"),
-    );
-    assert!(renamed_command_relations.contains(&"requires `path` -> `mode`".to_string()));
-    assert!(
-        renamed_command_relations
-            .contains(&"forbid_substrings `filePath`: \"..\", \"~\"".to_string())
-    );
 }
 
 #[test]
@@ -698,27 +618,6 @@ fn tool_input_field_group_constraints_apply_to_parse_and_schema() {
         renamed_schema.pointer("/properties/stdinPayload/x-agena-aliases"),
         Some(&json!(["stdin_payload", "legacyStdin"]))
     );
-
-    let manifest = Plugin::manifest(&ManifestPlugin);
-    let path_command = command_by_id(&manifest, "path_group");
-    let path_command_relations = schema_relation_labels(
-        path_command
-            .input_schema
-            .as_ref()
-            .expect("tool group schema"),
-    );
-    assert!(path_command_relations.contains(&"exactly_one_of: `path`, `stdin`".to_string()));
-    let renamed_command = command_by_id(&manifest, "renamed_group");
-    let renamed_command_relations = schema_relation_labels(
-        renamed_command
-            .input_schema
-            .as_ref()
-            .expect("renamed group schema"),
-    );
-    assert!(
-        renamed_command_relations
-            .contains(&"exactly_one_of: `filePath`, `stdinPayload`".to_string())
-    );
 }
 
 #[test]
@@ -791,7 +690,7 @@ use super::{
     PathAutoItemChoiceInput, PathGroupInput, PathRelationInput, RenamedAutoItemChoiceInput,
     RenamedGroupInput, RenamedRelationInput, RootDefaultInput, RootExampleInput,
     RootPartialExampleInput, VariantFieldArgInput, VariantInferenceInput, VariantNormalizeInput,
-    VariantRenamedFieldInput, VariantSemanticInput, command_by_id, enum_variant_schema_by_action,
+    VariantRenamedFieldInput, VariantSemanticInput, enum_variant_schema_by_action,
     schema_relation_labels, tool_by_name,
 };
 use agena_plugin_sdk::prelude::*;

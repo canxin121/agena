@@ -15,7 +15,7 @@ use crate::attachment::AttachmentItem;
 use crate::error::{PluginError, Result};
 use crate::hooks::{EventEnvelope, EventFilter, ToolInvokeOutput};
 use crate::identity::{PluginKey, ToolKey};
-use crate::manifest::{PluginDisplayContribution, PluginTuiThemeColors, ToolDefinition};
+use crate::manifest::{PluginDisplayContribution, PluginTerminalThemeColors, ToolDefinition};
 use agena_domain::{BackgroundActivity, BackgroundActivityKind};
 
 #[async_trait]
@@ -63,6 +63,16 @@ pub trait HostClient: Send + Sync + 'static {
 
     async fn invoke_tool(&self, tool: String, input: serde_json::Value)
     -> Result<ToolInvokeOutput>;
+
+    /// Invoke one explicitly imported service. The host resolves the provider
+    /// from the immutable manifest graph; callers cannot select or discover a
+    /// provider at invocation time.
+    async fn invoke_service(
+        &self,
+        _req: crate::PluginServiceInvokeInput,
+    ) -> Result<crate::PluginServiceInvokeOutput> {
+        Err(unavailable())
+    }
 
     // ---------------- Host workflow capabilities ----------------
     //
@@ -441,6 +451,12 @@ pub struct HostCallbackContext {
     /// host calls coming back through tool B.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_name: Option<String>,
+    /// Opaque host-issued authority proving that the session/call/workspace/
+    /// tool context above originated from the active Host→Plugin call. Plugin
+    /// code must treat this as an echo-only capability; inventing or replaying
+    /// a token outside the originating call is rejected by the host.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub authority_token: Option<String>,
 }
 
 tokio::task_local! {
@@ -466,6 +482,9 @@ where
     }
     if let Some(tool_name) = patch.tool_name {
         current.tool_name = Some(tool_name);
+    }
+    if let Some(authority_token) = patch.authority_token {
+        current.authority_token = Some(authority_token);
     }
     HOST_CALLBACK_CONTEXT.scope(current, fut).await
 }
@@ -1077,6 +1096,10 @@ pub struct ToolRegistryChangedEvent {
     pub timestamp_ms: i64,
     pub plugin: PluginKey,
     pub tool_key: ToolKey,
+    /// Opaque capability visibility scope. Absent means the mutation is
+    /// plugin-global; session-scoped dynamic tools carry `session:<id>`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool: Option<ToolDefinition>,
 }
@@ -1543,7 +1566,7 @@ pub struct HostThemePalette {
     pub id: String,
     pub plugin_id: PluginKey,
     pub display_name: String,
-    pub colors: PluginTuiThemeColors,
+    pub colors: PluginTerminalThemeColors,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1551,7 +1574,7 @@ pub struct HostThemePalette {
 pub struct HostThemeRegisterRequest {
     pub id: String,
     pub display_name: String,
-    pub colors: PluginTuiThemeColors,
+    pub colors: PluginTerminalThemeColors,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

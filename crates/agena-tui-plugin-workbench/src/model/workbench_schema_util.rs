@@ -14,40 +14,23 @@ pub(crate) fn schema_property_count(schema: &JsonValue) -> usize {
     }
 }
 
-pub(crate) fn command_argument_count(
-    plugin: &PluginWorkbenchPlugin,
-    command: &agena_plugin_host::PluginCommandDefinition,
+pub(crate) fn operation_argument_count(
+    _plugin: &PluginWorkbenchPlugin,
+    operation: &agena_plugin_host::PluginOperationDefinition,
 ) -> usize {
-    match command_schema_and_value(plugin, command) {
-        Some((schema, _)) => schema_property_count(&schema),
-        None => 0,
+    use agena_plugin_host::sdk::SettingsNodeKind;
+    match &operation.input.root.kind {
+        SettingsNodeKind::Object { fields } => fields.len(),
+        _ => 1,
     }
 }
 
-pub(crate) fn command_schema_and_value(
-    plugin: &PluginWorkbenchPlugin,
-    command: &agena_plugin_host::PluginCommandDefinition,
+pub(crate) fn operation_schema_and_value(
+    _plugin: &PluginWorkbenchPlugin,
+    operation: &agena_plugin_host::PluginOperationDefinition,
 ) -> Option<(JsonValue, JsonValue)> {
-    let schema = command
-        .input_schema
-        .clone()
-        .or_else(|| match &command.action {
-            agena_plugin_host::PluginUiAction::InvokeTool { tool, .. } => plugin
-                .tools
-                .iter()
-                .find(|candidate| candidate.name == *tool)
-                .map(|tool| tool.contract.input_schema.clone()),
-            _ => None,
-        })?;
-    let mut value = default_value_for_schema(&schema, &schema);
-    let input = match &command.action {
-        agena_plugin_host::PluginUiAction::InvokeTool { input, .. }
-        | agena_plugin_host::PluginUiAction::InvokeCommand { input, .. } => input.as_ref(),
-        _ => None,
-    };
-    if let Some(input) = input {
-        merge_config_override(&mut value, input);
-    }
+    let schema = settings_contract_editor_schema(&operation.input);
+    let value = operation.input.default_value().ok()?;
     Some((schema, value))
 }
 
@@ -569,8 +552,8 @@ pub fn clean(text: impl AsRef<str>) -> String {
 }
 use super::{
     BTreeSet, DiagnosticSeverity, JsonMap, JsonValue, PluginDetailTab, PluginWorkbenchOverlay,
-    PluginWorkbenchPlugin, Style, active_schema_for_value, default_value_for_schema, json,
-    merge_config_override, object_property_schema, pattern_key_matches, preview_value,
-    schema_has_array_shape, schema_has_object_shape, section_row_count,
+    PluginWorkbenchPlugin, Style, active_schema_for_value, json, object_property_schema,
+    pattern_key_matches, preview_value, schema_has_array_shape, schema_has_object_shape,
+    section_row_count, settings_contract_editor_schema,
 };
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};

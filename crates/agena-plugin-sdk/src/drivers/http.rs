@@ -195,6 +195,17 @@ impl HostClient for HttpCallbackHostClient {
         .await
     }
 
+    async fn invoke_service(
+        &self,
+        req: crate::PluginServiceInvokeInput,
+    ) -> crate::error::Result<crate::PluginServiceInvokeOutput> {
+        self.call(
+            method::HOST_SERVICE_INVOKE,
+            params_with_current_context(serde_json::json!({ "request": req })),
+        )
+        .await
+    }
+
     async fn image_execute(
         &self,
         req: HostImageExecuteRequest,

@@ -2,6 +2,10 @@
 
 use std::sync::{OnceLock, RwLock};
 
+use agena_plugin_contracts::{
+    MAX_JSON_ESCAPE_BYTES, MAX_JSON_ESCAPE_DEPTH, PluginServiceMethod, SettingsConstraints,
+    SettingsContract, SettingsNode, SettingsNodeKind,
+};
 use schemars::{JsonSchema, schema_for};
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
@@ -70,6 +74,22 @@ where
     normalize_schema_json(value)
 }
 
+/// Build a cross-plugin service method from ordinary Rust input/output types.
+/// Both sides compile through the same constrained contract used by settings
+/// and operations, so service authors get typed RPC without hand-written JSON
+/// schemas or renderer-specific metadata.
+pub fn service_method_for<I, O>(id: impl Into<String>) -> PluginServiceMethod
+where
+    I: JsonSchema,
+    O: JsonSchema,
+{
+    PluginServiceMethod::new(
+        id,
+        settings_contract_for::<I>(),
+        settings_contract_for::<O>(),
+    )
+}
+
 pub fn json_schema_for_default<T>(default: T) -> Value
 where
     T: JsonSchema + Serialize,
@@ -82,6 +102,69 @@ where
         );
     }
     value
+}
+
+/// Compile an internal schemars document into the closed settings contract.
+///
+/// JSON Schema is deliberately used only inside the SDK/macro boundary. The
+/// returned value is the only settings description placed in a manifest or
+/// sent to a host surface. Unsupported composition and open-ended shapes are
+/// rejected here so renderers never need to implement a second schema engine.
+pub fn settings_contract_from_schema(
+    schema: Value,
+) -> std::result::Result<SettingsContract, String> {
+    crate::settings_contract::settings_contract_from_schema(&schema)
+}
+
+pub fn settings_contract_for<T>() -> SettingsContract
+where
+    T: JsonSchema,
+{
+    crate::settings_contract::settings_contract_for::<T>()
+        .expect("typed plugin settings must compile to the constrained settings contract")
+}
+
+pub fn settings_contract_for_default<T>(default: T) -> SettingsContract
+where
+    T: JsonSchema + Serialize,
+{
+    crate::settings_contract::settings_contract_for_default(default)
+        .expect("typed plugin settings must compile to the constrained settings contract")
+}
+
+/// Contract for an operation that accepts no structured input.
+pub fn empty_settings_contract() -> SettingsContract {
+    SettingsContract::new(SettingsNode {
+        id: "root".to_string(),
+        path: String::new(),
+        title: "Input".to_string(),
+        description: String::new(),
+        required: true,
+        default: Some(serde_json::json!({})),
+        constraints: SettingsConstraints::default(),
+        sensitive: false,
+        secret: false,
+        kind: SettingsNodeKind::Object { fields: Vec::new() },
+    })
+}
+
+/// Contract for an operation whose handler explicitly opts into bounded JSON.
+pub fn json_settings_contract() -> SettingsContract {
+    SettingsContract::new(SettingsNode {
+        id: "root".to_string(),
+        path: String::new(),
+        title: "JSON input".to_string(),
+        description: String::new(),
+        required: true,
+        default: None,
+        constraints: SettingsConstraints::default(),
+        sensitive: false,
+        secret: false,
+        kind: SettingsNodeKind::Json {
+            max_bytes: MAX_JSON_ESCAPE_BYTES,
+            max_depth: MAX_JSON_ESCAPE_DEPTH,
+        },
+    })
 }
 
 pub fn typed_tool_output<T>(value: T) -> Result<crate::ToolInvokeOutput>
@@ -152,17 +235,6 @@ pub fn dedupe_tool_tags(tags: &mut Vec<ToolTag>) {
         }
     }
     *tags = deduped;
-}
-
-pub fn empty_settings_schema() -> Value {
-    serde_json::json!({
-        "title": "Plugin Config",
-        "description": "This plugin does not expose plugin-specific runtime configuration.",
-        "type": "object",
-        "properties": {},
-        "additionalProperties": false,
-        "default": {}
-    })
 }
 
 pub fn parse_json_value_str(input: &str) -> Result<Value> {
@@ -258,11 +330,20 @@ pub fn normalize_schema_json(value: Value) -> Value {
     normalize_schema_json_value(value, true)
 }
 
-fn normalize_schema_json_value(value: Value, remove_schema_metadata: bool) -> Value {
+/// Normalize structural Schemars output while preserving author-facing
+/// titles/descriptions. Settings contracts use this path so Rust type names and
+/// doc comments survive compilation into the closed UI contract; tool input
+/// schemas keep using `normalize_schema_json`, which intentionally strips
+/// presentation metadata from their machine-facing schema.
+pub(crate) fn normalize_settings_schema_json(value: Value) -> Value {
+    normalize_schema_json_value(value, false)
+}
+
+fn normalize_schema_json_value(value: Value, remove_titles: bool) -> Value {
     match value {
         Value::Object(mut object) => {
-            if remove_schema_metadata {
-                object.remove("$schema");
+            object.remove("$schema");
+            if remove_titles {
                 object.remove("title");
             }
             let mut cleaned = serde_json::Map::new();
@@ -272,15 +353,18 @@ fn normalize_schema_json_value(value: Value, remove_schema_metadata: bool) -> Va
                         Value::Object(map) => Value::Object(
                             map.into_iter()
                                 .map(|(nested_key, nested_value)| {
-                                    (nested_key, normalize_schema_json_value(nested_value, true))
+                                    (
+                                        nested_key,
+                                        normalize_schema_json_value(nested_value, remove_titles),
+                                    )
                                 })
                                 .collect(),
                         ),
-                        other => normalize_schema_json_value(other, true),
+                        other => normalize_schema_json_value(other, remove_titles),
                     },
                     "required" => match value {
                         Value::Array(items) => Value::Array(items),
-                        other => normalize_schema_json_value(other, true),
+                        other => normalize_schema_json_value(other, remove_titles),
                     },
                     "$defs" | "definitions" | "patternProperties" | "dependentSchemas" => {
                         match value {
@@ -289,15 +373,18 @@ fn normalize_schema_json_value(value: Value, remove_schema_metadata: bool) -> Va
                                     .map(|(nested_key, nested_value)| {
                                         (
                                             nested_key,
-                                            normalize_schema_json_value(nested_value, true),
+                                            normalize_schema_json_value(
+                                                nested_value,
+                                                remove_titles,
+                                            ),
                                         )
                                     })
                                     .collect(),
                             ),
-                            other => normalize_schema_json_value(other, true),
+                            other => normalize_schema_json_value(other, remove_titles),
                         }
                     }
-                    _ => normalize_schema_json_value(value, true),
+                    _ => normalize_schema_json_value(value, remove_titles),
                 };
                 cleaned.insert(key, normalized);
             }
@@ -320,7 +407,7 @@ fn normalize_schema_json_value(value: Value, remove_schema_metadata: bool) -> Va
         Value::Array(items) => Value::Array(
             items
                 .into_iter()
-                .map(|item| normalize_schema_json_value(item, true))
+                .map(|item| normalize_schema_json_value(item, remove_titles))
                 .collect(),
         ),
         other => other,

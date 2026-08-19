@@ -5,11 +5,11 @@ use syn::{Result, Type};
 
 use crate::plugin_hooks::plugin_layer_hooks_expr;
 use crate::plugin_impl_config::expr_is_ident;
-use crate::plugin_tooling::{expand_plugin_command_definition, expand_plugin_tool_definition};
+use crate::plugin_tooling::{expand_plugin_operation_definition, expand_plugin_tool_definition};
 
 use super::{
-    PluginCommandPlan, PluginHookPlan, PluginImplConfig, PluginToolPlan, doc_summary,
-    lit_str_from_text,
+    PluginHookPlan, PluginImplConfig, PluginOperationPlan, PluginServiceInputPlan,
+    PluginServicePlan, PluginServiceTargetPlan, PluginToolPlan, doc_summary, lit_str_from_text,
 };
 
 pub fn expand_plugin_layer_export(
@@ -71,7 +71,8 @@ pub fn expand_plugin_layer_manifest(
     docs: Option<&str>,
     tools: &[PluginToolPlan],
     hooks: &[PluginHookPlan],
-    commands: &[PluginCommandPlan],
+    operations: &[PluginOperationPlan],
+    services: &[PluginServicePlan],
 ) -> Result<proc_macro2::TokenStream> {
     let namespace = config
         .namespace
@@ -91,16 +92,7 @@ pub fn expand_plugin_layer_manifest(
     };
     let hooks_expr = plugin_layer_hooks_expr(tools, hooks);
 
-    let config_schema_assignment = expand_plugin_layer_config_schema_assignment(
-        config.settings_schema_type.as_ref(),
-        config,
-        self_ty,
-    )?;
-    let config_schema_value_assignment = config
-        .settings_schema
-        .as_ref()
-        .map(|schema| quote! { manifest.settings_schema = Some(#schema); })
-        .unwrap_or_default();
+    let settings_assignment = expand_plugin_layer_settings_assignment(config, self_ty)?;
     let help_assignment = if let Some(help) = config.help.as_ref() {
         quote! { manifest.help = Some(#help.to_string()); }
     } else if let Some(help) = lit_str_from_text(docs) {
@@ -123,6 +115,65 @@ pub fn expand_plugin_layer_manifest(
         .iter()
         .map(|tag| quote! { manifest.tags.push(#tag); })
         .collect::<Vec<_>>();
+    let service_import_assignments = config
+        .service_imports
+        .iter()
+        .map(|service| quote! { manifest.services.imports.push(#service); })
+        .collect::<Vec<_>>();
+    let typed_service_assignments = services
+        .iter()
+        .map(|service| {
+            let (service_id, api_version, method_contract) = match &service.target {
+                PluginServiceTargetPlan::Inline {
+                    service: service_id,
+                    api_version,
+                    method: method_id,
+                } => {
+                    let output = &service.output;
+                    let method_contract = match &service.input {
+                        PluginServiceInputPlan::None => quote! {
+                            ::agena_plugin_sdk::PluginServiceMethod::new(
+                                #method_id,
+                                ::agena_plugin_sdk::SettingsContract::empty_object("No input", ""),
+                                ::agena_plugin_sdk::macro_support::settings_contract_for::<#output>(),
+                            )
+                        },
+                        PluginServiceInputPlan::Typed { ty, .. } => quote! {
+                            ::agena_plugin_sdk::service_method_for::<#ty, #output>(#method_id)
+                        },
+                    };
+                    (
+                        quote! { #service_id },
+                        quote! { #api_version },
+                        method_contract,
+                    )
+                }
+                PluginServiceTargetPlan::Endpoint { endpoint } => (
+                    quote! { <#endpoint as ::agena_plugin_sdk::PluginServiceEndpoint>::SERVICE },
+                    quote! { <#endpoint as ::agena_plugin_sdk::PluginServiceEndpoint>::API_VERSION },
+                    quote! { <#endpoint as ::agena_plugin_sdk::PluginServiceEndpoint>::method_contract() },
+                ),
+            };
+            quote! {
+                {
+                    let __agena_service_method = #method_contract;
+                    if let Some(__agena_service_export) = manifest
+                        .services
+                        .exports
+                        .iter_mut()
+                        .find(|export| export.id == #service_id && export.api_version == #api_version)
+                    {
+                        __agena_service_export.methods.push(__agena_service_method);
+                    } else {
+                        manifest.services.exports.push(
+                            ::agena_plugin_sdk::PluginServiceExport::new(#service_id, #api_version)
+                                .with_method(__agena_service_method),
+                        );
+                    }
+                }
+            }
+        })
+        .collect::<Vec<_>>();
     let tool_definition_assignments = tools
         .iter()
         .map(|binding| {
@@ -130,24 +181,24 @@ pub fn expand_plugin_layer_manifest(
             Ok(quote! { manifest.tools.push(#definition); })
         })
         .collect::<Result<Vec<_>>>()?;
-    let command_definition_assignments = commands
+    let operation_definition_assignments = operations
         .iter()
-        .map(expand_plugin_command_definition)
+        .map(expand_plugin_operation_definition)
         .collect::<Result<Vec<_>>>()?;
 
     let build_manifest = quote! {{
             let mut manifest = ::agena_plugin_sdk::PluginManifest::new(#namespace, #name, #version);
             manifest.summary = Some(#summary.to_string());
             manifest.hooks = #hooks_expr;
-            manifest.settings_schema = Some(::agena_plugin_sdk::macro_support::empty_settings_schema());
-            #config_schema_assignment
-            #config_schema_value_assignment
-                        #help_assignment
+            #settings_assignment
+            #help_assignment
             #skills_assignment
             #activity_kinds_assignment
             #(#plugin_tag_assignments)*
+            #(#service_import_assignments)*
+            #(#typed_service_assignments)*
             #(#tool_definition_assignments)*
-            #(#command_definition_assignments)*
+            #(#operation_definition_assignments)*
             manifest
     }};
     let body = if cacheable {
@@ -167,39 +218,49 @@ pub fn expand_plugin_layer_manifest(
     })
 }
 
-fn expand_plugin_layer_config_schema_assignment(
-    config_schema_type: Option<&Type>,
+fn expand_plugin_layer_settings_assignment(
     config: &PluginImplConfig,
     self_ty: &Type,
 ) -> Result<proc_macro2::TokenStream> {
-    let Some(ty) = config_schema_type else {
-        if config.settings_schema_store {
+    let Some(ty) = config.settings.as_ref() else {
+        if config.settings_store {
             return Ok(quote! {
-                manifest.settings_schema = Some(
-                    <#self_ty as ::agena_plugin_sdk::plugin::PluginSettingsStoreAccess>::plugin_settings_schema(),
+                manifest.settings = Some(
+                    <#self_ty as ::agena_plugin_sdk::plugin::PluginSettingsStoreAccess>::plugin_settings_contract(),
                 );
             });
         }
         return Ok(quote! {});
     };
-    let Some(default) = config.settings_schema_default.as_ref() else {
-        return Ok(quote! {
-            manifest.settings_schema = Some(::agena_plugin_sdk::macro_support::json_schema_for::<#ty>());
-        });
-    };
-    if expr_is_ident(default, "default") {
-        Ok(quote! {
-            manifest.settings_schema = Some(
-                ::agena_plugin_sdk::macro_support::json_schema_for_default(
+    let contract = if let Some(default) = config.settings_default.as_ref() {
+        if expr_is_ident(default, "default") {
+            quote! {
+            ::agena_plugin_sdk::settings_contract_for_default(
                     <#ty as ::core::default::Default>::default(),
-                ),
-            );
-        })
+                )
+                .expect("typed plugin settings must compile to the constrained settings contract")
+            }
+        } else {
+            quote! {
+                ::agena_plugin_sdk::settings_contract_for_default(#default)
+                    .expect("typed plugin settings must compile to the constrained settings contract")
+            }
+        }
     } else {
-        Ok(quote! {
-            manifest.settings_schema = Some(
-                ::agena_plugin_sdk::macro_support::json_schema_for_default(#default),
-            );
-        })
-    }
+        quote! {
+            ::agena_plugin_sdk::settings_contract_for::<#ty>()
+                .expect("typed plugin settings must compile to the constrained settings contract")
+        }
+    };
+    let contract = if let Some(metadata) = config.settings_metadata.as_ref() {
+        quote! {
+            ::agena_plugin_sdk::decorate_settings_contract(#contract, #metadata)
+                .expect("typed plugin settings metadata must reference existing contract paths")
+        }
+    } else {
+        contract
+    };
+    Ok(quote! {
+        manifest.settings = Some(#contract);
+    })
 }

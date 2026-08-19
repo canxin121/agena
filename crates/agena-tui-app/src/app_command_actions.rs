@@ -73,9 +73,9 @@ impl App {
         }
     }
 
-    pub(crate) fn execute_plugin_slash_command(
+    pub(crate) fn execute_plugin_slash_operation(
         &mut self,
-        entry: agena_plugin_host::PluginCommandCatalogItem,
+        entry: agena_plugin_host::PluginOperationCatalogItem,
         args: &str,
     ) {
         let session_id = self
@@ -85,7 +85,7 @@ impl App {
         let args = args.to_string();
         self.dispatch_backend_operation(
             move |application| async move {
-                crate::app_backend::plugin_effects::invoke_plugin_slash_command(
+                crate::app_backend::plugin_effects::invoke_plugin_slash_operation(
                     &application,
                     &entry,
                     session_id,
@@ -94,48 +94,99 @@ impl App {
                 .await
             },
             move |app, result| match result {
-                Ok(effect) => app.apply_plugin_command_effect(effect, session_id),
+                Ok(result) => app.apply_plugin_operation_result(result, session_id),
                 Err(error) => app.flash_error(error),
             },
         );
     }
 
-    fn apply_plugin_command_effect(
+    fn apply_plugin_operation_result(
         &mut self,
-        effect: PluginCommandEffect,
+        result: PluginOperationEffect,
         session_id: Option<i64>,
     ) {
-        match effect {
-            PluginCommandEffect::None => {}
-            PluginCommandEffect::Message(message) => {
-                if !message.trim().is_empty() {
-                    self.flash_info(message);
-                }
+        let feedback = if result.summary.trim().is_empty() {
+            result.title.clone()
+        } else if result.title.trim().is_empty() {
+            result.summary.clone()
+        } else {
+            format!("{}: {}", result.title, result.summary)
+        };
+        match result.status {
+            agena_plugin_host::sdk::PluginOperationStatus::Succeeded => {
+                self.flash_success(feedback)
             }
-            PluginCommandEffect::SubmitPrompt(prompt) => {
-                if prompt.trim().is_empty() {
-                    self.flash_warning(ui_text::t(&self.i18n, "flash-user-command-empty"));
-                    return;
-                }
-                let draft = ComposerDraft {
-                    document: agena_domain::ComposerDocument(vec![
-                        agena_domain::ComposerNode::Text { text: prompt },
-                    ]),
-                };
-                match session_id {
-                    Some(session_id) => {
-                        self.request_submit_message_with_pending(session_id, draft, None)
+            agena_plugin_host::sdk::PluginOperationStatus::Failed => self.flash_error(
+                result
+                    .detail
+                    .clone()
+                    .filter(|detail| !detail.trim().is_empty())
+                    .unwrap_or(feedback),
+            ),
+            agena_plugin_host::sdk::PluginOperationStatus::Unavailable
+            | agena_plugin_host::sdk::PluginOperationStatus::PermissionRequired
+            | agena_plugin_host::sdk::PluginOperationStatus::Cancelled => self.flash_warning(
+                result
+                    .detail
+                    .clone()
+                    .filter(|detail| !detail.trim().is_empty())
+                    .unwrap_or(feedback),
+            ),
+        }
+
+        for effect in result.effects {
+            match effect {
+                agena_plugin_host::sdk::PluginHostEffect::InsertPrompt { prompt } => {
+                    if prompt.trim().is_empty() {
+                        self.flash_warning(ui_text::t(&self.i18n, "flash-user-command-empty"));
+                        continue;
                     }
-                    None => self.create_session(Some(draft)),
+                    let draft = ComposerDraft {
+                        document: agena_domain::ComposerDocument(vec![
+                            agena_domain::ComposerNode::Text { text: prompt },
+                        ]),
+                    };
+                    match session_id {
+                        Some(session_id) => {
+                            self.request_submit_message_with_pending(session_id, draft, None)
+                        }
+                        None => self.create_session(Some(draft)),
+                    }
                 }
-            }
-            PluginCommandEffect::OpenPluginWorkbench { plugin_id, tab } => {
-                self.open_plugin_workbench_detail(plugin_id.as_str(), tab.as_deref());
-            }
-            PluginCommandEffect::OpenUrl(url) => {
-                self.flash_info(format!("Plugin command URL: {url}"));
+                agena_plugin_host::sdk::PluginHostEffect::Navigate { path } => {
+                    if !self.apply_plugin_navigation(path.as_str()) {
+                        self.flash_info(format!("Plugin navigation: {path}"));
+                    }
+                }
+                agena_plugin_host::sdk::PluginHostEffect::OpenUrl { url } => {
+                    self.flash_info(format!("Plugin operation URL: {url}"));
+                }
+                agena_plugin_host::sdk::PluginHostEffect::RefreshPluginSurface { .. } => {}
             }
         }
+    }
+
+    fn apply_plugin_navigation(&mut self, path: &str) -> bool {
+        let Ok(url) = url::Url::parse(&format!("http://agena.local{path}")) else {
+            return false;
+        };
+        if url.path() != "/settings/plugins" {
+            return false;
+        }
+        let mut plugin_id = None;
+        let mut tab = None;
+        for (key, value) in url.query_pairs() {
+            match key.as_ref() {
+                "plugin" => plugin_id = Some(value.into_owned()),
+                "pluginTab" => tab = Some(value.into_owned()),
+                _ => {}
+            }
+        }
+        let Some(plugin_id) = plugin_id else {
+            return false;
+        };
+        self.open_plugin_workbench_detail(plugin_id.as_str(), tab.as_deref());
+        true
     }
 
     /// `/fork` forks the current session (full history clone) and opens the
@@ -237,7 +288,7 @@ impl App {
         self.dispatch_backend_operation(
             move |application| async move {
                 application
-                    .invoke_plugin_ui_tool(
+                    .invoke_plugin_tool(
                         "agena.skills",
                         "get",
                         serde_json::json!({ "name": "review" }),
@@ -423,7 +474,7 @@ fn command_opens_interactive_surface_without_arguments(id: CommandId) -> bool {
             | CommandId::Side
     )
 }
-use crate::app_backend::PluginCommandEffect;
+use crate::app_backend::PluginOperationEffect;
 use crate::{
     App, AppMessage, CommandId, CommandSpec, ComposerDraft, NoticeScope, Path, PermissionReplyKind,
     TIMELINE_EVENT_LIMIT, UiAction, non_empty_owned, parse_pr_command_args, ui_text,

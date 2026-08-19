@@ -785,12 +785,6 @@ fn tool_input_choice_constraints_apply_to_parse_schema_and_usage() {
         Some(&json!(["tool_name", "legacyTool"]))
     );
     assert_eq!(FieldChoiceInput::input_usage().as_deref(), Some("cargo"));
-
-    let manifest = Plugin::manifest(&ManifestPlugin);
-    let path_command = command_by_id(&manifest, "path_choice");
-    assert_eq!(path_command.usage.as_deref(), Some("/path-choice fast"));
-    let field_command = command_by_id(&manifest, "field_choice");
-    assert_eq!(field_command.usage.as_deref(), Some("/field-choice cargo"));
 }
 use super::ManifestPlugin;
 use super::{
@@ -804,7 +798,7 @@ use super::{
     NestedVariantArrayInferenceInput, NestedVariantConstraintArrayInput,
     NestedVariantConstraintInput, NestedVariantInferenceInput, NestedVariantSemanticInput,
     PathChoiceInput, RenameAllSemanticInput, RenameListSemanticInput, VariantInferenceSelector,
-    VariantNestedFieldArgInferenceInput, VariantNestedInferenceInput, command_by_id,
+    VariantNestedFieldArgInferenceInput, VariantNestedInferenceInput,
     enum_variant_schema_by_action, tool_by_name,
 };
 use agena_plugin_sdk::prelude::*;

@@ -89,11 +89,13 @@ impl Default for McpReconnectConfig {
 #[serde(tag = "transport", rename_all = "snake_case", deny_unknown_fields)]
 /// Configuration of one MCP server.
 pub enum McpServerConfig {
+    /// Launches an MCP server as a child process and communicates over stdio.
     Stdio {
         process: McpStdioProcessConfig,
         #[serde(default)]
         tools: McpToolPolicyConfig,
     },
+    /// Connects to a streamable HTTP MCP server.
     Http {
         endpoint: McpHttpEndpointConfig,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -140,23 +142,22 @@ pub struct McpHttpEndpointConfig {
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 /// HTTP authentication settings of an MCP server.
 pub enum McpHttpAuthConfig {
-    Bearer {
-        token: String,
-    },
-    BearerFromEnv {
-        env: String,
-    },
+    /// Uses an inline bearer token value.
+    Bearer { token: String },
+    /// Reads the bearer token from an environment variable.
+    BearerFromEnv { env: String },
+    /// Resolves the bearer token from the configured secret store.
     BearerFromStore,
     /// OAuth credentials and any dynamically registered client identity live
     /// exclusively in the configured secret store. Configuration carries only
     /// the requested public scopes.
+    /// Uses OAuth credentials managed by the configured secret store.
     OAuth {
         #[serde(default)]
         scopes: Vec<String>,
     },
-    Custom {
-        headers: BTreeMap<String, String>,
-    },
+    /// Sends explicit custom HTTP headers.
+    Custom { headers: BTreeMap<String, String> },
 }
 
 pub fn mcp_config_from_plugins(plugins: &PluginsConfig) -> Result<McpConfig, String> {
@@ -165,10 +166,10 @@ pub fn mcp_config_from_plugins(plugins: &PluginsConfig) -> Result<McpConfig, Str
     };
     if configured_plugin.disabled()
         || !matches!(configured_plugin.package, PluginPackage::Static { .. })
-        || configured_plugin.settings().is_null()
+        || configured_plugin.config().is_null()
     {
         return Ok(McpConfig::default());
     }
-    serde_json::from_value(configured_plugin.settings().clone())
+    serde_json::from_value(configured_plugin.config().clone())
         .map_err(|error| format!("plugins.list.\"{MCP_PLUGIN_ID}\".settings: {error}"))
 }

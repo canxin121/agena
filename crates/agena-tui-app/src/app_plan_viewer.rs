@@ -46,7 +46,7 @@ impl App {
         let tx = self.tx.clone();
         tokio::spawn(async move {
             let result = application
-                .invoke_plugin_ui_tool(
+                .invoke_plugin_tool(
                     "agena.plan",
                     "get",
                     serde_json::json!({ "view": "full" }),
@@ -182,7 +182,7 @@ impl App {
         let tx = self.tx.clone();
         tokio::spawn(async move {
             let result = application
-                .invoke_plugin_ui_tool(
+                .invoke_plugin_tool(
                     "agena.plan",
                     "phase",
                     serde_json::json!({ "autorun": target }),

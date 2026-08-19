@@ -1,10 +1,10 @@
 use agena_plugin_sdk::prelude::*;
 
 mod plugin_macro_manifest_basic;
-mod plugin_macro_manifest_commands;
 mod plugin_macro_manifest_constraints;
 mod plugin_macro_manifest_dispatch;
 mod plugin_macro_manifest_impl;
+mod plugin_macro_manifest_operations;
 mod plugin_macro_manifest_shapes_a;
 mod plugin_macro_manifest_shapes_b;
 pub(crate) use plugin_macro_manifest_impl::*;
@@ -21,6 +21,32 @@ struct ManifestInput {
 struct ManifestOutput {
     rendered: String,
 }
+
+agena_plugin_sdk::plugin_service_endpoint! {
+    ManifestEchoEndpoint {
+        service: "test.echo",
+        version: 1,
+        method: "echo",
+        input: ManifestInput,
+        output: ManifestOutput,
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+struct ManifestSettings {
+    /// Whether the test plugin is enabled.
+    enabled: bool,
+}
+
+const MANIFEST_SETTINGS_METADATA: &[(&str, &str, &str)] = &[
+    (
+        "",
+        "Manifest Settings",
+        "Settings metadata stays presentation-only.",
+    ),
+    ("/enabled", "Enabled Override", "Decorated field label."),
+];
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInput)]
 #[serde(deny_unknown_fields)]
@@ -967,12 +993,12 @@ fn tool_by_name<'a>(manifest: &'a PluginManifest, name: &str) -> &'a ToolDefinit
         .unwrap_or_else(|| panic!("{name} tool should be generated"))
 }
 
-fn command_by_id<'a>(manifest: &'a PluginManifest, id: &str) -> &'a PluginCommandDefinition {
+fn operation_by_id<'a>(manifest: &'a PluginManifest, id: &str) -> &'a PluginOperationDefinition {
     manifest
-        .commands
+        .operations
         .iter()
-        .find(|command| command.id == id)
-        .unwrap_or_else(|| panic!("{id} command should be generated"))
+        .find(|operation| operation.id == id)
+        .unwrap_or_else(|| panic!("{id} operation should be generated"))
 }
 
 fn schema_relation_labels(schema: &Value) -> Vec<String> {

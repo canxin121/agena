@@ -249,13 +249,13 @@ impl ClaudeToolsPlugin {
     }
 }
 
-#[agena_plugin_host::sdk::agena_plugin(namespace="agena", name="claude", version=env!("CARGO_PKG_VERSION"), summary="Anthropic Claude server and client tools exposed as ordinary Agena tools.", settings_schema=agena_plugin_sdk::macro_support::json_schema_for_default(ClaudeToolsConfig::default()))]
+#[agena_plugin_host::sdk::agena_plugin(namespace="agena", name="claude", version=env!("CARGO_PKG_VERSION"), summary="Anthropic Claude server and client tools exposed as ordinary Agena tools.", settings=ClaudeToolsConfig, settings_default=default)]
 impl ClaudeToolsPlugin {
     #[hook(init)]
     async fn init(&self, ctx: InitContext, host: Arc<dyn HostClient>) -> SdkResult<InitOutcome> {
         let config: ClaudeToolsConfig =
             agena_plugin_host::sdk::macro_support::parse_defaulted_settings(
-                ctx.settings,
+                ctx.config,
                 "invalid Claude tools plugin config",
             )?;
         self.workspace_root

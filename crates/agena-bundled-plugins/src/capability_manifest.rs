@@ -106,9 +106,6 @@ pub(crate) fn bundled_plugin_manifests() -> Vec<(PluginManifest, Option<String>)
     add!(crate::tool::new_notebook_plugin());
     add!(crate::tool::new_plan_plugin());
     add!(crate::tool::new_report_plugin());
-    if crate::tool::schema_lab_builtin_enabled() {
-        add!(crate::tool::new_schema_lab_plugin(), "feature:schema-lab");
-    }
     add!(crate::tool::new_session_plugin());
     add!(crate::tool::new_settings_plugin());
     add!(crate::tool::new_shell_plugin());
@@ -122,8 +119,7 @@ pub(crate) fn bundled_plugin_manifests() -> Vec<(PluginManifest, Option<String>)
 
 /// Return the complete source-level bundled catalog. `agena.mcp` is included
 /// and marked conditional because runtime registration requires an MCP
-/// manager. `agena.schema_lab` is present only when its compile-time feature is
-/// enabled and is marked accordingly.
+/// manager.
 pub fn bundled_capability_manifest() -> BundledCapabilityManifest {
     let mut plugins = bundled_plugin_manifests()
         .into_iter()

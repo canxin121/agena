@@ -143,7 +143,7 @@ pub struct PluginWorkbenchPlugin {
     pub version: String,
     pub transport: String,
     pub tools: Vec<agena_plugin_host::ToolDefinition>,
-    pub commands: Vec<agena_plugin_host::PluginCommandDefinition>,
+    pub operations: Vec<agena_plugin_host::PluginOperationDefinition>,
     pub config_status: PluginConfigStatus,
     pub status: agena_plugin_host::status::PluginStatus,
     pub inspect: Option<agena_plugin_host::PluginInspect>,

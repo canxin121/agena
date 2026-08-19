@@ -6,84 +6,92 @@ use syn::{Ident, LitStr, Result};
 use crate::plugin_impl_config::sanitize_generated_ident_label;
 
 use super::{
-    PluginCommandHandlerPlan, PluginCommandInputPlan, PluginCommandPlan, PluginGeneratedToolInput,
-    PluginInputNetworkSpec, PluginInputPathSpec, PluginPathPermissionKind,
-    built_in_normalization_tokens, built_in_post_parse_normalization_tokens,
-    built_in_validation_tokens, doc_summary, expand_flatten_shape_schema_normalize_expr,
-    expand_generated_input_post_parse_tokens, expand_input_alias_normalize_tokens,
-    expand_nested_shape_network_specs_expr, expand_nested_shape_path_specs_expr,
-    expand_nested_shape_schema_normalize_expr, expand_plugin_command_usage_expr,
-    generated_input_alias_specs, generated_input_flatten_shape_types,
-    generated_input_nested_shape_fields, lit_str_from_text, nested_input_shape_spec_from_type,
-    tool_spec_schema_metadata_calls,
+    PluginGeneratedToolInput, PluginInputNetworkSpec, PluginInputPathSpec,
+    PluginOperationHandlerPlan, PluginOperationInputPlan, PluginOperationPlan,
+    PluginPathPermissionKind, built_in_normalization_tokens,
+    built_in_post_parse_normalization_tokens, built_in_validation_tokens, doc_summary,
+    expand_flatten_shape_schema_normalize_expr, expand_generated_input_post_parse_tokens,
+    expand_input_alias_normalize_tokens, expand_nested_shape_network_specs_expr,
+    expand_nested_shape_path_specs_expr, expand_nested_shape_schema_normalize_expr,
+    expand_plugin_operation_usage_expr, generated_input_alias_specs,
+    generated_input_flatten_shape_types, generated_input_nested_shape_fields, lit_str_from_text,
+    nested_input_shape_spec_from_type, tool_spec_schema_metadata_calls,
 };
 
-pub fn expand_plugin_command_definition(
-    command: &PluginCommandPlan,
+pub fn expand_plugin_operation_definition(
+    operation: &PluginOperationPlan,
 ) -> Result<proc_macro2::TokenStream> {
-    let id = &command.id;
-    let title = &command.title;
-    let description = &command.description;
-    let category = &command.category;
-    let slash = option_lit_str_expr(command.slash.as_ref());
-    let aliases = &command.aliases;
-    let usage = expand_plugin_command_usage_expr(command)?;
-    let location = &command.location;
-    let input_schema = match &command.handler {
-        PluginCommandHandlerPlan::Method { input, .. } => match input {
-            PluginCommandInputPlan::Typed { ty, .. } => {
-                quote! { Some(<#ty as ::agena_plugin_sdk::ToolInput>::input_schema()) }
+    let id = &operation.id;
+    let title = &operation.title;
+    let description = &operation.description;
+    let group = &operation.group;
+    let category = &operation.category;
+    let slash = option_lit_str_expr(operation.slash.as_ref());
+    let aliases = &operation.aliases;
+    let usage = expand_plugin_operation_usage_expr(operation)?;
+    let slash_present = operation.slash.is_some();
+    let input = match &operation.handler {
+        PluginOperationHandlerPlan::Method { input, .. } => match input {
+            PluginOperationInputPlan::Typed { ty, .. } => {
+                quote! {
+                    ::agena_plugin_sdk::macro_support::settings_contract_from_schema(
+                        <#ty as ::agena_plugin_sdk::ToolInput>::input_schema(),
+                    ).expect("typed operation input must compile to the constrained settings contract")
+                }
             }
-            PluginCommandInputPlan::Generated { input_model, .. } => {
+            PluginOperationInputPlan::Generated { input_model, .. } => {
                 let schema = expand_plugin_tool_input_schema(input_model)?;
-                quote! { Some(#schema) }
+                quote! {
+                    ::agena_plugin_sdk::macro_support::settings_contract_from_schema(
+                        #schema,
+                    ).expect("generated operation input must compile to the constrained settings contract")
+                }
             }
-            PluginCommandInputPlan::None | PluginCommandInputPlan::Raw { .. } => quote! { None },
+            PluginOperationInputPlan::None => {
+                quote! { ::agena_plugin_sdk::macro_support::empty_settings_contract() }
+            }
+            PluginOperationInputPlan::Raw { .. } => {
+                quote! { ::agena_plugin_sdk::macro_support::json_settings_contract() }
+            }
         },
-        PluginCommandHandlerPlan::InvokeTool { input_model, .. } => {
+        PluginOperationHandlerPlan::InvokeTool { input_model, .. } => {
             let schema = expand_plugin_tool_input_schema(input_model)?;
-            quote! { Some(#schema) }
+            quote! {
+                ::agena_plugin_sdk::macro_support::settings_contract_from_schema(
+                    #schema,
+                ).expect("tool-backed operation input must compile to the constrained settings contract")
+            }
         }
     };
-    let action = command.action.as_ref().map_or_else(
-        || match &command.handler {
-            PluginCommandHandlerPlan::Method { .. } => quote! {
-                ::agena_plugin_sdk::PluginUiAction::InvokeCommand {
-                    command: #id.to_string(),
-                    input: None,
-                }
-            },
-            PluginCommandHandlerPlan::InvokeTool {
-                tool,
-                submit_output_as_prompt,
-                ..
-            } => quote! {
-                ::agena_plugin_sdk::PluginUiAction::InvokeTool {
-                    tool: #tool.to_string(),
-                    input: None,
-                    submit_output_as_prompt: #submit_output_as_prompt,
-                }
-            },
+    let target = match &operation.handler {
+        PluginOperationHandlerPlan::Method { method, .. } => quote! {
+            ::agena_plugin_sdk::manifest::PluginOperationTarget::Method {
+                handler: stringify!(#method).to_string(),
+            }
         },
-        |action| quote! { #action },
-    );
-    let handler = match &command.handler {
-        PluginCommandHandlerPlan::Method { .. } => quote! { Some(#id.to_string()) },
-        PluginCommandHandlerPlan::InvokeTool { .. } => quote! { Some(#id.to_string()) },
+        PluginOperationHandlerPlan::InvokeTool { tool, .. } => quote! {
+            ::agena_plugin_sdk::manifest::PluginOperationTarget::Tool {
+                tool: #tool.to_string(),
+            }
+        },
     };
     Ok(quote! {
-        manifest.commands.push(::agena_plugin_sdk::PluginCommandDefinition {
+        manifest.operations.push(::agena_plugin_sdk::PluginOperationDefinition {
             id: #id.to_string(),
             title: #title.to_string(),
             description: #description.to_string(),
-            category: #category.to_string(),
+            group: #group.to_string(),
+            category: Some(#category.to_string()),
             slash: #slash,
             aliases: vec![#(#aliases.to_string()),*],
             usage: #usage,
-            location: #location.to_string(),
-            input_schema: #input_schema,
-            handler: #handler,
-            action: #action,
+            input: #input,
+            discoverability: ::agena_plugin_sdk::OperationDiscoverability {
+                catalog: true,
+                command_palette: true,
+                slash: #slash_present,
+            },
+            target: #target,
         });
     })
 }

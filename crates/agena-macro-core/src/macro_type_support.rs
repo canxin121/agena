@@ -142,7 +142,7 @@ pub fn type_is_tool_invoke_context(ty: &Type) -> bool {
 }
 
 pub fn type_is_plugin_command_context(ty: &Type) -> bool {
-    type_last_segment_is(ty, "PluginCommandContext")
+    type_last_segment_is(ty, "PluginOperationContext")
 }
 
 pub fn type_is_reference(ty: &Type) -> bool {

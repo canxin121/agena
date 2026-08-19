@@ -11,7 +11,7 @@ pub struct PluginToolPlan {
     pub invoke: PluginToolInvokeHandler,
     pub stream: Option<PluginToolStreamHandler>,
     pub permissions: PluginToolPermissionHandlers,
-    pub command: Option<PluginToolCommandConfig>,
+    pub operation: Option<PluginToolOperationConfig>,
 }
 
 #[derive(Clone)]
@@ -122,39 +122,37 @@ pub struct PluginGeneratedInputField {
 }
 
 #[derive(Clone)]
-/// Plan of a plugin command.
-pub struct PluginCommandPlan {
+/// Plan of a plugin operation.
+pub struct PluginOperationPlan {
     pub id: LitStr,
     pub title: LitStr,
     pub description: LitStr,
+    pub group: LitStr,
     pub category: LitStr,
     pub slash: Option<LitStr>,
     pub aliases: Vec<LitStr>,
     pub usage: Option<LitStr>,
-    pub location: LitStr,
-    pub action: Option<Expr>,
-    pub handler: PluginCommandHandlerPlan,
+    pub handler: PluginOperationHandlerPlan,
 }
 
 #[derive(Clone)]
-/// Handler plan of a plugin command.
-pub enum PluginCommandHandlerPlan {
+/// Handler plan of a plugin operation.
+pub enum PluginOperationHandlerPlan {
     Method {
         method: Ident,
-        input: PluginCommandInputPlan,
+        input: PluginOperationInputPlan,
         context: Option<PluginContextArg>,
         is_async: bool,
     },
     InvokeTool {
         tool: LitStr,
         input_model: Box<PluginGeneratedToolInput>,
-        submit_output_as_prompt: bool,
     },
 }
 
 #[derive(Clone)]
-/// Input plan of a plugin command.
-pub enum PluginCommandInputPlan {
+/// Input plan of a plugin operation.
+pub enum PluginOperationInputPlan {
     None,
     Raw {
         by_ref: bool,
@@ -170,15 +168,44 @@ pub enum PluginCommandInputPlan {
 }
 
 #[derive(Clone)]
-/// Shape of a plugin command method.
-pub struct PluginCommandMethodShape {
-    pub input: PluginCommandInputPlan,
+/// Shape of a plugin operation method.
+pub struct PluginOperationMethodShape {
+    pub input: PluginOperationInputPlan,
     pub context: Option<PluginContextArg>,
 }
 
+#[derive(Clone)]
+/// One typed method exported through a declared cross-plugin service seam.
+pub struct PluginServicePlan {
+    pub target: PluginServiceTargetPlan,
+    pub handler: Ident,
+    pub input: PluginServiceInputPlan,
+    pub output: Type,
+    pub returns_result: bool,
+    pub is_async: bool,
+}
+
+#[derive(Clone)]
+pub enum PluginServiceTargetPlan {
+    Inline {
+        service: LitStr,
+        api_version: u32,
+        method: LitStr,
+    },
+    Endpoint {
+        endpoint: Type,
+    },
+}
+
+#[derive(Clone)]
+pub enum PluginServiceInputPlan {
+    None,
+    Typed { ty: Type, by_ref: bool },
+}
+
 #[derive(Clone, Default)]
-/// Config of a plugin tool command.
-pub struct PluginToolCommandConfig {
+/// Config of a tool-backed plugin operation.
+pub struct PluginToolOperationConfig {
     pub id: Option<LitStr>,
     pub title: Option<LitStr>,
     pub description: Option<LitStr>,
@@ -186,24 +213,62 @@ pub struct PluginToolCommandConfig {
     pub slash: Option<LitStr>,
     pub aliases: Vec<LitStr>,
     pub usage: Option<LitStr>,
-    pub location: Option<LitStr>,
-    pub submit_output_as_prompt: bool,
+    pub group: Option<LitStr>,
 }
 
 /// Attributes of a plugin inherent method.
 pub struct PluginInherentMethodAttrs {
     pub tools: Vec<PluginToolPlan>,
     pub hooks: Vec<crate::plugin_hooks::PluginHookPlan>,
-    pub commands: Vec<PluginCommandPlan>,
+    pub operations: Vec<PluginOperationPlan>,
+    pub services: Vec<PluginServicePlan>,
+}
+
+/// `#[service("service.id", version = 1, method = "method")]` arguments.
+/// The method defaults to the Rust function name; API version is mandatory so
+/// service compatibility never changes implicitly.
+pub struct PluginServiceAttrArgs {
+    pub target: PluginServiceAttrTarget,
+    pub metas: Vec<Meta>,
+}
+
+pub enum PluginServiceAttrTarget {
+    Inline(LitStr),
+    Endpoint(Type),
+}
+
+impl Parse for PluginServiceAttrArgs {
+    fn parse(input: ParseStream<'_>) -> Result<Self> {
+        let target = if input.peek(LitStr) {
+            PluginServiceAttrTarget::Inline(input.parse::<LitStr>()?)
+        } else {
+            PluginServiceAttrTarget::Endpoint(input.parse::<Type>()?)
+        };
+        if input.peek(Token![,]) {
+            input.parse::<Token![,]>()?;
+        } else if !input.is_empty() {
+            return Err(input.error("expected `,` after service target"));
+        }
+        let mut metas = Vec::new();
+        while !input.is_empty() {
+            metas.push(input.parse()?);
+            if input.peek(Token![,]) {
+                input.parse::<Token![,]>()?;
+            } else if !input.is_empty() {
+                return Err(input.error("expected `,` between service arguments"));
+            }
+        }
+        Ok(Self { target, metas })
+    }
 }
 
 /// Attribute arguments of a plugin command.
-pub struct PluginCommandAttrArgs {
+pub struct PluginOperationAttrArgs {
     pub slash: Option<LitStr>,
     pub metas: Vec<Meta>,
 }
 
-impl Parse for PluginCommandAttrArgs {
+impl Parse for PluginOperationAttrArgs {
     fn parse(input: ParseStream<'_>) -> Result<Self> {
         let mut slash = None;
         if input.peek(LitStr) {
@@ -211,7 +276,7 @@ impl Parse for PluginCommandAttrArgs {
             if input.peek(Token![,]) {
                 input.parse::<Token![,]>()?;
             } else if !input.is_empty() {
-                return Err(input.error("expected `,` after command slash shorthand"));
+                return Err(input.error("expected `,` after operation slash shorthand"));
             }
         }
 
@@ -221,7 +286,7 @@ impl Parse for PluginCommandAttrArgs {
             if input.peek(Token![,]) {
                 input.parse::<Token![,]>()?;
             } else if !input.is_empty() {
-                return Err(input.error("expected `,` between command arguments"));
+                return Err(input.error("expected `,` between operation arguments"));
             }
         }
 
@@ -243,7 +308,7 @@ pub struct PluginToolAttrConfig {
     pub stream_method: Option<Ident>,
     pub permission_path_rules: Vec<PluginToolPathPermissionRule>,
     pub permission_network_rules: Vec<PluginToolNetworkPermissionRule>,
-    pub command: Option<PluginToolCommandConfig>,
+    pub operation: Option<PluginToolOperationConfig>,
 }
 
 /// Shape of a plugin tool method.

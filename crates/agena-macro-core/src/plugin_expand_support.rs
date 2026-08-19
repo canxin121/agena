@@ -10,14 +10,15 @@ use crate::plugin_hooks::{
 use crate::plugin_impl_config::{parse_plugin_impl_config, plugin_self_type_label};
 use crate::plugin_manifest::{expand_plugin_layer_export, expand_plugin_layer_manifest};
 use crate::plugin_runtime::{
-    expand_plugin_layer_command_invoke, expand_plugin_layer_init_method,
+    expand_plugin_layer_init_method, expand_plugin_layer_operation_invoke,
     expand_plugin_layer_permission_networks, expand_plugin_layer_permission_paths,
-    expand_plugin_layer_tool_invoke, expand_plugin_layer_tool_stream,
+    expand_plugin_layer_service_invoke, expand_plugin_layer_tool_invoke,
+    expand_plugin_layer_tool_stream,
 };
 use crate::{
-    PluginGeneratedToolInput, build_tool_command_plan, command_generated_input_model,
-    parse_plugin_inherent_method_attrs, plugin_impl_method_infos, reject_duplicate_command_plans,
-    reject_duplicate_tool_plans,
+    PluginGeneratedToolInput, build_tool_operation_plan, operation_generated_input_model,
+    parse_plugin_inherent_method_attrs, plugin_impl_method_infos, reject_duplicate_operation_plans,
+    reject_duplicate_service_plans, reject_duplicate_tool_plans,
 };
 
 pub fn expand_plugin_impl_attr(
@@ -52,7 +53,8 @@ fn expand_plugin_inherent_impl_attr(
     let method_infos = plugin_impl_method_infos(&item);
     let mut tool_plans = Vec::new();
     let mut hook_bindings = Vec::new();
-    let mut command_plans = Vec::new();
+    let mut operation_plans = Vec::new();
+    let mut service_plans = Vec::new();
 
     for impl_item in &mut item.items {
         let ImplItem::Fn(method) = impl_item else {
@@ -61,31 +63,35 @@ fn expand_plugin_inherent_impl_attr(
         let attrs = parse_plugin_inherent_method_attrs(method, &self_label, &method_infos)?;
         tool_plans.extend(attrs.tools);
         hook_bindings.extend(attrs.hooks);
-        command_plans.extend(attrs.commands);
+        operation_plans.extend(attrs.operations);
+        service_plans.extend(attrs.services);
     }
 
-    if (!tool_plans.is_empty() || !command_plans.is_empty()) && !item.generics.params.is_empty() {
+    if (!tool_plans.is_empty() || !operation_plans.is_empty() || !service_plans.is_empty())
+        && !item.generics.params.is_empty()
+    {
         return Err(syn::Error::new_spanned(
             &item.generics,
-            "method-level #[tool(...)]/#[command(...)] generation does not support generic plugin impls yet; use a non-generic plugin wrapper type",
+            "method-level #[tool(...)]/#[operation(...)] generation does not support generic plugin impls yet; use a non-generic plugin wrapper type",
         ));
     }
-    command_plans.extend(
+    operation_plans.extend(
         tool_plans
             .iter()
-            .filter_map(build_tool_command_plan)
+            .filter_map(build_tool_operation_plan)
             .collect::<Result<Vec<_>>>()?,
     );
     reject_duplicate_tool_plans(&tool_plans)?;
     reject_duplicate_init_hooks(&hook_bindings)?;
-    reject_duplicate_command_plans(&command_plans)?;
+    reject_duplicate_operation_plans(&operation_plans)?;
+    reject_duplicate_service_plans(&service_plans)?;
     let generated_input_items = tool_plans
         .iter()
         .map(|tool| expand_plugin_generated_input(&tool.input_model))
         .chain(
-            command_plans
+            operation_plans
                 .iter()
-                .filter_map(command_generated_input_model)
+                .filter_map(operation_generated_input_model)
                 .map(expand_plugin_generated_input),
         )
         .collect::<Result<Vec<_>>>()?;
@@ -97,7 +103,8 @@ fn expand_plugin_inherent_impl_attr(
         docs.as_deref(),
         &tool_plans,
         &hook_bindings,
-        &command_plans,
+        &operation_plans,
+        &service_plans,
     )?;
     let tool_invoke_method = (!tool_plans.is_empty())
         .then(|| expand_plugin_layer_tool_invoke(&self_ty, &tool_plans))
@@ -117,8 +124,11 @@ fn expand_plugin_inherent_impl_attr(
         .any(|tool| tool.permissions.has_network_permissions())
         .then(|| expand_plugin_layer_permission_networks(&self_ty, &tool_plans))
         .transpose()?;
-    let command_invoke_method = (!command_plans.is_empty())
-        .then(|| expand_plugin_layer_command_invoke(&self_ty, &command_plans))
+    let operation_invoke_method = (!operation_plans.is_empty())
+        .then(|| expand_plugin_layer_operation_invoke(&self_ty, &operation_plans))
+        .transpose()?;
+    let service_invoke_method = (!service_plans.is_empty())
+        .then(|| expand_plugin_layer_service_invoke(&self_ty, &service_plans))
         .transpose()?;
     let init_binding = hook_bindings
         .iter()
@@ -143,7 +153,8 @@ fn expand_plugin_inherent_impl_attr(
             #stream_method
             #permission_paths_method
             #permission_networks_method
-            #command_invoke_method
+            #operation_invoke_method
+            #service_invoke_method
             #init_method
             #(#hook_methods)*
         }

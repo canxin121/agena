@@ -5,10 +5,222 @@ use super::super::{
 };
 use super::{schema_const_value, schema_enum_values, validate_schema_at};
 
+/// Convert the closed SettingsContract AST into the workbench's internal
+/// editor shape. This adapter never accepts plugin-authored JSON Schema: every
+/// keyword below is generated from the bounded wire contract.
 pub(crate) fn plugin_settings_schema(
     manifest: &agena_plugin_host::PluginManifest,
 ) -> Option<JsonValue> {
-    manifest.settings_schema.clone()
+    manifest
+        .settings
+        .as_ref()
+        .map(settings_contract_editor_schema)
+}
+
+pub(crate) fn settings_contract_editor_schema(
+    contract: &agena_plugin_host::sdk::SettingsContract,
+) -> JsonValue {
+    let mut schema = settings_node_editor_schema(&contract.root);
+    if let Ok(default) = contract.default_value()
+        && let Some(object) = schema.as_object_mut()
+    {
+        object.insert("default".to_string(), default);
+    }
+    schema
+}
+
+fn settings_node_editor_schema(node: &agena_plugin_host::sdk::SettingsNode) -> JsonValue {
+    use agena_plugin_host::sdk::SettingsNodeKind;
+
+    let mut schema = JsonMap::new();
+    schema.insert("title".to_string(), JsonValue::String(node.title.clone()));
+    if !node.description.is_empty() {
+        schema.insert(
+            "description".to_string(),
+            JsonValue::String(node.description.clone()),
+        );
+    }
+    if let Some(default) = &node.default {
+        schema.insert("default".to_string(), default.clone());
+    }
+    if node.sensitive || node.secret {
+        schema.insert("writeOnly".to_string(), JsonValue::Bool(true));
+    }
+    let constraints = &node.constraints;
+    for (key, value) in [
+        ("minimum", constraints.minimum),
+        ("maximum", constraints.maximum),
+        ("exclusiveMinimum", constraints.exclusive_minimum),
+        ("exclusiveMaximum", constraints.exclusive_maximum),
+        ("multipleOf", constraints.multiple_of),
+    ] {
+        if let Some(value) = value.and_then(JsonNumber::from_f64) {
+            schema.insert(key.to_string(), JsonValue::Number(value));
+        }
+    }
+    for (key, value) in [
+        ("minLength", constraints.min_length),
+        ("maxLength", constraints.max_length),
+        ("minItems", constraints.min_items),
+        ("maxItems", constraints.max_items),
+        ("maxProperties", constraints.max_entries),
+    ] {
+        if let Some(value) = value {
+            schema.insert(key.to_string(), JsonValue::Number(value.into()));
+        }
+    }
+
+    match &node.kind {
+        SettingsNodeKind::Boolean => {
+            schema.insert("type".to_string(), JsonValue::String("boolean".to_string()));
+        }
+        SettingsNodeKind::Text | SettingsNodeKind::SecretReference => {
+            schema.insert("type".to_string(), JsonValue::String("string".to_string()));
+        }
+        SettingsNodeKind::Integer => {
+            schema.insert("type".to_string(), JsonValue::String("integer".to_string()));
+        }
+        SettingsNodeKind::Number => {
+            schema.insert("type".to_string(), JsonValue::String("number".to_string()));
+        }
+        SettingsNodeKind::Choice { options } => {
+            schema.insert(
+                "enum".to_string(),
+                JsonValue::Array(options.iter().map(|option| option.value.clone()).collect()),
+            );
+            schema.insert(
+                "x-agena-option-labels".to_string(),
+                JsonValue::Array(
+                    options
+                        .iter()
+                        .map(|option| JsonValue::String(option.title.clone()))
+                        .collect(),
+                ),
+            );
+        }
+        SettingsNodeKind::MultiChoice { options } => {
+            schema.insert("type".to_string(), JsonValue::String("array".to_string()));
+            schema.insert(
+                "items".to_string(),
+                serde_json::json!({
+                    "enum": options.iter().map(|option| option.value.clone()).collect::<Vec<_>>()
+                }),
+            );
+            schema.insert("uniqueItems".to_string(), JsonValue::Bool(true));
+        }
+        SettingsNodeKind::Path { path_kind } => {
+            schema.insert("type".to_string(), JsonValue::String("string".to_string()));
+            schema.insert("format".to_string(), JsonValue::String("path".to_string()));
+            schema.insert(
+                "x-agena-path-kind".to_string(),
+                serde_json::to_value(path_kind).unwrap_or(JsonValue::Null),
+            );
+        }
+        SettingsNodeKind::Url => {
+            schema.insert("type".to_string(), JsonValue::String("string".to_string()));
+            schema.insert("format".to_string(), JsonValue::String("uri".to_string()));
+        }
+        SettingsNodeKind::Duration => {
+            schema.insert("type".to_string(), JsonValue::String("string".to_string()));
+            schema.insert(
+                "format".to_string(),
+                JsonValue::String("duration".to_string()),
+            );
+        }
+        SettingsNodeKind::Object { fields } => {
+            schema.insert("type".to_string(), JsonValue::String("object".to_string()));
+            schema.insert(
+                "properties".to_string(),
+                JsonValue::Object(
+                    fields
+                        .iter()
+                        .map(|field| (field.id.clone(), settings_node_editor_schema(field)))
+                        .collect(),
+                ),
+            );
+            let required = fields
+                .iter()
+                .filter(|field| field.required)
+                .map(|field| JsonValue::String(field.id.clone()))
+                .collect::<Vec<_>>();
+            if !required.is_empty() {
+                schema.insert("required".to_string(), JsonValue::Array(required));
+            }
+            schema.insert("additionalProperties".to_string(), JsonValue::Bool(false));
+        }
+        SettingsNodeKind::List { item } => {
+            schema.insert("type".to_string(), JsonValue::String("array".to_string()));
+            schema.insert("items".to_string(), settings_node_editor_schema(item));
+        }
+        SettingsNodeKind::Record { value } => {
+            schema.insert("type".to_string(), JsonValue::String("object".to_string()));
+            schema.insert(
+                "additionalProperties".to_string(),
+                settings_node_editor_schema(value),
+            );
+        }
+        SettingsNodeKind::TaggedVariant {
+            discriminator,
+            variants,
+        } => {
+            schema.insert(
+                "oneOf".to_string(),
+                JsonValue::Array(
+                    variants
+                        .iter()
+                        .map(|variant| {
+                            let mut properties = JsonMap::from_iter([(
+                                discriminator.clone(),
+                                serde_json::json!({
+                                    "title": discriminator,
+                                    "const": variant.tag,
+                                    "readOnly": true
+                                }),
+                            )]);
+                            for field in &variant.fields {
+                                properties
+                                    .insert(field.id.clone(), settings_node_editor_schema(field));
+                            }
+                            let mut required = vec![JsonValue::String(discriminator.clone())];
+                            required.extend(
+                                variant
+                                    .fields
+                                    .iter()
+                                    .filter(|field| field.required)
+                                    .map(|field| JsonValue::String(field.id.clone())),
+                            );
+                            serde_json::json!({
+                                "title": variant.title,
+                                "description": variant.description,
+                                "type": "object",
+                                "properties": properties,
+                                "required": required,
+                                "additionalProperties": false
+                            })
+                        })
+                        .collect(),
+                ),
+            );
+        }
+        SettingsNodeKind::Json {
+            max_bytes,
+            max_depth,
+        } => {
+            schema.insert(
+                "x-agena-editor".to_string(),
+                JsonValue::String("json".to_string()),
+            );
+            schema.insert(
+                "x-agena-json-max-bytes".to_string(),
+                JsonValue::Number((*max_bytes).into()),
+            );
+            schema.insert(
+                "x-agena-json-max-depth".to_string(),
+                JsonValue::Number((*max_depth).into()),
+            );
+        }
+    }
+    JsonValue::Object(schema)
 }
 
 pub(crate) fn validate_config_value(

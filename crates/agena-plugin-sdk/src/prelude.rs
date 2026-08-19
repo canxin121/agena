@@ -34,18 +34,28 @@ pub use crate::host_api::{
     HostToolUpdateRequest, LogLevel, NoopHostClient, PluginNotifyAction, PluginNotifyActionTarget,
     PluginNotifyRequest, ToolRegistryChangeKind, ToolRegistryChangedEvent,
 };
-pub use crate::macro_support::{schema_example_texts, schema_usage_text};
+pub use crate::macro_support::{schema_example_texts, schema_usage_text, service_method_for};
 pub use crate::manifest::{
-    ContributionKind, HookSubscription, InputNetworkSpec, InputPathSpec, NetworkAccessSpec,
-    PLUGIN_WORKBENCH_TAB_IDS, PathAccessSpec, PathKind, PluginCommandDefinition,
-    PluginDisplayContent, PluginDisplayContribution, PluginManifest, PluginSkillDefinition,
-    PluginStudioCommand, PluginStudioControl, PluginStudioControlOption,
-    PluginStudioUiContributions, PluginStudioView, PluginTuiColor, PluginTuiThemeColors,
-    PluginTuiUiContributions, PluginUiAction, PluginUiContributions, PluginUiThemePalette,
-    ToolDefinition, ToolInput, ToolResultPolicy, ToolResultRenderKind, ToolStreamingMode, ToolTag,
-    TransportKind, normalize_tool_tag_name, plugin_workbench_tab_id_is_supported,
+    ContributionKind, EmptyPluginSettings, HookSubscription, InputNetworkSpec, InputPathSpec,
+    MAX_JSON_ESCAPE_BYTES, MAX_JSON_ESCAPE_DEPTH, NetworkAccessSpec, OperationDiscoverability,
+    PathAccessSpec, PathInputKind, PathKind, PluginDisplayContent, PluginDisplayContribution,
+    PluginHostEffect, PluginManifest, PluginOperationDefinition, PluginOperationDiagnostic,
+    PluginOperationInvokeInput, PluginOperationResult, PluginOperationStatus,
+    PluginOperationTarget, PluginServiceDeclarations, PluginServiceExport, PluginServiceImport,
+    PluginServiceInvokeInput, PluginServiceInvokeOutput, PluginServiceMethod,
+    PluginSkillDefinition, PluginSurfaceContributions, PluginTerminalColor,
+    PluginTerminalContributions, PluginTerminalThemeColors, PluginTerminalThemePalette,
+    SettingsConstraints, SettingsContract, SettingsNode, SettingsNodeKind, SettingsOption,
+    SettingsVariant, ToolContract, ToolDefinition, ToolDocs, ToolInput, ToolModelSurface,
+    ToolResultPolicy, ToolResultRenderKind, ToolRuntimePolicy, ToolStreamingMode, ToolTag,
+    TransportKind, normalize_tool_tag_name,
 };
 pub use crate::plugin::{InitContext, InitOutcome, Plugin, PluginSettings, ToolStreamSink};
+pub use crate::service_client::{
+    PluginServiceClient, PluginServiceEndpoint, PluginServiceEndpointClient,
+    PluginServiceInvokeExt, PluginServiceResponse, encode_service_output,
+};
+pub use crate::settings_contract::{bounded_json_schema, decorate_settings_contract};
 pub use agena_macros::{PluginSettingsStore, ToolInput, agena_plugin};
 
 #[cfg(feature = "cdylib")]

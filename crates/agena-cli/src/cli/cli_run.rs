@@ -2,7 +2,7 @@ use super::{
     AgenaCli, AgenaCommand, AppError, ApplyArgs, AuthCommand, CommitArgs, CompletionArgs,
     ConfigCommand, ContinueArgs, CostArgs, DebugCommand, DiagnosticsArgs, ExecArgs, ForkArgs,
     GitArgs, InspectArgs, LoginArgs, LogoutArgs, McpCommand, McpGetArgs, McpServerArgs,
-    McpStatusArgs, McpSubcommand, MemoryCommand, OutputFormat, PermissionsArgs, PluginCommand,
+    McpStatusArgs, McpSubcommand, MemoryCommand, OutputFormat, PermissionsArgs, PluginOperation,
     PluginSubcommand, PrArgs, ProviderCommand, ResumeArgs, ReviewArgs, SessionsCommand,
     SnapshotArgs, UsageArgs, render_completion_command, render_plugin_validate_output,
     validate_plugin_target,
@@ -77,7 +77,7 @@ impl AgenaCli {
         Ok(())
     }
 
-    pub(super) async fn run_plugin(self, command: PluginCommand) -> Result<(), AppError> {
+    pub(super) async fn run_plugin(self, command: PluginOperation) -> Result<(), AppError> {
         use agena_plugin_marketplace::{
             InstallRequest, MarketplaceCache, MarketplaceClient, RegistrySpec, default_cache_root,
         };
@@ -92,6 +92,10 @@ impl AgenaCli {
             }
             PluginSubcommand::Inspect(args) => {
                 println!("{}", self.render_server_plugin_inspect(args).await?);
+                Ok(())
+            }
+            PluginSubcommand::Architecture(args) => {
+                println!("{}", self.render_server_plugin_architecture(args).await?);
                 Ok(())
             }
             PluginSubcommand::Logs(args) => {

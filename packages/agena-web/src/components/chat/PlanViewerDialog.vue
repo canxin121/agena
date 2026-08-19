@@ -37,7 +37,7 @@ function record(value: JsonValue | null | undefined): JsonRecord {
 async function invokePlanTool(tool: PlanTool, input: PlanToolInput): Promise<JsonRecord> {
   const body = buildPlanToolInvocationRequest(props.sessionId, tool, input)
   if (!body) throw new Error(String(t('chat.planViewer.requiresSession')))
-  const response = await apiJson<JsonValue>('/api/v1/plugins/ui/invoke-tool', {
+  const response = await apiJson<JsonValue>('/api/v1/plugins/tools/invoke', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body),

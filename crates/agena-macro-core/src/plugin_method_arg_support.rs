@@ -10,13 +10,14 @@ use syn::{
 };
 
 use crate::{
-    PluginArgConfig, PluginCallInput, PluginCommandInputPlan, PluginCommandMethodShape,
-    PluginContextArg, PluginGeneratedInputField, PluginGeneratedToolInput, PluginNetworkSemantic,
-    PluginPathPermissionKind, PluginPickerKind, PluginToolAttrConfig, PluginToolMethodShape,
-    apply_arg_config_to_spec, empty_tool_spec_config, expr_array_lit_strs, expr_array_values,
-    expr_lit_str, expr_lit_usize, input_type_semantic_shape, normalize_array_value_constraints,
-    type_is_plugin_command_context, type_is_reference, type_is_tool_invoke_context,
-    type_last_segment_is, validate_format_lit, validate_input_jsonpath_lit, validate_pattern_lit,
+    PluginArgConfig, PluginCallInput, PluginContextArg, PluginGeneratedInputField,
+    PluginGeneratedToolInput, PluginNetworkSemantic, PluginOperationInputPlan,
+    PluginOperationMethodShape, PluginPathPermissionKind, PluginPickerKind, PluginToolAttrConfig,
+    PluginToolMethodShape, apply_arg_config_to_spec, empty_tool_spec_config, expr_array_lit_strs,
+    expr_array_values, expr_lit_str, expr_lit_usize, input_type_semantic_shape,
+    normalize_array_value_constraints, type_is_plugin_command_context, type_is_reference,
+    type_is_tool_invoke_context, type_last_segment_is, validate_format_lit,
+    validate_input_jsonpath_lit, validate_pattern_lit,
 };
 
 pub fn build_plugin_tool_method_shape(
@@ -140,18 +141,22 @@ pub fn build_plugin_tool_method_shape(
     })
 }
 
-pub fn build_plugin_command_input_plan(
+pub fn build_plugin_operation_input_plan(
     method: &mut ImplItemFn,
     method_ident: &Ident,
     self_label: &str,
     docs: Option<String>,
-) -> Result<PluginCommandMethodShape> {
-    let input_ident = format_ident!("__AgenaPluginCommandInput_{}_{}", self_label, method_ident);
+) -> Result<PluginOperationMethodShape> {
+    let input_ident = format_ident!(
+        "__AgenaPluginOperationInput_{}_{}",
+        self_label,
+        method_ident
+    );
     let args = plugin_method_value_args(method)?;
     if let Some(context_arg) = args.iter().find(|arg| arg.is_context) {
         return Err(syn::Error::new_spanned(
             &context_arg.ty,
-            "#[command] methods do not support ToolInvokeContext; use PluginCommandInvokeInput for raw command context",
+            "#[operation] methods do not support ToolInvokeContext; use PluginOperationInvokeInput for raw operation context",
         ));
     }
     let context = plugin_command_context_arg(&args)?;
@@ -160,20 +165,20 @@ pub fn build_plugin_command_input_plan(
         .filter(|arg| !type_is_plugin_command_context(&arg.ty))
         .collect::<Vec<_>>();
     let input = match input_args.as_slice() {
-        [] => PluginCommandInputPlan::None,
+        [] => PluginOperationInputPlan::None,
         [arg] if !arg.has_arg_config => {
             let by_ref = arg.by_ref;
             let owned_ty = arg.inner_ty.clone();
-            if type_last_segment_is(&owned_ty, "PluginCommandInvokeInput") {
+            if type_last_segment_is(&owned_ty, "PluginOperationInvokeInput") {
                 if context.is_some() {
                     return Err(syn::Error::new_spanned(
                         &arg.ty,
-                        "PluginCommandInvokeInput already exposes raw command metadata; do not combine it with PluginCommandContext",
+                        "PluginOperationInvokeInput already exposes raw command metadata; do not combine it with PluginOperationContext",
                     ));
                 }
-                PluginCommandInputPlan::Raw { by_ref }
+                PluginOperationInputPlan::Raw { by_ref }
             } else {
-                PluginCommandInputPlan::Typed {
+                PluginOperationInputPlan::Typed {
                     ty: Box::new(owned_ty),
                     by_ref,
                 }
@@ -193,16 +198,16 @@ pub fn build_plugin_command_input_plan(
             for prepared in prepared_args {
                 let arg = prepared.arg;
                 validate_inline_shape_wrapper_arg(arg)?;
-                if type_last_segment_is(&arg.inner_ty, "PluginCommandInvokeInput") {
+                if type_last_segment_is(&arg.inner_ty, "PluginOperationInvokeInput") {
                     return Err(syn::Error::new_spanned(
                         &arg.ty,
-                        "PluginCommandInvokeInput is only supported as the sole #[command] argument; use a typed input struct or inline #[arg(...)] fields for structured command inputs",
+                        "PluginOperationInvokeInput is only supported as the sole #[operation] argument; use a typed input struct or inline #[arg(...)] fields for structured operation inputs",
                     ));
                 }
                 if arg.by_ref {
                     return Err(syn::Error::new_spanned(
                         &arg.ty,
-                        "field-style #[command] arguments must be owned values; use a single input struct argument if the handler wants a reference",
+                        "field-style #[operation] arguments must be owned values; use a single input struct argument if the handler wants a reference",
                     ));
                 }
                 let field_name = prepared.field_name;
@@ -247,7 +252,7 @@ pub fn build_plugin_command_input_plan(
                 &field_path_lookup,
                 &array_field_paths,
             );
-            PluginCommandInputPlan::Generated {
+            PluginOperationInputPlan::Generated {
                 input_model: Box::new(PluginGeneratedToolInput {
                     input_ident: Some(input_ident.clone()),
                     input_fields: fields,
@@ -259,7 +264,7 @@ pub fn build_plugin_command_input_plan(
             }
         }
     };
-    Ok(PluginCommandMethodShape { input, context })
+    Ok(PluginOperationMethodShape { input, context })
 }
 
 struct PluginMethodValueArg {
@@ -342,7 +347,7 @@ fn plugin_command_context_arg(args: &[PluginMethodValueArg]) -> Result<Option<Pl
     if context_positions.len() > 1 {
         return Err(syn::Error::new(
             proc_macro2::Span::call_site(),
-            "method-level #[command] generation supports at most one PluginCommandContext argument",
+            "method-level #[operation] generation supports at most one PluginOperationContext argument",
         ));
     }
     let Some((index, context_arg)) = context_positions.pop() else {

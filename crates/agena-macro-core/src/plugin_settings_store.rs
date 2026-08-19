@@ -13,19 +13,26 @@ pub fn expand_plugin_settings_store(input: DeriveInput) -> Result<proc_macro2::T
     let config_field = find_plugin_settings_store_field(&input.data)?;
     let field_member = config_field.member;
     let config_ty = config_field.config_ty;
-    let schema_expr = match config_field.default {
+    let contract_expr = match config_field.default {
         PluginConfigDefault::None => {
-            quote! { ::agena_plugin_sdk::macro_support::json_schema_for::<#config_ty>() }
+            quote! {
+                ::agena_plugin_sdk::settings_contract_for::<#config_ty>()
+                    .expect("typed plugin settings must compile to the constrained settings contract")
+            }
         }
         PluginConfigDefault::Default => {
             quote! {
-                ::agena_plugin_sdk::macro_support::json_schema_for_default(
+                ::agena_plugin_sdk::settings_contract_for_default(
                     <#config_ty as ::core::default::Default>::default(),
                 )
+                .expect("typed plugin settings must compile to the constrained settings contract")
             }
         }
         PluginConfigDefault::Expr(default) => {
-            quote! { ::agena_plugin_sdk::macro_support::json_schema_for_default(#default) }
+            quote! {
+                ::agena_plugin_sdk::settings_contract_for_default(#default)
+                    .expect("typed plugin settings must compile to the constrained settings contract")
+            }
         }
     };
     let generics = input.generics;
@@ -33,8 +40,8 @@ pub fn expand_plugin_settings_store(input: DeriveInput) -> Result<proc_macro2::T
 
     Ok(quote! {
         impl #impl_generics ::agena_plugin_sdk::plugin::PluginSettingsStoreAccess for #name #ty_generics #where_clause {
-            fn plugin_settings_schema() -> ::agena_plugin_sdk::serde_json::Value {
-                #schema_expr
+            fn plugin_settings_contract() -> ::agena_plugin_sdk::SettingsContract {
+                #contract_expr
             }
 
             fn set_plugin_settings_from_json(

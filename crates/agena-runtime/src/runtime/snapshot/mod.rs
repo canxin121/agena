@@ -127,7 +127,8 @@ impl RuntimeSnapshot {
         resolution.config.plugins = agena_runtime::merge_bundled_plugin_config(
             resolution.config.plugins.clone(),
             agena_bundled_plugins::plugins::sources::bundled_plugin_entries(),
-        );
+        )
+        .map_err(AppError::Config)?;
         agena_runtime::set_provider_client_versions(agena_provider::ProviderClientVersions {
             codex: resolution
                 .config

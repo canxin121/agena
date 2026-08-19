@@ -83,7 +83,7 @@ impl ToolExecutor {
         }
 
         self.plugins
-            .lookup_tool(invocation.tool_name.as_str())
+            .lookup_tool_for_scope(invocation.tool_name.as_str(), self.plugin_scope.as_ref())
             .map(|entry| entry.plugin_full_name())
             .unwrap_or_else(|| "custom".to_string())
     }
@@ -148,8 +148,7 @@ impl ToolExecutor {
     }
 
     pub(crate) fn plugin_tool_name_is_unambiguous(&self, plugin_tool_name: &str) -> bool {
-        self.plugins
-            .registered_tools()
+        self.registered_tools_with_definition_overrides()
             .into_iter()
             .filter(|tool| tool.tool_name() == plugin_tool_name)
             .take(2)
@@ -178,14 +177,16 @@ impl ToolExecutor {
         invocation: &PluginInvocation,
     ) -> Option<agena_plugin_host::registry::RegisteredTool> {
         self.plugins
-            .lookup_tool(invocation.tool_name.as_str())
+            .lookup_tool_for_scope(invocation.tool_name.as_str(), self.plugin_scope.as_ref())
             .or_else(|| {
-                self.plugins
-                    .lookup_tool(canonical_tool_name(invocation.tool_name.as_str()))
+                self.plugins.lookup_tool_for_scope(
+                    canonical_tool_name(invocation.tool_name.as_str()),
+                    self.plugin_scope.as_ref(),
+                )
             })
             .or_else(|| {
                 unique_registered_tool_match(
-                    self.plugins.registered_tools(),
+                    self.registered_tools_with_definition_overrides(),
                     invocation.tool_name.as_str(),
                 )
             })

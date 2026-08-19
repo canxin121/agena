@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use crate::plugins::provided::workflow::{
-    PlanEditInput, PlanGetInput, PlanPhaseInput, PlanReviewInput, PlanSetInput, WorkflowPlugin,
-    WorkflowPluginConfig, planning_plugin_settings_schema,
+    PlanEditInput, PlanGetInput, PlanPhaseInput, PlanReviewInput, PlanSetInput, WorkflowPlanConfig,
+    WorkflowPlugin, WorkflowPluginConfig,
 };
 use agena_plugin_host::sdk::host_api::HostClient;
 use agena_plugin_host::sdk::{
@@ -21,7 +21,8 @@ pub(crate) struct PlanPlugin {
     name = "plan",
     version = env!("CARGO_PKG_VERSION"),
     summary = "Plan orchestration and plan-autorun tools.",
-    settings_schema = planning_plugin_settings_schema(),
+    settings = WorkflowPlanConfig,
+    settings_default = default,
 )]
 impl PlanPlugin {
     pub(crate) fn new() -> Self {
@@ -33,7 +34,7 @@ impl PlanPlugin {
     #[hook(init)]
     async fn init(&self, ctx: InitContext, host: Arc<dyn HostClient>) -> SdkResult<InitOutcome> {
         let plan = agena_plugin_host::sdk::macro_support::parse_defaulted_settings(
-            ctx.settings.clone(),
+            ctx.config.clone(),
             "invalid planning config",
         )?;
         self.inner.initialize(

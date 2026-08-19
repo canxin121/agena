@@ -15,13 +15,17 @@ pub struct PluginImplConfig {
     pub help: Option<Expr>,
     pub skills: Option<Expr>,
     pub activity_kinds: Option<Expr>,
-    pub settings_schema: Option<Expr>,
-    pub settings_schema_type: Option<Type>,
-    pub settings_schema_default: Option<Expr>,
-    pub settings_schema_store: bool,
+    /// Typed settings are compiled internally to the constrained contract.
+    pub settings: Option<Type>,
+    pub settings_default: Option<Expr>,
+    /// Presentation-only decoration applied after compiling `settings = Type`.
+    pub settings_metadata: Option<Expr>,
     pub settings_field: Option<Ident>,
     pub settings_store: bool,
     pub plugin_tags: Vec<Expr>,
+    /// Declarative consumer dependencies. Provider exports are generated only
+    /// from method-level `#[service]` handlers so manifest and dispatch cannot drift.
+    pub service_imports: Vec<Expr>,
     pub export: Option<Ident>,
     pub export_bind: Option<Expr>,
 }
@@ -35,13 +39,13 @@ pub fn parse_plugin_impl_config(attr: proc_macro2::TokenStream) -> Result<Plugin
     let mut help = None;
     let mut skills = None;
     let mut activity_kinds = None;
-    let mut settings_schema = None;
-    let mut settings_schema_type = None;
-    let mut settings_schema_default = None;
-    let mut settings_schema_store = false;
+    let mut settings = None;
+    let mut settings_default = None;
+    let mut settings_metadata = None;
     let mut settings_field = None;
     let mut settings_store = false;
     let mut plugin_tags = Vec::new();
+    let mut service_imports = Vec::new();
     let mut export = None;
     let mut export_bind = None;
     for meta in metas {
@@ -59,15 +63,25 @@ pub fn parse_plugin_impl_config(attr: proc_macro2::TokenStream) -> Result<Plugin
                     "skills" => skills = Some(value.value),
                     "activity_kinds" => activity_kinds = Some(value.value),
                     "settings" => {
-                        settings_schema_type = Some(expr_as_type(value.value)?);
-                        settings_store = true;
+                        if settings.is_some() {
+                            return Err(syn::Error::new_spanned(ident, "duplicate settings type"));
+                        }
+                        if settings_metadata.is_some() && settings.is_none() {
+                            return Err(syn::Error::new(
+                                proc_macro2::Span::call_site(),
+                                "`settings_metadata = ...` requires `settings = Type`",
+                            ));
+                        }
+                        settings = Some(expr_as_type(value.value)?);
                     }
-                    "settings_schema" => settings_schema = Some(value.value),
-                    "settings_schema_type" => {
-                        settings_schema_type = Some(expr_as_type(value.value)?)
+                    "settings_default" => settings_default = Some(value.value),
+                    "settings_metadata" => settings_metadata = Some(value.value),
+                    "settings_builder" => {
+                        return Err(syn::Error::new_spanned(
+                            ident,
+                            "plugin-level `settings_builder = ...` was removed; use `settings = Type`, optional `settings_default`, and presentation-only `settings_metadata`",
+                        ));
                     }
-                    "settings_default" => settings_schema_default = Some(value.value),
-                    "settings_schema_default" => settings_schema_default = Some(value.value),
                     "settings_field" => {
                         settings_field = Some(expr_path_ident(value.value, "settings_field")?)
                     }
@@ -108,6 +122,15 @@ pub fn parse_plugin_impl_config(attr: proc_macro2::TokenStream) -> Result<Plugin
                     "tags" => {
                         plugin_tags.extend(parse_expr_list(list.tokens)?);
                     }
+                    "exports" => {
+                        return Err(syn::Error::new_spanned(
+                            ident,
+                            "plugin-level `exports(...)` was removed; define provider methods with method-level `#[service(...)]` or `#[service(Endpoint)]`",
+                        ));
+                    }
+                    "imports" => {
+                        service_imports.extend(parse_expr_list(list.tokens)?);
+                    }
                     other => {
                         return Err(syn::Error::new_spanned(
                             ident,
@@ -119,12 +142,10 @@ pub fn parse_plugin_impl_config(attr: proc_macro2::TokenStream) -> Result<Plugin
             Meta::Path(path) => {
                 if path.is_ident("settings") {
                     settings_store = true;
-                    settings_schema_store = true;
                     continue;
                 }
                 if path.is_ident("settings_store") {
                     settings_store = true;
-                    settings_schema_store = true;
                     continue;
                 }
                 return Err(syn::Error::new_spanned(
@@ -146,20 +167,16 @@ pub fn parse_plugin_impl_config(attr: proc_macro2::TokenStream) -> Result<Plugin
             ));
         }
     }
-    if settings_field.is_some() && settings_schema_type.is_none() {
+    if settings_field.is_some() && settings.is_none() {
         return Err(syn::Error::new(
             proc_macro2::Span::call_site(),
-            "#[agena_plugin(..., settings_field = field)] requires `settings = Type` or `settings_schema_type = Type`",
+            "#[agena_plugin(..., settings_field = field)] requires `settings = Type`",
         ));
     }
-    if settings_store && settings_schema_type.is_none() {
-        settings_schema_store = true;
-    }
-    if settings_schema_default.is_some() && settings_schema_type.is_none() && settings_schema_store
-    {
+    if settings_default.is_some() && settings.is_none() {
         return Err(syn::Error::new(
             proc_macro2::Span::call_site(),
-            "put derived settings defaults on the field, e.g. `#[settings(default)]`; `settings_default = ...` requires `settings = Type` or `settings_schema_type = Type`",
+            "`settings_default = ...` requires `settings = Type`",
         ));
     }
     Ok(PluginImplConfig {
@@ -170,13 +187,13 @@ pub fn parse_plugin_impl_config(attr: proc_macro2::TokenStream) -> Result<Plugin
         help,
         skills,
         activity_kinds,
-        settings_schema,
-        settings_schema_type,
-        settings_schema_default,
-        settings_schema_store,
+        settings,
+        settings_default,
+        settings_metadata,
         settings_field,
         settings_store,
         plugin_tags,
+        service_imports,
         export,
         export_bind,
     })

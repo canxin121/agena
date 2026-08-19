@@ -1,6 +1,6 @@
 use super::super::{
     Line, Modifier, PluginWorkbenchOverlay, PluginWorkbenchPlugin, Span, Style, Text, clean,
-    command_argument_count, command_schema_and_value, default_value_for_schema, fixed_columns,
+    default_value_for_schema, fixed_columns, operation_argument_count, operation_schema_and_value,
     plugin_package_preview, schema_property_count,
 };
 use super::append_schema_editor_lines;
@@ -16,9 +16,9 @@ pub(crate) fn plugin_header_text(plugin: &PluginWorkbenchPlugin) -> Text<'static
             clean(plugin.transport.as_str())
         )),
         Line::from(format!(
-            "Tools: {}        Commands: {}        Config: {}",
+            "Tools: {}        Operations: {}        Config: {}",
             plugin.tools.len(),
-            plugin.commands.len(),
+            plugin.operations.len(),
             clean(plugin.config_status.label.as_str())
         )),
         Line::from(format!(
@@ -137,9 +137,9 @@ pub(crate) fn plugin_tools_text(
     Text::from(lines)
 }
 
-pub(crate) fn plugin_commands_text(plugin: &PluginWorkbenchPlugin) -> Text<'static> {
-    if plugin.commands.is_empty() {
-        return Text::from("No commands.");
+pub(crate) fn plugin_operations_text(plugin: &PluginWorkbenchPlugin) -> Text<'static> {
+    if plugin.operations.is_empty() {
+        return Text::from("No operations.");
     }
     let mut lines = vec![Line::from(Span::styled(
         fixed_columns(
@@ -153,25 +153,31 @@ pub(crate) fn plugin_commands_text(plugin: &PluginWorkbenchPlugin) -> Text<'stat
         ),
         Style::default().add_modifier(Modifier::BOLD),
     ))];
-    for command in &plugin.commands {
-        let args = command_argument_count(plugin, command);
+    for operation in &plugin.operations {
+        let args = operation_argument_count(plugin, operation);
         lines.push(Line::from(fixed_columns(
             &[
-                (command.title.as_str(), 30),
-                (command.description.as_str(), 64),
+                (operation.title.as_str(), 30),
+                (operation.description.as_str(), 64),
                 (args.to_string().as_str(), 8),
-                (command.category.as_str(), 18),
+                (
+                    operation
+                        .category
+                        .as_deref()
+                        .unwrap_or(operation.group.as_str()),
+                    18,
+                ),
             ],
             124,
         )));
     }
-    if let Some(command) = plugin.commands.first() {
+    if let Some(operation) = plugin.operations.first() {
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
-            format!("Arguments: {}", command.title),
+            format!("Arguments: {}", operation.title),
             Style::default().add_modifier(Modifier::BOLD),
         )));
-        match command_schema_and_value(plugin, command) {
+        match operation_schema_and_value(plugin, operation) {
             Some((schema, value)) => append_schema_editor_lines(
                 &mut lines,
                 Some(&schema),

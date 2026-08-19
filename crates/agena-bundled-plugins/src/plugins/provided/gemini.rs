@@ -302,13 +302,13 @@ impl GeminiToolsPlugin {
     }
 }
 
-#[agena_plugin_host::sdk::agena_plugin(namespace="agena", name="gemini", version=env!("CARGO_PKG_VERSION"), summary="Google Gemini Interactions and image capabilities exposed as ordinary Agena tools.", settings_schema=agena_plugin_sdk::macro_support::json_schema_for_default(GeminiToolsConfig::default()))]
+#[agena_plugin_host::sdk::agena_plugin(namespace="agena", name="gemini", version=env!("CARGO_PKG_VERSION"), summary="Google Gemini Interactions and image capabilities exposed as ordinary Agena tools.", settings=GeminiToolsConfig, settings_default=default)]
 impl GeminiToolsPlugin {
     #[hook(init)]
     async fn init(&self, ctx: InitContext, host: Arc<dyn HostClient>) -> SdkResult<InitOutcome> {
         let config: GeminiToolsConfig =
             agena_plugin_host::sdk::macro_support::parse_defaulted_settings(
-                ctx.settings,
+                ctx.config,
                 "invalid Gemini tools plugin config",
             )?;
         self.workspace_root

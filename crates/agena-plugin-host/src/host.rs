@@ -4,7 +4,7 @@
 //! - the dedicated tokio runtime that drives plugin transports,
 //! - the host-callback router used by stdio/http plugins.
 
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
@@ -13,10 +13,14 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 use crate::config::{ConfiguredPlugin, PluginPackage, PluginsConfig, TimeoutsConfig};
 use crate::dispatcher::{self, call_with_timeout};
+use crate::effect_scope::{PluginEffectScope, PluginEffectScopeInspect};
 use crate::error::{HostError, TransportError};
-use crate::loader::{StaticRegistration, load_entry, shutdown_transport};
+use crate::loader::{
+    PreparedPlugin, StaticRegistration, activate_entry, prepare_entry, shutdown_transport,
+};
 use crate::logs::{PluginLogRecord, PluginLogStore};
-use crate::registry::{PluginToolRegistry, RegisteredTool, validate_tool_definition};
+use crate::registry::{PluginToolRegistry, RegisteredTool};
+use crate::scoped_registry::{PluginScopeKey, ScopedRegistry};
 use crate::sdk::host_api::{
     self, AskUserRequest, AskUserResponse, CancelSubtaskRequest, EventSubscription,
     HostCallbackContext, HostClient, HostConfigReloadResponse, HostContextStatusRequest,
@@ -49,16 +53,17 @@ use crate::sdk::{
     ChatMessagesTransformPatch, ChatParamsInput, ChatParamsPatch, ChatSystemTransformInput,
     ChatSystemTransformPatch, CommandAfterInput, CommandAfterPatch, CommandBeforeInput,
     CommandBeforeOutcome, CommandBeforeResponse, ConfigInput, ConfigPatch, EventEnvelope,
-    EventFilter, HookSubscription, NotificationInput, PluginCommandDefinition,
-    PluginCommandInvokeInput, PluginCommandOutput, PluginDisplayContribution, PluginError,
-    PluginErrorKind, PluginKey, PluginManifest, PluginStudioControl, PluginStudioView,
-    PluginUiAction, PostRunInput, PreRunInput, ProviderListInput, ProviderListPatch,
-    SessionEndInput, SessionStartInput, SessionStartPatch, ShellEnvInput, ShellEnvPatch,
-    ToolAfterInput, ToolAfterPatch, ToolBeforeInput, ToolBeforePatch, ToolDefinitionInput,
-    ToolDefinitionPatch, ToolFailureInput, ToolInvokeInput, ToolInvokeOutput, ToolKey,
-    ToolPermissionNetworksInput, ToolPermissionPathsInput, ToolStreamChunk, ToolStreamEnd,
+    EventFilter, HookSubscription, NotificationInput, PluginDisplayContribution, PluginError,
+    PluginErrorKind, PluginKey, PluginManifest, PluginOperationDefinition,
+    PluginOperationInvokeInput, PluginOperationResult, PluginServiceExport, PluginServiceImport,
+    PluginServiceInvokeInput, PluginServiceInvokeOutput, PostRunInput, PreRunInput,
+    ProviderListInput, ProviderListPatch, SessionEndInput, SessionStartInput, SessionStartPatch,
+    ShellEnvInput, ShellEnvPatch, ToolAfterInput, ToolAfterPatch, ToolBeforeInput, ToolBeforePatch,
+    ToolDefinitionInput, ToolDefinitionPatch, ToolFailureInput, ToolInvokeInput, ToolInvokeOutput,
+    ToolKey, ToolPermissionNetworksInput, ToolPermissionPathsInput, ToolStreamChunk, ToolStreamEnd,
     UserPromptSubmitInput, UserPromptSubmitPatch,
 };
+use crate::services::{PluginServiceBinding, PluginServiceBindingKey};
 use crate::transport::PluginTransport;
 use crate::transport::inproc::InProcessTransport;
 
@@ -80,6 +85,13 @@ pub struct AgentStopHookRun {
     pub continue_with_message: Option<String>,
     /// Human-readable reason the plugin recorded when blocking stop.
     pub reason: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct HostInvokeServiceParams {
+    request: PluginServiceInvokeInput,
+    #[serde(rename = "context", default)]
+    _context: Option<HostCallbackContext>,
 }
 
 impl AgentStopHookRun {
@@ -212,6 +224,7 @@ pub struct LoadedPlugin {
     pub configured_plugin: crate::config::ConfiguredPlugin,
     pub manifest: PluginManifest,
     pub transport: Arc<dyn PluginTransport>,
+    pub effect_scope: Arc<PluginEffectScope>,
     pub trust_level: String,
     pub provenance: Vec<String>,
 }
@@ -224,6 +237,10 @@ impl LoadedPlugin {
 
     pub fn transport(&self) -> Arc<dyn PluginTransport> {
         Arc::clone(&self.transport)
+    }
+
+    pub fn effect_scope(&self) -> Arc<PluginEffectScope> {
+        Arc::clone(&self.effect_scope)
     }
 
     pub fn configured_plugin(&self) -> &crate::config::ConfiguredPlugin {
@@ -259,14 +276,54 @@ impl LoadedPlugin {
         trust_level: String,
         provenance: Vec<String>,
     ) -> Self {
+        let key = PluginKey::new(manifest.namespace.clone(), manifest.name.clone())
+            .expect("loaded plugin manifest key should be valid");
+        Self::new_with_scope(
+            kind,
+            configured_plugin,
+            transport,
+            PluginEffectScope::new(key),
+            manifest,
+            trust_level,
+            provenance,
+        )
+    }
+
+    pub fn new_with_scope(
+        kind: &'static str,
+        configured_plugin: crate::config::ConfiguredPlugin,
+        transport: Arc<dyn PluginTransport>,
+        effect_scope: Arc<PluginEffectScope>,
+        manifest: PluginManifest,
+        trust_level: String,
+        provenance: Vec<String>,
+    ) -> Self {
+        debug_assert_eq!(
+            effect_scope.plugin_id(),
+            &PluginKey::new(manifest.namespace.clone(), manifest.name.clone())
+                .expect("loaded plugin manifest key should be valid")
+        );
         Self {
             kind,
             configured_plugin,
             manifest,
             transport,
+            effect_scope,
             trust_level,
             provenance,
         }
+    }
+
+    pub fn rebind_effect_scope(&self, effect_scope: Arc<PluginEffectScope>) -> Self {
+        Self::new_with_scope(
+            self.kind,
+            self.configured_plugin.clone(),
+            Arc::clone(&self.transport),
+            effect_scope,
+            self.manifest.clone(),
+            self.trust_level.clone(),
+            self.provenance.clone(),
+        )
     }
 
     pub fn subscribes(&self, sub: HookSubscription) -> bool {
@@ -302,41 +359,259 @@ pub struct PluginInspect {
     pub hooks: Vec<HostHookRegistration>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub configured_plugin: Option<crate::config::ConfiguredPlugin>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub activation: Option<PluginActivationInspect>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub services: Option<PluginServiceInspect>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effects: Option<PluginEffectScopeInspect>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-/// Plugin UI catalog.
-pub struct PluginUiCatalog {
-    pub tui: PluginTuiUiCatalog,
-    pub studio: PluginStudioUiCatalog,
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PluginServiceInspect {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exports: Vec<PluginServiceExport>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub imports: Vec<PluginServiceImportInspect>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-/// TUI plugin UI catalog.
-pub struct PluginTuiUiCatalog {
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PluginServiceImportInspect {
+    #[serde(flatten)]
+    pub declaration: PluginServiceImport,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_provider: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub display: Vec<HostDisplayContribution>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub themes: Vec<HostThemePalette>,
+    pub methods: Vec<crate::sdk::PluginServiceMethod>,
+    pub state: String,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-/// Studio plugin UI catalog.
-pub struct PluginStudioUiCatalog {
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// Safe, structured activation state shown even when a plugin never reached
+/// `meta/init`. Raw transport/init diagnostics remain in protected host logs.
+pub struct PluginActivationInspect {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub commands: Vec<PluginCommandCatalogItem>,
+    pub requires: Vec<PluginKey>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub controls: Vec<PluginStudioControlCatalogItem>,
+    pub after: Vec<PluginKey>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blocked: Option<PluginActivationDiagnostic>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// Non-sensitive reason an activation was blocked.
+pub struct PluginActivationDiagnostic {
+    pub code: String,
+    pub message: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub views: Vec<PluginStudioViewCatalogItem>,
+    pub dependencies: Vec<PluginKey>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PluginDependencyKind {
+    Explicit,
+    RequiredService,
+    OptionalService,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PluginDependencyEdge {
+    pub consumer_id: PluginKey,
+    pub provider_id: PluginKey,
+    pub kind: PluginDependencyKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_version: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-/// Catalog item of a plugin command.
-pub struct PluginCommandCatalogItem {
+pub struct PluginArchitectureNode {
+    pub plugin_id: PluginKey,
+    pub enabled: bool,
+    pub status: crate::status::PluginStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub activation_epoch: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blocked: Option<PluginActivationDiagnostic>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub service_exports: Vec<PluginServiceExport>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub service_imports: Vec<PluginServiceImport>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PluginArchitectureEffect {
     pub plugin_id: PluginKey,
     #[serde(flatten)]
-    pub command: PluginCommandDefinition,
+    pub effect: crate::effect_scope::PluginEffectDescriptor,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PluginArchitecturePipeline {
+    pub definition: crate::event_pipeline::PluginEventDefinition,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure_policy: Option<crate::event_pipeline::PluginPipelineFailurePolicy>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub handlers: Vec<crate::event_pipeline::PluginPipelineHandlerDescriptor>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PluginArchitectureCatalog {
+    #[serde(default)]
+    pub profiles: crate::profiles::PluginProfileResolutionMeta,
+    #[serde(default)]
+    pub reload: crate::activation::PluginReloadPlan,
+    #[serde(default)]
+    pub plugins: Vec<PluginArchitectureNode>,
+    #[serde(default)]
+    pub dependencies: Vec<PluginDependencyEdge>,
+    #[serde(default)]
+    pub effects: Vec<PluginArchitectureEffect>,
+    #[serde(default)]
+    pub pipelines: Vec<PluginArchitecturePipeline>,
+    #[serde(default)]
+    pub tool_registrations: Vec<crate::scoped_registry::ScopedRegistryEntryDescriptor<ToolKey>>,
+    #[serde(default)]
+    pub operation_registrations: Vec<crate::scoped_registry::ScopedRegistryEntryDescriptor<String>>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+/// Neutral plugin surface catalog. Executable operations and terminal-only
+/// presentation are deliberately separate from one another and from any
+/// particular renderer.
+pub struct PluginSurfaceCatalog {
+    #[serde(default)]
+    pub operations: Vec<PluginOperationCatalogItem>,
+    #[serde(default)]
+    pub terminal: PluginTerminalSurfaceCatalog,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+/// Terminal-only presentation catalog.
+pub struct PluginTerminalSurfaceCatalog {
+    #[serde(default)]
+    pub display: Vec<HostDisplayContribution>,
+    #[serde(default)]
+    pub themes: Vec<HostThemePalette>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Catalog item of a plugin operation.
+pub struct PluginOperationCatalogItem {
+    pub plugin_id: PluginKey,
+    /// Host-derived fact used by every command palette. This is computed from
+    /// the validated SettingsContract and cannot drift between clients.
+    pub accepts_empty_input: bool,
+    /// Deterministic editor/invocation seed produced by the shared contract.
+    pub default_input: serde_json::Value,
+    #[serde(flatten)]
+    pub operation: PluginOperationDefinition,
+}
+
+fn operation_registry_name(plugin_id: &PluginKey, operation_id: &str) -> String {
+    format!("{plugin_id}/{operation_id}")
+}
+
+fn sort_operation_catalog(operations: &mut [PluginOperationCatalogItem]) {
+    operations.sort_by(|a, b| {
+        a.operation
+            .group
+            .cmp(&b.operation.group)
+            .then_with(|| a.operation.category.cmp(&b.operation.category))
+            .then_with(|| a.operation.id.cmp(&b.operation.id))
+            .then_with(|| a.operation.title.cmp(&b.operation.title))
+            .then_with(|| a.plugin_id.cmp(&b.plugin_id))
+    });
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+/// Status of an explicit user-driven plugin tool invocation.
+pub enum PluginToolInvokeStatus {
+    Completed,
+    CapabilityUnavailable,
+    ToolUnavailable,
+}
+
+#[derive(Clone)]
+struct ToolBeforeDispatch {
+    input: ToolBeforeInput,
+    cancellation: Option<tokio_util::sync::CancellationToken>,
+}
+
+enum ToolBeforeBail {
+    Abort(String),
+    Error(PluginError),
+}
+
+#[derive(Clone)]
+struct ToolAfterDispatch {
+    input: ToolAfterInput,
+    cancellation: Option<tokio_util::sync::CancellationToken>,
+}
+
+#[derive(Debug, Clone)]
+/// Immutable operation identity plus middleware-visible input/context.
+/// Middleware may transform only the JSON input; plugin and operation routing
+/// stay host-owned and cannot be redirected by an extension.
+pub struct PluginOperationDispatch {
+    plugin_id: PluginKey,
+    operation_id: String,
+    input: PluginOperationInvokeInput,
+}
+
+impl PluginOperationDispatch {
+    fn new(plugin_id: PluginKey, input: PluginOperationInvokeInput) -> Self {
+        Self {
+            operation_id: input.operation_id.clone(),
+            plugin_id,
+            input,
+        }
+    }
+
+    pub fn plugin_id(&self) -> &PluginKey {
+        &self.plugin_id
+    }
+
+    pub fn operation_id(&self) -> &str {
+        self.operation_id.as_str()
+    }
+
+    pub fn input(&self) -> &serde_json::Value {
+        &self.input.input
+    }
+
+    pub fn set_input(&mut self, value: serde_json::Value) {
+        self.input.input = value;
+    }
+
+    pub fn session_id(&self) -> Option<i64> {
+        self.input.session_id
+    }
+
+    pub fn workspace_root(&self) -> Option<&str> {
+        self.input.workspace_root.as_deref()
+    }
+
+    fn into_input(self) -> PluginOperationInvokeInput {
+        self.input
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Presentation-neutral result of an explicit plugin tool invocation.
+pub struct PluginToolInvokeResponse {
+    pub plugin_id: PluginKey,
+    pub tool: String,
+    pub status: PluginToolInvokeStatus,
+    pub title: String,
+    pub output_text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub payload: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub metadata: BTreeMap<String, String>,
 }
 
 /// Host-resolved declarative display contribution: the contributing plugin
@@ -346,45 +621,6 @@ pub struct PluginCommandCatalogItem {
 pub struct HostDisplayContribution {
     pub plugin_id: PluginKey,
     pub contribution: PluginDisplayContribution,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-/// Catalog item of a plugin studio control.
-pub struct PluginStudioControlCatalogItem {
-    pub plugin_id: PluginKey,
-    #[serde(flatten)]
-    pub control: PluginStudioControl,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-/// Catalog item of a plugin studio view.
-pub struct PluginStudioViewCatalogItem {
-    pub plugin_id: PluginKey,
-    #[serde(flatten)]
-    pub view: PluginStudioView,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-/// Status of a plugin UI tool invocation.
-pub enum PluginUiToolInvokeStatus {
-    Completed,
-    CapabilityUnavailable,
-    ToolUnavailable,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-/// Response of a plugin UI tool invocation.
-pub struct PluginUiToolInvokeResponse {
-    pub plugin_id: PluginKey,
-    pub tool: String,
-    pub status: PluginUiToolInvokeStatus,
-    pub title: String,
-    pub output_text: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub payload: Option<serde_json::Value>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub metadata: BTreeMap<String, String>,
 }
 
 /// Live handle to an in-flight tool stream. Consume `chunks` for incremental
@@ -401,8 +637,26 @@ pub struct PluginHost {
     plugins: Vec<Arc<LoadedPlugin>>,
     plugins_by_id: HashMap<PluginKey, Arc<LoadedPlugin>>,
     tool_registry: Arc<RwLock<PluginToolRegistry>>,
+    operation_registry: Arc<ScopedRegistry<String, PluginOperationCatalogItem>>,
+    operation_pipeline: Arc<
+        crate::event_pipeline::PluginAroundPipeline<
+            PluginOperationDispatch,
+            PluginOperationResult,
+            PluginError,
+        >,
+    >,
+    tool_before_pipeline:
+        Arc<crate::event_pipeline::PluginTransformBailPipeline<ToolBeforeDispatch, ToolBeforeBail>>,
+    tool_after_pipeline: Arc<crate::event_pipeline::PluginTransformPipeline<ToolAfterDispatch>>,
     statuses: Arc<crate::status::StatusRegistry>,
     logs: Arc<PluginLogStore>,
+    configured_plugins: BTreeMap<String, ConfiguredPlugin>,
+    activation_blocks: BTreeMap<String, crate::activation::PluginActivationBlock>,
+    activation_epochs: BTreeMap<String, u64>,
+    reload_plan: crate::activation::PluginReloadPlan,
+    profile_resolution: crate::profiles::PluginProfileResolutionMeta,
+    prefetched_manifests: BTreeMap<String, PluginManifest>,
+    service_bindings: BTreeMap<PluginServiceBindingKey, PluginServiceBinding>,
     timeouts: TimeoutsConfig,
     /// Underlying host handle; kept alive for callbacks.
     _host_handle: Arc<HostHandle>,
@@ -432,6 +686,7 @@ fn tool_hook_context(
                 .manifest_tool_name(tool_name)
                 .unwrap_or_else(|| tool_name.to_string()),
         ),
+        authority_token: None,
     }
 }
 
@@ -595,6 +850,8 @@ pub struct HostHandle {
     tokens: tokio::sync::Mutex<HashMap<PluginKey, String>>,
     callback_base_url: Option<String>,
     tool_registry: Arc<RwLock<PluginToolRegistry>>,
+    scoped_tools: Arc<ScopedRegistry<ToolKey, RegisteredTool>>,
+    operation_registry: Arc<ScopedRegistry<String, PluginOperationCatalogItem>>,
     plugin_indices: Arc<RwLock<HashMap<PluginKey, usize>>>,
     plugin_names: Arc<RwLock<HashMap<PluginKey, String>>>,
     hook_catalog: Arc<RwLock<BTreeMap<PluginKey, HostHookRegistration>>>,
@@ -609,7 +866,20 @@ pub struct HostHandle {
     /// Plugin transport registry shared by the parent [`PluginHost`]. Lets
     /// the handle dispatch host->plugin calls (e.g. permission handler
     /// rendering) without holding a reference to PluginHost itself.
-    plugin_transports: tokio::sync::RwLock<HashMap<PluginKey, Arc<dyn PluginTransport>>>,
+    plugin_transports: Arc<tokio::sync::RwLock<HashMap<PluginKey, Arc<dyn PluginTransport>>>>,
+    service_bindings: tokio::sync::RwLock<BTreeMap<PluginServiceBindingKey, PluginServiceBinding>>,
+    effect_scopes: RwLock<HashMap<PluginKey, Arc<PluginEffectScope>>>,
+    /// Short-lived callback authorities minted only while Host→Plugin work is
+    /// in flight. They prevent stdio/http plugins from forging another
+    /// session, call, workspace, or tool capability in plugin→host callbacks.
+    callback_authorities: Arc<Mutex<HashMap<String, CallbackAuthorityRecord>>>,
+}
+
+#[derive(Debug, Clone)]
+struct CallbackAuthorityRecord {
+    plugin_id: PluginKey,
+    generation: u64,
+    context: HostCallbackContext,
 }
 
 type ToolRegistryEventListener = Arc<dyn Fn(ToolRegistryChangedEvent) + Send + Sync>;
@@ -649,14 +919,14 @@ struct HostUnsubscribeParams {
 struct HostConfigReadParams {
     #[serde(default)]
     path: Option<String>,
-    #[serde(default)]
-    context: Option<HostCallbackContext>,
+    #[serde(rename = "context", default)]
+    _context: Option<HostCallbackContext>,
 }
 
 #[derive(serde::Deserialize)]
 struct HostConfigReloadParams {
-    #[serde(default)]
-    context: Option<HostCallbackContext>,
+    #[serde(rename = "context", default)]
+    _context: Option<HostCallbackContext>,
 }
 
 #[derive(serde::Deserialize)]
@@ -664,112 +934,112 @@ struct HostInvokeToolParams {
     tool: String,
     #[serde(default)]
     input: serde_json::Value,
-    #[serde(default)]
-    context: Option<HostCallbackContext>,
+    #[serde(rename = "context", default)]
+    _context: Option<HostCallbackContext>,
 }
 
 #[derive(serde::Deserialize)]
 struct HostAskUserParams {
     request: AskUserRequest,
-    #[serde(default)]
-    context: Option<HostCallbackContext>,
+    #[serde(rename = "context", default)]
+    _context: Option<HostCallbackContext>,
 }
 
 #[derive(serde::Deserialize)]
 struct HostRunSubtaskParams {
     request: RunSubtaskRequest,
-    #[serde(default)]
-    context: Option<HostCallbackContext>,
+    #[serde(rename = "context", default)]
+    _context: Option<HostCallbackContext>,
 }
 
 #[derive(serde::Deserialize)]
 struct HostCancelSubtaskParams {
     request: CancelSubtaskRequest,
-    #[serde(default)]
-    context: Option<HostCallbackContext>,
+    #[serde(rename = "context", default)]
+    _context: Option<HostCallbackContext>,
 }
 
 #[derive(serde::Deserialize)]
 struct HostMessageSubtaskParams {
     request: MessageSubtaskRequest,
-    #[serde(default)]
-    context: Option<HostCallbackContext>,
+    #[serde(rename = "context", default)]
+    _context: Option<HostCallbackContext>,
 }
 
 #[derive(serde::Deserialize)]
 struct HostReadSubtaskOutputParams {
     request: ReadSubtaskOutputRequest,
-    #[serde(default)]
-    context: Option<HostCallbackContext>,
+    #[serde(rename = "context", default)]
+    _context: Option<HostCallbackContext>,
 }
 
 #[derive(serde::Deserialize)]
 struct HostListToolsParams {
-    #[serde(default)]
-    context: Option<HostCallbackContext>,
+    #[serde(rename = "context", default)]
+    _context: Option<HostCallbackContext>,
 }
 
 #[derive(serde::Deserialize)]
 struct HostContextStatusParams {
     request: HostContextStatusRequest,
-    #[serde(default)]
-    context: Option<HostCallbackContext>,
+    #[serde(rename = "context", default)]
+    _context: Option<HostCallbackContext>,
 }
 
 #[derive(serde::Deserialize)]
 struct HostSetSessionModelParams {
     request: HostSetSessionModelRequest,
-    #[serde(default)]
-    context: Option<HostCallbackContext>,
+    #[serde(rename = "context", default)]
+    _context: Option<HostCallbackContext>,
 }
 
 #[derive(serde::Deserialize)]
 struct HostImageExecuteParams {
     request: HostImageExecuteRequest,
-    #[serde(default)]
-    context: Option<HostCallbackContext>,
+    #[serde(rename = "context", default)]
+    _context: Option<HostCallbackContext>,
 }
 
 #[derive(serde::Deserialize, Default)]
 struct HostEnterSnapshotParams {
     #[serde(default)]
     request: HostEnterSnapshotRequest,
-    #[serde(default)]
-    context: Option<HostCallbackContext>,
+    #[serde(rename = "context", default)]
+    _context: Option<HostCallbackContext>,
 }
 
 #[derive(serde::Deserialize)]
 struct HostExitSnapshotParams {
     request: HostExitSnapshotRequest,
-    #[serde(default)]
-    context: Option<HostCallbackContext>,
+    #[serde(rename = "context", default)]
+    _context: Option<HostCallbackContext>,
 }
 
 #[derive(serde::Deserialize)]
 struct HostMonitorStartParams {
     request: MonitorStartRequest,
-    #[serde(default)]
-    context: Option<HostCallbackContext>,
+    #[serde(rename = "context", default)]
+    _context: Option<HostCallbackContext>,
 }
 
 #[derive(serde::Deserialize)]
 struct HostMonitorListParams {
-    #[serde(default)]
-    context: Option<HostCallbackContext>,
+    #[serde(rename = "context", default)]
+    _context: Option<HostCallbackContext>,
 }
 
 #[derive(serde::Deserialize)]
 struct HostMonitorReadParams {
     request: MonitorReadRequest,
-    #[serde(default)]
-    context: Option<HostCallbackContext>,
+    #[serde(rename = "context", default)]
+    _context: Option<HostCallbackContext>,
 }
 
 #[derive(serde::Deserialize)]
 struct HostMonitorStopParams {
     request: MonitorStopRequest,
-    #[serde(default)]
-    context: Option<HostCallbackContext>,
+    #[serde(rename = "context", default)]
+    _context: Option<HostCallbackContext>,
 }
 
 #[derive(serde::Deserialize)]
@@ -796,57 +1066,57 @@ struct HostToolRemoveParams {
 #[derive(serde::Deserialize)]
 struct HostStorageGetParams {
     request: HostStorageGetRequest,
-    #[serde(default)]
-    context: Option<HostCallbackContext>,
+    #[serde(rename = "context", default)]
+    _context: Option<HostCallbackContext>,
 }
 
 #[derive(serde::Deserialize)]
 struct HostStorageSetParams {
     request: HostStorageSetRequest,
-    #[serde(default)]
-    context: Option<HostCallbackContext>,
+    #[serde(rename = "context", default)]
+    _context: Option<HostCallbackContext>,
 }
 
 #[derive(serde::Deserialize)]
 struct HostStorageDeleteParams {
     request: HostStorageDeleteRequest,
-    #[serde(default)]
-    context: Option<HostCallbackContext>,
+    #[serde(rename = "context", default)]
+    _context: Option<HostCallbackContext>,
 }
 
 #[derive(serde::Deserialize)]
 struct HostStorageListParams {
     #[serde(default)]
     request: HostStorageListRequest,
-    #[serde(default)]
-    context: Option<HostCallbackContext>,
+    #[serde(rename = "context", default)]
+    _context: Option<HostCallbackContext>,
 }
 
 #[derive(serde::Deserialize)]
 struct HostSecretGetParams {
     request: HostSecretGetRequest,
-    #[serde(default)]
-    context: Option<HostCallbackContext>,
+    #[serde(rename = "context", default)]
+    _context: Option<HostCallbackContext>,
 }
 
 #[derive(serde::Deserialize)]
 struct HostSecretSetParams {
     request: HostSecretSetRequest,
-    #[serde(default)]
-    context: Option<HostCallbackContext>,
+    #[serde(rename = "context", default)]
+    _context: Option<HostCallbackContext>,
 }
 
 #[derive(serde::Deserialize)]
 struct HostSecretDeleteParams {
     request: HostSecretDeleteRequest,
-    #[serde(default)]
-    context: Option<HostCallbackContext>,
+    #[serde(rename = "context", default)]
+    _context: Option<HostCallbackContext>,
 }
 
 #[derive(serde::Deserialize, Default)]
 struct HostSecretListParams {
-    #[serde(default)]
-    context: Option<HostCallbackContext>,
+    #[serde(rename = "context", default)]
+    _context: Option<HostCallbackContext>,
 }
 
 #[derive(serde::Deserialize)]
@@ -858,62 +1128,62 @@ struct HostPluginStatusGetParams {
 
 #[derive(serde::Deserialize, Default)]
 struct HostLspListServersParams {
-    #[serde(default)]
-    context: Option<HostCallbackContext>,
+    #[serde(rename = "context", default)]
+    _context: Option<HostCallbackContext>,
 }
 
 #[derive(serde::Deserialize, Default)]
 struct HostLspListDiagnosticsParams {
     #[serde(default)]
     request: HostLspListDiagnosticsRequest,
-    #[serde(default)]
-    context: Option<HostCallbackContext>,
+    #[serde(rename = "context", default)]
+    _context: Option<HostCallbackContext>,
 }
 
 #[derive(serde::Deserialize, Default)]
 struct HostSnapshotListParams {
-    #[serde(default)]
-    context: Option<HostCallbackContext>,
+    #[serde(rename = "context", default)]
+    _context: Option<HostCallbackContext>,
 }
 
 #[derive(serde::Deserialize, Default)]
 struct HostSchedulerListParams {
-    #[serde(default)]
-    context: Option<HostCallbackContext>,
+    #[serde(rename = "context", default)]
+    _context: Option<HostCallbackContext>,
 }
 
 #[derive(serde::Deserialize)]
 struct HostSchedulerCreateParams {
     request: HostSchedulerCreateRequest,
-    #[serde(default)]
-    context: Option<HostCallbackContext>,
+    #[serde(rename = "context", default)]
+    _context: Option<HostCallbackContext>,
 }
 
 #[derive(serde::Deserialize)]
 struct HostSchedulerDeleteParams {
     request: HostSchedulerDeleteRequest,
-    #[serde(default)]
-    context: Option<HostCallbackContext>,
+    #[serde(rename = "context", default)]
+    _context: Option<HostCallbackContext>,
 }
 
 #[derive(serde::Deserialize, Default)]
 struct HostMcpListServersParams {
-    #[serde(default)]
-    context: Option<HostCallbackContext>,
+    #[serde(rename = "context", default)]
+    _context: Option<HostCallbackContext>,
 }
 
 #[derive(serde::Deserialize)]
 struct HostMcpAddServerParams {
     request: HostMcpAddServerRequest,
-    #[serde(default)]
-    context: Option<HostCallbackContext>,
+    #[serde(rename = "context", default)]
+    _context: Option<HostCallbackContext>,
 }
 
 #[derive(serde::Deserialize)]
 struct HostMcpRemoveServerParams {
     request: HostMcpRemoveServerRequest,
-    #[serde(default)]
-    context: Option<HostCallbackContext>,
+    #[serde(rename = "context", default)]
+    _context: Option<HostCallbackContext>,
 }
 
 #[derive(serde::Deserialize)]
@@ -966,6 +1236,22 @@ fn scoped_context(
     context
 }
 
+fn current_tool_scope() -> Option<PluginScopeKey> {
+    host_api::current_host_callback_context()
+        .and_then(|context| context.session_id)
+        .map(PluginScopeKey::session)
+}
+
+fn tool_registry_event_visible_in_scope(
+    event: &ToolRegistryChangedEvent,
+    scope: Option<&PluginScopeKey>,
+) -> bool {
+    match event.scope.as_deref() {
+        None => true,
+        Some(event_scope) => scope.is_some_and(|scope| scope.as_str() == event_scope),
+    }
+}
+
 fn callback_context_from_params(params: &serde_json::Value) -> Option<HostCallbackContext> {
     params
         .as_object()?
@@ -981,4 +1267,6 @@ fn parse<T: DeserializeOwned>(v: serde_json::Value) -> Result<T, PluginError> {
 struct ScopedHostClient {
     handle: Arc<HostHandle>,
     plugin_id: String,
+    plugin_key: PluginKey,
+    effect_scope: Arc<PluginEffectScope>,
 }

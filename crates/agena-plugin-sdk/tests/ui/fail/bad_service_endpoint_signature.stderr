@@ -1,0 +1,22 @@
+error[E0308]: mismatched types
+  --> tests/ui/fail/bad_service_endpoint_signature.rs:31:1
+   |
+31 | / #[agena_plugin(
+32 | |     namespace = "test",
+33 | |     name = "bad_endpoint_signature",
+34 | |     version = "0.0.0",
+35 | |     summary = "compile fail fixture"
+36 | | )]
+   | |__^ expected `&WrongRequest`, found `&Request`
+...
+39 |       fn query(&self, input: &WrongRequest) -> Response {
+   |          ----- arguments to this method are incorrect
+   |
+   = note: expected reference `&WrongRequest`
+              found reference `&Request`
+note: method defined here
+  --> tests/ui/fail/bad_service_endpoint_signature.rs:39:8
+   |
+39 |     fn query(&self, input: &WrongRequest) -> Response {
+   |        ^^^^^        --------------------
+   = note: this error originates in the attribute macro `agena_plugin` (in Nightly builds, run with -Z macro-backtrace for more info)

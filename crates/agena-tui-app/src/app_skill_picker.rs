@@ -97,7 +97,7 @@ impl App {
         self.dispatch_backend_operation(
             move |application| async move {
                 application
-                    .invoke_plugin_ui_tool(
+                    .invoke_plugin_tool(
                         "agena.skills",
                         "list",
                         serde_json::json!({
@@ -129,7 +129,7 @@ impl App {
         &mut self,
         dialog: &mut SkillPickerOverlay,
         requested_offset: usize,
-        result: UiResult<agena_plugin_host::PluginUiToolInvokeResponse>,
+        result: UiResult<agena_plugin_host::PluginToolInvokeResponse>,
     ) {
         match result.and_then(|response| skill_catalog_page(response.payload)) {
             Ok(page) => {
@@ -173,7 +173,7 @@ impl App {
         self.dispatch_backend_operation(
             move |application| async move {
                 application
-                    .invoke_plugin_ui_tool(
+                    .invoke_plugin_tool(
                         "agena.skills",
                         "get",
                         serde_json::json!({ "name": name }),

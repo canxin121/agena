@@ -219,7 +219,7 @@ impl App {
         self.dispatch_backend_operation(
             move |application| async move {
                 application
-                    .invoke_plugin_ui_tool(
+                    .invoke_plugin_tool(
                         "agena.skills",
                         "list",
                         serde_json::json!({
@@ -248,7 +248,7 @@ impl App {
     fn apply_skill_studio_page(
         &mut self,
         dialog: &mut SkillStudioOverlay,
-        result: UiResult<agena_plugin_host::PluginUiToolInvokeResponse>,
+        result: UiResult<agena_plugin_host::PluginToolInvokeResponse>,
     ) {
         match result.and_then(|response| skill_studio_page(response.payload)) {
             Ok(page) => {
@@ -324,7 +324,7 @@ impl App {
         self.dispatch_backend_operation(
             move |application| async move {
                 application
-                    .invoke_plugin_ui_tool(
+                    .invoke_plugin_tool(
                         "agena.skills",
                         "get",
                         serde_json::json!({ "name": requested_name }),
@@ -398,7 +398,7 @@ impl App {
         self.dispatch_backend_operation(
             move |application| async move {
                 application
-                    .invoke_plugin_ui_tool("agena.skills", tool, input, Some(session_id))
+                    .invoke_plugin_tool("agena.skills", tool, input, Some(session_id))
                     .await
             },
             |app, result| match result {
@@ -455,7 +455,7 @@ impl App {
         self.dispatch_backend_operation(
             move |application| async move {
                 application
-                    .invoke_plugin_ui_tool(
+                    .invoke_plugin_tool(
                         "agena.skills",
                         "delete",
                         serde_json::json!({ "name": name }),

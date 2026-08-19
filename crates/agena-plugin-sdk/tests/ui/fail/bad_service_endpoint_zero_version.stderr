@@ -1,0 +1,12 @@
+error[E0080]: evaluation panicked: plugin service endpoint version must be positive
+  --> tests/ui/fail/bad_service_endpoint_zero_version.rs:13:1
+   |
+13 | / agena_plugin_sdk::plugin_service_endpoint! {
+14 | |     BadEndpoint {
+15 | |         service: "test.zero",
+16 | |         version: 0,
+...  |
+21 | | }
+   | |_^ evaluation of `_` failed here
+   |
+   = note: this error originates in the macro `$crate::panic::panic_2021` which comes from the expansion of the macro `agena_plugin_sdk::plugin_service_endpoint` (in Nightly builds, run with -Z macro-backtrace for more info)

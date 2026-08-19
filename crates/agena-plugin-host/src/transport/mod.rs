@@ -4,6 +4,7 @@
 pub mod cdylib;
 pub mod http;
 pub mod inproc;
+pub mod quiescent;
 pub mod stdio;
 
 #[cfg(feature = "wasm")]
@@ -55,6 +56,19 @@ pub trait PluginTransport: Send + Sync + 'static {
         _params: serde_json::Value,
     ) -> Result<bool, TransportError> {
         Ok(false)
+    }
+
+    /// Graceful terminal lifecycle boundary. Implementations that need to
+    /// stop admission and await in-flight work atomically may override this;
+    /// the default preserves the historical shutdown-hook then close order.
+    async fn shutdown(&self) -> Result<(), TransportError> {
+        let _ = self
+            .dispatch(
+                crate::sdk::rpc::method::META_SHUTDOWN,
+                serde_json::Value::Object(Default::default()),
+            )
+            .await;
+        self.close().await
     }
 
     async fn close(&self) -> Result<(), TransportError> {

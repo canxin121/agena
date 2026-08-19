@@ -26,6 +26,12 @@ pub use provider_state::PartProviderState;
 /// Session state needed by tool execution, kept as a neutral port so neither
 /// the tool executor nor session core depends on the other's implementation.
 pub trait ToolSessionContext {
+    /// Runtime-only session identity used to select plugin-scoped capability
+    /// overlays. Implementations backed by portable policy/config values may
+    /// leave this absent; callers then see only global plugin capabilities.
+    fn session_id(&self) -> Option<i64> {
+        None
+    }
     fn effective_workspace_root(&self) -> Option<&std::path::Path>;
     fn effective_permission(&self) -> &authorization::PermissionConfig;
     fn permission_ceiling(&self) -> &authorization::PermissionConfig;

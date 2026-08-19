@@ -1,0 +1,5 @@
+error: #[service] methods support zero or one typed input argument; use a request struct to group fields
+  --> tests/ui/fail/bad_service_too_many_inputs.rs:14:14
+   |
+14 |     fn query(&self, left: String, right: String) -> String {
+   |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

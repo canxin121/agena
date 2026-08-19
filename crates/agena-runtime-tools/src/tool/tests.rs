@@ -1,4 +1,8 @@
-use std::{collections::HashMap, process::Command, sync::Arc};
+use std::{
+    collections::HashMap,
+    process::Command,
+    sync::{Arc, RwLock},
+};
 
 use super::{
     StructuredObject, TOOL_MODEL_STRUCTURED_OUTPUT_MAX_BYTES, ToolError, ToolExecutor,
@@ -25,6 +29,89 @@ struct ToolApiFixture;
 
 #[derive(Default)]
 struct ExecutionAccessFixture;
+
+#[derive(Default)]
+struct ScopedDynamicToolFixture {
+    host: RwLock<Option<Arc<dyn agena_plugin_host::sdk::HostClient>>>,
+}
+
+fn scoped_dynamic_tool_definition(name: &str) -> agena_plugin_host::sdk::ToolDefinition {
+    agena_plugin_host::sdk::ToolDefinition {
+        name: name.to_string(),
+        contract: agena_plugin_host::sdk::ToolContract {
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            }),
+            ..Default::default()
+        },
+        model: Default::default(),
+        docs: agena_plugin_host::sdk::ToolDocs {
+            summary: Some(format!("Scoped fixture tool {name}.")),
+            ..Default::default()
+        },
+        runtime: Default::default(),
+        permissions: agena_plugin_host::sdk::ToolPermissionContract {
+            read_only: true,
+            ..Default::default()
+        },
+        tags: Vec::new(),
+    }
+}
+
+#[agena_plugin_host::sdk::async_trait]
+impl agena_plugin_host::sdk::Plugin for ScopedDynamicToolFixture {
+    fn manifest(&self) -> agena_plugin_host::sdk::PluginManifest {
+        let mut manifest = agena_plugin_host::sdk::PluginManifest::new("test", "scoped", "0.1.0");
+        manifest.summary = Some("Session scoped dynamic tool fixture.".to_string());
+        manifest.hooks = agena_plugin_host::sdk::HookSubscription::INIT;
+        manifest.tools = vec![scoped_dynamic_tool_definition("seed")];
+        manifest
+    }
+
+    async fn init(
+        &self,
+        _ctx: agena_plugin_host::sdk::InitContext,
+        host: Arc<dyn agena_plugin_host::sdk::HostClient>,
+    ) -> agena_plugin_host::sdk::Result<agena_plugin_host::sdk::InitOutcome> {
+        *self
+            .host
+            .write()
+            .map_err(|_| agena_plugin_host::sdk::PluginError::internal("host lock poisoned"))? =
+            Some(host);
+        Ok(agena_plugin_host::sdk::InitOutcome::ack(self.manifest()))
+    }
+
+    async fn tool_invoke(
+        &self,
+        input: agena_plugin_host::sdk::ToolInvokeInput,
+    ) -> agena_plugin_host::sdk::Result<agena_plugin_host::sdk::ToolInvokeOutput> {
+        match input.tool_name.as_str() {
+            "seed" => {
+                let host = self
+                    .host
+                    .read()
+                    .map_err(|_| {
+                        agena_plugin_host::sdk::PluginError::internal("host lock poisoned")
+                    })?
+                    .clone()
+                    .ok_or_else(|| {
+                        agena_plugin_host::sdk::PluginError::internal("plugin not initialized")
+                    })?;
+                host.register_tool(agena_plugin_host::sdk::host_api::HostToolRegisterRequest {
+                    tool: scoped_dynamic_tool_definition("dynamic"),
+                })
+                .await?;
+                Ok(agena_plugin_host::sdk::ToolInvokeOutput::text("seeded"))
+            }
+            "dynamic" => Ok(agena_plugin_host::sdk::ToolInvokeOutput::text("dynamic")),
+            other => Err(agena_plugin_host::sdk::PluginError::not_implemented(
+                format!("tool_invoke({other})"),
+            )),
+        }
+    }
+}
 
 #[derive(Default)]
 struct ExecutorBackedShellAdapter;
@@ -112,10 +199,15 @@ impl ExecutionAccessFixture {
 }
 
 struct TestSessionContext {
+    session_id: Option<i64>,
     access: agena_domain::ExecutionAccess,
 }
 
 impl crate::ToolSessionContext for TestSessionContext {
+    fn session_id(&self) -> Option<i64> {
+        self.session_id
+    }
+
     fn effective_workspace_root(&self) -> Option<&std::path::Path> {
         None
     }
@@ -776,6 +868,7 @@ async fn read_only_access_filters_live_tools_and_preserves_gateway_discovery() {
         None,
     )
     .for_session_context_async(&TestSessionContext {
+        session_id: Some(1),
         access: agena_domain::ExecutionAccess::ReadOnly,
     })
     .await;
@@ -805,6 +898,149 @@ async fn read_only_access_filters_live_tools_and_preserves_gateway_discovery() {
     assert!(
         matches!(&error, ToolError::CapabilityUnavailable(_)),
         "out-of-capability tools must be hidden at invocation time, got {error:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn session_scoped_dynamic_tools_are_stable_per_turn_and_isolated_across_sessions() {
+    let workspace_root = std::env::current_dir().expect("resolve test workspace");
+    let plugin_id = "test.scoped";
+    let mut plugins_config = PluginsConfig::default();
+    plugins_config
+        .list
+        .insert(plugin_id.to_owned(), ConfiguredPlugin::static_default());
+    let plugins = PluginHost::new(PluginHostBuildConfig {
+        static_plugins: vec![StaticPluginRegistration::new(
+            plugin_id.parse().expect("valid scoped plugin key"),
+            ScopedDynamicToolFixture::default(),
+        )],
+        config: plugins_config,
+        workspace_root: workspace_root.clone(),
+        agena_version: "test".to_owned(),
+        callback_base_url: None,
+        host_client: None,
+        previous: None,
+        previous_plugins: HashMap::new(),
+    })
+    .await
+    .expect("build scoped dynamic tool host");
+    let base = ToolExecutor::new(
+        workspace_root,
+        ExecutionPrincipal::new(
+            PermissionPolicy::allow_all(),
+            ToolPermissionPolicy::allow_all(),
+        ),
+        Arc::clone(&plugins),
+        None,
+        None,
+        None,
+    );
+    let session_a = TestSessionContext {
+        session_id: Some(101),
+        access: agena_domain::ExecutionAccess::Inherit,
+    };
+    let session_b = TestSessionContext {
+        session_id: Some(202),
+        access: agena_domain::ExecutionAccess::Inherit,
+    };
+
+    let executor_a_turn_1 = base.for_session_context_async(&session_a).await;
+    assert!(
+        executor_a_turn_1
+            .available_execution_tools()
+            .iter()
+            .any(|tool| tool.canonical_name() == "test.scoped.seed")
+    );
+    assert!(
+        executor_a_turn_1
+            .available_execution_tools()
+            .iter()
+            .all(|tool| tool.canonical_name() != "test.scoped.dynamic")
+    );
+
+    executor_a_turn_1
+        .execute_invocation_detailed(
+            &ToolInvocation::new("test.scoped.seed", StructuredObject::default()),
+            101,
+            1,
+        )
+        .await
+        .expect("seed registers a session-scoped tool");
+
+    assert!(
+        executor_a_turn_1
+            .available_execution_tools()
+            .iter()
+            .all(|tool| tool.canonical_name() != "test.scoped.dynamic"),
+        "the current turn must keep its immutable catalog snapshot"
+    );
+
+    let executor_a_turn_2 = base.for_session_context_async(&session_a).await;
+    assert!(
+        executor_a_turn_2
+            .available_execution_tools()
+            .iter()
+            .any(|tool| tool.canonical_name() == "test.scoped.dynamic"),
+        "a new turn in the owning session sees the scoped registration"
+    );
+    executor_a_turn_2
+        .execute_invocation_detailed(
+            &ToolInvocation::new("test.scoped.dynamic", StructuredObject::default()),
+            101,
+            2,
+        )
+        .await
+        .expect("owning session executes scoped dynamic tool");
+
+    let executor_b = base.for_session_context_async(&session_b).await;
+    assert!(
+        executor_b
+            .available_execution_tools()
+            .iter()
+            .all(|tool| tool.canonical_name() != "test.scoped.dynamic")
+    );
+    let error = executor_b
+        .execute_invocation_detailed(
+            &ToolInvocation::new("test.scoped.dynamic", StructuredObject::default()),
+            202,
+            1,
+        )
+        .await
+        .expect_err("another session must not resolve the scoped dynamic tool");
+    assert!(matches!(error, ToolError::ToolUnavailable(_)));
+
+    assert!(
+        base.available_execution_tools()
+            .iter()
+            .all(|tool| tool.canonical_name() != "test.scoped.dynamic"),
+        "global callers never see a session-scoped registration"
+    );
+
+    plugins
+        .broadcast_session_end(agena_plugin_host::sdk::SessionEndInput {
+            session_id: 101,
+            reason: agena_plugin_host::sdk::SessionEndReason::Other,
+        })
+        .await;
+    let executor_a_after_end = base.for_session_context_async(&session_a).await;
+    assert!(
+        executor_a_after_end
+            .available_execution_tools()
+            .iter()
+            .all(|tool| tool.canonical_name() != "test.scoped.dynamic"),
+        "session.end must tear down the session visibility/lifetime scope"
+    );
+    assert!(
+        plugins
+            .architecture_catalog()
+            .tool_registrations
+            .iter()
+            .all(|entry| !matches!(
+                &entry.layer,
+                agena_plugin_host::ScopedRegistryLayer::Scope { scope }
+                    if scope.as_str() == "session:101"
+            )),
+        "architecture inspect must stop reporting registrations after scope teardown"
     );
 }
 

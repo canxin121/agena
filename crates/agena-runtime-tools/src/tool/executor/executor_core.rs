@@ -12,6 +12,7 @@ impl ToolExecutor {
             principal,
             allowed_tool_names: None,
             model_id: None,
+            plugin_scope: None,
             definition_catalog: None,
             monitor_registry: crate::default_monitor_registry(),
             plugins,
@@ -47,6 +48,9 @@ impl ToolExecutor {
         session_context: &C,
     ) -> Self {
         let mut scoped = self.clone();
+        scoped.plugin_scope = session_context
+            .session_id()
+            .map(agena_plugin_host::PluginScopeKey::session);
         if let Some(root) = session_context.effective_workspace_root() {
             scoped.workspace_root = root.to_path_buf();
         }
@@ -237,7 +241,7 @@ impl ToolExecutor {
         }
         let mut tools = self
             .plugins
-            .registered_tools()
+            .registered_tools_for_scope(self.plugin_scope.as_ref())
             .into_iter()
             .collect::<Vec<_>>();
 
@@ -264,7 +268,7 @@ impl ToolExecutor {
         }
         let mut tools = self
             .plugins
-            .registered_tools()
+            .registered_tools_for_scope(self.plugin_scope.as_ref())
             .into_iter()
             .collect::<Vec<_>>();
 

@@ -14,7 +14,7 @@ pub use crate::quota::QuotaConfig;
 /// Top-level `plugins` config object, parsed from agena's JSON config layer.
 ///
 /// The host only owns transport and lifecycle fields. Plugin-specific
-/// settings live in [`ConfiguredPlugin::settings`] as JSON and is validated
+/// configuration lives in [`ConfiguredPlugin::config`] as JSON and is validated
 /// against the plugin manifest at load time.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
@@ -26,6 +26,47 @@ pub struct PluginsConfig {
     pub policy: PluginPolicyConfig,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub list: BTreeMap<String, ConfiguredPlugin>,
+    /// Named deployment layers. Runtime resolves these after bundled plugin
+    /// defaults are injected, then every downstream consumer reads only `list`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub profiles: BTreeMap<String, crate::profiles::PluginProfile>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub active_profiles: Vec<String>,
+    /// Runtime-only provenance of the already-resolved profile layers.
+    #[serde(skip)]
+    pub profile_resolution: crate::profiles::PluginProfileResolutionMeta,
+}
+
+impl PluginsConfig {
+    /// Resolve active profiles over the current list exactly once and collapse
+    /// the runtime value back to the single `plugins.list` leaf.
+    pub fn resolve_profiles_in_place(&mut self) -> Result<(), String> {
+        if self.profile_resolution.resolved {
+            return Ok(());
+        }
+        let resolution = crate::profiles::resolve_plugin_profiles(
+            &self.list,
+            &self.profiles,
+            &self.active_profiles,
+        )?;
+        self.list = resolution.list;
+        self.profile_resolution = resolution.meta;
+        self.profiles.clear();
+        self.active_profiles.clear();
+        Ok(())
+    }
+
+    pub fn resolved_profile_view(
+        &self,
+    ) -> Result<crate::profiles::PluginProfileResolution, String> {
+        if self.profile_resolution.resolved {
+            return Ok(crate::profiles::PluginProfileResolution {
+                list: self.list.clone(),
+                meta: self.profile_resolution.clone(),
+            });
+        }
+        crate::profiles::resolve_plugin_profiles(&self.list, &self.profiles, &self.active_profiles)
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -76,7 +117,7 @@ pub struct PluginSignature {
 }
 
 /// One configured plugin under `plugins.list.<id>`. The host knows how to
-/// load the `package`; `settings` is plugin-owned JSON.
+/// load the `package`; `config` is plugin-owned JSON.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 /// Configured plugin entry.
@@ -85,9 +126,15 @@ pub struct ConfiguredPlugin {
     pub enabled: bool,
     pub package: PluginPackage,
     #[serde(default)]
-    pub settings: serde_json::Value,
+    pub config: serde_json::Value,
     #[serde(default)]
     pub timeouts: TimeoutsConfig,
+    /// Host-owned activation dependencies. `requires` is a hard dependency:
+    /// the plugin stays inactive when a required plugin is missing, disabled,
+    /// cyclic, or failed to initialize. `after` is only a deterministic load
+    /// ordering hint and never blocks activation.
+    #[serde(default, skip_serializing_if = "PluginActivationConfig::is_empty")]
+    pub activation: PluginActivationConfig,
 }
 
 impl Default for ConfiguredPlugin {
@@ -95,8 +142,9 @@ impl Default for ConfiguredPlugin {
         Self {
             enabled: true,
             package: PluginPackage::Static {},
-            settings: serde_json::Value::Null,
+            config: serde_json::Value::Null,
             timeouts: TimeoutsConfig::default(),
+            activation: PluginActivationConfig::default(),
         }
     }
 }
@@ -153,22 +201,76 @@ pub enum PluginPackage {
     },
 }
 
+#[cfg(test)]
+mod tests {
+    use super::{ConfiguredPlugin, PluginActivationConfig};
+
+    #[test]
+    fn configured_plugin_activation_round_trips_and_defaults_out_of_json() {
+        let configured: ConfiguredPlugin = serde_json::from_value(serde_json::json!({
+            "package": { "kind": "static" },
+            "activation": {
+                "requires": ["example.provider"],
+                "after": ["example.observer"]
+            }
+        }))
+        .expect("decode configured plugin activation");
+
+        assert_eq!(
+            configured
+                .activation
+                .requires
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>(),
+            ["example.provider"]
+        );
+        assert_eq!(
+            configured
+                .activation
+                .after
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>(),
+            ["example.observer"]
+        );
+        let encoded = serde_json::to_value(&configured).expect("encode configured plugin");
+        assert_eq!(encoded["activation"]["requires"][0], "example.provider");
+
+        let default = serde_json::to_value(ConfiguredPlugin::default())
+            .expect("encode default configured plugin");
+        assert!(default.get("activation").is_none());
+        assert!(PluginActivationConfig::default().is_empty());
+    }
+
+    #[test]
+    fn activation_contract_rejects_unknown_fields() {
+        let error = serde_json::from_value::<ConfiguredPlugin>(serde_json::json!({
+            "package": { "kind": "static" },
+            "activation": { "requires": [], "optional": ["example.plugin"] }
+        }))
+        .expect_err("unknown activation field must be rejected");
+        assert!(error.to_string().contains("unknown field"));
+    }
+}
+
 impl ConfiguredPlugin {
-    pub fn static_settings(settings: serde_json::Value) -> Self {
+    pub fn static_config(config: serde_json::Value) -> Self {
         Self {
             enabled: true,
             package: PluginPackage::Static {},
-            settings,
+            config,
             timeouts: TimeoutsConfig::default(),
+            activation: PluginActivationConfig::default(),
         }
     }
 
     pub fn static_default() -> Self {
-        Self::static_settings(serde_json::Value::Null)
+        Self::static_config(serde_json::Value::Null)
     }
 
-    pub fn settings(&self) -> &serde_json::Value {
-        &self.settings
+    pub fn config(&self) -> &serde_json::Value {
+        &self.config
     }
 
     pub fn timeouts(&self) -> &TimeoutsConfig {
@@ -187,6 +289,31 @@ impl ConfiguredPlugin {
 
     pub fn disabled(&self) -> bool {
         !self.enabled
+    }
+}
+
+/// Dependency-driven activation of one configured plugin instance.
+///
+/// Dependencies are deliberately expressed between configured plugin ids in
+/// this first host-level primitive. A later service registry can resolve a
+/// service requirement to a provider id before feeding the same activation
+/// planner; keeping the planner id-based prevents service lookup and process
+/// transport concerns from becoming entangled.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct PluginActivationConfig {
+    /// Plugins that must be active before this plugin may initialize.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub requires: Vec<PluginKey>,
+    /// Existing plugins that should initialize first when possible. Missing,
+    /// disabled, failed, or cyclic hints are ignored.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub after: Vec<PluginKey>,
+}
+
+impl PluginActivationConfig {
+    pub fn is_empty(&self) -> bool {
+        self.requires.is_empty() && self.after.is_empty()
     }
 }
 

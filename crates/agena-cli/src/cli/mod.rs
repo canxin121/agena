@@ -45,6 +45,13 @@ pub enum CliError {
     Internal(String),
 }
 
+#[derive(Debug, Clone, Args)]
+/// Arguments for the resolved plugin architecture catalog.
+pub struct PluginArchitectureArgs {
+    #[arg(long, default_value = "json")]
+    pub format: OutputFormat,
+}
+
 pub type AppError = CliError;
 
 use self::cli_auth_helpers::*;
@@ -152,7 +159,7 @@ pub enum AgenaCommand {
     McpServer(McpServerArgs),
     Permissions(PermissionsArgs),
     Provider(ProviderCommand),
-    Plugin(PluginCommand),
+    Plugin(PluginOperation),
     Resume(ResumeArgs),
     Review(ReviewArgs),
     Sessions(SessionsCommand),
@@ -539,7 +546,7 @@ pub struct MemoryCommand {
 
 #[derive(Debug, Clone, Args)]
 /// Plugin management command.
-pub struct PluginCommand {
+pub struct PluginOperation {
     #[command(subcommand)]
     pub command: PluginSubcommand,
 }
@@ -551,6 +558,8 @@ pub enum PluginSubcommand {
     Status(PluginStatusArgs),
     /// Show detailed runtime and manifest information for one plugin.
     Inspect(PluginInspectArgs),
+    /// Show the resolved plugin architecture graph and lifecycle inventory.
+    Architecture(PluginArchitectureArgs),
     /// Show recent retained logs for one plugin.
     Logs(PluginLogsArgs),
     /// Validate a plugin manifest, configured plugin, or agena config plugin list.

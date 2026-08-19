@@ -1,10 +1,10 @@
 {
   "counts": {
     "bundled_skills": 14,
-    "execution_tools": 139,
+    "execution_tools": 137,
     "gateway_tools": 4,
-    "plugins": 23,
-    "tools": 143
+    "plugins": 22,
+    "tools": 141
   },
   "plugins": [
     {
@@ -1235,40 +1235,6 @@
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "mutate",
-            "discovery"
-          ]
-        }
-      ],
-      "version": "0.1.0"
-    },
-    {
-      "conditional": "feature:schema-lab",
-      "hooks": [
-        "tool.invoke"
-      ],
-      "id": "agena.schema_lab",
-      "tools": [
-        {
-          "canonical_name": "agena.schema_lab.echo",
-          "conditional": "feature:schema-lab",
-          "definition_identity": "7e436c889e9a2b2b6ec5bc2c5f1f6a6f28c228fcfef65d69057b75d45ab56d43",
-          "gateway": false,
-          "input_schema_sha256": "5a7ab0daa0fc32628512d572f2a5b1b142c758bfeec67e5f624bc8ac0d2f392b",
-          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
-          "tags": [
-            "query",
-            "discovery"
-          ]
-        },
-        {
-          "canonical_name": "agena.schema_lab.inspect",
-          "conditional": "feature:schema-lab",
-          "definition_identity": "2fe22211463f8074f7add57667d2fa202633bbd3d39eb5175ac80402082acdb0",
-          "gateway": false,
-          "input_schema_sha256": "f301afcd9d66a8754c00a9e9653501a418542557140d35164278bb8934f272dc",
-          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
-          "tags": [
-            "query",
             "discovery"
           ]
         }

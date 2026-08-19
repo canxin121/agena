@@ -10,7 +10,7 @@ use crate::error::{PluginError, Result};
 use crate::hooks::*;
 use crate::host_api::HostClient;
 use crate::identity::PluginKey;
-use crate::manifest::PluginManifest;
+use crate::manifest::{PluginManifest, SettingsContract};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 /// Context passed to a plugin at initialization.
@@ -24,9 +24,9 @@ pub struct InitContext {
     /// Bearer token the plugin must use when calling back into the host.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub host_callback_token: Option<String>,
-    /// Plugin-owned configuration forwarded from `plugins.list.<id>.settings`.
+    /// Plugin-owned configuration forwarded from `plugins.list.<id>.config`.
     #[serde(default)]
-    pub settings: serde_json::Value,
+    pub config: serde_json::Value,
     /// Protocol version both sides agreed on (currently always `1`).
     pub protocol_version: u32,
 }
@@ -99,7 +99,7 @@ where
 #[doc(hidden)]
 /// Access to the plugin config store.
 pub trait PluginSettingsStoreAccess {
-    fn plugin_settings_schema() -> serde_json::Value;
+    fn plugin_settings_contract() -> SettingsContract;
 
     fn set_plugin_settings_from_json(
         &self,
@@ -192,10 +192,28 @@ pub trait Plugin: Send + Sync + 'static {
         Ok(ToolStreamEnd::from_output(stream_id, result))
     }
 
-    async fn command_invoke(&self, input: PluginCommandInvokeInput) -> Result<PluginCommandOutput> {
+    async fn operation_invoke(
+        &self,
+        input: PluginOperationInvokeInput,
+    ) -> Result<PluginOperationResult> {
         Err(crate::error::PluginError::not_implemented(format!(
-            "command_invoke({})",
-            input.command_id
+            "operation_invoke({})",
+            input.operation_id
+        )))
+    }
+
+    /// Handle one host-routed invocation of a service exported by this plugin.
+    /// The host has already verified the consumer import, provider binding,
+    /// declared method, and method input contract. The host also validates the
+    /// returned value against the method output contract before the consumer
+    /// receives it.
+    async fn service_invoke(
+        &self,
+        input: crate::PluginServiceInvokeInput,
+    ) -> Result<serde_json::Value> {
+        Err(crate::error::PluginError::not_implemented(format!(
+            "service_invoke({}@v{}::{})",
+            input.service, input.api_version, input.method
         )))
     }
 

@@ -39,7 +39,10 @@ pub trait PluginRuntimeService: Send + Sync {
 
     fn plugin_status(&self, plugin_id: &str) -> Option<agena_plugin_host::status::PluginStatus>;
 
-    fn plugin_ui_catalog(&self) -> agena_plugin_host::PluginUiCatalog;
+    fn plugin_surface_catalog(&self) -> agena_plugin_host::PluginSurfaceCatalog;
+    fn plugin_architecture_catalog(&self) -> agena_plugin_host::PluginArchitectureCatalog {
+        agena_plugin_host::PluginArchitectureCatalog::default()
+    }
 
     fn permission_tool_catalog(&self) -> Vec<RuntimePluginToolCatalogItem>;
 
@@ -49,7 +52,7 @@ pub trait PluginRuntimeService: Send + Sync {
 
     fn theme_palettes(&self) -> Vec<agena_plugin_host::HostThemePalette>;
 
-    fn studio_commands(&self) -> Vec<agena_plugin_host::PluginCommandCatalogItem>;
+    fn operation_catalog(&self) -> Vec<agena_plugin_host::PluginOperationCatalogItem>;
 
     fn tool_registry_generation(&self) -> u64;
 
@@ -68,23 +71,17 @@ pub trait PluginRuntimeService: Send + Sync {
         limit: usize,
     ) -> Vec<agena_plugin_host::PluginLogRecord>;
 
-    fn resolve_studio_action(
-        &self,
-        plugin_id: &str,
-        action_id: &str,
-    ) -> Option<agena_plugin_host::PluginUiAction>;
-
     fn resolve_plugin_tool(
         &self,
         plugin_id: Option<&str>,
         tool_name: &str,
     ) -> Option<PluginToolDescriptor>;
 
-    async fn invoke_plugin_command(
+    async fn invoke_plugin_operation(
         &self,
         plugin_id: &str,
-        input: agena_plugin_host::sdk::PluginCommandInvokeInput,
-    ) -> Result<agena_plugin_host::sdk::PluginCommandOutput, String>;
+        input: agena_plugin_host::sdk::PluginOperationInvokeInput,
+    ) -> Result<agena_plugin_host::sdk::PluginOperationResult, String>;
 
     async fn plugin_rpc(
         &self,

@@ -53,13 +53,16 @@ impl App {
             ));
             actions.insert(key, CommandPaletteCommand::BuiltIn(spec));
         }
-        for entry in self.plugin_slash_commands() {
-            let Some(name) = plugin_command_slash_name(&entry) else {
+        for entry in self.plugin_slash_operations() {
+            let Some(name) = plugin_operation_slash_name(&entry) else {
                 continue;
             };
-            let key = format!("plugin-command:{}:{}", entry.plugin_id, entry.command.id);
+            let key = format!(
+                "plugin-operation:{}:{}",
+                entry.plugin_id, entry.operation.id
+            );
             let label = format!("/{name}");
-            let detail = plugin_command_detail(&entry);
+            let detail = plugin_operation_detail(&entry);
             items.push(CommandPaletteItem::new(
                 key.clone(),
                 label.clone(),
@@ -81,11 +84,13 @@ impl App {
         });
     }
 
-    pub(crate) fn plugin_slash_commands(&self) -> Vec<agena_plugin_host::PluginCommandCatalogItem> {
-        crate::app_backend::plugin_effects::plugin_slash_commands(&self.application)
+    pub(crate) fn plugin_slash_operations(
+        &self,
+    ) -> Vec<agena_plugin_host::PluginOperationCatalogItem> {
+        crate::app_backend::plugin_effects::plugin_slash_operations(&self.application)
             .into_iter()
             .filter(|entry| {
-                plugin_command_slash_name(entry)
+                plugin_operation_slash_name(entry)
                     .is_some_and(|name| commands::find_command(name.as_str()).is_none())
             })
             .collect()
@@ -175,7 +180,7 @@ impl App {
 use crate::{
     App, CommandPaletteCommand, CommandPaletteOverlay, Editor, PermissionRuleDraft,
     PermissionRuleStudioOverlay, Route, SessionNavigationQuery, commands,
-    permission_rule_studio_items, plugin_command_detail, plugin_command_slash_name,
+    permission_rule_studio_items, plugin_operation_detail, plugin_operation_slash_name,
     refresh_permission_rule_studio_dialog, ui_text,
 };
 use agena_tui::command_palette::CommandPaletteItem;

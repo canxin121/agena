@@ -22,6 +22,59 @@ fn tool_macro_manifest_infers_output_and_streaming() {
 }
 
 #[test]
+fn service_macro_merges_typed_methods_into_one_versioned_export() {
+    let manifest = Plugin::manifest(&ManifestPlugin);
+    let export = manifest
+        .services
+        .exports
+        .iter()
+        .find(|export| export.id == "test.echo" && export.api_version == 1)
+        .expect("typed service export");
+    assert_eq!(
+        export
+            .methods
+            .iter()
+            .map(|method| method.id.as_str())
+            .collect::<Vec<_>>(),
+        ["echo", "status"]
+    );
+    manifest
+        .services
+        .validate()
+        .expect("generated service declarations contract");
+    export.methods[0]
+        .input
+        .validate_value(&json!({ "text": "hello" }))
+        .expect("typed service request contract");
+    export.methods[0]
+        .output
+        .validate_value(&json!({ "rendered": "service:hello" }))
+        .expect("typed service response contract");
+    export.methods[1]
+        .input
+        .validate_value(&json!({}))
+        .expect("no-input service method uses a closed empty object");
+}
+
+#[test]
+fn plugin_macro_compiles_typed_settings_then_applies_presentation_metadata() {
+    let manifest = Plugin::manifest(&ManifestPlugin);
+    let settings = manifest.settings.expect("typed settings contract");
+    assert_eq!(settings.root.title, "Manifest Settings");
+    assert_eq!(
+        settings.root.description,
+        "Settings metadata stays presentation-only."
+    );
+    let SettingsNodeKind::Object { fields } = settings.root.kind else {
+        panic!("manifest settings should be an object");
+    };
+    assert_eq!(fields[0].path, "/enabled");
+    assert_eq!(fields[0].title, "Enabled Override");
+    assert_eq!(fields[0].description, "Decorated field label.");
+    assert_eq!(fields[0].default, Some(json!(false)));
+}
+
+#[test]
 fn tool_macro_manifest_uses_doc_comments_and_dynamic_output() {
     let manifest = Plugin::manifest(&ManifestPlugin);
     let doc_tool = tool_by_name(&manifest, "doc_render");
@@ -138,219 +191,13 @@ fn tool_input_field_semantics_generate_declarative_permissions() {
         Some("<name>")
     );
 
-    let semantic_command = command_by_id(&manifest, "semantic");
-    assert_eq!(
-        semantic_command.usage.as_deref(),
-        Some(
-            "/semantic path=out.txt endpoint=https://example.com sources=[\"<item>\"] token=<token>"
-        )
-    );
-
-    let inline = tool_by_name(&manifest, "inline_semantic");
-    assert_eq!(inline.permissions.input_paths.len(), 1);
-    assert_eq!(inline.permissions.input_paths[0].jsonpath, "$.path");
-    assert_eq!(inline.permissions.input_paths[0].kind, PathKind::Read);
-    assert_eq!(inline.permissions.input_networks.len(), 1);
-    assert_eq!(inline.permissions.input_networks[0].jsonpath, "$.host");
-    assert_eq!(
-        inline
-            .contract
-            .input_schema
-            .pointer("/properties/host/x-agena-network"),
-        Some(&json!("private"))
-    );
-    assert_eq!(
-        inline
-            .contract
-            .input_schema
-            .pointer("/properties/path/description"),
-        Some(&json!("Path to inspect."))
-    );
-    assert_eq!(
-        inline
-            .contract
-            .input_schema
-            .pointer("/properties/path/x-agena-order"),
-        Some(&json!("000000"))
-    );
-    assert_eq!(
-        inline
-            .contract
-            .input_schema
-            .pointer("/properties/host/x-agena-order"),
-        Some(&json!("000001"))
-    );
-
-    let inline_command = command_by_id(&manifest, "inline_semantic");
-    assert_eq!(
-        inline_command.usage.as_deref(),
-        Some("/inline-semantic path=README.md host=localhost")
-    );
-
-    let inline_auto_tool = tool_by_name(&manifest, "inline_auto");
-    assert_eq!(
-        inline_auto_tool
-            .contract
-            .input_schema
-            .pointer("/properties/path/x-agena-order"),
-        Some(&json!("000000"))
-    );
-    assert_eq!(
-        inline_auto_tool
-            .contract
-            .input_schema
-            .pointer("/properties/count/x-agena-order"),
-        Some(&json!("000001"))
-    );
-    let inline_auto_command = command_by_id(&manifest, "inline_auto");
-    assert_eq!(
-        inline_auto_command.usage.as_deref(),
-        Some("/inline-auto path=<path> count=1")
-    );
-
-    let inline_count_tool = tool_by_name(&manifest, "inline_count");
-    assert_eq!(
-        inline_count_tool
-            .contract
-            .input_schema
-            .pointer("/properties/count/examples"),
-        Some(&json!([3]))
-    );
-    let inline_count_command = command_by_id(&manifest, "inline_count");
-    assert_eq!(
-        inline_count_command.usage.as_deref(),
-        Some("/inline-count 3")
-    );
-
-    let inline_rename_tool = tool_by_name(&manifest, "inline_rename");
-    assert_eq!(inline_rename_tool.permissions.input_paths.len(), 2);
-    assert_eq!(
-        inline_rename_tool.permissions.input_paths[0].jsonpath,
-        "$.filePath"
-    );
-    assert!(inline_rename_tool.permissions.input_paths[0].optional);
-    assert_eq!(
-        inline_rename_tool.permissions.input_paths[1].jsonpath,
-        "$.path"
-    );
-    assert!(inline_rename_tool.permissions.input_paths[1].optional);
-    assert_eq!(
-        inline_rename_tool
-            .contract
-            .input_schema
-            .pointer("/properties/filePath/x-agena-aliases"),
-        Some(&json!(["path"]))
-    );
-    let inline_rename_command = command_by_id(&manifest, "inline_rename");
-    assert_eq!(
-        inline_rename_command.usage.as_deref(),
-        Some("/inline-rename <filePath>")
-    );
-
-    let inline_default_tool = tool_by_name(&manifest, "inline_default");
-    assert_eq!(
-        inline_default_tool
-            .contract
-            .input_schema
-            .pointer("/properties/count/default"),
-        Some(&json!(3))
-    );
-    let inline_default_command = command_by_id(&manifest, "inline_default");
-    assert_eq!(
-        inline_default_command.usage.as_deref(),
-        Some("/inline-default 3")
-    );
-
-    let inline_nested_tool = tool_by_name(&manifest, "inline_nested");
-    let nested_paths = inline_nested_tool
-        .permissions
-        .input_paths
-        .iter()
-        .map(|spec| spec.jsonpath.as_str())
-        .collect::<Vec<_>>();
-    assert_eq!(nested_paths.len(), 6);
-    assert!(nested_paths.contains(&"$.payload.file_path"));
-    assert!(nested_paths.contains(&"$.payload.filePath"));
-    assert!(nested_paths.contains(&"$.payload.path"));
-    assert!(nested_paths.contains(&"$.body.file_path"));
-    assert!(nested_paths.contains(&"$.body.filePath"));
-    assert!(nested_paths.contains(&"$.body.path"));
-    assert_eq!(
-        inline_nested_tool
-            .contract
-            .input_schema
-            .pointer("/properties/payload/properties/filePath/default"),
-        Some(&json!("README.md"))
-    );
-    assert_eq!(
-        inline_nested_tool
-            .contract
-            .input_schema
-            .pointer("/properties/payload/properties/filePath/x-agena-path"),
-        Some(&json!("read"))
-    );
-    assert_eq!(
-        inline_nested_tool
-            .contract
-            .input_schema
-            .pointer("/properties/payload/properties/filePath/x-agena-aliases"),
-        Some(&json!(["file_path", "path"]))
-    );
-
-    let inline_flatten_tool = tool_by_name(&manifest, "inline_flatten");
-    let flatten_paths = inline_flatten_tool
-        .permissions
-        .input_paths
-        .iter()
-        .map(|spec| spec.jsonpath.as_str())
-        .collect::<Vec<_>>();
-    assert_eq!(flatten_paths.len(), 3);
-    assert!(flatten_paths.contains(&"$.file_path"));
-    assert!(flatten_paths.contains(&"$.filePath"));
-    assert!(flatten_paths.contains(&"$.path"));
-    assert_eq!(
-        inline_flatten_tool
-            .contract
-            .input_schema
-            .pointer("/properties/filePath/default"),
-        Some(&json!("README.md"))
-    );
-    assert_eq!(
-        inline_flatten_tool
-            .contract
-            .input_schema
-            .pointer("/properties/filePath/x-agena-path"),
-        Some(&json!("read"))
-    );
-    assert_eq!(
-        inline_flatten_tool
-            .contract
-            .input_schema
-            .pointer("/properties/filePath/x-agena-aliases"),
-        Some(&json!(["file_path", "path"]))
-    );
-
-    let plain_string_tool = tool_by_name(&manifest, "plain_string");
-    assert_eq!(
-        plain_string_tool.contract.input_schema.pointer("/type"),
-        Some(&json!("string"))
-    );
-    let plain_string_command = command_by_id(&manifest, "plain_string");
-    assert_eq!(
-        plain_string_command.usage.as_deref(),
-        Some("/plain-string <value>")
-    );
-
-    let bool_command = command_by_id(&manifest, "manifest.bool");
-    assert_eq!(
-        bool_command
-            .input_schema
-            .as_ref()
-            .and_then(|schema| schema.pointer("/type")),
-        Some(&json!("boolean"))
-    );
-    assert_eq!(bool_command.usage.as_deref(), Some("/manifest-bool false"));
+    // Operation publication is verified against the closed contract in
+    // plugin_macro_manifest_operations; keep these tests focused on
+    // ToolInput parsing/schema behavior rather than a second schema view.
+    for operation in &manifest.operations {
+        operation.validate().expect("generated operation contract");
+    }
 }
 use super::ManifestPlugin;
-use super::{ManifestCommandInput, SemanticInput, command_by_id, tool_by_name};
+use super::{ManifestCommandInput, SemanticInput, tool_by_name};
 use agena_plugin_sdk::prelude::*;

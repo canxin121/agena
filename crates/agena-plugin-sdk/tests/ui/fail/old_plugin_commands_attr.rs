@@ -8,7 +8,7 @@ struct BadPlugin;
     name = "bad",
     version = "0.0.0",
     summary = "Bad plugin.",
-    commands = Vec::<PluginCommandDefinition>::new()
+    commands = Vec::<PluginOperationDefinition>::new()
 )]
 impl BadPlugin {}
 

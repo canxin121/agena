@@ -54,6 +54,8 @@ mod manifest_support;
 pub mod plugin;
 pub mod prelude;
 pub mod rpc;
+pub mod service_client;
+mod settings_contract;
 
 #[cfg(feature = "cdylib")]
 pub mod cdylib_abi;
@@ -73,20 +75,32 @@ pub use host_api::{
     PluginNotifyAction, PluginNotifyActionTarget, PluginNotifyRequest,
 };
 pub use identity::{PluginKey, PluginKeyParseError, ToolKey, ToolKeyParseError};
-pub use macro_support::{schema_example_texts, schema_usage_text};
+pub use macro_support::{schema_example_texts, schema_usage_text, service_method_for};
 pub use manifest::{
-    ContributionKind, HookSubscription, InputNetworkSpec, InputPathSpec, NetworkAccessSpec,
-    PLUGIN_WORKBENCH_TAB_IDS, PathAccessSpec, PathKind, PluginCommandDefinition,
-    PluginDisplayContent, PluginDisplayContribution, PluginManifest, PluginSkillDefinition,
-    PluginStudioCommand, PluginStudioControl, PluginStudioControlOption,
-    PluginStudioUiContributions, PluginStudioView, PluginTuiColor, PluginTuiThemeColors,
-    PluginTuiUiContributions, PluginUiAction, PluginUiContributions, PluginUiThemePalette,
-    ToolDefinition, ToolInput, ToolPermissionContract, ToolResultPolicy, ToolResultRenderKind,
+    ContributionKind, EmptyPluginSettings, HookSubscription, InputNetworkSpec, InputPathSpec,
+    MAX_JSON_ESCAPE_BYTES, MAX_JSON_ESCAPE_DEPTH, NetworkAccessSpec, OperationDiscoverability,
+    PathAccessSpec, PathKind, PluginDisplayContent, PluginDisplayContribution, PluginHostEffect,
+    PluginManifest, PluginOperationDefinition, PluginOperationDiagnostic,
+    PluginOperationInvokeInput, PluginOperationResult, PluginOperationStatus,
+    PluginOperationTarget, PluginServiceDeclarations, PluginServiceExport, PluginServiceImport,
+    PluginServiceInvokeInput, PluginServiceInvokeOutput, PluginServiceMethod,
+    PluginSkillDefinition, PluginSurfaceContributions, PluginTerminalColor,
+    PluginTerminalContributions, PluginTerminalThemeColors, PluginTerminalThemePalette,
+    SettingsConstraints, SettingsContract, SettingsNode, SettingsNodeKind, SettingsOption,
+    SettingsVariant, ToolContract, ToolDefinition, ToolDocs, ToolInput, ToolModelSurface,
+    ToolPermissionContract, ToolResultPolicy, ToolResultRenderKind, ToolRuntimePolicy,
     ToolStreamingMode, ToolTag, TransportKind, normalize_tool_tag_name,
-    plugin_workbench_tab_id_is_supported,
 };
 pub use plugin::{InitContext, InitOutcome, Plugin, PluginSettings, ToolStreamSink};
 pub use schemars::JsonSchema;
+pub use service_client::{
+    PluginServiceClient, PluginServiceEndpoint, PluginServiceEndpointClient,
+    PluginServiceInvokeExt, PluginServiceResponse, encode_service_output,
+};
+pub use settings_contract::{
+    bounded_json_schema, decorate_settings_contract, settings_contract_for,
+    settings_contract_for_default,
+};
 
 // Re-exports used by macros so plugin authors don't have to add deps directly.
 #[doc(hidden)]

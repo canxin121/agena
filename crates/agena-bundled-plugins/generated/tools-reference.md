@@ -6,7 +6,7 @@
 > agena inspect --tools-reference > crates/agena-bundled-plugins/generated/tools-reference.md
 > ```
 
-This document is deterministically generated from the real `agena-bundled-plugins` plugin manifests, covering **23 plugins and 143 tool definitions**.
+This document is deterministically generated from the real `agena-bundled-plugins` plugin manifests, covering **22 plugins and 141 tool definitions**.
 
 - Each tool entry includes: name, summary, detailed help (`before_help` / `help` / `after_help`), tags, concurrency / streaming / strict runtime flags, examples, an input parameter table, and the full input / output JSON Schema.
 - The `list` / `search` / `help` / `tags` / `call` tools of `agena.tools` are the stable Tool API gateway handlers; all other tools are ordinary execution tools.
@@ -28,7 +28,6 @@ This document is deterministically generated from the real `agena-bundled-plugin
 - [`agena.notebook`](#agenanotebook) — Revision-safe Jupyter notebook cell editing. (1 tools)
 - [`agena.plan`](#agenaplan) — Plan orchestration and plan-autorun tools. (6 tools)
 - [`agena.report`](#agenareport) — Structured review and verification findings. (1 tools)
-- [`agena.schema_lab`](#agenaschema_lab) — Deep built-in JSON Schema fixture used to demo and test the structured plugin config editor. (2 tools)
 - [`agena.session`](#agenasession) — Inspect and manage the current runtime session and its environment, model, and token state. (5 tools)
 - [`agena.settings`](#agenasettings) — Inspect and edit Agena's global and workspace agena.json settings. (7 tools)
 - [`agena.shell`](#agenashell) — Shell command execution and background process tools. (4 tools)
@@ -6614,90 +6613,6 @@ Structured review and verification findings.
     "summary": {
       "default": "",
       "type": "string",
-      "x-agena-order": "000000"
-    }
-  },
-  "type": "object"
-}
-```
-
-## agena.schema_lab
-
-**Version** `0.1.0` · **Tools** 2 · **Condition** `feature:schema-lab`
-
-Deep built-in JSON Schema fixture used to demo and test the structured plugin config editor.
-
-### echo
-
-`agena.schema_lab.echo` · **Summary**: Echo schema lab input without mutating external state.
-
-**Tags**: `query` `discovery`
-
-**Runtime**: ✓ concurrency-safe · streaming `buffered` · non-strict
-
-**Help**:
-> Round-trip a label and arbitrary payload into the tool result. The tool is intentionally inert and exists only to populate the Tools tab for the schema lab demo plugin.
-
-**Input parameters**:
-| Parameter | Type | Required | Default | Description |
-| --- | --- | --- | --- | --- |
-| `label` | `string / null` | — | — |  |
-| `payload` | `any` | — | — |  |
-
-**Input schema**:
-```json
-{
-  "additionalProperties": false,
-  "properties": {
-    "label": {
-      "minLength": 1,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000000"
-    },
-    "payload": {
-      "x-agena-order": "000001"
-    }
-  },
-  "type": "object"
-}
-```
-
-### inspect
-
-`agena.schema_lab.inspect` · **Summary**: Inspect the schema lab fixture without mutating external state.
-
-**Tags**: `query` `discovery`
-
-**Runtime**: ✓ concurrency-safe · streaming `buffered` · non-strict
-
-**Help**:
-> Summarize one schema lab config section. The tool is intentionally inert and exists only to populate the Tools tab for the schema lab demo plugin.
-
-**Input parameters**:
-| Parameter | Type | Required | Default | Description |
-| --- | --- | --- | --- | --- |
-| `include_defaults` | `boolean` | — | `false` |  |
-| `section` | `string / null` | — | — |  |
-
-**Input schema**:
-```json
-{
-  "additionalProperties": false,
-  "properties": {
-    "include_defaults": {
-      "default": false,
-      "type": "boolean",
-      "x-agena-order": "000001"
-    },
-    "section": {
-      "minLength": 1,
-      "type": [
-        "string",
-        "null"
-      ],
       "x-agena-order": "000000"
     }
   },

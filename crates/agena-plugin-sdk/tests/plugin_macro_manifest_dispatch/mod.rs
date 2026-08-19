@@ -5,13 +5,13 @@ fn command_macro_dispatch_parses_typed_input() {
         .expect("test runtime should build");
     let plugin = ManifestPlugin;
     let output = runtime
-        .block_on(Plugin::command_invoke(
+        .block_on(Plugin::operation_invoke(
             &plugin,
-            PluginCommandInvokeInput {
+            PluginOperationInvokeInput {
                 session_id: Some(1),
                 call_id: Some(2),
                 workspace_root: Some("/workspace".to_string()),
-                command_id: "manifest.greet".to_string(),
+                operation_id: "manifest.greet".to_string(),
                 slash: Some("/manifest-greet".to_string()),
                 raw: "/manifest-greet Ada".to_string(),
                 input: json!({ "name": " Ada " }),
@@ -19,10 +19,40 @@ fn command_macro_dispatch_parses_typed_input() {
         ))
         .expect("command invoke should succeed");
 
-    match output {
-        PluginCommandOutput::Message { text } => assert_eq!(text, "hello Ada"),
-        other => panic!("expected message output, got {other:?}"),
-    }
+    assert_operation_summary(output, "hello Ada");
+}
+
+#[test]
+fn service_macro_dispatch_decodes_and_encodes_typed_methods() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .expect("test runtime should build");
+    let plugin = ManifestPlugin;
+    let echo = runtime
+        .block_on(Plugin::service_invoke(
+            &plugin,
+            PluginServiceInvokeInput {
+                service: "test.echo".to_string(),
+                api_version: 1,
+                method: "echo".to_string(),
+                input: json!({ "text": "hello" }),
+            },
+        ))
+        .expect("typed service invoke");
+    assert_eq!(echo, json!({ "rendered": "service:hello" }));
+
+    let status = runtime
+        .block_on(Plugin::service_invoke(
+            &plugin,
+            PluginServiceInvokeInput {
+                service: "test.echo".to_string(),
+                api_version: 1,
+                method: "status".to_string(),
+                input: json!({}),
+            },
+        ))
+        .expect("async no-input service invoke");
+    assert_eq!(status, json!({ "rendered": "ready" }));
 }
 
 #[test]
@@ -32,13 +62,13 @@ fn command_macro_dispatch_parses_inline_arg_generated_input() {
         .expect("test runtime should build");
     let plugin = ManifestPlugin;
     let output = runtime
-        .block_on(Plugin::command_invoke(
+        .block_on(Plugin::operation_invoke(
             &plugin,
-            PluginCommandInvokeInput {
+            PluginOperationInvokeInput {
                 session_id: Some(1),
                 call_id: Some(2),
                 workspace_root: Some("/workspace".to_string()),
-                command_id: "manifest.inline".to_string(),
+                operation_id: "manifest.inline".to_string(),
                 slash: Some("/manifest-inline".to_string()),
                 raw: "/manifest-inline Ada".to_string(),
                 input: json!({ "name": " Ada " }),
@@ -46,10 +76,7 @@ fn command_macro_dispatch_parses_inline_arg_generated_input() {
         ))
         .expect("inline command invoke should succeed");
 
-    match output {
-        PluginCommandOutput::Message { text } => assert_eq!(text, "hello Ada"),
-        other => panic!("expected message output, got {other:?}"),
-    }
+    assert_operation_summary(output, "hello Ada");
 }
 
 #[test]
@@ -59,13 +86,13 @@ fn command_macro_dispatch_parses_inline_arg_aliases() {
         .expect("test runtime should build");
     let plugin = ManifestPlugin;
     let output = runtime
-        .block_on(Plugin::command_invoke(
+        .block_on(Plugin::operation_invoke(
             &plugin,
-            PluginCommandInvokeInput {
+            PluginOperationInvokeInput {
                 session_id: Some(1),
                 call_id: Some(2),
                 workspace_root: Some("/workspace".to_string()),
-                command_id: "manifest.renamed".to_string(),
+                operation_id: "manifest.renamed".to_string(),
                 slash: Some("/manifest-renamed".to_string()),
                 raw: "/manifest-renamed README.md".to_string(),
                 input: json!({ "path": " README.md " }),
@@ -73,10 +100,7 @@ fn command_macro_dispatch_parses_inline_arg_aliases() {
         ))
         .expect("renamed inline command invoke should succeed");
 
-    match output {
-        PluginCommandOutput::Message { text } => assert_eq!(text, "README.md"),
-        other => panic!("expected message output, got {other:?}"),
-    }
+    assert_operation_summary(output, "README.md");
 }
 
 #[test]
@@ -86,13 +110,13 @@ fn command_macro_dispatch_parses_inline_arg_nested_shape() {
         .expect("test runtime should build");
     let plugin = ManifestPlugin;
     let output = runtime
-        .block_on(Plugin::command_invoke(
+        .block_on(Plugin::operation_invoke(
             &plugin,
-            PluginCommandInvokeInput {
+            PluginOperationInvokeInput {
                 session_id: Some(1),
                 call_id: Some(2),
                 workspace_root: Some("/workspace".to_string()),
-                command_id: "manifest.inline_nested".to_string(),
+                operation_id: "manifest.inline_nested".to_string(),
                 slash: Some("/manifest-inline-nested".to_string()),
                 raw: "/manifest-inline-nested query_text=cargo".to_string(),
                 input: json!({
@@ -103,10 +127,7 @@ fn command_macro_dispatch_parses_inline_arg_nested_shape() {
         ))
         .expect("inline nested command invoke should succeed");
 
-    match output {
-        PluginCommandOutput::Message { text } => assert_eq!(text, "README.md:cargo"),
-        other => panic!("expected message output, got {other:?}"),
-    }
+    assert_operation_summary(output, "README.md:cargo");
 }
 
 #[test]
@@ -116,13 +137,13 @@ fn command_macro_dispatch_parses_inline_arg_flatten_shape() {
         .expect("test runtime should build");
     let plugin = ManifestPlugin;
     let output = runtime
-        .block_on(Plugin::command_invoke(
+        .block_on(Plugin::operation_invoke(
             &plugin,
-            PluginCommandInvokeInput {
+            PluginOperationInvokeInput {
                 session_id: Some(1),
                 call_id: Some(2),
                 workspace_root: Some("/workspace".to_string()),
-                command_id: "manifest.inline_flatten".to_string(),
+                operation_id: "manifest.inline_flatten".to_string(),
                 slash: Some("/manifest-inline-flatten".to_string()),
                 raw: "/manifest-inline-flatten query_text=cargo".to_string(),
                 input: json!({
@@ -132,10 +153,7 @@ fn command_macro_dispatch_parses_inline_arg_flatten_shape() {
         ))
         .expect("inline flatten command invoke should succeed");
 
-    match output {
-        PluginCommandOutput::Message { text } => assert_eq!(text, "README.md:cargo"),
-        other => panic!("expected message output, got {other:?}"),
-    }
+    assert_operation_summary(output, "README.md:cargo");
 }
 
 #[test]
@@ -145,13 +163,13 @@ fn command_macro_dispatch_applies_inline_arg_default_expr() {
         .expect("test runtime should build");
     let plugin = ManifestPlugin;
     let output = runtime
-        .block_on(Plugin::command_invoke(
+        .block_on(Plugin::operation_invoke(
             &plugin,
-            PluginCommandInvokeInput {
+            PluginOperationInvokeInput {
                 session_id: Some(1),
                 call_id: Some(2),
                 workspace_root: Some("/workspace".to_string()),
-                command_id: "manifest.default".to_string(),
+                operation_id: "manifest.default".to_string(),
                 slash: Some("/manifest-default".to_string()),
                 raw: "/manifest-default".to_string(),
                 input: json!({}),
@@ -159,10 +177,7 @@ fn command_macro_dispatch_applies_inline_arg_default_expr() {
         ))
         .expect("default inline command invoke should succeed");
 
-    match output {
-        PluginCommandOutput::Message { text } => assert_eq!(text, "3"),
-        other => panic!("expected message output, got {other:?}"),
-    }
+    assert_operation_summary(output, "3");
 }
 
 #[test]
@@ -172,13 +187,13 @@ fn command_macro_dispatch_rejects_values_outside_choices() {
         .expect("test runtime should build");
     let plugin = ManifestPlugin;
     let error = runtime
-        .block_on(Plugin::command_invoke(
+        .block_on(Plugin::operation_invoke(
             &plugin,
-            PluginCommandInvokeInput {
+            PluginOperationInvokeInput {
                 session_id: Some(1),
                 call_id: Some(2),
                 workspace_root: Some("/workspace".to_string()),
-                command_id: "manifest.inline_choice".to_string(),
+                operation_id: "manifest.inline_choice".to_string(),
                 slash: Some("/manifest-inline-choice".to_string()),
                 raw: "/manifest-inline-choice npm".to_string(),
                 input: json!({ "tool": "npm" }),
@@ -200,13 +215,13 @@ fn command_macro_dispatch_rejects_values_outside_format() {
         .expect("test runtime should build");
     let plugin = ManifestPlugin;
     let error = runtime
-        .block_on(Plugin::command_invoke(
+        .block_on(Plugin::operation_invoke(
             &plugin,
-            PluginCommandInvokeInput {
+            PluginOperationInvokeInput {
                 session_id: Some(1),
                 call_id: Some(2),
                 workspace_root: Some("/workspace".to_string()),
-                command_id: "manifest.inline_format".to_string(),
+                operation_id: "manifest.inline_format".to_string(),
                 slash: Some("/manifest-inline-format".to_string()),
                 raw: "/manifest-inline-format not-a-uri".to_string(),
                 input: json!({ "endpoint": "not a uri" }),
@@ -229,13 +244,13 @@ fn command_macro_dispatch_rejects_values_outside_exclusive_numeric_bounds() {
     let plugin = ManifestPlugin;
 
     let min_error = runtime
-        .block_on(Plugin::command_invoke(
+        .block_on(Plugin::operation_invoke(
             &plugin,
-            PluginCommandInvokeInput {
+            PluginOperationInvokeInput {
                 session_id: Some(1),
                 call_id: Some(2),
                 workspace_root: Some("/workspace".to_string()),
-                command_id: "manifest.inline_exclusive_number".to_string(),
+                operation_id: "manifest.inline_exclusive_number".to_string(),
                 slash: Some("/manifest-inline-exclusive-number".to_string()),
                 raw: "/manifest-inline-exclusive-number 2".to_string(),
                 input: json!({ "count": 2 }),
@@ -249,13 +264,13 @@ fn command_macro_dispatch_rejects_values_outside_exclusive_numeric_bounds() {
     );
 
     let max_error = runtime
-        .block_on(Plugin::command_invoke(
+        .block_on(Plugin::operation_invoke(
             &plugin,
-            PluginCommandInvokeInput {
+            PluginOperationInvokeInput {
                 session_id: Some(1),
                 call_id: Some(2),
                 workspace_root: Some("/workspace".to_string()),
-                command_id: "manifest.inline_exclusive_number".to_string(),
+                operation_id: "manifest.inline_exclusive_number".to_string(),
                 slash: Some("/manifest-inline-exclusive-number".to_string()),
                 raw: "/manifest-inline-exclusive-number 5".to_string(),
                 input: json!({ "count": 5 }),
@@ -276,13 +291,13 @@ fn command_macro_dispatch_rejects_values_outside_pattern() {
         .expect("test runtime should build");
     let plugin = ManifestPlugin;
     let error = runtime
-        .block_on(Plugin::command_invoke(
+        .block_on(Plugin::operation_invoke(
             &plugin,
-            PluginCommandInvokeInput {
+            PluginOperationInvokeInput {
                 session_id: Some(1),
                 call_id: Some(2),
                 workspace_root: Some("/workspace".to_string()),
-                command_id: "manifest.inline_pattern".to_string(),
+                operation_id: "manifest.inline_pattern".to_string(),
                 slash: Some("/manifest-inline-pattern".to_string()),
                 raw: "/manifest-inline-pattern Cargo".to_string(),
                 input: json!({ "slug": "Cargo" }),
@@ -304,13 +319,13 @@ fn command_macro_dispatch_rejects_values_below_min_chars() {
         .expect("test runtime should build");
     let plugin = ManifestPlugin;
     let error = runtime
-        .block_on(Plugin::command_invoke(
+        .block_on(Plugin::operation_invoke(
             &plugin,
-            PluginCommandInvokeInput {
+            PluginOperationInvokeInput {
                 session_id: Some(1),
                 call_id: Some(2),
                 workspace_root: Some("/workspace".to_string()),
-                command_id: "manifest.inline_pattern".to_string(),
+                operation_id: "manifest.inline_pattern".to_string(),
                 slash: Some("/manifest-inline-pattern".to_string()),
                 raw: "/manifest-inline-pattern go".to_string(),
                 input: json!({ "slug": "go" }),
@@ -333,13 +348,13 @@ fn command_macro_dispatch_rejects_values_outside_object_property_bounds() {
     let plugin = ManifestPlugin;
 
     let min_error = runtime
-        .block_on(Plugin::command_invoke(
+        .block_on(Plugin::operation_invoke(
             &plugin,
-            PluginCommandInvokeInput {
+            PluginOperationInvokeInput {
                 session_id: Some(1),
                 call_id: Some(2),
                 workspace_root: Some("/workspace".to_string()),
-                command_id: "manifest.inline_object".to_string(),
+                operation_id: "manifest.inline_object".to_string(),
                 slash: Some("/manifest-inline-object".to_string()),
                 raw: "/manifest-inline-object {}".to_string(),
                 input: json!({ "labels": {} }),
@@ -353,13 +368,13 @@ fn command_macro_dispatch_rejects_values_outside_object_property_bounds() {
     );
 
     let max_error = runtime
-        .block_on(Plugin::command_invoke(
+        .block_on(Plugin::operation_invoke(
             &plugin,
-            PluginCommandInvokeInput {
+            PluginOperationInvokeInput {
                 session_id: Some(1),
                 call_id: Some(2),
                 workspace_root: Some("/workspace".to_string()),
-                command_id: "manifest.inline_object".to_string(),
+                operation_id: "manifest.inline_object".to_string(),
                 slash: Some("/manifest-inline-object".to_string()),
                 raw: "/manifest-inline-object a=1 b=2 c=3".to_string(),
                 input: json!({
@@ -383,13 +398,13 @@ fn command_macro_dispatch_rejects_values_outside_item_format() {
     let plugin = ManifestPlugin;
 
     let error = runtime
-        .block_on(Plugin::command_invoke(
+        .block_on(Plugin::operation_invoke(
             &plugin,
-            PluginCommandInvokeInput {
+            PluginOperationInvokeInput {
                 session_id: Some(1),
                 call_id: Some(2),
                 workspace_root: Some("/workspace".to_string()),
-                command_id: "manifest.inline_item_format".to_string(),
+                operation_id: "manifest.inline_item_format".to_string(),
                 slash: Some("/manifest-inline-item-format".to_string()),
                 raw: "/manifest-inline-item-format not-a-uuid".to_string(),
                 input: json!({ "ids": ["not-a-uuid"] }),
@@ -412,13 +427,13 @@ fn command_macro_dispatch_rejects_values_outside_item_constraints() {
     let plugin = ManifestPlugin;
 
     let min_error = runtime
-        .block_on(Plugin::command_invoke(
+        .block_on(Plugin::operation_invoke(
             &plugin,
-            PluginCommandInvokeInput {
+            PluginOperationInvokeInput {
                 session_id: Some(1),
                 call_id: Some(2),
                 workspace_root: Some("/workspace".to_string()),
-                command_id: "manifest.inline_item_pattern".to_string(),
+                operation_id: "manifest.inline_item_pattern".to_string(),
                 slash: Some("/manifest-inline-item-pattern".to_string()),
                 raw: "/manifest-inline-item-pattern go".to_string(),
                 input: json!({ "tags": ["go"] }),
@@ -432,13 +447,13 @@ fn command_macro_dispatch_rejects_values_outside_item_constraints() {
     );
 
     let pattern_error = runtime
-        .block_on(Plugin::command_invoke(
+        .block_on(Plugin::operation_invoke(
             &plugin,
-            PluginCommandInvokeInput {
+            PluginOperationInvokeInput {
                 session_id: Some(1),
                 call_id: Some(2),
                 workspace_root: Some("/workspace".to_string()),
-                command_id: "manifest.inline_item_pattern".to_string(),
+                operation_id: "manifest.inline_item_pattern".to_string(),
                 slash: Some("/manifest-inline-item-pattern".to_string()),
                 raw: "/manifest-inline-item-pattern Cargo".to_string(),
                 input: json!({ "tags": ["Cargo"] }),
@@ -459,13 +474,13 @@ fn command_macro_dispatch_rejects_values_outside_item_choices() {
         .expect("test runtime should build");
     let plugin = ManifestPlugin;
     let error = runtime
-        .block_on(Plugin::command_invoke(
+        .block_on(Plugin::operation_invoke(
             &plugin,
-            PluginCommandInvokeInput {
+            PluginOperationInvokeInput {
                 session_id: Some(1),
                 call_id: Some(2),
                 workspace_root: Some("/workspace".to_string()),
-                command_id: "manifest.inline_item_choice".to_string(),
+                operation_id: "manifest.inline_item_choice".to_string(),
                 slash: Some("/manifest-inline-item-choice".to_string()),
                 raw: "/manifest-inline-item-choice npm".to_string(),
                 input: json!({ "tools": ["npm"] }),
@@ -487,13 +502,13 @@ fn command_macro_dispatch_normalizes_inline_item_values() {
         .expect("test runtime should build");
     let plugin = ManifestPlugin;
     let output = runtime
-        .block_on(Plugin::command_invoke(
+        .block_on(Plugin::operation_invoke(
             &plugin,
-            PluginCommandInvokeInput {
+            PluginOperationInvokeInput {
                 session_id: Some(1),
                 call_id: Some(2),
                 workspace_root: Some("/workspace".to_string()),
-                command_id: "manifest.inline_item_normalize".to_string(),
+                operation_id: "manifest.inline_item_normalize".to_string(),
                 slash: Some("/manifest-inline-item-normalize".to_string()),
                 raw: "/manifest-inline-item-normalize cargo.rs git.rs".to_string(),
                 input: json!({ "tags": [" cargo.rs ", " git.rs "] }),
@@ -501,10 +516,7 @@ fn command_macro_dispatch_normalizes_inline_item_values() {
         ))
         .expect("inline item normalization command should succeed");
 
-    match output {
-        PluginCommandOutput::Message { text } => assert_eq!(text, "cargo,git"),
-        other => panic!("expected message output, got {other:?}"),
-    }
+    assert_operation_summary(output, "cargo,git");
 }
 
 #[test]
@@ -514,13 +526,13 @@ fn command_macro_dispatch_rejects_empty_normalized_inline_item_values() {
         .expect("test runtime should build");
     let plugin = ManifestPlugin;
     let error = runtime
-        .block_on(Plugin::command_invoke(
+        .block_on(Plugin::operation_invoke(
             &plugin,
-            PluginCommandInvokeInput {
+            PluginOperationInvokeInput {
                 session_id: Some(1),
                 call_id: Some(2),
                 workspace_root: Some("/workspace".to_string()),
-                command_id: "manifest.inline_item_normalize".to_string(),
+                operation_id: "manifest.inline_item_normalize".to_string(),
                 slash: Some("/manifest-inline-item-normalize".to_string()),
                 raw: "/manifest-inline-item-normalize .rs".to_string(),
                 input: json!({ "tags": [" .rs "] }),
@@ -543,13 +555,13 @@ fn command_macro_dispatch_handles_item_non_empty_if_present() {
     let plugin = ManifestPlugin;
 
     let missing_output = runtime
-        .block_on(Plugin::command_invoke(
+        .block_on(Plugin::operation_invoke(
             &plugin,
-            PluginCommandInvokeInput {
+            PluginOperationInvokeInput {
                 session_id: Some(1),
                 call_id: Some(2),
                 workspace_root: Some("/workspace".to_string()),
-                command_id: "manifest.inline_item_non_empty_if_present".to_string(),
+                operation_id: "manifest.inline_item_non_empty_if_present".to_string(),
                 slash: Some("/manifest-inline-item-non-empty-if-present".to_string()),
                 raw: "/manifest-inline-item-non-empty-if-present".to_string(),
                 input: json!({}),
@@ -557,19 +569,16 @@ fn command_macro_dispatch_handles_item_non_empty_if_present() {
         ))
         .expect("inline optional item command should allow missing values");
 
-    match missing_output {
-        PluginCommandOutput::Message { text } => assert_eq!(text, ""),
-        other => panic!("expected message output, got {other:?}"),
-    }
+    assert_operation_summary(missing_output, "");
 
     let error = runtime
-        .block_on(Plugin::command_invoke(
+        .block_on(Plugin::operation_invoke(
             &plugin,
-            PluginCommandInvokeInput {
+            PluginOperationInvokeInput {
                 session_id: Some(1),
                 call_id: Some(2),
                 workspace_root: Some("/workspace".to_string()),
-                command_id: "manifest.inline_item_non_empty_if_present".to_string(),
+                operation_id: "manifest.inline_item_non_empty_if_present".to_string(),
                 slash: Some("/manifest-inline-item-non-empty-if-present".to_string()),
                 raw: "/manifest-inline-item-non-empty-if-present \"\"".to_string(),
                 input: json!({ "tags": [""] }),
@@ -592,13 +601,13 @@ fn command_macro_dispatch_applies_direct_array_string_constraints() {
     let plugin = ManifestPlugin;
 
     let output = runtime
-        .block_on(Plugin::command_invoke(
+        .block_on(Plugin::operation_invoke(
             &plugin,
-            PluginCommandInvokeInput {
+            PluginOperationInvokeInput {
                 session_id: Some(1),
                 call_id: Some(2),
                 workspace_root: Some("/workspace".to_string()),
-                command_id: "manifest.inline_auto_item_pattern".to_string(),
+                operation_id: "manifest.inline_auto_item_pattern".to_string(),
                 slash: Some("/manifest-inline-auto-item-pattern".to_string()),
                 raw: "/manifest-inline-auto-item-pattern cargo.rs".to_string(),
                 input: json!({ "tags": [" cargo.rs "] }),
@@ -606,19 +615,16 @@ fn command_macro_dispatch_applies_direct_array_string_constraints() {
         ))
         .expect("inline direct array string constraints should normalize items");
 
-    match output {
-        PluginCommandOutput::Message { text } => assert_eq!(text, "cargo"),
-        other => panic!("expected message output, got {other:?}"),
-    }
+    assert_operation_summary(output, "cargo");
 
     let error = runtime
-        .block_on(Plugin::command_invoke(
+        .block_on(Plugin::operation_invoke(
             &plugin,
-            PluginCommandInvokeInput {
+            PluginOperationInvokeInput {
                 session_id: Some(1),
                 call_id: Some(2),
                 workspace_root: Some("/workspace".to_string()),
-                command_id: "manifest.inline_auto_item_pattern".to_string(),
+                operation_id: "manifest.inline_auto_item_pattern".to_string(),
                 slash: Some("/manifest-inline-auto-item-pattern".to_string()),
                 raw: "/manifest-inline-auto-item-pattern Cargo.rs".to_string(),
                 input: json!({ "tags": [" Cargo.rs "] }),
@@ -641,13 +647,13 @@ fn command_macro_dispatch_applies_direct_array_numeric_constraints() {
     let plugin = ManifestPlugin;
 
     let output = runtime
-        .block_on(Plugin::command_invoke(
+        .block_on(Plugin::operation_invoke(
             &plugin,
-            PluginCommandInvokeInput {
+            PluginOperationInvokeInput {
                 session_id: Some(1),
                 call_id: Some(2),
                 workspace_root: Some("/workspace".to_string()),
-                command_id: "manifest.inline_auto_item_number".to_string(),
+                operation_id: "manifest.inline_auto_item_number".to_string(),
                 slash: Some("/manifest-inline-auto-item-number".to_string()),
                 raw: "/manifest-inline-auto-item-number 2 4".to_string(),
                 input: json!({ "counts": [2, 4] }),
@@ -655,19 +661,16 @@ fn command_macro_dispatch_applies_direct_array_numeric_constraints() {
         ))
         .expect("inline direct array numeric constraints should accept matching items");
 
-    match output {
-        PluginCommandOutput::Message { text } => assert_eq!(text, "2"),
-        other => panic!("expected message output, got {other:?}"),
-    }
+    assert_operation_summary(output, "2");
 
     let error = runtime
-        .block_on(Plugin::command_invoke(
+        .block_on(Plugin::operation_invoke(
             &plugin,
-            PluginCommandInvokeInput {
+            PluginOperationInvokeInput {
                 session_id: Some(1),
                 call_id: Some(2),
                 workspace_root: Some("/workspace".to_string()),
-                command_id: "manifest.inline_auto_item_number".to_string(),
+                operation_id: "manifest.inline_auto_item_number".to_string(),
                 slash: Some("/manifest-inline-auto-item-number".to_string()),
                 raw: "/manifest-inline-auto-item-number 1".to_string(),
                 input: json!({ "counts": [1] }),
@@ -690,13 +693,13 @@ fn command_macro_dispatch_applies_direct_array_choices() {
     let plugin = ManifestPlugin;
 
     let output = runtime
-        .block_on(Plugin::command_invoke(
+        .block_on(Plugin::operation_invoke(
             &plugin,
-            PluginCommandInvokeInput {
+            PluginOperationInvokeInput {
                 session_id: Some(1),
                 call_id: Some(2),
                 workspace_root: Some("/workspace".to_string()),
-                command_id: "manifest.inline_auto_item_choice".to_string(),
+                operation_id: "manifest.inline_auto_item_choice".to_string(),
                 slash: Some("/manifest-inline-auto-item-choice".to_string()),
                 raw: "/manifest-inline-auto-item-choice cargo".to_string(),
                 input: json!({ "tools": ["cargo"] }),
@@ -704,19 +707,16 @@ fn command_macro_dispatch_applies_direct_array_choices() {
         ))
         .expect("inline direct array choices should accept matching items");
 
-    match output {
-        PluginCommandOutput::Message { text } => assert_eq!(text, "cargo"),
-        other => panic!("expected message output, got {other:?}"),
-    }
+    assert_operation_summary(output, "cargo");
 
     let error = runtime
-        .block_on(Plugin::command_invoke(
+        .block_on(Plugin::operation_invoke(
             &plugin,
-            PluginCommandInvokeInput {
+            PluginOperationInvokeInput {
                 session_id: Some(1),
                 call_id: Some(2),
                 workspace_root: Some("/workspace".to_string()),
-                command_id: "manifest.inline_auto_item_choice".to_string(),
+                operation_id: "manifest.inline_auto_item_choice".to_string(),
                 slash: Some("/manifest-inline-auto-item-choice".to_string()),
                 raw: "/manifest-inline-auto-item-choice npm".to_string(),
                 input: json!({ "tools": ["npm"] }),
@@ -789,32 +789,29 @@ fn command_macro_dispatch_handles_enum_variant_local_normalization() {
     let plugin = ManifestPlugin;
 
     let query_output = runtime
-        .block_on(Plugin::command_invoke(
+        .block_on(Plugin::operation_invoke(
             &plugin,
-            PluginCommandInvokeInput {
+            PluginOperationInvokeInput {
                 session_id: Some(1),
                 call_id: Some(2),
                 workspace_root: Some("/workspace".to_string()),
-                command_id: "manifest.variant_normalize".to_string(),
+                operation_id: "manifest.variant_normalize".to_string(),
                 slash: Some("/manifest-variant-normalize".to_string()),
                 raw: "/manifest-variant-normalize cargo".to_string(),
                 input: json!({ "query": " cargo " }),
             },
         ))
         .expect("typed command should normalize variant-local string fields");
-    match query_output {
-        PluginCommandOutput::Message { text } => assert_eq!(text, "query:cargo"),
-        other => panic!("expected message output, got {other:?}"),
-    }
+    assert_operation_summary(query_output, "query:cargo");
 
     let tags_error = runtime
-        .block_on(Plugin::command_invoke(
+        .block_on(Plugin::operation_invoke(
             &plugin,
-            PluginCommandInvokeInput {
+            PluginOperationInvokeInput {
                 session_id: Some(1),
                 call_id: Some(2),
                 workspace_root: Some("/workspace".to_string()),
-                command_id: "manifest.variant_normalize".to_string(),
+                operation_id: "manifest.variant_normalize".to_string(),
                 slash: Some("/manifest-variant-normalize".to_string()),
                 raw: "/manifest-variant-normalize .rs".to_string(),
                 input: json!({ "tags": [" .rs "] }),
@@ -828,13 +825,13 @@ fn command_macro_dispatch_handles_enum_variant_local_normalization() {
     );
 
     let renamed_tools_error = runtime
-        .block_on(Plugin::command_invoke(
+        .block_on(Plugin::operation_invoke(
             &plugin,
-            PluginCommandInvokeInput {
+            PluginOperationInvokeInput {
                 session_id: Some(1),
                 call_id: Some(2),
                 workspace_root: Some("/workspace".to_string()),
-                command_id: "manifest.variant_normalize".to_string(),
+                operation_id: "manifest.variant_normalize".to_string(),
                 slash: Some("/manifest-variant-normalize".to_string()),
                 raw: "/manifest-variant-normalize npm".to_string(),
                 input: json!({
@@ -877,13 +874,13 @@ fn tool_and_command_dispatch_handle_enum_variant_renamed_fields() {
     assert_eq!(tool_output.output_text, "query:Cargo.toml");
 
     let command_error = runtime
-        .block_on(Plugin::command_invoke(
+        .block_on(Plugin::operation_invoke(
             &plugin,
-            PluginCommandInvokeInput {
+            PluginOperationInvokeInput {
                 session_id: Some(1),
                 call_id: Some(2),
                 workspace_root: Some("/workspace".to_string()),
-                command_id: "manifest.variant_renamed_fields".to_string(),
+                operation_id: "manifest.variant_renamed_fields".to_string(),
                 slash: Some("/manifest-variant-renamed-fields".to_string()),
                 raw: "/manifest-variant-renamed-fields filePath=Cargo.toml".to_string(),
                 input: json!({
@@ -925,13 +922,13 @@ fn tool_and_command_dispatch_handle_enum_variant_field_args() {
     assert_eq!(tool_output.output_text, "query:Cargo.toml");
 
     let command_output = runtime
-        .block_on(Plugin::command_invoke(
+        .block_on(Plugin::operation_invoke(
             &plugin,
-            PluginCommandInvokeInput {
+            PluginOperationInvokeInput {
                 session_id: Some(1),
                 call_id: Some(2),
                 workspace_root: Some("/workspace".to_string()),
-                command_id: "manifest.variant_field_args".to_string(),
+                operation_id: "manifest.variant_field_args".to_string(),
                 slash: Some("/manifest-variant-field-args".to_string()),
                 raw: "/manifest-variant-field-args path=Cargo.toml".to_string(),
                 input: json!({
@@ -941,19 +938,16 @@ fn tool_and_command_dispatch_handle_enum_variant_field_args() {
             },
         ))
         .expect("typed command should apply alias normalization and defaults for variant fields");
-    match command_output {
-        PluginCommandOutput::Message { text } => assert_eq!(text, "run:Cargo.toml:read"),
-        other => panic!("expected message output, got {other:?}"),
-    }
+    assert_operation_summary(command_output, "run:Cargo.toml:read");
 
     let command_error = runtime
-        .block_on(Plugin::command_invoke(
+        .block_on(Plugin::operation_invoke(
             &plugin,
-            PluginCommandInvokeInput {
+            PluginOperationInvokeInput {
                 session_id: Some(1),
                 call_id: Some(2),
                 workspace_root: Some("/workspace".to_string()),
-                command_id: "manifest.variant_field_args".to_string(),
+                operation_id: "manifest.variant_field_args".to_string(),
                 slash: Some("/manifest-variant-field-args".to_string()),
                 raw: "/manifest-variant-field-args tags=cargo tags=cargo".to_string(),
                 input: json!({
@@ -996,13 +990,13 @@ fn tool_and_command_dispatch_handle_enum_variant_inference() {
     assert_eq!(tool_output.output_text, "query::cargo");
 
     let command_output = runtime
-        .block_on(Plugin::command_invoke(
+        .block_on(Plugin::operation_invoke(
             &plugin,
-            PluginCommandInvokeInput {
+            PluginOperationInvokeInput {
                 session_id: Some(1),
                 call_id: Some(2),
                 workspace_root: Some("/workspace".to_string()),
-                command_id: "manifest.variant_inference".to_string(),
+                operation_id: "manifest.variant_inference".to_string(),
                 slash: Some("/manifest-variant-inference".to_string()),
                 raw: "/manifest-variant-inference filePath=marker queryText=cargo".to_string(),
                 input: json!({
@@ -1012,10 +1006,7 @@ fn tool_and_command_dispatch_handle_enum_variant_inference() {
             },
         ))
         .expect("typed command should infer variants through renamed fields");
-    match command_output {
-        PluginCommandOutput::Message { text } => assert_eq!(text, "query::cargo"),
-        other => panic!("expected message output, got {other:?}"),
-    }
+    assert_operation_summary(command_output, "query::cargo");
 }
 
 #[test]
@@ -1026,13 +1017,13 @@ fn command_macro_dispatch_rejects_values_outside_item_numeric_bounds() {
     let plugin = ManifestPlugin;
 
     let min_error = runtime
-        .block_on(Plugin::command_invoke(
+        .block_on(Plugin::operation_invoke(
             &plugin,
-            PluginCommandInvokeInput {
+            PluginOperationInvokeInput {
                 session_id: Some(1),
                 call_id: Some(2),
                 workspace_root: Some("/workspace".to_string()),
-                command_id: "manifest.inline_item_number".to_string(),
+                operation_id: "manifest.inline_item_number".to_string(),
                 slash: Some("/manifest-inline-item-number".to_string()),
                 raw: "/manifest-inline-item-number 1".to_string(),
                 input: json!({ "counts": [1] }),
@@ -1046,13 +1037,13 @@ fn command_macro_dispatch_rejects_values_outside_item_numeric_bounds() {
     );
 
     let max_error = runtime
-        .block_on(Plugin::command_invoke(
+        .block_on(Plugin::operation_invoke(
             &plugin,
-            PluginCommandInvokeInput {
+            PluginOperationInvokeInput {
                 session_id: Some(1),
                 call_id: Some(2),
                 workspace_root: Some("/workspace".to_string()),
-                command_id: "manifest.inline_item_number".to_string(),
+                operation_id: "manifest.inline_item_number".to_string(),
                 slash: Some("/manifest-inline-item-number".to_string()),
                 raw: "/manifest-inline-item-number 5".to_string(),
                 input: json!({ "counts": [5] }),
@@ -1074,13 +1065,13 @@ fn command_macro_dispatch_rejects_values_outside_item_exclusive_numeric_bounds()
     let plugin = ManifestPlugin;
 
     let min_error = runtime
-        .block_on(Plugin::command_invoke(
+        .block_on(Plugin::operation_invoke(
             &plugin,
-            PluginCommandInvokeInput {
+            PluginOperationInvokeInput {
                 session_id: Some(1),
                 call_id: Some(2),
                 workspace_root: Some("/workspace".to_string()),
-                command_id: "manifest.inline_item_exclusive_number".to_string(),
+                operation_id: "manifest.inline_item_exclusive_number".to_string(),
                 slash: Some("/manifest-inline-item-exclusive-number".to_string()),
                 raw: "/manifest-inline-item-exclusive-number 2".to_string(),
                 input: json!({ "counts": [2] }),
@@ -1094,13 +1085,13 @@ fn command_macro_dispatch_rejects_values_outside_item_exclusive_numeric_bounds()
     );
 
     let max_error = runtime
-        .block_on(Plugin::command_invoke(
+        .block_on(Plugin::operation_invoke(
             &plugin,
-            PluginCommandInvokeInput {
+            PluginOperationInvokeInput {
                 session_id: Some(1),
                 call_id: Some(2),
                 workspace_root: Some("/workspace".to_string()),
-                command_id: "manifest.inline_item_exclusive_number".to_string(),
+                operation_id: "manifest.inline_item_exclusive_number".to_string(),
                 slash: Some("/manifest-inline-item-exclusive-number".to_string()),
                 raw: "/manifest-inline-item-exclusive-number 5".to_string(),
                 input: json!({ "counts": [5] }),
@@ -1122,13 +1113,13 @@ fn command_macro_dispatch_rejects_values_outside_item_object_bounds() {
     let plugin = ManifestPlugin;
 
     let min_error = runtime
-        .block_on(Plugin::command_invoke(
+        .block_on(Plugin::operation_invoke(
             &plugin,
-            PluginCommandInvokeInput {
+            PluginOperationInvokeInput {
                 session_id: Some(1),
                 call_id: Some(2),
                 workspace_root: Some("/workspace".to_string()),
-                command_id: "manifest.inline_item_object".to_string(),
+                operation_id: "manifest.inline_item_object".to_string(),
                 slash: Some("/manifest-inline-item-object".to_string()),
                 raw: "/manifest-inline-item-object [{}]".to_string(),
                 input: json!({ "entries": [{}] }),
@@ -1142,13 +1133,13 @@ fn command_macro_dispatch_rejects_values_outside_item_object_bounds() {
     );
 
     let max_error = runtime
-        .block_on(Plugin::command_invoke(
+        .block_on(Plugin::operation_invoke(
             &plugin,
-            PluginCommandInvokeInput {
+            PluginOperationInvokeInput {
                 session_id: Some(1),
                 call_id: Some(2),
                 workspace_root: Some("/workspace".to_string()),
-                command_id: "manifest.inline_item_object".to_string(),
+                operation_id: "manifest.inline_item_object".to_string(),
                 slash: Some("/manifest-inline-item-object".to_string()),
                 raw: "/manifest-inline-item-object [{\"a\":\"1\",\"b\":\"2\",\"c\":\"3\"}]"
                     .to_string(),
@@ -1173,13 +1164,13 @@ fn command_macro_dispatch_rejects_inline_relation_rules() {
     let plugin = ManifestPlugin;
 
     let requires_error = runtime
-        .block_on(Plugin::command_invoke(
+        .block_on(Plugin::operation_invoke(
             &plugin,
-            PluginCommandInvokeInput {
+            PluginOperationInvokeInput {
                 session_id: Some(1),
                 call_id: Some(2),
                 workspace_root: Some("/workspace".to_string()),
-                command_id: "manifest.inline_relation".to_string(),
+                operation_id: "manifest.inline_relation".to_string(),
                 slash: Some("/manifest-inline-relation".to_string()),
                 raw: "/manifest-inline-relation path=README.md".to_string(),
                 input: json!({
@@ -1198,13 +1189,13 @@ fn command_macro_dispatch_rejects_inline_relation_rules() {
     );
 
     let conflicts_error = runtime
-        .block_on(Plugin::command_invoke(
+        .block_on(Plugin::operation_invoke(
             &plugin,
-            PluginCommandInvokeInput {
+            PluginOperationInvokeInput {
                 session_id: Some(1),
                 call_id: Some(2),
                 workspace_root: Some("/workspace".to_string()),
-                command_id: "manifest.inline_relation".to_string(),
+                operation_id: "manifest.inline_relation".to_string(),
                 slash: Some("/manifest-inline-relation".to_string()),
                 raw: "/manifest-inline-relation slug=docs mode=read".to_string(),
                 input: json!({
@@ -1224,13 +1215,13 @@ fn command_macro_dispatch_rejects_inline_relation_rules() {
     );
 
     let required_unless_error = runtime
-        .block_on(Plugin::command_invoke(
+        .block_on(Plugin::operation_invoke(
             &plugin,
-            PluginCommandInvokeInput {
+            PluginOperationInvokeInput {
                 session_id: Some(1),
                 call_id: Some(2),
                 workspace_root: Some("/workspace".to_string()),
-                command_id: "manifest.inline_relation".to_string(),
+                operation_id: "manifest.inline_relation".to_string(),
                 slash: Some("/manifest-inline-relation".to_string()),
                 raw: "/manifest-inline-relation".to_string(),
                 input: json!({
@@ -1247,13 +1238,13 @@ fn command_macro_dispatch_rejects_inline_relation_rules() {
     );
 
     let forbid_error = runtime
-        .block_on(Plugin::command_invoke(
+        .block_on(Plugin::operation_invoke(
             &plugin,
-            PluginCommandInvokeInput {
+            PluginOperationInvokeInput {
                 session_id: Some(1),
                 call_id: Some(2),
                 workspace_root: Some("/workspace".to_string()),
-                command_id: "manifest.inline_relation".to_string(),
+                operation_id: "manifest.inline_relation".to_string(),
                 slash: Some("/manifest-inline-relation".to_string()),
                 raw: "/manifest-inline-relation file_path=../etc".to_string(),
                 input: json!({
@@ -1271,13 +1262,13 @@ fn command_macro_dispatch_rejects_inline_relation_rules() {
     );
 
     let distinct_error = runtime
-        .block_on(Plugin::command_invoke(
+        .block_on(Plugin::operation_invoke(
             &plugin,
-            PluginCommandInvokeInput {
+            PluginOperationInvokeInput {
                 session_id: Some(1),
                 call_id: Some(2),
                 workspace_root: Some("/workspace".to_string()),
-                command_id: "manifest.inline_relation".to_string(),
+                operation_id: "manifest.inline_relation".to_string(),
                 slash: Some("/manifest-inline-relation".to_string()),
                 raw: "/manifest-inline-relation tags=cargo".to_string(),
                 input: json!({
@@ -1303,13 +1294,13 @@ fn command_macro_dispatch_rejects_inline_group_rules() {
     let plugin = ManifestPlugin;
 
     let exactly_one_error = runtime
-        .block_on(Plugin::command_invoke(
+        .block_on(Plugin::operation_invoke(
             &plugin,
-            PluginCommandInvokeInput {
+            PluginOperationInvokeInput {
                 session_id: Some(1),
                 call_id: Some(2),
                 workspace_root: Some("/workspace".to_string()),
-                command_id: "manifest.inline_group".to_string(),
+                operation_id: "manifest.inline_group".to_string(),
                 slash: Some("/manifest-inline-group".to_string()),
                 raw: "/manifest-inline-group".to_string(),
                 input: json!({
@@ -1327,13 +1318,13 @@ fn command_macro_dispatch_rejects_inline_group_rules() {
     );
 
     let exactly_one_missing_error = runtime
-        .block_on(Plugin::command_invoke(
+        .block_on(Plugin::operation_invoke(
             &plugin,
-            PluginCommandInvokeInput {
+            PluginOperationInvokeInput {
                 session_id: Some(1),
                 call_id: Some(2),
                 workspace_root: Some("/workspace".to_string()),
-                command_id: "manifest.inline_group".to_string(),
+                operation_id: "manifest.inline_group".to_string(),
                 slash: Some("/manifest-inline-group".to_string()),
                 raw: "/manifest-inline-group".to_string(),
                 input: json!({
@@ -1349,13 +1340,13 @@ fn command_macro_dispatch_rejects_inline_group_rules() {
     );
 
     let at_least_one_error = runtime
-        .block_on(Plugin::command_invoke(
+        .block_on(Plugin::operation_invoke(
             &plugin,
-            PluginCommandInvokeInput {
+            PluginOperationInvokeInput {
                 session_id: Some(1),
                 call_id: Some(2),
                 workspace_root: Some("/workspace".to_string()),
-                command_id: "manifest.inline_group".to_string(),
+                operation_id: "manifest.inline_group".to_string(),
                 slash: Some("/manifest-inline-group".to_string()),
                 raw: "/manifest-inline-group filePath=README.md".to_string(),
                 input: json!({
@@ -1378,13 +1369,13 @@ fn command_macro_dispatch_rejects_values_outside_numeric_bounds() {
         .expect("test runtime should build");
     let plugin = ManifestPlugin;
     let error = runtime
-        .block_on(Plugin::command_invoke(
+        .block_on(Plugin::operation_invoke(
             &plugin,
-            PluginCommandInvokeInput {
+            PluginOperationInvokeInput {
                 session_id: Some(1),
                 call_id: Some(2),
                 workspace_root: Some("/workspace".to_string()),
-                command_id: "manifest.inline_number".to_string(),
+                operation_id: "manifest.inline_number".to_string(),
                 slash: Some("/manifest-inline-number".to_string()),
                 raw: "/manifest-inline-number 1".to_string(),
                 input: json!({ "count": 1 }),
@@ -1406,13 +1397,13 @@ fn command_macro_dispatch_parses_top_level_primitive_input() {
         .expect("test runtime should build");
     let plugin = ManifestPlugin;
     let output = runtime
-        .block_on(Plugin::command_invoke(
+        .block_on(Plugin::operation_invoke(
             &plugin,
-            PluginCommandInvokeInput {
+            PluginOperationInvokeInput {
                 session_id: Some(1),
                 call_id: Some(2),
                 workspace_root: Some("/workspace".to_string()),
-                command_id: "manifest.bool".to_string(),
+                operation_id: "manifest.bool".to_string(),
                 slash: Some("/manifest-bool".to_string()),
                 raw: "/manifest-bool true".to_string(),
                 input: json!(true),
@@ -1420,10 +1411,7 @@ fn command_macro_dispatch_parses_top_level_primitive_input() {
         ))
         .expect("primitive command invoke should succeed");
 
-    match output {
-        PluginCommandOutput::Message { text } => assert_eq!(text, "true"),
-        other => panic!("expected message output, got {other:?}"),
-    }
+    assert_operation_summary(output, "true");
 }
 
 #[test]
@@ -1433,13 +1421,13 @@ fn command_macro_dispatch_supports_typed_input_with_command_context() {
         .expect("test runtime should build");
     let plugin = ManifestPlugin;
     let output = runtime
-        .block_on(Plugin::command_invoke(
+        .block_on(Plugin::operation_invoke(
             &plugin,
-            PluginCommandInvokeInput {
+            PluginOperationInvokeInput {
                 session_id: Some(1),
                 call_id: Some(2),
                 workspace_root: Some("/workspace".to_string()),
-                command_id: "manifest.context".to_string(),
+                operation_id: "manifest.context".to_string(),
                 slash: Some("/manifest-context".to_string()),
                 raw: "/manifest-context Ada".to_string(),
                 input: json!({ "name": "Ada" }),
@@ -1447,12 +1435,7 @@ fn command_macro_dispatch_supports_typed_input_with_command_context() {
         ))
         .expect("context command invoke should succeed");
 
-    match output {
-        PluginCommandOutput::Message { text } => {
-            assert_eq!(text, "Ada via /manifest-context")
-        }
-        other => panic!("expected message output, got {other:?}"),
-    }
+    assert_operation_summary(output, "Ada via /manifest-context");
 }
 
 #[test]
@@ -1483,13 +1466,13 @@ fn tool_command_macro_dispatch_routes_to_tool() {
         .expect("test runtime should build");
     let plugin = ManifestPlugin;
     let output = runtime
-        .block_on(Plugin::command_invoke(
+        .block_on(Plugin::operation_invoke(
             &plugin,
-            PluginCommandInvokeInput {
+            PluginOperationInvokeInput {
                 session_id: Some(1),
                 call_id: Some(2),
                 workspace_root: Some("/workspace".to_string()),
-                command_id: "manifest.render".to_string(),
+                operation_id: "manifest.render".to_string(),
                 slash: Some("/manifest-render".to_string()),
                 raw: "/manifest-render hi".to_string(),
                 input: json!({ "text": " hi " }),
@@ -1497,18 +1480,9 @@ fn tool_command_macro_dispatch_routes_to_tool() {
         ))
         .expect("tool command invoke should succeed");
 
-    match output {
-        PluginCommandOutput::InvokeTool {
-            tool,
-            input,
-            submit_output_as_prompt,
-        } => {
-            assert_eq!(tool, "render");
-            assert_eq!(input, Some(json!({ "text": " hi " })));
-            assert!(submit_output_as_prompt);
-        }
-        other => panic!("expected tool invocation output, got {other:?}"),
-    }
+    assert_eq!(output.status, PluginOperationStatus::Unavailable);
+    assert!(output.summary.contains("executed by the host runtime"));
+    assert!(output.effects.is_empty());
 }
 
 #[test]
@@ -1592,6 +1566,13 @@ fn hook_macro_filters_by_tool_and_command() {
         "unmatched command filters should skip handlers"
     );
 }
+fn assert_operation_summary(output: PluginOperationResult, expected: &str) {
+    assert_eq!(output.status, PluginOperationStatus::Succeeded);
+    assert_eq!(output.summary, expected);
+    assert!(output.diagnostics.is_empty());
+    assert!(output.effects.is_empty());
+}
+
 use super::ManifestPlugin;
 use super::{command_before_input, tool_before_input, tool_before_input_with_tags};
 use agena_plugin_sdk::prelude::*;

@@ -84,6 +84,11 @@ jobs:
         with:
           ref: ${{ needs.metadata.outputs.source_sha }}
           persist-credentials: false
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          toolchain: 1.97.0
+      - name: Verify universal target coverage
+        run: python3 scripts/agena/verify-target-coverage.py
       - id: matrix
         shell: bash
         run: |

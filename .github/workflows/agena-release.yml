@@ -355,10 +355,10 @@ jobs:
             artifacts/agena/*.sha256
           if-no-files-found: error
 
-  publish:
+  verify-assets:
+    name: Verify complete release asset set
     if: >-
       always() &&
-      needs.metadata.outputs.publish_release == 'true' &&
       needs.hosted-backend.result == 'success' &&
       needs.native-backend.result == 'success' &&
       needs.portable-core.result == 'success' &&
@@ -370,28 +370,95 @@ jobs:
       - portable-core
       - portable-build-std-core
     runs-on: ubuntu-latest
+    env:
+      RELEASE_VERSION: ${{ needs.metadata.outputs.version }}
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.metadata.outputs.source_sha }}
+          persist-credentials: false
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: agena-release-*
           path: release-assets
           merge-multiple: true
-      - name: Verify unique release asset names and checksums
+      - name: Verify exact target archives and SHA256 files
         shell: bash
         run: |
           set -euo pipefail
-          find release-assets -maxdepth 1 -type f -print | sort
-          count="$(find release-assets -maxdepth 1 -type f \( -name '*.tar.gz' -o -name '*.zip' \) | wc -l | tr -d ' ')"
-          if [[ "$count" -lt 322 ]]; then
-            echo "expected at least 322 release archives, found $count" >&2
-            exit 1
-          fi
+          python3 - <<'PY_VERIFY'
+          import json
+          import os
+          from pathlib import Path
+
+          version = os.environ["RELEASE_VERSION"]
+          manifest = json.load(open("scripts/agena/universal-targets.json", encoding="utf-8"))
+          expected = set()
+
+          for row in manifest["hosted_cross"]:
+              target = row["target"]
+              prefix = "agena-web-runtime" if row["artifact_kind"] == "web-runtime" else "agena-backend"
+              ext = "zip" if "windows" in target else "tar.gz"
+              expected.add(f"{prefix}-{target}-v{version}.{ext}")
+
+          for row in manifest["native"]:
+              target = row["target"]
+              ext = "zip" if "windows" in target else "tar.gz"
+              expected.add(f"agena-backend-{target}-v{version}.{ext}")
+
+          for group in ("portable", "portable_build_std"):
+              for row in manifest[group]:
+                  target = row["target"]
+                  expected.add(f"agena-portable-core-{target}-v{version}.tar.gz")
+
+          root = Path("release-assets")
+          actual = {
+              path.name
+              for path in root.iterdir()
+              if path.is_file() and (path.name.endswith(".tar.gz") or path.name.endswith(".zip"))
+          }
+          checksum_files = {path.name for path in root.glob("*.sha256")}
+          expected_checksums = {f"{name}.sha256" for name in expected}
+
+          missing = sorted(expected - actual)
+          extra = sorted(actual - expected)
+          missing_checksums = sorted(expected_checksums - checksum_files)
+          extra_checksums = sorted(checksum_files - expected_checksums)
+          if missing or extra or missing_checksums or extra_checksums:
+              if missing:
+                  print("Missing archives:", *missing, sep="\n  ")
+              if extra:
+                  print("Unexpected archives:", *extra, sep="\n  ")
+              if missing_checksums:
+                  print("Missing checksum files:", *missing_checksums, sep="\n  ")
+              if extra_checksums:
+                  print("Unexpected checksum files:", *extra_checksums, sep="\n  ")
+              raise SystemExit(1)
+
+          print(f"Verified exact release archive set: {len(expected)} targets")
+          PY_VERIFY
           (
             cd release-assets
             for checksum in *.sha256; do
               sha256sum -c "$checksum"
             done
           )
+
+  publish:
+    if: >-
+      always() &&
+      needs.metadata.outputs.publish_release == 'true' &&
+      needs.verify-assets.result == 'success'
+    needs:
+      - metadata
+      - verify-assets
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: agena-release-*
+          path: release-assets
+          merge-multiple: true
       - uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           name: Agena ${{ needs.metadata.outputs.version }}

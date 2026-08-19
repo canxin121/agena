@@ -369,6 +369,8 @@ debug = false
 incremental = false
 
 [patch.crates-io]
+tantivy = { path = "third_party/tantivy" }
+rmcp = { path = "third_party/rmcp" }
 nix = { path = "third_party/nix-0.28" }
 prometheus = { path = "third_party/prometheus" }
 fs4 = { path = "third_party/fs4" }

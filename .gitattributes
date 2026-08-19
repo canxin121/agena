@@ -4,3 +4,5 @@ third_party/tree-sitter/** whitespace=-trailing-space
 third_party/fs4/** whitespace=-trailing-space
 third_party/prometheus/** whitespace=-trailing-space
 third_party/nix-0.28/** whitespace=-trailing-space
+third_party/rmcp/** whitespace=-trailing-space
+third_party/tantivy/** whitespace=-trailing-space

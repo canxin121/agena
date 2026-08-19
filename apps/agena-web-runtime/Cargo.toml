@@ -1,0 +1,14 @@
+[package]
+name = "agena-web-runtime"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Portable Agena runtime entry point for Emscripten/Web targets"
+
+[[bin]]
+name = "agena-web-runtime"
+path = "src/main.rs"
+
+[lints]
+workspace = true

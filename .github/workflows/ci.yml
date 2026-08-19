@@ -97,4 +97,4 @@ jobs:
           cache-targets: false
           cache-on-failure: true
       - name: Check target
-        run: bash scripts/ci/cross-check-target.sh '${{ matrix.target }}' '${{ matrix.build_std }}'
+        run: bash scripts/ci/cross-check-target.sh '${{ matrix.target }}' '${{ matrix.build_std }}' '${{ matrix.artifact_kind }}'

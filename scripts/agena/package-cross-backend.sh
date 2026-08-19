@@ -5,6 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 TARGET_TRIPLE="${1:?target triple is required}"
 BUILD_STD="${2:-false}"
+ARTIFACT_KIND="${3:-backend}"
 SERVER_MANIFEST="$REPO_ROOT/Cargo.toml"
 SERVER_TARGET_DIR="$REPO_ROOT/target"
 RELEASE_DIR="$REPO_ROOT/artifacts/agena"
@@ -23,10 +24,19 @@ VERSION="$(read_version)"
 }
 command -v cross >/dev/null 2>&1 || { echo "ERROR: cross is required" >&2; exit 1; }
 
+PACKAGE="agena"
+BINARY_BASENAME="agena"
+ARCHIVE_PREFIX="agena-backend"
+if [[ "$ARTIFACT_KIND" == "web-runtime" ]]; then
+  PACKAGE="agena-web-runtime"
+  BINARY_BASENAME="agena-web-runtime"
+  ARCHIVE_PREFIX="agena-web-runtime"
+fi
+
 build_args=(
   build
   --manifest-path "$SERVER_MANIFEST"
-  -p agena
+  -p "$PACKAGE"
   --release
   --target "$TARGET_TRIPLE"
   --locked
@@ -47,14 +57,14 @@ cp -R "$WEB_DIST_DIR/." "$STAGE_DIR/web-dist/"
 
 case "$TARGET_TRIPLE" in
   *-windows-*)
-    [[ -f "$OUTPUT_DIR/agena.exe" ]] || { echo "ERROR: missing $OUTPUT_DIR/agena.exe" >&2; exit 1; }
-    cp "$OUTPUT_DIR/agena.exe" "$STAGE_DIR/bin/agena.exe"
+    [[ -f "$OUTPUT_DIR/${BINARY_BASENAME}.exe" ]] || { echo "ERROR: missing $OUTPUT_DIR/${BINARY_BASENAME}.exe" >&2; exit 1; }
+    cp "$OUTPUT_DIR/${BINARY_BASENAME}.exe" "$STAGE_DIR/bin/${BINARY_BASENAME}.exe"
     archive_ext="zip"
     ;;
   wasm32-unknown-emscripten)
     found=0
     for suffix in js wasm data worker.js; do
-      candidate="$OUTPUT_DIR/agena.$suffix"
+      candidate="$OUTPUT_DIR/${BINARY_BASENAME}.$suffix"
       if [[ -f "$candidate" ]]; then
         cp "$candidate" "$STAGE_DIR/bin/"
         found=1
@@ -64,21 +74,22 @@ case "$TARGET_TRIPLE" in
     archive_ext="tar.gz"
     ;;
   *)
-    [[ -f "$OUTPUT_DIR/agena" ]] || { echo "ERROR: missing $OUTPUT_DIR/agena" >&2; exit 1; }
-    cp "$OUTPUT_DIR/agena" "$STAGE_DIR/bin/agena"
+    [[ -f "$OUTPUT_DIR/$BINARY_BASENAME" ]] || { echo "ERROR: missing $OUTPUT_DIR/$BINARY_BASENAME" >&2; exit 1; }
+    cp "$OUTPUT_DIR/$BINARY_BASENAME" "$STAGE_DIR/bin/$BINARY_BASENAME"
     archive_ext="tar.gz"
     ;;
 esac
 
-python3 - "$STAGE_DIR/manifest.json" "$VERSION" "$TARGET_TRIPLE" "$BUILD_STD" <<'PY'
+python3 - "$STAGE_DIR/manifest.json" "$VERSION" "$TARGET_TRIPLE" "$BUILD_STD" "$ARTIFACT_KIND" <<'PY'
 import json, sys
 from pathlib import Path
-path, version, target, build_std = sys.argv[1:]
+path, version, target, build_std, artifact_kind = sys.argv[1:]
 Path(path).write_text(json.dumps({
     "name": "agena",
     "version": version,
     "target": target,
     "build_std": build_std == "true",
+    "artifact_kind": artifact_kind,
     "contents": ["bin/", "web-dist/"],
 }, indent=2) + "\n", encoding="utf-8")
 PY
@@ -95,7 +106,7 @@ Contents:
 EOF
 
 mkdir -p "$RELEASE_DIR"
-ARCHIVE_NAME="agena-backend-${TARGET_TRIPLE}-v${VERSION}.${archive_ext}"
+ARCHIVE_NAME="${ARCHIVE_PREFIX}-${TARGET_TRIPLE}-v${VERSION}.${archive_ext}"
 rm -f "$RELEASE_DIR/$ARCHIVE_NAME"
 if [[ "$archive_ext" == zip ]]; then
   python3 - "$STAGE_DIR" "$RELEASE_DIR/$ARCHIVE_NAME" <<'PY'

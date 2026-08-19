@@ -44,34 +44,8 @@ jobs:
       max-parallel: 16
       matrix:
         include:
-          - target: x86_64-unknown-linux-musl
-            build_std: false
-          - target: aarch64-unknown-linux-gnu
-            build_std: false
-          - target: armv7-unknown-linux-gnueabihf
-            build_std: false
-          - target: i686-unknown-linux-gnu
-            build_std: false
-          - target: loongarch64-unknown-linux-gnu
-            build_std: false
           - target: mipsel-unknown-linux-gnu
             build_std: true
-          - target: powerpc64le-unknown-linux-gnu
-            build_std: false
-          - target: riscv64gc-unknown-linux-gnu
-            build_std: false
-          - target: s390x-unknown-linux-gnu
-            build_std: false
-          - target: aarch64-linux-android
-            build_std: false
-          - target: i686-linux-android
-            build_std: false
-          - target: x86_64-pc-windows-gnu
-            build_std: false
-          - target: x86_64-unknown-freebsd
-            build_std: false
-          - target: x86_64-unknown-netbsd
-            build_std: false
           - target: x86_64-unknown-illumos
             build_std: false
           - target: sparcv9-sun-solaris

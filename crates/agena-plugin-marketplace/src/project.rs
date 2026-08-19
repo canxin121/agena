@@ -1327,21 +1327,30 @@ jobs:
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
         with:
           toolchain: 1.97.0
+      - name: Restore Agena plugin developer tool
+        id: plugin_dev_cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: .agena-tools
+          key: agena-plugin-dev-${{{{ runner.os }}}}-{ref}
       - name: Install pinned Agena plugin developer tool
+        if: steps.plugin_dev_cache.outputs.cache-hit != 'true'
         run: >-
-          cargo install --locked
+          cargo install --locked --root "$GITHUB_WORKSPACE/.agena-tools"
           --git https://github.com/canxin121/agena
           --rev {ref}
           agena-plugin-dev
       - name: Rebuild GitHub-only marketplace
         run: >-
-          agena-plugin marketplace build releases
+          "$GITHUB_WORKSPACE/.agena-tools/bin/agena-plugin" marketplace build releases
           --output /tmp/agena-marketplace.json
           --github-only
       - name: Verify generated index is committed
         run: cmp /tmp/agena-marketplace.json agena-marketplace.json
       - name: Validate committed index
-        run: agena-plugin marketplace validate agena-marketplace.json --github-only
+        run: >-
+          "$GITHUB_WORKSPACE/.agena-tools/bin/agena-plugin" marketplace validate
+          agena-marketplace.json --github-only
       - name: Reject mutation of published release records
         if: github.event_name == 'pull_request'
         env:

@@ -45,14 +45,24 @@ jobs:
       - name: Test
         run: cargo test --all-features
 
+      - name: Restore Agena plugin developer tool
+        id: plugin_dev_cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: .agena-tools
+          key: agena-plugin-dev-${{ runner.os }}-${{ inputs.agena_ref }}
+
       - name: Install Agena plugin developer tool
+        if: steps.plugin_dev_cache.outputs.cache-hit != 'true'
         env:
           AGENA_REF: ${{ inputs.agena_ref }}
         run: >-
-          cargo install --locked
+          cargo install --locked --root "$GITHUB_WORKSPACE/.agena-tools"
           --git https://github.com/canxin121/agena
           --rev "$AGENA_REF"
           agena-plugin-dev
 
       - name: Validate plugin project
-        run: agena-plugin validate "${{ inputs.manifest_path }}"
+        run: >-
+          "$GITHUB_WORKSPACE/.agena-tools/bin/agena-plugin"
+          validate "${{ inputs.manifest_path }}"

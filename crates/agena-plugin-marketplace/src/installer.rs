@@ -27,6 +27,37 @@ pub struct RegistrySpec {
     pub require_github_distribution: bool,
 }
 
+fn verify_signature_bytes(
+    bytes: &[u8],
+    signature: &crate::manifest::PluginSignature,
+    trusted_keys: &BTreeMap<String, String>,
+) -> Result<(), String> {
+    use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+
+    let key_hex = trusted_keys
+        .get(&signature.key_id)
+        .ok_or_else(|| format!("unknown trusted key id `{}`", signature.key_id))?;
+    let key_bytes = hex::decode(key_hex).map_err(|error| {
+        format!(
+            "trusted key `{}` is not valid hex: {error}",
+            signature.key_id
+        )
+    })?;
+    let key_array: [u8; 32] = key_bytes
+        .try_into()
+        .map_err(|_| format!("trusted key `{}` must be 32 bytes", signature.key_id))?;
+    let verifier = VerifyingKey::from_bytes(&key_array)
+        .map_err(|error| format!("invalid ed25519 public key `{}`: {error}", signature.key_id))?;
+    let signature_bytes = hex::decode(&signature.signature)
+        .map_err(|error| format!("signature is not valid hex: {error}"))?;
+    let signature_array: [u8; 64] = signature_bytes
+        .try_into()
+        .map_err(|_| "signature must be 64 bytes".to_string())?;
+    verifier
+        .verify(bytes, &Signature::from_bytes(&signature_array))
+        .map_err(|error| error.to_string())
+}
+
 #[cfg(test)]
 mod source_tests {
     use super::{PluginInstallLocator, RegistrySpec, parse_plugin_install_locator};
@@ -179,8 +210,7 @@ pub fn parse_plugin_install_locator(
         }
         _ => (spec, None),
     };
-    plugin_id
-        .parse::<agena_plugin_host::PluginKey>()
+    agena_plugin_contracts::validate_plugin_identity(plugin_id)
         .map_err(|error| MarketplaceError::Index(error.to_string()))?;
     if let Some(version) = version.as_deref() {
         semver::Version::parse(version.trim_start_matches('v')).map_err(|error| {
@@ -550,11 +580,12 @@ impl<F: HttpFetcher> MarketplaceClient<F> {
         }
 
         if let Some(signature) = version.signature.as_ref() {
-            agena_plugin_host::verify_signature_bytes(&bytes, signature, &self.trusted_keys)
-                .map_err(|err| MarketplaceError::SignatureFailed {
+            verify_signature_bytes(&bytes, signature, &self.trusted_keys).map_err(|err| {
+                MarketplaceError::SignatureFailed {
                     plugin: plugin.id.clone(),
                     message: err,
-                })?;
+                }
+            })?;
         } else if req.registry.require_signature {
             return Err(MarketplaceError::SignatureFailed {
                 plugin: plugin.id.clone(),

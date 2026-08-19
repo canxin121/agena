@@ -21,8 +21,8 @@ pub use installer::{
 pub use manifest::{
     AGENA_MARKETPLACE_FILENAME, AGENA_RELEASE_MANIFEST_FILENAME, ArchiveSpec, DependencySpec,
     MarketplaceMetadata, MarketplaceOwner, MarketplaceReviewTier, PluginKind, PluginRecord,
-    PluginReleaseArtifact, PluginReleaseManifest, PluginReleaseSource, PluginVersion,
-    RegistryIndex,
+    PluginReleaseArtifact, PluginReleaseManifest, PluginReleaseSource, PluginSignature,
+    PluginVersion, RegistryIndex,
 };
 pub use project::{
     AGENA_MARKETPLACE_PROJECT_FILENAME, AGENA_PROJECT_MANIFEST_FILENAME,

@@ -81,11 +81,9 @@ impl MarketplaceProjectManifest {
             validate_canonical_github_repository(repository)?;
         }
         for (alias, target) in &self.renames {
-            alias
-                .parse::<agena_plugin_host::PluginKey>()
+            agena_plugin_contracts::validate_plugin_identity(alias)
                 .map_err(|error| MarketplaceError::Project(error.to_string()))?;
-            target
-                .parse::<agena_plugin_host::PluginKey>()
+            agena_plugin_contracts::validate_plugin_identity(target)
                 .map_err(|error| MarketplaceError::Project(error.to_string()))?;
             if alias == target {
                 return Err(MarketplaceError::Project(format!(
@@ -94,8 +92,7 @@ impl MarketplaceProjectManifest {
             }
         }
         for plugin_id in self.plugins.keys() {
-            plugin_id
-                .parse::<agena_plugin_host::PluginKey>()
+            agena_plugin_contracts::validate_plugin_identity(plugin_id)
                 .map_err(|error| MarketplaceError::Project(error.to_string()))?;
         }
         Ok(())
@@ -490,9 +487,7 @@ impl PluginProjectManifest {
                 self.schema_version
             )));
         }
-        self.plugin
-            .id
-            .parse::<agena_plugin_host::PluginKey>()
+        agena_plugin_contracts::validate_plugin_identity(self.plugin.id.as_str())
             .map_err(|error| MarketplaceError::Project(error.to_string()))?;
         semver::Version::parse(self.plugin.version.trim_start_matches('v')).map_err(|error| {
             MarketplaceError::Project(format!(
@@ -519,9 +514,7 @@ impl PluginProjectManifest {
         }
         let mut dependencies = BTreeSet::new();
         for dependency in &self.plugin.dependencies {
-            dependency
-                .plugin_id
-                .parse::<agena_plugin_host::PluginKey>()
+            agena_plugin_contracts::validate_plugin_identity(dependency.plugin_id.as_str())
                 .map_err(|error| MarketplaceError::Project(error.to_string()))?;
             semver::VersionReq::parse(&dependency.version_req).map_err(|error| {
                 MarketplaceError::Project(format!(
@@ -779,9 +772,7 @@ pub struct ScaffoldPluginRequest {
 }
 
 pub fn scaffold_plugin(request: ScaffoldPluginRequest) -> Result<(), MarketplaceError> {
-    request
-        .plugin_id
-        .parse::<agena_plugin_host::PluginKey>()
+    agena_plugin_contracts::validate_plugin_identity(request.plugin_id.as_str())
         .map_err(|error| MarketplaceError::Project(error.to_string()))?;
     if let Some(repository) = request.repository.as_deref() {
         validate_canonical_github_repository(repository)?;

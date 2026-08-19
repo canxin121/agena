@@ -3,13 +3,21 @@
 
 use std::{collections::BTreeMap, fmt};
 
-use agena_plugin_host::PluginSignature;
 use serde::{Deserialize, Serialize};
 
 use crate::MarketplaceError;
 
 pub const AGENA_MARKETPLACE_FILENAME: &str = "agena-marketplace.json";
 pub const AGENA_RELEASE_MANIFEST_FILENAME: &str = "agena-plugin-release.json";
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+/// Ed25519 signature over one immutable plugin release artifact.
+pub struct PluginSignature {
+    pub key_id: String,
+    /// Hex-encoded raw Ed25519 signature bytes (64 bytes).
+    pub signature: String,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(default, deny_unknown_fields)]
@@ -217,8 +225,7 @@ impl PluginReleaseManifest {
                 self.schema_version
             )));
         }
-        self.id
-            .parse::<agena_plugin_host::PluginKey>()
+        agena_plugin_contracts::validate_plugin_identity(self.id.as_str())
             .map_err(|error| MarketplaceError::Index(error.to_string()))?;
         semver::Version::parse(self.version.trim_start_matches('v')).map_err(|error| {
             MarketplaceError::Index(format!(
@@ -505,8 +512,7 @@ fn sort_versions(versions: &mut [PluginVersion]) {
 
 impl PluginRecord {
     pub fn validate(&self) -> Result<(), MarketplaceError> {
-        self.id
-            .parse::<agena_plugin_host::PluginKey>()
+        agena_plugin_contracts::validate_plugin_identity(self.id.as_str())
             .map_err(|error| MarketplaceError::Index(error.to_string()))?;
         if self.versions.is_empty() {
             return Err(MarketplaceError::Index(format!(
@@ -552,20 +558,16 @@ impl RegistryIndex {
             }
         }
         for (alias, target) in &self.renames {
-            alias
-                .parse::<agena_plugin_host::PluginKey>()
-                .map_err(|error| {
-                    MarketplaceError::Index(format!(
-                        "invalid marketplace rename source `{alias}`: {error}"
-                    ))
-                })?;
-            target
-                .parse::<agena_plugin_host::PluginKey>()
-                .map_err(|error| {
-                    MarketplaceError::Index(format!(
-                        "invalid marketplace rename target `{target}`: {error}"
-                    ))
-                })?;
+            agena_plugin_contracts::validate_plugin_identity(alias).map_err(|error| {
+                MarketplaceError::Index(format!(
+                    "invalid marketplace rename source `{alias}`: {error}"
+                ))
+            })?;
+            agena_plugin_contracts::validate_plugin_identity(target).map_err(|error| {
+                MarketplaceError::Index(format!(
+                    "invalid marketplace rename target `{target}`: {error}"
+                ))
+            })?;
             if alias == target {
                 return Err(MarketplaceError::Index(format!(
                     "marketplace rename `{alias}` cannot point to itself"
@@ -650,8 +652,7 @@ impl RegistryIndex {
     /// chains are allowed for long-lived catalogs, but cycles and dangling
     /// targets are rejected by the same method used by validation and install.
     pub fn resolve_plugin_id(&self, requested: &str) -> Result<String, MarketplaceError> {
-        requested
-            .parse::<agena_plugin_host::PluginKey>()
+        agena_plugin_contracts::validate_plugin_identity(requested)
             .map_err(|error| MarketplaceError::Index(error.to_string()))?;
         let mut current = requested.to_string();
         let mut seen = std::collections::BTreeSet::new();

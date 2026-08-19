@@ -625,8 +625,9 @@ dependencies = [
 name = "agena-plugin-marketplace"
 version = "0.1.0"
 dependencies = [
- "agena-plugin-host",
+ "agena-plugin-contracts",
  "chrono",
+ "ed25519-dalek 3.0.0",
  "flate2",
  "hex",
  "reqwest 0.13.4",

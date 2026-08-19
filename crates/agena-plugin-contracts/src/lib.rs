@@ -27,6 +27,84 @@ pub const MAX_OPERATION_DIAGNOSTICS: usize = 32;
 pub const MAX_OPERATION_EFFECTS: usize = 8;
 pub const MAX_PLUGIN_SERVICES: usize = 128;
 
+/// Host-neutral syntax error for Agena's stable `namespace.plugin` identity.
+/// The SDK, marketplace, runtime configuration and tooling all delegate to
+/// this contract so independent tooling never grows a second slug grammar.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PluginIdentityError {
+    MissingSeparator(String),
+    InvalidComponent {
+        label: &'static str,
+        value: String,
+        reason: String,
+    },
+}
+
+impl fmt::Display for PluginIdentityError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MissingSeparator(value) => {
+                write!(f, "plugin key `{value}` must use `namespace.plugin` format")
+            }
+            Self::InvalidComponent {
+                label,
+                value,
+                reason,
+            } => write!(f, "invalid {label} `{value}`: {reason}"),
+        }
+    }
+}
+
+impl std::error::Error for PluginIdentityError {}
+
+pub fn normalize_plugin_identity_parts(
+    namespace: &str,
+    name: &str,
+) -> Result<(String, String), PluginIdentityError> {
+    fn segment(value: &str, label: &'static str) -> Result<String, PluginIdentityError> {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            return Err(PluginIdentityError::InvalidComponent {
+                label,
+                value: value.to_string(),
+                reason: "cannot be empty".to_string(),
+            });
+        }
+        if trimmed.contains('.') {
+            return Err(PluginIdentityError::InvalidComponent {
+                label,
+                value: value.to_string(),
+                reason: "must not contain `.`".to_string(),
+            });
+        }
+        Ok(trimmed.to_string())
+    }
+
+    Ok((
+        segment(namespace, "plugin namespace")?,
+        segment(name, "plugin name")?,
+    ))
+}
+
+pub fn normalize_plugin_identity(value: &str) -> Result<(String, String), PluginIdentityError> {
+    let trimmed = value.trim();
+    let Some((namespace, name)) = trimmed.split_once('.') else {
+        return Err(PluginIdentityError::MissingSeparator(trimmed.to_string()));
+    };
+    if name.contains('.') {
+        return Err(PluginIdentityError::InvalidComponent {
+            label: "plugin name",
+            value: name.to_string(),
+            reason: "must not contain `.`".to_string(),
+        });
+    }
+    normalize_plugin_identity_parts(namespace, name)
+}
+
+pub fn validate_plugin_identity(value: &str) -> Result<(), PluginIdentityError> {
+    normalize_plugin_identity(value).map(|_| ())
+}
+
 /// A complete settings/form contract. The root is normally a fixed object,
 /// but the AST also supports a bounded primitive root for small plugins.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1890,6 +1968,19 @@ mod tests {
             secret: false,
             kind,
         }
+    }
+
+    #[test]
+    fn plugin_identity_contract_matches_runtime_key_grammar() {
+        assert_eq!(
+            normalize_plugin_identity(" agena-tools.FileSystem ").unwrap(),
+            ("agena-tools".to_string(), "FileSystem".to_string())
+        );
+        assert!(validate_plugin_identity("agena.fs").is_ok());
+        assert!(validate_plugin_identity("agena").is_err());
+        assert!(validate_plugin_identity("agena.fs.tools").is_err());
+        assert!(normalize_plugin_identity_parts("agena.tools", "fs").is_err());
+        assert!(normalize_plugin_identity_parts("agena", "fs.tools").is_err());
     }
 
     #[test]

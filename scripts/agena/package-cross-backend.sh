@@ -28,8 +28,13 @@ case "$TARGET_TRIPLE" in
   i586-unknown-linux-*)
     export RUSTFLAGS="${RUSTFLAGS:-} -C target-feature=+sse,+sse2"
     ;;
+  mips-unknown-linux-gnu|mipsel-unknown-linux-gnu)
+    # Large Agena codegen can otherwise reach LLVM's integrated assembler with
+    # an out-of-range PC16 branch. Force the MIPS long-branch expansion pass.
+    export RUSTFLAGS="${RUSTFLAGS:-} -C llvm-args=--force-mips-long-branch"
+    ;;
   mips64-unknown-linux-gnuabi64|mips64el-unknown-linux-gnuabi64)
-    export RUSTFLAGS="${RUSTFLAGS:-} -C relocation-model=static -C code-model=large"
+    export RUSTFLAGS="${RUSTFLAGS:-} -C relocation-model=static -C code-model=large -C llvm-args=--force-mips-long-branch"
     ;;
   aarch64_be-unknown-linux-gnu)
     # Rustix's linux_raw backend does not support big-endian AArch64. Force

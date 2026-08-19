@@ -34,7 +34,10 @@ case "$TARGET_TRIPLE" in
     export RUSTFLAGS="${RUSTFLAGS:-} -C llvm-args=--force-mips-long-branch"
     ;;
   mips64-unknown-linux-gnuabi64|mips64el-unknown-linux-gnuabi64)
-    export RUSTFLAGS="${RUSTFLAGS:-} -C relocation-model=static -C code-model=large -C llvm-args=--force-mips-long-branch"
+    # MIPS n64 PLT entries must remain in the signed 32-bit addressable range.
+    # The GNU linker otherwise places non-PIE executables above 4 GiB by
+    # default, which makes .got.plt unusable for the n64 PLT sequence.
+    export RUSTFLAGS="${RUSTFLAGS:-} -C relocation-model=static -C code-model=large -C llvm-args=--force-mips-long-branch -C link-arg=-Wl,-Ttext-segment=0x10000000"
     ;;
   aarch64_be-unknown-linux-gnu)
     # Rustix's linux_raw backend does not support big-endian AArch64. Force

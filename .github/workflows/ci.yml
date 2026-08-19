@@ -12,6 +12,28 @@ env:
   CARGO_INCREMENTAL: "0"
 
 jobs:
+  targets:
+    name: Load hosted target manifest
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: matrix
+        name: Render hosted target matrix
+        shell: bash
+        run: |
+          set -euo pipefail
+          matrix="$(python3 scripts/agena/target-matrix.py hosted-cross --compact)"
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+          python3 - <<'PY_MATRIX'
+          import json
+          matrix = json.load(open("scripts/agena/universal-targets.json", encoding="utf-8"))["hosted_cross"]
+          print(f"Loaded {len(matrix)} hosted target definitions")
+          PY_MATRIX
+
   cross-tool:
     name: Build pinned cross tool
     runs-on: ubuntu-latest
@@ -34,22 +56,17 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  representative-targets:
+  hosted-targets:
     name: check ${{ matrix.target }}
-    needs: cross-tool
+    needs:
+      - targets
+      - cross-tool
     runs-on: ubuntu-latest
     timeout-minutes: 90
     strategy:
       fail-fast: false
-      max-parallel: 16
-      matrix:
-        include:
-          - target: mipsel-unknown-linux-gnu
-            build_std: true
-          - target: x86_64-unknown-illumos
-            build_std: false
-          - target: sparcv9-sun-solaris
-            build_std: false
+      max-parallel: 20
+      matrix: ${{ fromJSON(needs.targets.outputs.matrix) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

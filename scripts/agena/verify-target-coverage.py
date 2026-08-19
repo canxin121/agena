@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify that the universal release manifest covers every distributed Rust target."""
+"""Verify that the universal release manifest covers every Rust 1.97 built-in target."""
 from __future__ import annotations
 
 import json
@@ -10,8 +10,8 @@ from pathlib import Path
 MANIFEST = Path(__file__).with_name("universal-targets.json")
 
 
-def rustup_targets() -> set[str]:
-    output = subprocess.check_output(["rustup", "target", "list"], text=True)
+def command_targets(command: list[str]) -> set[str]:
+    output = subprocess.check_output(command, text=True)
     return {line.split()[0] for line in output.splitlines() if line.strip()}
 
 
@@ -21,37 +21,42 @@ def main() -> None:
         "hosted_cross": data["hosted_cross"],
         "native": data["native"],
         "portable": data["portable"],
+        "portable_build_std": data["portable_build_std"],
     }
-    targets_by_group = {name: {row["target"] for row in rows} for name, rows in groups.items()}
-
     all_rows = [row for rows in groups.values() for row in rows]
     counts = Counter(row["target"] for row in all_rows)
     duplicates = sorted(target for target, count in counts.items() if count > 1)
     if duplicates:
         raise SystemExit(f"universal target manifest contains duplicate targets: {duplicates}")
 
-    distributed = rustup_targets()
+    rustc_targets = command_targets(["rustc", "--print", "target-list"])
+    rustup_targets = command_targets(["rustup", "target", "list"])
     covered = set(counts)
-    missing = sorted(distributed - covered)
+
+    missing = sorted(rustc_targets - covered)
+    unknown = sorted(covered - rustc_targets)
     if missing:
-        raise SystemExit(f"Rust distributed targets missing from release manifest: {missing}")
+        raise SystemExit(f"Rust built-in targets missing from release manifest: {missing}")
+    if unknown:
+        raise SystemExit(f"release manifest contains targets unknown to rustc: {unknown}")
 
-    # Targets which aren't in rustup's distributed list are intentional cross-rs
-    # build-std hosted targets. They must never silently leak into native/portable.
-    extra = covered - distributed
-    invalid_extra = sorted(extra - targets_by_group["hosted_cross"])
-    if invalid_extra:
-        raise SystemExit(f"non-distributed targets outside hosted_cross: {invalid_extra}")
+    distributed_missing = sorted(rustup_targets - covered)
+    if distributed_missing:
+        raise SystemExit(f"Rust distributed targets missing from release manifest: {distributed_missing}")
 
-    portable_non_distributed = sorted(targets_by_group["portable"] - distributed)
-    if portable_non_distributed:
-        raise SystemExit(f"portable target has no distributed Rust component: {portable_non_distributed}")
+    portable_build_std = {row["target"] for row in groups["portable_build_std"]}
+    distributed_in_build_std = sorted(portable_build_std & rustup_targets)
+    if distributed_in_build_std:
+        raise SystemExit(
+            f"build-std portable targets unexpectedly have distributed components: {distributed_in_build_std}"
+        )
 
-    print(f"Rust distributed targets covered: {len(distributed)}")
+    print(f"Rust built-in targets covered: {len(rustc_targets)}")
+    print(f"Rust distributed targets: {len(rustup_targets)}")
     print(f"Hosted/cross backend targets: {len(groups['hosted_cross'])}")
     print(f"Native backend targets: {len(groups['native'])}")
-    print(f"Portable core targets: {len(groups['portable'])}")
-    print(f"Additional cross build-std targets: {len(extra)}")
+    print(f"Distributed portable core targets: {len(groups['portable'])}")
+    print(f"Build-std portable core targets: {len(groups['portable_build_std'])}")
     print(f"Total unique release target triples: {len(covered)}")
 
 

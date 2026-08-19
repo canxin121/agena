@@ -79,6 +79,7 @@ jobs:
       hosted: ${{ steps.matrix.outputs.hosted }}
       native: ${{ steps.matrix.outputs.native }}
       portable: ${{ steps.matrix.outputs.portable }}
+      portable_build_std: ${{ steps.matrix.outputs.portable_build_std }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -96,15 +97,18 @@ jobs:
           hosted="$(python3 scripts/agena/target-matrix.py hosted-cross --compact)"
           native="$(python3 scripts/agena/target-matrix.py native --compact)"
           portable="$(python3 scripts/agena/target-matrix.py portable --compact)"
+          portable_build_std="$(python3 scripts/agena/target-matrix.py portable-build-std --compact)"
           echo "hosted=$hosted" >> "$GITHUB_OUTPUT"
           echo "native=$native" >> "$GITHUB_OUTPUT"
           echo "portable=$portable" >> "$GITHUB_OUTPUT"
+          echo "portable_build_std=$portable_build_std" >> "$GITHUB_OUTPUT"
           python3 - <<'PY'
           import json
           data = json.load(open("scripts/agena/universal-targets.json", encoding="utf-8"))
           print(f"Hosted/cross targets: {len(data['hosted_cross'])}")
           print(f"Native targets: {len(data['native'])}")
-          print(f"Portable targets: {len(data['portable'])}")
+          print(f"Distributed portable targets: {len(data['portable'])}")
+          print(f"Build-std portable targets: {len(data['portable_build_std'])}")
           PY
 
   web:
@@ -314,18 +318,57 @@ jobs:
             artifacts/agena/*.sha256
           if-no-files-found: error
 
+  portable-build-std-core:
+    name: build-std portable ${{ matrix.target }}
+    needs:
+      - metadata
+      - targets
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      max-parallel: 32
+      matrix: ${{ fromJSON(needs.targets.outputs.portable_build_std) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.metadata.outputs.source_sha }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          toolchain: 1.97.0
+          components: rust-src
+      - name: Install nightly Cargo driver
+        run: rustup toolchain install nightly-2026-08-18 --profile minimal
+      - name: Build and package target core from Rust 1.97 sources
+        shell: bash
+        run: >-
+          bash scripts/agena/package-portable-core.sh
+          '${{ matrix.target }}'
+          true
+          '${{ matrix.rustflags }}'
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: agena-release-${{ matrix.target }}
+          path: |
+            artifacts/agena/*.tar.gz
+            artifacts/agena/*.sha256
+          if-no-files-found: error
+
   publish:
     if: >-
       always() &&
       needs.metadata.outputs.publish_release == 'true' &&
       needs.hosted-backend.result == 'success' &&
       needs.native-backend.result == 'success' &&
-      needs.portable-core.result == 'success'
+      needs.portable-core.result == 'success' &&
+      needs.portable-build-std-core.result == 'success'
     needs:
       - metadata
       - hosted-backend
       - native-backend
       - portable-core
+      - portable-build-std-core
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -339,8 +382,8 @@ jobs:
           set -euo pipefail
           find release-assets -maxdepth 1 -type f -print | sort
           count="$(find release-assets -maxdepth 1 -type f \( -name '*.tar.gz' -o -name '*.zip' \) | wc -l | tr -d ' ')"
-          if [[ "$count" -lt 117 ]]; then
-            echo "expected at least 117 release archives, found $count" >&2
+          if [[ "$count" -lt 322 ]]; then
+            echo "expected at least 322 release archives, found $count" >&2
             exit 1
           fi
           (

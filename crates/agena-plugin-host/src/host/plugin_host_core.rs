@@ -1105,7 +1105,17 @@ impl PluginHost {
             let plugin_id = plugin.key().to_string();
             let params = serde_json::to_value(&current)
                 .map_err(|e| PluginError::invalid_params(e.to_string()))?;
-            let v = match call_with_timeout(plugin, method::HOOK_COMMAND_BEFORE, params, timeout)
+            let context = HostCallbackContext {
+                plugin_id: Some(plugin_id.clone()),
+                session_id: current.session_id,
+                call_id: current.call_id,
+                workspace_root: current.workspace_root.clone(),
+                ..HostCallbackContext::default()
+            };
+            let call = call_with_timeout(plugin, method::HOOK_COMMAND_BEFORE, params, timeout);
+            let v = match self
+                ._host_handle
+                .run_in_authorized_callback_context(&plugin.key(), context, call)
                 .await
             {
                 Ok(v) => v,
@@ -1842,27 +1852,36 @@ impl PluginHost {
         let timeout = self.timeouts.fast_or(Duration::from_secs(5));
         let session_id = input.session_id;
         let mut runs = Vec::new();
-        let result = dispatcher::chain_patch::<CommandAfterInput, CommandAfterPatch, _>(
-            &self.plugins,
-            method::HOOK_COMMAND_AFTER,
-            HookSubscription::COMMAND_AFTER,
-            timeout,
-            input,
-            |inp, patch| {
-                if let Some(s) = patch.stdout {
-                    inp.stdout = s;
-                }
-                if let Some(s) = patch.stderr {
-                    inp.stderr = s;
-                }
-                if patch.exit_code.is_some() {
-                    inp.exit_code = patch.exit_code;
-                }
-            },
-            session_id,
-            &mut runs,
-        )
-        .await;
+        let result =
+            dispatcher::chain_patch_in_context::<CommandAfterInput, CommandAfterPatch, _, _>(
+                &self.plugins,
+                method::HOOK_COMMAND_AFTER,
+                HookSubscription::COMMAND_AFTER,
+                timeout,
+                input,
+                |inp, patch| {
+                    if let Some(s) = patch.stdout {
+                        inp.stdout = s;
+                    }
+                    if let Some(s) = patch.stderr {
+                        inp.stderr = s;
+                    }
+                    if patch.exit_code.is_some() {
+                        inp.exit_code = patch.exit_code;
+                    }
+                },
+                |plugin, input| {
+                    Some(HostCallbackContext {
+                        plugin_id: Some(plugin.key().to_string()),
+                        session_id: input.session_id,
+                        ..HostCallbackContext::default()
+                    })
+                },
+                Some(&self._host_handle),
+                session_id,
+                &mut runs,
+            )
+            .await;
         self.push_hook_runs(runs);
         result.map_err(transport_to_plugin_error)
     }

@@ -920,6 +920,7 @@ impl PluginTransport for StdioTransport {
             id: req_id.clone(),
             method: method.to_string(),
             params: Some(params),
+            context: crate::sdk::host_api::current_host_callback_context(),
         };
         let body = serde_json::to_vec(&req)?;
         let (tx, rx) = oneshot::channel();
@@ -965,6 +966,7 @@ impl PluginTransport for StdioTransport {
             id: req_id.clone(),
             method: method::HOOK_TOOL_INVOKE_STREAM.to_string(),
             params: Some(serde_json::to_value(&input)?),
+            context: crate::sdk::host_api::current_host_callback_context(),
         };
         let body = serde_json::to_vec(&req)?;
         let (tx, rx) = oneshot::channel();

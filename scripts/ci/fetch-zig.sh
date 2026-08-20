@@ -21,7 +21,7 @@ if ! "$TOOL_ROOT/bin/python" -c 'import ziglang' >/dev/null 2>&1; then
   "$TOOL_ROOT/bin/pip" install \
     --disable-pip-version-check \
     --no-input \
-    "ziglang==$ZIG_VERSION"
+    "ziglang==$ZIG_VERSION" >&2
 fi
 
 ZIG="$($TOOL_ROOT/bin/python -c 'import pathlib, ziglang; print(pathlib.Path(ziglang.__file__).with_name("zig"))')"

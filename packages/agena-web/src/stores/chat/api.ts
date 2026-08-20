@@ -8,6 +8,7 @@
 // server rejects unknown fields, including the old Agent/profile selection.
 
 import { apiJson } from '../../lib/api'
+import { isRunInFlight, isRunTerminal } from '../../lib/chatRunState'
 import { normalizeSessionState } from '../../types/chat'
 import type { JsonObject, JsonValue } from '@/types/json'
 import type {
@@ -243,15 +244,15 @@ function entriesFromParts(sessionId: string, parts: JsonValue[], folds: MessageF
     if (kind === 'run') {
       const created = typeof part.created_at_ms === 'number' ? part.created_at_ms : now
       const finished = typeof part.finished_at_ms === 'number' ? part.finished_at_ms : undefined
-      const runState = str(part.state) || 'pending'
+      const runState = str(part.state)
       const info: MessageInfo = {
         id: partIdStr,
         sessionID: sessionId,
         role,
         runId: partId,
-        runState,
+        ...(runState ? { runState } : {}),
         runContent: content,
-        ...(runState === 'pending' || runState === 'in_progress' || runState === 'running' ? {} : { finish: runState }),
+        ...(isRunTerminal(runState) ? { finish: runState } : {}),
         time: { created, ...(typeof finished === 'number' ? { completed: finished } : {}) },
       }
       // Run marker metadata can carry provider/model identity.
@@ -383,7 +384,7 @@ export function normalizeAgenaPart(
 ): MessagePart | null {
   const part = asRecord(raw)
   const kind = str(part.kind)
-  const state = str(part.state) || 'completed'
+  const state = str(part.state)
   const content = part.content
   const createdMs = typeof part.created_at_ms === 'number' ? part.created_at_ms : Date.now()
   const startedMs = typeof part.started_at_ms === 'number' ? part.started_at_ms : createdMs
@@ -397,7 +398,7 @@ export function normalizeAgenaPart(
     sessionID: sessionId,
     messageID: messageId,
     type: 'text',
-    partState: state,
+    ...(state ? { partState: state } : {}),
     agenaKind: kind,
     agenaRole: str(part.role) || 'assistant',
     agenaSummary,
@@ -410,11 +411,12 @@ export function normalizeAgenaPart(
     },
   }
 
-  const toStatus = (s: string): 'pending' | 'running' | 'completed' | 'error' => {
+  const toStatus = (s: string): 'pending' | 'running' | 'completed' | 'error' | '' => {
     if (s === 'pending') return 'pending'
-    if (s === 'in_progress') return 'running'
+    if (isRunInFlight(s)) return 'running'
     if (s === 'completed') return 'completed'
-    return 'error'
+    if (isRunTerminal(s)) return 'error'
+    return ''
   }
 
   switch (kind) {
@@ -465,18 +467,9 @@ export function normalizeAgenaPart(
       }
       const structuredOutput = result.structured ?? operation.structured
       const title = stringField(operation, ['summary', 'title']) || stringField(display, ['summary', 'title'])
-      const status =
-        resultState === 'pending'
-          ? 'pending'
-          : resultState === 'running'
-            ? 'running'
-            : resultState === 'completed'
-              ? 'completed'
-              : resultState
-                ? 'error'
-                : toStatus(state)
+      const status = toStatus(resultState || state)
       const toolState: JsonObject = {
-        status,
+        ...(status ? { status } : {}),
         input,
         ...(output ? { output } : structuredOutput !== undefined ? { output: structuredOutput } : {}),
         ...(error ? { error } : {}),
@@ -541,7 +534,7 @@ export function normalizeAgenaPart(
         type: 'tool',
         tool: 'skill',
         state: {
-          status: 'completed',
+          ...(toStatus(state) ? { status: toStatus(state) } : {}),
           input: { name },
           ...(description ? { output: description } : {}),
         },
@@ -557,7 +550,7 @@ export function normalizeAgenaPart(
         type: 'tool',
         tool: hook,
         state: {
-          status: toStatus(state),
+          ...(toStatus(state) ? { status: toStatus(state) } : {}),
           input: {},
           ...(title ? { title } : {}),
           ...(output ? { output } : {}),
@@ -586,7 +579,7 @@ export function normalizeAgenaPart(
         type: 'tool',
         tool: 'question',
         state: {
-          status: reply === undefined || reply === null ? toStatus(state) : 'completed',
+          ...(toStatus(state) ? { status: toStatus(state) } : {}),
           input: {
             prompt,
             ...(interaction.options !== undefined ? { options: interaction.options } : {}),
@@ -605,7 +598,7 @@ export function normalizeAgenaPart(
         type: 'tool',
         tool: opKind,
         state: {
-          status: toStatus(state),
+          ...(toStatus(state) ? { status: toStatus(state) } : {}),
           input: {},
           ...(title ? { title } : {}),
           ...(output ? { output } : {}),

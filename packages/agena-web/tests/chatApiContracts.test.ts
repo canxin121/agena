@@ -248,3 +248,23 @@ test('file references retain Agena URL attachment sources', () => {
   assert.equal(part?.mime, 'image/png')
   assert.equal(part?.url, 'https://example.test/result.png')
 })
+
+test('missing or unknown wire state is not invented as completed, pending, or failed', () => {
+  const textPart = normalizeAgenaPart('90', '7', '89', {
+    part_id: 90,
+    kind: 'text',
+    role: 'assistant',
+    content: { text: 'server omitted state' },
+  })
+  assert.equal(textPart?.partState, undefined)
+
+  const toolPart = normalizeAgenaPart('91', '7', '89', {
+    part_id: 91,
+    kind: 'tool_call',
+    role: 'assistant',
+    state: 'future_state',
+    content: { name: 'future.tool', input: {} },
+  })
+  assert.deepEqual(toolPart?.state, { input: {} })
+  assert.equal(toolPart?.partState, 'future_state')
+})

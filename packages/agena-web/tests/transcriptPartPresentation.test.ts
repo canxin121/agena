@@ -118,6 +118,16 @@ describe('TUI-parity part presentation', () => {
     expect(partStatusPresentation('failed')).toMatchObject({ icon: '×', tone: 'danger', terminal: true })
   })
 
+  test('does not assign a failure or pending glyph to unknown status values', () => {
+    expect(partStatusPresentation('')).toMatchObject({ icon: '', label: '', tone: 'muted', terminal: false })
+    expect(partStatusPresentation('future_state')).toMatchObject({
+      icon: '',
+      label: '',
+      tone: 'muted',
+      terminal: false,
+    })
+  })
+
   test('projects web search structured results once and suppresses duplicate model/log output', () => {
     const structured = {
       query: 'agena',

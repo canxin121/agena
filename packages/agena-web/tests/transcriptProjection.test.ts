@@ -116,6 +116,38 @@ describe('TUI-parity transcript projection', () => {
     expect(failed.at(-1)?.title).toBe('Response failed')
   })
 
+  test('uses the latest backend run state when adjacent assistant rounds are folded', () => {
+    const failed = message('40', 'assistant', [part('41', 'text', { text: 'partial response' })], 'failed')
+    failed.info.error = { message: 'older failed attempt' }
+    const running = message('42', 'assistant', [], 'in_progress')
+    delete running.info.finish
+
+    const blocks = projectTranscriptBlocks([failed, running], {
+      showReasoning: true,
+      showJustification: true,
+      revert: null,
+    })
+    const folded = blocks[0]?.kind === 'message' ? blocks[0] : null
+
+    expect(blocks).toHaveLength(1)
+    expect(folded?.runIds).toEqual(['40', '42'])
+    expect(folded?.message.info.runState).toBe('in_progress')
+    expect(folded?.message.info.finish).toBeUndefined()
+    expect(folded?.message.info.error).toBeUndefined()
+    expect(folded?.displayParts.some((item) => item.title === 'Response failed')).toBe(false)
+  })
+
+  test('does not turn an unknown backend run state into a synthetic failure', () => {
+    const blocks = projectTranscriptBlocks([message('50', 'assistant', [], 'future_state')], {
+      showReasoning: true,
+      showJustification: true,
+      revert: null,
+    })
+    const projected = blocks[0]?.kind === 'message' ? blocks[0].displayParts : []
+
+    expect(projected).toEqual([])
+  })
+
   test('keeps pending operation interactions visible and expanded', () => {
     const blocks = projectTranscriptBlocks(
       [

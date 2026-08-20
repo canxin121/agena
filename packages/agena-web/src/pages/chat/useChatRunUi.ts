@@ -3,6 +3,7 @@ import type { AttachedFile } from './useChatAttachments'
 import type { RenderBlock } from './useChatRenderBlocks'
 import { i18n } from '@/i18n'
 import { formatCurrencyUSD, formatTimeHMS } from '@/i18n/intl'
+import { isAssistantMessageStreaming } from '@/lib/chatRunState'
 import { resolveComposerPrimaryActions } from './composerPrimaryActions'
 import type { SessionState } from '@/types/chat'
 import type { CancellationOutcome } from '@/stores/chat/api'
@@ -205,10 +206,10 @@ export function useChatRunUi(opts: {
     const sid = String(chat.selectedSessionId || '').trim()
     if (!sid) return 'idle'
 
-    // The tagged server state is authoritative. The local submit flag only
-    // covers the short submit-to-refresh window; stale activity events must
-    // never turn Interrupted or Ready back into busy.
-    if (canonicalRunActive.value || awaitingAssistant.value) return 'busy'
+    // The tagged server state is authoritative. Local submit/optimistic
+    // flags describe request delivery only and must not manufacture a running
+    // runtime phase before the server reports one.
+    if (canonicalRunActive.value) return 'busy'
     return 'idle'
   })
 
@@ -379,11 +380,9 @@ export function useChatRunUi(opts: {
       const m = list[i]
       const info = m?.info
       if (!info) continue
-      if (String(info.role) !== 'assistant') continue
+      if (!isAssistantMessageStreaming(info)) continue
       const mid = typeof info.id === 'string' ? String(info.id) : ''
       if (revertId && mid && mid >= revertId) continue
-      const finish = typeof info.finish === 'string' ? info.finish.trim() : ''
-      if (finish) continue
       const created = typeof info.time?.created === 'number' ? info.time.created : 0
       if (cutoff != null && created && created < cutoff) continue
       if (textFromMessageParts(Array.isArray(m.parts) ? m.parts : [])) return true
@@ -414,15 +413,12 @@ export function useChatRunUi(opts: {
     // If activity is visible, that *is* the working indicator.
     if (hasTailActivity.value) return false
 
-    const phase = currentPhase.value
-    const busyLike = phase === 'busy' || canonicalRunActive.value
-    return Boolean(awaitingAssistant.value || busyLike)
+    return canonicalRunActive.value
   })
 
   const sessionEnded = computed(() => {
     return (
       !canonicalRunActive.value &&
-      !awaitingAssistant.value &&
       (stateKind.value === 'ready' || stateKind.value === 'interrupted' || stateKind.value === 'failed')
     )
   })
@@ -432,8 +428,7 @@ export function useChatRunUi(opts: {
     if (!chat.selectedSessionId) return false
     return (
       aborting.value === false &&
-      (currentPhase.value === 'busy' ||
-        awaitingAssistant.value ||
+      (canonicalRunActive.value ||
         Boolean(sessionState.value.kind === 'awaiting_interaction' && sessionState.value.data.execution))
     )
   })

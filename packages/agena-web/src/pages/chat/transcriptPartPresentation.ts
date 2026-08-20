@@ -138,7 +138,7 @@ export function prettyJson(value: unknown): string {
 }
 
 export function partStatusPresentation(statusInput: string): PartStatusPresentation {
-  const status = String(statusInput || 'pending')
+  const status = String(statusInput || '')
     .trim()
     .toLowerCase()
   if (status === 'in_progress' || status === 'running') {
@@ -162,7 +162,10 @@ export function partStatusPresentation(statusInput: string): PartStatusPresentat
   if (status === 'cancelled' || status === 'canceled') {
     return { icon: '–', label: 'cancelled', tone: 'muted', spinning: false, terminal: true }
   }
-  return { icon: '○', label: 'pending', tone: 'pending', spinning: false, terminal: false }
+  if (status === 'pending') {
+    return { icon: '○', label: 'pending', tone: 'pending', spinning: false, terminal: false }
+  }
+  return { icon: '', label: '', tone: 'muted', spinning: false, terminal: false }
 }
 
 /** Decode the API StructuredValue/StructuredObject envelope into ordinary JSON. */

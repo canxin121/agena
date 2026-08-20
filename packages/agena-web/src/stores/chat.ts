@@ -7,6 +7,7 @@ import { binarySearchById, compareChatIds, upsertMessageEntryIn, upsertPart } fr
 import { createSessionRunConfigPersister, loadSessionRunConfigMap } from './chat/runConfig'
 import { STORAGE_RUN_CONFIG } from './chat/storeKeys'
 import { ApiError } from '../lib/api'
+import { isRunTerminal } from '../lib/chatRunState'
 import { setLocalJson, getLocalJson } from '../lib/persist'
 import { useToastsStore } from './toasts'
 import { useDirectoryStore } from './directory'
@@ -1498,18 +1499,16 @@ const useChatStoreDefinition = defineStore('chat', () => {
 
             if (kind === 'run') {
               // New message (turn marker).
-              const runState = readString(part.state as JsonValue) || 'pending'
+              const runState = readString(part.state as JsonValue)
               const content = asRecord(part.content)
               const info: MessageInfo = {
                 id: String(partId),
                 sessionID: sid,
                 role: readString(part.role as JsonValue) || 'assistant',
                 runId: partId,
-                runState,
+                ...(runState ? { runState } : {}),
                 runContent: content,
-                ...(runState === 'pending' || runState === 'in_progress' || runState === 'running'
-                  ? {}
-                  : { finish: runState }),
+                ...(isRunTerminal(runState) ? { finish: runState } : {}),
                 time: { created: readNumber(part.created_at_ms) ?? Date.now() },
               }
               const providerID = readString(content.provider_id as JsonValue)

@@ -7,6 +7,13 @@ import type {
   TranscriptDisplayPart,
   TranscriptPartKind,
 } from '@/components/chat/messageList.types'
+import {
+  isKnownRunState,
+  isRunCancelled,
+  isRunFailureState,
+  isRunInFlight,
+  normalizeRunState,
+} from '../../lib/chatRunState'
 import type { JsonValue } from '@/types/json'
 
 type JsonRecord = Record<string, JsonValue>
@@ -288,15 +295,16 @@ function displayFields(
     return { title, summary, copyText: [title, summary, prettyJson(content)].filter(Boolean).join('\n') }
   }
   if (kind === 'lifecycle') {
-    const state = text(part.partState) || firstText(durablePartContent(part), ['state']) || 'pending'
-    const title =
-      state === 'pending' || state === 'in_progress' || state === 'running'
-        ? 'Response running'
-        : state === 'completed'
-          ? 'Response completed'
-          : state === 'cancelled' || state === 'canceled'
-            ? 'Response cancelled'
-            : 'Response failed'
+    const state = normalizeRunState(text(part.partState) || firstText(durablePartContent(part), ['state']))
+    const title = isRunInFlight(state)
+      ? 'Response running'
+      : state === 'completed'
+        ? 'Response completed'
+        : isRunCancelled(state)
+          ? 'Response cancelled'
+          : isRunFailureState(state)
+            ? 'Response failed'
+            : state
     return { title, summary: '', copyText: title }
   }
   if (kind === 'error') {
@@ -325,7 +333,7 @@ function projectPart(part: MessagePartLike, role: string, answerPartId: string |
     key: `part:${id || compactJson(part).slice(0, 48)}`,
     id,
     kind,
-    status: text(part.partState) || 'completed',
+    status: text(part.partState),
     role: text(part.agenaRole) || role,
     source: part,
     ...fields,
@@ -355,36 +363,12 @@ function lifecyclePart(message: MessageLike, runIds: string[]): TranscriptDispla
   return projectPart(source, 'assistant', null)
 }
 
-function runNeedsLifecycle(state: string, displayParts: TranscriptDisplayPart[]): boolean {
+function runNeedsLifecycle(stateInput: string, displayParts: TranscriptDisplayPart[]): boolean {
+  const state = normalizeRunState(stateInput)
+  if (!isKnownRunState(state)) return false
   if (!displayParts.length) return true
-  if (
-    ![
-      'failed',
-      'cancelled',
-      'canceled',
-      'policy_denied',
-      'user_declined',
-      'capability_unavailable',
-      'tool_unavailable',
-    ].includes(state)
-  ) {
-    return false
-  }
+  if (!isRunFailureState(state) && !isRunCancelled(state)) return false
   return !displayParts.some((part) => part.kind === 'error')
-}
-
-function terminalSeverity(state: string): number {
-  if (['failed', 'policy_denied', 'user_declined', 'capability_unavailable', 'tool_unavailable'].includes(state))
-    return 4
-  if (state === 'cancelled' || state === 'canceled') return 3
-  if (state === 'completed') return 2
-  if (state === 'in_progress' || state === 'running') return 1
-  return 0
-}
-
-function foldRunState(current: string, next: string): string {
-  if ((current === 'cancelled' || current === 'canceled') && next !== current) return next
-  return terminalSeverity(next) > terminalSeverity(current) ? next : current
 }
 
 function cloneMessage(message: MessageLike): MessageLike {
@@ -409,14 +393,24 @@ export function foldAssistantMessages(messages: MessageLike[]): Array<{ message:
       }
       previous.message.parts.sort((a, b) => compareTranscriptIds(String(a.id || ''), String(b.id || '')))
       previous.runIds.push(id)
-      const currentState = text(previous.message.info.runState) || 'pending'
-      const nextState = text(message.info.runState) || text(message.info.finish) || 'pending'
-      const state = foldRunState(currentState, nextState)
-      previous.message.info.runState = state
-      previous.message.info.finish = terminalSeverity(state) >= 2 ? state : ''
-      previous.message.info.time = {
-        ...previous.message.info.time,
-        ...(message.info.time?.completed ? { completed: message.info.time.completed } : {}),
+
+      // Adjacent assistant runs form one visual reply, but their lifecycle is
+      // not cumulative. Keep the latest run marker's server-owned metadata
+      // instead of promoting an older failure over a newer running/completed
+      // run. The first id/created time remain the stable visual block anchor.
+      const firstId = previous.message.info.id
+      const firstCreated = previous.message.info.time?.created
+      previous.message.info = {
+        ...message.info,
+        id: firstId || message.info.id,
+        ...(message.info.time || firstCreated !== undefined
+          ? {
+              time: {
+                ...message.info.time,
+                ...(firstCreated !== undefined ? { created: firstCreated } : {}),
+              },
+            }
+          : {}),
       }
       continue
     }

@@ -398,14 +398,11 @@ fn parse_inline_tool_operation_config(
                 let Some(ident) = path.get_ident() else {
                     return Err(syn::Error::new_spanned(path, "expected identifier"));
                 };
-                match ident.to_string().as_str() {
-                    other => {
-                        return Err(syn::Error::new_spanned(
-                            ident,
-                            format!("unsupported tool operation flag '{other}'"),
-                        ));
-                    }
-                }
+                let other = ident.to_string();
+                return Err(syn::Error::new_spanned(
+                    ident,
+                    format!("unsupported tool operation flag '{other}'"),
+                ));
             }
         }
     }

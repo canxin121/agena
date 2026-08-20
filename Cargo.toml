@@ -325,8 +325,8 @@ ast-grep-language = { version = "0.44.1", default-features = false, features = [
 ] }
 tree-sitter = "0.26.12"
 rmcp = "3.1.3"
-wasmtime = { version = "46.0.1", default-features = false, features = ["cranelift", "runtime", "std"] }
-wasmtime-wasi = { version = "46.0.1", default-features = false, features = ["p1"] }
+wasmtime = { version = "46.0.2", default-features = false, features = ["cranelift", "runtime", "std"] }
+wasmtime-wasi = { version = "46.0.2", default-features = false, features = ["p1"] }
 
 [workspace.lints.rust]
 unused_must_use = "deny"

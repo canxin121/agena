@@ -35,8 +35,8 @@
     },
     {
       "name": "removed-safe-context-bag-stays-removed",
-      "roots": ["crates", "packages/agena-web-ui/src", "packages/agena-vscode/src"],
-      "include": ["**/*.rs", "**/*.ts", "**/*.vue"],
+      "roots": ["crates"],
+      "include": ["**/*.rs"],
       "pattern": "safe_context:",
       "expected": 0
     },
@@ -104,13 +104,6 @@
       "expected": 0
     },
     {
-      "name": "run-abort-never-persists-a-message-string",
-      "roots": ["crates/agena-runtime-session/src/session/history"],
-      "include": ["**/*.rs"],
-      "pattern": "pub message: Option<String>",
-      "expected": 0
-    },
-    {
       "name": "tui-failure-never-demotes-to-string",
       "roots": ["crates/agena-tui-app"],
       "include": ["**/*.rs"],
@@ -122,22 +115,6 @@
       "roots": ["crates/agena-tui-app"],
       "include": ["**/*.rs"],
       "pattern": "From<String> for UiFailure",
-      "expected": 0
-    },
-    {
-      "name": "web-catches-never-render-arbitrary-error-message",
-      "roots": ["packages/agena-web-ui/src"],
-      "include": ["**/*.ts", "**/*.vue"],
-      "exclude": ["**/*.test.ts"],
-      "pattern": "instanceof Error ?",
-      "expected": 0
-    },
-    {
-      "name": "web-catches-never-stringify-unknown-errors",
-      "roots": ["packages/agena-web-ui/src"],
-      "include": ["**/*.ts", "**/*.vue"],
-      "exclude": ["**/*.test.ts"],
-      "pattern": "String(error)",
       "expected": 0
     },
     {

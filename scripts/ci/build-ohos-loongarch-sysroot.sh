@@ -35,9 +35,11 @@ valid_sysroot() {
 
 mkdir -p "$ROOT"
 if ! valid_sysroot; then
+  echo "OpenHarmony LoongArch sysroot: preparing pinned musl source $MUSL_COMMIT" >&2
   if [[ ! -f "$ARCHIVE" ]] || [[ "$(sha256sum "$ARCHIVE" | awk '{print $1}')" != "$MUSL_SHA256" ]]; then
     tmp_archive="$ARCHIVE.tmp"
     rm -f "$tmp_archive"
+    echo "OpenHarmony LoongArch sysroot: downloading fixed musl archive" >&2
     curl --fail --location --retry 5 --retry-all-errors \
       --connect-timeout 30 --max-time 600 \
       "$MUSL_URL" -o "$tmp_archive"
@@ -49,29 +51,47 @@ if ! valid_sysroot; then
     fi
     mv "$tmp_archive" "$ARCHIVE"
   fi
+  echo "OpenHarmony LoongArch sysroot: verified archive $(sha256sum "$ARCHIVE" | awk '{print $1}')" >&2
 
+  echo "OpenHarmony LoongArch sysroot: extracting musl source" >&2
   rm -rf "$SOURCE"
   mkdir -p "$SOURCE"
+  tar -tzf "$ARCHIVE" >/dev/null
   tar -xzf "$ARCHIVE" --strip-components=1 -C "$SOURCE"
+  [[ -x "$SOURCE/configure" ]] || {
+    echo "ERROR: OpenHarmony musl archive did not contain configure at $SOURCE/configure" >&2
+    exit 1
+  }
 
+  echo "OpenHarmony LoongArch sysroot: configuring musl with pinned Clang" >&2
   rm -rf "$SYSROOT"
   mkdir -p "$SYSROOT"
+  TARGET_FLAGS=(--target=loongarch64-linux-gnu)
+  COMPILER_RT="$("$CLANG" "${TARGET_FLAGS[@]}" -print-file-name=libclang_rt.builtins-loongarch64.a)"
+  [[ -f "$COMPILER_RT" ]] || {
+    echo "ERROR: pinned Clang has no LoongArch compiler runtime: $COMPILER_RT" >&2
+    "$CLANG" --version >&2 || true
+    exit 1
+  }
   (
     cd "$SOURCE"
-    CC="$CLANG --target=loongarch64-linux-gnu" \
+    CC="$CLANG ${TARGET_FLAGS[*]}" \
     AR="$AR" \
     RANLIB="$RANLIB" \
+    LIBCC="$COMPILER_RT" \
       ./configure \
         --target=loongarch64-linux-musl \
         --prefix="$SYSROOT/usr" \
         --syslibdir=/lib \
         --disable-wrapper
+    echo "OpenHarmony LoongArch sysroot: building musl" >&2
     make -j"$(getconf _NPROCESSORS_ONLN)" \
-      CC="$CLANG --target=loongarch64-linux-gnu" \
+      CC="$CLANG ${TARGET_FLAGS[*]}" \
       AR="$AR" \
       RANLIB="$RANLIB" \
-      LIBCC= \
+      LIBCC="$COMPILER_RT" \
       LDFLAGS="-fuse-ld=lld -rtlib=compiler-rt" >&2
+    echo "OpenHarmony LoongArch sysroot: installing musl" >&2
     make install >&2
   )
 

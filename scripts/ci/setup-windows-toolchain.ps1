@@ -63,9 +63,52 @@ function Set-EnvFromVsDevCmd {
   $TargetBin = Join-Path $VCToolsRoot "bin\$HostToolArch\$Arch"
   $Compiler = Join-Path $TargetBin "cl.exe"
   if (-not (Test-Path $Compiler)) {
-    throw "MSVC target compiler missing for host=$HostArch target=${Arch}: $Compiler"
+    if ($Arch -ne "arm") {
+      throw "MSVC target compiler missing for host=$HostArch target=${Arch}: $Compiler"
+    }
+
+    # Recent hosted VS images can ship the ARM MSVC libraries and Windows SDK
+    # without the legacy ARM cl.exe.  Clang-cl is the supported MSVC-compatible
+    # compiler for this case: force the ARMv7 Windows MSVC target so an x64
+    # host compiler can never silently produce x64 objects for this target.
+    $ClangCandidates = @(
+      (Join-Path $Install "VC\Tools\Llvm\x64\bin\clang-cl.exe"),
+      (Join-Path $Install "VC\Tools\Llvm\bin\clang-cl.exe"),
+      (Join-Path ${env:ProgramFiles} "LLVM\bin\clang-cl.exe")
+    )
+    $ClangCl = $null
+    foreach ($Candidate in $ClangCandidates) {
+      if (Test-Path $Candidate) {
+        $ClangCl = $Candidate
+        break
+      }
+    }
+    if (-not $ClangCl) {
+      $PathClang = Get-Command clang-cl.exe -ErrorAction SilentlyContinue
+      if ($PathClang) {
+        $ClangCl = $PathClang.Source
+      }
+    }
+    if (-not $ClangCl) {
+      throw "MSVC ARM target compiler missing ($Compiler) and no clang-cl.exe was found in VS/LLVM paths"
+    }
+
+    $WrapperRoot = Join-Path $env:RUNNER_TEMP "agena-msvc-clang\$TargetTriple"
+    New-Item -ItemType Directory -Force -Path $WrapperRoot | Out-Null
+    $Compiler = Join-Path $WrapperRoot "clang-cl-arm.cmd"
+    $WrapperText = "@echo off`r`n`"$ClangCl`" --target=thumbv7a-pc-windows-msvc %*`r`nexit /b %ERRORLEVEL%`r`n"
+    [IO.File]::WriteAllText($Compiler, $WrapperText, [Text.Encoding]::ASCII)
+    Write-Host "Using clang-cl ARMv7 MSVC fallback: $ClangCl --target=thumbv7a-pc-windows-msvc"
   }
-  $env:PATH = "$TargetBin;$env:PATH"
+  if (Test-Path $TargetBin) {
+    $env:PATH = "$TargetBin;$env:PATH"
+  }
+  # link.exe is a host tool even when it links ARM COFF.  Keep it available
+  # explicitly when the ARM compiler directory is absent from the VS image.
+  $HostLinkBin = Join-Path $VCToolsRoot "bin\$HostToolArch\x64"
+  if (Test-Path $HostLinkBin) {
+    $env:PATH = "$HostLinkBin;$env:PATH"
+  }
   $env:VCToolsInstallDir = "$VCToolsRoot\"
 
   # Preserve the SDK choices made by VsDevCmd while making the target MSVC
@@ -82,6 +125,9 @@ function Set-EnvFromVsDevCmd {
     $env:LIB = "$VCToolsLib;$env:LIB"
   } else {
     $env:LIB = $VCToolsLib
+  }
+  if (-not (Test-Path $VCToolsLib)) {
+    throw "MSVC target library directory missing for host=$HostArch target=${Arch}: $VCToolsLib"
   }
 
   $Key = $TargetTriple.Replace("-", "_")

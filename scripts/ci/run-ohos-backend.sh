@@ -11,16 +11,17 @@ case "$(uname -s)-$(uname -m)" in
   *) echo "ERROR: OpenHarmony SDK builder requires Linux x86_64 host" >&2; exit 2 ;;
 esac
 
-case "$TARGET" in
-  loongarch64-unknown-linux-ohos)
-    SDK_RELEASE=6.0.0.2-Release
-    SDK_CACHE_KEY=6.0.0.2
-    ;;
-  *)
-    SDK_RELEASE=5.0.0-Release
-    SDK_CACHE_KEY=5.0.0
-    ;;
-esac
+if [[ "$TARGET" == loongarch64-unknown-linux-ohos ]]; then
+  PINNED_CLANG="$(bash scripts/ci/fetch-pinned-clang.sh)"
+  SYSROOT="$(bash scripts/ci/build-ohos-loongarch-sysroot.sh "$PINNED_CLANG")"
+  CLANG="$PINNED_CLANG/bin/clang"
+  CLANGXX="$PINNED_CLANG/bin/clang++"
+  AR="$PINNED_CLANG/bin/llvm-ar"
+  clang_target=loongarch64-linux-ohos
+  extra=()
+else
+  SDK_RELEASE=5.0.0-Release
+  SDK_CACHE_KEY=5.0.0
 
 ROOT="${RUNNER_TEMP:-/tmp}/agena-ohos-sdk/$SDK_CACHE_KEY"
 ARCHIVE="$ROOT/ohos-sdk-windows_linux-public.tar.gz"
@@ -63,17 +64,8 @@ if not archive.exists() or digest(archive) != expected:
 PY
   rm -rf "$SDK" "$ROOT/linux"
   mkdir -p "$SDK"
-  if [[ "$SDK_CACHE_KEY" == 5.0.0 ]]; then
-    native_zip=linux/native-linux-x64-5.0.0.71-Release.zip
-    tar -xzf "$ARCHIVE" -C "$ROOT" "$native_zip"
-  else
-    # OpenHarmony patch releases include the native component's internal build
-    # number in the zip filename. Match the single official Linux native SDK
-    # component instead of coupling this builder to that incidental build id.
-    native_zip="$(tar -tzf "$ARCHIVE" | grep -E '(^|/)native-linux-x64-[^/]+\.zip$' | head -1)"
-    [[ -n "$native_zip" ]] || { echo "ERROR: native Linux component missing from OpenHarmony SDK" >&2; exit 1; }
-    tar -xzf "$ARCHIVE" -C "$ROOT" "$native_zip"
-  fi
+  native_zip=linux/native-linux-x64-5.0.0.71-Release.zip
+  tar -xzf "$ARCHIVE" -C "$ROOT" "$native_zip"
   unzip -q "$ROOT/$native_zip" -d "$SDK"
   rm -rf "$ROOT/linux"
 fi
@@ -93,12 +85,11 @@ case "$TARGET" in
   armv7-unknown-linux-ohos)
     clang_target=arm-linux-ohos
     extra=(-march=armv7-a -mfloat-abi=softfp -mtune=generic-armv7-a -mthumb) ;;
-  loongarch64-unknown-linux-ohos)
-    clang_target=loongarch64-linux-ohos; extra=() ;;
   x86_64-unknown-linux-ohos)
     clang_target=x86_64-linux-ohos; extra=() ;;
   *) echo "ERROR: unsupported OHOS target: $TARGET" >&2; exit 2 ;;
 esac
+fi
 
 WRAP="${RUNNER_TEMP:-/tmp}/agena-ohos-wrappers/$TARGET"
 mkdir -p "$WRAP"

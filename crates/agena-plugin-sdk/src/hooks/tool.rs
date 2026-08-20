@@ -101,6 +101,42 @@ pub struct ToolAfterPatch {
     pub metadata: BTreeMap<String, String>,
 }
 
+// ── tool.render ────────────────────────────────────────────────────────────
+
+/// Pure runtime projection input. The host sends the original invocation
+/// input and the one durable raw result; plugins must not read or mutate the
+/// session record while rendering.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ToolRenderInput {
+    pub tool_name: String,
+    pub input: serde_json::Value,
+    pub output: agena_domain::RawOutput,
+}
+
+/// Human-facing projection owned by the tool/plugin.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(deny_unknown_fields)]
+pub struct ToolHumanPresentation {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub title: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub summary: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blocks: Vec<agena_domain::ViewBlock>,
+}
+
+/// Optional plugin-owned projections. Each missing side independently falls
+/// back to the runtime's tool renderer and then the system renderer.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(deny_unknown_fields)]
+pub struct ToolRenderOutput {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub human: Option<ToolHumanPresentation>,
+}
+
 // ── tool.execute.failure ───────────────────────────────────────────────────
 
 /// Fired when a tool execution fails. Notification — no patch.

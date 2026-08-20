@@ -962,13 +962,12 @@ impl OpenAiTransport {
 mod tool_api_history_tests {
     use super::{OpenAiTransport, ProviderError, validate_responses_input};
     use agena_domain::ToolInvocation;
-    use agena_domain::ToolOutput;
     use agena_domain::{StructuredObject, TimeRange};
     use agena_provider::CompletionRequest;
     use agena_runtime_contracts::part::OperationPart;
     use agena_runtime_contracts::provider_state::PartProviderState;
     use agena_storage::store::{Part, PartRole, PartState, PartVisibility};
-    use serde_json::{Map, Value};
+    use serde_json::Value;
 
     fn part(kind: &str, role: PartRole, state: PartState, content: Value) -> Part {
         Part {
@@ -1004,50 +1003,24 @@ mod tool_api_history_tests {
     /// `tool_api_call`, mirroring the session serializer
     /// (`tool_call_from_operation`).
     fn tool_call_content(operation: &OperationPart) -> Value {
-        let mut object = Map::new();
-        object.insert(
-            "name".to_owned(),
-            Value::String(operation.invocation.name.clone()),
-        );
-        if let Some(plugin) = &operation.invocation.plugin_name {
-            object.insert("plugin".to_owned(), Value::String(plugin.clone()));
-        }
-        object.insert(
-            "input".to_owned(),
-            Value::from(operation.invocation.input.clone()),
-        );
-        object.insert(
-            "operation".to_owned(),
-            serde_json::to_value(operation).expect("operation is JSON serializable"),
-        );
-        if let Some(api_call) = &operation.invocation.tool_api_call {
-            object.insert(
-                "tool_api_call".to_owned(),
-                serde_json::to_value(api_call).expect("tool api call is JSON serializable"),
-            );
-        }
-        Value::Object(object)
+        agena_runtime_contracts::part_content::tool_call_from_operation(operation).as_value()
     }
 
     fn completed_operation(
         call_id: i64,
         invocation: ToolInvocation,
-        title: &str,
-        summary: &str,
+        _title: &str,
+        _summary: &str,
         output_text: &str,
         operation_id: Option<&str>,
     ) -> OperationPart {
         let mut operation = OperationPart::completed(
             call_id,
             invocation,
-            agena_runtime_contracts::part::OperationCompletion::new(
-                title.to_owned(),
-                summary.to_owned(),
-                output_text.to_owned(),
-                Vec::new(),
-                Vec::new(),
-                ToolOutput::default(),
-            ),
+            agena_domain::RawOutput {
+                payload: Some(serde_json::json!({ "text": output_text.to_owned() })),
+                ..Default::default()
+            },
             TimeRange::default(),
         );
         // The session serializer stashes the provider operation id inside the

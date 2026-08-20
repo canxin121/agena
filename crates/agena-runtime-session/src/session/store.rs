@@ -834,8 +834,9 @@ pub(crate) fn parts_into_runs(parts: &[Part]) -> Vec<Vec<Part>> {
 }
 
 /// The key under which the adapter persists a part's provider `operation_id`
-/// (the tool-call id used to correlate `tool_call` ↔ `tool_result` across a
-/// transcript). The v2 parts schema has no column for it (design 4.1), so it
+/// (the provider tool-call id used to correlate an invocation with the
+/// ephemeral provider result emitted from that same `tool_call` part). The v2
+/// parts schema has no column for it (design 4.1), so it
 /// rides inside the rich `OperationPart.metadata` map — a reserved key the
 /// engine never treats as its own. This is the adapter's private contract and
 /// is invisible to everything that reads `parts.content` as the canonical
@@ -852,7 +853,6 @@ pub(crate) fn typed_content_to_value(content: &TypedContent) -> Result<Value, Ap
         TypedContent::Text(part) => part.as_value(),
         TypedContent::Think(part) => part.as_value(),
         TypedContent::ToolCall(part) => part.as_value(),
-        TypedContent::ToolResult(part) => part.as_value(),
         TypedContent::FileRef(part) => part.as_value(),
         TypedContent::PasteRef(part) => {
             serde_json::to_value(part).expect("paste ref content is always JSON serializable")
@@ -897,13 +897,10 @@ fn part_summary(content: &TypedContent) -> Option<String> {
     match content {
         TypedContent::Text(text) => truncate(&text.text),
         TypedContent::Think(think) => truncate(&reasoning_from_think(think).preferred_text()),
-        TypedContent::ToolCall(tool_call) => {
-            let operation = part_content::operation_from_tool_call(tool_call);
-            operation
-                .error_message()
-                .or_else(|| (!operation.summary.is_empty()).then_some(operation.summary.as_str()))
-                .and_then(truncate)
-        }
+        // Tool failures already live in `content.error`. Copying them into the
+        // generic summary column would create a second durable representation
+        // of the same fact.
+        TypedContent::ToolCall(_) => None,
         TypedContent::Error(error) => {
             truncate(&part_content::user_problem_from_error(error).user.fallback)
         }
@@ -926,7 +923,6 @@ fn part_summary(content: &TypedContent) -> Option<String> {
         }
         TypedContent::Run(_) => None,
         TypedContent::PasteRef(paste) => truncate(&paste.text),
-        TypedContent::ToolResult(result) => truncate(&result.output),
         TypedContent::Compaction(compaction) => {
             truncate(compaction.summary.as_deref().unwrap_or_default())
         }
@@ -952,8 +948,8 @@ fn truncate(value: &str) -> Option<String> {
 /// Decode the canonical JSON payload stored on a part into its typed content
 /// shape, dispatching on the part's `kind` column through the typed content
 /// layer in `agena-runtime-contracts` ([`agena_runtime_contracts::part_content::decode`]).
-/// Rich v1 payloads ride losslessly in the typed struct's `extra` bucket and
-/// are recovered on demand by the `*_from_*` mirrors in this module.
+/// Tool calls are strict: removed result/presentation keys and the removed
+/// standalone `tool_result` kind fail instead of being migrated.
 pub(crate) fn typed_content_from_value(
     kind: &str,
     value: &Value,
@@ -962,28 +958,11 @@ pub(crate) fn typed_content_from_value(
         .map_err(|error| AppError::Internal(format!("decode part content from store: {error}")))
 }
 
-/// Project a v1 [`OperationPart`] onto the canonical `tool_call` shape: the
-/// invocation identity as named keys, and the full v1 operation payload
-/// losslessly under `extra["operation"]` (the result envelope, details,
-/// lifecycle and authorization have no canonical home).
+/// Project an [`OperationPart`] onto the strict canonical `tool_call` shape:
+/// invocation/control facts plus one optional raw output. No model or human
+/// presentation is serialized.
 pub(crate) fn tool_call_from_operation(operation: &OperationPart) -> part_content::ToolCallContent {
-    let mut extra = BTreeMap::new();
-    extra.insert(
-        "operation".to_owned(),
-        serde_json::to_value(operation).expect("operation payload is always JSON serializable"),
-    );
-    if let Some(api_call) = &operation.invocation.tool_api_call {
-        extra.insert(
-            "tool_api_call".to_owned(),
-            serde_json::to_value(api_call).expect("tool api call is always JSON serializable"),
-        );
-    }
-    part_content::ToolCallContent {
-        name: operation.invocation.name.clone(),
-        plugin: operation.invocation.plugin_name.clone(),
-        input: Value::from(operation.invocation.input.clone()),
-        extra,
-    }
+    part_content::tool_call_from_operation(operation)
 }
 
 /// Project a v1 [`AttachmentPart`] onto the canonical `file_ref` shape: the
@@ -1691,7 +1670,6 @@ mod tests {
                 "builtin",
                 StructuredObject::try_from(serde_json::json!({"file_path": "/tmp/x.txt"})).unwrap(),
             ),
-            "Read file",
             TimeRange {
                 start_ms: 1000,
                 end_ms: Some(2000),
@@ -1701,19 +1679,24 @@ mod tests {
             OPERATION_ID_METADATA_KEY.to_owned(),
             Value::String("op-42".to_owned()),
         );
-        operation.result.structured = Some(serde_json::json!({"lines": 3}));
-        operation.result.model_preview.text = "3 lines".to_owned();
-        operation.result.state = agena_domain::ToolResultState::Completed;
+        operation.output = Some(agena_domain::RawOutput {
+            payload: Some(serde_json::json!({"lines": 3})),
+            ..Default::default()
+        });
+        operation.state = agena_domain::ToolResultState::Completed;
         let content = TypedContent::ToolCall(tool_call_from_operation(&operation));
 
         // Serialize via the typed canonical shape, then rebuild.
         let value = typed_content_to_value(&content).unwrap();
 
-        // Canonical named keys are present; the rich payload is an extra key.
+        // Canonical named keys are present; the single payload is the only
+        // output fact (no operation bucket, no result envelope).
         assert_eq!(value["name"], serde_json::json!("fs.read"));
         assert_eq!(value["plugin"], serde_json::json!("builtin"));
         assert_eq!(value["input"]["file_path"], serde_json::json!("/tmp/x.txt"));
-        assert!(value.get("operation").is_some());
+        assert_eq!(value["output"]["payload"]["lines"], serde_json::json!(3));
+        assert!(value.get("operation").is_none());
+        assert!(value.get("result").is_none());
 
         let back = typed_content_from_value("tool_call", &value).unwrap();
         let TypedContent::ToolCall(tool_call) = back else {
@@ -1730,6 +1713,44 @@ mod tests {
                 .get(OPERATION_ID_METADATA_KEY)
                 .and_then(Value::as_str),
             Some("op-42")
+        );
+    }
+
+    #[test]
+    fn tool_part_does_not_duplicate_failure_in_summary_column() {
+        let operation = OperationPart::failed(
+            9,
+            ToolInvocation::plugin_named("fs.read", "builtin", StructuredObject::default()),
+            agena_failure::Failure::new(
+                agena_failure::FailureCode::new("tool.internal"),
+                agena_failure::FailureCategory::Internal,
+                agena_failure::FailureResponsibility::System,
+                agena_failure::RetryDirective::UseAlternative,
+                agena_failure::RecoveryDirective::ChooseAlternative,
+                agena_failure::FailureImpact::OperationFailed,
+                agena_failure::UserPresentation::new(
+                    "tool-internal-failure",
+                    "the original tool failure",
+                ),
+            ),
+            agena_domain::RawOutput::text("the original raw result"),
+            TimeRange::default(),
+        );
+        let content = TypedContent::ToolCall(tool_call_from_operation(&operation));
+
+        let part = new_part_from_content(
+            "tool_call",
+            PartRole::Assistant,
+            &content,
+            PartState::Failed,
+        )
+        .expect("canonical tool part");
+
+        assert!(part.summary.is_none());
+        assert!(part.rendered_markdown.is_none());
+        assert_eq!(
+            part.content["error"]["failure"]["user"]["fallback"],
+            "the original tool failure"
         );
     }
 }

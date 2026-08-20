@@ -4,15 +4,14 @@ use super::{
     ProviderPromptAnchor, ResolvedPendingTool, SessionManager, SessionManagerState,
     SessionPendingTool, SessionRunOptions, SessionRunRequest, SessionRunTermination,
     StreamingToolExecution, ToolError, ToolInvocationExecution, ToolPermissionCheck, Utc,
-    ask_user_title, assistant_message_id, background_operation_from_execution,
-    background_operation_id, completed_lifecycle, execution_control_to_app_error,
-    inherit_operation_context, is_authorization_phase_title, operation_authorization,
-    operation_blocks_from_tool_output, operation_from_part, operation_permission_approved_actions,
+    assistant_message_id, background_operation_from_execution, background_operation_id,
+    completed_lifecycle, execution_control_to_app_error, inherit_operation_context,
+    operation_authorization, operation_from_part, operation_permission_approved_actions,
     pending_operation_for_resolved, pending_tool_part_not_found_error, permission_action_key,
     permission_request_id, plugin_user_input_request_id, push_unique_permission_action,
     requested_background_kind, reserve_background_external_id, resolve_pending_tool,
     responses_api_request_metadata, run_abort_reason, should_execute_pending_tools_concurrently,
-    terminal_operation_title, tool_name, update_resolved_tool_message,
+    update_resolved_tool_message,
 };
 use crate::session::Session;
 use crate::session::prompt_window;
@@ -1453,7 +1452,14 @@ impl SessionManager {
                 );
             }
 
-            let prepared = prompt_window::build_prepared_prompt(&session, prompt_request_options);
+            let mut prepared =
+                prompt_window::build_prepared_prompt(&session, prompt_request_options);
+            prompt_window::render_tool_results_for_model(
+                prepared.turns.as_mut_slice(),
+                session.active_window_parts(),
+                &state.tool_executor,
+            )
+            .await;
             let provider_request_shape_fingerprint = prepared
                 .provider_request_shape
                 .as_ref()
@@ -1989,16 +1995,6 @@ impl SessionManager {
         let mut session_changed = false;
         if invocation_changed || prepared.title_override.is_some() {
             let authorization = operation_authorization(session, &resolved);
-            let current_title = match session
-                .part(&resolved.pending.part)
-                .and_then(|part| typed_content_from_value(&part.kind, &part.content).ok())
-            {
-                Some(TypedContent::ToolCall(tool_call)) => {
-                    operation_from_tool_call(&tool_call).title.clone()
-                }
-                _ => format!("Tool {}", tool_name(&resolved.invocation)),
-            };
-
             let tool_part = session.part_mut(&resolved.pending.part).ok_or_else(|| {
                 PendingToolPreflightError::Session(AppError::Internal(format!(
                     "pending tool part not found: part={}",
@@ -2009,7 +2005,6 @@ impl SessionManager {
             let mut operation = pending_operation_for_resolved(
                 &resolved,
                 prepared.invocation,
-                prepared.title_override.unwrap_or(current_title),
                 resolved.lifecycle.clone(),
                 authorization,
             );
@@ -3034,8 +3029,6 @@ impl SessionManager {
             };
             let mut operation = operation_from_tool_call(&tool_call);
             operation.authorization.push_pending(request.clone());
-            operation.set_summary(format!("Awaiting approval · {reason}"));
-            tool_part.summary = Some(operation.summary.clone());
             tool_part.content = typed_content_to_value(&TypedContent::ToolCall(
                 tool_call_from_operation(&operation),
             ))
@@ -3096,7 +3089,6 @@ impl SessionManager {
             let mut operation = pending_operation_for_resolved(
                 &resolved,
                 resolved.invocation.clone(),
-                ask_user_title(&request),
                 resolved.lifecycle.clone(),
                 authorization.clone(),
             );
@@ -3165,56 +3157,17 @@ impl SessionManager {
             .and_then(|content| match content {
                 TypedContent::ToolCall(tool_call) => {
                     let operation = operation_from_tool_call(&tool_call);
-                    (!operation.title.is_empty()).then_some(operation.title.clone())
+                    (!operation.invocation.name.is_empty()).then_some(operation.invocation.name)
                 }
                 _ => None,
             })
             .unwrap_or_else(|| "tool".to_owned());
         let mut activity_handler = streaming_activity_id.map(|activity_id| {
-            // The built-in human renderer maps the tool's structured output to
-            // ViewBlocks (v2). Shell/process executions carry the command line
-            // so the human view renders a `$ command` card.
-            let invocation = session
-                .part(&pending_tool.part)
-                .and_then(|part| typed_content_from_value(&part.kind, &part.content).ok())
-                .and_then(|content| match content {
-                    TypedContent::ToolCall(tool_call) => {
-                        Some(operation_from_tool_call(&tool_call).invocation)
-                    }
-                    _ => None,
-                });
-            let invocation = invocation.as_ref();
-            let command = invocation.and_then(|invocation| {
-                invocation
-                    .input
-                    .get("command")
-                    .and_then(|value| value.as_text())
-                    .map(ToOwned::to_owned)
-            });
-            let cwd = invocation.and_then(|invocation| {
-                invocation
-                    .input
-                    .get("workdir")
-                    .and_then(|value| value.as_text())
-                    .map(ToOwned::to_owned)
-            });
-            let mut renderer = crate::tool::human_view::BuiltinHumanRenderer::new(
-                invocation
-                    .map(|invocation| invocation.name.as_str())
-                    .unwrap_or("tool"),
-            );
-            if let Some(command) = command {
-                renderer = renderer.with_command(command);
-            }
-            if let Some(cwd) = cwd {
-                renderer = renderer.with_cwd(cwd);
-            }
             crate::activity::ActivityHandler::begin(
                 activity_id,
                 crate::activity::ActivityKind::Operation,
                 initial_title,
             )
-            .with_renderer(renderer)
         });
         let stream_started = std::time::Instant::now();
         let mut stream_block_created = false;
@@ -3389,8 +3342,7 @@ impl SessionManager {
                 typed_content_from_value(&part.kind, &part.content)
             {
                 let mut operation = operation_from_tool_call(&tool_call);
-                operation.set_summary("Execution cancelled");
-                operation.result.state = agena_domain::ToolResultState::Cancelled;
+                operation.state = agena_domain::ToolResultState::Cancelled;
                 operation.lifecycle = completed_lifecycle(&resolved.lifecycle);
                 part.content = typed_content_to_value(&TypedContent::ToolCall(
                     tool_call_from_operation(&operation),
@@ -3450,29 +3402,7 @@ impl SessionManager {
             if let Ok(TypedContent::ToolCall(tool_call)) =
                 typed_content_from_value(&tool_part.kind, &tool_part.content)
             {
-                let mut operation = operation_from_tool_call(&tool_call);
-                let elapsed_secs = if operation.lifecycle.start_ms > 0 {
-                    (Utc::now().timestamp_millis() - operation.lifecycle.start_ms) / 1000
-                } else {
-                    0
-                };
-                if elapsed_secs >= 1 {
-                    let base_title = operation
-                        .metadata
-                        .get("agena_streaming_base_title")
-                        .and_then(|value| value.as_str())
-                        .map(ToOwned::to_owned)
-                        .unwrap_or_else(|| operation.title.clone());
-                    operation.metadata.insert(
-                        "agena_streaming_base_title".to_owned(),
-                        serde_json::json!(base_title),
-                    );
-                    operation.set_title(format!("{base_title} · {elapsed_secs}s"));
-                }
-                tool_part.content = typed_content_to_value(&TypedContent::ToolCall(
-                    tool_call_from_operation(&operation),
-                ))
-                .expect("operation content is always JSON serializable");
+                let _ = tool_call;
             }
         };
         // Persist the refreshed title as a part delta checkpoint (v2 D10):
@@ -3492,43 +3422,18 @@ impl SessionManager {
     pub(in crate::session::manager) async fn apply_streaming_terminal_output(
         &self,
         session_id: i64,
-        pending_tool: &SessionPendingTool,
+        _pending_tool: &SessionPendingTool,
         streamed_output: &str,
-        state: Arc<SessionManagerState>,
+        _state: Arc<SessionManagerState>,
     ) -> Result<Session, AppError> {
         if streamed_output.is_empty() {
             return self.store.load_session(session_id).await;
         }
-        // Bound the intermediate preview so a giant stream is not written in
-        // full even once; the terminal frame carries the real truncated output.
-        let preview = agena_runtime_tools::truncate_tool_output_text(streamed_output, 16 * 1024);
-        let mut session = self.store.load_session(session_id).await?;
-        let tool_part_ref = session
-            .resolve_part_ref(&pending_tool.part)
-            .ok_or_else(|| pending_tool_part_not_found_error(&pending_tool.part))?;
-        {
-            let tool_part = session
-                .part_mut(&tool_part_ref)
-                .ok_or_else(|| pending_tool_part_not_found_error(&pending_tool.part))?;
-            // `append_tool_output_delta` becomes a decode → mutate → re-encode
-            // cycle on the part's canonical operation content.
-            let Ok(TypedContent::ToolCall(tool_call)) =
-                typed_content_from_value(&tool_part.kind, &tool_part.content)
-            else {
-                return Err(AppError::Internal(format!(
-                    "streaming tool part refused terminal output: part={}",
-                    pending_tool.part.part_id
-                )));
-            };
-            let mut operation = operation_from_tool_call(&tool_call);
-            operation.append_output_delta(preview.as_str());
-            tool_part.content = typed_content_to_value(&TypedContent::ToolCall(
-                tool_call_from_operation(&operation),
-            ))
-            .expect("operation content is always JSON serializable");
-        }
-        self.persist_session_changes(session, vec![pending_tool.part.part_id], None, state)
-            .await
+        // The single-source payload is written once at completion; a stream
+        // checkpoint is no longer persisted (the v2 live broadcast carries
+        // streaming detail, and the terminal frame replaces the payload).
+        let _ = streamed_output;
+        self.store.load_session(session_id).await
     }
 
     pub(in crate::session::manager) async fn apply_tool_success_with_rules(
@@ -3578,23 +3483,7 @@ impl SessionManager {
                 )
             })
             .transpose()?;
-        let output_text = execution.view.output_text.clone();
-        let presentation_summary = execution.view.summary.clone();
         let lifecycle = completed_lifecycle(&resolved.lifecycle);
-        let blocks = operation_blocks_from_tool_output(
-            &resolved.invocation,
-            &tool_output,
-            execution.view.attachments.as_slice(),
-            output_text.as_str(),
-        );
-        let completion_title = {
-            let execution_title = execution.view.title.trim();
-            if !execution_title.is_empty() && !is_authorization_phase_title(execution_title) {
-                agena_tool::compose_tool_title(resolved.invocation.name.as_str(), execution_title)
-            } else {
-                terminal_operation_title(&resolved.invocation)
-            }
-        };
         self.apply_tool_success_execution_context(&mut session, &resolved.invocation, &execution);
 
         // The launch tool and the launched work have distinct lifecycles. The
@@ -3604,32 +3493,37 @@ impl SessionManager {
         // previously required a fake guard result and made control metadata
         // vulnerable to the streaming buffer.
         let background = background_operation_from_execution(&resolved.invocation, &tool_output);
+        // Single source of truth: when a tool produced no structured payload
+        // but did produce visible output text (plugin adapters, text-only
+        // results), fold that text into the payload so the model text and the
+        // human view can be projected from one stored value.
+        let payload = tool_output.to_json_payload().or_else(|| {
+            let text = execution.view.output_text.trim();
+            (!text.is_empty()).then(|| serde_json::json!({ "text": text }))
+        });
         update_resolved_tool_message(&mut session, &resolved, |tool_part| {
             let mut operation = OperationPart::completed(
                 resolved.call_id,
                 resolved.invocation.clone(),
-                crate::part::OperationCompletion::new(
-                    completion_title.clone(),
-                    presentation_summary.clone(),
-                    output_text.clone(),
-                    blocks.clone(),
+                agena_domain::RawOutput::from_parts(
+                    payload,
+                    execution.view.output_text.clone(),
                     execution.view.attachments.clone(),
-                    tool_output.clone(),
+                    tool_output.managed_outputs.clone(),
+                    execution
+                        .view
+                        .metadata
+                        .iter()
+                        .map(|(key, value)| (key.clone(), serde_json::Value::String(value.clone())))
+                        .collect(),
+                    tool_output.truncated,
                 ),
                 lifecycle.clone(),
             );
             operation.authorization = authorization.clone();
-            operation.set_presentation_sections(execution.view.sections.clone());
             if let Some(background) = background.as_ref() {
                 operation.set_background_operation(background);
             }
-            operation.result.metadata.extend(
-                execution
-                    .view
-                    .metadata
-                    .iter()
-                    .map(|(key, value)| (key.clone(), serde_json::Value::String(value.clone()))),
-            );
             // The completion payload replaces the operation, but provider
             // correlation metadata and answered asks belong to its identity.
             if let Some(existing) = operation_from_part(tool_part) {

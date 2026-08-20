@@ -343,44 +343,16 @@ fn part_content(part: &SessionTranscriptPart) -> TranscriptPartContent<'static> 
             },
         )),
         "tool_call" => {
-            if let Some(operation) = operation_resource_from_content(content) {
+            if let Some(operation) = operation_resource_from_part(part) {
                 return TranscriptPartContent::Activity(TranscriptActivityContent::Operation(
                     Box::new(operation),
                 ));
             }
-            let input = match content.get("input") {
-                Some(Value::Object(map)) => StructuredObjectResource {
-                    fields: map
-                        .iter()
-                        .map(|(name, value)| StructuredFieldResource {
-                            name: name.clone(),
-                            value: structured_value(value),
-                        })
-                        .collect(),
-                },
-                _ => StructuredObjectResource::default(),
-            };
-            TranscriptPartContent::Activity(TranscriptActivityContent::Operation(Box::new(
-                OperationPartResource {
-                    call_id: integer_field(content, "call_id").unwrap_or(part.part_id),
-                    invocation: ToolInvocationResource {
-                        gateway_function: None,
-                        name: string_field(content, "name").unwrap_or_default(),
-                        plugin_name: string_field(content, "plugin"),
-                        input,
-                    },
-                    title: string_field(content, "title").unwrap_or_default(),
-                    summary: string_field(content, "summary").unwrap_or_default(),
-                    ..Default::default()
-                },
-            )))
+            TranscriptPartContent::Text(TextPartResource {
+                text: format!("invalid tool_call content: {}", fallback_json_text(content)),
+                synthetic: false,
+            })
         }
-        "tool_result" => TranscriptPartContent::Text(TextPartResource {
-            text: string_field(content, "output")
-                .or_else(|| string_field(content, "text"))
-                .unwrap_or_default(),
-            synthetic: false,
-        }),
         "file_ref" => TranscriptPartContent::Activity(TranscriptActivityContent::Attachment(
             AttachmentPartResource {
                 attachments: vec![PartAttachment {
@@ -530,116 +502,132 @@ fn part_content(part: &SessionTranscriptPart) -> TranscriptPartContent<'static> 
 /// Known-compatible kinds (text/markdown/json/log/command/diff/file_changes/
 /// media) are left untouched. Unknown kinds stay as-is so the typed decode can
 /// still represent them.
-fn normalize_stored_operation_block(block: &mut Value) {
-    let Some(object) = block.as_object_mut() else {
-        return;
+fn operation_resource_from_part(part: &SessionTranscriptPart) -> Option<OperationPartResource> {
+    use agena_runtime_contracts::part_content::ToolCallContent;
+
+    let content = ToolCallContent::try_from(&part.content).ok()?;
+    let name = content.name.clone();
+    let input = match &content.input {
+        Value::Object(map) => StructuredObjectResource {
+            fields: map
+                .iter()
+                .map(|(name, value)| StructuredFieldResource {
+                    name: name.clone(),
+                    value: structured_value(value),
+                })
+                .collect(),
+        },
+        _ => return None,
     };
+    let presentation = part.presentation.clone().unwrap_or_else(|| {
+        agena_api::live::ToolHumanPresentationResource {
+            title: name.clone(),
+            summary: String::new(),
+            blocks: Vec::new(),
+        }
+    });
+    let title = presentation.title;
+    let summary = presentation.summary;
+    let blocks = presentation
+        .blocks
+        .iter()
+        .filter_map(operation_block_from_view)
+        .collect::<Vec<_>>();
+    let state = serde_json::from_value::<agena_api::part::ToolResultStateResource>(
+        serde_json::to_value(content.state).ok()?,
+    )
+    .unwrap_or(agena_api::part::ToolResultStateResource::Pending);
+    let gateway_name = content
+        .tool_api_call
+        .as_ref()
+        .map(|call| call.function.function_name())
+        .unwrap_or(name.as_str());
+    let lifecycle = serde_json::from_value::<agena_api::part::TimeRangeResource>(
+        serde_json::to_value(&content.lifecycle).ok()?,
+    )
+    .unwrap_or_default();
+    let display = agena_api::part::ToolResultDisplayResource {
+        title: title.clone(),
+        summary: summary.clone(),
+        sections: Vec::new(),
+    };
+    let result = agena_api::part::ToolResultEnvelopeResource {
+        state,
+        structured: None,
+        content: blocks.clone(),
+        display,
+        ..Default::default()
+    };
+    Some(OperationPartResource {
+        call_id: content.call_id,
+        invocation: ToolInvocationResource {
+            gateway_function: gateway_function(gateway_name),
+            name,
+            plugin_name: content.plugin,
+            input,
+        },
+        title,
+        summary,
+        authorization: content.authorization,
+        user_input: content.user_input,
+        blocks,
+        attachments: Vec::new(),
+        structured: None,
+        result,
+        lifecycle,
+        error: content
+            .error
+            .map(|error| agena_api::part::OperationErrorResource {
+                failure: (&error.failure).into(),
+            }),
+        metadata: content.metadata,
+        ..Default::default()
+    })
+}
+
+fn operation_block_from_view(
+    block: &agena_domain::ViewBlock,
+) -> Option<agena_api::part::OperationBlockResource> {
+    let mut value = serde_json::to_value(block).ok()?;
+    let object = value.as_object_mut()?;
     match object.get("type").and_then(Value::as_str) {
         Some("table") => {
             if let Some(columns) = object.get_mut("columns").and_then(Value::as_array_mut) {
                 for column in columns {
-                    if column.is_string() {
-                        let key = std::mem::take(column);
-                        *column = serde_json::json!({ "key": key, "label": null });
+                    if let Some(key) = column.as_str().map(ToOwned::to_owned) {
+                        *column = serde_json::json!({"key": key});
                     }
                 }
             }
         }
         Some("search_results") => {
-            if let Some(items) = object
-                .remove("items")
-                .and_then(|items| items.as_array().cloned())
-            {
-                let results = items
-                    .into_iter()
-                    .map(|mut item| {
-                        if let Some(uri) = item.as_object_mut().and_then(|item| item.remove("url"))
-                        {
-                            item.as_object_mut()
-                                .map(|item| item.insert("uri".to_owned(), uri));
-                        }
-                        item
-                    })
-                    .collect();
-                object.insert("results".to_owned(), Value::Array(results));
+            if let Some(items) = object.remove("items") {
+                let mut items = items.as_array().cloned().unwrap_or_default();
+                for item in &mut items {
+                    if let Some(item) = item.as_object_mut()
+                        && let Some(url) = item.remove("url")
+                    {
+                        item.insert("uri".to_owned(), url);
+                    }
+                }
+                object.insert("results".to_owned(), Value::Array(items));
             }
+            object.remove("total");
         }
         Some("custom") => {
-            if !object.contains_key("value") {
-                let value = object
-                    .get("presentation")
-                    .cloned()
-                    .or_else(|| object.get("schema").cloned())
-                    .unwrap_or_else(|| Value::Object(Default::default()));
-                object.insert("value".to_owned(), value);
-            }
-            if let Some(kind) = object.get("kind").cloned() {
-                object.insert("schema".to_owned(), kind);
-            }
+            let schema = object.remove("schema").unwrap_or(Value::Null);
+            let presentation = object.remove("presentation").unwrap_or(Value::Null);
+            object.insert(
+                "value".to_owned(),
+                serde_json::json!({"schema": schema, "presentation": presentation}),
+            );
+            object.insert("schema".to_owned(), Value::Null);
+            object.remove("kind");
         }
         _ => {}
     }
-}
-
-fn operation_resource_from_content(content: &Value) -> Option<OperationPartResource> {
-    // The stored `operation` rides the full v1 payload whose `result.content`
-    // holds runtime `ViewBlock` JSON (agena-domain). That shape differs from
-    // the API `OperationBlockResource` for `table` (string columns),
-    // `search_results` (`items`/`url` instead of `results`/`uri`) and `custom`
-    // (a `presentation` map instead of a required `value`). Normalize those
-    // blocks to the API shape first so the typed decode below is tolerant and
-    // never fails atomically on a single rich block (which would otherwise
-    // degrade the whole operation to a bare name + input).
-    let mut operation_value = content.get("operation")?.clone();
-    if let Some(result) = operation_value.get_mut("result")
-        && let Some(blocks) = result.get_mut("content").and_then(Value::as_array_mut)
-    {
-        for block in blocks {
-            normalize_stored_operation_block(block);
-        }
-    }
-    let mut operation = serde_json::from_value::<OperationPartResource>(operation_value).ok()?;
-
-    if operation.invocation.gateway_function.is_none() {
-        let gateway_name = content
-            .get("tool_api_call")
-            .and_then(|call| call.get("function"))
-            .and_then(Value::as_str)
-            .or_else(|| {
-                content
-                    .get("operation")
-                    .and_then(|value| value.get("invocation"))
-                    .and_then(|value| value.get("tool_api_call"))
-                    .and_then(|value| value.get("function"))
-                    .and_then(Value::as_str)
-            })
-            .unwrap_or(operation.invocation.name.as_str());
-        operation.invocation.gateway_function = gateway_function(gateway_name);
-    }
-
-    // Runtime operations keep their authoritative output in `result`; the
-    // public presentation resource also exposes convenient flattened mirrors
-    // consumed by the transcript renderer. Fill those mirrors without
-    // discarding the original envelope.
-    if operation.title.is_empty() {
-        operation.title = operation.result.display.title.clone();
-    }
-    if operation.summary.is_empty() {
-        operation.summary = operation.result.display.summary.clone();
-    }
-    if operation.model_output.is_empty() {
-        operation.model_output = operation.result.model_preview.clone();
-    }
-    if operation.blocks.is_empty() {
-        operation.blocks = operation.result.content.clone();
-    }
-    if operation.attachments.is_empty() {
-        operation.attachments = operation.result.attachments.clone();
-    }
-    if operation.structured.is_none() {
-        operation.structured = operation.result.structured.clone();
-    }
-    Some(operation)
+    object.remove("id");
+    serde_json::from_value(value).ok()
 }
 
 fn gateway_function(name: &str) -> Option<agena_api::part::ToolGatewayFunctionResource> {
@@ -814,10 +802,6 @@ fn bool_field(content: &Value, key: &str) -> Option<bool> {
     content.get(key).and_then(Value::as_bool)
 }
 
-fn integer_field(content: &Value, key: &str) -> Option<i64> {
-    content.get(key).and_then(Value::as_i64)
-}
-
 fn timestamp(created_at_ms: i64) -> chrono::DateTime<chrono::Utc> {
     chrono::DateTime::<chrono::Utc>::from_timestamp_millis(created_at_ms).unwrap_or_default()
 }
@@ -968,6 +952,7 @@ mod tests {
             role: role.to_owned(),
             state: state.to_owned(),
             content: serde_json::json!({ "run_kind": "user_send" }),
+            presentation: None,
             summary: None,
             created_at_ms: part_id * 10,
             parent_part_id: None,
@@ -997,6 +982,7 @@ mod tests {
             role: role.to_owned(),
             state: "completed".to_owned(),
             content,
+            presentation: None,
             summary: None,
             created_at_ms: part_id * 10,
             parent_part_id: None,
@@ -1062,14 +1048,12 @@ mod tests {
                 4,
                 "tool_call",
                 "assistant",
-                serde_json::json!({ "name": "tools_search", "operation": {} }),
-            ),
-            content_part_for(
-                3,
-                5,
-                "tool_result",
-                "tool",
-                serde_json::json!({ "output": "ok" }),
+                serde_json::json!({
+                    "name": "tools_search",
+                    "input": {},
+                    "state": "completed",
+                    "output": {"payload": {"text": "ok"}}
+                }),
             ),
             run(7, "assistant", "in_progress"),
             content_part_for(
@@ -1077,14 +1061,12 @@ mod tests {
                 8,
                 "tool_call",
                 "assistant",
-                serde_json::json!({ "name": "tools_help", "operation": {} }),
-            ),
-            content_part_for(
-                7,
-                9,
-                "tool_result",
-                "tool",
-                serde_json::json!({ "output": "ok" }),
+                serde_json::json!({
+                    "name": "tools_help",
+                    "input": {},
+                    "state": "completed",
+                    "output": {"payload": {"text": "ok"}}
+                }),
             ),
             run(11, "assistant", "completed"),
             content_part_for(
@@ -1370,63 +1352,39 @@ mod tests {
     }
 
     #[test]
-    fn completed_tool_call_recovers_nested_operation_output_for_expansion() {
-        let parts = vec![
-            run(1, "assistant", "completed"),
-            content_part(
-                2,
-                "tool_call",
-                "assistant",
-                serde_json::json!({
-                    "name": "tools_search",
-                    "input": { "query": "model" },
-                    "tool_api_call": {
-                        "function": "tools_search",
-                        "arguments": {
-                            "fields": [{
-                                "name": "query",
-                                "value": { "kind": "text", "value": "model" }
-                            }]
-                        }
-                    },
-                    "operation": {
-                        "call_id": 73,
-                        "invocation": {
-                            "name": "tools_search",
-                            "input": {
-                                "fields": [{
-                                    "name": "query",
-                                    "value": { "kind": "text", "value": "model" }
-                                }]
-                            },
-                            "tool_api_call": {
-                                "function": "tools_search",
-                                "arguments": { "fields": [] }
-                            }
-                        },
-                        "title": "tools_search · Search tools · model · 3/3",
-                        "summary": "Returned 3 of 3 matching tools; no more results.",
-                        "result": {
-                            "state": "completed",
-                            "content": [{
-                                "id": "text",
-                                "type": "log",
-                                "stream": "stdout",
-                                "text": "Matching tools for model:\n- session.model"
-                            }],
-                            "model_preview": {
-                                "text": "Matching tools for model:\n- session.model"
-                            },
-                            "display": {
-                                "title": "tools_search · Search tools · model · 3/3",
-                                "summary": "Returned 3 of 3 matching tools; no more results."
-                            }
-                        },
-                        "lifecycle": { "start_ms": 100, "end_ms": 200 }
+    fn completed_tool_call_uses_the_ephemeral_human_presentation() {
+        let mut tool = content_part(
+            2,
+            "tool_call",
+            "assistant",
+            serde_json::json!({
+                "name": "tools_search",
+                "input": { "query": "model" },
+                "tool_api_call": {
+                    "function": "tools_search",
+                    "arguments": {
+                        "fields": [{
+                            "name": "query",
+                            "value": { "kind": "text", "value": "model" }
+                        }]
                     }
-                }),
-            ),
-        ];
+                },
+                "call_id": 73,
+                "state": "completed",
+                "output": {"payload": {"text": "raw result"}},
+                "lifecycle": { "start_ms": 100, "end_ms": 200 }
+            }),
+        );
+        tool.presentation = Some(agena_api::live::ToolHumanPresentationResource {
+            title: "Search tools".to_owned(),
+            summary: "Returned 3 matching tools.".to_owned(),
+            blocks: vec![agena_domain::ViewBlock::Log {
+                id: Some("result".to_owned()),
+                stream: agena_domain::CommandOutputStream::Stdout,
+                text: "Matching tools for model:\n- session.model".to_owned(),
+            }],
+        });
+        let parts = vec![run(1, "assistant", "completed"), tool];
 
         let entries = parts_entries(&parts);
         let TranscriptPartContent::Activity(TranscriptActivityContent::Operation(operation)) =
@@ -1438,15 +1396,10 @@ mod tests {
             operation.invocation.gateway_function,
             Some(agena_api::part::ToolGatewayFunctionResource::Search)
         );
-        assert_eq!(
-            operation.model_output.text,
-            "Matching tools for model:\n- session.model"
-        );
+        assert!(operation.model_output.text.is_empty());
         assert_eq!(operation.blocks.len(), 1);
-        assert_eq!(
-            operation.summary,
-            "Returned 3 of 3 matching tools; no more results."
-        );
+        assert_eq!(operation.title, "Search tools");
+        assert_eq!(operation.summary, "Returned 3 matching tools.");
     }
 
     #[test]
@@ -1527,6 +1480,7 @@ mod tests {
             role: role.to_owned(),
             state: "completed".to_owned(),
             content: serde_json::json!({ "text": text }),
+            presentation: None,
             summary: None,
             created_at_ms: part_id * 10,
             parent_part_id: None,

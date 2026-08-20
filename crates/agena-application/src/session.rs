@@ -67,6 +67,7 @@ pub fn project_session_transcript(
             } else {
                 serde_json::json!({})
             },
+            presentation: None,
             summary: None,
             created_at_ms: run.created_at.timestamp_millis(),
             parent_part_id: None,
@@ -79,6 +80,7 @@ pub fn project_session_transcript(
                 role: run.role.to_string(),
                 state: part.status.to_string(),
                 content: part.content.clone().unwrap_or(serde_json::Value::Null),
+                presentation: None,
                 summary: part.summary.clone(),
                 created_at_ms: part.created_at.timestamp_millis(),
                 parent_part_id: None,

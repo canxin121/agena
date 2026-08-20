@@ -5,14 +5,12 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use agena_domain::{
-    ArtifactRef, ExecutionStatus, FilesystemEffects, InteractionNotificationLevel, NetworkEffect,
-    OperationAuthorization, OperationError, OperationUserInput, ProcessShell, ToolInvocation,
-    ToolManagedOutput, ToolOutput, ToolPresentationSection, ToolResultDisplay, ToolResultState,
-    UserInputQuestion,
+    ExecutionStatus, FilesystemEffects, InteractionNotificationLevel, NetworkEffect,
+    OperationAuthorization, OperationError, OperationUserInput, ProcessShell, RawOutput,
+    ToolInvocation, ToolResultState, UserInputQuestion,
 };
-use agena_tool::{ReadMode, TaskModelSelection, normalize_tool_summary, normalize_tool_title};
+use agena_tool::{ReadMode, TaskModelSelection};
 
-use super::AttachmentItem;
 use agena_domain::{StructuredValue, TimeRange};
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq, JsonSchema, ToolInput)]
@@ -952,177 +950,12 @@ fn json_block_to_view_block(value: &StructuredValue) -> Result<agena_domain::Vie
     })
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
-/// Output of a tool visible to the model.
-pub struct ModelVisibleOutput {
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub text: String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub attachments: Vec<AttachmentItem>,
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub truncated: bool,
-}
-
-fn is_false(value: &bool) -> bool {
-    !*value
-}
-
-impl ModelVisibleOutput {
-    pub fn text(text: impl Into<String>) -> Self {
-        Self {
-            text: text.into(),
-            attachments: Vec::new(),
-            truncated: false,
-        }
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.text.is_empty() && self.attachments.is_empty() && !self.truncated
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
-#[serde(deny_unknown_fields)]
-/// Envelope carrying the result of a tool execution.
-pub struct ToolResultEnvelope {
-    #[serde(default, skip_serializing_if = "ToolResultState::is_pending")]
-    pub state: ToolResultState,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub structured: Option<serde_json::Value>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub content: Vec<agena_domain::ViewBlock>,
-    #[serde(default, skip_serializing_if = "ModelVisibleOutput::is_empty")]
-    pub model_preview: ModelVisibleOutput,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub managed_outputs: Vec<ToolManagedOutput>,
-    #[serde(default, skip_serializing_if = "ToolResultDisplay::is_empty")]
-    pub display: ToolResultDisplay,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub attachments: Vec<AttachmentItem>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub error: Option<OperationError>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub metadata: BTreeMap<String, serde_json::Value>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub raw: Option<serde_json::Value>,
-}
-
-impl ToolResultEnvelope {
-    pub fn is_empty(&self) -> bool {
-        ToolResultState::is_pending(&self.state)
-            && self.structured.is_none()
-            && self.content.is_empty()
-            && self.model_preview.is_empty()
-            && self.managed_outputs.is_empty()
-            && self.display.is_empty()
-            && self.attachments.is_empty()
-            && self.error.is_none()
-            && self.metadata.is_empty()
-            && self.raw.is_none()
-    }
-
-    pub fn completed(
-        title: String,
-        summary: String,
-        output_text: String,
-        blocks: Vec<agena_domain::ViewBlock>,
-        attachments: Vec<AttachmentItem>,
-        details: &ToolOutput,
-    ) -> Self {
-        let truncated = details.is_model_truncated();
-        Self {
-            state: ToolResultState::Completed,
-            structured: details.to_json_payload(),
-            content: blocks,
-            model_preview: ModelVisibleOutput {
-                text: output_text.clone(),
-                attachments: attachments.clone(),
-                truncated,
-            },
-            managed_outputs: details.managed_outputs.clone(),
-            display: ToolResultDisplay {
-                title,
-                summary,
-                sections: Vec::new(),
-            },
-            attachments,
-            error: None,
-            metadata: BTreeMap::new(),
-            raw: None,
-        }
-    }
-
-    pub fn failed(
-        failure: agena_failure::Failure,
-        blocks: Vec<agena_domain::ViewBlock>,
-        attachments: Vec<AttachmentItem>,
-        details: &ToolOutput,
-    ) -> Self {
-        let truncated = details.is_model_truncated();
-        let user_summary = failure.user.fallback.clone();
-        let model_output = model_visible_failure_text(&failure);
-        let human_summary = normalize_tool_summary(user_summary.clone());
-        Self {
-            state: ToolResultState::Failed,
-            structured: details.to_json_payload(),
-            content: blocks,
-            model_preview: ModelVisibleOutput {
-                text: model_output,
-                attachments: attachments.clone(),
-                truncated,
-            },
-            managed_outputs: details.managed_outputs.clone(),
-            display: ToolResultDisplay {
-                title: String::new(),
-                summary: human_summary,
-                sections: Vec::new(),
-            },
-            attachments,
-            error: Some(OperationError { failure }),
-            metadata: BTreeMap::new(),
-            raw: None,
-        }
-    }
-
-    fn non_execution(
-        state: ToolResultState,
-        output_text: String,
-        blocks: Vec<agena_domain::ViewBlock>,
-        details: &ToolOutput,
-    ) -> Self {
-        debug_assert!(matches!(
-            state,
-            ToolResultState::PolicyDenied
-                | ToolResultState::UserDeclined
-                | ToolResultState::CapabilityUnavailable
-                | ToolResultState::ToolUnavailable
-        ));
-        let human_summary = normalize_tool_summary(&output_text);
-        Self {
-            state,
-            structured: details.to_json_payload(),
-            content: blocks,
-            model_preview: ModelVisibleOutput {
-                text: output_text.clone(),
-                attachments: Vec::new(),
-                truncated: false,
-            },
-            managed_outputs: Vec::new(),
-            display: ToolResultDisplay {
-                title: String::new(),
-                summary: human_summary,
-                sections: Vec::new(),
-            },
-            attachments: Vec::new(),
-            error: None,
-            metadata: BTreeMap::new(),
-            raw: None,
-        }
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 /// A message part representing a tool operation.
+///
+/// The durable record stores invocation identity and exactly one raw result.
+/// Model and human presentations are runtime projections and never fields on
+/// this type.
 pub struct OperationPart {
     pub call_id: i64,
     pub invocation: ToolInvocation,
@@ -1130,63 +963,24 @@ pub struct OperationPart {
     pub authorization: OperationAuthorization,
     #[serde(default, skip_serializing_if = "OperationUserInput::is_empty")]
     pub user_input: OperationUserInput,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub title: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub summary: String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub artifacts: Vec<ArtifactRef>,
-    #[serde(default, skip_serializing_if = "ToolOutput::is_empty")]
-    pub details: ToolOutput,
-    #[serde(default, skip_serializing_if = "ToolResultEnvelope::is_empty")]
-    pub result: ToolResultEnvelope,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub metadata: BTreeMap<String, serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output: Option<RawOutput>,
+    #[serde(default)]
+    pub state: ToolResultState,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<OperationError>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub raw: Option<serde_json::Value>,
+    /// Invocation and runtime-control metadata. Raw result metadata belongs
+    /// inside `output.metadata` so result facts have one storage location.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub metadata: BTreeMap<String, serde_json::Value>,
     #[serde(default)]
     pub lifecycle: TimeRange,
-}
-
-/// Complete, producer-owned presentation and result data for one Operation.
-///
-/// Keeping these fields together prevents callers from creating a completed
-/// Operation with detailed output but no concise title/summary contract.
-#[derive(Debug, Clone, PartialEq)]
-pub struct OperationCompletion {
-    pub title: String,
-    pub summary: String,
-    pub output_text: String,
-    pub blocks: Vec<agena_domain::ViewBlock>,
-    pub attachments: Vec<AttachmentItem>,
-    pub details: ToolOutput,
-}
-
-impl OperationCompletion {
-    pub fn new(
-        title: impl Into<String>,
-        summary: impl Into<String>,
-        output_text: impl Into<String>,
-        blocks: Vec<agena_domain::ViewBlock>,
-        attachments: Vec<AttachmentItem>,
-        details: ToolOutput,
-    ) -> Self {
-        Self {
-            title: title.into(),
-            summary: summary.into(),
-            output_text: output_text.into(),
-            blocks,
-            attachments,
-            details,
-        }
-    }
 }
 
 const PROVIDER_ONLY_METADATA_KEY: &str = "provider_only";
 const LEGACY_PROVIDER_NATIVE_ONLY_METADATA_KEY: &str = "provider_native_only";
 const ADVERTISED_TOOL_IDENTITY_METADATA_KEY: &str = "advertised_tool_identity";
+const PROVIDER_RAW_METADATA_KEY: &str = "agena.provider_raw";
 /// Marker that an operation was launched into the background (a monitored
 /// shell process or a delegated task) and must keep rendering as in-progress
 /// on the transcript part until the background work actually finishes. The
@@ -1211,25 +1005,16 @@ pub struct BackgroundOperation {
 }
 
 impl OperationPart {
-    pub fn pending(
-        call_id: i64,
-        invocation: ToolInvocation,
-        title: impl Into<String>,
-        lifecycle: TimeRange,
-    ) -> Self {
+    pub fn pending(call_id: i64, invocation: ToolInvocation, lifecycle: TimeRange) -> Self {
         Self {
             call_id,
             invocation,
             authorization: OperationAuthorization::default(),
             user_input: OperationUserInput::default(),
-            title: normalize_tool_title(title.into()),
-            summary: String::new(),
-            artifacts: Vec::new(),
-            details: ToolOutput::default(),
-            result: ToolResultEnvelope::default(),
-            metadata: BTreeMap::new(),
+            output: None,
+            state: ToolResultState::Pending,
             error: None,
-            raw: None,
+            metadata: BTreeMap::new(),
             lifecycle,
         }
     }
@@ -1237,40 +1022,18 @@ impl OperationPart {
     pub fn completed(
         call_id: i64,
         invocation: ToolInvocation,
-        completion: OperationCompletion,
+        output: RawOutput,
         lifecycle: TimeRange,
     ) -> Self {
-        let OperationCompletion {
-            title,
-            summary,
-            output_text,
-            blocks,
-            attachments,
-            details,
-        } = completion;
-        let title = normalize_tool_title(title);
-        let summary = normalize_tool_summary(summary);
-        let result = ToolResultEnvelope::completed(
-            title.clone(),
-            summary.clone(),
-            output_text.clone(),
-            blocks.clone(),
-            attachments.clone(),
-            &details,
-        );
         Self {
             call_id,
             invocation,
             authorization: OperationAuthorization::default(),
             user_input: OperationUserInput::default(),
-            title,
-            summary,
-            artifacts: Vec::new(),
-            details,
-            result,
-            metadata: BTreeMap::new(),
+            output: (!output.is_empty()).then_some(output),
+            state: ToolResultState::Completed,
             error: None,
-            raw: None,
+            metadata: BTreeMap::new(),
             lifecycle,
         }
     }
@@ -1279,31 +1042,18 @@ impl OperationPart {
         call_id: i64,
         invocation: ToolInvocation,
         failure: agena_failure::Failure,
-        blocks: Vec<agena_domain::ViewBlock>,
-        attachments: Vec<AttachmentItem>,
-        details: ToolOutput,
+        output: RawOutput,
         lifecycle: TimeRange,
     ) -> Self {
-        let result = ToolResultEnvelope::failed(
-            failure.clone(),
-            blocks.clone(),
-            attachments.clone(),
-            &details,
-        );
-        let user_summary = normalize_tool_summary(&failure.user.fallback);
         Self {
             call_id,
             invocation,
             authorization: OperationAuthorization::default(),
             user_input: OperationUserInput::default(),
-            title: String::new(),
-            summary: user_summary,
-            artifacts: Vec::new(),
-            details,
-            result,
-            metadata: BTreeMap::new(),
+            output: (!output.is_empty()).then_some(output),
+            state: ToolResultState::Failed,
             error: Some(OperationError { failure }),
-            raw: None,
+            metadata: BTreeMap::new(),
             lifecycle,
         }
     }
@@ -1311,18 +1061,14 @@ impl OperationPart {
     pub fn policy_denied(
         call_id: i64,
         invocation: ToolInvocation,
-        output_text: impl Into<String>,
-        blocks: Vec<agena_domain::ViewBlock>,
-        details: ToolOutput,
+        output: RawOutput,
         lifecycle: TimeRange,
     ) -> Self {
         Self::non_execution(
             call_id,
             invocation,
             ToolResultState::PolicyDenied,
-            output_text.into(),
-            blocks,
-            details,
+            output,
             lifecycle,
         )
     }
@@ -1330,18 +1076,14 @@ impl OperationPart {
     pub fn user_declined(
         call_id: i64,
         invocation: ToolInvocation,
-        output_text: impl Into<String>,
-        blocks: Vec<agena_domain::ViewBlock>,
-        details: ToolOutput,
+        output: RawOutput,
         lifecycle: TimeRange,
     ) -> Self {
         Self::non_execution(
             call_id,
             invocation,
             ToolResultState::UserDeclined,
-            output_text.into(),
-            blocks,
-            details,
+            output,
             lifecycle,
         )
     }
@@ -1349,18 +1091,14 @@ impl OperationPart {
     pub fn capability_unavailable(
         call_id: i64,
         invocation: ToolInvocation,
-        output_text: impl Into<String>,
-        blocks: Vec<agena_domain::ViewBlock>,
-        details: ToolOutput,
+        output: RawOutput,
         lifecycle: TimeRange,
     ) -> Self {
         Self::non_execution(
             call_id,
             invocation,
             ToolResultState::CapabilityUnavailable,
-            output_text.into(),
-            blocks,
-            details,
+            output,
             lifecycle,
         )
     }
@@ -1368,18 +1106,14 @@ impl OperationPart {
     pub fn tool_unavailable(
         call_id: i64,
         invocation: ToolInvocation,
-        output_text: impl Into<String>,
-        blocks: Vec<agena_domain::ViewBlock>,
-        details: ToolOutput,
+        output: RawOutput,
         lifecycle: TimeRange,
     ) -> Self {
         Self::non_execution(
             call_id,
             invocation,
             ToolResultState::ToolUnavailable,
-            output_text.into(),
-            blocks,
-            details,
+            output,
             lifecycle,
         )
     }
@@ -1388,45 +1122,20 @@ impl OperationPart {
         call_id: i64,
         invocation: ToolInvocation,
         state: ToolResultState,
-        output_text: String,
-        blocks: Vec<agena_domain::ViewBlock>,
-        details: ToolOutput,
+        output: RawOutput,
         lifecycle: TimeRange,
     ) -> Self {
-        let result =
-            ToolResultEnvelope::non_execution(state, output_text.clone(), blocks.clone(), &details);
         Self {
             call_id,
             invocation,
             authorization: OperationAuthorization::default(),
             user_input: OperationUserInput::default(),
-            title: String::new(),
-            summary: normalize_tool_summary(&output_text),
-            artifacts: Vec::new(),
-            details,
-            result,
-            metadata: BTreeMap::new(),
+            output: (!output.is_empty()).then_some(output),
+            state,
             error: None,
-            raw: None,
+            metadata: BTreeMap::new(),
             lifecycle,
         }
-    }
-
-    pub fn set_title(&mut self, title: impl Into<String>) {
-        self.title = normalize_tool_title(title.into());
-        self.result.display.title = self.title.clone();
-    }
-
-    pub fn set_summary(&mut self, summary: impl Into<String>) {
-        self.summary = agena_tool::normalize_tool_summary(summary.into());
-        self.result.display.summary = self.summary.clone();
-    }
-
-    /// Set canonical named result sections. These are intentionally kept out
-    /// of `blocks`: blocks are a rendering compatibility projection, while
-    /// sections are the durable presentation contract for Activity clients.
-    pub fn set_presentation_sections(&mut self, sections: Vec<ToolPresentationSection>) {
-        self.result.display.sections = sections;
     }
 
     pub fn set_provider_only(&mut self, value: bool) {
@@ -1519,165 +1228,173 @@ impl OperationPart {
         &mut self.lifecycle
     }
 
-    pub fn output_text(&self) -> Option<&str> {
-        (!self.result.model_preview.text.is_empty())
-            .then_some(self.result.model_preview.text.as_str())
+    pub fn raw_output(&self) -> Option<&RawOutput> {
+        self.output.as_ref()
     }
 
-    pub fn title(&self) -> Option<&str> {
-        (!self.title.is_empty()).then_some(self.title.as_str())
+    pub fn raw_output_mut(&mut self) -> &mut RawOutput {
+        self.output.get_or_insert_with(RawOutput::default)
     }
 
-    pub fn error_message(&self) -> Option<&str> {
-        self.result
-            .error
-            .as_ref()
-            .or(self.error.as_ref())
-            .map(OperationError::user_message)
-    }
-
-    pub fn status(&self) -> ExecutionStatus {
-        if self.result.state == ToolResultState::PolicyDenied {
-            ExecutionStatus::PolicyDenied
-        } else if self.result.state == ToolResultState::UserDeclined {
-            ExecutionStatus::UserDeclined
-        } else if self.result.state == ToolResultState::CapabilityUnavailable {
-            ExecutionStatus::CapabilityUnavailable
-        } else if self.result.state == ToolResultState::ToolUnavailable {
-            ExecutionStatus::ToolUnavailable
-        } else if self.result.state == ToolResultState::Failed {
-            ExecutionStatus::Failed
-        } else if self.result.state == ToolResultState::Cancelled {
-            ExecutionStatus::Cancelled
-        } else if self.error.is_some() {
-            ExecutionStatus::Failed
-        } else if self.result.state == ToolResultState::Completed {
-            ExecutionStatus::Completed
-        } else if self.result.state == ToolResultState::Running {
-            ExecutionStatus::InProgress
-        } else if self.lifecycle.end_ms.is_some() {
-            ExecutionStatus::Completed
-        } else if self.result.model_preview.text.trim().is_empty() {
-            ExecutionStatus::Pending
-        } else {
-            ExecutionStatus::InProgress
+    pub fn set_provider_raw(&mut self, raw: Option<serde_json::Value>) {
+        let output = self.raw_output_mut();
+        match raw {
+            Some(raw) => {
+                output
+                    .metadata
+                    .insert(PROVIDER_RAW_METADATA_KEY.to_owned(), raw);
+            }
+            None => {
+                output.metadata.remove(PROVIDER_RAW_METADATA_KEY);
+            }
+        }
+        if output.is_empty() {
+            self.output = None;
         }
     }
 
-    /// Append a streamed delta to the model-visible preview. The human-facing
-    /// detail is derived at render time from the compact result, so streaming
-    /// only ever grows the flat preview (bounded at completion); it is not
-    /// persisted per-delta.
-    pub fn append_output_delta(&mut self, delta: &str) -> bool {
-        self.result.state = ToolResultState::Running;
-        self.result.model_preview.text.push_str(delta);
-        true
+    pub fn provider_raw(&self) -> Option<&serde_json::Value> {
+        self.output
+            .as_ref()?
+            .metadata
+            .get(PROVIDER_RAW_METADATA_KEY)
     }
-}
 
-/// The same bounded, sanitized failure detail shown to the user is the tool's
-/// model-visible result. Closed category prose such as "the plugin failed"
-/// discards the only actionable information and causes the model to diagnose
-/// a provider outage instead of reacting to the real tool result.
-fn model_visible_failure_text(failure: &agena_failure::Failure) -> String {
-    let detail = failure.user.fallback.trim();
-    if !detail.is_empty() {
-        return detail.to_owned();
+    /// Best-effort model-visible text carved from the single payload. The
+    /// authoritative per-tool model projection lives in the provider layer;
+    /// this accessor only serves lossy fallbacks (text summaries, plain-text
+    /// transcripts).
+    pub fn output_text(&self) -> Option<&str> {
+        let output = self.output.as_ref()?;
+        if !output.text.is_empty() {
+            return Some(output.text.as_str());
+        }
+        output.payload.as_ref().and_then(|payload| {
+            payload
+                .as_str()
+                .or_else(|| payload.get("text").and_then(serde_json::Value::as_str))
+        })
     }
-    failure
-        .model
-        .as_ref()
-        .map(agena_failure::ModelFeedback::message)
-        .unwrap_or_else(|| "Tool execution failed without diagnostic details.".to_owned())
+
+    pub fn title(&self) -> Option<&str> {
+        (!self.invocation.name.is_empty()).then_some(self.invocation.name.as_str())
+    }
+
+    pub fn error_message(&self) -> Option<&str> {
+        self.error.as_ref().map(OperationError::user_message)
+    }
+
+    pub fn status(&self) -> ExecutionStatus {
+        if self.state == ToolResultState::PolicyDenied {
+            ExecutionStatus::PolicyDenied
+        } else if self.state == ToolResultState::UserDeclined {
+            ExecutionStatus::UserDeclined
+        } else if self.state == ToolResultState::CapabilityUnavailable {
+            ExecutionStatus::CapabilityUnavailable
+        } else if self.state == ToolResultState::ToolUnavailable {
+            ExecutionStatus::ToolUnavailable
+        } else if self.state == ToolResultState::Failed {
+            ExecutionStatus::Failed
+        } else if self.state == ToolResultState::Cancelled {
+            ExecutionStatus::Cancelled
+        } else if self.error.is_some() {
+            ExecutionStatus::Failed
+        } else if self.state == ToolResultState::Completed {
+            ExecutionStatus::Completed
+        } else if self.state == ToolResultState::Running {
+            ExecutionStatus::InProgress
+        } else if self.lifecycle.end_ms.is_some() {
+            ExecutionStatus::Completed
+        } else {
+            ExecutionStatus::Pending
+        }
+    }
 }
 
 #[cfg(test)]
 mod operation_part_tests {
     use super::OperationPart;
-    use agena_domain::{TimeRange, ToolInvocation};
+    use agena_domain::{StructuredObject, TimeRange, ToolInvocation, ToolResultState};
 
     fn operation() -> OperationPart {
         OperationPart::pending(
-            1,
-            ToolInvocation::new("shell", agena_domain::StructuredObject::default()),
-            "Run process",
+            5,
+            ToolInvocation::new("fs.read", StructuredObject::default()),
             TimeRange {
-                start_ms: 0,
-                end_ms: None,
+                start_ms: 100,
+                end_ms: Some(200),
             },
         )
     }
 
     #[test]
-    fn streamed_delta_only_grows_the_flat_model_preview() {
+    fn operation_round_trips_single_source_payload() {
         let mut op = operation();
-        assert!(op.append_output_delta("building "));
-        assert!(op.append_output_delta("thing\n"));
-        assert_eq!(op.result.model_preview.text, "building thing\n");
-        assert_eq!(op.result.state, agena_domain::ToolResultState::Running);
-    }
-}
-
-#[cfg(test)]
-mod failure_projection_tests {
-    use super::{OperationPart, ToolResultEnvelope, model_visible_failure_text};
-    use agena_domain::{
-        ExecutionStatus, StructuredObject, TimeRange, ToolInvocation, ToolOutput, ToolResultState,
-    };
-    use agena_failure::{
-        Failure, FailureCategory, FailureCode, FailureImpact, FailureResponsibility, ModelFeedback,
-        RecoveryDirective, RetryDirective, UserPresentation,
-    };
-
-    #[test]
-    fn failed_tool_model_output_uses_the_sanitized_real_result() {
-        let detail = "field `questions` requires at least 1 item";
-        let failure = Failure::new(
-            FailureCode::new("plugin.invalid_input"),
-            FailureCategory::InvalidInput,
-            FailureResponsibility::Caller,
-            RetryDirective::CorrectInput,
-            RecoveryDirective::None,
-            FailureImpact::OperationFailed,
-            UserPresentation::validated("plugin-invalid-input", detail),
-        )
-        .with_model_feedback(ModelFeedback::plugin_failure());
-
-        assert_eq!(model_visible_failure_text(&failure), detail);
-        let result =
-            ToolResultEnvelope::failed(failure, Vec::new(), Vec::new(), &ToolOutput::default());
-        assert_eq!(result.display.summary, detail);
-        assert_eq!(result.model_preview.text, detail);
-        assert!(!result.model_preview.text.contains("The plugin failed"));
+        op.output = Some(agena_domain::RawOutput {
+            payload: Some(serde_json::json!({"preview": "hello", "text": "hello"})),
+            ..agena_domain::RawOutput::default()
+        });
+        op.state = ToolResultState::Completed;
+        op.lifecycle.end_ms = Some(300);
+        let value = serde_json::to_value(&op).unwrap();
+        let back: OperationPart = serde_json::from_value(value).unwrap();
+        assert_eq!(back, op);
+        assert_eq!(back.output_text(), Some("hello"));
+        assert_eq!(back.status(), super::ExecutionStatus::Completed);
     }
 
     #[test]
-    fn explicit_cancelled_result_state_wins_over_completed_lifecycle() {
-        let mut operation = OperationPart::pending(
-            7,
-            ToolInvocation::new("fixture.cancel", StructuredObject::default()),
-            "Cancel fixture",
-            TimeRange {
-                start_ms: 1,
-                end_ms: Some(2),
-            },
-        );
-        operation.result.state = ToolResultState::Cancelled;
-        assert_eq!(operation.status(), ExecutionStatus::Cancelled);
-    }
-
-    #[test]
-    fn explicit_running_and_completed_result_states_do_not_depend_on_preview_text_or_timestamps() {
-        let mut operation = OperationPart::pending(
-            8,
-            ToolInvocation::new("fixture.state", StructuredObject::default()),
-            "State fixture",
+    fn operation_status_maps_non_execution_states() {
+        let denied = OperationPart::policy_denied(
+            1,
+            ToolInvocation::new("fs.read", StructuredObject::default()),
+            agena_domain::RawOutput::text("denied"),
             TimeRange::default(),
         );
-        operation.result.state = ToolResultState::Running;
-        assert_eq!(operation.status(), ExecutionStatus::InProgress);
+        assert_eq!(denied.status(), super::ExecutionStatus::PolicyDenied);
 
-        operation.result.state = ToolResultState::Completed;
-        assert_eq!(operation.status(), ExecutionStatus::Completed);
+        let failed = OperationPart::failed(
+            2,
+            ToolInvocation::new("fs.read", StructuredObject::default()),
+            agena_failure::Failure::new(
+                agena_failure::FailureCode::new("tool.internal"),
+                agena_failure::FailureCategory::Internal,
+                agena_failure::FailureResponsibility::System,
+                agena_failure::RetryDirective::UseAlternative,
+                agena_failure::RecoveryDirective::ChooseAlternative,
+                agena_failure::FailureImpact::OperationFailed,
+                agena_failure::UserPresentation::new(
+                    "tool-internal-failure",
+                    "Tool execution failed without diagnostic details.",
+                ),
+            ),
+            agena_domain::RawOutput::default(),
+            TimeRange::default(),
+        );
+        assert_eq!(failed.status(), super::ExecutionStatus::Failed);
+        assert!(failed.error_message().is_some());
+    }
+
+    #[test]
+    fn metadata_helpers_stay_stable() {
+        let mut op = operation();
+        op.set_notified();
+        assert!(op.is_notified());
+        op.set_background_operation(&super::BackgroundOperation {
+            kind: "shell".into(),
+            id: "p-1".into(),
+        });
+        assert_eq!(
+            op.background_operation(),
+            Some(super::BackgroundOperation {
+                kind: "shell".into(),
+                id: "p-1".into(),
+            })
+        );
+        op.set_provider_raw(Some(serde_json::json!({"id": "provider-1"})));
+        assert_eq!(
+            op.provider_raw().and_then(|raw| raw["id"].as_str()),
+            Some("provider-1")
+        );
     }
 }

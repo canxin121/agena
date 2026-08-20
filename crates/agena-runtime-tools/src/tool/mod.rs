@@ -30,7 +30,6 @@ pub(crate) mod task;
 pub mod tool_registry;
 pub(crate) mod tool_search;
 
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -64,16 +63,11 @@ use agena_tool::{
 };
 
 // Model-facing tool results must be small enough that a sequence of noisy
-// commands cannot consume the whole context window. The complete result is
-// durably stored under `.agena/tool-results`; this preview keeps the beginning
-// and end, which normally contain setup and final diagnostics.
+// commands cannot consume the whole context window. The complete raw result
+// remains unchanged in the tool part; this read-time projection keeps the
+// beginning and end, which normally contain setup and final diagnostics.
 const TOOL_MODEL_OUTPUT_MAX_LINES: usize = 400;
 const TOOL_MODEL_OUTPUT_MAX_BYTES: usize = 16 * 1024;
-const TOOL_MODEL_STRUCTURED_OUTPUT_MAX_BYTES: usize = 12 * 1024;
-const TOOL_MODEL_STRUCTURED_MAX_DEPTH: usize = 6;
-const TOOL_MODEL_STRUCTURED_MAX_FIELDS: usize = 32;
-const TOOL_MODEL_STRUCTURED_MAX_ITEMS: usize = 32;
-const TOOL_MODEL_STRUCTURED_STRING_MAX_BYTES: usize = 768;
 use self::output_helpers::*;
 pub use self::tool_registry::*;
 
@@ -81,7 +75,7 @@ pub use crate::{MonitorError, MonitorRead, MonitorReadParams, MonitorService, Mo
 pub use builtin_tools::BuiltinToolSet;
 pub use payload::{ToolPayloadInput, ToolPayloadOutput};
 pub use render::{
-    DetailSource, MarkdownWriter, RenderContext, ToolResultRender, render_tool_payload_markdown,
+    MarkdownWriter, RenderContext, ToolResultRender, render_tool_payload_markdown,
     render_tool_payload_markdown_with_name,
 };
 pub use result::{ToolExecutionView, ToolInvocationExecution, ToolPayloadExecution};

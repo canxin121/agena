@@ -240,12 +240,6 @@ function normalizedBlockText(value: string): string {
   return value.replace(/\r\n/g, '\n').trim()
 }
 
-function operationBlockText(block: JsonRecord): string {
-  const kind = firstString(block, ['type', 'kind'])
-  if (kind === 'text' || kind === 'markdown' || kind === 'log') return firstString(block, ['text', 'markdown'])
-  return ''
-}
-
 function splitOperationStdout(blocks: JsonRecord[]): { blocks: JsonRecord[]; stdout: string[] } {
   const outputBlocks: JsonRecord[] = []
   const stdout: string[] = []
@@ -276,20 +270,8 @@ function splitOperationStdout(blocks: JsonRecord[]): { blocks: JsonRecord[]; std
   return { blocks: outputBlocks, stdout }
 }
 
-function operationStdout(
-  content: JsonRecord,
-  operation: JsonRecord,
-  result: JsonRecord,
-  blockStdout: string[],
-): { text: string; normalized: Set<string> } {
-  const candidates = [
-    ...blockStdout,
-    firstString(content, ['stdout']),
-    firstString(operation, ['stdout']),
-    firstString(result, ['stdout']),
-    firstString(jsonRecord(operation.raw), ['stdout']),
-    firstString(jsonRecord(result.raw), ['stdout']),
-  ]
+function operationStdout(blockStdout: string[]): { text: string; normalized: Set<string> } {
+  const candidates = blockStdout
   const normalized = new Set<string>()
   const output: string[] = []
   for (const candidate of candidates) {
@@ -301,45 +283,6 @@ function operationStdout(
   const text = output.join('\n\n')
   if (text) normalized.add(normalizedBlockText(text))
   return { text, normalized }
-}
-
-function operationBlocks(
-  operation: JsonRecord,
-  result: JsonRecord,
-  structured: JsonValue | null,
-  toolName: string,
-  modelText: string,
-  humanMarkdown: string,
-): JsonRecord[] {
-  const merged = [...jsonArray(operation.blocks), ...jsonArray(result.content)]
-    .map(jsonRecord)
-    .filter((item) => Object.keys(item).length > 0)
-    .filter(
-      (item, index, values) => values.findIndex((candidate) => prettyJson(candidate) === prettyJson(item)) === index,
-    )
-
-  const structuredRecord = jsonRecord(structured)
-  const structuredResults = jsonArray(structuredRecord.results)
-  const searchTool = /(^|[._-])search$/i.test(toolName) || /web[._-]?search/i.test(toolName)
-  const hasSearchBlock = merged.some((block) => firstString(block, ['type', 'kind']) === 'search_results')
-  if (searchTool && structuredResults.length && !hasSearchBlock) {
-    merged.unshift({
-      type: 'search_results',
-      query: firstString(structuredRecord, ['query']),
-      results: structuredResults,
-    })
-  }
-
-  const hasSemanticSearch = merged.some((block) => firstString(block, ['type', 'kind']) === 'search_results')
-  const normalizedPrimary = normalizedBlockText(humanMarkdown || modelText)
-  return merged.filter((block) => {
-    const kind = firstString(block, ['type', 'kind'])
-    if (hasSemanticSearch && kind === 'json' && prettyJson(block.value) === prettyJson(structured)) return false
-    const text = normalizedBlockText(operationBlockText(block))
-    if (hasSemanticSearch && text && text === normalizedPrimary) return false
-    if (humanMarkdown && kind === 'markdown' && text === normalizedBlockText(humanMarkdown)) return false
-    return true
-  })
 }
 
 function attachmentFromRecord(value: JsonValue, index: number): AttachmentPresentation | null {
@@ -362,34 +305,61 @@ function attachmentFromRecord(value: JsonValue, index: number): AttachmentPresen
   }
 }
 
+function flatOperationView(content: JsonRecord, presentationValue: JsonValue): JsonRecord {
+  const presentation = jsonRecord(presentationValue)
+  const title = firstString(presentation, ['title'])
+  const summary = firstString(presentation, ['summary'])
+  const state = firstString(content, ['state'])
+  const invocation = {
+    name: firstString(content, ['name', 'tool']) || 'unknown',
+    plugin_name: content.plugin,
+    input: jsonRecord(content.input),
+    tool_api_call: jsonRecord(content.tool_api_call),
+  }
+  const blocks = jsonArray(presentation.blocks)
+  const result = {
+    state,
+    content: blocks,
+    display: { title, summary, sections: [] },
+  }
+  return {
+    call_id: content.call_id ?? 0,
+    invocation,
+    title,
+    summary,
+    blocks,
+    user_input: jsonRecord(content.user_input),
+    authorization: jsonRecord(content.authorization),
+    metadata: jsonRecord(content.metadata),
+    error: content.error ?? null,
+    lifecycle: jsonRecord(content.lifecycle),
+    result,
+  }
+}
+
 export function operationPresentation(part: TranscriptDisplayPart): OperationPresentation {
   const content = jsonRecord(part.source.agenaContent)
-  const operation = jsonRecord(content.operation)
+  const operation = flatOperationView(content, part.source.agenaPresentation ?? null)
   const invocation = jsonRecord(operation.invocation)
   const result = jsonRecord(operation.result)
   const display = jsonRecord(result.display)
-  const human = jsonRecord(result.human)
-  const modelPreview = jsonRecord(result.model_preview)
-  const modelOutput = jsonRecord(operation.model_output)
   const canonicalInput = jsonRecord(content.input)
   const encodedInput = Object.keys(canonicalInput).length ? canonicalInput : jsonRecord(invocation.input)
   const input = Object.keys(encodedInput).length ? decodeStructuredValue(encodedInput) : null
   const toolName =
     firstString(content, ['name', 'tool']) || firstString(invocation, ['name']) || stringValue(part.source.tool)
-  const rawHumanMarkdown = firstString(human, ['markdown', 'summary'])
-  const rawModelOutput = firstString(modelPreview, ['text']) || firstString(modelOutput, ['text'])
-  const structured = result.structured ?? operation.structured ?? null
-  const projectedBlocks = operationBlocks(operation, result, structured, toolName, rawModelOutput, rawHumanMarkdown)
+  const structured = null
+  const projectedBlocks = [...jsonArray(operation.blocks), ...jsonArray(result.content)]
+    .map(jsonRecord)
+    .filter((item) => Object.keys(item).length > 0)
+    .filter(
+      (item, index, values) => values.findIndex((candidate) => prettyJson(candidate) === prettyJson(item)) === index,
+    )
   const splitBlocks = splitOperationStdout(projectedBlocks)
   const blocks = splitBlocks.blocks
-  const stdout = operationStdout(content, operation, result, splitBlocks.stdout)
-  const humanMarkdown = stdout.normalized.has(normalizedBlockText(rawHumanMarkdown)) ? '' : rawHumanMarkdown
-  const modelOutputDuplicatedByBlock =
-    blocks.some((block) => normalizedBlockText(operationBlockText(block)) === normalizedBlockText(rawModelOutput)) ||
-    ((/(^|[._-])search$/i.test(toolName) || /web[._-]?search/i.test(toolName)) &&
-      blocks.some((block) => firstString(block, ['type', 'kind']) === 'search_results'))
-  const modelOutputText =
-    modelOutputDuplicatedByBlock || stdout.normalized.has(normalizedBlockText(rawModelOutput)) ? '' : rawModelOutput
+  const stdout = operationStdout(splitBlocks.stdout)
+  const humanMarkdown = ''
+  const modelOutputText = ''
 
   const displaySections = jsonArray(display.sections)
     .map((item) => {
@@ -400,11 +370,7 @@ export function operationPresentation(part: TranscriptDisplayPart): OperationPre
     })
     .filter((item): item is OperationDisplaySection => Boolean(item))
 
-  const attachments = [
-    ...jsonArray(operation.attachments),
-    ...jsonArray(modelOutput.attachments),
-    ...jsonArray(result.attachments),
-  ]
+  const attachments = [...jsonArray(operation.attachments), ...jsonArray(result.attachments)]
     .map(attachmentFromRecord)
     .filter((item): item is AttachmentPresentation => Boolean(item))
     .filter((item, index, list) => list.findIndex((candidate) => candidate.key === item.key) === index)
@@ -466,7 +432,6 @@ export function operationPresentation(part: TranscriptDisplayPart): OperationPre
     input,
     inputMarkdown: input === null ? '' : structuredValueMarkdown(input),
     error:
-      firstString(content, ['error']) ||
       operationFailureMessage(result.error ?? null) ||
       operationFailureMessage(operation.error ?? null),
     humanMarkdown,

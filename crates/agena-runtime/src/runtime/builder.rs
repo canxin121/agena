@@ -1286,6 +1286,26 @@ impl agena_runtime::RuntimeToolExecutionService for AgenaRuntime {
             .await
             .map_err(|error| agena_runtime::RuntimeToolExecutionError::new(error.to_string()))
     }
+
+    async fn render_tool_result(
+        &self,
+        invocation: &agena_domain::ToolInvocation,
+        output: &agena_domain::RawOutput,
+    ) -> agena_runtime::RuntimeToolResultProjection {
+        let rendered = self
+            .runtime_tool_executor()
+            .render_tool_result(invocation, output)
+            .await;
+        let human = rendered.human.unwrap_or_default();
+        agena_runtime::RuntimeToolResultProjection {
+            model: rendered.model.unwrap_or_default(),
+            human: agena_runtime::RuntimeToolHumanPresentation {
+                title: human.title,
+                summary: human.summary,
+                blocks: human.blocks,
+            },
+        }
+    }
 }
 
 #[async_trait::async_trait]

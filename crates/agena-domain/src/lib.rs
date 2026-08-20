@@ -25,6 +25,7 @@
 mod access;
 mod activity;
 mod activity_kind;
+mod attachment;
 mod auto_compaction;
 mod background_activity;
 mod command_events;
@@ -113,6 +114,7 @@ pub use activity_kind::{
     ActivityKindId, builtin_activity_kind_defaults, builtin_activity_kinds,
 };
 pub use activity_v2::{ActivityView, DeltaMode, RawOutput, RenderDelta, ViewBlock};
+pub use attachment::{AttachmentItem, AttachmentKind, AttachmentPart, AttachmentSource};
 pub use auto_compaction::SessionAutoCompactionConfig;
 pub use background_activity::{
     BackgroundActivity, BackgroundActivityChangedEvent, BackgroundActivityEventReason,

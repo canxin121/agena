@@ -2700,7 +2700,7 @@ mod router_contract_tests {
             .iter()
             .find_map(|part| {
                 part.content
-                    .pointer("/operation/user_input/requests/0/reply/answers/0")
+                    .pointer("/user_input/requests/0/reply/answers/0")
                     .and_then(serde_json::Value::as_array)
             })
             .expect("one durable user-input reply");
@@ -2822,7 +2822,7 @@ mod router_contract_tests {
             .iter()
             .filter_map(|part| {
                 part.content
-                    .pointer("/operation/authorization/permissions")
+                    .pointer("/authorization/permissions")
                     .and_then(serde_json::Value::as_array)
             })
             .flatten()

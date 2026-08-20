@@ -21,6 +21,7 @@ agena-domain = { workspace = true }
 agena-notification = { workspace = true }
 agena-runtime-notifications = { workspace = true }
 agena-runtime = { workspace = true }
+agena-runtime-contracts = { workspace = true }
 agena-storage = { workspace = true }
 agena-plugin-host = { workspace = true }
 agena-plugin-marketplace = { workspace = true }

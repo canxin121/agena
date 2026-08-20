@@ -10,7 +10,10 @@ import {
   structuredValueMarkdown,
 } from '../src/pages/chat/transcriptPartPresentation'
 
-function operationPart(content: Record<string, unknown>): TranscriptDisplayPart {
+function operationPart(
+  content: Record<string, unknown>,
+  presentation: Record<string, unknown> = { title: 'Tool operation', summary: '', blocks: [] },
+): TranscriptDisplayPart {
   return {
     key: 'part:4',
     id: '4',
@@ -28,6 +31,7 @@ function operationPart(content: Record<string, unknown>): TranscriptDisplayPart 
       agenaRole: 'assistant',
       partState: 'completed',
       agenaContent: content,
+      agenaPresentation: presentation,
     },
   }
 }
@@ -55,25 +59,25 @@ describe('TUI-parity part presentation', () => {
 
   test('preserves operation title, human output, rich blocks, metadata, and duration', () => {
     const projected = operationPresentation(
-      operationPart({
-        name: 'fs.read',
-        input: { path: 'README.md' },
-        operation: {
+      operationPart(
+        {
+          name: 'fs.read',
+          input: { path: 'README.md' },
+          lifecycle: { start_ms: 10, end_ms: 35 },
+          state: 'completed',
+          output: { payload: { preview: 'raw value' } },
+          metadata: { cache: true },
+        },
+        {
           title: 'fs.read · README.md',
           summary: 'Read 42 lines',
-          lifecycle: { start_ms: 10, end_ms: 35 },
-          result: {
-            state: 'completed',
-            human: { markdown: '**README**' },
-            content: [{ type: 'log', text: 'line one' }],
-            metadata: { cache: true },
-          },
+          blocks: [{ type: 'json', value: { preview: '**README**' } }],
         },
-      }),
+      ),
     )
     expect(projected.title).toBe('fs.read · README.md')
-    expect(projected.humanMarkdown).toBe('**README**')
-    expect(projected.blocks).toEqual([{ type: 'log', text: 'line one' }])
+    expect(projected.humanMarkdown).toBe('')
+    expect(projected.blocks).toEqual([{ type: 'json', value: { preview: '**README**' } }])
     expect(projected.metadata).toEqual({ cache: true })
     expect(projected.durationMs).toBe(25)
   })
@@ -82,28 +86,25 @@ describe('TUI-parity part presentation', () => {
     const projected = operationPresentation(
       operationPart({
         name: 'interaction.ask',
-        operation: {
-          invocation: { name: 'interaction.ask' },
-          user_input: {
-            requests: [
-              {
-                request: {
-                  request_id: 'request-1',
-                  kind: 'ask_user',
-                  questions: [
-                    {
-                      header: 'Target',
-                      question: 'Choose one',
-                      options: [{ label: 'Workspace', description: 'Search files' }],
-                    },
-                  ],
-                },
-                reply: { kind: 'submit', answers: { '0': ['Workspace'] } },
+        user_input: {
+          requests: [
+            {
+              request: {
+                request_id: 'request-1',
+                kind: 'ask_user',
+                questions: [
+                  {
+                    header: 'Target',
+                    question: 'Choose one',
+                    options: [{ label: 'Workspace', description: 'Search files' }],
+                  },
+                ],
               },
-            ],
-          },
-          result: { state: 'completed' },
+              reply: { kind: 'submit', answers: { '0': ['Workspace'] } },
+            },
+          ],
         },
+        state: 'completed',
       }),
     )
     expect(projected.userInputs).toHaveLength(1)
@@ -133,20 +134,14 @@ describe('TUI-parity part presentation', () => {
       query: 'agena',
       results: [{ title: 'Agena', url: 'https://example.test/agena', description: 'Result' }],
     }
-    const part = operationPart({
-      name: 'web.search',
-      operation: {
-        result: {
-          state: 'completed',
-          structured,
-          model_preview: { text: 'Found one result' },
-          content: [
-            { type: 'json', value: structured },
-            { type: 'log', text: 'Found one result' },
-          ],
-        },
+    const part = operationPart(
+      { name: 'web.search', state: 'completed', output: { payload: structured } },
+      {
+        title: 'Web search',
+        summary: '1 result',
+        blocks: [{ type: 'search_results', query: 'agena', results: structured.results }],
       },
-    })
+    )
     const projected = operationPresentation(part)
     expect(projected.modelOutput).toBe('')
     expect(projected.blocks).toEqual([
@@ -160,13 +155,11 @@ describe('TUI-parity part presentation', () => {
 
   test('retains request identities for inline interaction and permission ownership', () => {
     const part = operationPart({
-      operation: {
-        user_input: {
-          requests: [{ request: { request_id: 'input-1', questions: [] }, reply: null }],
-        },
-        authorization: {
-          permissions: [{ request: { request_id: 'permission-1', action: { kind: 'network_access' } } }],
-        },
+      user_input: {
+        requests: [{ request: { request_id: 'input-1', questions: [] }, reply: null }],
+      },
+      authorization: {
+        permissions: [{ request: { request_id: 'permission-1', action: { kind: 'network_access' } } }],
       },
     })
     expect(partInteractionRequestIds(part)).toEqual(['input-1', 'permission-1'])
@@ -174,14 +167,10 @@ describe('TUI-parity part presentation', () => {
 
   test('extracts explicit stdout logs and removes duplicate primary output', () => {
     const projected = operationPresentation(
-      operationPart({
-        operation: {
-          result: {
-            human: { markdown: '## Complete\n\n- one' },
-            content: [{ type: 'log', stream: 'stdout', text: '## Complete\n\n- one' }],
-          },
-        },
-      }),
+      operationPart(
+        { output: { payload: { text: 'raw text' } } },
+        { title: 'Complete', summary: 'Done', blocks: [{ type: 'log', stream: 'stdout', text: '## Complete\n\n- one' }] },
+      ),
     )
     expect(projected.stdout).toBe('## Complete\n\n- one')
     expect(projected.humanMarkdown).toBe('')
@@ -190,22 +179,14 @@ describe('TUI-parity part presentation', () => {
 
   test('extracts command stdout while retaining command diagnostics in Output', () => {
     const projected = operationPresentation(
-      operationPart({
-        operation: {
-          result: {
-            content: [
-              {
-                type: 'command',
-                command: 'cargo test',
-                cwd: '/workspace',
-                stdout: '**2 passed**',
-                stderr: 'warning',
-                exit_code: 0,
-              },
-            ],
-          },
+      operationPart(
+        { output: { payload: { raw: true } } },
+        {
+          title: 'cargo test',
+          summary: '2 passed',
+          blocks: [{ type: 'command', command: 'cargo test', cwd: '/workspace', stdout: '**2 passed**', stderr: 'warning', exit_code: 0 }],
         },
-      }),
+      ),
     )
     expect(projected.stdout).toBe('**2 passed**')
     expect(projected.blocks).toEqual([
@@ -221,14 +202,10 @@ describe('TUI-parity part presentation', () => {
 
   test('deduplicates direct stdout sources and leaves stdout-only Output empty', () => {
     const projected = operationPresentation(
-      operationPart({
-        stdout: '# Result',
-        operation: {
-          stdout: '# Result',
-          raw: { stdout: '# Result' },
-          result: { stdout: '# Result', raw: { stdout: '# Result' } },
-        },
-      }),
+      operationPart(
+        { output: { payload: { text: 'raw result' } } },
+        { title: 'Result', summary: 'Complete', blocks: [{ type: 'log', stream: 'stdout', text: '# Result' }] },
+      ),
     )
     expect(projected.stdout).toBe('# Result')
     expect(projected.humanMarkdown).toBe('')

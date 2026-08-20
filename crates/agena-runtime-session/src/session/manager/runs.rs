@@ -49,12 +49,7 @@ pub(crate) fn run_visible_text_lossy(run: &[Part]) -> String {
 /// `Message::tool_text_lossy` (private in contracts): first non-empty of
 /// output text, error message, title, or summary.
 fn tool_visible_text_lossy(tool: &agena_runtime_contracts::part::OperationPart) -> Option<String> {
-    let candidates = [
-        tool.output_text(),
-        tool.error_message(),
-        tool.title(),
-        (!tool.summary.trim().is_empty()).then_some(tool.summary.as_str()),
-    ];
+    let candidates = [tool.output_text(), tool.error_message(), tool.title()];
     candidates
         .into_iter()
         .flatten()

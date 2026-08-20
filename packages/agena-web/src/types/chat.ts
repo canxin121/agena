@@ -235,6 +235,7 @@ export type MessagePart = {
   agenaRole?: string
   agenaSummary?: string | null
   agenaContent?: JsonLike
+  agenaPresentation?: JsonLike
   runId?: number | null
   parentPartId?: number | null
   // For tool parts (ToolInvocation.vue contract).

@@ -5,8 +5,24 @@
 //! session executor or a bootstrap fallback) remains inside the runtime
 //! composition adapter.
 
-use agena_domain::ToolInvocation;
+use agena_domain::{RawOutput, ToolInvocation, ViewBlock};
 use async_trait::async_trait;
+
+/// Ephemeral human projection of a raw tool result. This value is produced on
+/// demand and must never be written back to a session part.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RuntimeToolHumanPresentation {
+    pub title: String,
+    pub summary: String,
+    pub blocks: Vec<ViewBlock>,
+}
+
+/// Ephemeral model and human projections of the one durable raw result.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RuntimeToolResultProjection {
+    pub model: String,
+    pub human: RuntimeToolHumanPresentation,
+}
 
 #[derive(Debug, Clone)]
 /// Descriptor of a runtime tool.
@@ -69,4 +85,41 @@ pub trait RuntimeToolExecutionService: Send + Sync {
         invocation: &ToolInvocation,
         call_id: i64,
     ) -> Result<crate::SessionToolExecutionOutcome, RuntimeToolExecutionError>;
+
+    /// Render one invocation/result pair at the read boundary. Concrete
+    /// runtimes delegate to the owning plugin/tool first. The default keeps
+    /// lightweight test/service implementations useful and is the Agena
+    /// system fallback when no owner-specific renderer is available.
+    async fn render_tool_result(
+        &self,
+        invocation: &ToolInvocation,
+        output: &RawOutput,
+    ) -> RuntimeToolResultProjection {
+        let model = match output.payload.as_ref() {
+            Some(payload) => serde_json::to_string(payload).unwrap_or_else(|_| output.text.clone()),
+            None => output.text.clone(),
+        };
+        let mut blocks = Vec::new();
+        if let Some(payload) = output.payload.as_ref() {
+            blocks.push(ViewBlock::Json {
+                id: Some("payload".to_owned()),
+                value: payload.clone(),
+            });
+        }
+        if !output.text.is_empty() {
+            blocks.push(ViewBlock::Log {
+                id: Some("text".to_owned()),
+                stream: agena_domain::CommandOutputStream::Stdout,
+                text: output.text.clone(),
+            });
+        }
+        RuntimeToolResultProjection {
+            human: RuntimeToolHumanPresentation {
+                title: invocation.name.clone(),
+                summary: agena_tool::normalize_tool_summary(model.as_str()),
+                blocks,
+            },
+            model,
+        }
+    }
 }

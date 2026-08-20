@@ -638,7 +638,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
           (total, entry) =>
             total +
             entry.parts.filter((part) => {
-              const kind = String(part.agenaKind || part.type || '').toLowerCase()
+              const kind = String(part.agenaKind || '').toLowerCase()
               return kind !== 'run'
             }).length,
           0,
@@ -649,7 +649,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
           normalized
             .flatMap((entry) => entry.parts)
             .find((part) => {
-              const kind = String(part.agenaKind || part.type || '').toLowerCase()
+              const kind = String(part.agenaKind || '').toLowerCase()
               return kind !== 'run'
             })?.id || fold.anchorPartId
         const nextFold: MessageFold = {

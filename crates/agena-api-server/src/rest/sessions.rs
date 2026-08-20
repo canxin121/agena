@@ -199,8 +199,29 @@ pub async fn list_session_parts(
         .load_page(session_id, before, i64::try_from(limit).unwrap_or(i64::MAX))
         .await
         .map_err(|error| ServerError::internal(error.to_string()))?;
-    let mut parts = page.parts;
-    let next_cursor = parts.last().map(|part| {
+    let (parts, next_cursor) = select_user_visible_part_page(session_id, page.parts)?;
+    let projected = crate::live::project_parts_for_user(&state, &parts).await;
+    Ok(Json(agena_api::live::SessionPartsResource {
+        session_id,
+        version: page.meta.version,
+        parts: projected,
+        folds: Vec::new(),
+        page: agena_api::pagination::PageInfo {
+            next_cursor,
+            has_more: page.has_more,
+            returned: parts.len() as u64,
+        },
+    }))
+}
+
+fn select_user_visible_part_page(
+    session_id: i64,
+    raw_parts: Vec<agena_storage::store::Part>,
+) -> Result<(Vec<agena_storage::store::Part>, Option<String>), ServerError> {
+    // Advance by the raw page boundary, even when every row in that page is
+    // AI-only. Otherwise a human client would request the same invisible page
+    // forever.
+    let next_cursor = raw_parts.last().map(|part| {
         agena_application::pagination::encode_cursor(
             &agena_application::pagination::SessionPartCursor {
                 session_id,
@@ -212,18 +233,12 @@ pub async fn list_session_parts(
     let next_cursor = next_cursor
         .transpose()
         .map_err(server_error_from_application)?;
+    let mut parts = raw_parts
+        .into_iter()
+        .filter(|part| part.visibility.visible_to_user())
+        .collect::<Vec<_>>();
     parts.reverse();
-    Ok(Json(agena_api::live::SessionPartsResource {
-        session_id,
-        version: page.meta.version,
-        parts: parts.iter().map(crate::live::project_part).collect(),
-        folds: Vec::new(),
-        page: agena_api::pagination::PageInfo {
-            next_cursor,
-            has_more: page.has_more,
-            returned: parts.len() as u64,
-        },
-    }))
+    Ok((parts, next_cursor))
 }
 
 pub async fn stream_session_changes(
@@ -248,7 +263,7 @@ pub async fn stream_session_changes(
     if let Some(delay_ms) = query.test_snapshot_delay_ms.filter(|delay| *delay > 0) {
         tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
     }
-    let initial = crate::live::session_parts(store.as_ref(), session_id).await?;
+    let initial = crate::live::session_parts(&state, store.as_ref(), session_id).await?;
 
     let stream = stream! {
         if query.since_version != Some(initial.version) {
@@ -525,3 +540,66 @@ use super::{
     SessionUpdateRequest, Sse, State, UserInputReply, if_match_version, json_http, json_http_found,
     server_error_from_application, sse_error_event, stream,
 };
+
+#[cfg(test)]
+mod visibility_tests {
+    use super::select_user_visible_part_page;
+    use agena_storage::store::{Part, PartRole, PartState, PartVisibility};
+
+    fn part(id: i64, visibility: PartVisibility) -> Part {
+        Part {
+            part_id: id,
+            kind: "text".to_owned(),
+            role: PartRole::Assistant,
+            state: PartState::Completed,
+            content: serde_json::json!({"text": id.to_string()}),
+            summary: None,
+            visibility,
+            rendered_markdown: None,
+            parent_part_id: None,
+            run_id: Some(1),
+            origin_session_id: 1,
+            revision: 0,
+            started_at_ms: id,
+            finished_at_ms: Some(id),
+            created_at_ms: id,
+            updated_at_ms: id,
+            provider_state: None,
+        }
+    }
+
+    #[test]
+    fn parts_page_exposes_both_and_user_but_not_ai() {
+        let raw_newest_first = vec![
+            part(3, PartVisibility::Both),
+            part(2, PartVisibility::Ai),
+            part(1, PartVisibility::User),
+        ];
+
+        let (visible, _) = select_user_visible_part_page(7, raw_newest_first).unwrap();
+
+        assert_eq!(
+            visible
+                .iter()
+                .map(|part| (part.part_id, part.visibility))
+                .collect::<Vec<_>>(),
+            vec![(1, PartVisibility::User), (3, PartVisibility::Both)]
+        );
+    }
+
+    #[test]
+    fn ai_only_raw_page_still_advances_the_parts_cursor() {
+        let raw_newest_first = vec![part(12, PartVisibility::Ai), part(11, PartVisibility::Ai)];
+
+        let (visible, cursor) = select_user_visible_part_page(7, raw_newest_first).unwrap();
+
+        assert!(visible.is_empty());
+        let cursor = agena_application::pagination::decode_cursor::<
+            agena_application::pagination::SessionPartCursor,
+        >(cursor.as_deref().expect("raw page cursor"))
+        .unwrap();
+        assert_eq!(cursor.session_id, 7);
+        assert_eq!(cursor.part_id, 11);
+        assert_eq!(cursor.created_at_ms, 11);
+    }
+}

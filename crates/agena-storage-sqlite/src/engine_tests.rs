@@ -249,7 +249,7 @@ async fn semantic_checkpoint_flushes_a_buffered_part_before_companion_append() {
     let mut tool = NewPart::pending(
         "tool_call",
         PartRole::Assistant,
-        json!({"operation": {"phase": "starting"}}),
+        json!({"name": "shell.run", "input": {}, "metadata": {"phase": "starting"}}),
     );
     tool.state = PartState::InProgress;
     let launched = facade
@@ -259,11 +259,11 @@ async fn semantic_checkpoint_flushes_a_buffered_part_before_companion_append() {
     let run_id = launched.run_id;
     let tool_part_id = launched.parts[1].part_id;
     let marker_content = json!({
-        "operation": {
+        "name": "shell.run",
+        "input": {},
+        "metadata": {
             "phase": "launched",
-            "metadata": {
-                "agena.background": {"kind": "shell", "id": "proc_atomic"}
-            }
+            "agena.background": {"kind": "shell", "id": "proc_atomic"}
         }
     });
 
@@ -293,15 +293,15 @@ async fn semantic_checkpoint_flushes_a_buffered_part_before_companion_append() {
             .iter()
             .find(|part| part.part_id == tool_part_id)
             .expect("durable tool part")
-            .content["operation"]["phase"],
+            .content["metadata"]["phase"],
         "starting",
         "the fixture must prove the marker is still memory-only"
     );
 
     let mut guard = NewPart::pending(
-        "tool_result",
-        PartRole::Tool,
-        json!({"ok": true, "output": ""}),
+        "hook",
+        PartRole::Runtime,
+        json!({"hook": "background.launch_checkpoint", "summary": "launched"}),
     );
     guard.state = PartState::Completed;
     guard.parent_part_id = Some(tool_part_id);
@@ -331,7 +331,7 @@ async fn semantic_checkpoint_flushes_a_buffered_part_before_companion_append() {
     assert_eq!(durable_tool.finished_at_ms, None);
     assert_eq!(durable_tool.content, marker_content);
     assert!(after.parts.iter().any(|part| {
-        part.kind == "tool_result"
+        part.kind == "hook"
             && part.parent_part_id == Some(tool_part_id)
             && part.state == PartState::Completed
     }));
@@ -980,7 +980,7 @@ async fn retry_transitions_failed_to_in_progress_with_revision_bump_but_not_for_
 }
 
 #[tokio::test]
-async fn retry_history_keeps_the_durable_error_beside_the_successful_result() {
+async fn retry_history_keeps_the_error_beside_the_updated_tool_call_result() {
     let db = in_memory_db().await;
     let (engine, session_id) = setup(db).await;
     let outcome = engine
@@ -991,7 +991,7 @@ async fn retry_history_keeps_the_durable_error_beside_the_successful_result() {
                 kind: "tool_call".to_owned(),
                 role: PartRole::Assistant,
                 content: json!({"name": "fs.read", "input": {"path": "missing"}}),
-                summary: Some("read missing".to_owned()),
+                summary: None,
                 visibility: PartVisibility::Both,
                 rendered_markdown: None,
                 parent_part_id: None,
@@ -1058,31 +1058,18 @@ async fn retry_history_keeps_the_durable_error_beside_the_successful_result() {
     assert_eq!(retried.state, PartState::InProgress);
     assert!(retried.revision >= 3);
     engine
-        .append_parts(
-            session_id,
-            "owner-a",
-            run_id,
-            vec![NewPart {
-                kind: "tool_result".to_owned(),
-                role: PartRole::Tool,
-                content: json!({"output": "contents", "ok": true}),
-                summary: Some("read succeeded".to_owned()),
-                visibility: PartVisibility::Both,
-                rendered_markdown: Some("`contents`".to_owned()),
-                parent_part_id: Some(tool_id),
-                state: PartState::Completed,
-            }],
-            1_000_004,
-        )
-        .await
-        .expect("append successful result");
-    engine
         .update_part(
             session_id,
             "owner-a",
             tool_id,
             agena_storage::store::PartDelta {
                 state: Some(PartState::Completed),
+                content: Some(json!({
+                    "name": "fs.read",
+                    "input": {"path": "missing"},
+                    "state": "completed",
+                    "output": {"payload": {"output": "contents", "ok": true}}
+                })),
                 ..Default::default()
             },
             1_000_005,
@@ -1117,13 +1104,13 @@ async fn retry_history_keeps_the_durable_error_beside_the_successful_result() {
     let success = history
         .parts
         .iter()
-        .find(|part| part.kind == "tool_result")
+        .find(|part| part.part_id == tool_id)
         .expect("successful result remains");
     assert_eq!(error.parent_part_id, Some(tool_id));
     assert_eq!(error.state, PartState::Failed);
-    assert_eq!(success.parent_part_id, Some(tool_id));
+    assert_eq!(success.parent_part_id, None);
     assert_eq!(success.state, PartState::Completed);
-    assert_eq!(success.content["output"], "contents");
+    assert_eq!(success.content["output"]["payload"]["output"], "contents");
     assert_eq!(
         history
             .parts
@@ -1391,7 +1378,7 @@ async fn resume_mid_tool_preserves_error_context_and_cancels_the_tool() {
                 kind: "tool_call".to_owned(),
                 role: PartRole::Assistant,
                 content: json!({"name": "shell", "input": {"command": "sleep"}}),
-                summary: Some("running shell".to_owned()),
+                summary: None,
                 visibility: PartVisibility::Both,
                 rendered_markdown: None,
                 parent_part_id: None,
@@ -1472,7 +1459,7 @@ async fn resume_mid_tool_preserves_error_context_and_cancels_the_tool() {
 }
 
 #[tokio::test]
-async fn jsonl_round_trip_preserves_ordering_and_references() {
+async fn jsonl_round_trip_preserves_single_source_tool_output_and_ordering() {
     let db = in_memory_db().await;
     let (engine, session_id) = setup(db.clone()).await;
     let outcome = engine
@@ -1483,7 +1470,7 @@ async fn jsonl_round_trip_preserves_ordering_and_references() {
                 kind: "tool_call".to_owned(),
                 role: PartRole::Assistant,
                 content: json!({"name": "fs.read", "input": {"path": "README.md"}}),
-                summary: Some("read README".to_owned()),
+                summary: None,
                 visibility: PartVisibility::Both,
                 rendered_markdown: None,
                 parent_part_id: None,
@@ -1496,31 +1483,18 @@ async fn jsonl_round_trip_preserves_ordering_and_references() {
         .expect("start exportable run");
     let tool_id = outcome.parts[1].part_id;
     engine
-        .append_parts(
-            session_id,
-            "owner-a",
-            outcome.run_id,
-            vec![NewPart {
-                kind: "tool_result".to_owned(),
-                role: PartRole::Tool,
-                content: json!({"output": "hello", "ok": true}),
-                summary: Some("read complete".to_owned()),
-                visibility: PartVisibility::Both,
-                rendered_markdown: Some("hello".to_owned()),
-                parent_part_id: Some(tool_id),
-                state: PartState::Completed,
-            }],
-            1_000_001,
-        )
-        .await
-        .expect("append referenced result");
-    engine
         .update_part(
             session_id,
             "owner-a",
             tool_id,
             agena_storage::store::PartDelta {
                 state: Some(PartState::Completed),
+                content: Some(json!({
+                    "name": "fs.read",
+                    "input": {"path": "README.md"},
+                    "state": "completed",
+                    "output": {"payload": {"output": "hello", "ok": true}}
+                })),
                 ..Default::default()
             },
             1_000_002,
@@ -1588,16 +1562,13 @@ async fn jsonl_round_trip_preserves_ordering_and_references() {
         .iter()
         .find(|part| part.kind == "tool_call")
         .expect("restored tool call");
-    let restored_result = restored
-        .parts
-        .iter()
-        .find(|part| part.kind == "tool_result")
-        .expect("restored tool result");
     assert_eq!(restored.parts[0].run_id, None, "marker stays a root");
     assert_eq!(restored.parts[0].provider_state, Some(provider_state));
     assert_eq!(restored_tool.run_id, Some(restored_marker));
-    assert_eq!(restored_result.run_id, Some(restored_marker));
-    assert_eq!(restored_result.parent_part_id, Some(restored_tool.part_id));
+    assert_eq!(
+        restored_tool.content["output"]["payload"]["output"],
+        "hello"
+    );
     assert!(
         restored
             .parts

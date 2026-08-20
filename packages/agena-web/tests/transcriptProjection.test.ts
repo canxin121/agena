@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 
 import type { MessageLike, MessagePartLike } from '../src/components/chat/messageList.types'
-import { projectTranscriptBlocks } from '../src/pages/chat/transcriptProjection'
+import { durablePartKind, projectTranscriptBlocks } from '../src/pages/chat/transcriptProjection'
 
 function part(id: string, kind: string, content: Record<string, unknown>, state = 'completed'): MessagePartLike {
   return {
@@ -11,6 +11,9 @@ function part(id: string, kind: string, content: Record<string, unknown>, state 
     agenaKind: kind,
     agenaRole: 'assistant',
     agenaContent: content,
+    ...(kind === 'tool_call'
+      ? { agenaPresentation: { title: 'Tool operation', summary: '', blocks: [] } }
+      : {}),
   }
 }
 
@@ -22,6 +25,12 @@ function message(id: string, role: string, parts: MessagePartLike[], runState = 
 }
 
 describe('TUI-parity transcript projection', () => {
+  test('does not reinterpret removed type-only tool rows', () => {
+    expect(durablePartKind({ type: 'tool' })).toBe('unknown')
+    expect(durablePartKind({ type: 'reasoning' })).toBe('unknown')
+    expect(durablePartKind({ agenaKind: 'tool_call', type: 'tool' })).toBe('tool_call')
+  })
+
   test('keeps parts inside their run and promotes only the final assistant text to Answer', () => {
     const blocks = projectTranscriptBlocks(
       [
@@ -31,7 +40,7 @@ describe('TUI-parity transcript projection', () => {
           part('5', 'text', { text: 'working note' }),
           part('6', 'tool_call', {
             name: 'fs.read',
-            operation: { title: 'Read file', summary: 'src/main.rs', result: { state: 'completed' } },
+            state: 'completed',
           }),
           part('7', 'text', { text: 'final answer' }),
         ]),
@@ -159,10 +168,8 @@ describe('TUI-parity transcript projection', () => {
               '31',
               'tool_call',
               {
-                operation: {
-                  user_input: {
-                    requests: [{ request: { request_id: 'request-31', questions: [] }, reply: null }],
-                  },
+                user_input: {
+                  requests: [{ request: { request_id: 'request-31', questions: [] }, reply: null }],
                 },
               },
               'in_progress',

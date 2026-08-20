@@ -1,5 +1,5 @@
 use super::{
-    AppError, Arc, BTreeMap, CompletionRequest, CompletionStreamEvent, FinishReason, PathBuf,
+    AppError, Arc, BTreeMap, CompletionRequest, CompletionStreamEvent, FinishReason,
     PendingProviderNativeToolCall, PendingToolCall, REASONING_PLACEHOLDER, SessionProcessor,
     SessionRunRequest, SessionRunResult, SessionRunTermination, complete_part_status,
     map_finish_reason, merge_provider_native_tool_invocation,
@@ -16,7 +16,7 @@ use futures_util::StreamExt;
 use std::collections::BTreeSet;
 use tracing::Instrument;
 
-use agena_domain::{ArtifactRef, ViewBlock, WebSearchResult};
+use agena_domain::ArtifactRef;
 
 /// The JSON key under which a run marker's per-round records live. Multi-round
 /// turns (one user message == one run marker) carry an array of round records,
@@ -98,14 +98,8 @@ fn merge_completed_event_state(
 }
 
 impl SessionProcessor {
-    pub fn new(
-        plugins: Arc<agena_plugin_host::PluginHost>,
-        workspace_root: impl Into<PathBuf>,
-    ) -> Self {
-        Self {
-            plugins,
-            workspace_root: workspace_root.into(),
-        }
+    pub fn new(plugins: Arc<agena_plugin_host::PluginHost>) -> Self {
+        Self { plugins }
     }
 
     /// Apply the `chat.params` plugin hook chain to a [`CompletionRequest`]
@@ -384,7 +378,7 @@ impl SessionProcessor {
                     stream_key,
                     id,
                     invocation,
-                    title,
+                    title: _,
                     raw,
                     ..
                 }) => {
@@ -426,9 +420,6 @@ impl SessionProcessor {
                         pending.invocation.as_ref(),
                         invocation,
                     ));
-                    if !title.trim().is_empty() {
-                        pending.title = title;
-                    }
                     pending.raw = merge_provider_metadata(pending.raw.take(), raw);
                     self.ensure_provider_native_tool_call_part(
                         &mut run,
@@ -491,7 +482,7 @@ impl SessionProcessor {
                         title,
                         summary,
                         output_text,
-                        provider_native_output_blocks_to_operation_blocks(blocks),
+                        provider_native_output_attachments(blocks),
                         details,
                         raw,
                     )
@@ -800,41 +791,25 @@ impl SessionProcessor {
     }
 }
 
-fn provider_native_output_blocks_to_operation_blocks(
+fn provider_native_output_attachments(
     blocks: Vec<ProviderNativeToolOutputBlock>,
-) -> Vec<ViewBlock> {
+) -> Vec<agena_domain::AttachmentItem> {
     blocks
         .into_iter()
-        .map(|block| match block {
-            ProviderNativeToolOutputBlock::Text { text } => ViewBlock::Text { id: None, text },
-            ProviderNativeToolOutputBlock::SearchResults { results, .. } => {
-                ViewBlock::SearchResults {
-                    id: None,
-                    items: results
-                        .into_iter()
-                        .map(|result| WebSearchResult {
-                            title: result.title,
-                            url: result.uri,
-                            snippet: result.snippet,
-                        })
-                        .collect(),
-                    total: None,
-                }
-            }
+        .filter_map(|block| match block {
             ProviderNativeToolOutputBlock::Media {
                 mime_type: _,
                 artifact,
-            } => ViewBlock::Media {
-                id: None,
-                artifact: provider_native_artifact_to_operation_block(artifact),
-            },
+            } => Some(agena_domain::AttachmentItem::from(
+                provider_native_artifact_to_raw_attachment(artifact),
+            )),
+            ProviderNativeToolOutputBlock::Text { .. }
+            | ProviderNativeToolOutputBlock::SearchResults { .. } => None,
         })
         .collect()
 }
 
-fn provider_native_artifact_to_operation_block(
-    artifact: ProviderNativeToolArtifact,
-) -> ArtifactRef {
+fn provider_native_artifact_to_raw_attachment(artifact: ProviderNativeToolArtifact) -> ArtifactRef {
     ArtifactRef {
         uri: artifact.uri,
         mime: artifact.mime,

@@ -1,6 +1,57 @@
 use crate::{Application, ApplicationError, dto::OperatorToolResource};
 
 impl Application {
+    /// Produce ephemeral model/human views from the invocation and the sole
+    /// durable raw result. Callers may serialize the human side in a response,
+    /// but must never persist either projection.
+    pub async fn render_tool_result(
+        &self,
+        invocation: &agena_domain::ToolInvocation,
+        output: &agena_domain::RawOutput,
+    ) -> agena_runtime::RuntimeToolResultProjection {
+        self.runtime_tools()
+            .render_tool_result(invocation, output)
+            .await
+    }
+
+    pub(crate) async fn render_transcript_tool_presentations(
+        &self,
+        parts: &mut [agena_api::resource::SessionTranscriptPart],
+    ) {
+        for part in parts {
+            if part.kind != agena_runtime_contracts::part_content::ToolCallContent::kind() {
+                continue;
+            }
+            let Ok(content) =
+                agena_runtime_contracts::part_content::ToolCallContent::try_from(&part.content)
+            else {
+                continue;
+            };
+            let Ok(input) = agena_domain::StructuredObject::try_from(content.input) else {
+                continue;
+            };
+            let invocation = agena_domain::ToolInvocation {
+                tool_api_call: content.tool_api_call,
+                name: content.name,
+                plugin_name: content.plugin,
+                input,
+            };
+            let human = if let Some(output) = content.output {
+                self.render_tool_result(&invocation, &output).await.human
+            } else {
+                agena_runtime::RuntimeToolHumanPresentation {
+                    title: invocation.name,
+                    ..Default::default()
+                }
+            };
+            part.presentation = Some(agena_api::live::ToolHumanPresentationResource {
+                title: human.title,
+                summary: human.summary,
+                blocks: human.blocks,
+            });
+        }
+    }
+
     pub async fn list_operator_tools(&self) -> Vec<OperatorToolResource> {
         self.runtime_tools()
             .available_runtime_tools()

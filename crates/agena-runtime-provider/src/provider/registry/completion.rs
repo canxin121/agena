@@ -1679,7 +1679,6 @@ mod tool_api_function_validation_tests {
     use agena_domain::TimeRange;
     use agena_domain::ToolApiFunction;
     use agena_domain::ToolInvocation;
-    use agena_domain::ToolOutput;
     use agena_domain::{Model, ModelId, ModelRef, ProviderId};
     use agena_plugin_host::registry::RegisteredTool;
     use agena_plugin_host::sdk::{PluginKey, ToolDefinition};
@@ -1688,7 +1687,7 @@ mod tool_api_function_validation_tests {
         AgenaToolMode, CompletionFinishReason, CompletionRequest, CompletionToolCall,
         CompletionUsage, ProviderNativeToolRoute, ProviderNativeToolsConfig,
     };
-    use agena_runtime_contracts::part::{OperationCompletion, OperationPart};
+    use agena_runtime_contracts::part::OperationPart;
     use agena_runtime_tools::tool::ToolApiBinding;
     use agena_storage::store::{Part, PartRole, PartState, PartVisibility};
     use async_trait::async_trait;
@@ -2045,14 +2044,10 @@ mod tool_api_function_validation_tests {
         let mut operation = OperationPart::completed(
             0,
             invocation,
-            OperationCompletion::new(
-                "Tool help",
-                "Help returned",
-                "help output".to_owned(),
-                Vec::new(),
-                Vec::new(),
-                ToolOutput::default(),
-            ),
+            agena_domain::RawOutput {
+                payload: Some(serde_json::json!({"text": "help output"})),
+                ..Default::default()
+            },
             TimeRange::default(),
         );
         // The session serializer stashes the provider operation id inside the
@@ -2062,36 +2057,14 @@ mod tool_api_function_validation_tests {
             "agena.operation_id".to_owned(),
             serde_json::Value::String("call_help".to_owned()),
         );
-        let mut content = serde_json::Map::new();
-        content.insert(
-            "name".to_owned(),
-            serde_json::Value::String(operation.invocation.name.clone()),
-        );
-        content.insert(
-            "input".to_owned(),
-            serde_json::Value::from(operation.invocation.input.clone()),
-        );
-        content.insert(
-            "operation".to_owned(),
-            serde_json::to_value(&operation).expect("operation is JSON serializable"),
-        );
-        content.insert(
-            "tool_api_call".to_owned(),
-            serde_json::to_value(
-                operation
-                    .invocation
-                    .tool_api_call
-                    .as_ref()
-                    .expect("tool api call"),
-            )
-            .expect("tool api call is JSON serializable"),
-        );
+        let content =
+            agena_runtime_contracts::part_content::tool_call_from_operation(&operation).as_value();
         Part {
             part_id: 1,
             kind: "tool_call".to_owned(),
             role: PartRole::Assistant,
             state: PartState::Completed,
-            content: serde_json::Value::Object(content),
+            content,
             summary: None,
             visibility: PartVisibility::Both,
             rendered_markdown: None,

@@ -15,11 +15,15 @@ use axum::{
 };
 use serde::Deserialize;
 
-use crate::{error::ServerError, live::project_part, state::AppState};
+use crate::{error::ServerError, live::project_parts_for_user, state::AppState};
 
 const RAW_SCAN_PAGE_SIZE: i64 = 200;
 const ACTIVITY_VISIBLE_TAIL: usize = 5;
 const MAX_VISIBLE_BLOCKS: usize = 12;
+
+fn transcript_visible_to_user(part: &Part) -> bool {
+    part.visibility.visible_to_user()
+}
 
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct SessionTranscriptQuery {
@@ -79,10 +83,11 @@ pub async fn list_session_transcript(
         .map(|cursor| encode_transcript_cursor(session_id, cursor))
         .transpose()?;
 
+    let projected = project_parts_for_user(&state, &page.parts).await;
     Ok(Json(SessionPartsResource {
         session_id,
         version: page.version,
-        parts: page.parts.iter().map(project_part).collect(),
+        parts: projected,
         folds: page.folds,
         page: agena_api::pagination::PageInfo {
             next_cursor,
@@ -117,13 +122,18 @@ pub async fn list_session_transcript_run_parts(
         })
         .map(|cursor| encode_run_cursor(session_id, cursor))
         .transpose()?;
-    let mut parts = page.parts;
+    let mut parts = page
+        .parts
+        .into_iter()
+        .filter(transcript_visible_to_user)
+        .collect::<Vec<_>>();
     parts.reverse();
 
+    let projected = project_parts_for_user(&state, &parts).await;
     Ok(Json(SessionPartsResource {
         session_id,
         version: page.meta.version,
-        parts: parts.iter().map(project_part).collect(),
+        parts: projected,
         folds: Vec::new(),
         page: agena_api::pagination::PageInfo {
             next_cursor,
@@ -167,9 +177,9 @@ pub async fn list_session_transcript_fold_parts(
     candidates.sort_by_key(|part| (part.created_at_ms, part.part_id));
     candidates.dedup_by_key(|part| part.part_id);
     let take_from = candidates.len().saturating_sub(limit);
-    let selected = candidates.split_off(take_from);
+    let raw_selected = candidates.split_off(take_from);
     has_more |= take_from > 0;
-    let next_cursor = selected.first().map(|part| {
+    let next_cursor = raw_selected.first().map(|part| {
         encode_fold_cursor(
             session_id,
             &cursor.run_ids,
@@ -179,6 +189,11 @@ pub async fn list_session_transcript_fold_parts(
             },
         )
     });
+    let selected = raw_selected
+        .into_iter()
+        .filter(transcript_visible_to_user)
+        .collect::<Vec<_>>();
+    let projected = project_parts_for_user(&state, &selected).await;
     Ok(Json(SessionPartsResource {
         session_id,
         version: store
@@ -187,7 +202,7 @@ pub async fn list_session_transcript_fold_parts(
             .map_err(|error| ServerError::internal(error.to_string()))?
             .meta
             .version,
-        parts: selected.iter().map(project_part).collect(),
+        parts: projected,
         folds: Vec::new(),
         page: agena_api::pagination::PageInfo {
             next_cursor: next_cursor.transpose()?,
@@ -228,7 +243,7 @@ async fn load_visible_page(
             created_at_ms: part.created_at_ms,
             part_id: part.part_id,
         });
-        raw_desc.extend(page.parts);
+        raw_desc.extend(page.parts.into_iter().filter(transcript_visible_to_user));
         let mut chronological = raw_desc.clone();
         chronological.reverse();
         blocks = logical_blocks(&chronological);
@@ -307,6 +322,7 @@ async fn load_all_run_parts(
         }
         before = next_before;
     }
+    newest_first.retain(transcript_visible_to_user);
     newest_first.reverse();
     Ok(newest_first)
 }
@@ -582,7 +598,7 @@ fn encode_fold_cursor(
 
 #[cfg(test)]
 mod tests {
-    use agena_storage::store::{PartRole, PartState};
+    use agena_storage::store::{PartRole, PartState, PartVisibility};
 
     use super::*;
 
@@ -630,5 +646,22 @@ mod tests {
         assert_eq!(folds[0].anchor_part_id, 3);
         assert_eq!(folds[0].hidden_count, 2);
         assert!(folds[0].next_cursor.is_some());
+    }
+
+    #[test]
+    fn transcript_exposes_both_and_user_but_not_ai() {
+        for (visibility, expected) in [
+            (PartVisibility::Both, true),
+            (PartVisibility::User, true),
+            (PartVisibility::Ai, false),
+        ] {
+            let mut candidate = part(1, "text");
+            candidate.visibility = visibility;
+            assert_eq!(
+                transcript_visible_to_user(&candidate),
+                expected,
+                "{visibility:?}"
+            );
+        }
     }
 }

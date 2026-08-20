@@ -1,6 +1,6 @@
 use super::replies::{operation_from_part, operation_id_from_part};
 use super::{
-    AppError, AttachmentItem, ExecutionControlError, HashSet, PermissionAction, PermissionMode,
+    AppError, ExecutionControlError, HashSet, PermissionAction, PermissionMode,
     PermissionReplyKind, PermissionScope, PersistedPermissionRule, ResolvedPendingTool,
     RunAbortReason, SessionManager, SessionPendingTool, TimeRange, ToolError, ToolInvocation,
     ToolInvocationExecution, ToolOutput, UserInputReplyKind, Utc,
@@ -9,7 +9,6 @@ use crate::session::Session;
 use agena_domain::{
     PermissionReply, StructuredObject, StructuredValue, UserInputReply, UserInputRequest,
 };
-use agena_tool::ToolHumanRenderer;
 
 /// Default lifetime of an interactive user-input request when the caller does
 /// not specify `auto_resolution_ms`. Every interactive request is bounded so a
@@ -30,33 +29,6 @@ pub(super) fn effective_user_input_timeout_ms(requested: Option<u64>) -> Option<
         requested
             .unwrap_or(DEFAULT_USER_INPUT_TIMEOUT_MS)
             .min(MAX_USER_INPUT_TIMEOUT_MS),
-    )
-}
-
-/// Derive the human-facing detail Markdown from a compact tool result payload.
-///
-/// This is the runtime's single derivation entry: the durable record stores
-/// only the compact `data` (serialized `ToolResult`), and the human view is
-/// produced here via the unified renderer (`ToolResultRender`). It is called
-/// at snapshot load and on lazy detail fetches, never during persistence.
-///
-/// `tool_name` lets the renderer reconstruct the `ToolPayloadOutput`
-/// discriminant (the compact payload is stored without its `tool` tag).
-/// `command` (when known) lets the human view show `$ command` for shell runs.
-pub(super) fn derive_operation_markdown(
-    tool_name: &str,
-    data: &serde_json::Value,
-    command: Option<&str>,
-) -> String {
-    crate::tool::render_tool_payload_markdown_with_name(
-        tool_name,
-        data,
-        &crate::tool::RenderContext {
-            workspace_root: std::path::Path::new(""),
-            live_tail: None,
-            command,
-            read_managed: &|path| std::fs::read_to_string(path).ok(),
-        },
     )
 }
 
@@ -137,47 +109,6 @@ pub(super) fn resolve_pending_tool(
     })
 }
 
-pub(super) fn operation_blocks_from_tool_output(
-    invocation: &ToolInvocation,
-    details: &ToolOutput,
-    attachments: &[AttachmentItem],
-    output_text: &str,
-) -> Vec<agena_domain::ViewBlock> {
-    // Human view ownership lives with the tools crate: the built-in renderer
-    // maps the structured payload to ViewBlocks (the same contract TUI/Web
-    // consume for activity v2). The legacy per-tool human-block derivation is
-    // removed.
-    let _ = attachments;
-    let command = invocation
-        .input
-        .get("command")
-        .and_then(|value| value.as_text())
-        .map(ToOwned::to_owned);
-    let cwd = invocation
-        .input
-        .get("workdir")
-        .and_then(|value| value.as_text())
-        .map(ToOwned::to_owned);
-    let mut renderer = crate::tool::human_view::BuiltinHumanRenderer::new(invocation.name.as_str());
-    if let Some(command) = command {
-        renderer = renderer.with_command(command);
-    }
-    if let Some(cwd) = cwd {
-        renderer = renderer.with_cwd(cwd);
-    }
-    let raw = agena_domain::RawOutput {
-        payload: details.to_json_payload(),
-        text: output_text.to_owned(),
-        ..agena_domain::RawOutput::default()
-    };
-    let ctx = agena_tool::RenderContext {
-        workspace_root: std::path::PathBuf::new(),
-        command: None,
-    };
-    renderer
-        .render_human(&ctx, &raw)
-        .unwrap_or_else(|_| crate::activity::projection::fallback_human_view(&raw))
-}
 pub(super) fn payload_tool_name_for_invocation(invocation: &ToolInvocation) -> String {
     crate::tool::ToolPayloadInput::from_invocation(invocation)
         .map(|payload| payload.tool_name().to_string())
@@ -355,11 +286,7 @@ pub(super) fn completed_lifecycle(lifecycle: &TimeRange) -> TimeRange {
     }
 }
 
-pub(super) fn tool_name(invocation: &ToolInvocation) -> String {
-    let ToolInvocation { name, .. } = invocation;
-    name.clone()
-}
-
+#[allow(dead_code)]
 pub(super) fn text_result_blocks(output_text: &str) -> Vec<agena_domain::ViewBlock> {
     if output_text.trim().is_empty() {
         Vec::new()
@@ -447,24 +374,6 @@ pub(super) fn tool_error_to_app_error(err: ToolError) -> AppError {
             AppError::Internal("unexpected unresolved user input request".to_string())
         }
         other => AppError::Tool(Box::new(other)),
-    }
-}
-
-pub(super) fn ask_user_title(request: &UserInputRequest) -> String {
-    if !request.title.trim().is_empty() {
-        return request.title.trim().to_string();
-    }
-    match request.questions.len() {
-        0 => "Ask user".to_string(),
-        1 => {
-            let header = request.questions[0].header.trim();
-            if header.is_empty() {
-                "Ask user".to_string()
-            } else {
-                format!("Ask: {header}")
-            }
-        }
-        count => format!("Ask user ({count})"),
     }
 }
 
@@ -711,113 +620,6 @@ mod tests {
             .expect("reserve monitor identity")
             .expect("background monitor identity");
         assert_eq!(reserved, agena_runtime_tools::managed_process_id(53, 8));
-    }
-
-    #[test]
-    fn glob_produces_a_human_markdown_list_not_a_flat_blob() {
-        let invocation = invocation_named("glob");
-        let details = output(ToolPayloadOutput::Glob {
-            count: Some(2),
-            paths: vec!["src/a.rs".to_owned(), "src/b.rs".to_owned()],
-            truncated: false,
-        });
-        let blocks =
-            operation_blocks_from_tool_output(&invocation, &details, &[], "src/a.rs\nsrc/b.rs");
-        assert!(blocks.iter().any(|block| matches!(
-            block,
-            agena_domain::ViewBlock::Markdown { text, .. }
-                if text.contains("- src/a.rs") && text.contains("- src/b.rs")
-        )));
-        // No raw text blob duplicated alongside the list.
-        assert!(
-            !blocks
-                .iter()
-                .any(|block| matches!(block, agena_domain::ViewBlock::Text { .. }))
-        );
-    }
-
-    #[test]
-    fn directory_read_produces_a_markdown_list() {
-        let invocation = invocation_named("read");
-        let details = output(ToolPayloadOutput::Read {
-            preview: Some("src/\ntarget/".to_owned()),
-            truncated: false,
-            loaded_paths: vec![".".to_owned()],
-            attachment: None,
-        });
-        let blocks = operation_blocks_from_tool_output(&invocation, &details, &[], "src/\ntarget/");
-        assert!(blocks.iter().any(|block| matches!(
-            block,
-            agena_domain::ViewBlock::Markdown { text, .. }
-                if text.contains("### preview") && text.contains("src/")
-        )));
-    }
-
-    #[test]
-    fn file_read_stays_a_plain_text_card() {
-        let invocation = invocation_named("read");
-        let details = output(ToolPayloadOutput::Read {
-            preview: Some("1: fn main()".to_owned()),
-            truncated: false,
-            loaded_paths: vec!["main.rs".to_owned()],
-            attachment: None,
-        });
-        let blocks = operation_blocks_from_tool_output(&invocation, &details, &[], "1: fn main()");
-        // Numbered file preview renders as a Markdown preview card.
-        assert!(blocks.iter().any(|block| matches!(
-            block,
-            agena_domain::ViewBlock::Markdown { text, .. }
-                if text.contains("### preview") && text.contains("1: fn main()")
-        )));
-    }
-
-    #[test]
-    fn cron_list_produces_a_human_markdown_list() {
-        let invocation = invocation_named("cron_list");
-        let job = agena_tool::CronJobSummary {
-            id: "job-1".to_owned(),
-            kind: "cron".to_owned(),
-            expression: Some("0 9 * * *".to_owned()),
-            timezone: Some("UTC".to_owned()),
-            at: None,
-            prompt: "run backup".to_owned(),
-            next_fire_at: Some("2026-08-05T09:00:00Z".to_owned()),
-            last_fired_at: None,
-            paused: false,
-            completed: false,
-            misfire_policy: String::new(),
-            retry_max_attempts: 0,
-            retry_at: None,
-            run_count: 0,
-            last_run_status: None,
-            last_run_failure: None,
-        };
-        let details = output(ToolPayloadOutput::CronList { jobs: vec![job] });
-        let blocks = operation_blocks_from_tool_output(&invocation, &details, &[], "1 job(s)");
-        assert!(blocks.iter().any(|block| matches!(
-            block,
-            agena_domain::ViewBlock::Markdown { text, .. }
-                if text.contains("### cron jobs") && text.contains("run backup")
-        )));
-    }
-
-    #[test]
-    fn lsp_diagnostics_render_with_severity_markers() {
-        let invocation = invocation_named("lsp_diagnostics");
-        let details = output(ToolPayloadOutput::LspDiagnostics {
-            entries: vec![
-                "src/main.rs:3:5 [error] undefined name".to_owned(),
-                "src/main.rs:7:2 [warning] unused import".to_owned(),
-            ],
-        });
-        let blocks = operation_blocks_from_tool_output(&invocation, &details, &[], "2 diagnostics");
-        assert!(blocks.iter().any(|block| matches!(
-            block,
-            agena_domain::ViewBlock::Markdown { text, .. }
-                if text.contains("### diagnostics")
-                    && text.contains("[error]")
-                    && text.contains("[warning]")
-        )));
     }
 
     #[test]

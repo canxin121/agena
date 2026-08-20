@@ -390,9 +390,9 @@ impl PartVisibility {
 
 /// A persisted part — the only chat-content entity in v2.
 ///
-/// `kind` is an open set (`run`, `text`, `think`, `tool_call`, `tool_result`,
-/// `file_ref`, `paste_ref`, `skill_ref`, `notice`, `hook`, `compaction`,
-/// `error`, `interaction`, ...). Ordering within a session is always
+/// `kind` is an open set (`run`, `text`, `think`, `tool_call`, `file_ref`,
+/// `paste_ref`, `skill_ref`, `notice`, `hook`, `compaction`, `error`,
+/// `interaction`, ...). Ordering within a session is always
 /// `(created_at_ms, part_id)` (decision D4).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Part {
@@ -400,7 +400,8 @@ pub struct Part {
     pub kind: String,
     pub role: PartRole,
     pub state: PartState,
-    /// Canonical raw payload — exactly what the AI sees (section 18.4).
+    /// Canonical durable facts. AI and human views are ephemeral projections
+    /// selected by `visibility`; a projected view is never written back here.
     pub content: Value,
     pub summary: Option<String>,
     pub visibility: PartVisibility,
@@ -461,7 +462,7 @@ pub struct NewPart {
     pub rendered_markdown: Option<String>,
     pub parent_part_id: Option<i64>,
     /// Initial state. `pending` is typical; `completed` is used for parts
-    /// created already-done (e.g. `tool_result`).
+    /// created already-done (for example, an imported completed text part).
     pub state: PartState,
 }
 
@@ -844,4 +845,21 @@ pub struct SessionPresentation {
     pub active_run_id: Option<i64>,
     /// Last error part content when `Failed` or after an Interrupted reconcile.
     pub last_failure: Option<Value>,
+}
+
+#[cfg(test)]
+mod visibility_tests {
+    use super::PartVisibility;
+
+    #[test]
+    fn part_visibility_has_an_explicit_ai_and_human_truth_table() {
+        assert!(PartVisibility::Both.visible_to_ai());
+        assert!(PartVisibility::Both.visible_to_user());
+
+        assert!(PartVisibility::Ai.visible_to_ai());
+        assert!(!PartVisibility::Ai.visible_to_user());
+
+        assert!(!PartVisibility::User.visible_to_ai());
+        assert!(PartVisibility::User.visible_to_user());
+    }
 }

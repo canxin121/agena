@@ -26,7 +26,6 @@ impl ToolExecutor {
         invocation: &ToolInvocation,
         session_id: i64,
         model_tool_name: &str,
-        result_policy: &SdkToolResultPolicy,
         call_id: i64,
         mut execution: ToolInvocationExecution,
     ) -> Result<ToolInvocationExecution, ToolError> {
@@ -39,8 +38,6 @@ impl ToolExecutor {
                 "tool `{model_tool_name}` returned an empty activity summary; every tool result must provide a concise outcome summary"
             )));
         }
-        self.apply_result_policy(model_tool_name, result_policy, call_id, &mut execution)?;
-        self.apply_model_output_boundary(model_tool_name, call_id, &mut execution)?;
         Ok(execution)
     }
 
@@ -93,168 +90,6 @@ impl ToolExecutor {
         Ok(())
     }
 
-    pub(crate) fn apply_result_policy(
-        &self,
-        model_tool_name: &str,
-        policy: &SdkToolResultPolicy,
-        call_id: i64,
-        execution: &mut ToolInvocationExecution,
-    ) -> Result<(), ToolError> {
-        if policy.is_default() {
-            return Ok(());
-        }
-
-        execution.view.insert_neutral_metadata(
-            "result_policy_ui_render_kind".to_string(),
-            format!("{:?}", policy.ui_render_kind).to_ascii_lowercase(),
-        );
-        if let Some(preview_lines) = policy.preview_lines {
-            execution.view.insert_neutral_metadata(
-                "result_policy_preview_lines".to_string(),
-                preview_lines.to_string(),
-            );
-        }
-
-        let original = execution.view.output_text.clone();
-        if original.is_empty() {
-            return Ok(());
-        }
-
-        let mut preview = original.clone();
-        let mut truncated = false;
-
-        if let Some(max_lines) = policy.preview_lines
-            && max_lines > 0
-        {
-            let mut lines = preview.lines();
-            let selected = lines.by_ref().take(max_lines).collect::<Vec<_>>();
-            if lines.next().is_some() {
-                preview = selected.join("\n");
-                truncated = true;
-            }
-        }
-
-        if let Some(max_chars) = policy.max_model_chars
-            && max_chars > 0
-            && preview.chars().count() > max_chars
-        {
-            preview = truncate_to_char_count(preview.as_str(), max_chars);
-            truncated = true;
-        }
-
-        if !truncated {
-            return Ok(());
-        }
-
-        execution
-            .view
-            .insert_neutral_metadata("result_policy_truncated", "true");
-        execution.view.insert_neutral_metadata(
-            "result_policy_original_chars".to_string(),
-            original.chars().count().to_string(),
-        );
-        execution.view.insert_neutral_metadata(
-            "result_policy_model_chars".to_string(),
-            preview.chars().count().to_string(),
-        );
-
-        if policy.persist_large_output {
-            if let Some(path) = persist_tool_result_output(
-                self.workspace_root(),
-                model_tool_name,
-                call_id,
-                &original,
-            )? {
-                execution.view.insert_neutral_metadata(
-                    "result_policy_persisted_path".to_string(),
-                    path.display().to_string(),
-                );
-                preview.push_str("\n\n[output truncated; full output persisted at ");
-                preview.push_str(path.display().to_string().as_str());
-                preview.push(']');
-            }
-        } else {
-            preview.push_str("\n\n[output truncated by tool result policy]");
-        }
-
-        execution.view.set_neutral_output(preview);
-        Ok(())
-    }
-
-    pub(crate) fn apply_model_output_boundary(
-        &self,
-        model_tool_name: &str,
-        call_id: i64,
-        execution: &mut ToolInvocationExecution,
-    ) -> Result<(), ToolError> {
-        let contextual = model_output_boundary_context(execution);
-        if contextual.trim().is_empty()
-            || !model_output_exceeds_boundary(
-                contextual.as_str(),
-                TOOL_MODEL_OUTPUT_MAX_LINES,
-                TOOL_MODEL_OUTPUT_MAX_BYTES,
-            )
-        {
-            return Ok(());
-        }
-
-        let Some(path) = persist_tool_result_output(
-            self.workspace_root(),
-            model_tool_name,
-            call_id,
-            contextual.as_str(),
-        )?
-        else {
-            return Ok(());
-        };
-
-        let path_text = path.display().to_string();
-        let marker = format!(
-            "... output truncated ({} lines, {} bytes); full content saved to {path_text} ...",
-            line_count(contextual.as_str()),
-            contextual.len(),
-        );
-        let preview = bounded_model_output_preview(
-            contextual.as_str(),
-            marker.as_str(),
-            TOOL_MODEL_OUTPUT_MAX_LINES,
-            TOOL_MODEL_OUTPUT_MAX_BYTES,
-        );
-
-        if execution.view.output_text.trim().is_empty()
-            || model_output_exceeds_boundary(
-                execution.view.output_text.as_str(),
-                TOOL_MODEL_OUTPUT_MAX_LINES,
-                TOOL_MODEL_OUTPUT_MAX_BYTES,
-            )
-        {
-            execution.view.set_neutral_output(preview);
-        } else if !execution.view.output_text.contains(marker.as_str()) {
-            let mut output = execution.view.output_text.clone();
-            output.push_str("\n\n");
-            output.push_str(marker.as_str());
-            execution.view.set_neutral_output(output);
-        }
-
-        compact_tool_output_payload_for_model(
-            &mut execution.output,
-            path_text.as_str(),
-            contextual.len(),
-        )?;
-        execution.output.mark_truncated(path_text.clone());
-        execution
-            .view
-            .insert_neutral_metadata("model_output_truncated", "true");
-        execution
-            .view
-            .insert_neutral_metadata("model_output_full_path", path_text);
-        execution.view.insert_neutral_metadata(
-            "model_output_original_bytes".to_string(),
-            contextual.len().to_string(),
-        );
-        Ok(())
-    }
-
     /// Fire-and-forget notification to plugins about a tool execution failure.
     pub async fn broadcast_tool_failure(
         &self,
@@ -293,6 +128,87 @@ impl ToolExecutor {
         self.plugins.broadcast_tool_failure(failure_input).await;
     }
 
+    /// Render a durable raw result without writing the projection back to the
+    /// session. The owning plugin gets first refusal; built-in tool rendering
+    /// and the generic system projection fill only the sides it delegates.
+    pub async fn render_tool_result(
+        &self,
+        invocation: &ToolInvocation,
+        output: &agena_domain::RawOutput,
+    ) -> agena_plugin_host::sdk::ToolRenderOutput {
+        let input = agena_plugin_host::sdk::ToolRenderInput {
+            tool_name: invocation.name.clone(),
+            input: serde_json::Value::from(invocation.input.clone()),
+            output: output.clone(),
+        };
+        let registered = self.plugin_resolution_for_invocation(invocation);
+        let mut rendered = if let Some(registered) = registered.as_ref() {
+            match self.plugins.render_tool(registered, input).await {
+                Ok(Some(rendered)) => rendered,
+                Ok(None) => Default::default(),
+                Err(error) => {
+                    tracing::warn!(
+                        target: "agena::tool_render",
+                        tool = %invocation.name,
+                        "plugin tool renderer failed; using runtime fallback: {error}"
+                    );
+                    Default::default()
+                }
+            }
+        } else {
+            Default::default()
+        };
+
+        let model = rendered
+            .model
+            .get_or_insert_with(|| raw_model_fallback(output));
+        project_model_at_read_time(
+            model,
+            registered
+                .as_ref()
+                .map(|tool| &tool.definition.runtime.result_policy),
+        );
+        if rendered.human.is_none() {
+            let command = invocation
+                .input
+                .get("command")
+                .and_then(|value| value.as_text())
+                .map(ToOwned::to_owned);
+            let cwd = invocation
+                .input
+                .get("workdir")
+                .and_then(|value| value.as_text())
+                .map(ToOwned::to_owned);
+            let mut renderer =
+                crate::tool::human_view::BuiltinHumanRenderer::new(invocation.name.as_str());
+            if let Some(command) = command {
+                renderer = renderer.with_command(command);
+            }
+            if let Some(cwd) = cwd {
+                renderer = renderer.with_cwd(cwd);
+            }
+            let context = agena_tool::RenderContext {
+                workspace_root: self.workspace_root.clone(),
+                command: None,
+            };
+            let blocks = agena_tool::ToolHumanRenderer::render_human(&renderer, &context, output)
+                .unwrap_or_default();
+            rendered.human = Some(agena_plugin_host::sdk::ToolHumanPresentation {
+                title: invocation.name.clone(),
+                summary: agena_tool::normalize_tool_summary(model.as_str()),
+                blocks,
+            });
+        } else if let Some(human) = rendered.human.as_mut() {
+            if human.title.trim().is_empty() {
+                human.title = invocation.name.clone();
+            }
+            if human.summary.trim().is_empty() {
+                human.summary = agena_tool::normalize_tool_summary(model.as_str());
+            }
+        }
+        rendered
+    }
+
     pub async fn broadcast_notification(
         &self,
         kind: impl Into<String>,
@@ -314,11 +230,103 @@ impl ToolExecutor {
         self.plugins.broadcast_notification(input).await;
     }
 }
+
+fn raw_model_fallback(output: &agena_domain::RawOutput) -> String {
+    match output.payload.as_ref() {
+        Some(payload) => serde_json::to_string(payload).unwrap_or_else(|_| output.text.clone()),
+        None => output.text.clone(),
+    }
+}
+
+fn project_model_at_read_time(model: &mut String, policy: Option<&SdkToolResultPolicy>) {
+    if let Some(policy) = policy {
+        let mut truncated_by_policy = false;
+        if let Some(max_lines) = policy.preview_lines
+            && max_lines > 0
+        {
+            let mut lines = model.lines();
+            let selected = lines.by_ref().take(max_lines).collect::<Vec<_>>();
+            if lines.next().is_some() {
+                *model = selected.join("\n");
+                truncated_by_policy = true;
+            }
+        }
+        if let Some(max_chars) = policy.max_model_chars
+            && max_chars > 0
+            && model.chars().count() > max_chars
+        {
+            *model = truncate_to_char_count(model, max_chars);
+            truncated_by_policy = true;
+        }
+        if truncated_by_policy {
+            model.push_str(
+                "\n\n[model projection truncated by tool result policy; raw output retained]",
+            );
+        }
+    }
+
+    if model.trim().is_empty()
+        || !model_output_exceeds_boundary(
+            model,
+            TOOL_MODEL_OUTPUT_MAX_LINES,
+            TOOL_MODEL_OUTPUT_MAX_BYTES,
+        )
+    {
+        return;
+    }
+    let marker = format!(
+        "... model projection truncated ({} lines, {} bytes); raw output retained ...",
+        line_count(model),
+        model.len(),
+    );
+    *model = bounded_model_output_preview(
+        model,
+        marker.as_str(),
+        TOOL_MODEL_OUTPUT_MAX_LINES,
+        TOOL_MODEL_OUTPUT_MAX_BYTES,
+    );
+}
 use super::{
     Path, PluginShellEnvInput, PluginToolAfterInput, PluginToolFailureInput, SdkToolResultPolicy,
     TOOL_MODEL_OUTPUT_MAX_BYTES, TOOL_MODEL_OUTPUT_MAX_LINES, ToolError, ToolExecutor,
     ToolInvocation, ToolInvocationExecution, ToolOutput, bounded_model_output_preview,
-    compact_tool_output_payload_for_model, invocation_input_json, invocation_name, line_count,
-    model_output_boundary_context, model_output_exceeds_boundary, persist_tool_result_output,
+    invocation_input_json, invocation_name, line_count, model_output_exceeds_boundary,
     truncate_to_char_count,
 };
+
+#[cfg(test)]
+mod tests {
+    use super::{SdkToolResultPolicy, TOOL_MODEL_OUTPUT_MAX_BYTES, project_model_at_read_time};
+
+    #[test]
+    fn model_boundary_is_an_ephemeral_projection_of_unchanged_raw_text() {
+        let raw = (0..2_000)
+            .map(|index| format!("raw-line-{index:04}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut model = raw.clone();
+
+        project_model_at_read_time(&mut model, None);
+
+        assert_eq!(raw.lines().count(), 2_000);
+        assert_ne!(model, raw);
+        assert!(model.len() <= TOOL_MODEL_OUTPUT_MAX_BYTES);
+        assert!(model.contains("raw output retained"));
+    }
+
+    #[test]
+    fn tool_result_policy_changes_only_the_runtime_model_projection() {
+        let raw = "one\ntwo\nthree\nfour".to_owned();
+        let mut model = raw.clone();
+        let policy = SdkToolResultPolicy {
+            preview_lines: Some(2),
+            ..Default::default()
+        };
+
+        project_model_at_read_time(&mut model, Some(&policy));
+
+        assert_eq!(raw, "one\ntwo\nthree\nfour");
+        assert!(model.starts_with("one\ntwo"));
+        assert!(model.contains("raw output retained"));
+    }
+}

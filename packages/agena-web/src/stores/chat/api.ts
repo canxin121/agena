@@ -54,6 +54,7 @@ export type AgenaPart = {
   role: string
   state: string
   content: JsonValue
+  presentation?: JsonValue | null
   summary?: string | null
   created_at_ms?: number
   started_at_ms?: number
@@ -308,6 +309,38 @@ function asObject(value: JsonValue): JsonObject {
   return isRecord(value) ? value : {}
 }
 
+function flatOperationView(content: JsonObject, presentationValue: JsonValue): JsonObject {
+  const presentation = asObject(presentationValue)
+  const title = stringField(presentation, ['title'])
+  const summary = stringField(presentation, ['summary'])
+  const state = stringField(content, ['state'])
+  const invocation = {
+    name: stringField(content, ['name', 'tool']) || 'unknown',
+    plugin_name: content.plugin,
+    input: asObject(content.input),
+    tool_api_call: asObject(content.tool_api_call),
+  }
+  const blocks = Array.isArray(presentation.blocks) ? presentation.blocks : []
+  const result = {
+    state,
+    content: blocks,
+    display: { title, summary, sections: [] },
+  }
+  return {
+    call_id: content.call_id ?? 0,
+    invocation,
+    title,
+    summary,
+    blocks,
+    user_input: asObject(content.user_input),
+    authorization: asObject(content.authorization),
+    metadata: asObject(content.metadata),
+    error: content.error ?? null,
+    lifecycle: asObject(content.lifecycle),
+    result,
+  }
+}
+
 function stringField(value: JsonValue, keys: string[]): string {
   const rec = asObject(value)
   for (const key of keys) {
@@ -367,7 +400,6 @@ export function messageErrorFromAgenaPart(raw: JsonValue): MessageError | null {
  *   text          → type 'text', text = content.text
  *   think         → type 'reasoning', text = summary[] + raw[]
  *   tool_call     → type 'tool', tool = content.name, state {status, input, output, error, metadata}
- *   tool_result   → type 'text' (synthetic) with content.output
  *   file_ref      → type 'file', url/filename/mime from content
  *   paste_ref     → type 'text', text
  *   skill_ref     → type 'tool' (tool='skill')
@@ -392,6 +424,7 @@ export function normalizeAgenaPart(
   const runId = typeof part.run_id === 'number' ? part.run_id : null
   const parentPartId = typeof part.parent_part_id === 'number' ? part.parent_part_id : null
   const agenaSummary = typeof part.summary === 'string' ? part.summary : null
+  const agenaPresentation = part.presentation ?? null
 
   const base: MessagePart = {
     id: partIdStr,
@@ -403,6 +436,7 @@ export function normalizeAgenaPart(
     agenaRole: str(part.role) || 'assistant',
     agenaSummary,
     agenaContent: content,
+    agenaPresentation,
     runId,
     parentPartId,
     time: {
@@ -433,45 +467,32 @@ export function normalizeAgenaPart(
       return { ...base, type: 'reasoning', text }
     }
     case 'tool_call': {
-      const operation = asObject(asObject(content).operation)
+      const operation = flatOperationView(asObject(content), agenaPresentation)
       const invocation = asObject(operation.invocation)
       const result = asObject(operation.result)
-      const modelPreview = asObject(result.model_preview)
-      const modelOutput = asObject(operation.model_output)
       const display = asObject(result.display)
-      const human = asObject(result.human)
       const resultState = stringField(result, ['state'])
       const toolName = stringField(content, ['name', 'tool']) || stringField(invocation, ['name']) || 'unknown'
       const canonicalInput = asObject(asObject(content).input)
       const operationInput = asObject(invocation.input)
       const input = Object.keys(canonicalInput).length > 0 ? canonicalInput : operationInput
       const output =
-        stringField(content, ['output']) ||
-        stringField(asObject(content.result), ['output', 'text']) ||
-        stringField(modelPreview, ['text']) ||
-        stringField(modelOutput, ['text']) ||
-        stringField(human, ['markdown', 'summary']) ||
         stringField(display, ['summary']) ||
-        stringField(operation, ['summary']) ||
-        stringField(part.provider_state as JsonValue, ['output'])
+        stringField(operation, ['summary'])
       const error =
-        stringField(content, ['error']) ||
         operationFailureMessage(result.error) ||
-        operationFailureMessage(operation.error) ||
-        stringField(asObject(content.result), ['error', 'message']) ||
-        ''
+        operationFailureMessage(operation.error)
       const metaCandidate = {
         ...asObject(operation.metadata),
         ...asObject(result.metadata),
         ...asObject(asObject(content).metadata),
       }
-      const structuredOutput = result.structured ?? operation.structured
-      const title = stringField(operation, ['summary', 'title']) || stringField(display, ['summary', 'title'])
+      const title = stringField(operation, ['title']) || stringField(display, ['title'])
       const status = toStatus(resultState || state)
       const toolState: JsonObject = {
         ...(status ? { status } : {}),
         input,
-        ...(output ? { output } : structuredOutput !== undefined ? { output: structuredOutput } : {}),
+        ...(output ? { output } : {}),
         ...(error ? { error } : {}),
         ...(title ? { title } : {}),
         ...(Object.keys(metaCandidate).length ? { metadata: metaCandidate } : {}),
@@ -483,11 +504,6 @@ export function normalizeAgenaPart(
         state: toolState,
         ...(Object.keys(metaCandidate).length ? { metadata: metaCandidate } : {}),
       }
-    }
-    case 'tool_result': {
-      const text = stringField(content, ['output', 'text'])
-      if (!text) return null
-      return { ...base, type: 'text', text, synthetic: true }
     }
     case 'file_ref': {
       const contentRecord = asObject(content)

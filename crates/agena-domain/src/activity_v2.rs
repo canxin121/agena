@@ -211,7 +211,9 @@ pub struct RawOutput {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub text: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub attachments: Vec<ArtifactRef>,
+    pub attachments: Vec<crate::AttachmentItem>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub managed_outputs: Vec<crate::ToolManagedOutput>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub metadata: BTreeMap<String, serde_json::Value>,
     #[serde(default)]
@@ -230,21 +232,39 @@ impl RawOutput {
         self.payload.is_none()
             && self.text.is_empty()
             && self.attachments.is_empty()
+            && self.managed_outputs.is_empty()
             && self.metadata.is_empty()
             && !self.truncated
     }
 
-    /// 旧数据宽松读取：老 compact payload 形状（`{ "payload": … }`）可直接进入。
-    pub fn from_legacy_json(value: Option<&serde_json::Value>) -> Self {
-        match value {
-            None | Some(serde_json::Value::Null) => Self::default(),
-            Some(value) => match serde_json::from_value::<RawOutput>(value.clone()) {
-                Ok(output) => output,
-                Err(_) => Self {
-                    payload: Some(value.clone()),
-                    ..Self::default()
-                },
-            },
+    /// Build one canonical raw result while avoiding a duplicate text copy
+    /// when the structured payload already contains the exact same fact.
+    pub fn from_parts(
+        payload: Option<serde_json::Value>,
+        text: impl Into<String>,
+        attachments: Vec<crate::AttachmentItem>,
+        managed_outputs: Vec<crate::ToolManagedOutput>,
+        metadata: BTreeMap<String, serde_json::Value>,
+        truncated: bool,
+    ) -> Self {
+        let text = text.into();
+        let payload_text = payload.as_ref().and_then(|payload| {
+            payload
+                .as_str()
+                .or_else(|| payload.get("text").and_then(serde_json::Value::as_str))
+        });
+        let text = if payload_text == Some(text.as_str()) {
+            String::new()
+        } else {
+            text
+        };
+        Self {
+            payload,
+            text,
+            attachments,
+            managed_outputs,
+            metadata,
+            truncated,
         }
     }
 }
@@ -384,7 +404,7 @@ mod tests {
     }
 
     #[test]
-    fn raw_output_serde_and_legacy_fallback() {
+    fn raw_output_serde_rejects_the_removed_legacy_shape() {
         let output = RawOutput {
             payload: Some(json!({ "exit_code": 0 })),
             text: "ok".into(),
@@ -394,11 +414,33 @@ mod tests {
         let decoded: RawOutput = serde_json::from_str(&encoded).unwrap();
         assert_eq!(decoded, output);
 
-        // 旧 compact payload（直接是机器事实）→ 宽松进入 payload 字段。
         let legacy = json!({ "result": { "count": 2 } });
-        let from_legacy = RawOutput::from_legacy_json(Some(&legacy));
-        assert_eq!(from_legacy.payload, Some(legacy));
-        assert!(from_legacy.text.is_empty());
+        assert!(serde_json::from_value::<RawOutput>(legacy).is_err());
+    }
+
+    #[test]
+    fn raw_output_stores_identical_text_once_but_preserves_distinct_facts() {
+        let duplicate = RawOutput::from_parts(
+            Some(json!({"text": "same"})),
+            "same",
+            Vec::new(),
+            Vec::new(),
+            BTreeMap::new(),
+            false,
+        );
+        assert!(duplicate.text.is_empty());
+        assert_eq!(duplicate.payload, Some(json!({"text": "same"})));
+
+        let distinct = RawOutput::from_parts(
+            Some(json!({"text": "structured"})),
+            "raw stream",
+            Vec::new(),
+            Vec::new(),
+            BTreeMap::new(),
+            false,
+        );
+        assert_eq!(distinct.text, "raw stream");
+        assert_eq!(distinct.payload, Some(json!({"text": "structured"})));
     }
 
     #[test]

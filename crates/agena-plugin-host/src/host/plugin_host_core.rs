@@ -471,6 +471,39 @@ impl PluginHost {
         Ok(report.value.input)
     }
 
+    /// Invoke only the plugin that owns `registered_tool`. Rendering is a
+    /// pure read-time projection; `None` means the plugin delegates to the
+    /// host fallback chain.
+    pub async fn render_tool(
+        &self,
+        registered_tool: &RegisteredTool,
+        mut input: crate::sdk::ToolRenderInput,
+    ) -> Result<Option<crate::sdk::ToolRenderOutput>, PluginError> {
+        let plugin = self
+            .plugins_by_id
+            .get(registered_tool.plugin_key())
+            .cloned()
+            .ok_or_else(|| {
+                PluginError::internal(format!(
+                    "plugin `{}` not loaded",
+                    registered_tool.plugin_full_name()
+                ))
+            })?;
+        input.tool_name = registered_tool.tool_name().to_owned();
+        let params = serde_json::to_value(&input)
+            .map_err(|error| PluginError::invalid_params(error.to_string()))?;
+        let value = call_with_timeout(
+            &plugin,
+            method::HOOK_TOOL_RENDER,
+            params,
+            self.timeouts.fast_or(Duration::from_secs(2)),
+        )
+        .await
+        .map_err(transport_to_plugin_error)?;
+        serde_json::from_value(value)
+            .map_err(|error| PluginError::invalid_params(error.to_string()))
+    }
+
     /// Native asynchronous tool invocation. This is the canonical runtime
     /// entry point; cancellation and the per-tool deadline are polled by the
     /// same Tokio runtime that owns the transport.

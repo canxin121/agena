@@ -80,13 +80,7 @@ export function compareTranscriptIds(left: string, right: string): number {
 }
 
 export function durablePartKind(part: MessagePartLike): string {
-  const kind = text(part.agenaKind).toLowerCase()
-  if (kind) return kind
-  const legacy = text(part.type).toLowerCase()
-  if (legacy === 'reasoning' || legacy === 'thinking' || legacy === 'reasoning_content') return 'think'
-  if (legacy === 'tool') return 'tool_call'
-  if (legacy === 'file') return 'file_ref'
-  return legacy || 'unknown'
+  return text(part.agenaKind).toLowerCase() || 'unknown'
 }
 
 export function durablePartContent(part: MessagePartLike): JsonRecord {
@@ -102,9 +96,6 @@ export function transcriptPartText(part: MessagePartLike): string {
   if (kind === 'think') {
     return rawText(part.text) || fragmentText(content, 'summary') || fragmentText(content, 'raw')
   }
-  if (kind === 'tool_result') {
-    return firstText(content, ['output', 'text']) || rawText(part.text)
-  }
   if (kind === 'compaction') {
     return firstText(content, ['summary', 'detail']) || text(part.agenaSummary) || rawText(part.text)
   }
@@ -117,7 +108,37 @@ export function transcriptPartText(part: MessagePartLike): string {
 }
 
 function operationEnvelope(part: MessagePartLike): JsonRecord {
-  return record(durablePartContent(part).operation)
+  const content = durablePartContent(part)
+  const presentation = record(part.agenaPresentation)
+  const title = firstText(presentation, ['title'])
+  const summary = firstText(presentation, ['summary'])
+  const state = firstText(content, ['state'])
+  const invocation = {
+    name: firstText(content, ['name', 'tool']) || 'unknown',
+    plugin_name: content.plugin,
+    input: record(content.input),
+    tool_api_call: record(content.tool_api_call),
+  }
+  const blocks = Array.isArray(presentation.blocks) ? presentation.blocks : []
+  const result = {
+    state,
+    content: blocks,
+    display: { title, summary, sections: [] },
+    human: { summary },
+  }
+  return {
+    call_id: content.call_id ?? 0,
+    invocation,
+    title,
+    summary,
+    blocks,
+    user_input: record(content.user_input),
+    authorization: record(content.authorization),
+    metadata: record(content.metadata),
+    error: content.error ?? null,
+    lifecycle: record(content.lifecycle),
+    result,
+  }
 }
 
 function operationTitle(part: MessagePartLike): string {
@@ -150,16 +171,10 @@ function operationCopyText(part: MessagePartLike): string {
   const content = durablePartContent(part)
   const operation = operationEnvelope(part)
   const invocation = record(operation.invocation)
-  const result = record(operation.result)
-  const human = record(result.human)
-  const modelPreview = record(result.model_preview)
-  const modelOutput = record(operation.model_output)
+  const presentation = record(part.agenaPresentation)
   const input = Object.keys(record(content.input)).length ? record(content.input) : record(invocation.input)
-  const output =
-    firstText(human, ['markdown', 'summary']) ||
-    firstText(modelPreview, ['text']) ||
-    firstText(modelOutput, ['text']) ||
-    (result.structured !== undefined ? prettyJson(result.structured) : '')
+  const blocks = Array.isArray(presentation.blocks) ? presentation.blocks : []
+  const output = firstText(presentation, ['summary']) || (blocks.length ? prettyJson(blocks) : '')
   const sections = [operationTitle(part)]
   if (Object.keys(input).length) sections.push(`Input\n${prettyJson(input)}`)
   if (output) sections.push(`Output\n${output}`)
@@ -220,7 +235,7 @@ function interactionSummary(part: MessagePartLike): string {
 }
 
 function operationHasPendingInteraction(part: MessagePartLike): boolean {
-  const operation = record(durablePartContent(part).operation)
+  const operation = operationEnvelope(part)
   const userInput = record(operation.user_input)
   const userInputPending = (Array.isArray(userInput.requests) ? userInput.requests : []).some((value) => {
     const request = record(value)
@@ -246,7 +261,7 @@ function classifyPart(part: MessagePartLike, answerPartId: string | null, assist
     if (!assistant) return 'text'
     return String(part.id || '') === answerPartId ? 'answer' : 'text_segment'
   }
-  if (kind === 'paste_ref' || kind === 'tool_result') return 'text'
+  if (kind === 'paste_ref') return 'text'
   if (kind === 'think') return 'reasoning'
   if (kind === 'tool_call') return 'operation'
   if (kind === 'file_ref') return 'resource'

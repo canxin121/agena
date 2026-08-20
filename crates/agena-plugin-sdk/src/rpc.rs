@@ -140,6 +140,7 @@ pub mod method {
     pub const HOOK_EVENT: &str = "hooks/event";
     pub const HOOK_TOOL_BEFORE: &str = "hooks/tool.execute.before";
     pub const HOOK_TOOL_AFTER: &str = "hooks/tool.execute.after";
+    pub const HOOK_TOOL_RENDER: &str = "hooks/tool.render";
     pub const HOOK_TOOL_INVOKE: &str = "hooks/tool.invoke";
     pub const HOOK_TOOL_PERMISSION_PATHS: &str = "hooks/tool.permission_paths";
     pub const HOOK_TOOL_PERMISSION_NETWORKS: &str = "hooks/tool.permission_networks";

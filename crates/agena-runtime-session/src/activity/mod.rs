@@ -7,9 +7,7 @@
 //! checkpoint/projection machinery.
 
 use agena_domain::{ActivityId, ActivityState, RawOutput, RenderDelta, ViewBlock};
-use agena_tool::{
-    RenderContext, RenderError, ToolActivityEvent, ToolActivityResult, ToolHumanRenderer,
-};
+use agena_tool::{ToolActivityEvent, ToolActivityResult};
 
 /// Converged activity kinds (07 §4.1): the only nine live variants.
 pub mod projection;
@@ -91,9 +89,8 @@ pub struct ActivityHandler {
     state: ActivityState,
     live_blocks: Vec<ViewBlock>,
     sections: Vec<agena_domain::ToolPresentationSection>,
-    attachments: Vec<agena_domain::ArtifactRef>,
+    attachments: Vec<agena_domain::AttachmentItem>,
     metadata: std::collections::BTreeMap<String, serde_json::Value>,
-    renderer: Option<Box<dyn ToolHumanRenderer>>,
 }
 
 impl std::fmt::Debug for ActivityHandler {
@@ -127,13 +124,7 @@ impl ActivityHandler {
             sections: Vec::new(),
             attachments: Vec::new(),
             metadata: Default::default(),
-            renderer: None,
         }
-    }
-
-    pub fn with_renderer(mut self, renderer: impl ToolHumanRenderer + 'static) -> Self {
-        self.renderer = Some(Box::new(renderer));
-        self
     }
 
     pub fn state(&self) -> ActivityState {
@@ -187,7 +178,7 @@ impl ActivityHandler {
                 self.sections.push(section);
             }
             ToolActivityEvent::Attachment(artifact) => {
-                self.attachments.push(artifact);
+                self.attachments.push(artifact.into());
             }
             ToolActivityEvent::Metadata { key, value } => {
                 self.metadata.insert(key, serde_json::json!(value));
@@ -248,19 +239,6 @@ impl ActivityHandler {
             state,
             raw_output: Some(raw_output),
             sections: std::mem::take(&mut self.sections),
-        }
-    }
-
-    /// Render the authoritative human view: the tool's renderer when present,
-    /// otherwise `Err(RenderError::Fallback)` so the caller renders raw output.
-    pub fn render_human(
-        &self,
-        ctx: &RenderContext,
-        raw: &RawOutput,
-    ) -> Result<Vec<ViewBlock>, RenderError> {
-        match self.renderer.as_deref() {
-            Some(renderer) => renderer.render_human(ctx, raw),
-            None => Err(RenderError::Fallback),
         }
     }
 

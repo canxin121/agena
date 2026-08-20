@@ -54,6 +54,7 @@ pub(crate) fn transcript_part_from_resource(
         role: part.role,
         state: part.state,
         content: part.content,
+        presentation: part.presentation,
         summary: part.summary,
         created_at_ms: part.created_at_ms,
         parent_part_id: part.parent_part_id,

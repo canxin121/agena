@@ -356,6 +356,7 @@ pub use runtime_status_service::{
 };
 pub use runtime_tool_execution_service::{
     RuntimeToolDescriptor, RuntimeToolExecutionError, RuntimeToolExecutionService,
+    RuntimeToolHumanPresentation, RuntimeToolResultProjection,
 };
 pub(crate) use scheduler_composition::compose_scheduler;
 pub(crate) use services::RuntimeServiceBundle;

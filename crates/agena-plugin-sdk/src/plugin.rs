@@ -173,6 +173,13 @@ pub trait Plugin: Send + Sync + 'static {
         Ok(None)
     }
 
+    /// Project one raw tool result for the model and/or a human at read time.
+    /// Returning `None` delegates to the owning tool renderer and system
+    /// fallback. The projection is never persisted.
+    async fn tool_render(&self, _input: ToolRenderInput) -> Result<Option<ToolRenderOutput>> {
+        Ok(None)
+    }
+
     async fn tool_invoke(&self, input: ToolInvokeInput) -> Result<ToolInvokeOutput> {
         Err(crate::error::PluginError::not_implemented(format!(
             "tool_invoke({})",

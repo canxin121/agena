@@ -2,13 +2,12 @@ use super::{
     AppError, Arc, ExecutionStatus, OperationPart, PersistedPermissionRule, SessionManager,
     SessionManagerState, SessionPendingTool, ToolError, completed_lifecycle,
     inherit_operation_context, operation_authorization, operation_from_part, resolve_pending_tool,
-    terminal_operation_title, text_result_blocks, update_resolved_tool_message,
+    update_resolved_tool_message,
 };
 use crate::session::Session;
 use crate::session::store::{
     part_state_from_execution_status, tool_call_from_operation, typed_content_to_value,
 };
-use agena_domain::ToolOutput;
 use agena_failure::{
     Failure, FailureCategory, FailureCode, FailureImpact, FailureResponsibility, ModelFeedback,
     RecoveryDirective, RetryDirective, UserPresentation,
@@ -189,10 +188,8 @@ fn tool_error_failure(error: &ToolError) -> Failure {
 #[cfg(test)]
 #[allow(clippy::items_after_test_module)]
 mod tests {
-    use super::super::is_authorization_phase_title;
-    use super::{terminal_operation_title, tool_error_failure};
+    use super::tool_error_failure;
     use crate::tool::ToolError;
-    use agena_domain::{StructuredObject, ToolInvocation};
     use agena_failure::{FailureCategory, RetryDirective};
 
     #[test]
@@ -254,40 +251,6 @@ mod tests {
         assert!(model_message.contains("offset (out of range)"));
         assert!(!model_message.contains("/private/project"));
         assert!(!encoded.contains("token=secret"));
-    }
-
-    #[test]
-    fn failed_tools_call_uses_the_execution_tool_as_its_title() {
-        let arguments = StructuredObject::try_from(serde_json::json!({
-            "tool": "shell.run",
-            "input": {"command": "python3 calc_pi.py"}
-        }))
-        .expect("valid tools_call input");
-        let invocation = ToolInvocation {
-            tool_api_call: Some(agena_domain::ToolApiCall {
-                function: agena_domain::ToolApiFunction::Call,
-                arguments,
-            }),
-            name: "shell.run".to_owned(),
-            plugin_name: None,
-            input: StructuredObject::try_from(serde_json::json!({
-                "command": "python3 calc_pi.py"
-            }))
-            .expect("valid target input"),
-        };
-        assert_eq!(terminal_operation_title(&invocation), "shell.run");
-    }
-
-    #[test]
-    fn authorization_phase_titles_are_never_valid_terminal_titles() {
-        assert!(is_authorization_phase_title(
-            "Awaiting permission: shell.run"
-        ));
-        assert!(is_authorization_phase_title(
-            "Awaiting approval · write access"
-        ));
-        assert!(is_authorization_phase_title("Permission request · network"));
-        assert!(!is_authorization_phase_title("Run shell.run · exit 0"));
     }
 }
 
@@ -382,9 +345,7 @@ impl SessionManager {
     ) -> Result<Session, AppError> {
         let resolved = resolve_pending_tool(&session, pending_tool)?;
         let lifecycle = completed_lifecycle(&resolved.lifecycle);
-        let blocks = text_result_blocks(failure.user.fallback.as_str());
         let authorization = operation_authorization(&session, &resolved);
-        let failure_title = terminal_operation_title(&resolved.invocation);
 
         // Notification delivery is bounded by the plugin host and remains
         // part of this lifecycle, so no detached hook task can outlive it.
@@ -399,13 +360,10 @@ impl SessionManager {
                     resolved.call_id,
                     resolved.invocation.clone(),
                     failure.clone(),
-                    blocks.clone(),
-                    Vec::new(),
-                    ToolOutput::default(),
+                    agena_domain::RawOutput::default(),
                     lifecycle.clone(),
                 );
                 operation.authorization = authorization.clone();
-                operation.set_title(failure_title.clone());
                 // The failure payload replaces the operation, but provider
                 // correlation metadata and asks belong to its identity.
                 if let Some(existing) = operation_from_part(tool_part) {

@@ -136,8 +136,9 @@ impl ToolInvocationExecution {
 
 impl From<ToolPayloadExecution> for ToolInvocationExecution {
     fn from(value: ToolPayloadExecution) -> Self {
+        let output = value.output.into_tool_output();
         Self {
-            output: value.output.into_tool_output(),
+            output,
             view: value.view,
             apply_patch: value.apply_patch,
         }

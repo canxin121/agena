@@ -11,9 +11,13 @@ use std::sync::atomic::Ordering;
 
 use agena_api::{
     Scope,
-    live::{PartResource, RuntimeSignalResource, SessionChangeResource, SessionPartsResource},
+    live::{
+        PartResource, RuntimeSignalResource, SessionChangeResource, SessionPartsResource,
+        ToolHumanPresentationResource,
+    },
 };
 use agena_runtime::{RuntimeLiveSignal, RuntimeLiveSignalItem};
+use agena_runtime_contracts::part_content::ToolCallContent;
 use agena_storage::store::{GlobalSubscription, Part, SessionChange, SessionStore};
 use tokio::sync::mpsc;
 
@@ -31,7 +35,7 @@ pub(crate) struct LiveSubscription {
     dropped: Arc<AtomicU64>,
     pending_lag: u64,
     _store_subscription: GlobalSubscription,
-    signal_task: tokio::task::JoinHandle<()>,
+    projection_task: tokio::task::JoinHandle<()>,
 }
 
 impl LiveSubscription {
@@ -54,7 +58,7 @@ impl LiveSubscription {
 
 impl Drop for LiveSubscription {
     fn drop(&mut self) {
-        self.signal_task.abort();
+        self.projection_task.abort();
     }
 }
 
@@ -79,11 +83,14 @@ fn subscribe_with_queue_capacity(
     let store = state.session_store()?;
     let signals = state.live_signals()?;
     let (tx, rx) = mpsc::channel(capacity);
+    let (raw_change_tx, mut raw_change_rx) = mpsc::channel(capacity);
     let dropped = Arc::new(AtomicU64::new(0));
-    let change_tx = tx.clone();
     let change_dropped = Arc::clone(&dropped);
     let store_subscription = store.subscribe_all(Arc::new(move |change| {
-        match change_tx.try_send(LiveItem::SessionChanged(project_change(change))) {
+        if !change_visible_to_user(&change) {
+            return;
+        }
+        match raw_change_tx.try_send(change) {
             Ok(()) => {}
             Err(mpsc::error::TrySendError::Full(_)) => {
                 change_dropped.fetch_add(1, Ordering::Relaxed);
@@ -92,13 +99,28 @@ fn subscribe_with_queue_capacity(
         }
     }));
     let mut signal_subscription = signals.subscribe();
-    let signal_task = tokio::spawn(async move {
-        while let Some(item) = signal_subscription.recv().await {
-            let item = match item {
-                RuntimeLiveSignalItem::Signal(signal) => {
-                    LiveItem::RuntimeSignal(project_signal(signal))
+    let projection_state = state.clone();
+    let projection_task = tokio::spawn(async move {
+        loop {
+            let item = tokio::select! {
+                change = raw_change_rx.recv() => match change {
+                    Some(change) => project_change(&projection_state, change)
+                        .await
+                        .map(LiveItem::SessionChanged),
+                    None => None,
+                },
+                signal = signal_subscription.recv() => match signal {
+                    Some(RuntimeLiveSignalItem::Signal(signal)) => {
+                        Some(LiveItem::RuntimeSignal(project_signal(signal)))
+                    }
+                    Some(RuntimeLiveSignalItem::Lagged(skipped)) => {
+                        Some(LiveItem::Lagged(skipped))
+                    }
+                    None => None,
                 }
-                RuntimeLiveSignalItem::Lagged(skipped) => LiveItem::Lagged(skipped),
+            };
+            let Some(item) = item else {
+                break;
             };
             if tx.send(item).await.is_err() {
                 break;
@@ -110,8 +132,19 @@ fn subscribe_with_queue_capacity(
         dropped,
         pending_lag: 0,
         _store_subscription: store_subscription,
-        signal_task,
+        projection_task,
     })
+}
+
+fn change_visible_to_user(change: &SessionChange) -> bool {
+    match change {
+        SessionChange::PartAdded { part, .. } | SessionChange::PartUpdated { part, .. } => {
+            part.visibility.visible_to_user()
+        }
+        // Removals carry no visibility. Sending the id lets a client discard
+        // a previously visible row; meta changes are session-level state.
+        SessionChange::PartRemoved { .. } | SessionChange::SessionMetaUpdated { .. } => true,
+    }
 }
 
 pub(crate) async fn matches_scope(
@@ -145,6 +178,7 @@ pub(crate) async fn matches_scope(
 }
 
 pub(crate) async fn session_parts(
+    state: &AppState,
     store: &dyn SessionStore,
     session_id: i64,
 ) -> Result<SessionPartsResource, ServerError> {
@@ -152,26 +186,34 @@ pub(crate) async fn session_parts(
         .load(session_id)
         .await
         .map_err(|error| ServerError::internal(error.to_string()))?;
+    let visible = view
+        .parts
+        .into_iter()
+        .filter(|part| part.visibility.visible_to_user())
+        .collect::<Vec<_>>();
+    let parts = project_parts_for_user(state, &visible).await;
     Ok(SessionPartsResource {
         session_id,
         version: view.meta.version,
-        parts: view.parts.iter().map(project_part).collect(),
-        folds: Vec::new(),
         page: agena_api::pagination::PageInfo {
             next_cursor: None,
             has_more: false,
-            returned: view.parts.len() as u64,
+            returned: parts.len() as u64,
         },
+        parts,
+        folds: Vec::new(),
     })
 }
 
-pub(crate) fn project_part(part: &Part) -> PartResource {
+pub(crate) async fn project_part_for_user(state: &AppState, part: &Part) -> PartResource {
+    let presentation = project_tool_presentation(state, part).await;
     PartResource {
         part_id: part.part_id,
         kind: part.kind.clone(),
         role: part.role.as_str().to_owned(),
         state: part.state.as_str().to_owned(),
         content: part.content.clone(),
+        presentation,
         summary: part.summary.clone(),
         visibility: part.visibility.as_str().to_owned(),
         rendered_markdown: part.rendered_markdown.clone(),
@@ -187,16 +229,64 @@ pub(crate) fn project_part(part: &Part) -> PartResource {
     }
 }
 
-fn project_change(change: SessionChange) -> SessionChangeResource {
-    match change {
-        SessionChange::PartAdded { session_id, part } => SessionChangeResource::PartAdded {
-            session_id,
-            part: Box::new(project_part(&part)),
-        },
-        SessionChange::PartUpdated { session_id, part } => SessionChangeResource::PartUpdated {
-            session_id,
-            part: Box::new(project_part(&part)),
-        },
+pub(crate) async fn project_parts_for_user(state: &AppState, parts: &[Part]) -> Vec<PartResource> {
+    let mut projected = Vec::with_capacity(parts.len());
+    for part in parts {
+        if part.visibility.visible_to_user() {
+            projected.push(project_part_for_user(state, part).await);
+        }
+    }
+    projected
+}
+
+async fn project_tool_presentation(
+    state: &AppState,
+    part: &Part,
+) -> Option<ToolHumanPresentationResource> {
+    if part.kind != ToolCallContent::kind() {
+        return None;
+    }
+    let content = ToolCallContent::try_from(&part.content).ok()?;
+    let input = agena_domain::StructuredObject::try_from(content.input).ok()?;
+    let invocation = agena_domain::ToolInvocation {
+        tool_api_call: content.tool_api_call,
+        name: content.name,
+        plugin_name: content.plugin,
+        input,
+    };
+    let Some(output) = content.output else {
+        return Some(ToolHumanPresentationResource {
+            title: invocation.name,
+            summary: String::new(),
+            blocks: Vec::new(),
+        });
+    };
+    let projection = state
+        .application()
+        .render_tool_result(&invocation, &output)
+        .await;
+    Some(ToolHumanPresentationResource {
+        title: projection.human.title,
+        summary: projection.human.summary,
+        blocks: projection.human.blocks,
+    })
+}
+
+async fn project_change(state: &AppState, change: SessionChange) -> Option<SessionChangeResource> {
+    Some(match change {
+        SessionChange::PartAdded { session_id, part } if part.visibility.visible_to_user() => {
+            SessionChangeResource::PartAdded {
+                session_id,
+                part: Box::new(project_part_for_user(state, &part).await),
+            }
+        }
+        SessionChange::PartUpdated { session_id, part } if part.visibility.visible_to_user() => {
+            SessionChangeResource::PartUpdated {
+                session_id,
+                part: Box::new(project_part_for_user(state, &part).await),
+            }
+        }
+        SessionChange::PartAdded { .. } | SessionChange::PartUpdated { .. } => return None,
         SessionChange::PartRemoved {
             session_id,
             part_id,
@@ -214,7 +304,7 @@ fn project_change(change: SessionChange) -> SessionChangeResource {
                 updated_at_ms: meta.updated_at_ms,
             }
         }
-    }
+    })
 }
 
 fn project_signal(signal: RuntimeLiveSignal) -> RuntimeSignalResource {
@@ -243,5 +333,59 @@ fn project_signal(signal: RuntimeLiveSignal) -> RuntimeSignalResource {
             session_id: None,
             payload: serde_json::to_value(&*change).unwrap_or(serde_json::Value::Null),
         },
+    }
+}
+
+#[cfg(test)]
+mod visibility_tests {
+    use super::change_visible_to_user;
+    use agena_storage::store::{Part, PartRole, PartState, PartVisibility, SessionChange};
+
+    fn part(visibility: PartVisibility) -> Part {
+        Part {
+            part_id: 1,
+            kind: "text".to_owned(),
+            role: PartRole::Assistant,
+            state: PartState::Completed,
+            content: serde_json::json!({"text": "feed"}),
+            summary: None,
+            visibility,
+            rendered_markdown: None,
+            parent_part_id: None,
+            run_id: Some(1),
+            origin_session_id: 1,
+            revision: 0,
+            started_at_ms: 1,
+            finished_at_ms: Some(1),
+            created_at_ms: 1,
+            updated_at_ms: 1,
+            provider_state: None,
+        }
+    }
+
+    #[test]
+    fn shared_ws_sse_ipc_feed_exposes_both_and_user_but_not_ai() {
+        for (visibility, expected) in [
+            (PartVisibility::Both, true),
+            (PartVisibility::User, true),
+            (PartVisibility::Ai, false),
+        ] {
+            assert_eq!(
+                change_visible_to_user(&SessionChange::PartAdded {
+                    session_id: 1,
+                    part: part(visibility),
+                }),
+                expected,
+                "added {visibility:?}"
+            );
+            assert_eq!(
+                change_visible_to_user(&SessionChange::PartUpdated {
+                    session_id: 1,
+                    part: part(visibility),
+                }),
+                expected,
+                "updated {visibility:?}"
+            );
+        }
     }
 }

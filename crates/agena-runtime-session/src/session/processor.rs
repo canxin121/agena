@@ -1,5 +1,4 @@
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use chrono::Utc;
@@ -89,23 +88,19 @@ pub(crate) enum SessionRunTermination {
 
 #[derive(Clone)]
 /// Processor executing session runs against providers and tools. Keeps only
-/// the run-specific collaborators (plugin host, workspace root); provider and
-/// context-budget state live on `SessionManagerState`.
+/// the run-specific plugin host; provider and context-budget state live on
+/// `SessionManagerState`.
 pub struct SessionProcessor {
     plugins: Arc<agena_plugin_host::PluginHost>,
-    workspace_root: PathBuf,
 }
 
 mod helpers;
-mod media;
 mod parts;
-mod provider_media;
 mod run;
 mod tool_call_helpers;
 mod tool_calls;
 
 pub(crate) use self::helpers::*;
-pub(crate) use self::media::*;
 pub(crate) use self::run::MARKER_ROUNDS_KEY;
 pub(crate) use self::tool_call_helpers::*;
 

@@ -6,6 +6,11 @@ Param(
 )
 
 $ErrorActionPreference = "Stop"
+
+if ($TargetTriple -match "windows") {
+  & "$PSScriptRoot/setup-windows-toolchain.ps1" -TargetTriple $TargetTriple
+}
+
 $Args = @(
   "check",
   "--manifest-path", "Cargo.toml",

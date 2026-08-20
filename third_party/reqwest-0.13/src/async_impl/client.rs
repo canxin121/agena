@@ -753,34 +753,13 @@ impl ClientBuilder {
                             ));
                         }
 
-                        let verifier = if config.root_certs.is_empty() {
-                            rustls_platform_verifier::Verifier::new(provider.clone())
-                                .map_err(crate::error::builder)?
-                        } else {
-                            #[cfg(any(
-                                all(unix, not(target_os = "android")),
-                                target_os = "windows"
-                            ))]
-                            {
-                                rustls_platform_verifier::Verifier::new_with_extra_roots(
-                                    crate::tls::rustls_der(config.root_certs)?,
-                                    provider.clone(),
-                                )
-                                .map_err(crate::error::builder)?
-                            }
-
-                            #[cfg(not(any(
-                                all(unix, not(target_os = "android")),
-                                target_os = "windows"
-                            )))]
-                            return Err(crate::error::builder(
-                                "rustls-platform-verifier could not load extra certs",
-                            ));
+                        let mut roots = rustls::RootCertStore {
+                            roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
                         };
-
-                        config_builder
-                            .dangerous()
-                            .with_custom_certificate_verifier(Arc::new(verifier))
+                        for cert in config.root_certs {
+                            cert.add_to_rustls(&mut roots)?;
+                        }
+                        config_builder.with_root_certificates(roots)
                     } else {
                         if config.crls.is_empty() {
                             config_builder.with_root_certificates(crate::tls::rustls_store(

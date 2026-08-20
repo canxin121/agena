@@ -57,10 +57,8 @@ case "$BUILDER" in
       bash scripts/agena/package-backend.sh "$TARGET" "$BUILD_STD"
     ;;
   openbsd)
-    zig_target="$(openbsd_zig_target)"
-    AGENA_ZIG_SYSROOT="$(bash scripts/ci/fetch-openbsd-sysroot.sh "$TARGET")" \
-      exec bash scripts/ci/run-zig-backend.sh "$TARGET" "$zig_target" -- \
-        bash scripts/agena/package-backend.sh "$TARGET" "$BUILD_STD"
+    exec bash scripts/ci/run-openbsd-backend.sh "$TARGET" -- \
+      bash scripts/agena/package-backend.sh "$TARGET" "$BUILD_STD"
     ;;
   redox)
     exec bash scripts/ci/run-redox-backend.sh "$TARGET" -- \

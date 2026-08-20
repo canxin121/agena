@@ -62,7 +62,7 @@ PY
   touch "$ROOT/.verified"
 fi
 
-gcc="$(find "$EXTRACTED" -type f -path '*/bin/*-gcc' -perm -111 | head -1)"
+gcc="$(find "$EXTRACTED" \( -type f -o -type l \) -path '*/bin/*-gcc' -perm -111 | head -1)"
 [[ -n "$gcc" ]] || { echo "ERROR: Bootlin gcc not found in $EXTRACTED" >&2; exit 1; }
 prefix="${gcc%-gcc}"
 gxx="${prefix}-g++"

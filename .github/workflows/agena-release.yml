@@ -90,6 +90,8 @@ jobs:
           toolchain: 1.97.0
       - name: Verify universal target coverage
         run: python3 scripts/agena/verify-target-coverage.py
+      - name: Verify runtime crypto/auth capabilities
+        run: python3 scripts/ci/verify-runtime-capabilities.py
       - id: matrix
         shell: bash
         run: |

@@ -17,6 +17,7 @@ pub mod ctypes {
     #[cfg(any(
         target_arch = "aarch64",
         target_arch = "arm",
+        target_arch = "csky",
         target_arch = "hexagon",
         target_arch = "msp430",
         target_arch = "powerpc",

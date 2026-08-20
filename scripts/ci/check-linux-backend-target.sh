@@ -17,6 +17,10 @@ case "$BUILDER" in
     exec bash scripts/ci/run-zig-backend.sh "$TARGET" "$ZIG_TARGET" -- \
       bash scripts/ci/check-native-backend.sh "$TARGET" "$BUILD_STD" "$TARGET_RUSTFLAGS"
     ;;
+  csky-gcc)
+    exec bash scripts/ci/run-csky-backend.sh "$TARGET" -- \
+      bash scripts/ci/check-native-backend.sh "$TARGET" "$BUILD_STD" "$TARGET_RUSTFLAGS"
+    ;;
   ohos-ndk)
     exec bash scripts/ci/run-ohos-backend.sh "$TARGET" -- \
       bash scripts/ci/check-native-backend.sh "$TARGET" "$BUILD_STD" "$TARGET_RUSTFLAGS"

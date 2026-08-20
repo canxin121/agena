@@ -78,10 +78,8 @@ case "$BUILDER" in
       bash "$0" "$TARGET" "$TARGET_OS" "$BUILD_STD" direct
     ;;
   openbsd)
-    zig_target="$(openbsd_zig_target)"
-    AGENA_ZIG_SYSROOT="$(bash scripts/ci/fetch-openbsd-sysroot.sh "$TARGET")" \
-      exec bash scripts/ci/run-zig-backend.sh "$TARGET" "$zig_target" -- \
-        bash "$0" "$TARGET" "$TARGET_OS" "$BUILD_STD" direct
+    exec bash scripts/ci/run-openbsd-backend.sh "$TARGET" -- \
+      bash "$0" "$TARGET" "$TARGET_OS" "$BUILD_STD" direct
     ;;
   redox)
     exec bash scripts/ci/run-redox-backend.sh "$TARGET" -- \

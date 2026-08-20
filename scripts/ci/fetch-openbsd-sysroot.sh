@@ -21,7 +21,14 @@ SYSROOT="$ROOT/root"
 BASE_URL="https://cdn.openbsd.org/pub/OpenBSD/${VERSION}/${release_arch}"
 mkdir -p "$ROOT"
 
-if [[ ! -f "$ROOT/.verified" ]]; then
+valid_sysroot() {
+  [[ -f "$SYSROOT/usr/include/stdio.h" ]] \
+    && [[ -f "$SYSROOT/usr/lib/crt0.o" ]] \
+    && [[ -f "$SYSROOT/usr/lib/libcompiler_rt.a" ]] \
+    && compgen -G "$SYSROOT/usr/lib/libc.so.*" >/dev/null
+}
+
+if ! valid_sysroot; then
   python3 - "$BASE_URL" "$ROOT" "$SUFFIX" <<'PY'
 import hashlib
 import pathlib
@@ -64,11 +71,43 @@ for name in (f"base{suffix}.tgz", f"comp{suffix}.tgz"):
         raise SystemExit(f"OpenBSD {name} SHA256 mismatch: expected {expected[name]}, got {actual}")
     tmp.replace(archive)
 PY
+  if [[ -e "$SYSROOT" ]]; then
+    chmod -R u+rwX "$SYSROOT" 2>/dev/null || true
+  fi
   rm -rf "$SYSROOT"
   mkdir -p "$SYSROOT"
-  tar -xzf "$ROOT/base${SUFFIX}.tgz" -C "$SYSROOT"
   tar -xzf "$ROOT/comp${SUFFIX}.tgz" -C "$SYSROOT"
-  touch "$ROOT/.verified"
+  python3 - "$ROOT/base${SUFFIX}.tgz" "$SYSROOT" <<'PY'
+import pathlib
+import sys
+import tarfile
+
+archive_path, sysroot_path = sys.argv[1:]
+sysroot = pathlib.Path(sysroot_path)
+wanted_exact = {
+    "./usr/lib/crt0.o",
+    "./usr/lib/rcrt0.o",
+    "./usr/lib/crtbegin.o",
+    "./usr/lib/crtbeginS.o",
+    "./usr/lib/crtend.o",
+    "./usr/lib/crtendS.o",
+    "./usr/lib/libcompiler_rt.a",
+    "./usr/libexec/ld.so",
+}
+with tarfile.open(archive_path, "r:gz") as tf:
+    members = []
+    for member in tf.getmembers():
+        name = member.name
+        if name in wanted_exact or name.startswith("./usr/lib/libc.so."):
+            members.append(member)
+    # Members are selected from a fixed allow-list above; avoid Python 3.12-only
+    # tarfile filters so GitHub/macOS Python 3.9 can build the sysroot too.
+    tf.extractall(sysroot, members=members)
+PY
+  libc_so="$(find "$SYSROOT/usr/lib" -maxdepth 1 -type f -name 'libc.so.*' | sort -V | tail -1)"
+  [[ -n "$libc_so" ]] || { echo "ERROR: OpenBSD libc.so missing from base set" >&2; exit 1; }
+  ln -sf "$(basename "$libc_so")" "$SYSROOT/usr/lib/libc.so"
+  valid_sysroot || { echo "ERROR: incomplete OpenBSD sysroot for $TARGET" >&2; exit 1; }
 fi
 
 printf '%s\n' "$SYSROOT"

@@ -33,6 +33,10 @@ if (-not $TargetTriple) {
   $TargetTriple = Get-HostTriple
 }
 
+if ($TargetTriple -match "windows") {
+  & (Join-Path $RepoRoot "scripts/ci/setup-windows-toolchain.ps1") -TargetTriple $TargetTriple
+}
+
 $metadataJson = & cargo metadata --manifest-path "$ServerManifest" --format-version 1 --no-deps --locked | Out-String
 if ($LASTEXITCODE -ne 0) {
   throw "Failed to read Cargo metadata from $ServerManifest"

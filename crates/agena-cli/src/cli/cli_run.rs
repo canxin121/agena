@@ -79,15 +79,29 @@ impl AgenaCli {
 
     pub(super) async fn run_plugin(self, command: PluginOperation) -> Result<(), AppError> {
         use agena_plugin_marketplace::{
-            AssembleReleaseRequest, DEFAULT_MARKETPLACE_SOURCE, InstallRequest, MarketplaceCache,
-            MarketplaceClient, PackagePluginRequest, PluginInstallLocator, PluginReleaseSource,
-            PluginTemplateKind, RegistrySpec, ScaffoldPluginRequest, assemble_release,
-            current_target_triple, default_cache_root, generate_plugin_lockfile, package_plugin,
-            parse_plugin_install_locator, scaffold_plugin,
+            AssembleReleaseRequest, PackagePluginRequest, PluginReleaseSource, PluginTemplateKind,
+            ScaffoldPluginRequest, assemble_release, current_target_triple,
+            generate_plugin_lockfile, package_plugin, scaffold_plugin,
         };
 
-        let cache = MarketplaceCache::new(default_cache_root());
-        let client = MarketplaceClient::new(cache, std::collections::BTreeMap::new());
+        if matches!(
+            &command.command,
+            PluginSubcommand::Install(_)
+                | PluginSubcommand::Uninstall(_)
+                | PluginSubcommand::ListInstalled
+                | PluginSubcommand::Sync(_)
+                | PluginSubcommand::Search(_)
+                | PluginSubcommand::Upgrade(_)
+                | PluginSubcommand::Outdated
+        ) {
+            return tokio::task::spawn_blocking(move || {
+                run_plugin_marketplace_lifecycle(command.command)
+            })
+            .await
+            .map_err(|error| {
+                AppError::Internal(format!("plugin marketplace task join failed: {error}"))
+            })?;
+        }
 
         match command.command {
             PluginSubcommand::Status(args) => {
@@ -199,225 +213,14 @@ impl AgenaCli {
                     Ok(())
                 }
             },
-            PluginSubcommand::Install(args) => {
-                let locator = parse_plugin_install_locator(args.spec.as_str())
-                    .map_err(|error| AppError::Config(error.to_string()))?;
-                let (registry, plugin_id, version) = match (args.registry.as_deref(), locator) {
-                    (Some(source), PluginInstallLocator::Marketplace { plugin_id, version }) => (
-                        RegistrySpec::from_source(
-                            args.registry_id.clone(),
-                            source,
-                            args.require_signature,
-                        )
-                        .map_err(|error| AppError::Config(error.to_string()))?,
-                        plugin_id,
-                        version,
-                    ),
-                    (Some(_), PluginInstallLocator::GitHubRelease { .. }) => {
-                        return Err(AppError::Config(
-                            "do not combine a direct GitHub repository install with --registry"
-                                .to_string(),
-                        ));
-                    }
-                    (None, PluginInstallLocator::GitHubRelease { repository, tag }) => {
-                        let registry = RegistrySpec::github_release(
-                            repository,
-                            tag.as_deref(),
-                            args.require_signature,
-                        )
-                        .map_err(|error| AppError::Config(error.to_string()))?;
-                        let index = client
-                            .registry(registry.clone())
-                            .fetch_index(args.refresh)
-                            .map_err(|error| AppError::Config(error.to_string()))?;
-                        let plugin_id = single_release_plugin_id(&index)?;
-                        (registry, plugin_id, None)
-                    }
-                    (None, PluginInstallLocator::Marketplace { plugin_id, version }) => (
-                        RegistrySpec::from_source(
-                            "official",
-                            DEFAULT_MARKETPLACE_SOURCE,
-                            args.require_signature,
-                        )
-                        .map_err(|error| AppError::Config(error.to_string()))?,
-                        plugin_id,
-                        version,
-                    ),
-                };
-                let config_path =
-                    agena_runtime::default_config_path(&agena_runtime::ProcessEnvironment);
-                let outcome = client
-                    .install(InstallRequest {
-                        registry,
-                        plugin_id,
-                        version,
-                        config_path,
-                        force: args.force,
-                        dry_run: args.dry_run,
-                        allow_unverified: args.allow_unverified,
-                        refresh_index: args.refresh,
-                    })
-                    .map_err(|err| AppError::Config(err.to_string()))?;
-                if outcome.dry_run {
-                    println!(
-                        "DRY-RUN: would install {} v{} ({}) into {}",
-                        outcome.plugin_id,
-                        outcome.version,
-                        outcome.kind,
-                        outcome.config_path.display()
-                    );
-                } else {
-                    println!(
-                        "Installed {} v{} ({}) to {}",
-                        outcome.plugin_id,
-                        outcome.version,
-                        outcome.kind,
-                        outcome.artifact_path.display()
-                    );
-                }
-                Ok(())
-            }
-            PluginSubcommand::Uninstall(args) => {
-                let outcomes = client
-                    .uninstall_with(&args.plugin_id, args.cascade)
-                    .map_err(|err| AppError::Config(err.to_string()))?;
-                for outcome in outcomes {
-                    println!(
-                        "Uninstalled {} v{} from {}",
-                        outcome.plugin_id,
-                        outcome.version,
-                        outcome.config_path.display()
-                    );
-                }
-                Ok(())
-            }
-            PluginSubcommand::ListInstalled => {
-                let records = client
-                    .list_installed()
-                    .map_err(|err| AppError::Config(err.to_string()))?;
-                if records.is_empty() {
-                    println!("(no plugins installed via agena marketplace)");
-                } else {
-                    for record in records {
-                        println!(
-                            "{} v{} ({}) -> {}",
-                            record.plugin_id,
-                            record.version,
-                            record.kind,
-                            record.binary_path.display()
-                        );
-                    }
-                }
-                Ok(())
-            }
-            PluginSubcommand::Sync(args) => {
-                let registry = client.registry(
-                    RegistrySpec::from_source(args.registry_id, args.registry, false)
-                        .map_err(|error| AppError::Config(error.to_string()))?,
-                );
-                let index = registry
-                    .fetch_index(true)
-                    .map_err(|err| AppError::Config(err.to_string()))?;
-                println!(
-                    "registry index refreshed: {} plugin(s)",
-                    index.plugins.len()
-                );
-                Ok(())
-            }
-            PluginSubcommand::Search(args) => {
-                let registry = client.registry(
-                    RegistrySpec::from_source(args.registry_id, args.registry, false)
-                        .map_err(|error| AppError::Config(error.to_string()))?,
-                );
-                let index = registry
-                    .fetch_index(false)
-                    .map_err(|err| AppError::Config(err.to_string()))?;
-                let needle = args.query.to_ascii_lowercase();
-                let mut hits = 0usize;
-                for plugin in index.plugins {
-                    let blob = format!("{} {} {}", plugin.id, plugin.name, plugin.description)
-                        .to_ascii_lowercase();
-                    if blob.contains(&needle) {
-                        hits += 1;
-                        println!(
-                            "{} — {} ({} version{})",
-                            plugin.id,
-                            if plugin.description.is_empty() {
-                                plugin.name.as_str()
-                            } else {
-                                plugin.description.as_str()
-                            },
-                            plugin.versions.len(),
-                            if plugin.versions.len() == 1 { "" } else { "s" }
-                        );
-                    }
-                }
-                if hits == 0 {
-                    println!("(no matches)");
-                }
-                Ok(())
-            }
-            PluginSubcommand::Upgrade(args) => {
-                let override_spec = args
-                    .registry
-                    .as_ref()
-                    .map(|source| {
-                        RegistrySpec::from_source(args.registry_id.clone(), source, false)
-                    })
-                    .transpose()
-                    .map_err(|error| AppError::Config(error.to_string()))?;
-                let targets: Vec<String> = if args.all {
-                    client
-                        .list_installed()
-                        .map_err(|err| AppError::Config(err.to_string()))?
-                        .into_iter()
-                        .map(|r| r.plugin_id)
-                        .collect()
-                } else {
-                    let id = args.plugin_id.clone().ok_or_else(|| {
-                        AppError::Config(
-                            "agena plugin upgrade requires <plugin_id> or --all".to_string(),
-                        )
-                    })?;
-                    vec![id]
-                };
-                let mut errors = Vec::new();
-                for id in targets {
-                    match client.upgrade(&id, override_spec.clone()) {
-                        Ok(out) if out.upgraded => println!(
-                            "Upgraded {} {} -> {}",
-                            out.plugin_id, out.previous_version, out.installed_version
-                        ),
-                        Ok(out) => {
-                            println!(
-                                "{} is up to date (v{})",
-                                out.plugin_id, out.previous_version
-                            )
-                        }
-                        Err(err) => errors.push(format!("{id}: {err}")),
-                    }
-                }
-                if !errors.is_empty() {
-                    return Err(AppError::Config(errors.join("; ")));
-                }
-                Ok(())
-            }
-            PluginSubcommand::Outdated => {
-                let outdated = client
-                    .list_outdated()
-                    .map_err(|err| AppError::Config(err.to_string()))?;
-                if outdated.is_empty() {
-                    println!("(all installed plugins are up to date)");
-                } else {
-                    println!("{:<32} {:<14} LATEST", "PLUGIN", "INSTALLED");
-                    for record in outdated {
-                        println!(
-                            "{:<32} {:<14} {}",
-                            record.plugin_id, record.installed_version, record.latest_version
-                        );
-                    }
-                }
-                Ok(())
+            PluginSubcommand::Install(_)
+            | PluginSubcommand::Uninstall(_)
+            | PluginSubcommand::ListInstalled
+            | PluginSubcommand::Sync(_)
+            | PluginSubcommand::Search(_)
+            | PluginSubcommand::Upgrade(_)
+            | PluginSubcommand::Outdated => {
+                unreachable!("marketplace lifecycle commands are dispatched through spawn_blocking")
             }
         }
     }
@@ -607,6 +410,238 @@ impl AgenaCli {
     pub(super) async fn run_config(self, command: ConfigCommand) -> Result<(), AppError> {
         println!("{}", self.render_server_config_command(command).await?);
         Ok(())
+    }
+}
+
+fn run_plugin_marketplace_lifecycle(command: PluginSubcommand) -> Result<(), AppError> {
+    use agena_plugin_marketplace::{
+        DEFAULT_MARKETPLACE_SOURCE, InstallRequest, MarketplaceCache, MarketplaceClient,
+        PluginInstallLocator, RegistrySpec, default_cache_root, parse_plugin_install_locator,
+    };
+
+    let cache = MarketplaceCache::new(default_cache_root());
+    let client = MarketplaceClient::new(cache, std::collections::BTreeMap::new());
+
+    match command {
+        PluginSubcommand::Install(args) => {
+            let locator = parse_plugin_install_locator(args.spec.as_str())
+                .map_err(|error| AppError::Config(error.to_string()))?;
+            let (registry, plugin_id, version) = match (args.registry.as_deref(), locator) {
+                (Some(source), PluginInstallLocator::Marketplace { plugin_id, version }) => (
+                    RegistrySpec::from_source(
+                        args.registry_id.clone(),
+                        source,
+                        args.require_signature,
+                    )
+                    .map_err(|error| AppError::Config(error.to_string()))?,
+                    plugin_id,
+                    version,
+                ),
+                (Some(_), PluginInstallLocator::GitHubRelease { .. }) => {
+                    return Err(AppError::Config(
+                        "do not combine a direct GitHub repository install with --registry"
+                            .to_string(),
+                    ));
+                }
+                (None, PluginInstallLocator::GitHubRelease { repository, tag }) => {
+                    let registry = RegistrySpec::github_release(
+                        repository,
+                        tag.as_deref(),
+                        args.require_signature,
+                    )
+                    .map_err(|error| AppError::Config(error.to_string()))?;
+                    let index = client
+                        .registry(registry.clone())
+                        .fetch_index(args.refresh)
+                        .map_err(|error| AppError::Config(error.to_string()))?;
+                    let plugin_id = single_release_plugin_id(&index)?;
+                    (registry, plugin_id, None)
+                }
+                (None, PluginInstallLocator::Marketplace { plugin_id, version }) => (
+                    RegistrySpec::from_source(
+                        "official",
+                        DEFAULT_MARKETPLACE_SOURCE,
+                        args.require_signature,
+                    )
+                    .map_err(|error| AppError::Config(error.to_string()))?,
+                    plugin_id,
+                    version,
+                ),
+            };
+            let config_path =
+                agena_runtime::default_config_path(&agena_runtime::ProcessEnvironment);
+            let outcome = client
+                .install(InstallRequest {
+                    registry,
+                    plugin_id,
+                    version,
+                    config_path,
+                    force: args.force,
+                    dry_run: args.dry_run,
+                    allow_unverified: args.allow_unverified,
+                    refresh_index: args.refresh,
+                })
+                .map_err(|err| AppError::Config(err.to_string()))?;
+            if outcome.dry_run {
+                println!(
+                    "DRY-RUN: would install {} v{} ({}) into {}",
+                    outcome.plugin_id,
+                    outcome.version,
+                    outcome.kind,
+                    outcome.config_path.display()
+                );
+            } else {
+                println!(
+                    "Installed {} v{} ({}) to {}",
+                    outcome.plugin_id,
+                    outcome.version,
+                    outcome.kind,
+                    outcome.artifact_path.display()
+                );
+            }
+            Ok(())
+        }
+        PluginSubcommand::Uninstall(args) => {
+            let outcomes = client
+                .uninstall_with(&args.plugin_id, args.cascade)
+                .map_err(|err| AppError::Config(err.to_string()))?;
+            for outcome in outcomes {
+                println!(
+                    "Uninstalled {} v{} from {}",
+                    outcome.plugin_id,
+                    outcome.version,
+                    outcome.config_path.display()
+                );
+            }
+            Ok(())
+        }
+        PluginSubcommand::ListInstalled => {
+            let records = client
+                .list_installed()
+                .map_err(|err| AppError::Config(err.to_string()))?;
+            if records.is_empty() {
+                println!("(no plugins installed via agena marketplace)");
+            } else {
+                for record in records {
+                    println!(
+                        "{} v{} ({}) -> {}",
+                        record.plugin_id,
+                        record.version,
+                        record.kind,
+                        record.binary_path.display()
+                    );
+                }
+            }
+            Ok(())
+        }
+        PluginSubcommand::Sync(args) => {
+            let registry = client.registry(
+                RegistrySpec::from_source(args.registry_id, args.registry, false)
+                    .map_err(|error| AppError::Config(error.to_string()))?,
+            );
+            let index = registry
+                .fetch_index(true)
+                .map_err(|err| AppError::Config(err.to_string()))?;
+            println!(
+                "registry index refreshed: {} plugin(s)",
+                index.plugins.len()
+            );
+            Ok(())
+        }
+        PluginSubcommand::Search(args) => {
+            let registry = client.registry(
+                RegistrySpec::from_source(args.registry_id, args.registry, false)
+                    .map_err(|error| AppError::Config(error.to_string()))?,
+            );
+            let index = registry
+                .fetch_index(false)
+                .map_err(|err| AppError::Config(err.to_string()))?;
+            let needle = args.query.to_ascii_lowercase();
+            let mut hits = 0usize;
+            for plugin in index.plugins {
+                let blob = format!("{} {} {}", plugin.id, plugin.name, plugin.description)
+                    .to_ascii_lowercase();
+                if blob.contains(&needle) {
+                    hits += 1;
+                    println!(
+                        "{} — {} ({} version{})",
+                        plugin.id,
+                        if plugin.description.is_empty() {
+                            plugin.name.as_str()
+                        } else {
+                            plugin.description.as_str()
+                        },
+                        plugin.versions.len(),
+                        if plugin.versions.len() == 1 { "" } else { "s" }
+                    );
+                }
+            }
+            if hits == 0 {
+                println!("(no matches)");
+            }
+            Ok(())
+        }
+        PluginSubcommand::Upgrade(args) => {
+            let override_spec = args
+                .registry
+                .as_ref()
+                .map(|source| RegistrySpec::from_source(args.registry_id.clone(), source, false))
+                .transpose()
+                .map_err(|error| AppError::Config(error.to_string()))?;
+            let targets: Vec<String> = if args.all {
+                client
+                    .list_installed()
+                    .map_err(|err| AppError::Config(err.to_string()))?
+                    .into_iter()
+                    .map(|r| r.plugin_id)
+                    .collect()
+            } else {
+                let id = args.plugin_id.clone().ok_or_else(|| {
+                    AppError::Config(
+                        "agena plugin upgrade requires <plugin_id> or --all".to_string(),
+                    )
+                })?;
+                vec![id]
+            };
+            let mut errors = Vec::new();
+            for id in targets {
+                match client.upgrade(&id, override_spec.clone()) {
+                    Ok(out) if out.upgraded => println!(
+                        "Upgraded {} {} -> {}",
+                        out.plugin_id, out.previous_version, out.installed_version
+                    ),
+                    Ok(out) => {
+                        println!(
+                            "{} is up to date (v{})",
+                            out.plugin_id, out.previous_version
+                        )
+                    }
+                    Err(err) => errors.push(format!("{id}: {err}")),
+                }
+            }
+            if !errors.is_empty() {
+                return Err(AppError::Config(errors.join("; ")));
+            }
+            Ok(())
+        }
+        PluginSubcommand::Outdated => {
+            let outdated = client
+                .list_outdated()
+                .map_err(|err| AppError::Config(err.to_string()))?;
+            if outdated.is_empty() {
+                println!("(all installed plugins are up to date)");
+            } else {
+                println!("{:<32} {:<14} LATEST", "PLUGIN", "INSTALLED");
+                for record in outdated {
+                    println!(
+                        "{:<32} {:<14} {}",
+                        record.plugin_id, record.installed_version, record.latest_version
+                    );
+                }
+            }
+            Ok(())
+        }
+        _ => unreachable!("non-marketplace plugin command reached blocking lifecycle helper"),
     }
 }
 

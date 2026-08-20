@@ -1075,20 +1075,6 @@
       "artifact_kind": "backend"
     },
     {
-      "target": "aarch64-unknown-helenos",
-      "os": "helenos",
-      "builder": "helenos",
-      "build_std": true,
-      "artifact_kind": "backend"
-    },
-    {
-      "target": "aarch64-unknown-hermit",
-      "os": "hermit",
-      "builder": "hermit",
-      "build_std": true,
-      "artifact_kind": "backend"
-    },
-    {
       "target": "aarch64-unknown-illumos",
       "os": "illumos",
       "builder": "illumos",
@@ -1152,30 +1138,9 @@
       "artifact_kind": "backend"
     },
     {
-      "target": "aarch64-unknown-teeos",
-      "os": "teeos",
-      "builder": "teeos",
-      "build_std": true,
-      "artifact_kind": "backend"
-    },
-    {
-      "target": "aarch64-unknown-trusty",
-      "os": "trusty",
-      "builder": "trusty",
-      "build_std": true,
-      "artifact_kind": "backend"
-    },
-    {
       "target": "aarch64-wrs-vxworks",
       "os": "vxworks",
       "builder": "vxworks",
-      "build_std": true,
-      "artifact_kind": "backend"
-    },
-    {
-      "target": "aarch64_be-unknown-hermit",
-      "os": "hermit",
-      "builder": "hermit",
       "build_std": true,
       "artifact_kind": "backend"
     },
@@ -1222,23 +1187,9 @@
       "artifact_kind": "backend"
     },
     {
-      "target": "armv7-unknown-trusty",
-      "os": "trusty",
-      "builder": "trusty",
-      "build_std": true,
-      "artifact_kind": "backend"
-    },
-    {
       "target": "armv7-wrs-vxworks-eabihf",
       "os": "vxworks",
       "builder": "vxworks",
-      "build_std": true,
-      "artifact_kind": "backend"
-    },
-    {
-      "target": "armv7a-vex-v5",
-      "os": "vexos",
-      "builder": "vexos",
       "build_std": true,
       "artifact_kind": "backend"
     },
@@ -1278,13 +1229,6 @@
       "artifact_kind": "backend"
     },
     {
-      "target": "i686-unknown-helenos",
-      "os": "helenos",
-      "builder": "helenos",
-      "build_std": true,
-      "artifact_kind": "backend"
-    },
-    {
       "target": "i686-unknown-hurd-gnu",
       "os": "hurd",
       "builder": "hurd",
@@ -1313,13 +1257,6 @@
       "artifact_kind": "backend"
     },
     {
-      "target": "mipsel-sony-psp",
-      "os": "psp",
-      "builder": "psp",
-      "build_std": true,
-      "artifact_kind": "backend"
-    },
-    {
       "target": "mipsel-unknown-netbsd",
       "os": "netbsd",
       "builder": "zig-netbsd",
@@ -1330,13 +1267,6 @@
       "target": "powerpc-unknown-freebsd",
       "os": "freebsd",
       "builder": "freebsd-sysroot",
-      "build_std": true,
-      "artifact_kind": "backend"
-    },
-    {
-      "target": "powerpc-unknown-helenos",
-      "os": "helenos",
-      "builder": "helenos",
       "build_std": true,
       "artifact_kind": "backend"
     },
@@ -1411,13 +1341,6 @@
       "artifact_kind": "backend"
     },
     {
-      "target": "riscv32imac-unknown-xous-elf",
-      "os": "xous",
-      "builder": "xous",
-      "build_std": true,
-      "artifact_kind": "backend"
-    },
-    {
       "target": "riscv64-linux-android",
       "os": "android",
       "builder": "android-ndk",
@@ -1446,13 +1369,6 @@
       "artifact_kind": "backend"
     },
     {
-      "target": "riscv64gc-unknown-hermit",
-      "os": "hermit",
-      "builder": "hermit",
-      "build_std": true,
-      "artifact_kind": "backend"
-    },
-    {
       "target": "riscv64gc-unknown-managarm-mlibc",
       "os": "managarm",
       "builder": "managarm",
@@ -1477,13 +1393,6 @@
       "target": "riscv64gc-unknown-redox",
       "os": "redox",
       "builder": "redox",
-      "build_std": true,
-      "artifact_kind": "backend"
-    },
-    {
-      "target": "sparc64-unknown-helenos",
-      "os": "helenos",
-      "builder": "helenos",
       "build_std": true,
       "artifact_kind": "backend"
     },
@@ -1551,20 +1460,6 @@
       "artifact_kind": "backend"
     },
     {
-      "target": "x86_64-unknown-helenos",
-      "os": "helenos",
-      "builder": "helenos",
-      "build_std": true,
-      "artifact_kind": "backend"
-    },
-    {
-      "target": "x86_64-unknown-hermit",
-      "os": "hermit",
-      "builder": "hermit",
-      "build_std": true,
-      "artifact_kind": "backend"
-    },
-    {
       "target": "x86_64-unknown-hurd-gnu",
       "os": "hurd",
       "builder": "hurd",
@@ -1607,13 +1502,6 @@
       "artifact_kind": "backend"
     },
     {
-      "target": "x86_64-unknown-trusty",
-      "os": "trusty",
-      "builder": "trusty",
-      "build_std": true,
-      "artifact_kind": "backend"
-    },
-    {
       "target": "x86_64-wrs-vxworks",
       "os": "vxworks",
       "builder": "vxworks",
@@ -1635,6 +1523,18 @@
       "description": "ARM64 Nintendo Switch, Horizon"
     },
     {
+      "target": "aarch64-unknown-helenos",
+      "target_os": "helenos",
+      "reason": "rust-std-process-unsupported",
+      "description": "ARM64 HelenOS; Rust 1.97 std::process uses unsupported PAL"
+    },
+    {
+      "target": "aarch64-unknown-hermit",
+      "target_os": "hermit",
+      "reason": "rust-std-process-unsupported",
+      "description": "ARM64 Hermit; Rust 1.97 std::process uses unsupported PAL"
+    },
+    {
       "target": "aarch64-unknown-none",
       "target_os": "none",
       "reason": "non-os-execution-environment",
@@ -1653,10 +1553,28 @@
       "description": "AArch64 NuttX; Rust 1.97 std::process uses unsupported PAL"
     },
     {
+      "target": "aarch64-unknown-teeos",
+      "target_os": "teeos",
+      "reason": "rust-std-process-unsupported",
+      "description": "ARM64 TEEOS; Rust 1.97 std::process uses unsupported PAL"
+    },
+    {
+      "target": "aarch64-unknown-trusty",
+      "target_os": "trusty",
+      "reason": "rust-std-process-unsupported",
+      "description": "ARM64 Trusty; Rust 1.97 std::process uses unsupported PAL"
+    },
+    {
       "target": "aarch64-unknown-uefi",
       "target_os": "uefi",
       "reason": "non-os-execution-environment",
       "description": "ARM64 UEFI"
+    },
+    {
+      "target": "aarch64_be-unknown-hermit",
+      "target_os": "hermit",
+      "reason": "rust-std-process-unsupported",
+      "description": "ARM64 Hermit (big-endian); Rust 1.97 std::process uses unsupported PAL"
     },
     {
       "target": "aarch64_be-unknown-none-softfloat",
@@ -1731,6 +1649,12 @@
       "description": "Armv7-A Cortex-A9 Sony PlayStation Vita (requires VITASDK toolchain); Rust 1.97 std::process uses unsupported PAL"
     },
     {
+      "target": "armv7-unknown-trusty",
+      "target_os": "trusty",
+      "reason": "rust-std-process-unsupported",
+      "description": "Armv7-A Trusty; Rust 1.97 std::process uses unsupported PAL"
+    },
+    {
       "target": "armv7a-kmc-solid_asp3-eabi",
       "target_os": "solid_asp3",
       "reason": "rust-target-no-executables",
@@ -1765,6 +1689,12 @@
       "target_os": "nuttx",
       "reason": "rust-std-process-unsupported",
       "description": "ARMv7-A Cortex-A with NuttX (hard float); Rust 1.97 std::process uses unsupported PAL"
+    },
+    {
+      "target": "armv7a-vex-v5",
+      "target_os": "vexos",
+      "reason": "rust-std-process-unsupported",
+      "description": "ARMv7-A Cortex-A9 VEX V5 Brain; Rust 1.97 std::process uses unsupported PAL"
     },
     {
       "target": "armv7r-none-eabi",
@@ -1807,6 +1737,12 @@
       "target_os": "none",
       "reason": "non-os-execution-environment",
       "description": "Bare Hexagon (v60+, HVX)"
+    },
+    {
+      "target": "i686-unknown-helenos",
+      "target_os": "helenos",
+      "reason": "rust-std-process-unsupported",
+      "description": "IA-32 (i686) HelenOS; Rust 1.97 std::process uses unsupported PAL"
     },
     {
       "target": "i686-unknown-uefi",
@@ -1857,6 +1793,12 @@
       "description": "MIPS32r2 LE Baremetal Softfloat"
     },
     {
+      "target": "mipsel-sony-psp",
+      "target_os": "psp",
+      "reason": "rust-std-process-unsupported",
+      "description": "MIPS (LE) Sony PlatStation Portable (PSP); Rust 1.97 std::process uses unsupported PAL"
+    },
+    {
       "target": "mipsel-sony-psx",
       "target_os": "psx",
       "reason": "non-os-execution-environment",
@@ -1879,6 +1821,12 @@
       "target_os": "cuda",
       "reason": "non-os-execution-environment",
       "description": "--emit=asm generates PTX code that runs on NVIDIA GPUs"
+    },
+    {
+      "target": "powerpc-unknown-helenos",
+      "target_os": "helenos",
+      "reason": "rust-std-process-unsupported",
+      "description": "PowerPC HelenOS; Rust 1.97 std::process uses unsupported PAL"
     },
     {
       "target": "riscv32e-unknown-none-elf",
@@ -1941,6 +1889,12 @@
       "description": "Rust nuttx target; Rust 1.97 std::process uses unsupported PAL"
     },
     {
+      "target": "riscv32imac-unknown-xous-elf",
+      "target_os": "xous",
+      "reason": "rust-std-process-unsupported",
+      "description": "RISC-V Xous (RV32IMAC ISA); Rust 1.97 std::process uses unsupported PAL"
+    },
+    {
       "target": "riscv32imafc-esp-espidf",
       "target_os": "espidf",
       "reason": "rust-std-process-unsupported",
@@ -1975,6 +1929,12 @@
       "target_os": "nuttx",
       "reason": "rust-std-process-unsupported",
       "description": "Rust nuttx target; Rust 1.97 std::process uses unsupported PAL"
+    },
+    {
+      "target": "riscv64gc-unknown-hermit",
+      "target_os": "hermit",
+      "reason": "rust-std-process-unsupported",
+      "description": "RISC-V Hermit; Rust 1.97 std::process uses unsupported PAL"
     },
     {
       "target": "riscv64gc-unknown-none-elf",
@@ -2017,6 +1977,12 @@
       "target_os": "none",
       "reason": "non-os-execution-environment",
       "description": "Bare 32-bit SPARC V7+"
+    },
+    {
+      "target": "sparc64-unknown-helenos",
+      "target_os": "helenos",
+      "reason": "rust-std-process-unsupported",
+      "description": "SPARC HelenOS; Rust 1.97 std::process uses unsupported PAL"
     },
     {
       "target": "thumbv4t-none-eabi",
@@ -2223,6 +2189,18 @@
       "description": "Fortanix ABI for 64-bit Intel SGX"
     },
     {
+      "target": "x86_64-unknown-helenos",
+      "target_os": "helenos",
+      "reason": "rust-std-process-unsupported",
+      "description": "64-bit HelenOS; Rust 1.97 std::process uses unsupported PAL"
+    },
+    {
+      "target": "x86_64-unknown-hermit",
+      "target_os": "hermit",
+      "reason": "rust-std-process-unsupported",
+      "description": "x86_64 Hermit; Rust 1.97 std::process uses unsupported PAL"
+    },
+    {
       "target": "x86_64-unknown-linux-none",
       "target_os": "linux",
       "reason": "freestanding-no-userspace-std",
@@ -2233,6 +2211,12 @@
       "target_os": "none",
       "reason": "non-os-execution-environment",
       "description": "Freestanding/bare-metal x86_64 softfloat"
+    },
+    {
+      "target": "x86_64-unknown-trusty",
+      "target_os": "trusty",
+      "reason": "rust-std-process-unsupported",
+      "description": "x86_64 Trusty; Rust 1.97 std::process uses unsupported PAL"
     },
     {
       "target": "x86_64-unknown-uefi",

@@ -22,6 +22,21 @@ NON_OS_ENVIRONMENTS = {
     "zkvm",
 }
 
+
+def rust_std_process_supported(spec: dict) -> bool:
+    """Mirror Rust 1.97 std::sys::process PAL selection.
+
+    Rust's top-level process PAL is implemented for Unix-family targets,
+    Windows, UEFI, and Motor. The Unix selector then explicitly routes a
+    handful of embedded OSes to its unsupported implementation.
+    """
+
+    target_os = spec.get("os") or "none"
+    target_families = set(spec.get("target-family") or [])
+    if "unix" in target_families:
+        return target_os not in RUST_STD_PROCESS_UNSUPPORTED_OS
+    return target_os in {"windows", "uefi", "motor"}
+
 # Agena's full backend requires working process/PTY semantics at runtime. Rust
 # 1.97 explicitly routes these OS targets to std::sys::process::unsupported,
 # so accepting them would merely move a build-time portability gap into a
@@ -126,7 +141,7 @@ def main() -> None:
             target_os in NON_OS_ENVIRONMENTS
             or target in FREESTANDING_OS_TARGETS
             or target in NON_OS_TARGETS
-            or target_os in RUST_STD_PROCESS_UNSUPPORTED_OS
+            or not rust_std_process_supported(spec)
             or executables is False
         ):
             invalid_backends.append(
@@ -134,7 +149,8 @@ def main() -> None:
             )
     if invalid_backends:
         raise SystemExit(
-            "full-backend manifest contains non-OS/no-std targets: " + ", ".join(invalid_backends)
+            "full-backend manifest contains targets without the required OS runtime: "
+            + ", ".join(invalid_backends)
         )
 
     invalid_excluded: list[str] = []
@@ -153,7 +169,13 @@ def main() -> None:
         elif reason == "rust-target-no-executables":
             valid = executables is False
         elif reason == "rust-std-process-unsupported":
-            valid = target_os in RUST_STD_PROCESS_UNSUPPORTED_OS
+            valid = (
+                not rust_std_process_supported(spec)
+                and target_os not in NON_OS_ENVIRONMENTS
+                and target not in FREESTANDING_OS_TARGETS
+                and target not in NON_OS_TARGETS
+                and executables is not False
+            )
         else:
             valid = False
         if not valid:

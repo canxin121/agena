@@ -23,7 +23,23 @@ read_version() {
 }
 
 TARGET_TRIPLE="${1:-$(detect_host_triple)}"
+BUILD_STD="${2:-false}"
+TARGET_RUSTFLAGS="${3:-}"
+COMBINED_RUSTFLAGS="${RUSTFLAGS:-}"
+if [[ -n "$TARGET_RUSTFLAGS" ]]; then
+  COMBINED_RUSTFLAGS="${COMBINED_RUSTFLAGS:+$COMBINED_RUSTFLAGS }$TARGET_RUSTFLAGS"
+fi
 VERSION="$(read_version)"
+
+case "$TARGET_TRIPLE" in
+  armv7s-apple-ios|i386-apple-ios)
+    export IPHONEOS_DEPLOYMENT_TARGET=10.0
+    ;;
+  i686-apple-darwin)
+    export CFLAGS_i686_apple_darwin="${CFLAGS_i686_apple_darwin:-} -D_Float16=float"
+    export CXXFLAGS_i686_apple_darwin="${CXXFLAGS_i686_apple_darwin:-} -D_Float16=float"
+    ;;
+esac
 
 if [[ -z "$VERSION" ]]; then
   echo "ERROR: failed to read agena version from $SERVER_MANIFEST" >&2
@@ -58,12 +74,21 @@ if [[ ! -f "$WEB_DIST_DIR/index.html" ]]; then
   exit 1
 fi
 
-cargo build \
-  --manifest-path "$SERVER_MANIFEST" \
-  --release \
-  --target "$TARGET_TRIPLE" \
-  --locked \
+build_args=(
+  build
+  --manifest-path "$SERVER_MANIFEST"
+  -p agena
+  --release
+  --target "$TARGET_TRIPLE"
+  --locked
   --target-dir "$SERVER_TARGET_DIR"
+)
+if [[ "$BUILD_STD" == true ]]; then
+  RUSTFLAGS="$COMBINED_RUSTFLAGS" \
+    bash "$REPO_ROOT/scripts/ci/run-build-std-cargo.sh" "$TARGET_TRIPLE" "${build_args[@]}"
+else
+  RUSTFLAGS="$COMBINED_RUSTFLAGS" cargo "${build_args[@]}"
+fi
 
 BIN_PATH="$SERVER_TARGET_DIR/$TARGET_TRIPLE/release/agena$EXT"
 if [[ ! -f "$BIN_PATH" ]]; then

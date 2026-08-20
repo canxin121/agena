@@ -785,16 +785,19 @@ fn read_with_deadline(
     buffer: &mut [u8],
     deadline: Instant,
 ) -> Result<usize> {
-    use rustix::event::{PollFd, PollFlags, poll};
+    use rustix::event::{PollFd, PollFlags, Timespec, poll};
 
     let remaining = deadline.saturating_duration_since(Instant::now());
     if remaining.is_zero() {
         return Err(Errors::NoStdinResponse);
     }
-    let timeout_millis = remaining.as_millis().clamp(1, i32::MAX as u128) as i32;
+    let timeout = Timespec {
+        tv_sec: remaining.as_secs().min(i64::MAX as u64) as i64,
+        tv_nsec: remaining.subsec_nanos() as _,
+    };
     {
         let mut descriptors = [PollFd::new(&*input, PollFlags::IN)];
-        if poll(&mut descriptors, timeout_millis)? == 0 {
+        if poll(&mut descriptors, Some(&timeout))? == 0 {
             return Err(Errors::NoStdinResponse);
         }
         if descriptors[0]

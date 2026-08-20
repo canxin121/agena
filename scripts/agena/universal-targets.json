@@ -1,21 +1,21 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "cross_revision": "c5c9de4a8f54ed3f40c0ca9f9cc8be60c4bc4019",
   "nightly_toolchain": "nightly-2026-08-18",
-  "hosted_cross": [
+  "cross_backend": [
     {
-      "target": "x86_64-unknown-linux-gnu",
+      "target": "aarch64-linux-android",
       "build_std": false,
-      "family": "linux",
+      "family": "android",
       "can_run_in_cross": true,
       "requires_cpp": true,
       "artifact_kind": "backend"
     },
     {
-      "target": "x86_64-unknown-linux-musl",
-      "build_std": false,
-      "family": "linux",
-      "can_run_in_cross": true,
+      "target": "aarch64-unknown-freebsd",
+      "build_std": true,
+      "family": "bsd",
+      "can_run_in_cross": false,
       "requires_cpp": true,
       "artifact_kind": "backend"
     },
@@ -28,9 +28,25 @@
       "artifact_kind": "backend"
     },
     {
+      "target": "aarch64-unknown-linux-musl",
+      "build_std": false,
+      "family": "linux",
+      "can_run_in_cross": true,
+      "requires_cpp": true,
+      "artifact_kind": "backend"
+    },
+    {
       "target": "aarch64_be-unknown-linux-gnu",
       "build_std": true,
       "family": "linux",
+      "can_run_in_cross": true,
+      "requires_cpp": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "arm-linux-androideabi",
+      "build_std": false,
+      "family": "android",
       "can_run_in_cross": true,
       "requires_cpp": true,
       "artifact_kind": "backend"
@@ -52,6 +68,46 @@
       "artifact_kind": "backend"
     },
     {
+      "target": "arm-unknown-linux-musleabi",
+      "build_std": false,
+      "family": "linux",
+      "can_run_in_cross": true,
+      "requires_cpp": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "arm-unknown-linux-musleabihf",
+      "build_std": false,
+      "family": "linux",
+      "can_run_in_cross": true,
+      "requires_cpp": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "armv5te-unknown-linux-gnueabi",
+      "build_std": false,
+      "family": "linux",
+      "can_run_in_cross": true,
+      "requires_cpp": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "armv5te-unknown-linux-musleabi",
+      "build_std": false,
+      "family": "linux",
+      "can_run_in_cross": true,
+      "requires_cpp": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "armv7-linux-androideabi",
+      "build_std": false,
+      "family": "android",
+      "can_run_in_cross": true,
+      "requires_cpp": true,
+      "artifact_kind": "backend"
+    },
+    {
       "target": "armv7-unknown-linux-gnueabi",
       "build_std": false,
       "family": "linux",
@@ -68,7 +124,15 @@
       "artifact_kind": "backend"
     },
     {
-      "target": "thumbv7neon-unknown-linux-gnueabihf",
+      "target": "armv7-unknown-linux-musleabi",
+      "build_std": false,
+      "family": "linux",
+      "can_run_in_cross": true,
+      "requires_cpp": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "armv7-unknown-linux-musleabihf",
       "build_std": false,
       "family": "linux",
       "can_run_in_cross": true,
@@ -84,7 +148,47 @@
       "artifact_kind": "backend"
     },
     {
+      "target": "i586-unknown-linux-musl",
+      "build_std": false,
+      "family": "linux",
+      "can_run_in_cross": true,
+      "requires_cpp": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "i686-linux-android",
+      "build_std": false,
+      "family": "android",
+      "can_run_in_cross": true,
+      "requires_cpp": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "i686-pc-windows-gnu",
+      "build_std": false,
+      "family": "windows-gnu",
+      "can_run_in_cross": true,
+      "requires_cpp": false,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "i686-unknown-freebsd",
+      "build_std": false,
+      "family": "bsd",
+      "can_run_in_cross": false,
+      "requires_cpp": true,
+      "artifact_kind": "backend"
+    },
+    {
       "target": "i686-unknown-linux-gnu",
+      "build_std": false,
+      "family": "linux",
+      "can_run_in_cross": true,
+      "requires_cpp": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "i686-unknown-linux-musl",
       "build_std": false,
       "family": "linux",
       "can_run_in_cross": true,
@@ -116,7 +220,7 @@
       "artifact_kind": "backend"
     },
     {
-      "target": "mipsel-unknown-linux-gnu",
+      "target": "mips-unknown-linux-musl",
       "build_std": true,
       "family": "linux",
       "can_run_in_cross": true,
@@ -132,7 +236,39 @@
       "artifact_kind": "backend"
     },
     {
+      "target": "mips64-unknown-linux-muslabi64",
+      "build_std": true,
+      "family": "linux",
+      "can_run_in_cross": true,
+      "requires_cpp": true,
+      "artifact_kind": "backend"
+    },
+    {
       "target": "mips64el-unknown-linux-gnuabi64",
+      "build_std": true,
+      "family": "linux",
+      "can_run_in_cross": true,
+      "requires_cpp": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "mips64el-unknown-linux-muslabi64",
+      "build_std": true,
+      "family": "linux",
+      "can_run_in_cross": true,
+      "requires_cpp": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "mipsel-unknown-linux-gnu",
+      "build_std": true,
+      "family": "linux",
+      "can_run_in_cross": true,
+      "requires_cpp": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "mipsel-unknown-linux-musl",
       "build_std": true,
       "family": "linux",
       "can_run_in_cross": true,
@@ -196,98 +332,10 @@
       "artifact_kind": "backend"
     },
     {
-      "target": "aarch64-unknown-linux-musl",
+      "target": "sparcv9-sun-solaris",
       "build_std": false,
-      "family": "linux",
-      "can_run_in_cross": true,
-      "requires_cpp": true,
-      "artifact_kind": "backend"
-    },
-    {
-      "target": "arm-unknown-linux-musleabihf",
-      "build_std": false,
-      "family": "linux",
-      "can_run_in_cross": true,
-      "requires_cpp": true,
-      "artifact_kind": "backend"
-    },
-    {
-      "target": "arm-unknown-linux-musleabi",
-      "build_std": false,
-      "family": "linux",
-      "can_run_in_cross": true,
-      "requires_cpp": true,
-      "artifact_kind": "backend"
-    },
-    {
-      "target": "armv5te-unknown-linux-gnueabi",
-      "build_std": false,
-      "family": "linux",
-      "can_run_in_cross": true,
-      "requires_cpp": true,
-      "artifact_kind": "backend"
-    },
-    {
-      "target": "armv5te-unknown-linux-musleabi",
-      "build_std": false,
-      "family": "linux",
-      "can_run_in_cross": true,
-      "requires_cpp": true,
-      "artifact_kind": "backend"
-    },
-    {
-      "target": "armv7-unknown-linux-musleabi",
-      "build_std": false,
-      "family": "linux",
-      "can_run_in_cross": true,
-      "requires_cpp": true,
-      "artifact_kind": "backend"
-    },
-    {
-      "target": "armv7-unknown-linux-musleabihf",
-      "build_std": false,
-      "family": "linux",
-      "can_run_in_cross": true,
-      "requires_cpp": true,
-      "artifact_kind": "backend"
-    },
-    {
-      "target": "i586-unknown-linux-musl",
-      "build_std": false,
-      "family": "linux",
-      "can_run_in_cross": true,
-      "requires_cpp": true,
-      "artifact_kind": "backend"
-    },
-    {
-      "target": "i686-unknown-linux-musl",
-      "build_std": false,
-      "family": "linux",
-      "can_run_in_cross": true,
-      "requires_cpp": true,
-      "artifact_kind": "backend"
-    },
-    {
-      "target": "aarch64-linux-android",
-      "build_std": false,
-      "family": "android",
-      "can_run_in_cross": true,
-      "requires_cpp": true,
-      "artifact_kind": "backend"
-    },
-    {
-      "target": "arm-linux-androideabi",
-      "build_std": false,
-      "family": "android",
-      "can_run_in_cross": true,
-      "requires_cpp": true,
-      "artifact_kind": "backend"
-    },
-    {
-      "target": "armv7-linux-androideabi",
-      "build_std": false,
-      "family": "android",
-      "can_run_in_cross": true,
+      "family": "solaris",
+      "can_run_in_cross": false,
       "requires_cpp": true,
       "artifact_kind": "backend"
     },
@@ -300,9 +348,9 @@
       "artifact_kind": "backend"
     },
     {
-      "target": "i686-linux-android",
+      "target": "thumbv7neon-unknown-linux-gnueabihf",
       "build_std": false,
-      "family": "android",
+      "family": "linux",
       "can_run_in_cross": true,
       "requires_cpp": true,
       "artifact_kind": "backend"
@@ -316,6 +364,14 @@
       "artifact_kind": "backend"
     },
     {
+      "target": "x86_64-pc-solaris",
+      "build_std": false,
+      "family": "solaris",
+      "can_run_in_cross": false,
+      "requires_cpp": true,
+      "artifact_kind": "backend"
+    },
+    {
       "target": "x86_64-pc-windows-gnu",
       "build_std": false,
       "family": "windows-gnu",
@@ -324,32 +380,8 @@
       "artifact_kind": "backend"
     },
     {
-      "target": "i686-pc-windows-gnu",
-      "build_std": false,
-      "family": "windows-gnu",
-      "can_run_in_cross": true,
-      "requires_cpp": false,
-      "artifact_kind": "backend"
-    },
-    {
-      "target": "wasm32-unknown-emscripten",
-      "build_std": false,
-      "family": "web",
-      "can_run_in_cross": true,
-      "requires_cpp": true,
-      "artifact_kind": "web-runtime"
-    },
-    {
       "target": "x86_64-unknown-dragonfly",
       "build_std": true,
-      "family": "bsd",
-      "can_run_in_cross": false,
-      "requires_cpp": true,
-      "artifact_kind": "backend"
-    },
-    {
-      "target": "i686-unknown-freebsd",
-      "build_std": false,
       "family": "bsd",
       "can_run_in_cross": false,
       "requires_cpp": true,
@@ -364,10 +396,26 @@
       "artifact_kind": "backend"
     },
     {
-      "target": "aarch64-unknown-freebsd",
-      "build_std": true,
-      "family": "bsd",
+      "target": "x86_64-unknown-illumos",
+      "build_std": false,
+      "family": "solaris",
       "can_run_in_cross": false,
+      "requires_cpp": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "x86_64-unknown-linux-gnu",
+      "build_std": false,
+      "family": "linux",
+      "can_run_in_cross": true,
+      "requires_cpp": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "x86_64-unknown-linux-musl",
+      "build_std": false,
+      "family": "linux",
+      "can_run_in_cross": true,
       "requires_cpp": true,
       "artifact_kind": "backend"
     },
@@ -378,1544 +426,1880 @@
       "can_run_in_cross": false,
       "requires_cpp": true,
       "artifact_kind": "backend"
-    },
-    {
-      "target": "sparcv9-sun-solaris",
-      "build_std": false,
-      "family": "solaris",
-      "can_run_in_cross": false,
-      "requires_cpp": true,
-      "artifact_kind": "backend"
-    },
-    {
-      "target": "x86_64-pc-solaris",
-      "build_std": false,
-      "family": "solaris",
-      "can_run_in_cross": false,
-      "requires_cpp": true,
-      "artifact_kind": "backend"
-    },
-    {
-      "target": "x86_64-unknown-illumos",
-      "build_std": false,
-      "family": "solaris",
-      "can_run_in_cross": false,
-      "requires_cpp": true,
-      "artifact_kind": "backend"
     }
   ],
-  "native": [
-    {
-      "target": "x86_64-apple-darwin",
-      "runner": "macos-15-intel",
-      "shell": "bash",
-      "artifact_kind": "backend"
-    },
+  "native_backend": [
     {
       "target": "aarch64-apple-darwin",
       "runner": "macos-15",
       "shell": "bash",
+      "artifact_kind": "backend",
+      "build_std": false,
+      "platform_family": "macos"
+    },
+    {
+      "target": "aarch64-apple-ios",
+      "runner": "macos-15",
+      "shell": "bash",
+      "build_std": false,
+      "platform_family": "apple",
       "artifact_kind": "backend"
     },
     {
-      "target": "x86_64-pc-windows-msvc",
-      "runner": "windows-latest",
-      "shell": "pwsh",
+      "target": "aarch64-apple-ios-macabi",
+      "runner": "macos-15",
+      "shell": "bash",
+      "build_std": false,
+      "platform_family": "apple",
       "artifact_kind": "backend"
     },
     {
-      "target": "i686-pc-windows-msvc",
+      "target": "aarch64-apple-ios-sim",
+      "runner": "macos-15",
+      "shell": "bash",
+      "build_std": false,
+      "platform_family": "apple",
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "aarch64-apple-tvos",
+      "runner": "macos-15",
+      "shell": "bash",
+      "build_std": false,
+      "platform_family": "apple",
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "aarch64-apple-tvos-sim",
+      "runner": "macos-15",
+      "shell": "bash",
+      "build_std": false,
+      "platform_family": "apple",
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "aarch64-apple-visionos",
+      "runner": "macos-15",
+      "shell": "bash",
+      "build_std": false,
+      "platform_family": "apple",
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "aarch64-apple-visionos-sim",
+      "runner": "macos-15",
+      "shell": "bash",
+      "build_std": false,
+      "platform_family": "apple",
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "aarch64-apple-watchos",
+      "runner": "macos-15",
+      "shell": "bash",
+      "build_std": false,
+      "platform_family": "apple",
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "aarch64-apple-watchos-sim",
+      "runner": "macos-15",
+      "shell": "bash",
+      "build_std": false,
+      "platform_family": "apple",
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "aarch64-pc-windows-gnullvm",
       "runner": "windows-latest",
       "shell": "pwsh",
+      "build_std": false,
+      "platform_family": "windows",
       "artifact_kind": "backend"
     },
     {
       "target": "aarch64-pc-windows-msvc",
       "runner": "windows-11-arm",
       "shell": "pwsh",
-      "artifact_kind": "backend"
-    }
-  ],
-  "portable": [
-    {
-      "target": "aarch64-apple-ios",
-      "artifact_kind": "portable-core"
-    },
-    {
-      "target": "aarch64-apple-ios-macabi",
-      "artifact_kind": "portable-core"
-    },
-    {
-      "target": "aarch64-apple-ios-sim",
-      "artifact_kind": "portable-core"
-    },
-    {
-      "target": "aarch64-apple-tvos",
-      "artifact_kind": "portable-core"
-    },
-    {
-      "target": "aarch64-apple-tvos-sim",
-      "artifact_kind": "portable-core"
-    },
-    {
-      "target": "aarch64-apple-visionos",
-      "artifact_kind": "portable-core"
-    },
-    {
-      "target": "aarch64-apple-visionos-sim",
-      "artifact_kind": "portable-core"
-    },
-    {
-      "target": "aarch64-apple-watchos",
-      "artifact_kind": "portable-core"
-    },
-    {
-      "target": "aarch64-apple-watchos-sim",
-      "artifact_kind": "portable-core"
-    },
-    {
-      "target": "aarch64-pc-windows-gnullvm",
-      "artifact_kind": "portable-core"
-    },
-    {
-      "target": "aarch64-unknown-fuchsia",
-      "artifact_kind": "portable-core"
-    },
-    {
-      "target": "aarch64-unknown-linux-ohos",
-      "artifact_kind": "portable-core"
-    },
-    {
-      "target": "aarch64-unknown-none",
-      "artifact_kind": "portable-core"
-    },
-    {
-      "target": "aarch64-unknown-none-softfloat",
-      "artifact_kind": "portable-core"
-    },
-    {
-      "target": "aarch64-unknown-uefi",
-      "artifact_kind": "portable-core"
-    },
-    {
-      "target": "arm64ec-pc-windows-msvc",
-      "artifact_kind": "portable-core"
-    },
-    {
-      "target": "armv7-unknown-linux-ohos",
-      "artifact_kind": "portable-core"
-    },
-    {
-      "target": "armv7a-none-eabi",
-      "artifact_kind": "portable-core"
-    },
-    {
-      "target": "armv7a-none-eabihf",
-      "artifact_kind": "portable-core"
-    },
-    {
-      "target": "armv7r-none-eabi",
-      "artifact_kind": "portable-core"
-    },
-    {
-      "target": "armv7r-none-eabihf",
-      "artifact_kind": "portable-core"
-    },
-    {
-      "target": "armv8r-none-eabihf",
-      "artifact_kind": "portable-core"
-    },
-    {
-      "target": "i686-pc-windows-gnullvm",
-      "artifact_kind": "portable-core"
-    },
-    {
-      "target": "i686-unknown-uefi",
-      "artifact_kind": "portable-core"
-    },
-    {
-      "target": "loongarch64-unknown-none",
-      "artifact_kind": "portable-core"
-    },
-    {
-      "target": "loongarch64-unknown-none-softfloat",
-      "artifact_kind": "portable-core"
-    },
-    {
-      "target": "nvptx64-nvidia-cuda",
-      "artifact_kind": "portable-core"
-    },
-    {
-      "target": "powerpc64-unknown-linux-musl",
-      "artifact_kind": "portable-core"
-    },
-    {
-      "target": "powerpc64le-unknown-linux-musl",
-      "artifact_kind": "portable-core"
-    },
-    {
-      "target": "riscv32i-unknown-none-elf",
-      "artifact_kind": "portable-core"
-    },
-    {
-      "target": "riscv32im-unknown-none-elf",
-      "artifact_kind": "portable-core"
-    },
-    {
-      "target": "riscv32imac-unknown-none-elf",
-      "artifact_kind": "portable-core"
-    },
-    {
-      "target": "riscv32imafc-unknown-none-elf",
-      "artifact_kind": "portable-core"
-    },
-    {
-      "target": "riscv32imc-unknown-none-elf",
-      "artifact_kind": "portable-core"
-    },
-    {
-      "target": "riscv64a23-unknown-linux-gnu",
-      "artifact_kind": "portable-core"
-    },
-    {
-      "target": "riscv64gc-unknown-none-elf",
-      "artifact_kind": "portable-core"
-    },
-    {
-      "target": "riscv64imac-unknown-none-elf",
-      "artifact_kind": "portable-core"
-    },
-    {
-      "target": "thumbv6m-none-eabi",
-      "artifact_kind": "portable-core"
-    },
-    {
-      "target": "thumbv7em-none-eabi",
-      "artifact_kind": "portable-core"
-    },
-    {
-      "target": "thumbv7em-none-eabihf",
-      "artifact_kind": "portable-core"
-    },
-    {
-      "target": "thumbv7m-none-eabi",
-      "artifact_kind": "portable-core"
-    },
-    {
-      "target": "thumbv8m.base-none-eabi",
-      "artifact_kind": "portable-core"
-    },
-    {
-      "target": "thumbv8m.main-none-eabi",
-      "artifact_kind": "portable-core"
-    },
-    {
-      "target": "thumbv8m.main-none-eabihf",
-      "artifact_kind": "portable-core"
-    },
-    {
-      "target": "wasm32-unknown-unknown",
-      "artifact_kind": "portable-core"
-    },
-    {
-      "target": "wasm32-wasip1",
-      "artifact_kind": "portable-core"
-    },
-    {
-      "target": "wasm32-wasip1-threads",
-      "artifact_kind": "portable-core"
-    },
-    {
-      "target": "wasm32-wasip2",
-      "artifact_kind": "portable-core"
-    },
-    {
-      "target": "wasm32v1-none",
-      "artifact_kind": "portable-core"
-    },
-    {
-      "target": "x86_64-apple-ios",
-      "artifact_kind": "portable-core"
-    },
-    {
-      "target": "x86_64-apple-ios-macabi",
-      "artifact_kind": "portable-core"
-    },
-    {
-      "target": "x86_64-fortanix-unknown-sgx",
-      "artifact_kind": "portable-core"
-    },
-    {
-      "target": "x86_64-pc-windows-gnullvm",
-      "artifact_kind": "portable-core"
-    },
-    {
-      "target": "x86_64-unknown-fuchsia",
-      "artifact_kind": "portable-core"
-    },
-    {
-      "target": "x86_64-unknown-linux-gnuasan",
-      "artifact_kind": "portable-core"
-    },
-    {
-      "target": "x86_64-unknown-linux-gnumsan",
-      "artifact_kind": "portable-core"
-    },
-    {
-      "target": "x86_64-unknown-linux-gnutsan",
-      "artifact_kind": "portable-core"
-    },
-    {
-      "target": "x86_64-unknown-linux-gnux32",
-      "artifact_kind": "portable-core"
-    },
-    {
-      "target": "x86_64-unknown-linux-ohos",
-      "artifact_kind": "portable-core"
-    },
-    {
-      "target": "x86_64-unknown-none",
-      "artifact_kind": "portable-core"
-    },
-    {
-      "target": "x86_64-unknown-redox",
-      "artifact_kind": "portable-core"
-    },
-    {
-      "target": "x86_64-unknown-uefi",
-      "artifact_kind": "portable-core"
-    }
-  ],
-  "portable_build_std": [
-    {
-      "target": "aarch64-kmc-solid_asp3",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "aarch64-nintendo-switch-freestanding",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "aarch64-unknown-helenos",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "aarch64-unknown-hermit",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "aarch64-unknown-illumos",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "aarch64-unknown-linux-gnu_ilp32",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "aarch64-unknown-managarm-mlibc",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "aarch64-unknown-netbsd",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "aarch64-unknown-nto-qnx700",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "aarch64-unknown-nto-qnx710",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "aarch64-unknown-nto-qnx710_iosock",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "aarch64-unknown-nto-qnx800",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "aarch64-unknown-nuttx",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "aarch64-unknown-openbsd",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "aarch64-unknown-redox",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "aarch64-unknown-teeos",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "aarch64-unknown-trusty",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
+      "artifact_kind": "backend",
+      "build_std": false,
+      "platform_family": "windows"
     },
     {
       "target": "aarch64-uwp-windows-msvc",
-      "artifact_kind": "portable-core-build-std",
+      "runner": "windows-latest",
+      "shell": "pwsh",
       "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "aarch64-wrs-vxworks",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "aarch64_be-unknown-hermit",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "aarch64_be-unknown-linux-gnu_ilp32",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "aarch64_be-unknown-linux-musl",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "aarch64_be-unknown-netbsd",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "aarch64_be-unknown-none-softfloat",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "aarch64v8r-unknown-none",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "aarch64v8r-unknown-none-softfloat",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "amdgcn-amd-amdhsa",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": "-Ctarget-cpu=gfx900"
+      "platform_family": "windows",
+      "artifact_kind": "backend"
     },
     {
       "target": "arm64_32-apple-watchos",
-      "artifact_kind": "portable-core-build-std",
+      "runner": "macos-15",
+      "shell": "bash",
       "build_std": true,
-      "rustflags": ""
+      "platform_family": "apple",
+      "artifact_kind": "backend"
     },
     {
       "target": "arm64e-apple-darwin",
-      "artifact_kind": "portable-core-build-std",
+      "runner": "macos-15",
+      "shell": "bash",
       "build_std": true,
-      "rustflags": ""
+      "platform_family": "apple",
+      "artifact_kind": "backend"
     },
     {
       "target": "arm64e-apple-ios",
-      "artifact_kind": "portable-core-build-std",
+      "runner": "macos-15",
+      "shell": "bash",
       "build_std": true,
-      "rustflags": ""
+      "platform_family": "apple",
+      "artifact_kind": "backend"
     },
     {
       "target": "arm64e-apple-tvos",
-      "artifact_kind": "portable-core-build-std",
+      "runner": "macos-15",
+      "shell": "bash",
       "build_std": true,
-      "rustflags": ""
+      "platform_family": "apple",
+      "artifact_kind": "backend"
     },
     {
-      "target": "armeb-unknown-linux-gnueabi",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "armebv7r-none-eabi",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "armebv7r-none-eabihf",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "armv4t-none-eabi",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "armv4t-unknown-linux-gnueabi",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "armv5te-none-eabi",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "armv5te-unknown-linux-uclibceabi",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "armv6-none-eabi",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "armv6-none-eabihf",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "armv6-unknown-freebsd",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "armv6-unknown-netbsd-eabihf",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "armv6k-nintendo-3ds",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "armv7-rtems-eabihf",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "armv7-sony-vita-newlibeabihf",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "armv7-unknown-freebsd",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "armv7-unknown-linux-uclibceabi",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "armv7-unknown-linux-uclibceabihf",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "armv7-unknown-netbsd-eabihf",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "armv7-unknown-trusty",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "armv7-wrs-vxworks-eabihf",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "armv7a-kmc-solid_asp3-eabi",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "armv7a-kmc-solid_asp3-eabihf",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "armv7a-nuttx-eabi",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "armv7a-nuttx-eabihf",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "armv7a-vex-v5",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
+      "target": "arm64ec-pc-windows-msvc",
+      "runner": "windows-latest",
+      "shell": "pwsh",
+      "build_std": false,
+      "platform_family": "windows",
+      "artifact_kind": "backend"
     },
     {
       "target": "armv7k-apple-watchos",
-      "artifact_kind": "portable-core-build-std",
+      "runner": "macos-15",
+      "shell": "bash",
       "build_std": true,
-      "rustflags": ""
+      "platform_family": "apple",
+      "artifact_kind": "backend"
     },
     {
       "target": "armv7s-apple-ios",
-      "artifact_kind": "portable-core-build-std",
+      "runner": "macos-15",
+      "shell": "bash",
       "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "avr-none",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": "-Ctarget-cpu=atmega328p"
-    },
-    {
-      "target": "bpfeb-unknown-none",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "bpfel-unknown-none",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "csky-unknown-linux-gnuabiv2",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "csky-unknown-linux-gnuabiv2hf",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "hexagon-unknown-linux-musl",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "hexagon-unknown-none-elf",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "hexagon-unknown-qurt",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
+      "platform_family": "apple",
+      "artifact_kind": "backend"
     },
     {
       "target": "i386-apple-ios",
-      "artifact_kind": "portable-core-build-std",
+      "runner": "macos-15-intel",
+      "shell": "bash",
       "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "i586-unknown-netbsd",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "i586-unknown-redox",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
+      "platform_family": "apple",
+      "artifact_kind": "backend"
     },
     {
       "target": "i686-apple-darwin",
-      "artifact_kind": "portable-core-build-std",
+      "runner": "macos-15-intel",
+      "shell": "bash",
       "build_std": true,
-      "rustflags": ""
+      "platform_family": "apple",
+      "artifact_kind": "backend"
     },
     {
-      "target": "i686-pc-nto-qnx700",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
+      "target": "i686-pc-windows-gnullvm",
+      "runner": "windows-latest",
+      "shell": "pwsh",
+      "build_std": false,
+      "platform_family": "windows",
+      "artifact_kind": "backend"
     },
     {
-      "target": "i686-unknown-haiku",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "i686-unknown-helenos",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "i686-unknown-hurd-gnu",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "i686-unknown-netbsd",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "i686-unknown-openbsd",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
+      "target": "i686-pc-windows-msvc",
+      "runner": "windows-latest",
+      "shell": "pwsh",
+      "artifact_kind": "backend",
+      "build_std": false,
+      "platform_family": "windows"
     },
     {
       "target": "i686-uwp-windows-gnu",
-      "artifact_kind": "portable-core-build-std",
+      "runner": "windows-latest",
+      "shell": "pwsh",
       "build_std": true,
-      "rustflags": ""
+      "platform_family": "windows",
+      "artifact_kind": "backend"
     },
     {
       "target": "i686-uwp-windows-msvc",
-      "artifact_kind": "portable-core-build-std",
+      "runner": "windows-latest",
+      "shell": "pwsh",
       "build_std": true,
-      "rustflags": ""
+      "platform_family": "windows",
+      "artifact_kind": "backend"
     },
     {
       "target": "i686-win7-windows-gnu",
-      "artifact_kind": "portable-core-build-std",
+      "runner": "windows-latest",
+      "shell": "pwsh",
       "build_std": true,
-      "rustflags": ""
+      "platform_family": "windows",
+      "artifact_kind": "backend"
     },
     {
       "target": "i686-win7-windows-msvc",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "i686-wrs-vxworks",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "loongarch32-unknown-none",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "loongarch32-unknown-none-softfloat",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "loongarch64-unknown-linux-ohos",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "m68k-unknown-linux-gnu",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "m68k-unknown-none-elf",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "mips-mti-none-elf",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "mips-unknown-linux-musl",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "mips-unknown-linux-uclibc",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "mips64-openwrt-linux-musl",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "mips64-unknown-linux-muslabi64",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "mips64el-unknown-linux-muslabi64",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "mipsel-mti-none-elf",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "mipsel-sony-psp",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "mipsel-sony-psx",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "mipsel-unknown-linux-musl",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "mipsel-unknown-linux-uclibc",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "mipsel-unknown-netbsd",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "mipsel-unknown-none",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "mipsisa32r6-unknown-linux-gnu",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "mipsisa32r6el-unknown-linux-gnu",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "mipsisa64r6-unknown-linux-gnuabi64",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "mipsisa64r6el-unknown-linux-gnuabi64",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "msp430-none-elf",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "powerpc-unknown-freebsd",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "powerpc-unknown-helenos",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "powerpc-unknown-linux-gnuspe",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "powerpc-unknown-linux-musl",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "powerpc-unknown-linux-muslspe",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "powerpc-unknown-netbsd",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "powerpc-unknown-openbsd",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "powerpc-wrs-vxworks",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "powerpc-wrs-vxworks-spe",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "powerpc64-ibm-aix",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "powerpc64-unknown-freebsd",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "powerpc64-unknown-openbsd",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "powerpc64-wrs-vxworks",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "powerpc64le-unknown-freebsd",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "riscv32-wrs-vxworks",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "riscv32e-unknown-none-elf",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "riscv32em-unknown-none-elf",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "riscv32emc-unknown-none-elf",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "riscv32gc-unknown-linux-gnu",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "riscv32gc-unknown-linux-musl",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "riscv32im-risc0-zkvm-elf",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "riscv32ima-unknown-none-elf",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "riscv32imac-esp-espidf",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "riscv32imac-unknown-nuttx-elf",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "riscv32imac-unknown-xous-elf",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "riscv32imafc-esp-espidf",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "riscv32imafc-unknown-nuttx-elf",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "riscv32imc-esp-espidf",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "riscv32imc-unknown-nuttx-elf",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "riscv64-linux-android",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "riscv64-wrs-vxworks",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "riscv64gc-unknown-freebsd",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "riscv64gc-unknown-fuchsia",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "riscv64gc-unknown-hermit",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "riscv64gc-unknown-managarm-mlibc",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "riscv64gc-unknown-netbsd",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "riscv64gc-unknown-nuttx-elf",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "riscv64gc-unknown-openbsd",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "riscv64gc-unknown-redox",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "riscv64im-unknown-none-elf",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "riscv64imac-unknown-nuttx-elf",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "s390x-unknown-linux-musl",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "s390x-unknown-none-softfloat",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "sparc-unknown-linux-gnu",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "sparc-unknown-none-elf",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "sparc64-unknown-helenos",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "sparc64-unknown-netbsd",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "sparc64-unknown-openbsd",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "thumbv4t-none-eabi",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "thumbv5te-none-eabi",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "thumbv6-none-eabi",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "thumbv6m-nuttx-eabi",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "thumbv7a-none-eabi",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "thumbv7a-none-eabihf",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "thumbv7a-nuttx-eabi",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "thumbv7a-nuttx-eabihf",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
+      "runner": "windows-latest",
+      "shell": "pwsh",
+      "build_std": true,
+      "platform_family": "windows",
+      "artifact_kind": "backend"
     },
     {
       "target": "thumbv7a-pc-windows-msvc",
-      "artifact_kind": "portable-core-build-std",
+      "runner": "windows-latest",
+      "shell": "pwsh",
       "build_std": true,
-      "rustflags": ""
+      "platform_family": "windows",
+      "artifact_kind": "backend"
     },
     {
       "target": "thumbv7a-uwp-windows-msvc",
-      "artifact_kind": "portable-core-build-std",
+      "runner": "windows-latest",
+      "shell": "pwsh",
       "build_std": true,
-      "rustflags": ""
+      "platform_family": "windows",
+      "artifact_kind": "backend"
     },
     {
-      "target": "thumbv7em-nuttx-eabi",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
+      "target": "x86_64-apple-darwin",
+      "runner": "macos-15-intel",
+      "shell": "bash",
+      "artifact_kind": "backend",
+      "build_std": false,
+      "platform_family": "macos"
     },
     {
-      "target": "thumbv7em-nuttx-eabihf",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
+      "target": "x86_64-apple-ios",
+      "runner": "macos-15-intel",
+      "shell": "bash",
+      "build_std": false,
+      "platform_family": "apple",
+      "artifact_kind": "backend"
     },
     {
-      "target": "thumbv7m-nuttx-eabi",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "thumbv7neon-unknown-linux-musleabihf",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "thumbv7r-none-eabi",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "thumbv7r-none-eabihf",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "thumbv8m.base-nuttx-eabi",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "thumbv8m.main-nuttx-eabi",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "thumbv8m.main-nuttx-eabihf",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "thumbv8r-none-eabihf",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "wasm32-wali-linux-musl",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "wasm32-wasip3",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "wasm64-unknown-unknown",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
+      "target": "x86_64-apple-ios-macabi",
+      "runner": "macos-15-intel",
+      "shell": "bash",
+      "build_std": false,
+      "platform_family": "apple",
+      "artifact_kind": "backend"
     },
     {
       "target": "x86_64-apple-tvos",
-      "artifact_kind": "portable-core-build-std",
+      "runner": "macos-15-intel",
+      "shell": "bash",
       "build_std": true,
-      "rustflags": ""
+      "platform_family": "apple",
+      "artifact_kind": "backend"
     },
     {
       "target": "x86_64-apple-watchos-sim",
-      "artifact_kind": "portable-core-build-std",
+      "runner": "macos-15-intel",
+      "shell": "bash",
       "build_std": true,
-      "rustflags": ""
+      "platform_family": "apple",
+      "artifact_kind": "backend"
     },
     {
-      "target": "x86_64-lynx-lynxos178",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
+      "target": "x86_64-pc-windows-gnullvm",
+      "runner": "windows-latest",
+      "shell": "pwsh",
+      "build_std": false,
+      "platform_family": "windows",
+      "artifact_kind": "backend"
     },
     {
-      "target": "x86_64-pc-cygwin",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "x86_64-pc-nto-qnx710",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "x86_64-pc-nto-qnx710_iosock",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "x86_64-pc-nto-qnx800",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "x86_64-unikraft-linux-musl",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "x86_64-unknown-haiku",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "x86_64-unknown-helenos",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "x86_64-unknown-hermit",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "x86_64-unknown-hurd-gnu",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "x86_64-unknown-l4re-uclibc",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "x86_64-unknown-linux-none",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "x86_64-unknown-managarm-mlibc",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "x86_64-unknown-motor",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "x86_64-unknown-openbsd",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "x86_64-unknown-trusty",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
+      "target": "x86_64-pc-windows-msvc",
+      "runner": "windows-latest",
+      "shell": "pwsh",
+      "artifact_kind": "backend",
+      "build_std": false,
+      "platform_family": "windows"
     },
     {
       "target": "x86_64-uwp-windows-gnu",
-      "artifact_kind": "portable-core-build-std",
+      "runner": "windows-latest",
+      "shell": "pwsh",
       "build_std": true,
-      "rustflags": ""
+      "platform_family": "windows",
+      "artifact_kind": "backend"
     },
     {
       "target": "x86_64-uwp-windows-msvc",
-      "artifact_kind": "portable-core-build-std",
+      "runner": "windows-latest",
+      "shell": "pwsh",
       "build_std": true,
-      "rustflags": ""
+      "platform_family": "windows",
+      "artifact_kind": "backend"
     },
     {
       "target": "x86_64-win7-windows-gnu",
-      "artifact_kind": "portable-core-build-std",
+      "runner": "windows-latest",
+      "shell": "pwsh",
       "build_std": true,
-      "rustflags": ""
+      "platform_family": "windows",
+      "artifact_kind": "backend"
     },
     {
       "target": "x86_64-win7-windows-msvc",
-      "artifact_kind": "portable-core-build-std",
+      "runner": "windows-latest",
+      "shell": "pwsh",
       "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "x86_64-wrs-vxworks",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
+      "platform_family": "windows",
+      "artifact_kind": "backend"
     },
     {
       "target": "x86_64h-apple-darwin",
-      "artifact_kind": "portable-core-build-std",
+      "runner": "macos-15-intel",
+      "shell": "bash",
       "build_std": true,
-      "rustflags": ""
+      "platform_family": "apple",
+      "artifact_kind": "backend"
+    }
+  ],
+  "linux_zig_backend": [
+    {
+      "target": "aarch64-unknown-linux-gnu_ilp32",
+      "os": "linux",
+      "builder": "aarch64-ilp32-sysroot",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "aarch64-unknown-linux-ohos",
+      "os": "linux",
+      "builder": "ohos-ndk",
+      "build_std": false,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "aarch64_be-unknown-linux-gnu_ilp32",
+      "os": "linux",
+      "builder": "aarch64-ilp32-sysroot",
+      "build_std": true,
+      "artifact_kind": "backend",
+      "rustflags": "--cfg rustix_use_libc"
+    },
+    {
+      "target": "aarch64_be-unknown-linux-musl",
+      "os": "linux",
+      "builder": "zig-linux",
+      "build_std": true,
+      "artifact_kind": "backend",
+      "zig_target": "aarch64_be-linux-musl",
+      "rustflags": "--cfg rustix_use_libc"
+    },
+    {
+      "target": "armeb-unknown-linux-gnueabi",
+      "os": "linux",
+      "builder": "zig-linux",
+      "build_std": true,
+      "artifact_kind": "backend",
+      "zig_target": "armeb-linux-gnueabi",
+      "rustflags": "--cfg rustix_use_libc"
+    },
+    {
+      "target": "armv4t-unknown-linux-gnueabi",
+      "os": "linux",
+      "builder": "zig-linux",
+      "build_std": true,
+      "artifact_kind": "backend",
+      "zig_target": "arm-linux-gnueabi"
+    },
+    {
+      "target": "armv5te-unknown-linux-uclibceabi",
+      "os": "linux",
+      "builder": "uclibc-sysroot",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "armv7-unknown-linux-ohos",
+      "os": "linux",
+      "builder": "ohos-ndk",
+      "build_std": false,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "armv7-unknown-linux-uclibceabi",
+      "os": "linux",
+      "builder": "uclibc-sysroot",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "armv7-unknown-linux-uclibceabihf",
+      "os": "linux",
+      "builder": "uclibc-sysroot",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "csky-unknown-linux-gnuabiv2",
+      "os": "linux",
+      "builder": "csky-gcc",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "csky-unknown-linux-gnuabiv2hf",
+      "os": "linux",
+      "builder": "csky-gcc",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "hexagon-unknown-linux-musl",
+      "os": "linux",
+      "builder": "zig-linux",
+      "build_std": true,
+      "artifact_kind": "backend",
+      "zig_target": "hexagon-linux-musl",
+      "rustflags": "--cfg rustix_use_libc --cfg rustix_no_linux_raw"
+    },
+    {
+      "target": "loongarch64-unknown-linux-ohos",
+      "os": "linux",
+      "builder": "ohos-ndk",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "m68k-unknown-linux-gnu",
+      "os": "linux",
+      "builder": "m68k-gcc",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "mips-unknown-linux-uclibc",
+      "os": "linux",
+      "builder": "uclibc-sysroot",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "mips64-openwrt-linux-musl",
+      "os": "linux",
+      "builder": "zig-linux",
+      "build_std": true,
+      "artifact_kind": "backend",
+      "zig_target": "mips64-linux-muslabi64"
+    },
+    {
+      "target": "mipsel-unknown-linux-uclibc",
+      "os": "linux",
+      "builder": "uclibc-sysroot",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "mipsisa32r6-unknown-linux-gnu",
+      "os": "linux",
+      "builder": "zig-linux",
+      "build_std": true,
+      "artifact_kind": "backend",
+      "zig_target": "mips-linux-gnueabi"
+    },
+    {
+      "target": "mipsisa32r6el-unknown-linux-gnu",
+      "os": "linux",
+      "builder": "zig-linux",
+      "build_std": true,
+      "artifact_kind": "backend",
+      "zig_target": "mipsel-linux-gnueabi"
+    },
+    {
+      "target": "mipsisa64r6-unknown-linux-gnuabi64",
+      "os": "linux",
+      "builder": "zig-linux",
+      "build_std": true,
+      "artifact_kind": "backend",
+      "zig_target": "mips64-linux-gnuabi64"
+    },
+    {
+      "target": "mipsisa64r6el-unknown-linux-gnuabi64",
+      "os": "linux",
+      "builder": "zig-linux",
+      "build_std": true,
+      "artifact_kind": "backend",
+      "zig_target": "mips64el-linux-gnuabi64"
+    },
+    {
+      "target": "powerpc-unknown-linux-gnuspe",
+      "os": "linux",
+      "builder": "powerpc-spe-sysroot",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "powerpc-unknown-linux-musl",
+      "os": "linux",
+      "builder": "zig-linux",
+      "build_std": true,
+      "artifact_kind": "backend",
+      "zig_target": "powerpc-linux-musleabi"
+    },
+    {
+      "target": "powerpc-unknown-linux-muslspe",
+      "os": "linux",
+      "builder": "powerpc-spe-sysroot",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "powerpc64-unknown-linux-musl",
+      "os": "linux",
+      "builder": "zig-linux",
+      "build_std": false,
+      "artifact_kind": "backend",
+      "zig_target": "powerpc64-linux-musl"
+    },
+    {
+      "target": "powerpc64le-unknown-linux-musl",
+      "os": "linux",
+      "builder": "zig-linux",
+      "build_std": false,
+      "artifact_kind": "backend",
+      "zig_target": "powerpc64le-linux-musl"
+    },
+    {
+      "target": "riscv32gc-unknown-linux-gnu",
+      "os": "linux",
+      "builder": "zig-linux",
+      "build_std": true,
+      "artifact_kind": "backend",
+      "zig_target": "riscv32-linux-gnu"
+    },
+    {
+      "target": "riscv32gc-unknown-linux-musl",
+      "os": "linux",
+      "builder": "zig-linux",
+      "build_std": true,
+      "artifact_kind": "backend",
+      "zig_target": "riscv32-linux-musl"
+    },
+    {
+      "target": "riscv64a23-unknown-linux-gnu",
+      "os": "linux",
+      "builder": "zig-linux",
+      "build_std": false,
+      "artifact_kind": "backend",
+      "zig_target": "riscv64-linux-gnu"
+    },
+    {
+      "target": "s390x-unknown-linux-musl",
+      "os": "linux",
+      "builder": "zig-linux",
+      "build_std": true,
+      "artifact_kind": "backend",
+      "zig_target": "s390x-linux-musl"
+    },
+    {
+      "target": "sparc-unknown-linux-gnu",
+      "os": "linux",
+      "builder": "sparc-gcc",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "thumbv7neon-unknown-linux-musleabihf",
+      "os": "linux",
+      "builder": "zig-linux",
+      "build_std": true,
+      "artifact_kind": "backend",
+      "zig_target": "arm-linux-musleabihf"
+    },
+    {
+      "target": "x86_64-unikraft-linux-musl",
+      "os": "linux",
+      "builder": "unikraft-sysroot",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "x86_64-unknown-linux-gnuasan",
+      "os": "linux",
+      "builder": "zig-linux",
+      "build_std": false,
+      "artifact_kind": "backend",
+      "zig_target": "x86_64-linux-gnu"
+    },
+    {
+      "target": "x86_64-unknown-linux-gnumsan",
+      "os": "linux",
+      "builder": "zig-linux",
+      "build_std": false,
+      "artifact_kind": "backend",
+      "zig_target": "x86_64-linux-gnu"
+    },
+    {
+      "target": "x86_64-unknown-linux-gnutsan",
+      "os": "linux",
+      "builder": "zig-linux",
+      "build_std": false,
+      "artifact_kind": "backend",
+      "zig_target": "x86_64-linux-gnu"
+    },
+    {
+      "target": "x86_64-unknown-linux-gnux32",
+      "os": "linux",
+      "builder": "zig-linux",
+      "build_std": false,
+      "artifact_kind": "backend",
+      "zig_target": "x86_64-linux-gnux32"
+    },
+    {
+      "target": "x86_64-unknown-linux-ohos",
+      "os": "linux",
+      "builder": "ohos-ndk",
+      "build_std": false,
+      "artifact_kind": "backend"
+    }
+  ],
+  "custom_backend": [
+    {
+      "target": "aarch64-unknown-fuchsia",
+      "os": "fuchsia",
+      "builder": "fuchsia",
+      "build_std": false,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "aarch64-unknown-helenos",
+      "os": "helenos",
+      "builder": "helenos",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "aarch64-unknown-hermit",
+      "os": "hermit",
+      "builder": "hermit",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "aarch64-unknown-illumos",
+      "os": "illumos",
+      "builder": "illumos",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "aarch64-unknown-managarm-mlibc",
+      "os": "managarm",
+      "builder": "managarm",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "aarch64-unknown-netbsd",
+      "os": "netbsd",
+      "builder": "zig-netbsd",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "aarch64-unknown-nto-qnx700",
+      "os": "nto",
+      "builder": "nto",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "aarch64-unknown-nto-qnx710",
+      "os": "nto",
+      "builder": "nto",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "aarch64-unknown-nto-qnx710_iosock",
+      "os": "nto",
+      "builder": "nto",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "aarch64-unknown-nto-qnx800",
+      "os": "nto",
+      "builder": "nto",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "aarch64-unknown-nuttx",
+      "os": "nuttx",
+      "builder": "nuttx",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "aarch64-unknown-openbsd",
+      "os": "openbsd",
+      "builder": "openbsd",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "aarch64-unknown-redox",
+      "os": "redox",
+      "builder": "redox",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "aarch64-unknown-teeos",
+      "os": "teeos",
+      "builder": "teeos",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "aarch64-unknown-trusty",
+      "os": "trusty",
+      "builder": "trusty",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "aarch64-wrs-vxworks",
+      "os": "vxworks",
+      "builder": "vxworks",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "aarch64_be-unknown-hermit",
+      "os": "hermit",
+      "builder": "hermit",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "aarch64_be-unknown-netbsd",
+      "os": "netbsd",
+      "builder": "zig-netbsd",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "armv6-unknown-freebsd",
+      "os": "freebsd",
+      "builder": "freebsd-image-sysroot",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "armv6-unknown-netbsd-eabihf",
+      "os": "netbsd",
+      "builder": "zig-netbsd",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "armv6k-nintendo-3ds",
+      "os": "horizon",
+      "builder": "horizon",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "armv7-rtems-eabihf",
+      "os": "rtems",
+      "builder": "rtems",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "armv7-sony-vita-newlibeabihf",
+      "os": "vita",
+      "builder": "vita",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "armv7-unknown-freebsd",
+      "os": "freebsd",
+      "builder": "freebsd-image-sysroot",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "armv7-unknown-netbsd-eabihf",
+      "os": "netbsd",
+      "builder": "zig-netbsd",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "armv7-unknown-trusty",
+      "os": "trusty",
+      "builder": "trusty",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "armv7-wrs-vxworks-eabihf",
+      "os": "vxworks",
+      "builder": "vxworks",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "armv7a-nuttx-eabi",
+      "os": "nuttx",
+      "builder": "nuttx",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "armv7a-nuttx-eabihf",
+      "os": "nuttx",
+      "builder": "nuttx",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "armv7a-vex-v5",
+      "os": "vexos",
+      "builder": "vexos",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "hexagon-unknown-qurt",
+      "os": "qurt",
+      "builder": "qurt",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "i586-unknown-netbsd",
+      "os": "netbsd",
+      "builder": "zig-netbsd",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "i586-unknown-redox",
+      "os": "redox",
+      "builder": "redox",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "i686-pc-nto-qnx700",
+      "os": "nto",
+      "builder": "nto",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "i686-unknown-haiku",
+      "os": "haiku",
+      "builder": "haiku",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "i686-unknown-helenos",
+      "os": "helenos",
+      "builder": "helenos",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "i686-unknown-hurd-gnu",
+      "os": "hurd",
+      "builder": "hurd",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "i686-unknown-netbsd",
+      "os": "netbsd",
+      "builder": "zig-netbsd",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "i686-unknown-openbsd",
+      "os": "openbsd",
+      "builder": "openbsd",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "i686-wrs-vxworks",
+      "os": "vxworks",
+      "builder": "vxworks",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "mipsel-sony-psp",
+      "os": "psp",
+      "builder": "psp",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "mipsel-unknown-netbsd",
+      "os": "netbsd",
+      "builder": "zig-netbsd",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "powerpc-unknown-freebsd",
+      "os": "freebsd",
+      "builder": "freebsd-sysroot",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "powerpc-unknown-helenos",
+      "os": "helenos",
+      "builder": "helenos",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "powerpc-unknown-netbsd",
+      "os": "netbsd",
+      "builder": "zig-netbsd",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "powerpc-unknown-openbsd",
+      "os": "openbsd",
+      "builder": "openbsd",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "powerpc-wrs-vxworks",
+      "os": "vxworks",
+      "builder": "vxworks",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "powerpc-wrs-vxworks-spe",
+      "os": "vxworks",
+      "builder": "vxworks",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "powerpc64-ibm-aix",
+      "os": "aix",
+      "builder": "aix",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "powerpc64-unknown-freebsd",
+      "os": "freebsd",
+      "builder": "freebsd-sysroot",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "powerpc64-unknown-openbsd",
+      "os": "openbsd",
+      "builder": "openbsd",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "powerpc64-wrs-vxworks",
+      "os": "vxworks",
+      "builder": "vxworks",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "powerpc64le-unknown-freebsd",
+      "os": "freebsd",
+      "builder": "freebsd-sysroot",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "riscv32-wrs-vxworks",
+      "os": "vxworks",
+      "builder": "vxworks",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "riscv32imac-esp-espidf",
+      "os": "espidf",
+      "builder": "espidf",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "riscv32imac-unknown-nuttx-elf",
+      "os": "nuttx",
+      "builder": "nuttx",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "riscv32imac-unknown-xous-elf",
+      "os": "xous",
+      "builder": "xous",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "riscv32imafc-esp-espidf",
+      "os": "espidf",
+      "builder": "espidf",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "riscv32imafc-unknown-nuttx-elf",
+      "os": "nuttx",
+      "builder": "nuttx",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "riscv32imc-esp-espidf",
+      "os": "espidf",
+      "builder": "espidf",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "riscv32imc-unknown-nuttx-elf",
+      "os": "nuttx",
+      "builder": "nuttx",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "riscv64-linux-android",
+      "os": "android",
+      "builder": "android-ndk",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "riscv64-wrs-vxworks",
+      "os": "vxworks",
+      "builder": "vxworks",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "riscv64gc-unknown-freebsd",
+      "os": "freebsd",
+      "builder": "freebsd-sysroot",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "riscv64gc-unknown-fuchsia",
+      "os": "fuchsia",
+      "builder": "fuchsia",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "riscv64gc-unknown-hermit",
+      "os": "hermit",
+      "builder": "hermit",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "riscv64gc-unknown-managarm-mlibc",
+      "os": "managarm",
+      "builder": "managarm",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "riscv64gc-unknown-netbsd",
+      "os": "netbsd",
+      "builder": "netbsd-sysroot",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "riscv64gc-unknown-nuttx-elf",
+      "os": "nuttx",
+      "builder": "nuttx",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "riscv64gc-unknown-openbsd",
+      "os": "openbsd",
+      "builder": "openbsd",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "riscv64gc-unknown-redox",
+      "os": "redox",
+      "builder": "redox",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "riscv64imac-unknown-nuttx-elf",
+      "os": "nuttx",
+      "builder": "nuttx",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "sparc64-unknown-helenos",
+      "os": "helenos",
+      "builder": "helenos",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "sparc64-unknown-netbsd",
+      "os": "netbsd",
+      "builder": "zig-netbsd",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "sparc64-unknown-openbsd",
+      "os": "openbsd",
+      "builder": "openbsd",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "thumbv6m-nuttx-eabi",
+      "os": "nuttx",
+      "builder": "nuttx",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "thumbv7a-nuttx-eabi",
+      "os": "nuttx",
+      "builder": "nuttx",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "thumbv7a-nuttx-eabihf",
+      "os": "nuttx",
+      "builder": "nuttx",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "thumbv7em-nuttx-eabi",
+      "os": "nuttx",
+      "builder": "nuttx",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "thumbv7em-nuttx-eabihf",
+      "os": "nuttx",
+      "builder": "nuttx",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "thumbv7m-nuttx-eabi",
+      "os": "nuttx",
+      "builder": "nuttx",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "thumbv8m.base-nuttx-eabi",
+      "os": "nuttx",
+      "builder": "nuttx",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "thumbv8m.main-nuttx-eabi",
+      "os": "nuttx",
+      "builder": "nuttx",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "thumbv8m.main-nuttx-eabihf",
+      "os": "nuttx",
+      "builder": "nuttx",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "x86_64-lynx-lynxos178",
+      "os": "lynxos178",
+      "builder": "lynxos178",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "x86_64-pc-cygwin",
+      "os": "cygwin",
+      "builder": "cygwin",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "x86_64-pc-nto-qnx710",
+      "os": "nto",
+      "builder": "nto",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "x86_64-pc-nto-qnx710_iosock",
+      "os": "nto",
+      "builder": "nto",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "x86_64-pc-nto-qnx800",
+      "os": "nto",
+      "builder": "nto",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "x86_64-unknown-fuchsia",
+      "os": "fuchsia",
+      "builder": "fuchsia",
+      "build_std": false,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "x86_64-unknown-haiku",
+      "os": "haiku",
+      "builder": "haiku",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "x86_64-unknown-helenos",
+      "os": "helenos",
+      "builder": "helenos",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "x86_64-unknown-hermit",
+      "os": "hermit",
+      "builder": "hermit",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "x86_64-unknown-hurd-gnu",
+      "os": "hurd",
+      "builder": "hurd",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "x86_64-unknown-l4re-uclibc",
+      "os": "l4re",
+      "builder": "l4re",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "x86_64-unknown-managarm-mlibc",
+      "os": "managarm",
+      "builder": "managarm",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "x86_64-unknown-motor",
+      "os": "motor",
+      "builder": "motor",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "x86_64-unknown-openbsd",
+      "os": "openbsd",
+      "builder": "openbsd",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "x86_64-unknown-redox",
+      "os": "redox",
+      "builder": "redox",
+      "build_std": false,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "x86_64-unknown-trusty",
+      "os": "trusty",
+      "builder": "trusty",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "x86_64-wrs-vxworks",
+      "os": "vxworks",
+      "builder": "vxworks",
+      "build_std": true,
+      "artifact_kind": "backend"
     },
     {
       "target": "xtensa-esp32-espidf",
-      "artifact_kind": "portable-core-build-std",
+      "os": "espidf",
+      "builder": "espidf",
       "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "xtensa-esp32-none-elf",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
+      "artifact_kind": "backend"
     },
     {
       "target": "xtensa-esp32s2-espidf",
-      "artifact_kind": "portable-core-build-std",
+      "os": "espidf",
+      "builder": "espidf",
       "build_std": true,
-      "rustflags": ""
-    },
-    {
-      "target": "xtensa-esp32s2-none-elf",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
+      "artifact_kind": "backend"
     },
     {
       "target": "xtensa-esp32s3-espidf",
-      "artifact_kind": "portable-core-build-std",
+      "os": "espidf",
+      "builder": "espidf",
       "build_std": true,
-      "rustflags": ""
+      "artifact_kind": "backend"
+    }
+  ],
+  "excluded": [
+    {
+      "target": "aarch64-kmc-solid_asp3",
+      "target_os": "solid_asp3",
+      "reason": "rust-target-no-executables",
+      "description": "Rust target spec sets executables=false"
+    },
+    {
+      "target": "aarch64-nintendo-switch-freestanding",
+      "target_os": "horizon",
+      "reason": "freestanding-no-userspace-std",
+      "description": "ARM64 Nintendo Switch, Horizon"
+    },
+    {
+      "target": "aarch64-unknown-none",
+      "target_os": "none",
+      "reason": "non-os-execution-environment",
+      "description": "Bare ARM64, hardfloat"
+    },
+    {
+      "target": "aarch64-unknown-none-softfloat",
+      "target_os": "none",
+      "reason": "non-os-execution-environment",
+      "description": "Bare ARM64, softfloat"
+    },
+    {
+      "target": "aarch64-unknown-uefi",
+      "target_os": "uefi",
+      "reason": "non-os-execution-environment",
+      "description": "ARM64 UEFI"
+    },
+    {
+      "target": "aarch64_be-unknown-none-softfloat",
+      "target_os": "none",
+      "reason": "non-os-execution-environment",
+      "description": "Bare ARM64 (big-endian), softfloat"
+    },
+    {
+      "target": "aarch64v8r-unknown-none",
+      "target_os": "none",
+      "reason": "non-os-execution-environment",
+      "description": "Bare Armv8-R AArch64, hardfloat"
+    },
+    {
+      "target": "aarch64v8r-unknown-none-softfloat",
+      "target_os": "none",
+      "reason": "non-os-execution-environment",
+      "description": "Bare Armv8-R AArch64, softfloat"
+    },
+    {
+      "target": "amdgcn-amd-amdhsa",
+      "target_os": "amdhsa",
+      "reason": "non-os-execution-environment",
+      "description": "AMD GPU"
+    },
+    {
+      "target": "armebv7r-none-eabi",
+      "target_os": "none",
+      "reason": "non-os-execution-environment",
+      "description": "Bare Armv7-R, Big Endian"
+    },
+    {
+      "target": "armebv7r-none-eabihf",
+      "target_os": "none",
+      "reason": "non-os-execution-environment",
+      "description": "Bare Armv7-R, Big Endian, hardfloat"
+    },
+    {
+      "target": "armv4t-none-eabi",
+      "target_os": "none",
+      "reason": "non-os-execution-environment",
+      "description": "Bare Armv4T"
+    },
+    {
+      "target": "armv5te-none-eabi",
+      "target_os": "none",
+      "reason": "non-os-execution-environment",
+      "description": "Bare Armv5TE"
+    },
+    {
+      "target": "armv6-none-eabi",
+      "target_os": "none",
+      "reason": "non-os-execution-environment",
+      "description": "Bare ARMv6 soft-float"
+    },
+    {
+      "target": "armv6-none-eabihf",
+      "target_os": "none",
+      "reason": "non-os-execution-environment",
+      "description": "Bare ARMv6 hard-float"
+    },
+    {
+      "target": "armv7a-kmc-solid_asp3-eabi",
+      "target_os": "solid_asp3",
+      "reason": "rust-target-no-executables",
+      "description": "Rust target spec sets executables=false"
+    },
+    {
+      "target": "armv7a-kmc-solid_asp3-eabihf",
+      "target_os": "solid_asp3",
+      "reason": "rust-target-no-executables",
+      "description": "Rust target spec sets executables=false"
+    },
+    {
+      "target": "armv7a-none-eabi",
+      "target_os": "none",
+      "reason": "non-os-execution-environment",
+      "description": "Bare Armv7-A"
+    },
+    {
+      "target": "armv7a-none-eabihf",
+      "target_os": "none",
+      "reason": "non-os-execution-environment",
+      "description": "Bare Armv7-A, hardfloat"
+    },
+    {
+      "target": "armv7r-none-eabi",
+      "target_os": "none",
+      "reason": "non-os-execution-environment",
+      "description": "Bare Armv7-R"
+    },
+    {
+      "target": "armv7r-none-eabihf",
+      "target_os": "none",
+      "reason": "non-os-execution-environment",
+      "description": "Bare Armv7-R, hardfloat"
+    },
+    {
+      "target": "armv8r-none-eabihf",
+      "target_os": "none",
+      "reason": "non-os-execution-environment",
+      "description": "Bare Armv8-R, hardfloat"
+    },
+    {
+      "target": "avr-none",
+      "target_os": "none",
+      "reason": "non-os-execution-environment",
+      "description": ""
+    },
+    {
+      "target": "bpfeb-unknown-none",
+      "target_os": "none",
+      "reason": "non-os-execution-environment",
+      "description": "BPF (big endian)"
+    },
+    {
+      "target": "bpfel-unknown-none",
+      "target_os": "none",
+      "reason": "non-os-execution-environment",
+      "description": "BPF (little endian)"
+    },
+    {
+      "target": "hexagon-unknown-none-elf",
+      "target_os": "none",
+      "reason": "non-os-execution-environment",
+      "description": "Bare Hexagon (v60+, HVX)"
+    },
+    {
+      "target": "i686-unknown-uefi",
+      "target_os": "uefi",
+      "reason": "non-os-execution-environment",
+      "description": "32-bit UEFI"
+    },
+    {
+      "target": "loongarch32-unknown-none",
+      "target_os": "none",
+      "reason": "non-os-execution-environment",
+      "description": "Freestanding/bare-metal LoongArch32"
+    },
+    {
+      "target": "loongarch32-unknown-none-softfloat",
+      "target_os": "none",
+      "reason": "non-os-execution-environment",
+      "description": "Freestanding/bare-metal LoongArch32 softfloat"
+    },
+    {
+      "target": "loongarch64-unknown-none",
+      "target_os": "none",
+      "reason": "non-os-execution-environment",
+      "description": "Freestanding/bare-metal LoongArch64"
+    },
+    {
+      "target": "loongarch64-unknown-none-softfloat",
+      "target_os": "none",
+      "reason": "non-os-execution-environment",
+      "description": "Freestanding/bare-metal LoongArch64 softfloat"
+    },
+    {
+      "target": "m68k-unknown-none-elf",
+      "target_os": "none",
+      "reason": "non-os-execution-environment",
+      "description": "Motorola 680x0"
+    },
+    {
+      "target": "mips-mti-none-elf",
+      "target_os": "none",
+      "reason": "non-os-execution-environment",
+      "description": "MIPS32r2 BE Baremetal Softfloat"
+    },
+    {
+      "target": "mipsel-mti-none-elf",
+      "target_os": "none",
+      "reason": "non-os-execution-environment",
+      "description": "MIPS32r2 LE Baremetal Softfloat"
+    },
+    {
+      "target": "mipsel-sony-psx",
+      "target_os": "psx",
+      "reason": "non-os-execution-environment",
+      "description": "MIPS (LE) Sony PlayStation 1 (PSX)"
+    },
+    {
+      "target": "mipsel-unknown-none",
+      "target_os": "none",
+      "reason": "non-os-execution-environment",
+      "description": "Bare MIPS (LE) softfloat"
+    },
+    {
+      "target": "msp430-none-elf",
+      "target_os": "none",
+      "reason": "non-os-execution-environment",
+      "description": "16-bit MSP430 microcontrollers"
+    },
+    {
+      "target": "nvptx64-nvidia-cuda",
+      "target_os": "cuda",
+      "reason": "non-os-execution-environment",
+      "description": "--emit=asm generates PTX code that runs on NVIDIA GPUs"
+    },
+    {
+      "target": "riscv32e-unknown-none-elf",
+      "target_os": "none",
+      "reason": "non-os-execution-environment",
+      "description": "Bare RISC-V (RV32E ISA)"
+    },
+    {
+      "target": "riscv32em-unknown-none-elf",
+      "target_os": "none",
+      "reason": "non-os-execution-environment",
+      "description": "Bare RISC-V (RV32EM ISA)"
+    },
+    {
+      "target": "riscv32emc-unknown-none-elf",
+      "target_os": "none",
+      "reason": "non-os-execution-environment",
+      "description": "Bare RISC-V (RV32EMC ISA)"
+    },
+    {
+      "target": "riscv32i-unknown-none-elf",
+      "target_os": "none",
+      "reason": "non-os-execution-environment",
+      "description": "Bare RISC-V (RV32I ISA)"
+    },
+    {
+      "target": "riscv32im-risc0-zkvm-elf",
+      "target_os": "zkvm",
+      "reason": "non-os-execution-environment",
+      "description": "RISC Zero's zero-knowledge Virtual Machine (RV32IM ISA)"
+    },
+    {
+      "target": "riscv32im-unknown-none-elf",
+      "target_os": "none",
+      "reason": "non-os-execution-environment",
+      "description": ""
+    },
+    {
+      "target": "riscv32ima-unknown-none-elf",
+      "target_os": "none",
+      "reason": "non-os-execution-environment",
+      "description": "Bare RISC-V (RV32IMA ISA)"
+    },
+    {
+      "target": "riscv32imac-unknown-none-elf",
+      "target_os": "none",
+      "reason": "non-os-execution-environment",
+      "description": "Bare RISC-V (RV32IMAC ISA)"
+    },
+    {
+      "target": "riscv32imafc-unknown-none-elf",
+      "target_os": "none",
+      "reason": "non-os-execution-environment",
+      "description": "Bare RISC-V (RV32IMAFC ISA)"
+    },
+    {
+      "target": "riscv32imc-unknown-none-elf",
+      "target_os": "none",
+      "reason": "non-os-execution-environment",
+      "description": "Bare RISC-V (RV32IMC ISA)"
+    },
+    {
+      "target": "riscv64gc-unknown-none-elf",
+      "target_os": "none",
+      "reason": "non-os-execution-environment",
+      "description": "Bare RISC-V (RV64IMAFDC ISA)"
+    },
+    {
+      "target": "riscv64im-unknown-none-elf",
+      "target_os": "none",
+      "reason": "non-os-execution-environment",
+      "description": "Bare RISC-V (RV64IM ISA)"
+    },
+    {
+      "target": "riscv64imac-unknown-none-elf",
+      "target_os": "none",
+      "reason": "non-os-execution-environment",
+      "description": "Bare RISC-V (RV64IMAC ISA)"
+    },
+    {
+      "target": "s390x-unknown-none-softfloat",
+      "target_os": "none",
+      "reason": "non-os-execution-environment",
+      "description": "S390x Linux"
+    },
+    {
+      "target": "sparc-unknown-none-elf",
+      "target_os": "none",
+      "reason": "non-os-execution-environment",
+      "description": "Bare 32-bit SPARC V7+"
+    },
+    {
+      "target": "thumbv4t-none-eabi",
+      "target_os": "none",
+      "reason": "non-os-execution-environment",
+      "description": "Thumb-mode Bare ARMv4T"
+    },
+    {
+      "target": "thumbv5te-none-eabi",
+      "target_os": "none",
+      "reason": "non-os-execution-environment",
+      "description": "Thumb-mode Bare ARMv5TE"
+    },
+    {
+      "target": "thumbv6-none-eabi",
+      "target_os": "none",
+      "reason": "non-os-execution-environment",
+      "description": "Thumb-mode Bare ARMv6 soft-float"
+    },
+    {
+      "target": "thumbv6m-none-eabi",
+      "target_os": "none",
+      "reason": "non-os-execution-environment",
+      "description": "Bare ARMv6-M"
+    },
+    {
+      "target": "thumbv7a-none-eabi",
+      "target_os": "none",
+      "reason": "non-os-execution-environment",
+      "description": "Thumb-mode Bare Armv7-A"
+    },
+    {
+      "target": "thumbv7a-none-eabihf",
+      "target_os": "none",
+      "reason": "non-os-execution-environment",
+      "description": "Thumb-mode Bare Armv7-A, hardfloat"
+    },
+    {
+      "target": "thumbv7em-none-eabi",
+      "target_os": "none",
+      "reason": "non-os-execution-environment",
+      "description": "Bare ARMv7E-M"
+    },
+    {
+      "target": "thumbv7em-none-eabihf",
+      "target_os": "none",
+      "reason": "non-os-execution-environment",
+      "description": "Bare ARMv7E-M, hardfloat"
+    },
+    {
+      "target": "thumbv7m-none-eabi",
+      "target_os": "none",
+      "reason": "non-os-execution-environment",
+      "description": "Bare ARMv7-M"
+    },
+    {
+      "target": "thumbv7r-none-eabi",
+      "target_os": "none",
+      "reason": "non-os-execution-environment",
+      "description": "Thumb-mode Bare Armv7-R"
+    },
+    {
+      "target": "thumbv7r-none-eabihf",
+      "target_os": "none",
+      "reason": "non-os-execution-environment",
+      "description": "Thumb-mode Bare Armv7-R, hardfloat"
+    },
+    {
+      "target": "thumbv8m.base-none-eabi",
+      "target_os": "none",
+      "reason": "non-os-execution-environment",
+      "description": "Bare ARMv8-M Baseline"
+    },
+    {
+      "target": "thumbv8m.main-none-eabi",
+      "target_os": "none",
+      "reason": "non-os-execution-environment",
+      "description": "Bare ARMv8-M Mainline"
+    },
+    {
+      "target": "thumbv8m.main-none-eabihf",
+      "target_os": "none",
+      "reason": "non-os-execution-environment",
+      "description": "Bare ARMv8-M Mainline, hardfloat"
+    },
+    {
+      "target": "thumbv8r-none-eabihf",
+      "target_os": "none",
+      "reason": "non-os-execution-environment",
+      "description": "Thumb-mode Bare Armv8-R, hardfloat"
+    },
+    {
+      "target": "wasm32-unknown-emscripten",
+      "target_os": "emscripten",
+      "reason": "non-os-execution-environment",
+      "description": "WebAssembly via Emscripten"
+    },
+    {
+      "target": "wasm32-unknown-unknown",
+      "target_os": "unknown",
+      "reason": "non-os-execution-environment",
+      "description": "WebAssembly"
+    },
+    {
+      "target": "wasm32-wali-linux-musl",
+      "target_os": "linux",
+      "reason": "non-os-execution-environment",
+      "description": "WebAssembly with WALI"
+    },
+    {
+      "target": "wasm32-wasip1",
+      "target_os": "wasi",
+      "reason": "non-os-execution-environment",
+      "description": "WebAssembly with WASI"
+    },
+    {
+      "target": "wasm32-wasip1-threads",
+      "target_os": "wasi",
+      "reason": "non-os-execution-environment",
+      "description": ""
+    },
+    {
+      "target": "wasm32-wasip2",
+      "target_os": "wasi",
+      "reason": "non-os-execution-environment",
+      "description": "WebAssembly"
+    },
+    {
+      "target": "wasm32-wasip3",
+      "target_os": "wasi",
+      "reason": "non-os-execution-environment",
+      "description": "WebAssembly"
+    },
+    {
+      "target": "wasm32v1-none",
+      "target_os": "none",
+      "reason": "non-os-execution-environment",
+      "description": "WebAssembly"
+    },
+    {
+      "target": "wasm64-unknown-unknown",
+      "target_os": "unknown",
+      "reason": "non-os-execution-environment",
+      "description": "WebAssembly"
+    },
+    {
+      "target": "x86_64-fortanix-unknown-sgx",
+      "target_os": "unknown",
+      "reason": "non-os-execution-environment",
+      "description": "Fortanix ABI for 64-bit Intel SGX"
+    },
+    {
+      "target": "x86_64-unknown-linux-none",
+      "target_os": "linux",
+      "reason": "freestanding-no-userspace-std",
+      "description": ""
+    },
+    {
+      "target": "x86_64-unknown-none",
+      "target_os": "none",
+      "reason": "non-os-execution-environment",
+      "description": "Freestanding/bare-metal x86_64 softfloat"
+    },
+    {
+      "target": "x86_64-unknown-uefi",
+      "target_os": "uefi",
+      "reason": "non-os-execution-environment",
+      "description": "64-bit UEFI"
+    },
+    {
+      "target": "xtensa-esp32-none-elf",
+      "target_os": "none",
+      "reason": "non-os-execution-environment",
+      "description": "Xtensa ESP32"
+    },
+    {
+      "target": "xtensa-esp32s2-none-elf",
+      "target_os": "none",
+      "reason": "non-os-execution-environment",
+      "description": "Xtensa ESP32-S2"
     },
     {
       "target": "xtensa-esp32s3-none-elf",
-      "artifact_kind": "portable-core-build-std",
-      "build_std": true,
-      "rustflags": ""
+      "target_os": "none",
+      "reason": "non-os-execution-environment",
+      "description": "Xtensa ESP32-S3"
     }
   ]
 }

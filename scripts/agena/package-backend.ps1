@@ -1,5 +1,7 @@
 Param(
-  [string]$TargetTriple = ""
+  [string]$TargetTriple = "",
+  [bool]$BuildStd = $false,
+  [string]$TargetRustFlags = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -54,12 +56,47 @@ if ($TargetTriple -match 'windows') {
 }
 
 Write-Host "Building agena for $TargetTriple..."
-& cargo build `
-  --manifest-path "$ServerManifest" `
-  --release `
-  --target "$TargetTriple" `
-  --locked `
-  --target-dir "$ServerTargetDir"
+$BuildArgs = @(
+  "build",
+  "--manifest-path", "$ServerManifest",
+  "-p", "agena",
+  "--release",
+  "--target", "$TargetTriple",
+  "--locked",
+  "--target-dir", "$ServerTargetDir"
+)
+if ($BuildStd) {
+  $StableToolchain = if ($env:AGENA_STABLE_TOOLCHAIN) { $env:AGENA_STABLE_TOOLCHAIN } else { "1.97.0" }
+  $NightlyToolchain = if ($env:AGENA_NIGHTLY_TOOLCHAIN) { $env:AGENA_NIGHTLY_TOOLCHAIN } else { "nightly-2026-08-18" }
+  $StableRustc = (& rustup which --toolchain $StableToolchain rustc).Trim()
+  if ($LASTEXITCODE -ne 0 -or -not $StableRustc) {
+    throw "Failed to locate rustc for $StableToolchain"
+  }
+  $OldRustc = $env:RUSTC
+  $OldBootstrap = $env:RUSTC_BOOTSTRAP
+  $OldRustFlags = $env:RUSTFLAGS
+  try {
+    $env:RUSTC = $StableRustc
+    $env:RUSTC_BOOTSTRAP = "1"
+    $env:RUSTFLAGS = (($OldRustFlags, $TargetRustFlags) | Where-Object { $_ } | Join-String -Separator " ")
+    & cargo "+$NightlyToolchain" @BuildArgs -Z "build-std=std,panic_abort,proc_macro"
+  }
+  finally {
+    $env:RUSTC = $OldRustc
+    $env:RUSTC_BOOTSTRAP = $OldBootstrap
+    $env:RUSTFLAGS = $OldRustFlags
+  }
+}
+else {
+  $OldRustFlags = $env:RUSTFLAGS
+  try {
+    $env:RUSTFLAGS = (($OldRustFlags, $TargetRustFlags) | Where-Object { $_ } | Join-String -Separator " ")
+    & cargo @BuildArgs
+  }
+  finally {
+    $env:RUSTFLAGS = $OldRustFlags
+  }
+}
 
 if ($LASTEXITCODE -ne 0) {
   throw "cargo build failed"

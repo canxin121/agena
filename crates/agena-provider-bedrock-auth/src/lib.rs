@@ -6,11 +6,27 @@
 
 #[cfg(not(any(
     all(target_arch = "aarch64", target_endian = "big"),
+    all(target_arch = "aarch64", target_pointer_width = "32"),
+    all(target_arch = "arm", target_endian = "big"),
+    target_arch = "csky",
+    target_arch = "hexagon",
+    target_arch = "m68k",
+    target_arch = "riscv32",
+    target_arch = "xtensa",
+    all(target_arch = "x86_64", target_pointer_width = "32"),
     all(target_arch = "x86", target_os = "windows", target_env = "gnu")
 )))]
 use aws_config::{BehaviorVersion, Region};
 #[cfg(not(any(
     all(target_arch = "aarch64", target_endian = "big"),
+    all(target_arch = "aarch64", target_pointer_width = "32"),
+    all(target_arch = "arm", target_endian = "big"),
+    target_arch = "csky",
+    target_arch = "hexagon",
+    target_arch = "m68k",
+    target_arch = "riscv32",
+    target_arch = "xtensa",
+    all(target_arch = "x86_64", target_pointer_width = "32"),
     all(target_arch = "x86", target_os = "windows", target_env = "gnu")
 )))]
 use aws_credential_types::provider::ProvideCredentials;
@@ -57,6 +73,14 @@ pub fn static_credentials(
 
 #[cfg(not(any(
     all(target_arch = "aarch64", target_endian = "big"),
+    all(target_arch = "aarch64", target_pointer_width = "32"),
+    all(target_arch = "arm", target_endian = "big"),
+    target_arch = "csky",
+    target_arch = "hexagon",
+    target_arch = "m68k",
+    target_arch = "riscv32",
+    target_arch = "xtensa",
+    all(target_arch = "x86_64", target_pointer_width = "32"),
     all(target_arch = "x86", target_os = "windows", target_env = "gnu")
 )))]
 async fn resolve_provider_chain(
@@ -80,6 +104,14 @@ async fn resolve_provider_chain(
 
 #[cfg(any(
     all(target_arch = "aarch64", target_endian = "big"),
+    all(target_arch = "aarch64", target_pointer_width = "32"),
+    all(target_arch = "arm", target_endian = "big"),
+    target_arch = "csky",
+    target_arch = "hexagon",
+    target_arch = "m68k",
+    target_arch = "riscv32",
+    target_arch = "xtensa",
+    all(target_arch = "x86_64", target_pointer_width = "32"),
     all(target_arch = "x86", target_os = "windows", target_env = "gnu")
 ))]
 async fn resolve_provider_chain(

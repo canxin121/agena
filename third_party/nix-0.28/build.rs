@@ -14,8 +14,9 @@ fn main() {
         solaris: { target_os = "solaris" },
         watchos: { target_os = "watchos" },
         tvos: { target_os = "tvos" },
+        visionos: { target_os = "visionos" },
 
-        apple_targets: { any(ios, macos, watchos, tvos) },
+        apple_targets: { any(ios, macos, watchos, tvos, visionos) },
         bsd: { any(freebsd, dragonfly, netbsd, openbsd, apple_targets) },
         linux_android: { any(android, linux) },
         freebsdlike: { any(dragonfly, freebsd) },

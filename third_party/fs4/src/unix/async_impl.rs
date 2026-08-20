@@ -34,6 +34,7 @@ macro_rules! allocate {
             target_os = "illumos",
             target_os = "haiku",
             target_os = "hurd",
+            target_os = "visionos",
         ))]
         pub async fn allocate(file: &$file, len: u64) -> std::io::Result<()> {
             // No file allocation API available, just set the length if necessary.

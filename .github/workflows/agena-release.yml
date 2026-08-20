@@ -76,10 +76,10 @@ jobs:
     needs: metadata
     runs-on: ubuntu-latest
     outputs:
-      hosted: ${{ steps.matrix.outputs.hosted }}
+      cross_backend: ${{ steps.matrix.outputs.cross_backend }}
       native: ${{ steps.matrix.outputs.native }}
-      portable: ${{ steps.matrix.outputs.portable }}
-      portable_build_std: ${{ steps.matrix.outputs.portable_build_std }}
+      linux_zig: ${{ steps.matrix.outputs.linux_zig }}
+      custom: ${{ steps.matrix.outputs.custom }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -94,21 +94,22 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          hosted="$(python3 scripts/agena/target-matrix.py hosted-cross --compact)"
-          native="$(python3 scripts/agena/target-matrix.py native --compact)"
-          portable="$(python3 scripts/agena/target-matrix.py portable --compact)"
-          portable_build_std="$(python3 scripts/agena/target-matrix.py portable-build-std --compact)"
-          echo "hosted=$hosted" >> "$GITHUB_OUTPUT"
+          cross_backend="$(python3 scripts/agena/target-matrix.py cross-backend --compact)"
+          native="$(python3 scripts/agena/target-matrix.py native-backend --compact)"
+          linux_zig="$(python3 scripts/agena/target-matrix.py linux-zig-backend --compact)"
+          custom="$(python3 scripts/agena/target-matrix.py custom-backend --compact)"
+          echo "cross_backend=$cross_backend" >> "$GITHUB_OUTPUT"
           echo "native=$native" >> "$GITHUB_OUTPUT"
-          echo "portable=$portable" >> "$GITHUB_OUTPUT"
-          echo "portable_build_std=$portable_build_std" >> "$GITHUB_OUTPUT"
+          echo "linux_zig=$linux_zig" >> "$GITHUB_OUTPUT"
+          echo "custom=$custom" >> "$GITHUB_OUTPUT"
           python3 - <<'PY'
           import json
           data = json.load(open("scripts/agena/universal-targets.json", encoding="utf-8"))
-          print(f"Hosted/cross targets: {len(data['hosted_cross'])}")
-          print(f"Native targets: {len(data['native'])}")
-          print(f"Distributed portable targets: {len(data['portable'])}")
-          print(f"Build-std portable targets: {len(data['portable_build_std'])}")
+          print(f"Cross backend targets: {len(data['cross_backend'])}")
+          print(f"Native/SDK backend targets: {len(data['native_backend'])}")
+          print(f"Linux Zig backend targets: {len(data['linux_zig_backend'])}")
+          print(f"Custom OS backend targets: {len(data['custom_backend'])}")
+          print(f"Excluded no-std/non-OS targets: {len(data['excluded'])}")
           PY
 
   web:
@@ -171,13 +172,12 @@ jobs:
       - metadata
       - targets
       - web
-      - cross-tool
     runs-on: ubuntu-latest
     timeout-minutes: 120
     strategy:
       fail-fast: false
       max-parallel: 20
-      matrix: ${{ fromJSON(needs.targets.outputs.hosted) }}
+      matrix: ${{ fromJSON(needs.targets.outputs.cross_backend) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -191,14 +191,6 @@ jobs:
         run: rustup toolchain install nightly-2026-08-18 --profile minimal --component rust-src
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: cross-linux-x86_64-internal
-          path: ${{ runner.temp }}/cross/bin
-      - name: Install cross tool
-        run: |
-          chmod +x "$RUNNER_TEMP/cross/bin/cross"
-          echo "$RUNNER_TEMP/cross/bin" >> "$GITHUB_PATH"
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
           name: agena-web-dist-internal
           path: packages/agena-web/dist
       - name: Restore Cargo source cache
@@ -208,6 +200,14 @@ jobs:
           key: hosted
           cache-targets: false
           cache-on-failure: true
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: cross-linux-x86_64-internal
+          path: ${{ runner.temp }}/cross/bin
+      - name: Install cross tool
+        run: |
+          chmod +x "$RUNNER_TEMP/cross/bin/cross"
+          echo "$RUNNER_TEMP/cross/bin" >> "$GITHUB_PATH"
       - name: Build and package target
         run: >-
           bash scripts/agena/package-cross-backend.sh
@@ -248,7 +248,15 @@ jobs:
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
         with:
           toolchain: 1.97.0
-          targets: ${{ matrix.target }}
+          components: rust-src
+      - name: Install distributed target component
+        if: ${{ !matrix.build_std }}
+        shell: bash
+        run: rustup target add '${{ matrix.target }}' --toolchain 1.97.0
+      - name: Install nightly Cargo driver
+        if: matrix.build_std
+        shell: bash
+        run: rustup toolchain install nightly-2026-08-18 --profile minimal
       - name: Set up sccache
         uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
         with:
@@ -269,11 +277,19 @@ jobs:
       - name: Build Backend Package (Unix)
         if: matrix.shell == 'bash'
         shell: bash
-        run: bash scripts/agena/package-backend.sh '${{ matrix.target }}'
+        run: >-
+          bash scripts/agena/package-backend.sh
+          '${{ matrix.target }}'
+          '${{ matrix.build_std }}'
+          '${{ matrix.rustflags || '' }}'
       - name: Build Backend Package (Windows)
         if: matrix.shell == 'pwsh'
         shell: pwsh
-        run: ./scripts/agena/package-backend.ps1 -TargetTriple '${{ matrix.target }}'
+        run: >-
+          ./scripts/agena/package-backend.ps1
+          -TargetTriple '${{ matrix.target }}'
+          -BuildStd $${{ matrix.build_std }}
+          -TargetRustFlags '${{ matrix.rustflags || '' }}'
       - name: Verify sccache compiler activity
         uses: ./.github/actions/verify-sccache
         with:
@@ -288,47 +304,19 @@ jobs:
             artifacts/agena/*.sha256
           if-no-files-found: error
 
-  portable-core:
-    name: portable ${{ matrix.target }}
+  linux-zig-backend:
+    name: release ${{ matrix.target }}
     needs:
       - metadata
       - targets
+      - web
+      - cross-tool
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 120
     strategy:
       fail-fast: false
-      max-parallel: 24
-      matrix: ${{ fromJSON(needs.targets.outputs.portable) }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ needs.metadata.outputs.source_sha }}
-          persist-credentials: false
-      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
-        with:
-          toolchain: 1.97.0
-          targets: ${{ matrix.target }}
-      - name: Build and package portable core
-        run: bash scripts/agena/package-portable-core.sh '${{ matrix.target }}'
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: agena-release-${{ matrix.target }}
-          path: |
-            artifacts/agena/*.tar.gz
-            artifacts/agena/*.sha256
-          if-no-files-found: error
-
-  portable-build-std-core:
-    name: build-std portable ${{ matrix.target }}
-    needs:
-      - metadata
-      - targets
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      max-parallel: 32
-      matrix: ${{ fromJSON(needs.targets.outputs.portable_build_std) }}
+      max-parallel: 20
+      matrix: ${{ fromJSON(needs.targets.outputs.linux_zig) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -339,19 +327,78 @@ jobs:
           toolchain: 1.97.0
           components: rust-src
       - name: Install nightly Cargo driver
+        if: matrix.build_std
         run: rustup toolchain install nightly-2026-08-18 --profile minimal
-      - name: Build and package target core from Rust 1.97 sources
-        shell: bash
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: agena-web-dist-internal
+          path: packages/agena-web/dist
+      - name: Restore Cargo source cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          prefix-key: universal-release-zig-sources
+          key: ${{ matrix.target }}
+          cache-targets: false
+          cache-on-failure: true
+      - name: Build and package Linux backend
         run: >-
-          bash scripts/agena/package-portable-core.sh
+          bash scripts/agena/package-linux-backend.sh
           '${{ matrix.target }}'
-          true
-          '${{ matrix.rustflags }}'
+          '${{ matrix.build_std }}'
+          '${{ matrix.builder }}'
+          '${{ matrix.zig_target || '' }}'
+          '${{ matrix.rustflags || '' }}'
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: agena-release-${{ matrix.target }}
           path: |
             artifacts/agena/*.tar.gz
+            artifacts/agena/*.zip
+            artifacts/agena/*.sha256
+          if-no-files-found: error
+
+  custom-backend:
+    name: release ${{ matrix.target }}
+    needs:
+      - metadata
+      - targets
+      - web
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix: ${{ fromJSON(needs.targets.outputs.custom) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.metadata.outputs.source_sha }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          toolchain: 1.97.0
+          components: rust-src
+      - name: Install nightly Cargo driver
+        if: matrix.build_std
+        run: rustup toolchain install nightly-2026-08-18 --profile minimal
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: agena-web-dist-internal
+          path: packages/agena-web/dist
+      - name: Build and package OS backend
+        shell: bash
+        run: >-
+          bash scripts/agena/package-custom-backend.sh
+          '${{ matrix.target }}'
+          '${{ matrix.os }}'
+          '${{ matrix.build_std }}'
+          '${{ matrix.builder }}'
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: agena-release-${{ matrix.target }}
+          path: |
+            artifacts/agena/*.tar.gz
+            artifacts/agena/*.zip
             artifacts/agena/*.sha256
           if-no-files-found: error
 
@@ -361,14 +408,14 @@ jobs:
       always() &&
       needs.hosted-backend.result == 'success' &&
       needs.native-backend.result == 'success' &&
-      needs.portable-core.result == 'success' &&
-      needs.portable-build-std-core.result == 'success'
+      needs.linux-zig-backend.result == 'success' &&
+      needs.custom-backend.result == 'success'
     needs:
       - metadata
       - hosted-backend
       - native-backend
-      - portable-core
-      - portable-build-std-core
+      - linux-zig-backend
+      - custom-backend
     runs-on: ubuntu-latest
     env:
       RELEASE_VERSION: ${{ needs.metadata.outputs.version }}
@@ -395,21 +442,11 @@ jobs:
           manifest = json.load(open("scripts/agena/universal-targets.json", encoding="utf-8"))
           expected = set()
 
-          for row in manifest["hosted_cross"]:
-              target = row["target"]
-              prefix = "agena-web-runtime" if row["artifact_kind"] == "web-runtime" else "agena-backend"
-              ext = "zip" if "windows" in target else "tar.gz"
-              expected.add(f"{prefix}-{target}-v{version}.{ext}")
-
-          for row in manifest["native"]:
-              target = row["target"]
-              ext = "zip" if "windows" in target else "tar.gz"
-              expected.add(f"agena-backend-{target}-v{version}.{ext}")
-
-          for group in ("portable", "portable_build_std"):
+          for group in ("cross_backend", "native_backend", "linux_zig_backend", "custom_backend"):
               for row in manifest[group]:
                   target = row["target"]
-                  expected.add(f"agena-portable-core-{target}-v{version}.tar.gz")
+                  ext = "zip" if ("windows" in target or "cygwin" in target) else "tar.gz"
+                  expected.add(f"agena-backend-{target}-v{version}.{ext}")
 
           root = Path("release-assets")
           actual = {

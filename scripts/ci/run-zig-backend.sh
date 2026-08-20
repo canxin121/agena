@@ -7,25 +7,8 @@ shift 2
 [[ "${1:-}" == -- ]] && shift
 [[ $# -gt 0 ]] || { echo "ERROR: command is required" >&2; exit 2; }
 
-ZIG_VERSION="${AGENA_ZIG_VERSION:-0.15.2}"
 ZIG_SYSROOT="${AGENA_ZIG_SYSROOT:-}"
-TOOL_ROOT="${RUNNER_TEMP:-/tmp}/agena-zig-$ZIG_VERSION"
-if [[ -n "${AGENA_ZIG:-}" ]]; then
-  ZIG="$AGENA_ZIG"
-else
-  if [[ ! -x "$TOOL_ROOT/bin/python" ]]; then
-    python3 -m venv "$TOOL_ROOT"
-  fi
-  if ! "$TOOL_ROOT/bin/python" -c 'import ziglang' >/dev/null 2>&1; then
-    "$TOOL_ROOT/bin/pip" install --disable-pip-version-check --no-input "ziglang==$ZIG_VERSION"
-  fi
-  ZIG="$($TOOL_ROOT/bin/python - <<'PY'
-import pathlib, ziglang
-print(pathlib.Path(ziglang.__file__).with_name("zig"))
-PY
-)"
-fi
-[[ -x "$ZIG" ]] || { echo "ERROR: Zig executable not found at $ZIG" >&2; exit 1; }
+ZIG="$(bash scripts/ci/fetch-zig.sh)"
 
 WRAPPER_ROOT="${RUNNER_TEMP:-/tmp}/agena-zig-wrappers/${RUST_TARGET}"
 mkdir -p "$WRAPPER_ROOT"

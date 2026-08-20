@@ -12,13 +12,15 @@ case "$(uname -s)-$(uname -m)" in
 esac
 
 if [[ "$TARGET" == loongarch64-unknown-linux-ohos ]]; then
-  PINNED_CLANG="$(bash scripts/ci/fetch-pinned-clang.sh)"
-  SYSROOT="$(bash scripts/ci/build-ohos-loongarch-sysroot.sh "$PINNED_CLANG")"
-  CLANG="$PINNED_CLANG/bin/clang"
-  CLANGXX="$PINNED_CLANG/bin/clang++"
-  AR="$PINNED_CLANG/bin/llvm-ar"
-  clang_target=loongarch64-linux-ohos
-  extra=()
+  # Zig does not claim an OpenHarmony libc target.  The target-specific C
+  # provider is intentionally the Linux musl ABI built from the pinned
+  # OpenHarmony third_party_musl source below; the Rust target remains the
+  # OpenHarmony target triple so rustc uses the correct std PAL.
+  ZIG="$(bash scripts/ci/fetch-zig.sh)"
+  SYSROOT="$(bash scripts/ci/build-ohos-loongarch-sysroot.sh "$ZIG")"
+  export AGENA_ZIG="$ZIG"
+  export AGENA_ZIG_SYSROOT="$SYSROOT"
+  exec bash scripts/ci/run-zig-backend.sh "$TARGET" loongarch64-linux-musl -- "$@"
 else
   SDK_RELEASE=5.0.0-Release
   SDK_CACHE_KEY=5.0.0

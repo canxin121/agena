@@ -62,6 +62,7 @@ function Set-EnvFromVsDevCmd {
   $HostToolArch = if ($HostArch -eq "arm64") { "HostARM64" } else { "HostX64" }
   $TargetBin = Join-Path $VCToolsRoot "bin\$HostToolArch\$Arch"
   $Compiler = Join-Path $TargetBin "cl.exe"
+  $UsingClangCl = $false
   if (-not (Test-Path $Compiler)) {
     if ($Arch -ne "arm") {
       throw "MSVC target compiler missing for host=$HostArch target=${Arch}: $Compiler"
@@ -98,6 +99,7 @@ function Set-EnvFromVsDevCmd {
     $Compiler = Join-Path $WrapperRoot "clang-cl-arm.cmd"
     $WrapperText = "@echo off`r`n`"$ClangCl`" --target=thumbv7a-pc-windows-msvc %*`r`nexit /b %ERRORLEVEL%`r`n"
     [IO.File]::WriteAllText($Compiler, $WrapperText, [Text.Encoding]::ASCII)
+    $UsingClangCl = $true
     Write-Host "Using clang-cl ARMv7 MSVC fallback: $ClangCl --target=thumbv7a-pc-windows-msvc"
   }
   if (Test-Path $TargetBin) {
@@ -121,13 +123,62 @@ function Set-EnvFromVsDevCmd {
   } else {
     $env:INCLUDE = $VCToolsInclude
   }
-  if ($env:LIB) {
-    $env:LIB = "$VCToolsLib;$env:LIB"
-  } else {
-    $env:LIB = $VCToolsLib
-  }
-  if (-not (Test-Path $VCToolsLib)) {
+
+  $TargetLibDirs = @()
+  $PreserveExistingLib = $true
+  if (Test-Path $VCToolsLib) {
+    $TargetLibDirs += $VCToolsLib
+  } elseif (-not ($UsingClangCl -and $Arch -eq "arm")) {
     throw "MSVC target library directory missing for host=$HostArch target=${Arch}: $VCToolsLib"
+  } else {
+    # VS 2026 hosted images may provide clang-cl for ARMv7 while omitting the
+    # legacy MSVC ARM compiler and VC\Tools\MSVC\...\lib\arm directory.  In
+    # that configuration use the actual ARM Windows SDK import libraries.  Do
+    # not substitute x64 or ARM64 libraries: clang-cl still has to link a
+    # genuine ARM32 MSVC target.
+    $PreserveExistingLib = $false
+    $WindowsSdkDir = $env:WindowsSdkDir
+    if (-not $WindowsSdkDir) {
+      throw "WindowsSdkDir is not set; cannot locate ARM Windows SDK libraries for $TargetTriple"
+    }
+    $WindowsSdkVersion = if ($env:WindowsSDKVersion) {
+      $env:WindowsSDKVersion.TrimEnd('\')
+    } else {
+      $null
+    }
+    $WindowsSdkLibRoot = Join-Path $WindowsSdkDir "Lib"
+    if (-not $WindowsSdkVersion -or -not (Test-Path (Join-Path $WindowsSdkLibRoot $WindowsSdkVersion))) {
+      $WindowsSdkVersion = (Get-ChildItem -Path $WindowsSdkLibRoot -Directory -ErrorAction SilentlyContinue |
+        Sort-Object Name -Descending | Select-Object -First 1).Name
+    }
+    if (-not $WindowsSdkVersion) {
+      throw "Windows SDK library version not found under $WindowsSdkLibRoot"
+    }
+
+    $UniversalCrtDir = if ($env:UniversalCRTSdkDir) {
+      $env:UniversalCRTSdkDir
+    } else {
+      $WindowsSdkDir
+    }
+    $UniversalCrtVersion = if ($env:UCRTVersion) {
+      $env:UCRTVersion.TrimEnd('\')
+    } else {
+      $WindowsSdkVersion
+    }
+    $SdkUmArm = Join-Path (Join-Path $WindowsSdkLibRoot $WindowsSdkVersion) "um\arm"
+    $SdkUcrtArm = Join-Path (Join-Path (Join-Path $UniversalCrtDir "Lib") $UniversalCrtVersion) "ucrt\arm"
+    $MissingSdkArmDirs = @($SdkUmArm, $SdkUcrtArm) | Where-Object { -not (Test-Path $_) }
+    if ($MissingSdkArmDirs.Count -gt 0) {
+      throw "ARM Windows SDK library directories missing for $TargetTriple: $($MissingSdkArmDirs -join ', ') (WindowsSdkDir=$WindowsSdkDir, WindowsSDKVersion=$WindowsSdkVersion, UniversalCRTSdkDir=$UniversalCrtDir, UCRTVersion=$UniversalCrtVersion)"
+    }
+    $TargetLibDirs += $SdkUmArm
+    $TargetLibDirs += $SdkUcrtArm
+    Write-Host "Using ARM Windows SDK libraries: $SdkUmArm; $SdkUcrtArm"
+  }
+  if ($PreserveExistingLib -and $env:LIB) {
+    $env:LIB = (($TargetLibDirs + @($env:LIB)) -join ";")
+  } else {
+    $env:LIB = ($TargetLibDirs -join ";")
   }
 
   $Key = $TargetTriple.Replace("-", "_")

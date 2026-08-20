@@ -135,16 +135,26 @@ async fn spawn_server(
     for (name, value) in environment {
         command.env(name, value);
     }
-    let child = command.spawn().expect("spawn MCP HTTP server");
+    let mut child = command.spawn().expect("spawn MCP HTTP server");
 
     let base_url = format!("http://127.0.0.1:{port}");
     let client = test_client();
-    let deadline = Instant::now() + Duration::from_secs(20);
+    // A cold macOS GitHub runner may spend well over 20 seconds initializing
+    // the server's runtime and keychain-backed auth state. Keep a generous
+    // readiness deadline, but fail immediately if the child exits instead of
+    // masking a real startup error as a timeout.
+    let deadline = Instant::now() + Duration::from_secs(60);
     loop {
         if let Ok(response) = client.get(format!("{base_url}/health")).send().await
             && response.status().is_success()
         {
             break;
+        }
+        if let Some(status) = child.try_wait().expect("inspect MCP HTTP server child") {
+            panic!(
+                "MCP HTTP server exited before becoming ready with status {status}; log:\n{}",
+                std::fs::read_to_string(log_path).unwrap_or_default()
+            );
         }
         assert!(
             Instant::now() < deadline,

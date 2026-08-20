@@ -238,6 +238,10 @@ pub async fn stream_session_changes(
         crate::live::subscribe_with_capacity(&state, query.test_queue_capacity.unwrap_or(256))?;
     #[cfg(not(test))]
     let mut subscription = crate::live::subscribe(&state)?;
+    #[cfg(test)]
+    if let Some(probe) = query.test_subscription_probe.clone() {
+        super::mark_test_session_stream_subscription(probe);
+    }
     let store = state.session_store()?;
     let session_queries = state.application().session_query_service()?;
     #[cfg(test)]

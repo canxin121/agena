@@ -390,6 +390,7 @@ nix-0-31 = { package = "nix", path = "third_party/nix-0.31" }
 prometheus = { path = "third_party/prometheus" }
 portable-pty = { path = "third_party/portable-pty" }
 process-wrap = { path = "third_party/process-wrap" }
+process_control = { path = "third_party/process-control" }
 fs4 = { path = "third_party/fs4" }
 getrandom-0-3 = { package = "getrandom", path = "third_party/getrandom-0.3" }
 getrandom = { path = "third_party/getrandom-0.4" }

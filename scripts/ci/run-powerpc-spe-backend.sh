@@ -244,7 +244,10 @@ LINUX_VER = headers-4.19.88-2
 DL_CMD = curl --fail --location --retry 12 --retry-all-errors --retry-delay 5 --connect-timeout 30 --max-time 1800 -o
 SHA1_CMD = sha1sum -c
 COMMON_CONFIG += --disable-nls
-GCC_CONFIG += --disable-libquadmath --disable-decimal-float --disable-libitm
+# GCC 8 still contains the exact powerpcspe backend, but marks this target
+# obsolete unless the build explicitly opts in.  Keep the SPE ABI rather than
+# substituting a normal PowerPC/e500 compiler.
+GCC_CONFIG += --disable-libquadmath --disable-decimal-float --disable-libitm --enable-obsolete
 EOF
     make -C "$MCM_DIR" -j"$(nproc)" install
   fi

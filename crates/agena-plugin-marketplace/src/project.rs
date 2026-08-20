@@ -585,10 +585,7 @@ pub fn package_plugin(
             request.artifact_path.display()
         )));
     }
-    let project_root = request
-        .manifest_path
-        .parent()
-        .unwrap_or_else(|| Path::new("."));
+    let project_root = manifest_project_root(&request.manifest_path);
     fs::create_dir_all(&request.output_dir)?;
     let entrypoint = manifest
         .release
@@ -858,6 +855,12 @@ pub fn scaffold_plugin(request: ScaffoldPluginRequest) -> Result<(), Marketplace
         template_release_workflow(&request).as_str(),
     )?;
     Ok(())
+}
+
+fn manifest_project_root(path: &Path) -> &Path {
+    path.parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."))
 }
 
 fn cargo_package_version(path: &Path) -> Result<String, MarketplaceError> {
@@ -1702,6 +1705,18 @@ mod tests {
         })
         .unwrap_err();
         assert!(matches!(sha_error, MarketplaceError::Sha256Mismatch { .. }));
+    }
+
+    #[test]
+    fn bare_manifest_path_resolves_project_root_to_current_directory() {
+        assert_eq!(
+            manifest_project_root(Path::new("agena-plugin.toml")),
+            Path::new(".")
+        );
+        assert_eq!(
+            manifest_project_root(Path::new("plugins/example/agena-plugin.toml")),
+            Path::new("plugins/example")
+        );
     }
 
     #[test]

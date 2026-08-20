@@ -47,6 +47,10 @@ case "$BUILDER" in
       "$TARGET" m68k-68xxx m68k-68xxx--glibc--stable-2025.08-1 '' -- \
       bash scripts/agena/package-backend.sh "$TARGET" "$BUILD_STD" "$TARGET_RUSTFLAGS"
     ;;
+  powerpc-spe-sysroot)
+    exec bash scripts/ci/run-powerpc-spe-backend.sh "$TARGET" -- \
+      bash scripts/agena/package-backend.sh "$TARGET" "$BUILD_STD" "$TARGET_RUSTFLAGS"
+    ;;
   *)
     echo "Using Linux backend builder '$BUILDER' for $TARGET" >&2
     exec bash scripts/agena/package-backend.sh "$TARGET" "$BUILD_STD" "$TARGET_RUSTFLAGS"

@@ -397,6 +397,8 @@ abi_stable = { path = "third_party/abi_stable" }
 blake3 = { path = "third_party/blake3" }
 constant_time_eq = { path = "third_party/constant_time_eq" }
 cpufeatures = { path = "third_party/cpufeatures" }
+compact_str = { path = "third_party/compact_str-0.8", version = "0.8.2" }
+compact_str_09 = { package = "compact_str", path = "third_party/compact_str-0.9", version = "0.9.1" }
 cpufeatures-0-3 = { package = "cpufeatures", path = "third_party/cpufeatures-0.3" }
 libgit2-sys = { path = "third_party/libgit2-sys" }
 linux-raw-sys = { path = "third_party/linux-raw-sys-0.12" }

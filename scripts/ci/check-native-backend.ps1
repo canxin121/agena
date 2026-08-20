@@ -17,27 +17,39 @@ $Args = @(
   "--manifest-path", "Cargo.toml",
   "-p", "agena",
   "--target", $TargetTriple,
+  "--target-dir", (Join-Path $env:RUNNER_TEMP "agena-check-target\$TargetTriple"),
   "--locked"
 )
 
 if ($BuildStd) {
   $StableRustc = (& rustup which --toolchain 1.97.0 rustc).Trim()
+  $StableRustdoc = (& rustup which --toolchain 1.97.0 rustdoc).Trim()
   if ($LASTEXITCODE -ne 0 -or -not $StableRustc) {
     throw "Failed to locate Rust 1.97.0 rustc"
   }
+  if (-not $StableRustdoc) {
+    throw "Failed to locate Rust 1.97.0 rustdoc"
+  }
   $OldRustc = $env:RUSTC
+  $OldRustdoc = $env:RUSTDOC
   $OldBootstrap = $env:RUSTC_BOOTSTRAP
   $OldRustFlags = $env:RUSTFLAGS
+  $OldTargetDir = $env:CARGO_TARGET_DIR
+  $BuildTargetDir = Join-Path $env:RUNNER_TEMP "agena-check-target\$TargetTriple"
   try {
     $env:RUSTC = $StableRustc
+    $env:RUSTDOC = $StableRustdoc
     $env:RUSTC_BOOTSTRAP = "1"
+    $env:CARGO_TARGET_DIR = $BuildTargetDir
     $env:RUSTFLAGS = (($OldRustFlags, $TargetRustFlags) | Where-Object { $_ } | Join-String -Separator " ")
     & cargo +nightly-2026-08-18 @Args -Z "build-std=std,panic_abort,proc_macro"
   }
   finally {
     $env:RUSTC = $OldRustc
+    $env:RUSTDOC = $OldRustdoc
     $env:RUSTC_BOOTSTRAP = $OldBootstrap
     $env:RUSTFLAGS = $OldRustFlags
+    $env:CARGO_TARGET_DIR = $OldTargetDir
   }
 }
 else {

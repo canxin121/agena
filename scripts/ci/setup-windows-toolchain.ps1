@@ -9,6 +9,7 @@ function Set-EnvFromVsDevCmd {
   param(
     [Parameter(Mandatory = $true)][string]$Arch,
     [Parameter(Mandatory = $true)][string]$HostArch,
+    [Parameter(Mandatory = $true)][string]$TargetTriple,
     [switch]$Uwp
   )
 
@@ -41,6 +42,51 @@ function Set-EnvFromVsDevCmd {
     $Value = $Line.Substring($Index + 1)
     [Environment]::SetEnvironmentVariable($Name, $Value, "Process")
   }
+
+  # VsDevCmd normally puts the target-specific MSVC compiler first on PATH.
+  # Keep that selection explicit: on hosted images the command can leave the
+  # host compiler (for example HostX64\x64) first even though
+  # VSCMD_ARG_TGT_ARCH reports the requested ARM target.  Using that compiler
+  # would silently compile with the wrong ABI and, in the ARM case, commonly
+  # leaves the target C headers unavailable to cc-rs.
+  $ToolsRoot = Join-Path $Install "VC\Tools\MSVC"
+  $ToolsVersion = $env:VCToolsVersion
+  if (-not $ToolsVersion) {
+    $ToolsVersion = (Get-ChildItem -Path $ToolsRoot -Directory |
+      Sort-Object Name -Descending | Select-Object -First 1).Name
+  }
+  if (-not $ToolsVersion) {
+    throw "MSVC tools version not found under $ToolsRoot"
+  }
+  $VCToolsRoot = Join-Path $ToolsRoot $ToolsVersion
+  $HostToolArch = if ($HostArch -eq "arm64") { "HostARM64" } else { "HostX64" }
+  $TargetBin = Join-Path $VCToolsRoot "bin\$HostToolArch\$Arch"
+  $Compiler = Join-Path $TargetBin "cl.exe"
+  if (-not (Test-Path $Compiler)) {
+    throw "MSVC target compiler missing for host=$HostArch target=$Arch: $Compiler"
+  }
+  $env:PATH = "$TargetBin;$env:PATH"
+  $env:VCToolsInstallDir = "$VCToolsRoot\"
+
+  # Preserve the SDK choices made by VsDevCmd while making the target MSVC
+  # headers and libraries unambiguous for build scripts that invoke cl.exe
+  # through cc-rs rather than through devenv/msbuild.
+  $VCToolsInclude = Join-Path $VCToolsRoot "include"
+  $VCToolsLib = Join-Path $VCToolsRoot "lib\$Arch"
+  if ($env:INCLUDE) {
+    $env:INCLUDE = "$VCToolsInclude;$env:INCLUDE"
+  } else {
+    $env:INCLUDE = $VCToolsInclude
+  }
+  if ($env:LIB) {
+    $env:LIB = "$VCToolsLib;$env:LIB"
+  } else {
+    $env:LIB = $VCToolsLib
+  }
+
+  $Key = $TargetTriple.Replace("-", "_")
+  [Environment]::SetEnvironmentVariable("CC_$Key", $Compiler, "Process")
+  [Environment]::SetEnvironmentVariable("CXX_$Key", $Compiler, "Process")
 }
 
 function Install-LlvmMingw {
@@ -128,5 +174,4 @@ $TargetArch = if ($TargetTriple.StartsWith("thumbv7a-")) {
 
 $HostArch = if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { "arm64" } else { "x64" }
 $IsUwp = $TargetTriple -match "-uwp-windows-msvc$"
-Set-EnvFromVsDevCmd -Arch $TargetArch -HostArch $HostArch -Uwp:$IsUwp
-
+Set-EnvFromVsDevCmd -Arch $TargetArch -HostArch $HostArch -TargetTriple $TargetTriple -Uwp:$IsUwp

@@ -68,28 +68,39 @@ $BuildArgs = @(
   "--release",
   "--target", "$TargetTriple",
   "--locked",
-  "--target-dir", "$ServerTargetDir"
+  "--target-dir", (Join-Path $env:RUNNER_TEMP "agena-release-target\$TargetTriple")
 )
+$BuildTargetDir = Join-Path $env:RUNNER_TEMP "agena-release-target\$TargetTriple"
 if ($BuildStd) {
   $StableToolchain = if ($env:AGENA_STABLE_TOOLCHAIN) { $env:AGENA_STABLE_TOOLCHAIN } else { "1.97.0" }
   $NightlyToolchain = if ($env:AGENA_NIGHTLY_TOOLCHAIN) { $env:AGENA_NIGHTLY_TOOLCHAIN } else { "nightly-2026-08-18" }
   $StableRustc = (& rustup which --toolchain $StableToolchain rustc).Trim()
+  $StableRustdoc = (& rustup which --toolchain $StableToolchain rustdoc).Trim()
   if ($LASTEXITCODE -ne 0 -or -not $StableRustc) {
     throw "Failed to locate rustc for $StableToolchain"
   }
+  if (-not $StableRustdoc) {
+    throw "Failed to locate rustdoc for $StableToolchain"
+  }
   $OldRustc = $env:RUSTC
+  $OldRustdoc = $env:RUSTDOC
   $OldBootstrap = $env:RUSTC_BOOTSTRAP
   $OldRustFlags = $env:RUSTFLAGS
+  $OldTargetDir = $env:CARGO_TARGET_DIR
   try {
     $env:RUSTC = $StableRustc
+    $env:RUSTDOC = $StableRustdoc
     $env:RUSTC_BOOTSTRAP = "1"
+    $env:CARGO_TARGET_DIR = $BuildTargetDir
     $env:RUSTFLAGS = (($OldRustFlags, $TargetRustFlags) | Where-Object { $_ } | Join-String -Separator " ")
     & cargo "+$NightlyToolchain" @BuildArgs -Z "build-std=std,panic_abort,proc_macro"
   }
   finally {
     $env:RUSTC = $OldRustc
+    $env:RUSTDOC = $OldRustdoc
     $env:RUSTC_BOOTSTRAP = $OldBootstrap
     $env:RUSTFLAGS = $OldRustFlags
+    $env:CARGO_TARGET_DIR = $OldTargetDir
   }
 }
 else {
@@ -107,7 +118,7 @@ if ($LASTEXITCODE -ne 0) {
   throw "cargo build failed"
 }
 
-$BinPath = Join-Path $ServerTargetDir "$TargetTriple/release/agena$Ext"
+$BinPath = Join-Path $BuildTargetDir "$TargetTriple/release/agena$Ext"
 if (-not (Test-Path -LiteralPath $BinPath)) {
   throw "Built binary not found at $BinPath"
 }

@@ -35,6 +35,7 @@ macro_rules! allocate {
             target_os = "haiku",
             target_os = "hurd",
             target_os = "redox",
+            target_os = "fuchsia",
             target_os = "visionos",
         ))]
         pub async fn allocate(file: &$file, len: u64) -> std::io::Result<()> {

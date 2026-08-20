@@ -17,7 +17,7 @@ RANLIB="$CLANG_ROOT/bin/llvm-ranlib"
 }
 
 MUSL_COMMIT="1f559e1b84d6784e1ea4a91d67381565bef492cd"
-MUSL_URL="https://gitee.com/openharmony/third_party_musl/repository/archive/${MUSL_COMMIT}.tar.gz"
+MUSL_URL="https://github.com/openharmony/third_party_musl/archive/${MUSL_COMMIT}.tar.gz"
 MUSL_SHA256="fc483693f9081930d5986192ab90582154c43039d92ea6d18d2dedcb18faf67b"
 ROOT="${RUNNER_TEMP:-/tmp}/agena-ohos-loongarch-musl/${MUSL_COMMIT}"
 ARCHIVE="$ROOT/third_party_musl.tar.gz"

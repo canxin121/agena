@@ -2458,7 +2458,7 @@ async fn policy_denied_terminal_transition_preserves_operation_metadata() {
     let tool_part = new_part_from_content(
         "tool_call",
         PartRole::Assistant,
-        &TypedContent::ToolCall(tool_call_from_operation(&operation)),
+        &TypedContent::ToolCall(Box::new(tool_call_from_operation(&operation))),
         PartState::InProgress,
     )
     .expect("build pending tool part");
@@ -2562,20 +2562,20 @@ async fn idless_plugin_asks_are_unique_and_cancellation_is_scoped_and_model_visi
                 new_part_from_content(
                     "tool_call",
                     PartRole::Assistant,
-                    &TypedContent::ToolCall(tool_call_from_operation(&operation(
+                    &TypedContent::ToolCall(Box::new(tool_call_from_operation(&operation(
                         77,
                         "fixture.ask.first",
-                    ))),
+                    )))),
                     PartState::InProgress,
                 )
                 .expect("build first pending tool"),
                 new_part_from_content(
                     "tool_call",
                     PartRole::Assistant,
-                    &TypedContent::ToolCall(tool_call_from_operation(&operation(
+                    &TypedContent::ToolCall(Box::new(tool_call_from_operation(&operation(
                         78,
                         "fixture.ask.second",
-                    ))),
+                    )))),
                     PartState::InProgress,
                 )
                 .expect("build second pending tool"),
@@ -2911,7 +2911,7 @@ async fn host_user_input_does_not_downgrade_an_in_progress_tool_part() {
     let tool_part = new_part_from_content(
         "tool_call",
         PartRole::Assistant,
-        &TypedContent::ToolCall(tool_call_from_operation(&operation)),
+        &TypedContent::ToolCall(Box::new(tool_call_from_operation(&operation))),
         PartState::InProgress,
     )
     .expect("build tool part");
@@ -3002,7 +3002,7 @@ async fn host_ask_user_interaction_part_is_reply_resolvable() {
     let tool_part = new_part_from_content(
         "tool_call",
         PartRole::Assistant,
-        &TypedContent::ToolCall(tool_call_from_operation(&operation)),
+        &TypedContent::ToolCall(Box::new(tool_call_from_operation(&operation))),
         PartState::InProgress,
     )
     .expect("build tool part");
@@ -3143,7 +3143,7 @@ async fn non_host_user_input_reply_persists_completed_interaction_part() {
     let tool_part = new_part_from_content(
         "tool_call",
         PartRole::Assistant,
-        &TypedContent::ToolCall(tool_call_from_operation(&operation)),
+        &TypedContent::ToolCall(Box::new(tool_call_from_operation(&operation))),
         PartState::InProgress,
     )
     .expect("build tool part");
@@ -3290,7 +3290,7 @@ async fn host_ask_user_interaction_part_born_in_progress_and_reply_completes() {
     let tool_part = new_part_from_content(
         "tool_call",
         PartRole::Assistant,
-        &TypedContent::ToolCall(tool_call_from_operation(&operation)),
+        &TypedContent::ToolCall(Box::new(tool_call_from_operation(&operation))),
         PartState::InProgress,
     )
     .expect("build tool part");
@@ -3505,14 +3505,14 @@ async fn host_ask_user_from_unrelated_operations_with_empty_operation_id_do_not_
                 new_part_from_content(
                     "tool_call",
                     PartRole::Assistant,
-                    &TypedContent::ToolCall(tool_call_from_operation(&plan_operation)),
+                    &TypedContent::ToolCall(Box::new(tool_call_from_operation(&plan_operation))),
                     PartState::InProgress,
                 )
                 .expect("build plan tool part"),
                 new_part_from_content(
                     "tool_call",
                     PartRole::Assistant,
-                    &TypedContent::ToolCall(tool_call_from_operation(&ask_operation)),
+                    &TypedContent::ToolCall(Box::new(tool_call_from_operation(&ask_operation))),
                     PartState::InProgress,
                 )
                 .expect("build ask tool part"),
@@ -4091,7 +4091,7 @@ async fn install_test_background_operation(
     let tool_part = new_part_from_content(
         "tool_call",
         PartRole::Assistant,
-        &TypedContent::ToolCall(tool_call_from_operation(&operation)),
+        &TypedContent::ToolCall(Box::new(tool_call_from_operation(&operation))),
         PartState::Completed,
     )
     .expect("build completed background launch receipt");
@@ -5301,7 +5301,7 @@ async fn background_launch_receipt_is_terminal_and_needs_no_guard() {
     let mut tool_part = new_part_from_content(
         "tool_call",
         PartRole::Assistant,
-        &TypedContent::ToolCall(tool_call_from_operation(&operation)),
+        &TypedContent::ToolCall(Box::new(tool_call_from_operation(&operation))),
         PartState::InProgress,
     )
     .expect("build launching tool part");

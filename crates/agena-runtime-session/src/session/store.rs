@@ -1684,7 +1684,7 @@ mod tests {
             ..Default::default()
         });
         operation.state = agena_domain::ToolResultState::Completed;
-        let content = TypedContent::ToolCall(tool_call_from_operation(&operation));
+        let content = TypedContent::ToolCall(Box::new(tool_call_from_operation(&operation)));
 
         // Serialize via the typed canonical shape, then rebuild.
         let value = typed_content_to_value(&content).unwrap();
@@ -1736,7 +1736,7 @@ mod tests {
             agena_domain::RawOutput::text("the original raw result"),
             TimeRange::default(),
         );
-        let content = TypedContent::ToolCall(tool_call_from_operation(&operation));
+        let content = TypedContent::ToolCall(Box::new(tool_call_from_operation(&operation)));
 
         let part = new_part_from_content(
             "tool_call",

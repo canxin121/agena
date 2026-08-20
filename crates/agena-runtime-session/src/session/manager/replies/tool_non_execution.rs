@@ -55,9 +55,9 @@ impl SessionManager {
                 if let Some(existing) = operation_from_part(tool_part) {
                     inherit_operation_context(&mut operation, existing);
                 }
-                tool_part.content = typed_content_to_value(&TypedContent::ToolCall(
+                tool_part.content = typed_content_to_value(&TypedContent::ToolCall(Box::new(
                     tool_call_from_operation(&operation),
-                ))
+                )))
                 .expect("tool content is always JSON serializable");
                 tool_part.state =
                     part_state_from_execution_status(ExecutionStatus::CapabilityUnavailable);
@@ -106,9 +106,9 @@ impl SessionManager {
                 if let Some(existing) = operation_from_part(tool_part) {
                     inherit_operation_context(&mut operation, existing);
                 }
-                tool_part.content = typed_content_to_value(&TypedContent::ToolCall(
+                tool_part.content = typed_content_to_value(&TypedContent::ToolCall(Box::new(
                     tool_call_from_operation(&operation),
-                ))
+                )))
                 .expect("tool content is always JSON serializable");
                 tool_part.state =
                     part_state_from_execution_status(ExecutionStatus::ToolUnavailable);
@@ -158,9 +158,9 @@ impl SessionManager {
                 if let Some(existing) = operation_from_part(tool_part) {
                     inherit_operation_context(&mut operation, existing);
                 }
-                tool_part.content = typed_content_to_value(&TypedContent::ToolCall(
+                tool_part.content = typed_content_to_value(&TypedContent::ToolCall(Box::new(
                     tool_call_from_operation(&operation),
-                ))
+                )))
                 .expect("tool content is always JSON serializable");
                 tool_part.state = part_state_from_execution_status(ExecutionStatus::PolicyDenied);
             })?;
@@ -216,9 +216,9 @@ impl SessionManager {
                 if let Some(existing) = operation_from_part(tool_part) {
                     inherit_operation_context(&mut operation, existing);
                 }
-                tool_part.content = typed_content_to_value(&TypedContent::ToolCall(
+                tool_part.content = typed_content_to_value(&TypedContent::ToolCall(Box::new(
                     tool_call_from_operation(&operation),
-                ))
+                )))
                 .expect("tool content is always JSON serializable");
                 tool_part.state = part_state_from_execution_status(ExecutionStatus::UserDeclined);
             })?;

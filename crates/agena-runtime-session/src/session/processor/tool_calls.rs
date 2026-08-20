@@ -42,9 +42,9 @@ impl SessionProcessor {
             }) {
                 operation.set_advertised_tool_identity(identity);
             }
-            let content = typed_content_to_value(&TypedContent::ToolCall(
+            let content = typed_content_to_value(&TypedContent::ToolCall(Box::new(
                 tool_call_from_operation(&operation),
-            ))?;
+            )))?;
             parts.push(placeholder_part(
                 part_id,
                 run_id,
@@ -85,7 +85,7 @@ impl SessionProcessor {
                         OPERATION_ID_METADATA_KEY.to_owned(),
                         serde_json::Value::String(operation_id.clone()),
                     );
-                    *tool_call = tool_call_from_operation(&operation);
+                    **tool_call = tool_call_from_operation(&operation);
                     part.content = typed_content_to_value(&content)?;
                 }
             }
@@ -116,7 +116,7 @@ impl SessionProcessor {
                 let mut operation = operation_from_tool_call(tool_call);
                 if operation.invocation.name != name {
                     operation.invocation.name = name.to_owned();
-                    *tool_call = tool_call_from_operation(&operation);
+                    **tool_call = tool_call_from_operation(&operation);
                     part.content = typed_content_to_value(&content)?;
                 }
             }
@@ -206,9 +206,9 @@ impl SessionProcessor {
             {
                 operation.set_advertised_tool_identity(identity);
             }
-            part.content = typed_content_to_value(&TypedContent::ToolCall(
+            part.content = typed_content_to_value(&TypedContent::ToolCall(Box::new(
                 tool_call_from_operation(&operation),
-            ))?;
+            )))?;
         }
 
         Ok(())
@@ -254,9 +254,9 @@ impl SessionProcessor {
                     serde_json::Value::String(operation_id.clone()),
                 );
             }
-            let content = typed_content_to_value(&TypedContent::ToolCall(
+            let content = typed_content_to_value(&TypedContent::ToolCall(Box::new(
                 tool_call_from_operation(&operation),
-            ))?;
+            )))?;
             parts.push(placeholder_part(
                 part_id,
                 run_id,
@@ -294,9 +294,9 @@ impl SessionProcessor {
                     serde_json::Value::String(operation_id.clone()),
                 );
             }
-            part.content = typed_content_to_value(&TypedContent::ToolCall(
+            part.content = typed_content_to_value(&TypedContent::ToolCall(Box::new(
                 tool_call_from_operation(&operation),
-            ))?;
+            )))?;
             if part.state == PartState::Pending {
                 part.state = PartState::InProgress;
             }
@@ -380,8 +380,8 @@ impl SessionProcessor {
                 serde_json::Value::String(operation_id.to_owned()),
             );
         }
-        part.content = typed_content_to_value(&TypedContent::ToolCall(tool_call_from_operation(
-            &operation,
+        part.content = typed_content_to_value(&TypedContent::ToolCall(Box::new(
+            tool_call_from_operation(&operation),
         )))?;
         if part.state != PartState::Completed {
             part.state = PartState::Completed;

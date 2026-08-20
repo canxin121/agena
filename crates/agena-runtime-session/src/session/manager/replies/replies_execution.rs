@@ -2011,9 +2011,9 @@ impl SessionManager {
             if let Some(existing) = existing {
                 inherit_operation_context(&mut operation, existing);
             }
-            tool_part.content = typed_content_to_value(&TypedContent::ToolCall(
+            tool_part.content = typed_content_to_value(&TypedContent::ToolCall(Box::new(
                 tool_call_from_operation(&operation),
-            ))
+            )))
             .expect("operation content is always JSON serializable");
             session_changed = true;
         }
@@ -2403,9 +2403,9 @@ impl SessionManager {
                 ))
             })?;
             operation.invocation = resolved.invocation.clone();
-            tool_part.content = typed_content_to_value(&TypedContent::ToolCall(
+            tool_part.content = typed_content_to_value(&TypedContent::ToolCall(Box::new(
                 tool_call_from_operation(&operation),
-            ))
+            )))
             .map_err(|error| {
                 AppError::Internal(format!(
                     "serialize background launch identity for part {}: {error}",
@@ -3029,9 +3029,9 @@ impl SessionManager {
             };
             let mut operation = operation_from_tool_call(&tool_call);
             operation.authorization.push_pending(request.clone());
-            tool_part.content = typed_content_to_value(&TypedContent::ToolCall(
+            tool_part.content = typed_content_to_value(&TypedContent::ToolCall(Box::new(
                 tool_call_from_operation(&operation),
-            ))
+            )))
             .expect("operation content is always JSON serializable");
             // The part lifecycle is forward-only (17.2): a tool that has
             // already started executing is InProgress and must stay that way
@@ -3100,9 +3100,9 @@ impl SessionManager {
                 inherit_operation_context(&mut operation, existing);
             }
             operation.user_input.push_pending(request.clone());
-            tool_part.content = typed_content_to_value(&TypedContent::ToolCall(
+            tool_part.content = typed_content_to_value(&TypedContent::ToolCall(Box::new(
                 tool_call_from_operation(&operation),
-            ))
+            )))
             .expect("operation content is always JSON serializable");
             // Same forward-only lifecycle rule as permission requests: an
             // executing tool (InProgress) that suspends on a host ask_user
@@ -3344,9 +3344,9 @@ impl SessionManager {
                 let mut operation = operation_from_tool_call(&tool_call);
                 operation.state = agena_domain::ToolResultState::Cancelled;
                 operation.lifecycle = completed_lifecycle(&resolved.lifecycle);
-                part.content = typed_content_to_value(&TypedContent::ToolCall(
+                part.content = typed_content_to_value(&TypedContent::ToolCall(Box::new(
                     tool_call_from_operation(&operation),
-                ))
+                )))
                 .expect("operation content is always JSON serializable");
             }
             part.state = PartState::Cancelled;
@@ -3529,9 +3529,9 @@ impl SessionManager {
             if let Some(existing) = operation_from_part(tool_part) {
                 inherit_operation_context(&mut operation, existing);
             }
-            tool_part.content = typed_content_to_value(&TypedContent::ToolCall(
+            tool_part.content = typed_content_to_value(&TypedContent::ToolCall(Box::new(
                 tool_call_from_operation(&operation),
-            ))
+            )))
             .expect("operation content is always JSON serializable");
             tool_part.state = PartState::Completed;
         })?;

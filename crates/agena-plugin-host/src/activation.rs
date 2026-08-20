@@ -691,7 +691,7 @@ mod tests {
         let plan = plan_plugin_activation(&plugins).expect("initial plan");
         let before = plugin_activation_epochs(&plugins, &plan).expect("initial epochs");
 
-        plugins.get_mut("example.root").expect("root").config = serde_json::json!({"revision":2});
+        plugins.get_mut("example.root").expect("root").settings = serde_json::json!({"revision":2});
         let plan = plan_plugin_activation(&plugins).expect("updated plan");
         let after = plugin_activation_epochs(&plugins, &plan).expect("updated epochs");
 
@@ -709,7 +709,7 @@ mod tests {
             ("example.unrelated".to_owned(), plugin(&[], &[])),
         ]);
         let mut current = previous.clone();
-        current.get_mut("example.root").expect("root").config = serde_json::json!({"revision":2});
+        current.get_mut("example.root").expect("root").settings = serde_json::json!({"revision":2});
 
         let plan = plan_plugin_reload(&previous, &current).expect("reload plan");
         for plugin_id in ["example.root", "example.middle", "example.leaf"] {

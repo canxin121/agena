@@ -34,7 +34,7 @@ impl PlanPlugin {
     #[hook(init)]
     async fn init(&self, ctx: InitContext, host: Arc<dyn HostClient>) -> SdkResult<InitOutcome> {
         let plan = agena_plugin_host::sdk::macro_support::parse_defaulted_settings(
-            ctx.config.clone(),
+            ctx.settings.clone(),
             "invalid planning config",
         )?;
         self.inner.initialize(

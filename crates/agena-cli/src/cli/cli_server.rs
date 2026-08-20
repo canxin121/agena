@@ -2762,6 +2762,7 @@ mod tests {
                 content: text
                     .map(|text| serde_json::json!({ "text": text }))
                     .unwrap_or_else(|| serde_json::json!({})),
+                presentation: None,
                 summary: None,
                 created_at_ms: part_id,
                 parent_part_id: None,

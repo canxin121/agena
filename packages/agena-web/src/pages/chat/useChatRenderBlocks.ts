@@ -60,7 +60,7 @@ export function useChatRenderBlocks(opts: {
   function getTextParts(parts: MessagePartLike[]): MessagePartLike[] {
     return (parts || []).filter((part) => {
       const kind = durablePartKind(part)
-      if (kind !== 'text' && kind !== 'paste_ref' && kind !== 'tool_result') return false
+      if (kind !== 'text' && kind !== 'paste_ref') return false
       if (part.ignored) return false
       return Boolean(transcriptPartText(part).trim())
     })

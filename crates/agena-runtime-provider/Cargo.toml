@@ -35,7 +35,6 @@ tokio = { workspace = true, features = ["fs", "io-util", "macros", "net", "proce
 tokio-util = { workspace = true, features = ["rt"] }
 tracing = { workspace = true }
 url = { workspace = true }
-uuid = { workspace = true }
 
 [dev-dependencies]
 # start_paused on #[tokio::test] keeps retry-delay-heavy tests fast.

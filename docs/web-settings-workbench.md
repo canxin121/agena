@@ -63,7 +63,7 @@ The server TUI locale and browser Web locale are deliberately independent.
 - Session permission writes use `/api/v1/sessions/{session_id}/permission`.
 - Provider Studio and MCP use their dedicated server control APIs.
 - Model Catalog refresh and provider client-version refresh use their dedicated background operations.
-- Plugin configuration saves the full configured-plugin record at the quoted path `plugins.list."<plugin-id>"`, preserving package and timeout fields while replacing only the plugin-owned minimal `config` override and enabled state.
+- Plugin settings save the full configured-plugin record at the quoted path `plugins.list."<plugin-id>"`, preserving package and timeout fields while replacing only the plugin-owned minimal `settings` override and enabled state.
 - Empty/inherited values are removed from the selected layer instead of being persisted as meaningless empty strings where the setting contract supports inheritance.
 
 ## Safety model
@@ -85,4 +85,4 @@ bun test
 bun run build
 ```
 
-Focused contract and unit tests cover the section hierarchy/deep links, advanced layer editor, model verbosity metadata, plugin schema defaults/overrides/unions, plugin config workflow, permission layer summaries, TUI/Web locale separation, and dynamic Interface searches.
+Focused contract and unit tests cover the section hierarchy/deep links, advanced layer editor, model verbosity metadata, plugin schema defaults/overrides/unions, plugin settings workflow, permission layer summaries, TUI/Web locale separation, and dynamic Interface searches.

@@ -127,14 +127,14 @@ test('tool-call parts read canonical operation invocation and result fields', ()
     content: {
       name: 'agena.fs.read',
       input: { path: 'README.md' },
-      operation: {
-        invocation: { name: 'agena.fs.read', input: { path: 'README.md' } },
-        model_output: { text: 'README contents' },
-        result: {
-          structured: { bytes: 42 },
-          metadata: { cache: true },
-        },
-      },
+      state: 'completed',
+      output: { payload: { text: 'README contents', bytes: 42 } },
+      metadata: { cache: true },
+    },
+    presentation: {
+      title: 'Read README.md',
+      summary: 'README contents',
+      blocks: [{ type: 'markdown', text: 'README contents' }],
     },
   })
 
@@ -144,6 +144,7 @@ test('tool-call parts read canonical operation invocation and result fields', ()
     status: 'completed',
     input: { path: 'README.md' },
     output: 'README contents',
+    title: 'Read README.md',
     metadata: { cache: true },
   })
   assert.equal(part?.agenaKind, 'tool_call')
@@ -152,14 +153,14 @@ test('tool-call parts read canonical operation invocation and result fields', ()
   assert.deepEqual(part?.agenaContent, {
     name: 'agena.fs.read',
     input: { path: 'README.md' },
-    operation: {
-      invocation: { name: 'agena.fs.read', input: { path: 'README.md' } },
-      model_output: { text: 'README contents' },
-      result: {
-        structured: { bytes: 42 },
-        metadata: { cache: true },
-      },
-    },
+    state: 'completed',
+    output: { payload: { text: 'README contents', bytes: 42 } },
+    metadata: { cache: true },
+  })
+  assert.deepEqual(part?.agenaPresentation, {
+    title: 'Read README.md',
+    summary: 'README contents',
+    blocks: [{ type: 'markdown', text: 'README contents' }],
   })
 })
 
@@ -172,10 +173,17 @@ test('tool-call parts retain structured results when no display text exists', ()
     content: {
       name: 'agena.repo.status',
       input: {},
-      operation: { result: { structured: { clean: true } } },
+      state: 'completed',
+      output: { payload: { clean: true } },
     },
+    presentation: { title: 'Repository status', summary: 'Working tree is clean', blocks: [] },
   })
-  assert.deepEqual(part?.state, { status: 'completed', input: {}, output: { clean: true } })
+  assert.deepEqual(part?.state, {
+    status: 'completed',
+    input: {},
+    output: 'Working tree is clean',
+    title: 'Repository status',
+  })
 })
 
 test('tool-call parts honor Agena result lifecycle and presentation summary', () => {
@@ -187,13 +195,13 @@ test('tool-call parts honor Agena result lifecycle and presentation summary', ()
     content: {
       name: 'fs.read',
       input: { path: 'missing.txt' },
-      operation: {
-        summary: 'File capability unavailable',
-        result: {
-          state: 'capability_unavailable',
-          model_preview: { text: 'This runtime cannot read files.' },
-        },
-      },
+      state: 'capability_unavailable',
+      output: { payload: { text: 'This runtime cannot read files.' } },
+    },
+    presentation: {
+      title: 'File capability unavailable',
+      summary: 'This runtime cannot read files.',
+      blocks: [{ type: 'text', text: 'This runtime cannot read files.' }],
     },
   })
 
@@ -247,4 +255,24 @@ test('file references retain Agena URL attachment sources', () => {
   assert.equal(part?.filename, 'result.png')
   assert.equal(part?.mime, 'image/png')
   assert.equal(part?.url, 'https://example.test/result.png')
+})
+
+test('missing or unknown wire state is not invented as completed, pending, or failed', () => {
+  const textPart = normalizeAgenaPart('90', '7', '89', {
+    part_id: 90,
+    kind: 'text',
+    role: 'assistant',
+    content: { text: 'server omitted state' },
+  })
+  assert.equal(textPart?.partState, undefined)
+
+  const toolPart = normalizeAgenaPart('91', '7', '89', {
+    part_id: 91,
+    kind: 'tool_call',
+    role: 'assistant',
+    state: 'future_state',
+    content: { name: 'future.tool', input: {} },
+  })
+  assert.deepEqual(toolPart?.state, { input: {} })
+  assert.equal(toolPart?.partState, 'future_state')
 })

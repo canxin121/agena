@@ -62,6 +62,7 @@ type TextModel = { entries: TextEntry[]; text: string }
 const NODE_SELECTOR = '[data-transcript-node][data-transcript-key]'
 const MESSAGE_SELECTOR = '[data-transcript-node="message"][data-transcript-key]'
 const VISUAL_BLOCK_HIGHLIGHT = 'agena-vim-block'
+const VISUAL_BLOCK_HIGHLIGHT_STYLE_ID = 'agena-vim-highlight-style'
 
 type CssHighlightRegistry = {
   set: (name: string, highlight: unknown) => void
@@ -84,6 +85,20 @@ function isEditable(target: EventTarget | null): boolean {
 function cssEscape(value: string): string {
   if (typeof CSS !== 'undefined' && typeof CSS.escape === 'function') return CSS.escape(value)
   return value.replace(/["\\]/g, '\\$&')
+}
+
+function ensureVisualBlockHighlightStyle() {
+  if (typeof document === 'undefined' || document.getElementById(VISUAL_BLOCK_HIGHLIGHT_STYLE_ID)) return
+  const head = document.head
+  if (!head) return
+  const style = document.createElement('style')
+  style.id = VISUAL_BLOCK_HIGHLIGHT_STYLE_ID
+  style.textContent = `
+::highlight(${VISUAL_BLOCK_HIGHLIGHT}) {
+  background: oklch(var(--primary) / 0.24);
+  color: inherit;
+}`
+  head.append(style)
 }
 
 export function useChatTranscriptVim(opts: {
@@ -847,7 +862,9 @@ export function useChatTranscriptVim(opts: {
     if (typeof CSS === 'undefined') return null
     const registry = (CSS as typeof CSS & { highlights?: CssHighlightRegistry }).highlights
     const Constructor = (globalThis as typeof globalThis & { Highlight?: HighlightConstructor }).Highlight
-    return registry && Constructor ? { registry, Constructor } : null
+    if (!registry || !Constructor) return null
+    ensureVisualBlockHighlightStyle()
+    return { registry, Constructor }
   }
 
   function clearVisualBlockHighlight() {

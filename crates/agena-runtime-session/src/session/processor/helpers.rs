@@ -363,7 +363,6 @@ pub(crate) struct PendingProviderNativeToolCall {
     pub(crate) started_at_ms: Option<i64>,
     pub(crate) id: Option<String>,
     pub(crate) invocation: Option<ToolInvocation>,
-    pub(crate) title: String,
     pub(crate) raw: Option<serde_json::Value>,
 }
 

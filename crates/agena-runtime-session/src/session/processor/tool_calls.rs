@@ -2,8 +2,7 @@ use super::{
     AppError, BTreeMap, OperationPart, PendingProviderNativeToolCall, PendingToolCall,
     SessionProcessor, SessionRunRequest, StructuredObject, TimeRange, ToolInvocation, Utc,
     merge_provider_native_tool_invocation, parse_tool_invocation_lossy,
-    placeholder_tool_invocation, provider_native_tool_execution_title,
-    tool_api_definition_identity, tool_execution_title, tool_execution_title_for_invocation,
+    placeholder_tool_invocation, tool_api_definition_identity,
 };
 use crate::session::store::{
     OPERATION_ID_METADATA_KEY, tool_call_from_operation, typed_content_from_value,
@@ -33,7 +32,6 @@ impl SessionProcessor {
             let mut operation = OperationPart::pending(
                 call_id,
                 invocation,
-                tool_execution_title(pending.name.as_deref()),
                 TimeRange {
                     start_ms: start.timestamp_millis(),
                     end_ms: None,
@@ -44,9 +42,9 @@ impl SessionProcessor {
             }) {
                 operation.set_advertised_tool_identity(identity);
             }
-            let content = typed_content_to_value(&TypedContent::ToolCall(
+            let content = typed_content_to_value(&TypedContent::ToolCall(Box::new(
                 tool_call_from_operation(&operation),
-            ))?;
+            )))?;
             parts.push(placeholder_part(
                 part_id,
                 run_id,
@@ -87,7 +85,7 @@ impl SessionProcessor {
                         OPERATION_ID_METADATA_KEY.to_owned(),
                         serde_json::Value::String(operation_id.clone()),
                     );
-                    *tool_call = tool_call_from_operation(&operation);
+                    **tool_call = tool_call_from_operation(&operation);
                     part.content = typed_content_to_value(&content)?;
                 }
             }
@@ -116,12 +114,9 @@ impl SessionProcessor {
             let mut content = typed_content_from_value(&part.kind, &part.content)?;
             if let TypedContent::ToolCall(tool_call) = &mut content {
                 let mut operation = operation_from_tool_call(tool_call);
-                if operation.invocation.name != name
-                    || operation.title != tool_execution_title(Some(name))
-                {
+                if operation.invocation.name != name {
                     operation.invocation.name = name.to_owned();
-                    operation.set_title(tool_execution_title(Some(name)));
-                    *tool_call = tool_call_from_operation(&operation);
+                    **tool_call = tool_call_from_operation(&operation);
                     part.content = typed_content_to_value(&content)?;
                 }
             }
@@ -178,7 +173,6 @@ impl SessionProcessor {
             let mut operation = OperationPart::pending(
                 call_id,
                 invocation.clone(),
-                tool_execution_title_for_invocation(&invocation),
                 TimeRange {
                     start_ms: pending.started_at_ms.unwrap_or_default(),
                     end_ms: None,
@@ -212,9 +206,9 @@ impl SessionProcessor {
             {
                 operation.set_advertised_tool_identity(identity);
             }
-            part.content = typed_content_to_value(&TypedContent::ToolCall(
+            part.content = typed_content_to_value(&TypedContent::ToolCall(Box::new(
                 tool_call_from_operation(&operation),
-            ))?;
+            )))?;
         }
 
         Ok(())
@@ -230,11 +224,6 @@ impl SessionProcessor {
         let invocation = pending.invocation.clone().unwrap_or_else(|| {
             ToolInvocation::new("provider_native_tool", StructuredObject::default())
         });
-        let operation_title = provider_native_tool_execution_title(
-            pending.title.as_str(),
-            invocation.name.as_str(),
-            &invocation.input,
-        );
         let raw = pending.raw.clone();
         let operation_id = pending
             .id
@@ -252,24 +241,22 @@ impl SessionProcessor {
             let mut operation = OperationPart::pending(
                 call_id,
                 invocation,
-                operation_title,
                 TimeRange {
                     start_ms: start.timestamp_millis(),
                     end_ms: None,
                 },
             );
             operation.set_provider_only(true);
-            operation.raw = raw.clone();
-            operation.result.raw = raw;
+            operation.set_provider_raw(raw.clone());
             if let Some(operation_id) = &operation_id {
                 operation.metadata.insert(
                     OPERATION_ID_METADATA_KEY.to_owned(),
                     serde_json::Value::String(operation_id.clone()),
                 );
             }
-            let content = typed_content_to_value(&TypedContent::ToolCall(
+            let content = typed_content_to_value(&TypedContent::ToolCall(Box::new(
                 tool_call_from_operation(&operation),
-            ))?;
+            )))?;
             parts.push(placeholder_part(
                 part_id,
                 run_id,
@@ -294,24 +281,22 @@ impl SessionProcessor {
             let mut operation = OperationPart::pending(
                 pending.call_id.unwrap_or_default(),
                 invocation,
-                operation_title,
                 TimeRange {
                     start_ms: started_at_ms,
                     end_ms: None,
                 },
             );
             operation.set_provider_only(true);
-            operation.raw = raw.clone();
-            operation.result.raw = raw;
+            operation.set_provider_raw(raw.clone());
             if let Some(operation_id) = &operation_id {
                 operation.metadata.insert(
                     OPERATION_ID_METADATA_KEY.to_owned(),
                     serde_json::Value::String(operation_id.clone()),
                 );
             }
-            part.content = typed_content_to_value(&TypedContent::ToolCall(
+            part.content = typed_content_to_value(&TypedContent::ToolCall(Box::new(
                 tool_call_from_operation(&operation),
-            ))?;
+            )))?;
             if part.state == PartState::Pending {
                 part.state = PartState::InProgress;
             }
@@ -329,10 +314,10 @@ impl SessionProcessor {
         mut pending: PendingProviderNativeToolCall,
         id: Option<String>,
         invocation: ToolInvocation,
-        title: String,
-        summary: String,
+        _title: String,
+        _summary: String,
         output_text: String,
-        blocks: Vec<agena_domain::ViewBlock>,
+        attachments: Vec<agena_domain::AttachmentItem>,
         details: agena_domain::ToolOutput,
         raw: Option<serde_json::Value>,
     ) -> Result<(), AppError> {
@@ -345,27 +330,10 @@ impl SessionProcessor {
         let invocation =
             merge_provider_native_tool_invocation(pending.invocation.as_ref(), invocation);
         pending.invocation = Some(invocation.clone());
-        let title = if title.trim().is_empty() && !pending.title.trim().is_empty() {
-            pending.title.clone()
-        } else {
-            title
-        };
-        pending.title = title.clone();
         let raw = merge_provider_metadata(pending.raw.take(), raw);
         pending.raw = raw.clone();
         self.ensure_provider_native_tool_call_part(run, run_id, parts, &mut pending)
             .await?;
-
-        let artifact_key = pending
-            .id
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToOwned::to_owned)
-            .unwrap_or_else(|| format!("provider-tool-{}", pending.call_id.unwrap_or_default()));
-        let blocks = self
-            .persist_provider_native_tool_media(run.session_id, artifact_key.as_str(), blocks)
-            .await;
 
         let Some(part_id) = pending.part_id else {
             return Ok(());
@@ -381,13 +349,16 @@ impl SessionProcessor {
         let mut operation = OperationPart::completed(
             pending.call_id.unwrap_or_default(),
             invocation.clone(),
-            crate::part::OperationCompletion::new(
-                title,
-                summary,
+            agena_domain::RawOutput::from_parts(
+                details.to_json_payload().or_else(|| {
+                    let text = output_text.trim();
+                    (!text.is_empty()).then(|| serde_json::json!({ "text": text }))
+                }),
                 output_text,
-                blocks,
-                Vec::new(),
-                details,
+                attachments,
+                details.managed_outputs.clone(),
+                BTreeMap::new(),
+                details.truncated,
             ),
             TimeRange {
                 start_ms: pending
@@ -397,8 +368,7 @@ impl SessionProcessor {
             },
         );
         operation.set_provider_only(true);
-        operation.raw = raw.clone();
-        operation.result.raw = raw;
+        operation.set_provider_raw(raw.clone());
         if let Some(operation_id) = pending
             .id
             .as_deref()
@@ -410,8 +380,8 @@ impl SessionProcessor {
                 serde_json::Value::String(operation_id.to_owned()),
             );
         }
-        part.content = typed_content_to_value(&TypedContent::ToolCall(tool_call_from_operation(
-            &operation,
+        part.content = typed_content_to_value(&TypedContent::ToolCall(Box::new(
+            tool_call_from_operation(&operation),
         )))?;
         if part.state != PartState::Completed {
             part.state = PartState::Completed;

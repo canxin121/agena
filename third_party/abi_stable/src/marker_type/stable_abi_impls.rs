@@ -13,7 +13,9 @@ macro_rules! monomorphic_marker_type {
             abi_stable::std_types::RStr::from_str("_marker;");
 
         use ::abi_stable::derive_macro_reexports::{self as __sabi_re, renamed::*};
-        pub struct _static_(extern "C" fn());
+        pub struct _static_ {
+            _marker: extern "C" fn(),
+        }
         unsafe impl __GetStaticEquivalent_ for $name {
             type StaticEquivalent = _static_;
         }

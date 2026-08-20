@@ -45,6 +45,7 @@ import { openComposerInputMenu } from './chat/composerInputMenus'
 import { formatTimeHM } from '@/i18n/intl'
 import { useChatRenderBlocks } from './chat/useChatRenderBlocks'
 import { useChatMessageActions } from './chat/useChatMessageActions'
+import { isAssistantMessageStreaming } from '@/lib/chatRunState'
 import { deriveSendRunConfig } from './chat/modelSendDefaults'
 import { useWorkspacePaneContext } from '@/app/workspace/workspacePaneContext'
 import type { OptionMenuGroup, OptionMenuItem } from '@/components/ui/optionMenu.types'
@@ -1269,14 +1270,14 @@ const { copiedMessageId, revertBusyMessageId, handleCopyMessage, handleForkFromM
   messageActions
 
 function isStreamingAssistantMessage(
-  message: { info?: { role?: string; finish?: string; error?: unknown } } | null | undefined,
+  message:
+    | {
+        info?: { role?: string; runState?: string; finish?: string; error?: unknown }
+      }
+    | null
+    | undefined,
 ): boolean {
-  if (!message?.info) return false
-  const role = String(message.info.role || '')
-  if (role !== 'assistant') return false
-  if (message.info.error) return false
-  const finish = typeof message.info.finish === 'string' ? message.info.finish.trim() : ''
-  return !finish
+  return isAssistantMessageStreaming(message?.info)
 }
 
 let commandPointerHandler: ((event: MouseEvent | TouchEvent) => void) | null = null

@@ -115,6 +115,17 @@ impl<P: Plugin> PluginDispatcher<P> {
                     .await?,
                 )
             }
+            method::HOOK_TOOL_RENDER => {
+                let i: ToolRenderInput = serde_json::from_value(params)?;
+                let ctx = crate::host_api::HostCallbackContext {
+                    tool_name: Some(i.tool_name.clone()),
+                    ..crate::host_api::HostCallbackContext::default()
+                };
+                ok_json(
+                    &crate::host_api::run_in_host_callback_context(ctx, plugin.tool_render(i))
+                        .await?,
+                )
+            }
             method::HOOK_TOOL_INVOKE => {
                 let i: ToolInvokeInput = serde_json::from_value(params)?;
                 let ctx = crate::host_api::HostCallbackContext {
@@ -372,4 +383,67 @@ fn _random_id() -> String {
         .map(|d| d.as_nanos() as u64)
         .unwrap_or(0);
     format!("{nanos:x}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PluginDispatcher;
+    use crate::{
+        Plugin, PluginManifest, ToolHumanPresentation, ToolRenderInput, ToolRenderOutput,
+        rpc::method,
+    };
+
+    struct RenderingPlugin;
+
+    #[async_trait::async_trait]
+    impl Plugin for RenderingPlugin {
+        fn manifest(&self) -> PluginManifest {
+            PluginManifest::new("test", "renderer", "0.1.0")
+        }
+
+        async fn tool_render(
+            &self,
+            input: ToolRenderInput,
+        ) -> crate::Result<Option<ToolRenderOutput>> {
+            assert_eq!(input.tool_name, "fs.read");
+            assert_eq!(input.input, serde_json::json!({"path": "README.md"}));
+            assert_eq!(input.output.text, "raw result");
+            Ok(Some(ToolRenderOutput {
+                model: Some("plugin model projection".to_owned()),
+                human: Some(ToolHumanPresentation {
+                    title: "Read README.md".to_owned(),
+                    summary: "Read one file".to_owned(),
+                    blocks: vec![agena_domain::ViewBlock::Markdown {
+                        id: Some("result".to_owned()),
+                        text: "**README**".to_owned(),
+                    }],
+                }),
+            }))
+        }
+    }
+
+    #[tokio::test]
+    async fn tool_render_dispatch_round_trips_both_ephemeral_projections() {
+        let dispatcher = PluginDispatcher::new(RenderingPlugin);
+        let value = dispatcher
+            .dispatch(
+                method::HOOK_TOOL_RENDER,
+                serde_json::to_value(ToolRenderInput {
+                    tool_name: "fs.read".to_owned(),
+                    input: serde_json::json!({"path": "README.md"}),
+                    output: agena_domain::RawOutput::text("raw result"),
+                })
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+        let rendered: Option<ToolRenderOutput> = serde_json::from_value(value).unwrap();
+        let rendered = rendered.expect("plugin projection");
+        assert_eq!(rendered.model.as_deref(), Some("plugin model projection"));
+        assert_eq!(
+            rendered.human.as_ref().map(|human| human.title.as_str()),
+            Some("Read README.md")
+        );
+        assert_eq!(rendered.human.unwrap().blocks.len(), 1);
+    }
 }

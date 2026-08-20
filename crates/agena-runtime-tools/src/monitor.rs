@@ -1090,6 +1090,21 @@ mod tests {
         }
     }
 
+    async fn wait_for_pid_file(path: &std::path::Path) -> i32 {
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if let Ok(text) = std::fs::read_to_string(path)
+                    && let Ok(pid) = text.trim().parse::<i32>()
+                {
+                    return pid;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("monitor publishes a complete pid")
+    }
+
     async fn wait_for_terminal(registry: Arc<MonitorRegistry>, id: String) -> MonitorRead {
         tokio::time::timeout(Duration::from_secs(2), async {
             let mut since_seq = 0;
@@ -1196,18 +1211,7 @@ mod tests {
         params.timeout_ms = None;
         registry.start(params).expect("start persistent monitor");
 
-        tokio::time::timeout(Duration::from_secs(2), async {
-            while !pid_path.exists() {
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-        })
-        .await
-        .expect("monitor publishes its pid");
-        let pid = std::fs::read_to_string(&pid_path)
-            .expect("read monitor pid")
-            .trim()
-            .parse::<i32>()
-            .expect("valid monitor pid");
+        let pid = wait_for_pid_file(&pid_path).await;
 
         drop(registry);
         tokio::time::timeout(Duration::from_secs(2), async {
@@ -1239,18 +1243,7 @@ mod tests {
             .summary
             .process_id;
 
-        tokio::time::timeout(Duration::from_secs(2), async {
-            while !pid_path.exists() {
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-        })
-        .await
-        .expect("monitor publishes descendant pid");
-        let pid = std::fs::read_to_string(&pid_path)
-            .expect("read descendant pid")
-            .trim()
-            .parse::<i32>()
-            .expect("valid descendant pid");
+        let pid = wait_for_pid_file(&pid_path).await;
         registry.stop(&id).expect("stop monitor");
         tokio::time::timeout(Duration::from_secs(2), async {
             while process_exists(pid) {

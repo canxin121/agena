@@ -193,14 +193,14 @@ pub enum PluginServiceTargetPlan {
         method: LitStr,
     },
     Endpoint {
-        endpoint: Type,
+        endpoint: Box<Type>,
     },
 }
 
 #[derive(Clone)]
 pub enum PluginServiceInputPlan {
     None,
-    Typed { ty: Type, by_ref: bool },
+    Typed { ty: Box<Type>, by_ref: bool },
 }
 
 #[derive(Clone, Default)]
@@ -234,7 +234,7 @@ pub struct PluginServiceAttrArgs {
 
 pub enum PluginServiceAttrTarget {
     Inline(LitStr),
-    Endpoint(Type),
+    Endpoint(Box<Type>),
 }
 
 impl Parse for PluginServiceAttrArgs {
@@ -242,7 +242,7 @@ impl Parse for PluginServiceAttrArgs {
         let target = if input.peek(LitStr) {
             PluginServiceAttrTarget::Inline(input.parse::<LitStr>()?)
         } else {
-            PluginServiceAttrTarget::Endpoint(input.parse::<Type>()?)
+            PluginServiceAttrTarget::Endpoint(Box::new(input.parse::<Type>()?))
         };
         if input.peek(Token![,]) {
             input.parse::<Token![,]>()?;

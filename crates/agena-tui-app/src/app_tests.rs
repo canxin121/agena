@@ -31,6 +31,7 @@ mod parts_fixtures {
             role: role.to_owned(),
             state: state.to_owned(),
             content: serde_json::json!({ "run_kind": "user_send" }),
+            presentation: None,
             summary: None,
             created_at_ms: part_id * 10,
             parent_part_id: None,
@@ -45,6 +46,7 @@ mod parts_fixtures {
             role: role.to_owned(),
             state: "completed".to_owned(),
             content: serde_json::json!({ "text": text }),
+            presentation: None,
             summary: None,
             created_at_ms: part_id * 10,
             parent_part_id: None,
@@ -64,6 +66,7 @@ mod parts_fixtures {
             state: "failed".to_owned(),
             content: serde_json::to_value(ErrorPartResource { problem })
                 .expect("error part serializes"),
+            presentation: None,
             summary: None,
             created_at_ms: part_id * 10,
             parent_part_id: None,
@@ -78,6 +81,7 @@ mod parts_fixtures {
             role: role.to_owned(),
             state: "completed".to_owned(),
             content: serde_json::json!({ "summary": summary }),
+            presentation: None,
             summary: None,
             created_at_ms: part_id * 10,
             parent_part_id: None,
@@ -101,6 +105,7 @@ mod parts_fixtures {
                 "summary": summary,
                 "detail": detail,
             }),
+            presentation: None,
             summary: None,
             created_at_ms: part_id * 10,
             parent_part_id: None,
@@ -115,6 +120,7 @@ mod parts_fixtures {
             role: role.to_owned(),
             state: "completed".to_owned(),
             content: serde_json::json!({ "text": text }),
+            presentation: None,
             summary: None,
             created_at_ms: part_id * 10,
             parent_part_id: None,
@@ -129,6 +135,7 @@ mod parts_fixtures {
             role: role.to_owned(),
             state: "completed".to_owned(),
             content: serde_json::json!({ "path": path, "name": path }),
+            presentation: None,
             summary: None,
             created_at_ms: part_id * 10,
             parent_part_id: None,
@@ -651,6 +658,7 @@ mod interaction_part_routing_tests {
             role: "assistant".to_owned(),
             state: "in_progress".to_owned(),
             content: serde_json::json!({ "run_kind": "user_send" }),
+            presentation: None,
             summary: None,
             created_at_ms: 30,
             parent_part_id: None,
@@ -669,6 +677,7 @@ mod interaction_part_routing_tests {
                 reply: None,
             })
             .expect("request part serializes"),
+            presentation: None,
             summary: None,
             created_at_ms: 50,
             parent_part_id: None,
@@ -680,28 +689,28 @@ mod interaction_part_routing_tests {
     /// awaiting `user_input` record IS the pending interaction part (there is no
     /// separate `interaction` part anymore).
     fn operation_tool_call_part() -> SessionTranscriptPart {
-        let operation = agena_api::part::OperationPartResource {
-            call_id: 5,
-            invocation: agena_api::part::ToolInvocationResource {
-                name: "plan.review".to_owned(),
-                ..Default::default()
-            },
-            user_input: agena_domain::OperationUserInput {
-                requests: vec![agena_domain::OperationUserInputRecord {
-                    request: domain_request(),
-                    reply: None,
-                    replied_at_ms: None,
-                }],
-            },
-            ..Default::default()
-        };
+        let request = serde_json::to_value(domain_request()).expect("request serializes");
         SessionTranscriptPart {
             part_id: 5,
             kind: "tool_call".to_owned(),
             role: "assistant".to_owned(),
             state: "in_progress".to_owned(),
-            content: serde_json::to_value(serde_json::json!({ "operation": operation }))
-                .expect("operation serializes"),
+            content: serde_json::to_value(serde_json::json!({
+                "name": "plan.review",
+                "input": {},
+                "call_id": 5,
+                "state": "running",
+                "lifecycle": { "start_ms": 0 },
+                "user_input": {
+                    "requests": [{
+                        "request": request,
+                        "reply": null,
+                        "replied_at_ms": null
+                    }]
+                }
+            }))
+            .expect("operation serializes"),
+            presentation: None,
             summary: None,
             created_at_ms: 50,
             parent_part_id: None,
@@ -1013,6 +1022,7 @@ mod interaction_part_routing_tests {
                         reply: None,
                     })
                     .expect("request part serializes"),
+                    presentation: None,
                     summary: None,
                     created_at_ms: 50,
                     parent_part_id: None,

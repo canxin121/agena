@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 
 import type { MessageLike, MessagePartLike } from '../src/components/chat/messageList.types'
-import { projectTranscriptBlocks } from '../src/pages/chat/transcriptProjection'
+import { durablePartKind, projectTranscriptBlocks } from '../src/pages/chat/transcriptProjection'
 
 function part(id: string, kind: string, content: Record<string, unknown>, state = 'completed'): MessagePartLike {
   return {
@@ -11,6 +11,7 @@ function part(id: string, kind: string, content: Record<string, unknown>, state 
     agenaKind: kind,
     agenaRole: 'assistant',
     agenaContent: content,
+    ...(kind === 'tool_call' ? { agenaPresentation: { title: 'Tool operation', summary: '', blocks: [] } } : {}),
   }
 }
 
@@ -22,6 +23,12 @@ function message(id: string, role: string, parts: MessagePartLike[], runState = 
 }
 
 describe('TUI-parity transcript projection', () => {
+  test('does not reinterpret removed type-only tool rows', () => {
+    expect(durablePartKind({ type: 'tool' })).toBe('unknown')
+    expect(durablePartKind({ type: 'reasoning' })).toBe('unknown')
+    expect(durablePartKind({ agenaKind: 'tool_call', type: 'tool' })).toBe('tool_call')
+  })
+
   test('keeps parts inside their run and promotes only the final assistant text to Answer', () => {
     const blocks = projectTranscriptBlocks(
       [
@@ -31,7 +38,7 @@ describe('TUI-parity transcript projection', () => {
           part('5', 'text', { text: 'working note' }),
           part('6', 'tool_call', {
             name: 'fs.read',
-            operation: { title: 'Read file', summary: 'src/main.rs', result: { state: 'completed' } },
+            state: 'completed',
           }),
           part('7', 'text', { text: 'final answer' }),
         ]),
@@ -116,6 +123,38 @@ describe('TUI-parity transcript projection', () => {
     expect(failed.at(-1)?.title).toBe('Response failed')
   })
 
+  test('uses the latest backend run state when adjacent assistant rounds are folded', () => {
+    const failed = message('40', 'assistant', [part('41', 'text', { text: 'partial response' })], 'failed')
+    failed.info.error = { message: 'older failed attempt' }
+    const running = message('42', 'assistant', [], 'in_progress')
+    delete running.info.finish
+
+    const blocks = projectTranscriptBlocks([failed, running], {
+      showReasoning: true,
+      showJustification: true,
+      revert: null,
+    })
+    const folded = blocks[0]?.kind === 'message' ? blocks[0] : null
+
+    expect(blocks).toHaveLength(1)
+    expect(folded?.runIds).toEqual(['40', '42'])
+    expect(folded?.message.info.runState).toBe('in_progress')
+    expect(folded?.message.info.finish).toBeUndefined()
+    expect(folded?.message.info.error).toBeUndefined()
+    expect(folded?.displayParts.some((item) => item.title === 'Response failed')).toBe(false)
+  })
+
+  test('does not turn an unknown backend run state into a synthetic failure', () => {
+    const blocks = projectTranscriptBlocks([message('50', 'assistant', [], 'future_state')], {
+      showReasoning: true,
+      showJustification: true,
+      revert: null,
+    })
+    const projected = blocks[0]?.kind === 'message' ? blocks[0].displayParts : []
+
+    expect(projected).toEqual([])
+  })
+
   test('keeps pending operation interactions visible and expanded', () => {
     const blocks = projectTranscriptBlocks(
       [
@@ -127,10 +166,8 @@ describe('TUI-parity transcript projection', () => {
               '31',
               'tool_call',
               {
-                operation: {
-                  user_input: {
-                    requests: [{ request: { request_id: 'request-31', questions: [] }, reply: null }],
-                  },
+                user_input: {
+                  requests: [{ request: { request_id: 'request-31', questions: [] }, reply: null }],
                 },
               },
               'in_progress',

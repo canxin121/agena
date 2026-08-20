@@ -20,7 +20,7 @@ pub enum ToolResultState {
     Cancelled,
 }
 
-/// Compact presentation metadata attached to a tool result.
+/// Ephemeral human presentation projected from a tool result at read time.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(deny_unknown_fields)]
 pub struct ToolResultDisplay {
@@ -28,9 +28,8 @@ pub struct ToolResultDisplay {
     pub title: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub summary: String,
-    /// Explicit, named result sections. These are the canonical expanded
-    /// presentation: unlike a rendered Markdown block they remain structured
-    /// across persistence, API and UI boundaries.
+    /// Explicit, named result sections returned to a human-facing consumer.
+    /// They are never part of the durable `tool_call` payload.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sections: Vec<ToolPresentationSection>,
 }
@@ -41,12 +40,11 @@ impl ToolResultDisplay {
     }
 }
 
-/// One explicitly named user-facing section of a tool result.
+/// One explicitly named section of a runtime human projection.
 ///
-/// The domain owns this value because the same tool result must retain its
-/// presentation semantics in the executor, persisted transcript and every
-/// client. The body is ordinary text/Markdown; rendering is deliberately left
-/// to the consuming surface.
+/// The body is ordinary text/Markdown. Owning plugins may create these
+/// sections and Agena's built-in renderer supplies them as a fallback; the
+/// consuming surface performs the final visual rendering.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ToolPresentationSection {

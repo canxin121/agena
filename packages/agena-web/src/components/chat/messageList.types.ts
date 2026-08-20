@@ -19,6 +19,7 @@ export type MessagePartLike = {
   agenaRole?: string
   agenaSummary?: string | null
   agenaContent?: JsonValue
+  agenaPresentation?: JsonValue
   runId?: number | null
   parentPartId?: number | null
   time?: { start?: number; end?: number }

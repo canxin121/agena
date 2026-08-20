@@ -18,22 +18,12 @@ use axum::{
 };
 use sha2::{Digest, Sha256};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 /// Snapshot of a marketplace registry.
 pub struct RegistrySnapshot {
     pub index: RegistryIndex,
     pub releases: BTreeMap<(String, String), PluginReleaseManifest>,
     pub artifacts: BTreeMap<(String, String, String), RegistryArtifact>,
-}
-
-impl Default for RegistrySnapshot {
-    fn default() -> Self {
-        Self {
-            index: RegistryIndex::default(),
-            releases: BTreeMap::new(),
-            artifacts: BTreeMap::new(),
-        }
-    }
 }
 
 impl RegistrySnapshot {

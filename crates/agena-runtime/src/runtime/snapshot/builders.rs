@@ -34,7 +34,7 @@ pub(super) fn build_or_reconfigure_session_manager(
         Arc::new(McpRiskPermissionInspector { manager })
             as Arc<dyn agena_runtime_tools::tool::ExecutionPermissionInspector>
     });
-    let processor = SessionProcessor::new(Arc::clone(&plugins), workspace_root);
+    let processor = SessionProcessor::new(Arc::clone(&plugins));
     let config = agena_runtime::RuntimeSessionManagerConfig {
         default_selection: build_config.default_selection.clone(),
         permission: build_config.permission.clone(),

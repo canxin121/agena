@@ -302,6 +302,7 @@ impl PluginTransport for HttpTransport {
             id: RequestId::Num(self.next_request_id()),
             method: method.to_string(),
             params: Some(params),
+            context: crate::sdk::host_api::current_host_callback_context(),
         };
         let resp = self.send(&req).await?;
         match resp.payload {
@@ -333,6 +334,7 @@ impl PluginTransport for HttpTransport {
             id: RequestId::Num(self.next_request_id()),
             method: method::HOOK_TOOL_INVOKE_STREAM.to_string(),
             params: Some(serde_json::to_value(&input)?),
+            context: crate::sdk::host_api::current_host_callback_context(),
         };
         let resp = self.send(&req).await?;
         let handle: ToolInvokeStreamHandle = match resp.payload {

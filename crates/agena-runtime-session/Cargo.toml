@@ -11,8 +11,6 @@ portable-atomic = { workspace = true }
 arc-swap = { workspace = true }
 agena-domain = { workspace = true }
 agena-failure = { workspace = true }
-agena-keyring-store = { workspace = true }
-agena-lsp = { workspace = true }
 agena-plugin-host = { workspace = true }
 agena-permission = { workspace = true }
 agena-plugin-sdk = { workspace = true }
@@ -33,12 +31,9 @@ blake3 = { workspace = true }
 chrono = { workspace = true }
 derive_more = { workspace = true, features = ["display", "from", "into"] }
 hex = { workspace = true }
-futures-core = { workspace = true }
 futures-util = { workspace = true }
 indexmap = { workspace = true }
-merge = { workspace = true }
 parking_lot = { workspace = true }
-path-clean = { workspace = true }
 reqwest = { workspace = true, features = ["json", "rustls", "stream"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -51,7 +46,6 @@ tokio = { workspace = true, features = ["fs", "io-util", "macros", "net", "proce
 tokio-util = { workspace = true, features = ["rt"] }
 tracing = { workspace = true }
 uuid = { workspace = true }
-url = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

@@ -8,6 +8,7 @@
 // server rejects unknown fields, including the old Agent/profile selection.
 
 import { apiJson } from '../../lib/api'
+import { isRunInFlight, isRunTerminal } from '../../lib/chatRunState'
 import { normalizeSessionState } from '../../types/chat'
 import type { JsonObject, JsonValue } from '@/types/json'
 import type {
@@ -53,6 +54,7 @@ export type AgenaPart = {
   role: string
   state: string
   content: JsonValue
+  presentation?: JsonValue | null
   summary?: string | null
   created_at_ms?: number
   started_at_ms?: number
@@ -243,15 +245,15 @@ function entriesFromParts(sessionId: string, parts: JsonValue[], folds: MessageF
     if (kind === 'run') {
       const created = typeof part.created_at_ms === 'number' ? part.created_at_ms : now
       const finished = typeof part.finished_at_ms === 'number' ? part.finished_at_ms : undefined
-      const runState = str(part.state) || 'pending'
+      const runState = str(part.state)
       const info: MessageInfo = {
         id: partIdStr,
         sessionID: sessionId,
         role,
         runId: partId,
-        runState,
+        ...(runState ? { runState } : {}),
         runContent: content,
-        ...(runState === 'pending' || runState === 'in_progress' || runState === 'running' ? {} : { finish: runState }),
+        ...(isRunTerminal(runState) ? { finish: runState } : {}),
         time: { created, ...(typeof finished === 'number' ? { completed: finished } : {}) },
       }
       // Run marker metadata can carry provider/model identity.
@@ -305,6 +307,38 @@ function entriesFromParts(sessionId: string, parts: JsonValue[], folds: MessageF
 
 function asObject(value: JsonValue): JsonObject {
   return isRecord(value) ? value : {}
+}
+
+function flatOperationView(content: JsonObject, presentationValue: JsonValue): JsonObject {
+  const presentation = asObject(presentationValue)
+  const title = stringField(presentation, ['title'])
+  const summary = stringField(presentation, ['summary'])
+  const state = stringField(content, ['state'])
+  const invocation = {
+    name: stringField(content, ['name', 'tool']) || 'unknown',
+    plugin_name: content.plugin,
+    input: asObject(content.input),
+    tool_api_call: asObject(content.tool_api_call),
+  }
+  const blocks = Array.isArray(presentation.blocks) ? presentation.blocks : []
+  const result = {
+    state,
+    content: blocks,
+    display: { title, summary, sections: [] },
+  }
+  return {
+    call_id: content.call_id ?? 0,
+    invocation,
+    title,
+    summary,
+    blocks,
+    user_input: asObject(content.user_input),
+    authorization: asObject(content.authorization),
+    metadata: asObject(content.metadata),
+    error: content.error ?? null,
+    lifecycle: asObject(content.lifecycle),
+    result,
+  }
 }
 
 function stringField(value: JsonValue, keys: string[]): string {
@@ -366,7 +400,6 @@ export function messageErrorFromAgenaPart(raw: JsonValue): MessageError | null {
  *   text          → type 'text', text = content.text
  *   think         → type 'reasoning', text = summary[] + raw[]
  *   tool_call     → type 'tool', tool = content.name, state {status, input, output, error, metadata}
- *   tool_result   → type 'text' (synthetic) with content.output
  *   file_ref      → type 'file', url/filename/mime from content
  *   paste_ref     → type 'text', text
  *   skill_ref     → type 'tool' (tool='skill')
@@ -383,7 +416,7 @@ export function normalizeAgenaPart(
 ): MessagePart | null {
   const part = asRecord(raw)
   const kind = str(part.kind)
-  const state = str(part.state) || 'completed'
+  const state = str(part.state)
   const content = part.content
   const createdMs = typeof part.created_at_ms === 'number' ? part.created_at_ms : Date.now()
   const startedMs = typeof part.started_at_ms === 'number' ? part.started_at_ms : createdMs
@@ -391,17 +424,19 @@ export function normalizeAgenaPart(
   const runId = typeof part.run_id === 'number' ? part.run_id : null
   const parentPartId = typeof part.parent_part_id === 'number' ? part.parent_part_id : null
   const agenaSummary = typeof part.summary === 'string' ? part.summary : null
+  const agenaPresentation = part.presentation ?? null
 
   const base: MessagePart = {
     id: partIdStr,
     sessionID: sessionId,
     messageID: messageId,
     type: 'text',
-    partState: state,
+    ...(state ? { partState: state } : {}),
     agenaKind: kind,
     agenaRole: str(part.role) || 'assistant',
     agenaSummary,
     agenaContent: content,
+    agenaPresentation,
     runId,
     parentPartId,
     time: {
@@ -410,11 +445,12 @@ export function normalizeAgenaPart(
     },
   }
 
-  const toStatus = (s: string): 'pending' | 'running' | 'completed' | 'error' => {
+  const toStatus = (s: string): 'pending' | 'running' | 'completed' | 'error' | '' => {
     if (s === 'pending') return 'pending'
-    if (s === 'in_progress') return 'running'
+    if (isRunInFlight(s)) return 'running'
     if (s === 'completed') return 'completed'
-    return 'error'
+    if (isRunTerminal(s)) return 'error'
+    return ''
   }
 
   switch (kind) {
@@ -431,54 +467,28 @@ export function normalizeAgenaPart(
       return { ...base, type: 'reasoning', text }
     }
     case 'tool_call': {
-      const operation = asObject(asObject(content).operation)
+      const operation = flatOperationView(asObject(content), agenaPresentation)
       const invocation = asObject(operation.invocation)
       const result = asObject(operation.result)
-      const modelPreview = asObject(result.model_preview)
-      const modelOutput = asObject(operation.model_output)
       const display = asObject(result.display)
-      const human = asObject(result.human)
       const resultState = stringField(result, ['state'])
       const toolName = stringField(content, ['name', 'tool']) || stringField(invocation, ['name']) || 'unknown'
       const canonicalInput = asObject(asObject(content).input)
       const operationInput = asObject(invocation.input)
       const input = Object.keys(canonicalInput).length > 0 ? canonicalInput : operationInput
-      const output =
-        stringField(content, ['output']) ||
-        stringField(asObject(content.result), ['output', 'text']) ||
-        stringField(modelPreview, ['text']) ||
-        stringField(modelOutput, ['text']) ||
-        stringField(human, ['markdown', 'summary']) ||
-        stringField(display, ['summary']) ||
-        stringField(operation, ['summary']) ||
-        stringField(part.provider_state as JsonValue, ['output'])
-      const error =
-        stringField(content, ['error']) ||
-        operationFailureMessage(result.error) ||
-        operationFailureMessage(operation.error) ||
-        stringField(asObject(content.result), ['error', 'message']) ||
-        ''
+      const output = stringField(display, ['summary']) || stringField(operation, ['summary'])
+      const error = operationFailureMessage(result.error) || operationFailureMessage(operation.error)
       const metaCandidate = {
         ...asObject(operation.metadata),
         ...asObject(result.metadata),
         ...asObject(asObject(content).metadata),
       }
-      const structuredOutput = result.structured ?? operation.structured
-      const title = stringField(operation, ['summary', 'title']) || stringField(display, ['summary', 'title'])
-      const status =
-        resultState === 'pending'
-          ? 'pending'
-          : resultState === 'running'
-            ? 'running'
-            : resultState === 'completed'
-              ? 'completed'
-              : resultState
-                ? 'error'
-                : toStatus(state)
+      const title = stringField(operation, ['title']) || stringField(display, ['title'])
+      const status = toStatus(resultState || state)
       const toolState: JsonObject = {
-        status,
+        ...(status ? { status } : {}),
         input,
-        ...(output ? { output } : structuredOutput !== undefined ? { output: structuredOutput } : {}),
+        ...(output ? { output } : {}),
         ...(error ? { error } : {}),
         ...(title ? { title } : {}),
         ...(Object.keys(metaCandidate).length ? { metadata: metaCandidate } : {}),
@@ -490,11 +500,6 @@ export function normalizeAgenaPart(
         state: toolState,
         ...(Object.keys(metaCandidate).length ? { metadata: metaCandidate } : {}),
       }
-    }
-    case 'tool_result': {
-      const text = stringField(content, ['output', 'text'])
-      if (!text) return null
-      return { ...base, type: 'text', text, synthetic: true }
     }
     case 'file_ref': {
       const contentRecord = asObject(content)
@@ -541,7 +546,7 @@ export function normalizeAgenaPart(
         type: 'tool',
         tool: 'skill',
         state: {
-          status: 'completed',
+          ...(toStatus(state) ? { status: toStatus(state) } : {}),
           input: { name },
           ...(description ? { output: description } : {}),
         },
@@ -557,7 +562,7 @@ export function normalizeAgenaPart(
         type: 'tool',
         tool: hook,
         state: {
-          status: toStatus(state),
+          ...(toStatus(state) ? { status: toStatus(state) } : {}),
           input: {},
           ...(title ? { title } : {}),
           ...(output ? { output } : {}),
@@ -586,7 +591,7 @@ export function normalizeAgenaPart(
         type: 'tool',
         tool: 'question',
         state: {
-          status: reply === undefined || reply === null ? toStatus(state) : 'completed',
+          ...(toStatus(state) ? { status: toStatus(state) } : {}),
           input: {
             prompt,
             ...(interaction.options !== undefined ? { options: interaction.options } : {}),
@@ -605,7 +610,7 @@ export function normalizeAgenaPart(
         type: 'tool',
         tool: opKind,
         state: {
-          status: toStatus(state),
+          ...(toStatus(state) ? { status: toStatus(state) } : {}),
           input: {},
           ...(title ? { title } : {}),
           ...(output ? { output } : {}),

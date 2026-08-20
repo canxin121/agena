@@ -985,7 +985,7 @@ async fn persist_response_receipt(
         })
         .collect::<String>();
     let path = workspace_root
-        .join(".agena/tool-results/provider-tools")
+        .join(".agena/artifacts/provider-tools/receipts")
         .join(provider)
         .join(format!(
             "{}-{}.json",

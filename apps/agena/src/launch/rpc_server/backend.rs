@@ -416,6 +416,7 @@ mod tests {
             role: "assistant".to_owned(),
             state: "completed".to_owned(),
             content: serde_json::json!({}),
+            presentation: None,
             summary: None,
             created_at_ms: part_id,
             parent_part_id: None,

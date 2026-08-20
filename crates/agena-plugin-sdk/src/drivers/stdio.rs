@@ -145,10 +145,19 @@ pub async fn serve_stdio<P: Plugin>(plugin: P) -> std::io::Result<()> {
                         let _dispatch_slot = dispatch_slot;
                         let id = req.id.clone();
                         let params = req.params.unwrap_or(serde_json::Value::Null);
+                        let callback_context = req.context;
                         if req.method == method::HOOK_TOOL_INVOKE_STREAM {
                             match serde_json::from_value(params) {
                                 Ok(input) => {
-                                    let mut handle = dispatcher.dispatch_stream(input);
+                                    let mut handle = if let Some(context) = callback_context {
+                                        crate::host_api::run_in_host_callback_context(
+                                            context,
+                                            async { dispatcher.dispatch_stream(input) },
+                                        )
+                                        .await
+                                    } else {
+                                        dispatcher.dispatch_stream(input)
+                                    };
                                     let stream_id = handle.stream_id.clone();
                                     if !send_response(
                                         &tx,
@@ -231,7 +240,13 @@ pub async fn serve_stdio<P: Plugin>(plugin: P) -> std::io::Result<()> {
                             }
                             return;
                         }
-                        let resp = match dispatcher.dispatch(&req.method, params).await {
+                        let dispatch = dispatcher.dispatch(&req.method, params);
+                        let result = if let Some(context) = callback_context {
+                            crate::host_api::run_in_host_callback_context(context, dispatch).await
+                        } else {
+                            dispatch.await
+                        };
+                        let resp = match result {
                             Ok(v) => Response {
                                 jsonrpc: JsonRpcVersion,
                                 id,
@@ -354,6 +369,7 @@ impl StdioHostClient {
             id: req_id.clone(),
             method: method.to_string(),
             params: Some(params),
+            context: None,
         };
         let body =
             serde_json::to_vec(&req).map_err(|e| PluginError::invalid_params(e.to_string()))?;

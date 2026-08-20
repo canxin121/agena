@@ -3,7 +3,7 @@ import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 
 import SettingsSidebarNavRow from './SettingsSidebarNavRow.vue'
-import type { SettingsSidebarRenderGroup, SettingsTab } from './settingsSidebarNavigation'
+import type { SettingsSidebarRenderGroup, SettingsSidebarTabRow } from './settingsSidebarNavigation'
 
 const props = withDefaults(
   defineProps<{
@@ -15,7 +15,7 @@ const props = withDefaults(
 )
 
 const emit = defineEmits<{
-  (e: 'navigate-tab', id: SettingsTab): void
+  (e: 'activate-row', row: SettingsSidebarTabRow): void
 }>()
 
 const { t } = useI18n()
@@ -39,14 +39,18 @@ const hasRows = computed(() => visibleGroups.value.length > 0)
         </div>
 
         <div class="space-y-0.5">
-          <div v-for="row in group.items" :key="row.id">
-            <SettingsSidebarNavRow
-              :label="row.label"
-              :active="row.active"
-              :icon="row.icon"
-              @click="emit('navigate-tab', row.id)"
-            />
-          </div>
+          <SettingsSidebarNavRow
+            v-for="row in group.items"
+            :key="row.key"
+            :label="row.label"
+            :active="row.active"
+            :branch-active="row.branchActive"
+            :icon="row.icon"
+            :depth="row.depth"
+            :has-children="row.hasChildren"
+            :expanded="row.expanded"
+            @click="emit('activate-row', row)"
+          />
         </div>
       </div>
     </div>

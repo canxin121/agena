@@ -351,7 +351,7 @@ impl SettingsPlugin {
         host: Arc<dyn HostClient>,
     ) -> SdkResult<agena_plugin_host::sdk::InitOutcome> {
         let config = agena_plugin_host::sdk::macro_support::parse_defaulted_settings(
-            ctx.config,
+            ctx.settings,
             "invalid settings plugin config",
         )?;
         self.config

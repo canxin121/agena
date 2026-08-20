@@ -25,6 +25,7 @@ pub struct InFlightRun {
 pub struct PendingInteraction {
     pub part_id: i64,
     pub created_at_ms: i64,
+    pub part_kind: String,
     pub content: serde_json::Value,
 }
 
@@ -42,15 +43,13 @@ pub struct StateInputs {
     pub last_error: Option<serde_json::Value>,
 }
 
-/// Decode the first still-awaiting user-input request from a `tool_call` part
-/// whose content carries the flattened tool operation (`content["operation"]`),
-/// when that operation has an unanswered `user_input` record. This is the
-/// canonical single-activity shape: the ask lives inside the tool activity.
+/// Decode the first still-awaiting user-input request from the strict flat
+/// `tool_call.user_input` control field. The ask lives inside the same durable
+/// tool part; there is no nested operation or companion result row.
 pub(crate) fn tool_call_first_awaiting_user_input(
     content: &serde_json::Value,
 ) -> Option<agena_domain::UserInputRequest> {
-    let operation = content.get("operation")?;
-    let user_input = operation.get("user_input")?;
+    let user_input = content.get("user_input")?;
     let user_input: agena_domain::OperationUserInput =
         serde_json::from_value(user_input.clone()).ok()?;
     user_input
@@ -78,6 +77,7 @@ impl StateInputs {
                 pending_interactions.push(PendingInteraction {
                     part_id: part.part_id,
                     created_at_ms: part.created_at_ms,
+                    part_kind: part.kind.clone(),
                     content: part.content.clone(),
                 });
             }
@@ -166,12 +166,10 @@ pub fn presentation(
         last_failure: last_error.cloned(),
     };
     if let Some(interaction) = pending_interactions.first() {
-        // Canonical shape: the ask rides on the tool activity's operation
-        // (`content["operation"]["user_input"]`); display kind/prompt come
-        // from the still-awaiting request. Legacy shape: the `interaction`
-        // part names the kind `type` (or flat `kind`) and a `prompt`; read
-        // both so display kind is stable across stored shapes.
-        let (kind, prompt) = if interaction.content.get("operation").is_some() {
+        // Canonical shape: the ask rides on flat `tool_call.user_input`;
+        // display kind/prompt come from the still-awaiting request. A separate
+        // `interaction` part names its kind and prompt directly.
+        let (kind, prompt) = if interaction.part_kind == "tool_call" {
             tool_call_first_awaiting_user_input(&interaction.content)
                 .map(|request| (request.kind.as_str().to_owned(), request.title))
                 .unwrap_or_else(|| ("ask_user".to_owned(), String::new()))
@@ -246,4 +244,42 @@ pub fn apply_part_transition(
         part.finished_at_ms = None;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{PendingInteraction, presentation};
+
+    #[test]
+    fn flat_tool_call_user_input_drives_pending_presentation() {
+        let pending = PendingInteraction {
+            part_id: 7,
+            created_at_ms: 1,
+            part_kind: "tool_call".to_owned(),
+            content: serde_json::json!({
+                "user_input": {
+                    "requests": [{
+                        "request": {
+                            "request_id": "ask-1",
+                            "session_id": 3,
+                            "title": "Choose a path",
+                            "kind": "review",
+                            "source": "plugin",
+                            "questions": [],
+                            "created_at": "2026-08-20T00:00:00Z"
+                        }
+                    }]
+                }
+            }),
+        };
+
+        let projected = presentation(None, &[], &[pending], None, None, 1)
+            .expect("project pending interaction");
+        let interaction = projected
+            .pending_interaction
+            .expect("flat tool call should surface its ask");
+        assert_eq!(interaction.part_id, 7);
+        assert_eq!(interaction.kind, "review");
+        assert_eq!(interaction.prompt, "Choose a path");
+    }
 }

@@ -1,8 +1,8 @@
 use super::{
     AppError, Arc, ExecutionStatus, OperationPart, PersistedPermissionRule, SessionManager,
     SessionManagerState, SessionPendingTool, completed_lifecycle, inherit_operation_context,
-    operation_authorization, operation_from_part, resolve_pending_tool, terminal_operation_title,
-    text_result_blocks, update_resolved_tool_message,
+    operation_authorization, operation_from_part, resolve_pending_tool,
+    update_resolved_tool_message,
 };
 use crate::session::Session;
 use crate::session::store::{
@@ -25,7 +25,6 @@ impl SessionManager {
         let resolved = resolve_pending_tool(&session, pending_tool)?;
         let lifecycle = completed_lifecycle(&resolved.lifecycle);
         let authorization = operation_authorization(&session, &resolved);
-        let title = terminal_operation_title(&resolved.invocation);
         let output_text = format!(
             "The operation was not executed because the current runtime does not provide the required capability: {}. User approval cannot enable this capability.",
             unavailable.reason
@@ -37,25 +36,28 @@ impl SessionManager {
             "unavailable": unavailable,
         });
         let details = ToolOutput::from_json_payload(Some(&payload)).map_err(AppError::Internal)?;
-        let blocks = text_result_blocks(output_text.as_str());
         let _assistant_message =
             update_resolved_tool_message(&mut session, &resolved, |tool_part| {
                 let mut operation = OperationPart::capability_unavailable(
                     resolved.call_id,
                     resolved.invocation.clone(),
-                    output_text.clone(),
-                    blocks.clone(),
-                    details.clone(),
+                    agena_domain::RawOutput::from_parts(
+                        details.to_json_payload(),
+                        output_text.clone(),
+                        Vec::new(),
+                        details.managed_outputs.clone(),
+                        Default::default(),
+                        details.truncated,
+                    ),
                     lifecycle.clone(),
                 );
                 operation.authorization = authorization.clone();
-                operation.set_title(title.clone());
                 if let Some(existing) = operation_from_part(tool_part) {
                     inherit_operation_context(&mut operation, existing);
                 }
-                tool_part.content = typed_content_to_value(&TypedContent::ToolCall(
+                tool_part.content = typed_content_to_value(&TypedContent::ToolCall(Box::new(
                     tool_call_from_operation(&operation),
-                ))
+                )))
                 .expect("tool content is always JSON serializable");
                 tool_part.state =
                     part_state_from_execution_status(ExecutionStatus::CapabilityUnavailable);
@@ -74,7 +76,6 @@ impl SessionManager {
         let resolved = resolve_pending_tool(&session, pending_tool)?;
         let lifecycle = completed_lifecycle(&resolved.lifecycle);
         let authorization = operation_authorization(&session, &resolved);
-        let title = terminal_operation_title(&resolved.invocation);
         let output_text = format!(
             "The operation was not executed because the requested tool is unavailable: {}.",
             unavailable.reason
@@ -86,25 +87,28 @@ impl SessionManager {
             "unavailable": unavailable,
         });
         let details = ToolOutput::from_json_payload(Some(&payload)).map_err(AppError::Internal)?;
-        let blocks = text_result_blocks(output_text.as_str());
         let _assistant_message =
             update_resolved_tool_message(&mut session, &resolved, |tool_part| {
                 let mut operation = OperationPart::tool_unavailable(
                     resolved.call_id,
                     resolved.invocation.clone(),
-                    output_text.clone(),
-                    blocks.clone(),
-                    details.clone(),
+                    agena_domain::RawOutput::from_parts(
+                        details.to_json_payload(),
+                        output_text.clone(),
+                        Vec::new(),
+                        details.managed_outputs.clone(),
+                        Default::default(),
+                        details.truncated,
+                    ),
                     lifecycle.clone(),
                 );
                 operation.authorization = authorization.clone();
-                operation.set_title(title.clone());
                 if let Some(existing) = operation_from_part(tool_part) {
                     inherit_operation_context(&mut operation, existing);
                 }
-                tool_part.content = typed_content_to_value(&TypedContent::ToolCall(
+                tool_part.content = typed_content_to_value(&TypedContent::ToolCall(Box::new(
                     tool_call_from_operation(&operation),
-                ))
+                )))
                 .expect("tool content is always JSON serializable");
                 tool_part.state =
                     part_state_from_execution_status(ExecutionStatus::ToolUnavailable);
@@ -134,27 +138,29 @@ impl SessionManager {
             "denial": denial,
         });
         let details = ToolOutput::from_json_payload(Some(&payload)).map_err(AppError::Internal)?;
-        let blocks = text_result_blocks(output_text.as_str());
-        let title = terminal_operation_title(&resolved.invocation);
 
         let _assistant_message =
             update_resolved_tool_message(&mut session, &resolved, |tool_part| {
                 let mut operation = OperationPart::policy_denied(
                     resolved.call_id,
                     resolved.invocation.clone(),
-                    output_text.clone(),
-                    blocks.clone(),
-                    details.clone(),
+                    agena_domain::RawOutput::from_parts(
+                        details.to_json_payload(),
+                        output_text.clone(),
+                        Vec::new(),
+                        details.managed_outputs.clone(),
+                        Default::default(),
+                        details.truncated,
+                    ),
                     lifecycle.clone(),
                 );
                 operation.authorization = authorization.clone();
-                operation.set_title(title.clone());
                 if let Some(existing) = operation_from_part(tool_part) {
                     inherit_operation_context(&mut operation, existing);
                 }
-                tool_part.content = typed_content_to_value(&TypedContent::ToolCall(
+                tool_part.content = typed_content_to_value(&TypedContent::ToolCall(Box::new(
                     tool_call_from_operation(&operation),
-                ))
+                )))
                 .expect("tool content is always JSON serializable");
                 tool_part.state = part_state_from_execution_status(ExecutionStatus::PolicyDenied);
             })?;
@@ -190,27 +196,29 @@ impl SessionManager {
             "decline": decline,
         });
         let details = ToolOutput::from_json_payload(Some(&payload)).map_err(AppError::Internal)?;
-        let blocks = text_result_blocks(output_text.as_str());
-        let title = terminal_operation_title(&resolved.invocation);
 
         let _assistant_message =
             update_resolved_tool_message(&mut session, &resolved, |tool_part| {
                 let mut operation = OperationPart::user_declined(
                     resolved.call_id,
                     resolved.invocation.clone(),
-                    output_text.clone(),
-                    blocks.clone(),
-                    details.clone(),
+                    agena_domain::RawOutput::from_parts(
+                        details.to_json_payload(),
+                        output_text.clone(),
+                        Vec::new(),
+                        details.managed_outputs.clone(),
+                        Default::default(),
+                        details.truncated,
+                    ),
                     lifecycle.clone(),
                 );
                 operation.authorization = authorization.clone();
-                operation.set_title(title.clone());
                 if let Some(existing) = operation_from_part(tool_part) {
                     inherit_operation_context(&mut operation, existing);
                 }
-                tool_part.content = typed_content_to_value(&TypedContent::ToolCall(
+                tool_part.content = typed_content_to_value(&TypedContent::ToolCall(Box::new(
                     tool_call_from_operation(&operation),
-                ))
+                )))
                 .expect("tool content is always JSON serializable");
                 tool_part.state = part_state_from_execution_status(ExecutionStatus::UserDeclined);
             })?;

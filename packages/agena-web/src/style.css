@@ -776,8 +776,3 @@ mark[data-agena-search-active='true'] {
   background: oklch(var(--ring) / 0.52);
   outline: 1px solid oklch(var(--ring) / 0.78);
 }
-
-::highlight(agena-vim-block) {
-  background: oklch(var(--primary) / 0.24);
-  color: inherit;
-}

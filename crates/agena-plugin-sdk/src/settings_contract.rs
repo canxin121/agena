@@ -76,7 +76,7 @@ pub fn settings_contract_from_schema(schema: &Value) -> Result<SettingsContract,
         .and_then(Value::as_object)
         .cloned()
         .unwrap_or_default();
-    let root = compile_node(&schema, &defs, "root", "", true, &mut Vec::new())?;
+    let root = compile_node(schema, &defs, "root", "", true, &mut Vec::new())?;
     let contract = SettingsContract::new(root);
     contract
         .validate()
@@ -322,7 +322,7 @@ fn compile_object(
                 SettingsNodeKind::Record {
                     value: Box::new(value),
                 },
-                constraints(&schema)?,
+                constraints(schema)?,
             ));
         }
         Some(Value::Bool(false)) | None => {}

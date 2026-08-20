@@ -15,7 +15,6 @@ async-trait = { workspace = true }
 bytes = { workspace = true }
 futures-util = { workspace = true, features = ["sink"] }
 jsonschema = { workspace = true }
-indexmap = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
@@ -25,7 +24,6 @@ tracing = { workspace = true }
 reqwest = { workspace = true, features = ["json", "rustls", "stream"] }
 url = { workspace = true, features = ["serde"] }
 uuid = { workspace = true }
-regex = { workspace = true }
 dashmap = { workspace = true }
 blake3 = { workspace = true }
 wasmtime = { workspace = true, optional = true }

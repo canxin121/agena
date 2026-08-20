@@ -200,7 +200,7 @@ fn service_file_path() -> Result<PathBuf> {
             .map(PathBuf::from)
             .filter(|path| !path.as_os_str().is_empty())
             .unwrap_or(home_dir()?.join(".config"));
-        return Ok(base.join("systemd").join("user").join(SYSTEMD_UNIT_NAME));
+        Ok(base.join("systemd").join("user").join(SYSTEMD_UNIT_NAME))
     }
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     bail!("OS-native Agena user services are supported only on macOS and Linux")

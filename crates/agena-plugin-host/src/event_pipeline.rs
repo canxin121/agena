@@ -413,6 +413,16 @@ pub struct PluginBailPipeline<I, O> {
     next: AtomicU64,
 }
 
+impl<I, O> Default for PluginBailPipeline<I, O>
+where
+    I: Clone + Send + 'static,
+    O: Send + 'static,
+{
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<I, O> PluginBailPipeline<I, O>
 where
     I: Clone + Send + 'static,
@@ -750,6 +760,18 @@ pub struct PluginAroundPipeline<C, O, E> {
     handlers: Arc<Mutex<Vec<AroundHandler<C, O, E>>>>,
     next: AtomicU64,
 }
+
+impl<C, O, E> Default for PluginAroundPipeline<C, O, E>
+where
+    C: Send + 'static,
+    O: Send + 'static,
+    E: Send + 'static,
+{
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<C, O, E> PluginAroundPipeline<C, O, E>
 where
     C: Send + 'static,

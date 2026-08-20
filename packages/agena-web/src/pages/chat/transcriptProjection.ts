@@ -7,6 +7,13 @@ import type {
   TranscriptDisplayPart,
   TranscriptPartKind,
 } from '@/components/chat/messageList.types'
+import {
+  isKnownRunState,
+  isRunCancelled,
+  isRunFailureState,
+  isRunInFlight,
+  normalizeRunState,
+} from '../../lib/chatRunState'
 import type { JsonValue } from '@/types/json'
 
 type JsonRecord = Record<string, JsonValue>
@@ -73,13 +80,7 @@ export function compareTranscriptIds(left: string, right: string): number {
 }
 
 export function durablePartKind(part: MessagePartLike): string {
-  const kind = text(part.agenaKind).toLowerCase()
-  if (kind) return kind
-  const legacy = text(part.type).toLowerCase()
-  if (legacy === 'reasoning' || legacy === 'thinking' || legacy === 'reasoning_content') return 'think'
-  if (legacy === 'tool') return 'tool_call'
-  if (legacy === 'file') return 'file_ref'
-  return legacy || 'unknown'
+  return text(part.agenaKind).toLowerCase() || 'unknown'
 }
 
 export function durablePartContent(part: MessagePartLike): JsonRecord {
@@ -95,9 +96,6 @@ export function transcriptPartText(part: MessagePartLike): string {
   if (kind === 'think') {
     return rawText(part.text) || fragmentText(content, 'summary') || fragmentText(content, 'raw')
   }
-  if (kind === 'tool_result') {
-    return firstText(content, ['output', 'text']) || rawText(part.text)
-  }
   if (kind === 'compaction') {
     return firstText(content, ['summary', 'detail']) || text(part.agenaSummary) || rawText(part.text)
   }
@@ -110,7 +108,37 @@ export function transcriptPartText(part: MessagePartLike): string {
 }
 
 function operationEnvelope(part: MessagePartLike): JsonRecord {
-  return record(durablePartContent(part).operation)
+  const content = durablePartContent(part)
+  const presentation = record(part.agenaPresentation)
+  const title = firstText(presentation, ['title'])
+  const summary = firstText(presentation, ['summary'])
+  const state = firstText(content, ['state'])
+  const invocation = {
+    name: firstText(content, ['name', 'tool']) || 'unknown',
+    plugin_name: content.plugin,
+    input: record(content.input),
+    tool_api_call: record(content.tool_api_call),
+  }
+  const blocks = Array.isArray(presentation.blocks) ? presentation.blocks : []
+  const result = {
+    state,
+    content: blocks,
+    display: { title, summary, sections: [] },
+    human: { summary },
+  }
+  return {
+    call_id: content.call_id ?? 0,
+    invocation,
+    title,
+    summary,
+    blocks,
+    user_input: record(content.user_input),
+    authorization: record(content.authorization),
+    metadata: record(content.metadata),
+    error: content.error ?? null,
+    lifecycle: record(content.lifecycle),
+    result,
+  }
 }
 
 function operationTitle(part: MessagePartLike): string {
@@ -143,16 +171,10 @@ function operationCopyText(part: MessagePartLike): string {
   const content = durablePartContent(part)
   const operation = operationEnvelope(part)
   const invocation = record(operation.invocation)
-  const result = record(operation.result)
-  const human = record(result.human)
-  const modelPreview = record(result.model_preview)
-  const modelOutput = record(operation.model_output)
+  const presentation = record(part.agenaPresentation)
   const input = Object.keys(record(content.input)).length ? record(content.input) : record(invocation.input)
-  const output =
-    firstText(human, ['markdown', 'summary']) ||
-    firstText(modelPreview, ['text']) ||
-    firstText(modelOutput, ['text']) ||
-    (result.structured !== undefined ? prettyJson(result.structured) : '')
+  const blocks = Array.isArray(presentation.blocks) ? presentation.blocks : []
+  const output = firstText(presentation, ['summary']) || (blocks.length ? prettyJson(blocks) : '')
   const sections = [operationTitle(part)]
   if (Object.keys(input).length) sections.push(`Input\n${prettyJson(input)}`)
   if (output) sections.push(`Output\n${output}`)
@@ -213,7 +235,7 @@ function interactionSummary(part: MessagePartLike): string {
 }
 
 function operationHasPendingInteraction(part: MessagePartLike): boolean {
-  const operation = record(durablePartContent(part).operation)
+  const operation = operationEnvelope(part)
   const userInput = record(operation.user_input)
   const userInputPending = (Array.isArray(userInput.requests) ? userInput.requests : []).some((value) => {
     const request = record(value)
@@ -239,7 +261,7 @@ function classifyPart(part: MessagePartLike, answerPartId: string | null, assist
     if (!assistant) return 'text'
     return String(part.id || '') === answerPartId ? 'answer' : 'text_segment'
   }
-  if (kind === 'paste_ref' || kind === 'tool_result') return 'text'
+  if (kind === 'paste_ref') return 'text'
   if (kind === 'think') return 'reasoning'
   if (kind === 'tool_call') return 'operation'
   if (kind === 'file_ref') return 'resource'
@@ -288,15 +310,16 @@ function displayFields(
     return { title, summary, copyText: [title, summary, prettyJson(content)].filter(Boolean).join('\n') }
   }
   if (kind === 'lifecycle') {
-    const state = text(part.partState) || firstText(durablePartContent(part), ['state']) || 'pending'
-    const title =
-      state === 'pending' || state === 'in_progress' || state === 'running'
-        ? 'Response running'
-        : state === 'completed'
-          ? 'Response completed'
-          : state === 'cancelled' || state === 'canceled'
-            ? 'Response cancelled'
-            : 'Response failed'
+    const state = normalizeRunState(text(part.partState) || firstText(durablePartContent(part), ['state']))
+    const title = isRunInFlight(state)
+      ? 'Response running'
+      : state === 'completed'
+        ? 'Response completed'
+        : isRunCancelled(state)
+          ? 'Response cancelled'
+          : isRunFailureState(state)
+            ? 'Response failed'
+            : state
     return { title, summary: '', copyText: title }
   }
   if (kind === 'error') {
@@ -325,7 +348,7 @@ function projectPart(part: MessagePartLike, role: string, answerPartId: string |
     key: `part:${id || compactJson(part).slice(0, 48)}`,
     id,
     kind,
-    status: text(part.partState) || 'completed',
+    status: text(part.partState),
     role: text(part.agenaRole) || role,
     source: part,
     ...fields,
@@ -355,36 +378,12 @@ function lifecyclePart(message: MessageLike, runIds: string[]): TranscriptDispla
   return projectPart(source, 'assistant', null)
 }
 
-function runNeedsLifecycle(state: string, displayParts: TranscriptDisplayPart[]): boolean {
+function runNeedsLifecycle(stateInput: string, displayParts: TranscriptDisplayPart[]): boolean {
+  const state = normalizeRunState(stateInput)
+  if (!isKnownRunState(state)) return false
   if (!displayParts.length) return true
-  if (
-    ![
-      'failed',
-      'cancelled',
-      'canceled',
-      'policy_denied',
-      'user_declined',
-      'capability_unavailable',
-      'tool_unavailable',
-    ].includes(state)
-  ) {
-    return false
-  }
+  if (!isRunFailureState(state) && !isRunCancelled(state)) return false
   return !displayParts.some((part) => part.kind === 'error')
-}
-
-function terminalSeverity(state: string): number {
-  if (['failed', 'policy_denied', 'user_declined', 'capability_unavailable', 'tool_unavailable'].includes(state))
-    return 4
-  if (state === 'cancelled' || state === 'canceled') return 3
-  if (state === 'completed') return 2
-  if (state === 'in_progress' || state === 'running') return 1
-  return 0
-}
-
-function foldRunState(current: string, next: string): string {
-  if ((current === 'cancelled' || current === 'canceled') && next !== current) return next
-  return terminalSeverity(next) > terminalSeverity(current) ? next : current
 }
 
 function cloneMessage(message: MessageLike): MessageLike {
@@ -409,14 +408,24 @@ export function foldAssistantMessages(messages: MessageLike[]): Array<{ message:
       }
       previous.message.parts.sort((a, b) => compareTranscriptIds(String(a.id || ''), String(b.id || '')))
       previous.runIds.push(id)
-      const currentState = text(previous.message.info.runState) || 'pending'
-      const nextState = text(message.info.runState) || text(message.info.finish) || 'pending'
-      const state = foldRunState(currentState, nextState)
-      previous.message.info.runState = state
-      previous.message.info.finish = terminalSeverity(state) >= 2 ? state : ''
-      previous.message.info.time = {
-        ...previous.message.info.time,
-        ...(message.info.time?.completed ? { completed: message.info.time.completed } : {}),
+
+      // Adjacent assistant runs form one visual reply, but their lifecycle is
+      // not cumulative. Keep the latest run marker's server-owned metadata
+      // instead of promoting an older failure over a newer running/completed
+      // run. The first id/created time remain the stable visual block anchor.
+      const firstId = previous.message.info.id
+      const firstCreated = previous.message.info.time?.created
+      previous.message.info = {
+        ...message.info,
+        id: firstId || message.info.id,
+        ...(message.info.time || firstCreated !== undefined
+          ? {
+              time: {
+                ...message.info.time,
+                ...(firstCreated !== undefined ? { created: firstCreated } : {}),
+              },
+            }
+          : {}),
       }
       continue
     }

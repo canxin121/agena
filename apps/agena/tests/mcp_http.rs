@@ -86,12 +86,15 @@ async fn spawn_server(
     ui_password: Option<&str>,
     environment: &[(&str, &str)],
 ) -> (Child, String) {
-    let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("reserve MCP HTTP port");
-    let port = listener
-        .local_addr()
-        .expect("read reserved MCP HTTP port")
-        .port();
-    drop(listener);
+    // Let the server bind port 0 itself. Reserving an ephemeral port in the
+    // test process and releasing it before spawning the child leaves a TOCTOU
+    // window where parallel tests (or another local process) can claim the
+    // port. A unique endpoint record gives us the actual bound port without
+    // that race.
+    let record_path = server_data.join(format!(
+        "mcp-http-server-{}.json",
+        uuid::Uuid::new_v4().simple()
+    ));
 
     let log = OpenOptions::new()
         .create(true)
@@ -107,10 +110,11 @@ async fn spawn_server(
         .arg("--host")
         .arg("127.0.0.1")
         .arg("--port")
-        .arg(port.to_string())
+        .arg("0")
         .arg("--workspace")
         .arg(workspace)
         .env("AGENA_SERVER_DATA_DIR", server_data)
+        .env("AGENA_SERVER_RECORD", &record_path)
         .stdin(Stdio::null())
         .stdout(Stdio::from(log))
         .stderr(Stdio::from(stderr));
@@ -135,16 +139,28 @@ async fn spawn_server(
     for (name, value) in environment {
         command.env(name, value);
     }
-    let child = command.spawn().expect("spawn MCP HTTP server");
+    let mut child = command.spawn().expect("spawn MCP HTTP server");
 
-    let base_url = format!("http://127.0.0.1:{port}");
     let client = test_client();
-    let deadline = Instant::now() + Duration::from_secs(20);
-    loop {
-        if let Ok(response) = client.get(format!("{base_url}/health")).send().await
+    // A cold macOS GitHub runner may spend well over 20 seconds initializing
+    // the server runtime. Keep a generous readiness deadline, but fail
+    // immediately if the child exits instead of masking a real startup error
+    // as a timeout.
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let base_url = loop {
+        if let Ok(bytes) = std::fs::read(&record_path)
+            && let Ok(record) = serde_json::from_slice::<Value>(&bytes)
+            && let Some(url) = record.get("url").and_then(Value::as_str)
+            && let Ok(response) = client.get(format!("{url}/health")).send().await
             && response.status().is_success()
         {
-            break;
+            break url.to_owned();
+        }
+        if let Some(status) = child.try_wait().expect("inspect MCP HTTP server child") {
+            panic!(
+                "MCP HTTP server exited before becoming ready with status {status}; log:\n{}",
+                std::fs::read_to_string(log_path).unwrap_or_default()
+            );
         }
         assert!(
             Instant::now() < deadline,
@@ -152,7 +168,7 @@ async fn spawn_server(
             std::fs::read_to_string(log_path).unwrap_or_default()
         );
         sleep(Duration::from_millis(50)).await;
-    }
+    };
 
     (child, base_url)
 }

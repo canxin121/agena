@@ -20,22 +20,6 @@ pub(super) fn truncate_to_char_count(value: &str, max_chars: usize) -> String {
     value[..idx].to_string()
 }
 
-pub(super) fn model_output_boundary_context(execution: &ToolInvocationExecution) -> String {
-    let summary = execution.summary();
-    let output_text = summary.output_text.as_str();
-    let payload_text = execution
-        .output
-        .to_json_payload()
-        .and_then(|payload| serde_json::to_string_pretty(&payload).ok())
-        .unwrap_or_default();
-
-    if payload_text.len() > output_text.len() {
-        payload_text
-    } else {
-        output_text.to_string()
-    }
-}
-
 pub(super) fn model_output_exceeds_boundary(
     value: &str,
     max_lines: usize,
@@ -122,166 +106,6 @@ pub(super) fn truncate_tail_to_utf8_bytes(value: &str, max_bytes: usize) -> Stri
         start += 1;
     }
     value[start..].to_string()
-}
-
-/// The text preview alone is not enough: provider wire serialization also
-/// includes `ToolOutput.payload`.  Bound that payload independently so a
-/// giant JSON result cannot bypass the textual model-output limit.  We retain
-/// concise structured facts (for example `changes` from `apply_patch`) and
-/// leave the full, lossless result at the managed output path.
-pub(super) fn compact_tool_output_payload_for_model(
-    output: &mut ToolOutput,
-    full_output_path: &str,
-    original_bytes: usize,
-) -> Result<(), ToolError> {
-    let Some(payload) = output.to_json_payload() else {
-        return Ok(());
-    };
-    let serialized = serde_json::to_string(&payload)
-        .map_err(|error| ToolError::plugin(format!("encode tool output payload: {error}")))?;
-    if serialized.len() <= TOOL_MODEL_STRUCTURED_OUTPUT_MAX_BYTES {
-        return Ok(());
-    }
-
-    let compacted = compact_json_for_model(&payload, 0);
-    let compacted_serialized = serde_json::to_string(&compacted).map_err(|error| {
-        ToolError::plugin(format!("encode compact tool output payload: {error}"))
-    })?;
-    let payload = if compacted_serialized.len() <= TOOL_MODEL_STRUCTURED_OUTPUT_MAX_BYTES {
-        compacted
-    } else {
-        serde_json::json!({
-            "truncated": true,
-            "full_output_path": full_output_path,
-            "original_bytes": original_bytes,
-        })
-    };
-    let managed_outputs = output.managed_outputs.clone();
-    let truncated = output.truncated;
-    let mut compact_output =
-        ToolOutput::from_json_payload(Some(&payload)).map_err(ToolError::invalid_input)?;
-    compact_output.managed_outputs = managed_outputs;
-    compact_output.truncated = truncated;
-    *output = compact_output;
-    Ok(())
-}
-
-pub(super) fn compact_json_for_model(value: &serde_json::Value, depth: usize) -> serde_json::Value {
-    if depth >= TOOL_MODEL_STRUCTURED_MAX_DEPTH {
-        return serde_json::Value::String("[nested value omitted]".to_string());
-    }
-    match value {
-        serde_json::Value::Null | serde_json::Value::Bool(_) | serde_json::Value::Number(_) => {
-            value.clone()
-        }
-        serde_json::Value::String(text) => {
-            if text.len() <= TOOL_MODEL_STRUCTURED_STRING_MAX_BYTES {
-                value.clone()
-            } else {
-                serde_json::Value::String(format!(
-                    "{}… [string truncated; full output persisted]",
-                    truncate_to_utf8_bytes(text, TOOL_MODEL_STRUCTURED_STRING_MAX_BYTES)
-                ))
-            }
-        }
-        serde_json::Value::Array(items) => {
-            let mut compacted = items
-                .iter()
-                .take(TOOL_MODEL_STRUCTURED_MAX_ITEMS)
-                .map(|item| compact_json_for_model(item, depth + 1))
-                .collect::<Vec<_>>();
-            let omitted = items.len().saturating_sub(compacted.len());
-            if omitted > 0 {
-                compacted.push(serde_json::Value::String(format!(
-                    "[{omitted} array items omitted; full output persisted]"
-                )));
-            }
-            serde_json::Value::Array(compacted)
-        }
-        serde_json::Value::Object(object) => {
-            let mut compacted = serde_json::Map::new();
-            // Keep the small, high-signal fields first even when an object has
-            // many keys. This preserves patch file lists and common counters.
-            for key in [
-                "changes", "count", "matches", "query", "path", "url", "status", "error", "results",
-            ] {
-                if let Some(value) = object.get(key) {
-                    compacted.insert(key.to_string(), compact_json_for_model(value, depth + 1));
-                }
-            }
-            for (key, value) in object {
-                if compacted.len() >= TOOL_MODEL_STRUCTURED_MAX_FIELDS {
-                    break;
-                }
-                compacted
-                    .entry(key.clone())
-                    .or_insert_with(|| compact_json_for_model(value, depth + 1));
-            }
-            if object.len() > compacted.len() {
-                compacted.insert(
-                    "_agena_omitted_fields".to_string(),
-                    serde_json::Value::from(object.len().saturating_sub(compacted.len())),
-                );
-            }
-            compacted.insert(
-                "_agena_truncated".to_string(),
-                serde_json::Value::Bool(true),
-            );
-            serde_json::Value::Object(compacted)
-        }
-    }
-}
-
-pub(super) fn persist_tool_result_output(
-    workspace_root: &Path,
-    model_tool_name: &str,
-    call_id: i64,
-    output_text: &str,
-) -> Result<Option<PathBuf>, ToolError> {
-    if output_text.is_empty() {
-        return Ok(None);
-    }
-
-    let dir = workspace_root.join(".agena").join("tool-results");
-    fs::create_dir_all(&dir)?;
-    let digest = blake3::hash(output_text.as_bytes()).to_hex().to_string();
-    let short_digest = digest.get(..12).unwrap_or(digest.as_str());
-    let safe_tool = tool_result_file_stem(model_tool_name);
-    let call_part = if call_id >= 0 {
-        call_id.to_string()
-    } else {
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|duration| duration.as_millis().to_string())
-            .unwrap_or_else(|_| "synthetic".to_string())
-    };
-    let path = dir.join(format!("{call_part}-{safe_tool}-{short_digest}.txt"));
-    crate::atomic_write_file(&path, output_text.as_bytes())?;
-    Ok(Some(path))
-}
-
-pub(super) fn tool_result_file_stem(name: &str) -> String {
-    let trimmed = name.trim();
-    if trimmed.is_empty() {
-        return "tool".to_string();
-    }
-    let mut stem = String::with_capacity(trimmed.len());
-    let mut previous_was_separator = false;
-    for ch in trimmed.chars() {
-        if ch.is_ascii_alphanumeric() {
-            stem.push(ch);
-            previous_was_separator = false;
-        } else if !previous_was_separator {
-            stem.push('_');
-            previous_was_separator = true;
-        }
-    }
-    let stem = stem.trim_matches('_');
-    if stem.is_empty() {
-        "tool".to_string()
-    } else {
-        stem.to_string()
-    }
 }
 
 pub(super) fn access_kind_name(access: AccessKind) -> &'static str {
@@ -615,10 +439,7 @@ pub(super) enum InputJsonPathSegment {
 }
 use super::{
     AccessKind, Path, PathBuf, RegisteredTool, SdkInputNetworkSpec, SdkInputPathSpec, SdkPathKind,
-    StructuredObject, TOOL_MODEL_STRUCTURED_MAX_DEPTH, TOOL_MODEL_STRUCTURED_MAX_FIELDS,
-    TOOL_MODEL_STRUCTURED_MAX_ITEMS, TOOL_MODEL_STRUCTURED_OUTPUT_MAX_BYTES,
-    TOOL_MODEL_STRUCTURED_STRING_MAX_BYTES, ToolError, ToolInvocation, ToolInvocationExecution,
-    ToolOutput, ToolPayloadInput, fs, shell_tools,
+    StructuredObject, ToolError, ToolInvocation, ToolOutput, ToolPayloadInput, shell_tools,
 };
 use agena_domain::{FilesystemEffects, PluginInvocation};
 use agena_tool::ApplyPatchExecution;

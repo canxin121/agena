@@ -91,6 +91,29 @@ pub use providers::*;
 
 pub use model_catalog::*;
 
+#[cfg(test)]
+static TEST_SESSION_STREAM_SUBSCRIPTIONS: std::sync::OnceLock<
+    std::sync::Mutex<std::collections::HashSet<String>>,
+> = std::sync::OnceLock::new();
+
+#[cfg(test)]
+pub(crate) fn mark_test_session_stream_subscription(probe: String) {
+    TEST_SESSION_STREAM_SUBSCRIPTIONS
+        .get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()))
+        .lock()
+        .expect("session stream probe lock")
+        .insert(probe);
+}
+
+#[cfg(test)]
+pub(crate) fn take_test_session_stream_subscription(probe: &str) -> bool {
+    TEST_SESSION_STREAM_SUBSCRIPTIONS
+        .get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()))
+        .lock()
+        .expect("session stream probe lock")
+        .remove(probe)
+}
+
 #[derive(Debug, Clone, Deserialize, Default)]
 /// Query for the ordered session-parts snapshot.
 pub struct SessionPartListQuery {
@@ -122,6 +145,11 @@ pub struct SessionChangeStreamQuery {
     #[cfg(test)]
     #[serde(default)]
     pub test_snapshot_delay_ms: Option<u64>,
+    /// Unique test-only probe marked after the handler has subscribed to the
+    /// live bus. This removes timing guesses from overflow tests.
+    #[cfg(test)]
+    #[serde(default)]
+    pub test_subscription_probe: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]

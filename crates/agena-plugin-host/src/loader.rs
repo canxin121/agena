@@ -305,7 +305,11 @@ async fn prepare_transport(
             message: e.to_string(),
         })?;
     validate_manifest(plugin_id, plugin_key, &prefetched_manifest, "meta/manifest")?;
-    validate_manifest_config(plugin_id, &prefetched_manifest, configured_plugin.config())?;
+    validate_manifest_settings(
+        plugin_id,
+        &prefetched_manifest,
+        configured_plugin.settings(),
+    )?;
     host_handle.set_plugin_manifest_name(plugin_key.clone(), prefetched_manifest.name.clone());
 
     let trust_level = plugin_trust_level(configured_plugin, trusted_keys);
@@ -336,7 +340,7 @@ pub async fn activate_entry(
         plugin_id: plugin_key.clone(),
         host_callback_url: host_handle.callback_url(&plugin_id),
         host_callback_token: host_handle.callback_token(&plugin_id).await,
-        config: prepared.configured_plugin.config().clone(),
+        settings: prepared.configured_plugin.settings().clone(),
         protocol_version: crate::sdk::rpc::PROTOCOL_VERSION,
     };
     let init_params = serde_json::to_value(&init_ctx).map_err(|error| HostError::Init {
@@ -635,22 +639,22 @@ fn validate_manifest(
 }
 
 #[allow(clippy::result_large_err)]
-fn validate_manifest_config(
+fn validate_manifest_settings(
     plugin_id: &str,
     manifest: &PluginManifest,
-    config: &JsonValue,
+    settings_value: &JsonValue,
 ) -> Result<(), HostError> {
-    if config.is_null() {
+    if settings_value.is_null() {
         return Ok(());
     }
     let Some(settings) = manifest.settings.as_ref() else {
         return Err(HostError::Config(format!(
-            "plugin `{plugin_id}` supplied config but does not declare settings"
+            "plugin `{plugin_id}` supplied settings but does not declare a settings contract"
         )));
     };
-    settings.validate_value(config).map_err(|message| {
+    settings.validate_value(settings_value).map_err(|message| {
         HostError::Config(format!(
-            "plugin `{plugin_id}` config does not match manifest settings contract: {message}"
+            "plugin `{plugin_id}` settings do not match manifest settings contract: {message}"
         ))
     })
 }
@@ -658,7 +662,7 @@ fn validate_manifest_config(
 /// Validate a JSON value with the standards-compliant JSON Schema engine used
 /// by Agena plugin manifests and generated tool contracts.
 ///
-/// This is intentionally the same validator used for plugin configuration so
+/// This is intentionally the same validator used for plugin settings so
 /// Tool API callers can reject definitely invalid execution-tool input before
 /// the tool handler runs. Agena extension aliases (`x-agena-aliases`) are
 /// accepted wherever their canonical property is accepted.

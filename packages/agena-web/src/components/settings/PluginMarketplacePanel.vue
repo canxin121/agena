@@ -317,7 +317,10 @@ onMounted(() => void refresh())
           {{ searchResponse.registry_url }}
         </span>
       </div>
-      <div v-if="searchResponse?.marketplace?.name" class="rounded-md border border-border/50 bg-background/70 px-3 py-2 text-xs">
+      <div
+        v-if="searchResponse?.marketplace?.name"
+        class="rounded-md border border-border/50 bg-background/70 px-3 py-2 text-xs"
+      >
         <div class="font-medium">{{ searchResponse.marketplace.name }}</div>
         <div v-if="searchResponse.marketplace.description" class="mt-1 text-muted-foreground">
           {{ searchResponse.marketplace.description }}
@@ -344,9 +347,7 @@ onMounted(() => void refresh())
         <h3 class="text-sm font-semibold">{{ $st('Install directly from GitHub Releases') }}</h3>
         <p class="mt-1 text-xs leading-5 text-muted-foreground">
           {{
-            $st(
-              'Enter owner/repository for the latest release or owner/repository@tag for an exact immutable version.',
-            )
+            $st('Enter owner/repository for the latest release or owner/repository@tag for an exact immutable version.')
           }}
         </p>
       </div>
@@ -380,11 +381,18 @@ onMounted(() => void refresh())
       <div v-if="loading && entries.length === 0" class="text-sm text-muted-foreground">
         {{ $st('Loading marketplace plugins…') }}
       </div>
-      <div v-else-if="entries.length === 0" class="rounded-md border border-border/60 p-6 text-center text-sm text-muted-foreground">
+      <div
+        v-else-if="entries.length === 0"
+        class="rounded-md border border-border/60 p-6 text-center text-sm text-muted-foreground"
+      >
         {{ $st('No marketplace plugins match this query.') }}
       </div>
       <div v-else class="grid gap-3 xl:grid-cols-2">
-        <article v-for="plugin in entries" :key="plugin.plugin_id" class="grid gap-3 rounded-lg border border-border/60 p-4">
+        <article
+          v-for="plugin in entries"
+          :key="plugin.plugin_id"
+          class="grid gap-3 rounded-lg border border-border/60 p-4"
+        >
           <div class="flex flex-wrap items-start justify-between gap-3">
             <div class="min-w-0">
               <h4 class="break-all font-mono text-sm font-semibold">{{ plugin.plugin_id }}</h4>
@@ -394,7 +402,13 @@ onMounted(() => void refresh())
               v{{ plugin.latest_version }}
             </span>
             <span v-if="plugin.review_tier" class="rounded bg-muted px-2 py-1 text-[10px]">
-              {{ plugin.review_tier === 'official' ? $st('Official') : plugin.review_tier === 'verified' ? $st('Verified') : $st('Community') }}
+              {{
+                plugin.review_tier === 'official'
+                  ? $st('Official')
+                  : plugin.review_tier === 'verified'
+                    ? $st('Verified')
+                    : $st('Community')
+              }}
             </span>
             <span v-if="plugin.featured" class="rounded bg-primary/10 px-2 py-1 text-[10px] text-primary">
               {{ $st('Featured') }}
@@ -429,7 +443,8 @@ onMounted(() => void refresh())
           >
             <div class="font-medium text-foreground">{{ $st('Release provenance') }}</div>
             <div v-if="plugin.latest_source_repository" class="mt-1 break-all font-mono">
-              {{ plugin.latest_source_repository }}<template v-if="plugin.latest_source_tag">@{{ plugin.latest_source_tag }}</template>
+              {{ plugin.latest_source_repository
+              }}<template v-if="plugin.latest_source_tag">@{{ plugin.latest_source_tag }}</template>
             </div>
             <div v-if="plugin.latest_source_commit" class="mt-1 font-mono">
               {{ $st('Source commit') }}: {{ plugin.latest_source_commit.slice(0, 12) }}
@@ -488,7 +503,11 @@ onMounted(() => void refresh())
         {{ $st('No marketplace plugins are installed.') }}
       </div>
       <div v-else class="divide-y divide-border/60 rounded-lg border border-border/60">
-        <div v-for="plugin in installed" :key="plugin.plugin_id" class="grid gap-2 px-4 py-3 sm:grid-cols-[minmax(0,1fr)_auto]">
+        <div
+          v-for="plugin in installed"
+          :key="plugin.plugin_id"
+          class="grid gap-2 px-4 py-3 sm:grid-cols-[minmax(0,1fr)_auto]"
+        >
           <div class="min-w-0">
             <div class="flex flex-wrap items-center gap-2">
               <span class="font-mono text-xs font-semibold">{{ plugin.plugin_id }}</span>
@@ -511,7 +530,10 @@ onMounted(() => void refresh())
               <span v-if="plugin.require_signature" class="rounded bg-muted px-2 py-1">
                 {{ $st('Signature required') }}
               </span>
-              <span v-if="!plugin.require_github_distribution && !plugin.require_signature" class="rounded bg-muted px-2 py-1">
+              <span
+                v-if="!plugin.require_github_distribution && !plugin.require_signature"
+                class="rounded bg-muted px-2 py-1"
+              >
                 {{ $st('Digest verified') }}
               </span>
             </div>
@@ -526,12 +548,7 @@ onMounted(() => void refresh())
             >
               {{ $st('Upgrade') }}
             </Button>
-            <Button
-              size="sm"
-              variant="ghost"
-              :disabled="Boolean(actionKey)"
-              @click="uninstallPlugin(plugin.plugin_id)"
-            >
+            <Button size="sm" variant="ghost" :disabled="Boolean(actionKey)" @click="uninstallPlugin(plugin.plugin_id)">
               {{ $st('Uninstall') }}
             </Button>
           </div>

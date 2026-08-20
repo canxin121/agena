@@ -203,6 +203,9 @@ https://github.com/rodrimati1992/abi_stable_crates/blob/master/readme.md#readme_
 #![allow(clippy::type_complexity)]
 #![allow(clippy::ptr_offset_with_cast)]
 #![allow(clippy::assertions_on_constants)]
+// abi_stable_derive 0.11.3 wraps generated impls in const blocks. Newer
+// compilers intentionally preserve those impls but warn about their location.
+#![allow(non_local_definitions)]
 #![deny(missing_docs)]
 #![deny(clippy::missing_safety_doc)]
 // #![deny(clippy::missing_const_for_fn)]

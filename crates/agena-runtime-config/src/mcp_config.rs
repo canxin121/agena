@@ -166,10 +166,10 @@ pub fn mcp_config_from_plugins(plugins: &PluginsConfig) -> Result<McpConfig, Str
     };
     if configured_plugin.disabled()
         || !matches!(configured_plugin.package, PluginPackage::Static { .. })
-        || configured_plugin.config().is_null()
+        || configured_plugin.settings().is_null()
     {
         return Ok(McpConfig::default());
     }
-    serde_json::from_value(configured_plugin.config().clone())
+    serde_json::from_value(configured_plugin.settings().clone())
         .map_err(|error| format!("plugins.list.\"{MCP_PLUGIN_ID}\".settings: {error}"))
 }

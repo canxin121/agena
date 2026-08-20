@@ -265,7 +265,7 @@ pub fn build_plugin_service_plan(
     let input = match (&target, typed_args.as_slice()) {
         (PluginServiceTargetPlan::Inline { .. }, []) => PluginServiceInputPlan::None,
         (_, [ty]) => PluginServiceInputPlan::Typed {
-            ty: type_without_reference(ty),
+            ty: Box::new(type_without_reference(ty)),
             by_ref: type_is_reference(ty),
         },
         (PluginServiceTargetPlan::Endpoint { .. }, []) => {

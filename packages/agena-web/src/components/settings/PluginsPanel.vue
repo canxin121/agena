@@ -278,12 +278,20 @@ const pluginQuery = ref('')
 const transportFilter = ref('')
 const stateFilter = ref('')
 
-const sortedStatuses = computed(() => [...statuses.value].sort((left, right) => left.plugin_id.localeCompare(right.plugin_id)))
+const sortedStatuses = computed(() =>
+  [...statuses.value].sort((left, right) => left.plugin_id.localeCompare(right.plugin_id)),
+)
 const transportOptions = computed(() =>
-  [...new Set(sortedStatuses.value.map((status) => status.kind).filter(Boolean))].map((value) => ({ value, label: value })),
+  [...new Set(sortedStatuses.value.map((status) => status.kind).filter(Boolean))].map((value) => ({
+    value,
+    label: value,
+  })),
 )
 const stateOptions = computed(() =>
-  [...new Set(sortedStatuses.value.map((status) => status.state).filter(Boolean))].map((value) => ({ value, label: value })),
+  [...new Set(sortedStatuses.value.map((status) => status.state).filter(Boolean))].map((value) => ({
+    value,
+    label: value,
+  })),
 )
 const filteredStatuses = computed(() => {
   const query = pluginQuery.value.trim().toLowerCase()
@@ -293,10 +301,14 @@ const filteredStatuses = computed(() => {
     if (!query) return true
     return `${status.plugin_id}
 ${status.kind}
-${status.state}`.toLowerCase().includes(query)
+${status.state}`
+      .toLowerCase()
+      .includes(query)
   })
 })
-const selectedStatus = computed(() => statuses.value.find((status) => status.plugin_id === selectedPluginId.value) || null)
+const selectedStatus = computed(
+  () => statuses.value.find((status) => status.plugin_id === selectedPluginId.value) || null,
+)
 const selectedPlugin = computed(() => selectedInspect.value?.plugin || null)
 const selectedManifest = computed(() => selectedPlugin.value?.manifest || null)
 const selectedActivation = computed(() => selectedPlugin.value?.activation || null)
@@ -305,7 +317,8 @@ const selectedArchitectureNode = computed(
   () => architecture.value?.plugins?.find((node) => node.plugin_id === selectedPluginId.value) || null,
 )
 const selectedReloadDecision = computed(
-  () => architecture.value?.reload?.decisions?.find((decision) => decision.plugin_id === selectedPluginId.value) || null,
+  () =>
+    architecture.value?.reload?.decisions?.find((decision) => decision.plugin_id === selectedPluginId.value) || null,
 )
 const appliedProfiles = computed(() => architecture.value?.profiles?.applied_profiles || [])
 const selectedProfileChanges = computed(() =>
@@ -349,10 +362,18 @@ const selectedIncomingDependencies = computed(() =>
 const selectedOutgoingDependencies = computed(() =>
   (architecture.value?.dependencies || []).filter((edge) => edge.provider_id === selectedPluginId.value),
 )
-const allOperations = computed(() => (Array.isArray(catalog.value?.catalog?.operations) ? catalog.value!.catalog!.operations! : []))
-const selectedOperations = computed(() => allOperations.value.filter((operation) => operation.plugin_id === selectedPluginId.value))
-const selectedTools = computed(() => (Array.isArray(selectedManifest.value?.tools) ? selectedManifest.value!.tools! : []))
-const settingsDiagnostics = computed(() => (Array.isArray(settingsState.value?.diagnostics) ? settingsState.value!.diagnostics! : []))
+const allOperations = computed(() =>
+  Array.isArray(catalog.value?.catalog?.operations) ? catalog.value!.catalog!.operations! : [],
+)
+const selectedOperations = computed(() =>
+  allOperations.value.filter((operation) => operation.plugin_id === selectedPluginId.value),
+)
+const selectedTools = computed(() =>
+  Array.isArray(selectedManifest.value?.tools) ? selectedManifest.value!.tools! : [],
+)
+const settingsDiagnostics = computed(() =>
+  Array.isArray(settingsState.value?.diagnostics) ? settingsState.value!.diagnostics! : [],
+)
 const settingsDirty = computed(() => {
   if (!settingsState.value) return false
   return JSON.stringify(settingsDraft.value) !== JSON.stringify(settingsState.value.effective)
@@ -383,7 +404,9 @@ function panelTabFromRequest(value: unknown): PanelTab | null {
 }
 
 function statusFailure(status: PluginStatus | null): string {
-  return String(status?.last_failure?.user?.fallback || status?.last_failure?.rendered || status?.last_failure?.message || '').trim()
+  return String(
+    status?.last_failure?.user?.fallback || status?.last_failure?.rendered || status?.last_failure?.message || '',
+  ).trim()
 }
 
 function statusTone(state: string): string {
@@ -395,7 +418,11 @@ function statusTone(state: string): string {
 
 function preferredPluginId(): string {
   const contributedIds = new Set(allOperations.value.map((operation) => operation.plugin_id))
-  return sortedStatuses.value.find((status) => contributedIds.has(status.plugin_id))?.plugin_id || sortedStatuses.value[0]?.plugin_id || ''
+  return (
+    sortedStatuses.value.find((status) => contributedIds.has(status.plugin_id))?.plugin_id ||
+    sortedStatuses.value[0]?.plugin_id ||
+    ''
+  )
 }
 
 function operationKey(operation: PluginOperationCatalogItem): string {
@@ -419,8 +446,10 @@ function resultPayload(value: JsonValue | undefined): string {
 function showOperationFeedback(result: PluginOperationResult) {
   const message = [result.title, result.summary].filter((value) => String(value || '').trim()).join(': ')
   if (result.status === 'succeeded') toasts.push('success', message || st('Plugin operation completed'))
-  else if (result.status === 'failed') toasts.push('error', result.detail?.trim() || message || st('Plugin operation failed'))
-  else toasts.push('info', result.detail?.trim() || message || st('Plugin operation {status}', { status: result.status }))
+  else if (result.status === 'failed')
+    toasts.push('error', result.detail?.trim() || message || st('Plugin operation failed'))
+  else
+    toasts.push('info', result.detail?.trim() || message || st('Plugin operation {status}', { status: result.status }))
 }
 
 async function applyOperationEffect(effect: PluginHostEffect) {
@@ -431,7 +460,8 @@ async function applyOperationEffect(effect: PluginHostEffect) {
   }
   if (effect.kind === 'open_url') {
     const url = new URL(effect.url, window.location.href)
-    if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error(st('Plugin URLs must use HTTP or HTTPS.'))
+    if (url.protocol !== 'http:' && url.protocol !== 'https:')
+      throw new Error(st('Plugin URLs must use HTTP or HTTPS.'))
     window.open(url.toString(), '_blank', 'noopener,noreferrer')
     return
   }
@@ -493,7 +523,10 @@ async function saveSettings() {
     )
     settingsState.value = response.settings
     settingsDraft.value = clonePluginJson(response.settings.effective)
-    toasts.push('success', response.reload_required ? st('Plugin settings saved and Runtime reloaded') : st('Plugin settings saved'))
+    toasts.push(
+      'success',
+      response.reload_required ? st('Plugin settings saved and Runtime reloaded') : st('Plugin settings saved'),
+    )
     await refresh()
   } catch (err) {
     toasts.push('error', err instanceof Error ? err.message : String(err))
@@ -524,9 +557,7 @@ async function loadSelectedPlugin() {
     selectedInspect.value = inspect
     logs.value = Array.isArray(logResponse?.logs) ? logResponse.logs : []
     if (inspect.plugin?.manifest?.settings) {
-      const loadedSettings = await apiJson<PluginSettingsState>(
-        `/api/v1/plugins/${encodeURIComponent(id)}/settings`,
-      )
+      const loadedSettings = await apiJson<PluginSettingsState>(`/api/v1/plugins/${encodeURIComponent(id)}/settings`)
       settingsState.value = loadedSettings
       settingsDraft.value = clonePluginJson(loadedSettings.effective)
     }
@@ -551,7 +582,12 @@ async function refresh() {
     architecture.value = architectureData && typeof architectureData === 'object' ? architectureData : null
     const ids = new Set(statuses.value.map((status) => status.plugin_id))
     const requested = String(route.query.plugin || '').trim()
-    const target = requested && ids.has(requested) ? requested : ids.has(selectedPluginId.value) ? selectedPluginId.value : preferredPluginId()
+    const target =
+      requested && ids.has(requested)
+        ? requested
+        : ids.has(selectedPluginId.value)
+          ? selectedPluginId.value
+          : preferredPluginId()
     if (selectedPluginId.value === target) await loadSelectedPlugin()
     else selectedPluginId.value = target
   } catch (err) {
@@ -598,7 +634,11 @@ onMounted(() => void refresh())
       <div>
         <div class="text-lg font-medium">{{ $st('Plugin Workbench') }}</div>
         <div class="mt-1 text-sm text-muted-foreground">
-          {{ $st('Dependency-aware lifecycle, shared settings contracts, server-owned operations, tools, logs and diagnostics.') }}
+          {{
+            $st(
+              'Dependency-aware lifecycle, shared settings contracts, server-owned operations, tools, logs and diagnostics.',
+            )
+          }}
         </div>
       </div>
       <IconButton
@@ -613,11 +653,16 @@ onMounted(() => void refresh())
       </IconButton>
     </div>
 
-    <div v-if="error" class="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+    <div
+      v-if="error"
+      class="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+    >
       {{ error }}
     </div>
 
-    <section class="grid gap-3 rounded-lg border border-border/60 bg-muted/10 p-3 md:grid-cols-[minmax(0,1fr)_12rem_12rem]">
+    <section
+      class="grid gap-3 rounded-lg border border-border/60 bg-muted/10 p-3 md:grid-cols-[minmax(0,1fr)_12rem_12rem]"
+    >
       <SearchInput
         v-model="pluginQuery"
         :placeholder="$st('Search plugins')"
@@ -637,11 +682,18 @@ onMounted(() => void refresh())
         :empty-label="$st('All states')"
       />
     </section>
-    <div v-if="loading && statuses.length === 0" class="text-sm text-muted-foreground">{{ $st('Loading plugins…') }}</div>
-    <div v-else-if="statuses.length === 0" class="text-sm text-muted-foreground">{{ $st('No plugins are loaded.') }}</div>
+    <div v-if="loading && statuses.length === 0" class="text-sm text-muted-foreground">
+      {{ $st('Loading plugins…') }}
+    </div>
+    <div v-else-if="statuses.length === 0" class="text-sm text-muted-foreground">
+      {{ $st('No plugins are loaded.') }}
+    </div>
 
     <div v-else class="grid min-h-[38rem] grid-cols-1 border-y border-border/60 md:grid-cols-[15rem_minmax(0,1fr)]">
-      <nav class="border-b border-border/60 py-3 md:border-b-0 md:border-r md:pr-3" :aria-label="$st('Configured plugins')">
+      <nav
+        class="border-b border-border/60 py-3 md:border-b-0 md:border-r md:pr-3"
+        :aria-label="$st('Configured plugins')"
+      >
         <button
           v-for="status in filteredStatuses"
           :key="status.plugin_id"
@@ -668,14 +720,18 @@ onMounted(() => void refresh())
           <header class="flex flex-wrap items-start justify-between gap-3">
             <div class="min-w-0">
               <h2 class="break-all font-mono text-base font-semibold">{{ selectedPluginId }}</h2>
-              <p v-if="selectedManifest?.summary" class="mt-1 text-sm text-muted-foreground">{{ selectedManifest.summary }}</p>
+              <p v-if="selectedManifest?.summary" class="mt-1 text-sm text-muted-foreground">
+                {{ selectedManifest.summary }}
+              </p>
               <div class="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
                 <span :class="statusTone(selectedStatus.state)">{{ selectedStatus.state }}</span>
                 <span>{{ $st('transport:') }} {{ selectedStatus.kind }}</span>
                 <span v-if="selectedManifest?.version">{{ $st('version:') }} {{ selectedManifest.version }}</span>
                 <span>{{ selectedOperations.length }} {{ $st('operations') }}</span>
                 <span>{{ selectedTools.length }} {{ $st('tools') }}</span>
-                <span v-if="catalog?.tool_registry_generation !== undefined">{{ $st('tool registry:') }} {{ catalog.tool_registry_generation }}</span>
+                <span v-if="catalog?.tool_registry_generation !== undefined"
+                  >{{ $st('tool registry:') }} {{ catalog.tool_registry_generation }}</span
+                >
               </div>
             </div>
           </header>
@@ -688,7 +744,9 @@ onMounted(() => void refresh())
               role="tab"
               :aria-selected="activeTab === tab.id"
               class="shrink-0 border-b-2 px-3 py-2 text-xs font-medium"
-              :class="activeTab === tab.id ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground'"
+              :class="
+                activeTab === tab.id ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground'
+              "
               @click="selectTab(tab.id)"
             >
               {{ tab.label }}
@@ -708,11 +766,18 @@ onMounted(() => void refresh())
               <div v-if="appliedProfiles.length" class="rounded-md border border-border/60 bg-muted/20 p-4">
                 <div class="text-xs font-medium text-muted-foreground">{{ $st('Applied plugin profiles') }}</div>
                 <div class="mt-2 flex flex-wrap gap-1.5">
-                  <span v-for="profile in appliedProfiles" :key="profile" class="rounded bg-muted px-2 py-1 font-mono text-[10px]">
+                  <span
+                    v-for="profile in appliedProfiles"
+                    :key="profile"
+                    class="rounded bg-muted px-2 py-1 font-mono text-[10px]"
+                  >
                     {{ profile }}
                   </span>
                 </div>
-                <div v-if="selectedProfileChanges.length" class="mt-3 divide-y divide-border/50 rounded-md border border-border/50">
+                <div
+                  v-if="selectedProfileChanges.length"
+                  class="mt-3 divide-y divide-border/50 rounded-md border border-border/50"
+                >
                   <div
                     v-for="change in selectedProfileChanges"
                     :key="`${change.profile}:${change.action}`"
@@ -723,7 +788,11 @@ onMounted(() => void refresh())
                       <span class="text-muted-foreground">{{ change.action }}</span>
                     </div>
                     <div v-if="change.paths?.length" class="mt-2 flex flex-wrap gap-1.5">
-                      <span v-for="path in change.paths" :key="path" class="rounded bg-background px-2 py-1 font-mono text-[10px] text-muted-foreground">
+                      <span
+                        v-for="path in change.paths"
+                        :key="path"
+                        class="rounded bg-background px-2 py-1 font-mono text-[10px] text-muted-foreground"
+                      >
                         {{ path }}
                       </span>
                     </div>
@@ -734,13 +803,20 @@ onMounted(() => void refresh())
               <div v-if="selectedReloadDecision" class="rounded-md border border-border/60 bg-muted/20 p-4">
                 <div class="flex flex-wrap items-center justify-between gap-2">
                   <div class="text-xs font-medium text-muted-foreground">{{ $st('Current reload decision') }}</div>
-                  <span class="rounded bg-muted px-2 py-1 font-mono text-[10px]">{{ selectedReloadDecision.action }}</span>
+                  <span class="rounded bg-muted px-2 py-1 font-mono text-[10px]">{{
+                    selectedReloadDecision.action
+                  }}</span>
                 </div>
                 <div class="mt-2 text-xs text-muted-foreground">
-                  {{ selectedReloadDecision.reasons?.length ? selectedReloadDecision.reasons.join(' · ') : $st('No restart reason; the transport is reusable.') }}
+                  {{
+                    selectedReloadDecision.reasons?.length
+                      ? selectedReloadDecision.reasons.join(' · ')
+                      : $st('No restart reason; the transport is reusable.')
+                  }}
                 </div>
                 <div v-if="selectedReloadDecision.triggered_by?.length" class="mt-2 text-xs text-muted-foreground">
-                  {{ $st('Triggered by:') }} <span class="font-mono">{{ selectedReloadDecision.triggered_by.join(', ') }}</span>
+                  {{ $st('Triggered by:') }}
+                  <span class="font-mono">{{ selectedReloadDecision.triggered_by.join(', ') }}</span>
                 </div>
               </div>
 
@@ -755,7 +831,9 @@ onMounted(() => void refresh())
                 </div>
                 <div>
                   <dt class="text-xs text-muted-foreground">{{ $st('Activation epoch') }}</dt>
-                  <dd class="mt-1 break-all font-mono text-xs">{{ selectedArchitectureNode?.activation_epoch || $st('Not computed') }}</dd>
+                  <dd class="mt-1 break-all font-mono text-xs">
+                    {{ selectedArchitectureNode?.activation_epoch || $st('Not computed') }}
+                  </dd>
                 </div>
                 <div>
                   <dt class="text-xs text-muted-foreground">{{ $st('Effect scope') }}</dt>
@@ -779,7 +857,10 @@ onMounted(() => void refresh())
                 </div>
               </dl>
 
-              <div v-if="selectedIncomingDependencies.length || selectedOutgoingDependencies.length" class="grid gap-4 lg:grid-cols-2">
+              <div
+                v-if="selectedIncomingDependencies.length || selectedOutgoingDependencies.length"
+                class="grid gap-4 lg:grid-cols-2"
+              >
                 <div v-if="selectedIncomingDependencies.length">
                   <h3 class="text-xs font-medium text-muted-foreground">{{ $st('Depends on') }}</h3>
                   <div class="mt-2 divide-y divide-border/50 rounded-md border border-border/60">
@@ -818,7 +899,10 @@ onMounted(() => void refresh())
                 </div>
               </div>
 
-              <div v-if="selectedServiceImports.length || selectedServiceExports.length" class="grid gap-4 lg:grid-cols-2">
+              <div
+                v-if="selectedServiceImports.length || selectedServiceExports.length"
+                class="grid gap-4 lg:grid-cols-2"
+              >
                 <div v-if="selectedServiceImports.length">
                   <h3 class="text-xs font-medium text-muted-foreground">{{ $st('Service imports') }}</h3>
                   <div class="mt-2 divide-y divide-border/50 rounded-md border border-border/60">
@@ -832,10 +916,15 @@ onMounted(() => void refresh())
                         <span class="font-mono text-muted-foreground">{{ service.state }}</span>
                       </div>
                       <div class="mt-1 text-muted-foreground">
-                        {{ service.resolved_provider || service.provider || $st('No provider bound') }} · {{ service.optional ? $st('optional') : $st('required') }}
+                        {{ service.resolved_provider || service.provider || $st('No provider bound') }} ·
+                        {{ service.optional ? $st('optional') : $st('required') }}
                       </div>
                       <div v-if="service.methods?.length" class="mt-2 flex flex-wrap gap-1.5">
-                        <span v-for="method in service.methods" :key="method.id" class="rounded bg-muted px-2 py-1 font-mono text-[10px]">
+                        <span
+                          v-for="method in service.methods"
+                          :key="method.id"
+                          class="rounded bg-muted px-2 py-1 font-mono text-[10px]"
+                        >
                           {{ method.id }}
                         </span>
                       </div>
@@ -855,7 +944,11 @@ onMounted(() => void refresh())
                         <span class="text-muted-foreground">{{ $st('provider') }}</span>
                       </div>
                       <div v-if="service.methods?.length" class="mt-2 flex flex-wrap gap-1.5">
-                        <span v-for="method in service.methods" :key="method.id" class="rounded bg-muted px-2 py-1 font-mono text-[10px]">
+                        <span
+                          v-for="method in service.methods"
+                          :key="method.id"
+                          class="rounded bg-muted px-2 py-1 font-mono text-[10px]"
+                        >
                           {{ method.id }}
                         </span>
                       </div>
@@ -865,26 +958,42 @@ onMounted(() => void refresh())
               </div>
 
               <div
-                v-if="selectedPipelineHandlers.length || selectedToolRegistrations.length || selectedOperationRegistrations.length"
+                v-if="
+                  selectedPipelineHandlers.length ||
+                  selectedToolRegistrations.length ||
+                  selectedOperationRegistrations.length
+                "
                 class="grid gap-4 lg:grid-cols-2"
               >
                 <div v-if="selectedPipelineHandlers.length">
                   <h3 class="text-xs font-medium text-muted-foreground">{{ $st('Typed pipeline handlers') }}</h3>
                   <div class="mt-2 divide-y divide-border/50 rounded-md border border-border/60">
-                    <div v-for="pipeline in selectedPipelineHandlers" :key="pipeline.definition.id" class="px-3 py-2 text-xs">
+                    <div
+                      v-for="pipeline in selectedPipelineHandlers"
+                      :key="pipeline.definition.id"
+                      class="px-3 py-2 text-xs"
+                    >
                       <div class="flex flex-wrap items-center justify-between gap-2">
                         <span class="font-mono">{{ pipeline.definition.id }}</span>
                         <span class="text-muted-foreground">
                           {{ pipeline.definition.mode }}
-                          · {{ pipeline.definition.durable ? $st('durable') : $st('live') }}
-                          · {{ pipeline.definition.scoped ? $st('scoped') : $st('global') }}
-                          <template v-if="pipeline.failure_policy"> · {{ pipeline.failure_policy }} {{ $st('on error') }}</template>
+                          · {{ pipeline.definition.durable ? $st('durable') : $st('live') }} ·
+                          {{ pipeline.definition.scoped ? $st('scoped') : $st('global') }}
+                          <template v-if="pipeline.failure_policy">
+                            · {{ pipeline.failure_policy }} {{ $st('on error') }}</template
+                          >
                         </span>
                       </div>
                       <div class="mt-2 space-y-1">
-                        <div v-for="handler in pipeline.handlers" :key="handler.registration" class="flex items-center justify-between gap-2">
+                        <div
+                          v-for="handler in pipeline.handlers"
+                          :key="handler.registration"
+                          class="flex items-center justify-between gap-2"
+                        >
                           <span>{{ handler.id }}</span>
-                          <span class="font-mono text-[10px] text-muted-foreground">{{ $st('priority') }} {{ handler.priority }}</span>
+                          <span class="font-mono text-[10px] text-muted-foreground"
+                            >{{ $st('priority') }} {{ handler.priority }}</span
+                          >
                         </div>
                       </div>
                     </div>
@@ -893,10 +1002,15 @@ onMounted(() => void refresh())
                 <div v-if="selectedToolRegistrations.length">
                   <h3 class="text-xs font-medium text-muted-foreground">{{ $st('Scoped tool registrations') }}</h3>
                   <div class="mt-2 divide-y divide-border/50 rounded-md border border-border/60">
-                    <div v-for="entry in selectedToolRegistrations" :key="`${entry.generation}:${entry.key}`" class="px-3 py-2 text-xs">
+                    <div
+                      v-for="entry in selectedToolRegistrations"
+                      :key="`${entry.generation}:${entry.key}`"
+                      class="px-3 py-2 text-xs"
+                    >
                       <div class="font-mono">{{ entry.key }}</div>
                       <div class="mt-1 text-muted-foreground">
-                        {{ entry.layer.kind === 'global' ? $st('global') : entry.layer.scope }} · {{ $st('generation') }} {{ entry.generation }}
+                        {{ entry.layer.kind === 'global' ? $st('global') : entry.layer.scope }} ·
+                        {{ $st('generation') }} {{ entry.generation }}
                       </div>
                     </div>
                   </div>
@@ -904,10 +1018,15 @@ onMounted(() => void refresh())
                 <div v-if="selectedOperationRegistrations.length">
                   <h3 class="text-xs font-medium text-muted-foreground">{{ $st('Scoped operation registrations') }}</h3>
                   <div class="mt-2 divide-y divide-border/50 rounded-md border border-border/60">
-                    <div v-for="entry in selectedOperationRegistrations" :key="`${entry.generation}:${entry.key}`" class="px-3 py-2 text-xs">
+                    <div
+                      v-for="entry in selectedOperationRegistrations"
+                      :key="`${entry.generation}:${entry.key}`"
+                      class="px-3 py-2 text-xs"
+                    >
                       <div class="font-mono">{{ entry.key }}</div>
                       <div class="mt-1 text-muted-foreground">
-                        {{ entry.layer.kind === 'global' ? $st('global') : entry.layer.scope }} · {{ $st('generation') }} {{ entry.generation }}
+                        {{ entry.layer.kind === 'global' ? $st('global') : entry.layer.scope }} ·
+                        {{ $st('generation') }} {{ entry.generation }}
                       </div>
                     </div>
                   </div>
@@ -917,7 +1036,11 @@ onMounted(() => void refresh())
               <div v-if="selectedAuthority?.plugin_capabilities?.length">
                 <h3 class="text-xs font-medium text-muted-foreground">{{ $st('Plugin capabilities') }}</h3>
                 <div class="mt-2 flex flex-wrap gap-1.5">
-                  <span v-for="capability in selectedAuthority.plugin_capabilities" :key="capability" class="rounded bg-muted px-2 py-1 font-mono text-[11px]">
+                  <span
+                    v-for="capability in selectedAuthority.plugin_capabilities"
+                    :key="capability"
+                    class="rounded bg-muted px-2 py-1 font-mono text-[11px]"
+                  >
                     {{ capability }}
                   </span>
                 </div>
@@ -925,7 +1048,9 @@ onMounted(() => void refresh())
             </section>
 
             <section v-else-if="activeTab === 'settings'" class="space-y-5">
-              <div v-if="!selectedManifest?.settings" class="text-sm text-muted-foreground">{{ $st('This plugin does not expose editable settings.') }}</div>
+              <div v-if="!selectedManifest?.settings" class="text-sm text-muted-foreground">
+                {{ $st('This plugin does not expose editable settings.') }}
+              </div>
               <template v-else-if="settingsState">
                 <PluginContractEditor
                   :node="settingsState.contract.root"
@@ -933,13 +1058,23 @@ onMounted(() => void refresh())
                   :disabled="settingsSaving"
                   @update:model-value="settingsDraft = $event"
                 />
-                <div v-if="settingsDiagnostics.length" class="rounded-md border border-destructive/30 bg-destructive/5 p-3">
-                  <div v-for="diagnostic in settingsDiagnostics" :key="`${diagnostic.path}:${diagnostic.message}`" class="text-xs text-destructive">
-                    <span v-if="diagnostic.path" class="font-mono">{{ diagnostic.path }}:</span> {{ diagnostic.message }}
+                <div
+                  v-if="settingsDiagnostics.length"
+                  class="rounded-md border border-destructive/30 bg-destructive/5 p-3"
+                >
+                  <div
+                    v-for="diagnostic in settingsDiagnostics"
+                    :key="`${diagnostic.path}:${diagnostic.message}`"
+                    class="text-xs text-destructive"
+                  >
+                    <span v-if="diagnostic.path" class="font-mono">{{ diagnostic.path }}:</span>
+                    {{ diagnostic.message }}
                   </div>
                 </div>
                 <div class="flex flex-wrap justify-end gap-2 border-t border-border/60 pt-4">
-                  <Button variant="outline" size="sm" :disabled="settingsSaving" @click="resetSettings">{{ $st('Reset to defaults') }}</Button>
+                  <Button variant="outline" size="sm" :disabled="settingsSaving" @click="resetSettings">{{
+                    $st('Reset to defaults')
+                  }}</Button>
                   <Button size="sm" :disabled="settingsSaving || !settingsDirty" @click="saveSettings">
                     {{ settingsSaving ? $st('Saving...') : $st('Save settings') }}
                   </Button>
@@ -948,18 +1083,28 @@ onMounted(() => void refresh())
             </section>
 
             <section v-else-if="activeTab === 'operations'" class="space-y-5">
-              <div v-if="selectedOperations.length === 0" class="text-sm text-muted-foreground">{{ $st('This plugin does not expose user operations.') }}</div>
-              <article v-for="operation in selectedOperations" :key="operationKey(operation)" class="space-y-3 border-b border-border/60 pb-5 last:border-b-0">
+              <div v-if="selectedOperations.length === 0" class="text-sm text-muted-foreground">
+                {{ $st('This plugin does not expose user operations.') }}
+              </div>
+              <article
+                v-for="operation in selectedOperations"
+                :key="operationKey(operation)"
+                class="space-y-3 border-b border-border/60 pb-5 last:border-b-0"
+              >
                 <div class="flex flex-wrap items-start justify-between gap-3">
                   <div class="min-w-0">
                     <div class="flex items-center gap-2 text-sm font-medium">
                       <RiCommandLine class="h-4 w-4 text-muted-foreground" />
                       <span>{{ operation.title }}</span>
                     </div>
-                    <p v-if="operation.description" class="mt-1 text-xs text-muted-foreground">{{ operation.description }}</p>
+                    <p v-if="operation.description" class="mt-1 text-xs text-muted-foreground">
+                      {{ operation.description }}
+                    </p>
                     <div class="mt-1 flex flex-wrap gap-x-3 text-[10px] text-muted-foreground">
                       <span class="font-mono">{{ operation.id }}</span>
-                      <span v-if="operation.slash" class="font-mono">/{{ String(operation.slash).replace(/^\/+/, '') }}</span>
+                      <span v-if="operation.slash" class="font-mono"
+                        >/{{ String(operation.slash).replace(/^\/+/, '') }}</span
+                      >
                       <span>{{ operation.category || operation.group }}</span>
                       <span>{{ operation.target.kind }}</span>
                     </div>
@@ -982,28 +1127,55 @@ onMounted(() => void refresh())
                   <div class="text-sm font-semibold">{{ lastOperationResult.title }}</div>
                   <span class="rounded bg-muted px-2 py-1 font-mono text-[10px]">{{ lastOperationResult.status }}</span>
                 </div>
-                <p v-if="lastOperationResult.summary" class="mt-2 text-sm text-muted-foreground">{{ lastOperationResult.summary }}</p>
-                <pre v-if="lastOperationResult.detail" class="mt-3 max-h-72 overflow-auto whitespace-pre-wrap break-words rounded bg-muted/40 p-3 text-xs">{{ lastOperationResult.detail }}</pre>
-                <pre v-if="resultPayload(lastOperationResult.output)" class="mt-3 max-h-72 overflow-auto whitespace-pre-wrap break-words rounded bg-muted/40 p-3 text-xs">{{ resultPayload(lastOperationResult.output) }}</pre>
-                <div v-for="diagnostic in lastOperationResult.diagnostics || []" :key="`${diagnostic.code}:${diagnostic.path || ''}`" class="mt-2 text-xs text-destructive">
-                  <span class="font-mono">{{ diagnostic.code }}</span>: {{ diagnostic.message }}
+                <p v-if="lastOperationResult.summary" class="mt-2 text-sm text-muted-foreground">
+                  {{ lastOperationResult.summary }}
+                </p>
+                <pre
+                  v-if="lastOperationResult.detail"
+                  class="mt-3 max-h-72 overflow-auto whitespace-pre-wrap break-words rounded bg-muted/40 p-3 text-xs"
+                  >{{ lastOperationResult.detail }}</pre
+                >
+                <pre
+                  v-if="resultPayload(lastOperationResult.output)"
+                  class="mt-3 max-h-72 overflow-auto whitespace-pre-wrap break-words rounded bg-muted/40 p-3 text-xs"
+                  >{{ resultPayload(lastOperationResult.output) }}</pre
+                >
+                <div
+                  v-for="diagnostic in lastOperationResult.diagnostics || []"
+                  :key="`${diagnostic.code}:${diagnostic.path || ''}`"
+                  class="mt-2 text-xs text-destructive"
+                >
+                  <span class="font-mono">{{ diagnostic.code }}</span
+                  >: {{ diagnostic.message }}
                 </div>
               </div>
             </section>
 
             <section v-else-if="activeTab === 'tools'" class="space-y-4">
-              <div v-if="selectedTools.length === 0" class="text-sm text-muted-foreground">{{ $st('This plugin does not register tools.') }}</div>
-              <div v-for="tool in selectedTools" :key="String(tool.name || '')" class="border-b border-border/60 pb-4 last:border-b-0">
+              <div v-if="selectedTools.length === 0" class="text-sm text-muted-foreground">
+                {{ $st('This plugin does not register tools.') }}
+              </div>
+              <div
+                v-for="tool in selectedTools"
+                :key="String(tool.name || '')"
+                class="border-b border-border/60 pb-4 last:border-b-0"
+              >
                 <div class="font-mono text-sm font-semibold">{{ tool.name || $st('Unnamed tool') }}</div>
-                <p class="mt-1 text-xs text-muted-foreground">{{ tool.summary || tool.docs?.summary || tool.description || $st('No summary.') }}</p>
+                <p class="mt-1 text-xs text-muted-foreground">
+                  {{ tool.summary || tool.docs?.summary || tool.description || $st('No summary.') }}
+                </p>
                 <div v-if="tool.tags?.length" class="mt-2 flex flex-wrap gap-1.5">
-                  <span v-for="tag in tool.tags" :key="tag" class="rounded bg-muted px-2 py-1 font-mono text-[10px]">{{ tag }}</span>
+                  <span v-for="tag in tool.tags" :key="tag" class="rounded bg-muted px-2 py-1 font-mono text-[10px]">{{
+                    tag
+                  }}</span>
                 </div>
               </div>
             </section>
 
             <section v-else-if="activeTab === 'logs'" class="space-y-2">
-              <div v-if="logs.length === 0" class="text-sm text-muted-foreground">{{ $st('No plugin logs recorded.') }}</div>
+              <div v-if="logs.length === 0" class="text-sm text-muted-foreground">
+                {{ $st('No plugin logs recorded.') }}
+              </div>
               <div v-for="entry in logs" :key="entry.seq" class="border-b border-border/50 py-2 last:border-b-0">
                 <div class="flex flex-wrap gap-x-3 text-[10px] text-muted-foreground">
                   <span>#{{ entry.seq }}</span>
@@ -1017,18 +1189,32 @@ onMounted(() => void refresh())
 
             <section v-else class="space-y-4">
               <MarkdownRenderer v-if="selectedManifest?.help" :content="selectedManifest.help" source-path="" />
-              <div v-if="statusFailure(selectedStatus)" class="rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
+              <div
+                v-if="statusFailure(selectedStatus)"
+                class="rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive"
+              >
                 {{ statusFailure(selectedStatus) }}
               </div>
-              <div v-if="selectedBlocked" class="rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
+              <div
+                v-if="selectedBlocked"
+                class="rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive"
+              >
                 {{ selectedBlocked.message }}
               </div>
-              <div v-for="diagnostic in settingsDiagnostics" :key="`${diagnostic.path}:${diagnostic.message}`" class="rounded-md border border-warning/30 bg-warning/5 p-3 text-xs">
+              <div
+                v-for="diagnostic in settingsDiagnostics"
+                :key="`${diagnostic.path}:${diagnostic.message}`"
+                class="rounded-md border border-warning/30 bg-warning/5 p-3 text-xs"
+              >
                 <span v-if="diagnostic.path" class="font-mono">{{ diagnostic.path }}:</span> {{ diagnostic.message }}
               </div>
               <div v-if="selectedEffects.length" class="space-y-2">
                 <h3 class="text-xs font-medium text-muted-foreground">{{ $st('Owned effects') }}</h3>
-                <div v-for="effect in selectedEffects" :key="effect.id" class="rounded-md border border-border/60 px-3 py-2 text-xs">
+                <div
+                  v-for="effect in selectedEffects"
+                  :key="effect.id"
+                  class="rounded-md border border-border/60 px-3 py-2 text-xs"
+                >
                   <div class="flex flex-wrap items-center justify-between gap-2">
                     <span class="font-mono">#{{ effect.id }} · {{ effect.kind }}</span>
                     <span class="font-mono text-muted-foreground">{{ effect.state }}</span>
@@ -1037,7 +1223,15 @@ onMounted(() => void refresh())
                   <div v-if="effect.error" class="mt-1 text-destructive">{{ effect.error }}</div>
                 </div>
               </div>
-              <div v-if="!statusFailure(selectedStatus) && !selectedBlocked && settingsDiagnostics.length === 0 && selectedEffects.every((effect) => effect.state !== 'failed')" class="text-sm text-muted-foreground">
+              <div
+                v-if="
+                  !statusFailure(selectedStatus) &&
+                  !selectedBlocked &&
+                  settingsDiagnostics.length === 0 &&
+                  selectedEffects.every((effect) => effect.state !== 'failed')
+                "
+                class="text-sm text-muted-foreground"
+              >
                 {{ $st('No plugin diagnostics are currently reported.') }}
               </div>
             </section>

@@ -308,7 +308,7 @@ impl GeminiToolsPlugin {
     async fn init(&self, ctx: InitContext, host: Arc<dyn HostClient>) -> SdkResult<InitOutcome> {
         let config: GeminiToolsConfig =
             agena_plugin_host::sdk::macro_support::parse_defaulted_settings(
-                ctx.config,
+                ctx.settings,
                 "invalid Gemini tools plugin config",
             )?;
         self.workspace_root

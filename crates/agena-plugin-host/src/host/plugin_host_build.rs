@@ -1,5 +1,5 @@
 enum BuildCandidate {
-    Prepared(PreparedPlugin),
+    Prepared(Box<PreparedPlugin>),
     Reused(Arc<LoadedPlugin>),
 }
 
@@ -130,7 +130,7 @@ impl PluginHost {
             {
                 Ok(prepared) => {
                     prefetched_manifests.insert(id.clone(), prepared.manifest.clone());
-                    candidates.insert(id.clone(), BuildCandidate::Prepared(prepared));
+                    candidates.insert(id.clone(), BuildCandidate::Prepared(Box::new(prepared)));
                 }
                 Err(error) => {
                     let block = crate::activation::PluginActivationBlock {
@@ -312,7 +312,7 @@ impl PluginHost {
                 .await
                 {
                     Ok(prepared) if prepared.manifest == previous_manifest => {
-                        candidate = BuildCandidate::Prepared(prepared);
+                        candidate = BuildCandidate::Prepared(Box::new(prepared));
                     }
                     Ok(prepared) => {
                         let _ = shutdown_transport(prepared.transport()).await;
@@ -379,7 +379,7 @@ impl PluginHost {
                 }
                 BuildCandidate::Prepared(prepared) => {
                     let transport = prepared.transport();
-                    match activate_entry(prepared, &host_handle, &agena_version, &workspace_root)
+                    match activate_entry(*prepared, &host_handle, &agena_version, &workspace_root)
                         .await
                     {
                         Ok(plugin) => (Arc::new(plugin), false),
@@ -817,6 +817,56 @@ mod tests {
     use super::{PluginHost, PluginHostBuildConfig, PluginServiceBinding, PluginServiceBindingKey};
     use crate::host::StaticPluginRegistration;
 
+    struct CommandBeforeContextPlugin {
+        manifest: PluginManifest,
+        contexts: Arc<Mutex<Vec<crate::sdk::host_api::HostCallbackContext>>>,
+    }
+
+    impl CommandBeforeContextPlugin {
+        fn new(contexts: Arc<Mutex<Vec<crate::sdk::host_api::HostCallbackContext>>>) -> Self {
+            let mut manifest = PluginManifest::new("example", "command-context", "0.1.0");
+            manifest.hooks = HookSubscription::COMMAND_BEFORE | HookSubscription::COMMAND_AFTER;
+            Self { manifest, contexts }
+        }
+    }
+
+    #[async_trait]
+    impl Plugin for CommandBeforeContextPlugin {
+        fn manifest(&self) -> PluginManifest {
+            self.manifest.clone()
+        }
+
+        async fn init(
+            &self,
+            _ctx: InitContext,
+            _host: Arc<dyn HostClient>,
+        ) -> crate::sdk::Result<InitOutcome> {
+            Ok(InitOutcome::ack(self.manifest()))
+        }
+
+        async fn command_execute_before(
+            &self,
+            _input: crate::sdk::CommandBeforeInput,
+        ) -> crate::sdk::Result<Option<crate::sdk::CommandBeforeResponse>> {
+            self.contexts
+                .lock()
+                .expect("command hook context lock")
+                .push(crate::sdk::host_api::current_host_callback_context().unwrap_or_default());
+            Ok(None)
+        }
+
+        async fn command_execute_after(
+            &self,
+            _input: crate::sdk::CommandAfterInput,
+        ) -> crate::sdk::Result<Option<crate::sdk::CommandAfterPatch>> {
+            self.contexts
+                .lock()
+                .expect("command hook context lock")
+                .push(crate::sdk::host_api::current_host_callback_context().unwrap_or_default());
+            Ok(None)
+        }
+    }
+
     struct RecordingPlugin {
         manifest: PluginManifest,
         events: Arc<Mutex<Vec<String>>>,
@@ -941,6 +991,100 @@ mod tests {
             },
             ..ConfiguredPlugin::static_default()
         }
+    }
+
+    #[tokio::test]
+    async fn command_hooks_receive_host_issued_callback_authority() {
+        let contexts = Arc::new(Mutex::new(Vec::new()));
+        let plugin_key: PluginKey = "example.command-context".parse().expect("plugin key");
+        let mut config = PluginsConfig::default();
+        config.list.insert(plugin_key.to_string(), configured(&[]));
+        let host = PluginHost::new(PluginHostBuildConfig {
+            static_plugins: vec![StaticPluginRegistration::new(
+                plugin_key,
+                CommandBeforeContextPlugin::new(Arc::clone(&contexts)),
+            )],
+            config,
+            workspace_root: PathBuf::from("/tmp/agena-command-context-test"),
+            agena_version: "0.1.0".to_string(),
+            callback_base_url: None,
+            host_client: None,
+            previous: None,
+            previous_plugins: Default::default(),
+        })
+        .await
+        .expect("build command context host");
+
+        let outcome = host
+            .dispatch_command_before(crate::sdk::CommandBeforeInput {
+                session_id: Some(41),
+                call_id: Some(73),
+                workspace_root: Some("/tmp/agena-workspace".to_string()),
+                command: "sh".to_string(),
+                args: vec!["-c".to_string(), "git status".to_string()],
+                cwd: PathBuf::from("/tmp/agena-workspace"),
+                env: BTreeMap::new(),
+            })
+            .await
+            .expect("dispatch command-before hook");
+        assert!(matches!(
+            outcome,
+            crate::sdk::CommandBeforeOutcome::Continue(_)
+        ));
+
+        {
+            let seen = contexts.lock().expect("command-before context lock");
+            assert_eq!(seen.len(), 1);
+            let context = &seen[0];
+            assert_eq!(
+                context.plugin_id.as_deref(),
+                Some("example.command-context")
+            );
+            assert_eq!(context.session_id, Some(41));
+            assert_eq!(context.call_id, Some(73));
+            assert_eq!(
+                context.workspace_root.as_deref(),
+                Some("/tmp/agena-workspace")
+            );
+            assert!(
+                context
+                    .authority_token
+                    .as_deref()
+                    .is_some_and(|token| token.starts_with("ctx-")),
+                "command.before must inherit a host-issued callback authority"
+            );
+        }
+
+        host.dispatch_command_after(crate::sdk::CommandAfterInput {
+            session_id: Some(41),
+            command: "sh".to_string(),
+            args: vec!["-c".to_string(), "git status".to_string()],
+            cwd: PathBuf::from("/tmp/agena-workspace"),
+            exit_code: Some(0),
+            stdout: String::new(),
+            stderr: String::new(),
+            timed_out: false,
+        })
+        .await
+        .expect("dispatch command-after hook");
+        {
+            let seen = contexts.lock().expect("command hook context lock");
+            assert_eq!(seen.len(), 2);
+            let context = &seen[1];
+            assert_eq!(
+                context.plugin_id.as_deref(),
+                Some("example.command-context")
+            );
+            assert_eq!(context.session_id, Some(41));
+            assert!(
+                context
+                    .authority_token
+                    .as_deref()
+                    .is_some_and(|token| token.starts_with("ctx-")),
+                "command.after must inherit a host-issued callback authority"
+            );
+        }
+        host.shutdown().await;
     }
 
     async fn build_recording_host(
@@ -1708,7 +1852,8 @@ mod tests {
         ));
 
         let mut changed_config = current_config.clone();
-        changed_config.get_mut("example.provider").unwrap().config = serde_json::json!({"epoch":2});
+        changed_config.get_mut("example.provider").unwrap().settings =
+            serde_json::json!({"epoch":2});
         assert!(!super::service_epoch_unchanged(
             "example.consumer",
             &current_bindings,

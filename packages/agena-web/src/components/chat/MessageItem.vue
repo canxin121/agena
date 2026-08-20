@@ -44,7 +44,7 @@ const role = computed(() => String(props.message.info.role || 'assistant'))
 const messageId = computed(() => String(props.message.info.id || ''))
 const messageNodeKey = computed(() => `message:${messageId.value}`)
 const runStatus = computed(() =>
-  partStatusPresentation(String(props.message.info.runState || props.message.info.finish || 'completed')),
+  partStatusPresentation(String(props.message.info.runState || props.message.info.finish || '')),
 )
 const sourcePath = computed(() => {
   for (const part of props.message.parts || []) {
@@ -192,7 +192,7 @@ function partNavigationText(part: TranscriptDisplayPart): string {
         >{{ role }}</span
       >
       <span
-        v-if="runStatus.label !== 'completed'"
+        v-if="runStatus.label && runStatus.label !== 'completed'"
         class="font-mono"
         :class="{
           'text-primary': runStatus.tone === 'pending',

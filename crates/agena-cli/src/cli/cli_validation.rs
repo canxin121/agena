@@ -1151,7 +1151,7 @@ mod tests {
                     "example.consumer": {
                         "package": { "kind": "static" },
                         "activation": { "requires": ["example.provider"] },
-                        "config": { "mode": "base" }
+                        "settings": { "mode": "base" }
                     },
                     "example.provider": {
                         "enabled": false,
@@ -1172,7 +1172,7 @@ mod tests {
                         "plugins": {
                             "example.consumer": {
                                 "action": "patch",
-                                "config_patch": { "mode": "coding" }
+                                "settings_patch": { "mode": "coding" }
                             }
                         }
                     }

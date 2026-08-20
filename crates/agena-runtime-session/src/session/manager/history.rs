@@ -11,7 +11,7 @@ use crate::{
     },
 };
 use agena_domain::{
-    CancellationOutcome, CancellationResult, ComposerDocument, ExecutionStatus, Role,
+    CancellationOutcome, CancellationResult, ComposerDocument, ExecutionStatus, RawOutput, Role,
     SessionSummary, TurnId,
 };
 use agena_plugin_host::AgentCancelInput;
@@ -21,6 +21,7 @@ use agena_runtime_contracts::part_content::{
     skill_reference_from_skill_ref, user_problem_from_error,
 };
 use agena_storage::store::{Part, PartRole};
+use agena_tool::{RenderContext as ToolRenderContext, ToolHumanRenderer};
 
 impl SessionManager {
     pub async fn fork_session(&self, request: SessionForkRequest) -> Result<Session, AppError> {
@@ -513,7 +514,9 @@ impl SessionManager {
         session_id: i64,
     ) -> Result<agena_domain::TranscriptSnapshot, AppError> {
         let session = self.store.load_session(session_id).await?;
-        transcript_snapshot_from_session(&session)
+        let mut snapshot = transcript_snapshot_from_session(&session)?;
+        render_snapshot_tool_presentations(&mut snapshot, &self.tool_executor()).await;
+        Ok(snapshot)
     }
 }
 
@@ -1023,9 +1026,10 @@ fn activity_payload_from_part(
             // The human-facing detail Markdown is derived from it at render
             // time and is never persisted.
             let data = operation
-                .details
-                .to_json_payload()
+                .raw_output()
+                .and_then(|output| serde_json::to_value(output).ok())
                 .unwrap_or(serde_json::Value::Null);
+            let model_text = model_text_from_payload(&operation);
             Some(ActivityPayload::Operation(OperationActivity {
                 call_id: ToolCallId::new(
                     part.operation_id
@@ -1033,8 +1037,8 @@ fn activity_payload_from_part(
                         .unwrap_or_else(|| operation.call_id.to_string()),
                 ),
                 invocation: operation.invocation.clone(),
-                title: operation.title.clone(),
-                summary: operation.summary.clone(),
+                title: operation.invocation.name.clone(),
+                summary: agena_tool::normalize_tool_summary(model_text),
                 data,
                 // The derived projection carries no detail Markdown; it is
                 // derived at snapshot load / lazy detail fetch time.
@@ -1155,12 +1159,9 @@ fn activity_payload_from_part(
                 )),
             }))
         }
-        Some(
-            TypedContent::Run(_)
-            | TypedContent::ToolResult(_)
-            | TypedContent::PasteRef(_)
-            | TypedContent::Compaction(_),
-        ) => None,
+        Some(TypedContent::Run(_) | TypedContent::PasteRef(_) | TypedContent::Compaction(_)) => {
+            None
+        }
         None => None,
     }) else {
         return Ok(None);
@@ -1310,29 +1311,10 @@ impl agena_runtime::SessionQueryService for SessionManager {
         let agena_domain::ActivityPayload::Operation(operation) = &activity.payload else {
             return Ok(None);
         };
-        // If the snapshot did not pre-derive the detail (e.g. a live in-memory
-        // node), derive it now from the compact data.
-        let markdown = if !operation.markdown.is_empty() {
-            operation.markdown.clone()
-        } else if !operation.data.is_null() {
-            let command = operation
-                .invocation
-                .input
-                .get("command")
-                .and_then(|value| value.as_text())
-                .map(str::to_owned);
-            crate::session::manager::helpers::derive_operation_markdown(
-                &operation.invocation.name,
-                &operation.data,
-                command.as_deref(),
-            )
-        } else {
-            String::new()
-        };
         let streaming = activity.state == agena_domain::ActivityState::InProgress;
         Ok(Some(agena_runtime::OperationDetail {
             activity_id,
-            markdown,
+            markdown: operation.markdown.clone(),
             streaming,
         }))
     }
@@ -1558,15 +1540,17 @@ impl agena_runtime::SessionQueryService for SessionManager {
 pub(crate) fn projected_runs_from_parts(
     parts: &[Part],
 ) -> Result<Vec<crate::session_query_service::SessionProjectedRun>, AppError> {
-    parts_into_runs(parts)
-        .into_iter()
-        .map(|run| {
-            let marker = run.first().expect("run group has a marker");
-            let mut projected_parts = Vec::with_capacity(run.len().saturating_sub(1));
-            for (index, part) in run.iter().enumerate().skip(1) {
+    let mut projected = Vec::new();
+    for run in parts_into_runs(parts) {
+        let marker = run.first().expect("run group has a marker");
+        let mut projected_parts = Vec::with_capacity(run.len().saturating_sub(1));
+        for (index, part) in run.iter().enumerate().skip(1) {
+            if part.visibility.visible_to_user() {
                 projected_parts.push(project_storage_part(part, marker.part_id, index as i32)?);
             }
-            Ok(crate::session_query_service::SessionProjectedRun {
+        }
+        if marker.visibility.visible_to_user() || !projected_parts.is_empty() {
+            projected.push(crate::session_query_service::SessionProjectedRun {
                 id: marker.part_id,
                 role: role_from_part_role(marker.role),
                 state: execution_status_from_part_state(marker.state),
@@ -1578,9 +1562,10 @@ pub(crate) fn projected_runs_from_parts(
                 metadata: marker.content.clone(),
                 usage: None,
                 parts: projected_parts,
-            })
-        })
-        .collect()
+            });
+        }
+    }
+    Ok(projected)
 }
 
 /// A decoded content part: the parts-native projection of one storage [`Part`]
@@ -1668,12 +1653,7 @@ fn part_name_from_content(content: &TypedContent) -> Option<String> {
         TypedContent::Think(_) => Some("reasoning".to_string()),
         TypedContent::ToolCall(tool_call) => {
             let operation = operation_from_tool_call(tool_call);
-            let title = operation.title.trim();
-            Some(if title.is_empty() {
-                operation.invocation.name.clone()
-            } else {
-                title.to_owned()
-            })
+            Some(operation.invocation.name)
         }
         TypedContent::SkillRef(_) => Some("skill_reference".to_string()),
         TypedContent::Error(error) => Some(user_problem_from_error(error).code.to_string()),
@@ -1687,10 +1667,7 @@ fn part_name_from_content(content: &TypedContent) -> Option<String> {
             "{}:{}:{}",
             notification.operation_kind, notification.operation_id, notification.status
         )),
-        TypedContent::Run(_)
-        | TypedContent::PasteRef(_)
-        | TypedContent::ToolResult(_)
-        | TypedContent::Compaction(_) => None,
+        TypedContent::Run(_) | TypedContent::PasteRef(_) | TypedContent::Compaction(_) => None,
     }
 }
 
@@ -1793,10 +1770,6 @@ fn project_part_detail(content: &TypedContent) -> agena_runtime::SessionProjecte
             text: value.text.clone(),
             synthetic: false,
         },
-        TypedContent::ToolResult(value) => agena_runtime::SessionProjectedPartDetail::Text {
-            text: value.output.clone(),
-            synthetic: false,
-        },
         TypedContent::Compaction(value) => agena_runtime::SessionProjectedPartDetail::Text {
             text: value.summary.clone().unwrap_or_default(),
             synthetic: false,
@@ -1804,59 +1777,114 @@ fn project_part_detail(content: &TypedContent) -> agena_runtime::SessionProjecte
     }
 }
 
+/// Project the durable single-source operation into the read-time view.
+///
+/// The stored record holds only the flat invocation identity and one
+/// tool-defined `payload`; the model-visible text and the human-facing blocks
+/// are derived here, at read time, and are never persisted redundantly.
 fn project_operation_part(
     value: &crate::part::OperationPart,
 ) -> agena_runtime::SessionProjectedOperationPart {
-    let details = value.details.clone();
+    let model_text = model_text_from_payload(value);
+    let blocks = human_blocks_for_operation(value);
+    let projected_blocks: Vec<_> = blocks.iter().map(project_operation_block).collect();
+    let details = tool_output_view(value);
+    let raw = value.raw_output().cloned().unwrap_or_default();
+    let title = value.invocation.name.clone();
+    let summary = agena_tool::normalize_tool_summary(&model_text);
     agena_runtime::SessionProjectedOperationPart {
         call_id: value.call_id,
         invocation: value.invocation.clone(),
         authorization: value.authorization.clone(),
         user_input: value.user_input.clone(),
-        title: value.title.clone(),
-        summary: value.summary.clone(),
-        model_output: project_model_visible_output(&value.result.model_preview),
-        blocks: value
-            .result
-            .content
-            .iter()
-            .map(project_operation_block)
-            .collect(),
-        artifacts: value.artifacts.clone(),
-        attachments: value.result.attachments.clone(),
+        title: title.clone(),
+        summary: summary.clone(),
+        model_output: project_model_visible_output(&model_text, raw.truncated, &raw.attachments),
+        blocks: projected_blocks.clone(),
+        artifacts: Vec::new(),
+        attachments: raw.attachments.clone(),
         details,
         result: agena_runtime::SessionProjectedToolResult {
-            state: value.result.state,
-            structured: value.result.structured.clone(),
-            content: value
-                .result
-                .content
-                .iter()
-                .map(project_operation_block)
-                .collect(),
-            model_preview: project_model_visible_output(&value.result.model_preview),
-            managed_outputs: value.result.managed_outputs.clone(),
-            display: value.result.display.clone(),
-            attachments: value.result.attachments.clone(),
-            error: value.result.error.clone(),
-            metadata: value.result.metadata.clone(),
-            raw: value.result.raw.clone(),
+            state: value.state,
+            structured: raw.payload.clone(),
+            content: projected_blocks.clone(),
+            model_preview: project_model_visible_output(
+                &model_text,
+                raw.truncated,
+                &raw.attachments,
+            ),
+            managed_outputs: raw.managed_outputs.clone(),
+            display: agena_domain::ToolResultDisplay {
+                title,
+                summary,
+                sections: Vec::new(),
+            },
+            attachments: raw.attachments.clone(),
+            error: value.error.clone(),
+            metadata: raw.metadata.clone(),
+            raw: value.provider_raw().cloned(),
         },
-        structured: value.result.structured.clone(),
+        structured: raw.payload.clone(),
         metadata: value.metadata.clone(),
         error: value.error.clone(),
-        raw: value.raw.clone(),
+        raw: value.provider_raw().cloned(),
         lifecycle: value.lifecycle.clone(),
     }
 }
 
+/// Best-effort model-visible text projected from the single payload: the
+/// payload's own `text` field when present, otherwise its JSON rendering.
+fn model_text_from_payload(value: &crate::part::OperationPart) -> String {
+    value
+        .raw_output()
+        .map(crate::activity::projection::for_model)
+        .unwrap_or_default()
+}
+
+/// Human-facing blocks derived at read time through the tool's own renderer
+/// (falling back to rendering the payload directly). The renderer is a pure
+/// function of the stored payload, so nothing about the view is persisted.
+fn human_blocks_for_operation(value: &crate::part::OperationPart) -> Vec<agena_domain::ViewBlock> {
+    let raw = value.raw_output().cloned().unwrap_or_default();
+    let command = value
+        .invocation
+        .input
+        .get("command")
+        .and_then(|value| value.as_text())
+        .map(ToOwned::to_owned);
+    let mut renderer =
+        crate::tool::human_view::BuiltinHumanRenderer::new(value.invocation.name.as_str());
+    if let Some(command) = command {
+        renderer = renderer.with_command(command);
+    }
+    let ctx = ToolRenderContext {
+        workspace_root: std::path::PathBuf::new(),
+        command: None,
+    };
+    renderer
+        .render_human(&ctx, &raw)
+        .unwrap_or_else(|_| crate::activity::projection::fallback_human_view(&raw))
+}
+
+/// Rebuild the structured `ToolOutput` view from the single payload.
+fn tool_output_view(value: &crate::part::OperationPart) -> agena_domain::ToolOutput {
+    let raw = value.raw_output().cloned().unwrap_or_default();
+    let mut details =
+        agena_domain::ToolOutput::from_json_payload(raw.payload.as_ref()).unwrap_or_default();
+    details.managed_outputs = raw.managed_outputs;
+    details.truncated = raw.truncated;
+    details
+}
+
 fn project_model_visible_output(
-    value: &crate::part::ModelVisibleOutput,
+    text: &str,
+    truncated: bool,
+    attachments: &[crate::part::AttachmentItem],
 ) -> agena_runtime::SessionProjectedModelVisibleOutput {
     agena_runtime::SessionProjectedModelVisibleOutput {
-        text: value.text.clone(),
-        attachments: value.attachments.clone(),
-        truncated: value.truncated,
+        text: text.to_owned(),
+        attachments: attachments.to_vec(),
+        truncated,
     }
 }
 
@@ -1939,6 +1967,81 @@ fn project_operation_block(
             },
             value: serde_json::json!({ "kind": kind, "presentation": presentation }),
         },
+    }
+}
+
+/// Fill the legacy activity snapshot's ephemeral presentation by invoking the
+/// same owning-plugin-first renderer as the current parts/live APIs. The
+/// snapshot itself is an in-memory response projection and is never written
+/// back to storage.
+async fn render_snapshot_tool_presentations(
+    snapshot: &mut agena_domain::TranscriptSnapshot,
+    executor: &crate::tool::ToolExecutor,
+) {
+    for turn in &mut snapshot.turns {
+        for node in &mut turn.input.0 {
+            render_snapshot_node_tool_presentation(node, executor).await;
+        }
+        for node in &mut turn.reply.content.0 {
+            render_snapshot_node_tool_presentation(node, executor).await;
+        }
+    }
+    for activity in &mut snapshot.session_activities {
+        render_snapshot_activity_tool_presentation(activity, executor).await;
+    }
+}
+
+async fn render_snapshot_node_tool_presentation(
+    node: &mut agena_domain::ContentNode,
+    executor: &crate::tool::ToolExecutor,
+) {
+    let agena_domain::ContentNode::Activity { activity } = node else {
+        return;
+    };
+    render_snapshot_activity_tool_presentation(activity, executor).await;
+}
+
+async fn render_snapshot_activity_tool_presentation(
+    activity: &mut agena_domain::ActivityNode,
+    executor: &crate::tool::ToolExecutor,
+) {
+    let agena_domain::ActivityPayload::Operation(operation) = &mut activity.payload else {
+        return;
+    };
+    let Ok(output) = serde_json::from_value::<RawOutput>(operation.data.clone()) else {
+        return;
+    };
+    let rendered = executor
+        .render_tool_result(&operation.invocation, &output)
+        .await;
+    let model = rendered.model.unwrap_or_default();
+    let human = rendered.human.unwrap_or_default();
+    operation.title = human.title;
+    operation.summary = human.summary;
+    operation.markdown = view_blocks_as_markdown(&human.blocks, &model);
+}
+
+fn view_blocks_as_markdown(blocks: &[agena_domain::ViewBlock], fallback: &str) -> String {
+    let rendered = blocks
+        .iter()
+        .filter_map(|block| match block {
+            agena_domain::ViewBlock::Text { text, .. }
+            | agena_domain::ViewBlock::Markdown { text, .. } => Some(text.clone()),
+            agena_domain::ViewBlock::Json { value, .. } => Some(format!(
+                "```json\n{}\n```",
+                serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string())
+            )),
+            other => serde_json::to_string_pretty(other)
+                .ok()
+                .map(|value| format!("```json\n{value}\n```")),
+        })
+        .filter(|value| !value.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    if rendered.is_empty() {
+        fallback.to_owned()
+    } else {
+        rendered
     }
 }
 

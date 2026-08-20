@@ -937,8 +937,8 @@ impl Session {
             .find(|part| part.role == PartRole::User && part.kind != "run")
     }
 
-    /// Pending tool calls: in-flight `tool_call` parts still awaiting a result
-    /// and without a `tool_result` referencing them.
+    /// Pending tool calls are represented by the state of the single
+    /// `tool_call` part. Results never live in a second persisted part.
     pub fn pending_tool_calls(&self) -> impl Iterator<Item = &Part> {
         self.parts
             .iter()
@@ -978,24 +978,9 @@ impl Session {
             .find(|part| self.pending_user_input_part(part))
     }
 
-    /// Every `tool_result` part in the projection.
-    pub fn tool_results(&self) -> impl Iterator<Item = &Part> {
-        self.parts.iter().filter(|part| part.kind == "tool_result")
-    }
-
-    /// Whether a `tool_result` part references `call` via `parent_part_id`.
-    pub fn tool_result_for(&self, call: &Part) -> Option<&Part> {
-        self.parts
-            .iter()
-            .find(|part| part.kind == "tool_result" && part.parent_part_id == Some(call.part_id))
-    }
-
-    /// Whether `part` is an in-flight tool call still awaiting its result and
-    /// without a paired `tool_result`.
+    /// Whether `part` is an in-flight tool call still awaiting its result.
     fn pending_tool_call(&self, part: &Part) -> bool {
-        part.kind == "tool_call"
-            && part.state.is_in_flight()
-            && self.tool_result_for(part).is_none()
+        part.kind == "tool_call" && part.state.is_in_flight()
     }
 
     // --- Derived execution state over the parts projection -----------------
@@ -1043,8 +1028,8 @@ impl Session {
 
     /// Derive the pending operations from the parts projection:
     ///
-    /// - `tool_call` parts not yet `completed`/`cancelled` and without a
-    ///   paired `tool_result` become [`SessionPendingOperation::Tool`]. Every
+    /// - `tool_call` parts not yet `completed`/`cancelled` become
+    ///   [`SessionPendingOperation::Tool`]. Every
     ///   unresolved authorization record on that operation also becomes a
     ///   [`SessionPendingOperation::Permission`], and a suspended tool whose
     ///   operation carries an awaiting `user_input` record is also a
@@ -1245,6 +1230,28 @@ mod parts_projection_tests {
         session
     }
 
+    /// Project an [`OperationPart`] onto the canonical flat `tool_call` content
+    /// (single source: invocation identity + one payload; no operation bucket).
+    fn tool_call_content(
+        operation: &agena_runtime_contracts::part::OperationPart,
+    ) -> serde_json::Value {
+        agena_runtime_contracts::part_content::ToolCallContent {
+            name: operation.invocation.name.clone(),
+            plugin: operation.invocation.plugin_name.clone(),
+            input: serde_json::Value::from(operation.invocation.input.clone()),
+            tool_api_call: operation.invocation.tool_api_call.clone(),
+            call_id: operation.call_id,
+            state: operation.state,
+            authorization: operation.authorization.clone(),
+            user_input: operation.user_input.clone(),
+            output: operation.output.clone(),
+            error: operation.error.clone(),
+            metadata: operation.metadata.clone(),
+            lifecycle: operation.lifecycle.clone(),
+        }
+        .as_value()
+    }
+
     #[test]
     fn install_projected_parts_replaces_projection_and_refreshes_derived() {
         let mut session = Session::new(1, 1, "t", chrono::Utc::now());
@@ -1311,8 +1318,8 @@ mod parts_projection_tests {
     }
 
     #[test]
-    fn pending_tool_calls_exclude_paired_and_terminal_calls() {
-        let paired = part(
+    fn pending_tool_calls_are_defined_only_by_the_tool_call_state() {
+        let running = part(
             10,
             "tool_call",
             PartRole::Assistant,
@@ -1347,27 +1354,10 @@ mod parts_projection_tests {
             PartState::Cancelled,
             json!({"name": "cancelled", "input": {}}),
         );
-        let mut result = part(
-            13,
-            "tool_result",
-            PartRole::Tool,
-            PartState::Completed,
-            json!({"output": "ok", "ok": true}),
-        );
-        result.parent_part_id = Some(paired.part_id);
-
-        let session = session_with(vec![paired, unpaired, completed, result, failed, cancelled]);
+        let session = session_with(vec![running, unpaired, completed, failed, cancelled]);
 
         let pending: Vec<i64> = session.pending_tool_calls().map(|p| p.part_id).collect();
-        assert_eq!(pending, vec![11]);
-        assert_eq!(
-            session
-                .tool_result_for(&session.parts()[0])
-                .map(|p| p.part_id),
-            Some(13),
-            "fs.read is paired with its tool_result"
-        );
-        assert_eq!(session.tool_results().count(), 1);
+        assert_eq!(pending, vec![10, 11]);
         // Highest part id + 1 is the next call id (call ids are part ids).
         assert_eq!(session.next_call_id(), 16);
         assert_eq!(session.workflow_state(), WorkflowState::ToolPending);
@@ -1381,7 +1371,6 @@ mod parts_projection_tests {
                 "tools_search",
                 agena_domain::StructuredObject::default(),
             ),
-            "Search tools",
             agena_domain::TimeRange::default(),
         );
         operation.metadata.insert(
@@ -1393,11 +1382,7 @@ mod parts_projection_tests {
             "tool_call",
             PartRole::Assistant,
             PartState::InProgress,
-            json!({
-                "name": "tools_search",
-                "input": {},
-                "operation": serde_json::to_value(&operation).unwrap()
-            }),
+            tool_call_content(&operation),
         );
         let session = session_with(vec![pending]);
         let snapshot = session
@@ -1421,7 +1406,6 @@ mod parts_projection_tests {
                 "plan.set",
                 agena_domain::StructuredObject::default(),
             ),
-            "Approve New Plan",
             agena_domain::TimeRange {
                 start_ms: 1,
                 end_ms: None,
@@ -1456,7 +1440,7 @@ mod parts_projection_tests {
             "tool_call",
             PartRole::Assistant,
             PartState::Pending,
-            json!({"name": "plan.set", "input": {}, "operation": serde_json::to_value(&operation).unwrap()}),
+            tool_call_content(&operation),
         )
     }
 
@@ -1466,7 +1450,6 @@ mod parts_projection_tests {
         let mut operation = agena_runtime_contracts::part::OperationPart::pending(
             part_id,
             agena_domain::ToolInvocation::new("fs.read", agena_domain::StructuredObject::default()),
-            "Read fixture",
             agena_domain::TimeRange {
                 start_ms: 1,
                 end_ms: None,
@@ -1506,7 +1489,7 @@ mod parts_projection_tests {
             "tool_call",
             PartRole::Assistant,
             PartState::Pending,
-            json!({"name": "fs.read", "input": {}, "operation": serde_json::to_value(&operation).unwrap()}),
+            tool_call_content(&operation),
         )
     }
 

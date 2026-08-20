@@ -18,6 +18,11 @@ test('diagnostics workbench exposes advanced settings as a real subpage', () => 
     resolve(import.meta.dir, '../src/components/settings/DiagnosticsWorkbenchPanel.vue'),
     'utf8',
   )
-  assert.ok(source.includes("id: 'advanced-settings'"))
+  const catalog = readFileSync(
+    resolve(import.meta.dir, '../src/components/settings/settingsNavigationCatalog.ts'),
+    'utf8',
+  )
+  assert.ok(source.includes("buildSettingsSubpages('diagnostics')"))
+  assert.ok(catalog.includes("id: 'advanced-settings'"))
   assert.ok(source.includes('<AdvancedSettingsPanel'))
 })

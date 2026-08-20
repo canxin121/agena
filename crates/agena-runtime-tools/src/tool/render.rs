@@ -5,47 +5,8 @@
 //! — which dispatches to each variant's impl. Terminals and web UIs both render
 //! this Markdown with their own Markdown pipeline; no consumer ever matches on
 //! tool names to build a presentation.
-//!
-//! Large text bodies are never embedded in the compact result. They live in a
-//! managed file (`.agena/tool-results/…`) referenced by `DetailSource::Managed`,
-//! and the renderer reads them lazily through [`RenderContext::read_managed`].
-//! This keeps the durable record small and defers I/O to the moment a human
-//! actually expands an Activity.
 
 use std::fmt::Write as _;
-use std::path::PathBuf;
-
-use serde::{Deserialize, Serialize};
-
-/// Where the human-readable body of a tool result lives.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(tag = "source", rename_all = "snake_case")]
-pub enum DetailSource {
-    /// Small body stored inline in the compact result.
-    Inline(String),
-    /// Large body stored in a managed file under `.agena/tool-results/`.
-    Managed { path: PathBuf },
-}
-
-impl DetailSource {
-    /// Small inline bodies are kept in the compact record; larger ones spill
-    /// to a managed file so the durable record stays small.
-    pub fn new(body: String, managed_path: Option<PathBuf>) -> Self {
-        match managed_path {
-            Some(path) if !body.is_empty() => Self::Managed { path },
-            _ if body.is_empty() => Self::Inline(body),
-            _ => Self::Inline(body),
-        }
-    }
-
-    /// Resolve the body for rendering, reading a managed file lazily.
-    pub fn text<'a>(&'a self, ctx: &'a RenderContext<'_>) -> Option<String> {
-        match self {
-            Self::Inline(text) => Some(text.clone()),
-            Self::Managed { path } => (ctx.read_managed)(path),
-        }
-    }
-}
 
 /// Context passed to every tool-result renderer.
 pub struct RenderContext<'a> {
@@ -58,9 +19,6 @@ pub struct RenderContext<'a> {
     /// the caller knows it. Lets the human view show `$ command` instead of a
     /// bare output card.
     pub command: Option<&'a str>,
-    /// Lazily read a managed file body. Callers own caching; the renderer
-    /// reads at most once per expanded Activity.
-    pub read_managed: &'a dyn Fn(&PathBuf) -> Option<String>,
 }
 
 /// A tool result renders its human-facing view as a single Markdown document.
@@ -568,7 +526,7 @@ fn file_change_line(change: &agena_domain::FileChangeRecord) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{DetailSource, MarkdownWriter};
+    use super::MarkdownWriter;
 
     #[test]
     fn writer_builds_a_spaced_markdown_document() {
@@ -585,18 +543,6 @@ mod tests {
         assert!(out.ends_with("_truncated_\n"));
     }
 
-    #[test]
-    fn detail_source_inline_round_trips() {
-        let source = DetailSource::Inline("hello".to_string());
-        let ctx = crate::tool::RenderContext {
-            workspace_root: std::path::Path::new("/tmp"),
-            live_tail: None,
-            command: None,
-            read_managed: &|_| None,
-        };
-        assert_eq!(source.text(&ctx), Some("hello".to_string()));
-    }
-
     fn render(payload: serde_json::Value) -> String {
         render_with_command(payload, None)
     }
@@ -608,7 +554,6 @@ mod tests {
                 workspace_root: std::path::Path::new("/tmp"),
                 live_tail: None,
                 command,
-                read_managed: &|_| None,
             },
         )
     }
@@ -700,7 +645,6 @@ mod tests {
                 workspace_root: std::path::Path::new("/tmp"),
                 live_tail: None,
                 command: Some("ls -la"),
-                read_managed: &|_| None,
             },
         );
         assert!(out.contains("| shell | bash |"), "{out}");
@@ -732,7 +676,6 @@ mod tests {
                 workspace_root: std::path::Path::new("/tmp"),
                 live_tail: None,
                 command: Some("grep -n foo"),
-                read_managed: &|_| None,
             },
         );
         assert!(out.contains("| shell | bash |"), "{out}");
@@ -768,7 +711,6 @@ mod tests {
                 workspace_root: std::path::Path::new("/tmp"),
                 live_tail: None,
                 command: Some("grep -n 'pub enum ActivityPayload'"),
-                read_managed: &|_| None,
             },
         );
         // Parameters render as a table; the output is a clean code block.
@@ -799,7 +741,6 @@ mod tests {
                 workspace_root: std::path::Path::new("/tmp"),
                 live_tail: None,
                 command: None,
-                read_managed: &|_| None,
             },
         );
         assert!(out.contains("`glob` · 2 match(es)"), "{out}");
@@ -820,7 +761,6 @@ mod tests {
                 workspace_root: std::path::Path::new("/tmp"),
                 live_tail: None,
                 command: None,
-                read_managed: &|_| None,
             },
         );
         assert!(out.contains("`cron_list` · 0 job(s)"), "{out}");
@@ -841,7 +781,6 @@ mod tests {
                 workspace_root: std::path::Path::new("/tmp"),
                 live_tail: None,
                 command: None,
-                read_managed: &|_| None,
             },
         );
         assert!(out.contains("`web_search` · rust async"), "{out}");

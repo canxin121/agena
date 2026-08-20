@@ -2635,6 +2635,7 @@ fn derive_state(
         .map(|part| PendingInteraction {
             part_id: part.part_id,
             created_at_ms: part.created_at_ms,
+            part_kind: part.kind.clone(),
             content: part.content.clone(),
         })
         .collect();
@@ -3197,7 +3198,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn retry_history_retains_failed_error_and_successful_result_parts() {
+    async fn retry_history_retains_error_and_updates_the_single_tool_call_result() {
         let (engine, session_id) = setup().await;
         let outcome = engine
             .submit_user_run(
@@ -3265,31 +3266,18 @@ mod tests {
             .await
             .expect("retry tool");
         engine
-            .append_parts(
-                session_id,
-                "owner-a",
-                outcome.run_id,
-                vec![NewPart {
-                    kind: "tool_result".to_owned(),
-                    role: PartRole::Tool,
-                    content: json!({"output": "ok", "ok": true}),
-                    summary: None,
-                    visibility: PartVisibility::Both,
-                    rendered_markdown: None,
-                    parent_part_id: Some(tool_id),
-                    state: PartState::Completed,
-                }],
-                engine.now_ms(),
-            )
-            .await
-            .expect("append success");
-        engine
             .update_part(
                 session_id,
                 "owner-a",
                 tool_id,
                 PartDelta {
                     state: Some(PartState::Completed),
+                    content: Some(json!({
+                        "name": "fs.read",
+                        "input": {},
+                        "state": "completed",
+                        "output": {"payload": {"output": "ok", "ok": true}}
+                    })),
                     ..Default::default()
                 },
                 engine.now_ms(),
@@ -3321,12 +3309,13 @@ mod tests {
         let result = history
             .parts
             .iter()
-            .find(|part| part.kind == "tool_result")
+            .find(|part| part.part_id == tool_id)
             .expect("success persists");
         assert_eq!(error.parent_part_id, Some(tool_id));
         assert_eq!(error.state, PartState::Failed);
-        assert_eq!(result.parent_part_id, Some(tool_id));
+        assert_eq!(result.parent_part_id, None);
         assert_eq!(result.state, PartState::Completed);
+        assert_eq!(result.content["output"]["payload"]["output"], "ok");
     }
 
     #[tokio::test]

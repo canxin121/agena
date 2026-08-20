@@ -1456,7 +1456,9 @@ enum Exactness {
 
 /// Dummy type used to create a statically allocated constant that can only be
 /// accessed of the lifetime of T.
-struct VTableGetter<'a, T>(&'a T);
+struct VTableGetter<'a, T> {
+    _marker: &'a T,
+}
 
 impl<'a, T: 'a> VTableGetter<'a, T> {
     const DEFAULT_VTABLE: VecVTable = VecVTable {

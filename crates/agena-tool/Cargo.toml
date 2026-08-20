@@ -18,7 +18,6 @@ serde.workspace = true
 serde_json.workspace = true
 schemars.workspace = true
 thiserror.workspace = true
-tracing.workspace = true
 tree-sitter = { workspace = true }
 
 [lints]

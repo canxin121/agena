@@ -390,9 +390,9 @@ impl PartVisibility {
 
 /// A persisted part — the only chat-content entity in v2.
 ///
-/// `kind` is an open set (`run`, `text`, `think`, `tool_call`, `tool_result`,
-/// `file_ref`, `paste_ref`, `skill_ref`, `notice`, `hook`, `compaction`,
-/// `error`, `interaction`, ...). Ordering within a session is always
+/// `kind` is an open set (`run`, `text`, `think`, `tool_call`, `file_ref`,
+/// `paste_ref`, `skill_ref`, `notice`, `hook`, `compaction`, `error`,
+/// `interaction`, ...). Ordering within a session is always
 /// `(created_at_ms, part_id)` (decision D4).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Part {
@@ -400,7 +400,8 @@ pub struct Part {
     pub kind: String,
     pub role: PartRole,
     pub state: PartState,
-    /// Canonical raw payload — exactly what the AI sees (section 18.4).
+    /// Canonical durable facts. AI and human views are ephemeral projections
+    /// selected by `visibility`; a projected view is never written back here.
     pub content: Value,
     pub summary: Option<String>,
     pub visibility: PartVisibility,
@@ -461,7 +462,7 @@ pub struct NewPart {
     pub rendered_markdown: Option<String>,
     pub parent_part_id: Option<i64>,
     /// Initial state. `pending` is typical; `completed` is used for parts
-    /// created already-done (e.g. `tool_result`).
+    /// created already-done (for example, an imported completed text part).
     pub state: PartState,
 }
 
@@ -497,7 +498,7 @@ pub struct PartDelta {
     pub finished_at_ms: Option<i64>,
 }
 
-/// Outcome of [`PersistenceEngine::complete_run`] — how a run marker ends.
+/// Outcome of [`crate::store::PersistenceEngine::complete_run`] — how a run marker ends.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RunOutcome {
     /// `completed` | `failed` | `cancelled` (never a non-terminal state).
@@ -510,7 +511,7 @@ pub struct RunOutcome {
     pub provider_state: Option<Value>,
 }
 
-/// Result of [`PersistenceEngine::submit_user_run`].
+/// Result of [`crate::store::PersistenceEngine::submit_user_run`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct SubmitOutcome {
     /// The run marker part id (the run identity).
@@ -651,7 +652,7 @@ pub struct SessionCursor {
     pub id: i64,
 }
 
-/// Query for [`PersistenceEngine::list_session_summaries`].
+/// Query for [`crate::store::PersistenceEngine::list_session_summaries`].
 ///
 /// The listing surface (13.1 / 14.1) filters by workspace, optional parent,
 /// optional roots-only, optional title search, and pages newest-first by the
@@ -684,7 +685,7 @@ pub struct LeaseState {
     pub heartbeat_at_ms: i64,
 }
 
-/// Result of [`PersistenceEngine::try_acquire_lease`].
+/// Result of [`crate::store::PersistenceEngine::try_acquire_lease`].
 #[derive(Debug, Clone, PartialEq)]
 pub enum LeaseAcquire {
     /// This caller now owns the lease. Any stale in-flight run markers were
@@ -703,7 +704,7 @@ pub enum LeaseAcquire {
     },
 }
 
-/// Result of [`PersistenceEngine::reconcile`] (17.4 step 2c).
+/// Result of [`crate::store::PersistenceEngine::reconcile`] (17.4 step 2c).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ReconcileOutcome {
     /// Run markers marked `failed` (abort_reason = `process_restart`).
@@ -745,7 +746,7 @@ pub struct UsageRecord {
     pub detail_json: Option<Value>,
 }
 
-/// Query for [`PersistenceEngine::usage_stats`]. All shapes are pure SQL over
+/// Query for [`crate::store::PersistenceEngine::usage_stats`]. All shapes are pure SQL over
 /// index ranges (16.3).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct UsageQuery {
@@ -844,4 +845,21 @@ pub struct SessionPresentation {
     pub active_run_id: Option<i64>,
     /// Last error part content when `Failed` or after an Interrupted reconcile.
     pub last_failure: Option<Value>,
+}
+
+#[cfg(test)]
+mod visibility_tests {
+    use super::PartVisibility;
+
+    #[test]
+    fn part_visibility_has_an_explicit_ai_and_human_truth_table() {
+        assert!(PartVisibility::Both.visible_to_ai());
+        assert!(PartVisibility::Both.visible_to_user());
+
+        assert!(PartVisibility::Ai.visible_to_ai());
+        assert!(!PartVisibility::Ai.visible_to_user());
+
+        assert!(!PartVisibility::User.visible_to_ai());
+        assert!(PartVisibility::User.visible_to_user());
+    }
 }

@@ -20,8 +20,10 @@ test('slash shorthand is preserved for the server-owned SettingsContract parser'
 })
 
 test('sessionless navigation operations retain the same request shape', () => {
-  assert.deepEqual(
-    pluginOperationInvocationBody({ operation: { slash: 'memory' }, sessionId: null, rawArgs: '' }),
-    { input: {}, session_id: null, slash: 'memory', raw: '' },
-  )
+  assert.deepEqual(pluginOperationInvocationBody({ operation: { slash: 'memory' }, sessionId: null, rawArgs: '' }), {
+    input: {},
+    session_id: null,
+    slash: 'memory',
+    raw: '',
+  })
 })

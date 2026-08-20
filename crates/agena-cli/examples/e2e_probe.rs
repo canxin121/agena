@@ -204,10 +204,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .unwrap_or_default();
                     println!("   tool_call name={name} content={payload}");
                 }
-                "tool_result" => {
-                    let summary = part.summary.as_deref().unwrap_or("");
-                    println!("   tool_result name={name} summary={summary}");
-                }
                 "run" => {
                     let meta = part
                         .content

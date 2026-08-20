@@ -3,14 +3,14 @@
 //! The v2 `parts` table stores every chat entity as a row with a `kind`
 //! column and a canonical JSON payload on `parts.content` (design 4.1.1).
 //! This module is the single content model: one struct per kind whose named
-//! fields are the canonical keys (4.1.1) plus the extended keys (19.4), and a
-//! lossless `extra` bucket (`#[serde(flatten)]`) that captures every key this
-//! crate does not name, so a round-trip never drops data even when a producer
-//! writes richer payloads than the canonical spec lists.
+//! fields are the canonical keys (4.1.1) plus the extended keys (19.4). Most
+//! non-tool kinds retain an open `extra` bucket. `tool_call` is deliberately
+//! strict: it rejects unknown/removed result and presentation fields and has
+//! exactly one optional [`RawOutput`] result.
 //!
-//! Decoding is deliberately lenient ("reload 宁缺勿崩"): every named field is
-//! `#[serde(default)]`, so a payload missing canonical keys decodes to its
-//! defaults and never fails — the only failure is a non-object payload.
+//! Non-tool kinds preserve their existing lenient decoding. Tool calls use
+//! `#[serde(deny_unknown_fields)]`; incompatible development rows fail fast
+//! instead of being migrated or silently interpreted as the current shape.
 //!
 //! The module builds only on `serde_json`, `std`, `agena_domain`,
 //! `agena_failure`, and the shared contracts part types (which re-export the
@@ -25,7 +25,10 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use agena_domain::{StructuredObject, TimeRange, ToolInvocation, UserInputReply, UserInputRequest};
+use agena_domain::{
+    OperationAuthorization, OperationError, OperationUserInput, RawOutput, StructuredObject,
+    TimeRange, ToolApiCall, ToolInvocation, ToolResultState, UserInputReply, UserInputRequest,
+};
 use agena_failure::{
     FailureCategory, FailureCode, FailureId, FailureImpact, FailureResponsibility,
     RecoveryDirective, RetryDirective, UserPresentation, UserProblem,
@@ -40,9 +43,9 @@ fn is_false(value: &bool) -> bool {
     !*value
 }
 
-/// Lenient object decoder shared by every struct's `TryFrom<&Value>`:
-/// a non-object is an error; anything else decodes with missing named keys
-/// defaulted and unknown keys captured in `extra`.
+/// Object decoder shared by every struct's `TryFrom<&Value>`. The target
+/// struct controls strictness: open kinds flatten unknown keys into `extra`,
+/// while `ToolCallContent` rejects them.
 fn decode_object<T>(kind: &str, value: &Value) -> Result<T, String>
 where
     T: for<'de> Deserialize<'de>,
@@ -151,21 +154,38 @@ impl TryFrom<&Value> for ThinkContent {
     }
 }
 
-/// `tool_call` — tool invocation. Named keys are the v1
-/// [`agena_domain::ToolInvocation`] identity; the full v1
-/// [`OperationPart`] payload rides in `extra["operation"]` so a reload can
-/// rebuild the rich operation (call id, result envelope, details, lifecycle,
-/// authorization) losslessly. Extended keys also include `tool_api_call`.
+/// `tool_call` — tool invocation with one canonical raw output.
+///
+/// The durable record stores the invocation identity (`name`/`plugin`/
+/// `input`, plus the optional provider envelope `tool_api_call`) and one
+/// [`RawOutput`] fact envelope; every presentation (model-visible text,
+/// human-facing blocks, API projection) is derived from these facts at read
+/// time. Nothing is duplicated: there is no `operation` bucket, no result
+/// envelope, no stored blocks or model preview. The canonical identity,
+/// lifecycle, and state fields are required when decoding; missing fields are
+/// invalid rather than an implicit legacy shape.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(deny_unknown_fields)]
 pub struct ToolCallContent {
-    #[serde(default)]
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plugin: Option<String>,
-    #[serde(default)]
     pub input: Value,
-    #[serde(flatten)]
-    pub extra: BTreeMap<String, Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_api_call: Option<ToolApiCall>,
+    pub call_id: i64,
+    pub state: ToolResultState,
+    #[serde(default, skip_serializing_if = "OperationAuthorization::is_empty")]
+    pub authorization: OperationAuthorization,
+    #[serde(default, skip_serializing_if = "OperationUserInput::is_empty")]
+    pub user_input: OperationUserInput,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output: Option<RawOutput>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<OperationError>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub metadata: BTreeMap<String, Value>,
+    pub lifecycle: TimeRange,
 }
 
 impl ToolCallContent {
@@ -179,41 +199,6 @@ impl ToolCallContent {
 }
 
 impl TryFrom<&Value> for ToolCallContent {
-    type Error = String;
-
-    fn try_from(value: &Value) -> Result<Self, Self::Error> {
-        decode_object(Self::kind(), value)
-    }
-}
-
-/// `tool_result` — result of a tool call (child of the `tool_call` part via
-/// `parent_part_id`). Extended keys preserve the full v1
-/// [`OperationPart`] result envelope: `structured`, `model_preview`,
-/// `managed_outputs`, `display`, `attachments`, `metadata`, `raw`, `error`,
-/// `state` (19.4). The engine today keeps results inside the `tool_call`
-/// operation, so the store serializes `tool_call`; this shape is the future
-/// split part and is decoded for completeness.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
-pub struct ToolResultContent {
-    #[serde(default)]
-    pub output: String,
-    #[serde(default)]
-    pub ok: bool,
-    #[serde(flatten)]
-    pub extra: BTreeMap<String, Value>,
-}
-
-impl ToolResultContent {
-    pub const fn kind() -> &'static str {
-        "tool_result"
-    }
-
-    pub fn as_value(&self) -> Value {
-        serde_json::to_value(self).expect("tool result content is always JSON serializable")
-    }
-}
-
-impl TryFrom<&Value> for ToolResultContent {
     type Error = String;
 
     fn try_from(value: &Value) -> Result<Self, Self::Error> {
@@ -632,8 +617,7 @@ pub enum TypedContent {
     Run(RunContent),
     Text(TextContent),
     Think(ThinkContent),
-    ToolCall(ToolCallContent),
-    ToolResult(ToolResultContent),
+    ToolCall(Box<ToolCallContent>),
     FileRef(FileRefContent),
     PasteRef(PasteRefContent),
     SkillRef(SkillRefContent),
@@ -647,14 +631,14 @@ pub enum TypedContent {
 
 /// Decode a part's canonical JSON payload into its typed shape, dispatching on
 /// the part's `kind` column (4.1.1). Unknown kinds are an error; every known
-/// kind decodes leniently (missing keys default, unknown keys land in `extra`).
+/// kind uses its declared serde contract. In particular, `tool_call` rejects
+/// unknown fields and the removed standalone `tool_result` kind is unknown.
 pub fn decode(kind: &str, value: &Value) -> Result<TypedContent, String> {
     Ok(match kind {
         "run" => TypedContent::Run(RunContent::try_from(value)?),
         "text" => TypedContent::Text(TextContent::try_from(value)?),
         "think" => TypedContent::Think(ThinkContent::try_from(value)?),
-        "tool_call" => TypedContent::ToolCall(ToolCallContent::try_from(value)?),
-        "tool_result" => TypedContent::ToolResult(ToolResultContent::try_from(value)?),
+        "tool_call" => TypedContent::ToolCall(Box::new(ToolCallContent::try_from(value)?)),
         "file_ref" => TypedContent::FileRef(FileRefContent::try_from(value)?),
         "paste_ref" => TypedContent::PasteRef(PasteRefContent::try_from(value)?),
         "skill_ref" => TypedContent::SkillRef(SkillRefContent::try_from(value)?),
@@ -671,35 +655,50 @@ pub fn decode(kind: &str, value: &Value) -> Result<TypedContent, String> {
 }
 
 // ---------------------------------------------------------------------------
-// Rich v1 payload extractors (recover the full v1 structs from `extra`)
+// Read-time domain projections
 // ---------------------------------------------------------------------------
 
-/// Rebuild a v1 [`OperationPart`] from the canonical `tool_call` shape,
-/// restoring the full payload from `extra["operation"]` and falling back to a
-/// pending operation built from the canonical invocation identity.
+/// Rebuild an [`OperationPart`] view from the canonical single-source
+/// `tool_call` shape. The operation is a pure projection of the flat content:
+/// invocation identity is reassembled and every presentation field (blocks,
+/// model text) is derived by the consumer, never persisted.
 pub fn operation_from_tool_call(part: &ToolCallContent) -> OperationPart {
-    if let Some(operation) = part
-        .extra
-        .get("operation")
-        .and_then(|value| serde_json::from_value::<OperationPart>(value.clone()).ok())
-    {
-        return operation;
+    OperationPart {
+        call_id: part.call_id,
+        invocation: ToolInvocation {
+            tool_api_call: part.tool_api_call.clone(),
+            name: part.name.clone(),
+            plugin_name: part.plugin.clone(),
+            input: StructuredObject::try_from(part.input.clone()).unwrap_or_default(),
+        },
+        authorization: part.authorization.clone(),
+        user_input: part.user_input.clone(),
+        output: part.output.clone(),
+        state: part.state,
+        error: part.error.clone(),
+        metadata: part.metadata.clone(),
+        lifecycle: part.lifecycle.clone(),
     }
-    let invocation = ToolInvocation {
-        tool_api_call: part
-            .extra
-            .get("tool_api_call")
-            .and_then(|value| serde_json::from_value(value.clone()).ok()),
-        name: part.name.clone(),
-        plugin_name: part.plugin.clone(),
-        input: StructuredObject::try_from(part.input.clone()).unwrap_or_default(),
-    };
-    let call_id = part
-        .extra
-        .get("call_id")
-        .and_then(Value::as_i64)
-        .unwrap_or(0);
-    OperationPart::pending(call_id, invocation, "", TimeRange::default())
+}
+
+/// Project an operation onto the exact durable `tool_call` shape. This is the
+/// inverse of [`operation_from_tool_call`]; neither direction creates or
+/// accepts presentation fields.
+pub fn tool_call_from_operation(operation: &OperationPart) -> ToolCallContent {
+    ToolCallContent {
+        name: operation.invocation.name.clone(),
+        plugin: operation.invocation.plugin_name.clone(),
+        input: Value::from(operation.invocation.input.clone()),
+        tool_api_call: operation.invocation.tool_api_call.clone(),
+        call_id: operation.call_id,
+        state: operation.state,
+        authorization: operation.authorization.clone(),
+        user_input: operation.user_input.clone(),
+        output: operation.output.clone(),
+        error: operation.error.clone(),
+        metadata: operation.metadata.clone(),
+        lifecycle: operation.lifecycle.clone(),
+    }
 }
 
 /// Rebuild a v1 [`AttachmentPart`] from the canonical `file_ref` shape,
@@ -951,60 +950,66 @@ mod tests {
     }
 
     #[test]
-    fn tool_call_round_trips_input_object_and_unknown_keys() {
+    fn tool_call_round_trips_only_single_source_fields_and_rejects_removed_keys() {
         let content = ToolCallContent {
             name: "fs.read".to_owned(),
             plugin: Some("builtin".to_owned()),
             input: json!({"file_path": "/tmp/x.txt", "offset": 3}),
-            extra: BTreeMap::from([
-                (
-                    "tool_api_call".to_owned(),
-                    json!({"function": "fs_read", "arguments": {"file_path": "/tmp/x.txt"}}),
-                ),
-                ("unknown_ext".to_owned(), json!({"nested": true})),
-            ]),
+            tool_api_call: Some(agena_domain::ToolApiCall {
+                function: agena_domain::ToolApiFunction::Call,
+                arguments: agena_domain::StructuredObject::default(),
+            }),
+            call_id: 7,
+            state: ToolResultState::Completed,
+            authorization: OperationAuthorization::default(),
+            user_input: OperationUserInput::default(),
+            output: Some(RawOutput {
+                payload: Some(json!({"preview": "hello", "truncated": false})),
+                ..Default::default()
+            }),
+            error: None,
+            metadata: BTreeMap::from([("agena.operation_id".to_owned(), json!("op-1"))]),
+            lifecycle: TimeRange {
+                start_ms: 1000,
+                end_ms: Some(2000),
+            },
         };
         let value = content.as_value();
         assert_eq!(value["name"], json!("fs.read"));
         assert_eq!(value["input"]["file_path"], json!("/tmp/x.txt"));
-        assert_eq!(value["tool_api_call"]["function"], json!("fs_read"));
+        assert_eq!(value["output"]["payload"]["preview"], json!("hello"));
+        // No operation bucket and no stored blocks/model preview.
+        assert!(value.get("operation").is_none());
+        assert!(value.get("result").is_none());
         let back = ToolCallContent::try_from(&value).unwrap();
-        assert_eq!(back.name, "fs.read");
-        assert_eq!(back.plugin.as_deref(), Some("builtin"));
-        assert_eq!(back.input, json!({"file_path": "/tmp/x.txt", "offset": 3}));
-        assert_eq!(back.extra["tool_api_call"]["function"], json!("fs_read"));
-        assert_eq!(back.extra["unknown_ext"]["nested"], json!(true));
-        // Sparse tool_call (no plugin, no input) decodes leniently.
-        let sparse = ToolCallContent::try_from(&json!({"name": "ping"})).unwrap();
-        assert_eq!(sparse.name, "ping");
-        assert_eq!(sparse.plugin, None);
-        assert_eq!(sparse.input, Value::Null);
-    }
-
-    #[test]
-    fn tool_result_round_trips_extended_envelope_keys() {
-        let content = ToolResultContent {
-            output: "3 lines".to_owned(),
-            ok: true,
-            extra: BTreeMap::from([
-                ("structured".to_owned(), json!({"lines": 3})),
-                (
-                    "model_preview".to_owned(),
-                    json!({"text": "3 lines", "truncated": false}),
-                ),
-                ("state".to_owned(), json!("completed")),
-                ("metadata".to_owned(), json!({"provider": "cli"})),
-            ]),
-        };
-        let value = content.as_value();
-        assert_eq!(value["output"], json!("3 lines"));
-        assert_eq!(value["ok"], json!(true));
-        let back = ToolResultContent::try_from(&value).unwrap();
-        assert_eq!(back.output, "3 lines");
-        assert!(back.ok);
-        assert_eq!(back.extra["structured"], json!({"lines": 3}));
-        assert_eq!(back.extra["state"], json!("completed"));
-        assert_eq!(back.extra["metadata"]["provider"], json!("cli"));
+        assert_eq!(back, content);
+        assert!(
+            ToolCallContent::try_from(&json!({
+                "name": "fs.read",
+                "input": {},
+                "payload": {"preview": "legacy"}
+            }))
+            .is_err()
+        );
+        assert!(
+            ToolCallContent::try_from(&json!({
+                "name": "fs.read",
+                "input": {},
+                "unknown_ext": true
+            }))
+            .is_err()
+        );
+        for required in ["name", "input", "call_id", "state", "lifecycle"] {
+            let mut incomplete = value.clone();
+            incomplete
+                .as_object_mut()
+                .expect("tool_call serializes as an object")
+                .remove(required);
+            assert!(
+                ToolCallContent::try_from(&incomplete).is_err(),
+                "missing required field {required} must be rejected"
+            );
+        }
     }
 
     #[test]

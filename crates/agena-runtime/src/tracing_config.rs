@@ -245,11 +245,8 @@ mod tests {
         use sea_orm::{ConnectionTrait, Statement};
         use std::path::PathBuf;
 
-        let dir =
-            std::env::temp_dir().join(format!("agena-scheduler-db-test-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).expect("create temp dir");
-        let db_path = dir.join("scheduler.db");
-        let _ = std::fs::remove_file(&db_path);
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let db_path = dir.path().join("scheduler.db");
 
         let database = connect_scheduler_database(
             None,
@@ -260,7 +257,6 @@ mod tests {
         .await
         .expect("compose scheduler database")
         .expect("scheduler database present");
-        let _ = std::fs::remove_dir_all(&dir);
 
         for table in ["agena_scheduler_jobs", "agena_scheduler_history"] {
             let count: i64 = database

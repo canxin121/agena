@@ -67,6 +67,7 @@ impl HttpCallbackHostClient {
             id: RequestId::Num(id),
             method: method_name.to_string(),
             params: Some(params),
+            context: None,
         };
         let mut builder = self.client.post(&self.url).json(&req);
         if let Some(header) = &self.auth_header {
@@ -237,6 +238,7 @@ async fn handle_rpc<P: Plugin>(
 ) -> Json<Response> {
     let id = req.id.clone();
     let params = req.params.unwrap_or(serde_json::Value::Null);
+    let callback_context = req.context;
     let dispatch_slot = Arc::clone(&state.dispatch_slots).try_acquire_owned();
     let Ok(dispatch_slot) = dispatch_slot else {
         return Json(error_response(
@@ -271,7 +273,14 @@ async fn handle_rpc<P: Plugin>(
                 ));
             }
         };
-        let mut handle = state.dispatcher.dispatch_stream(input.clone());
+        let mut handle = if let Some(context) = callback_context.clone() {
+            crate::host_api::run_in_host_callback_context(context, async {
+                state.dispatcher.dispatch_stream(input.clone())
+            })
+            .await
+        } else {
+            state.dispatcher.dispatch_stream(input.clone())
+        };
         let stream_id = handle.stream_id.clone();
         let callback_context = crate::host_api::HostCallbackContext {
             session_id: Some(input.session_id),
@@ -353,7 +362,13 @@ async fn handle_rpc<P: Plugin>(
         });
     }
 
-    match state.dispatcher.dispatch(&req.method, params).await {
+    let dispatch = state.dispatcher.dispatch(&req.method, params);
+    let result = if let Some(context) = callback_context {
+        crate::host_api::run_in_host_callback_context(context, dispatch).await
+    } else {
+        dispatch.await
+    };
+    match result {
         Ok(v) => Json(Response {
             jsonrpc: JsonRpcVersion,
             id,

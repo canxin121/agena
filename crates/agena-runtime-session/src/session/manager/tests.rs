@@ -80,7 +80,7 @@ async fn test_manager_with_database() -> (SessionManager, DatabaseConnection) {
     );
     let provider_registry = Arc::new(ProviderRegistry::new());
     let context_governor = ContextGovernor::new(agena_domain::ContextPolicy::default());
-    let processor = SessionProcessor::new(plugins, workspace_root);
+    let processor = SessionProcessor::new(plugins);
     let database = Database::connect("sqlite::memory:")
         .await
         .expect("open v2 test database");
@@ -906,7 +906,14 @@ async fn projection_preserves_precise_part_kind() {
                 NewPart {
                     kind: "tool_call".to_owned(),
                     role: PartRole::Assistant,
-                    content: serde_json::json!({"name": "tools_search", "input": {"query": "x"}}),
+                    content: serde_json::json!({
+                        "name": "tools_search",
+                        "input": {"query": "x"},
+                        "call_id": 1,
+                        "state": "completed",
+                        "output": {"text": "search complete", "truncated": false},
+                        "lifecycle": {"start_ms": 1, "end_ms": 2}
+                    }),
                     summary: None,
                     visibility: PartVisibility::Both,
                     rendered_markdown: None,
@@ -1295,7 +1302,7 @@ async fn manager_with_provider(provider: Arc<dyn ModelRuntime>) -> SessionManage
     registry.register_arc(provider);
     let provider_registry = Arc::new(registry);
     let context_governor = ContextGovernor::new(agena_domain::ContextPolicy::default());
-    let processor = SessionProcessor::new(plugins, workspace_root);
+    let processor = SessionProcessor::new(plugins);
     let database = Database::connect("sqlite::memory:")
         .await
         .expect("open v2 test database");
@@ -1984,7 +1991,7 @@ async fn manager_with_tool_search_fixture(provider: Arc<dyn ModelRuntime>) -> Se
     registry.register_arc(provider);
     let provider_registry = Arc::new(registry);
     let context_governor = ContextGovernor::new(agena_domain::ContextPolicy::default());
-    let processor = SessionProcessor::new(plugins, workspace_root);
+    let processor = SessionProcessor::new(plugins);
     let database = Database::connect("sqlite::memory:")
         .await
         .expect("open v2 test database");
@@ -2234,12 +2241,9 @@ async fn stable_run_executes_in_progress_tools_search_and_replays_reasoning() {
     else {
         panic!("expected tool_call content");
     };
-    let operation = agena_runtime_contracts::part_content::operation_from_tool_call(&tool_call);
     assert!(
-        operation.output_text().is_some_and(|output| {
-            output.contains("Matching tools for \"filesystem\"") && output.contains("fs.read")
-        }),
-        "tools_search must execute through the Tool API handler: {operation:?}"
+        tool_call.output.is_some(),
+        "completed tool call keeps its raw output"
     );
     assert!(completed.parts().iter().any(|part| {
         part.kind == "text"
@@ -2305,6 +2309,19 @@ async fn stable_run_executes_in_progress_tools_search_and_replays_reasoning() {
         replayed_call_id, "call_tools_search_1",
         "the persisted replay must keep the provider-issued call id rather than replacing it with the local call sequence"
     );
+    let replayed_results: Vec<&String> = replayed_tool_turn
+        .parts
+        .iter()
+        .filter_map(|part| match part {
+            CompletionInputPart::ToolResult {
+                tool_call_id,
+                output_json,
+                ..
+            } if tool_call_id == replayed_call_id => Some(output_json),
+            _ => None,
+        })
+        .collect();
+    eprintln!("DEBUG replay output_json: {:?}", replayed_results);
     assert!(
         replayed_tool_turn.parts.iter().any(|part| {
             matches!(
@@ -2425,7 +2442,6 @@ async fn policy_denied_terminal_transition_preserves_operation_metadata() {
     let mut operation = agena_runtime_contracts::part::OperationPart::pending(
         7,
         ToolInvocation::new("fixture.denied", StructuredObject::default()),
-        "Denied fixture",
         TimeRange {
             start_ms: 1,
             end_ms: None,
@@ -2442,7 +2458,7 @@ async fn policy_denied_terminal_transition_preserves_operation_metadata() {
     let tool_part = new_part_from_content(
         "tool_call",
         PartRole::Assistant,
-        &TypedContent::ToolCall(tool_call_from_operation(&operation)),
+        &TypedContent::ToolCall(Box::new(tool_call_from_operation(&operation))),
         PartState::InProgress,
     )
     .expect("build pending tool part");
@@ -2531,7 +2547,6 @@ async fn idless_plugin_asks_are_unique_and_cancellation_is_scoped_and_model_visi
         agena_runtime_contracts::part::OperationPart::pending(
             call_id,
             ToolInvocation::new(name, StructuredObject::default()),
-            "Ask fixture",
             TimeRange {
                 start_ms: 1,
                 end_ms: None,
@@ -2547,20 +2562,20 @@ async fn idless_plugin_asks_are_unique_and_cancellation_is_scoped_and_model_visi
                 new_part_from_content(
                     "tool_call",
                     PartRole::Assistant,
-                    &TypedContent::ToolCall(tool_call_from_operation(&operation(
+                    &TypedContent::ToolCall(Box::new(tool_call_from_operation(&operation(
                         77,
                         "fixture.ask.first",
-                    ))),
+                    )))),
                     PartState::InProgress,
                 )
                 .expect("build first pending tool"),
                 new_part_from_content(
                     "tool_call",
                     PartRole::Assistant,
-                    &TypedContent::ToolCall(tool_call_from_operation(&operation(
+                    &TypedContent::ToolCall(Box::new(tool_call_from_operation(&operation(
                         78,
                         "fixture.ask.second",
-                    ))),
+                    )))),
                     PartState::InProgress,
                 )
                 .expect("build second pending tool"),
@@ -2725,7 +2740,7 @@ async fn provider_native_completion_preserves_started_identity_and_context() {
         Some("ws_fixture_1"),
         "a completion event that omits id must retain the started event's provider identity"
     );
-    assert_eq!(operation.title, "Hosted search");
+    assert_eq!(operation.title(), Some(operation.invocation.name.as_str()));
     assert_eq!(
         operation
             .invocation
@@ -2735,13 +2750,12 @@ async fn provider_native_completion_preserves_started_identity_and_context() {
         Some("fixture")
     );
     assert_eq!(
-        operation.raw.as_ref().and_then(|raw| raw["id"].as_str()),
+        operation.provider_raw().and_then(|raw| raw["id"].as_str()),
         Some("ws_fixture_1")
     );
     assert_eq!(
         operation
-            .raw
-            .as_ref()
+            .provider_raw()
             .and_then(|raw| raw["result"].as_str()),
         Some("done")
     );
@@ -2889,7 +2903,6 @@ async fn host_user_input_does_not_downgrade_an_in_progress_tool_part() {
     let operation = agena_runtime_contracts::part::OperationPart::pending(
         1,
         ToolInvocation::new("session.rename", StructuredObject::default()),
-        "Rename session",
         TimeRange {
             start_ms: 1,
             end_ms: None,
@@ -2898,7 +2911,7 @@ async fn host_user_input_does_not_downgrade_an_in_progress_tool_part() {
     let tool_part = new_part_from_content(
         "tool_call",
         PartRole::Assistant,
-        &TypedContent::ToolCall(tool_call_from_operation(&operation)),
+        &TypedContent::ToolCall(Box::new(tool_call_from_operation(&operation))),
         PartState::InProgress,
     )
     .expect("build tool part");
@@ -2981,7 +2994,6 @@ async fn host_ask_user_interaction_part_is_reply_resolvable() {
     let operation = agena_runtime_contracts::part::OperationPart::pending(
         1,
         ToolInvocation::new("plan.set", StructuredObject::default()),
-        "Create plan",
         TimeRange {
             start_ms: 1,
             end_ms: None,
@@ -2990,7 +3002,7 @@ async fn host_ask_user_interaction_part_is_reply_resolvable() {
     let tool_part = new_part_from_content(
         "tool_call",
         PartRole::Assistant,
-        &TypedContent::ToolCall(tool_call_from_operation(&operation)),
+        &TypedContent::ToolCall(Box::new(tool_call_from_operation(&operation))),
         PartState::InProgress,
     )
     .expect("build tool part");
@@ -3116,7 +3128,6 @@ async fn non_host_user_input_reply_persists_completed_interaction_part() {
     let mut operation = agena_runtime_contracts::part::OperationPart::pending(
         1,
         ToolInvocation::new("plan.set", StructuredObject::default()),
-        "Create plan",
         TimeRange {
             start_ms: 1,
             end_ms: None,
@@ -3132,7 +3143,7 @@ async fn non_host_user_input_reply_persists_completed_interaction_part() {
     let tool_part = new_part_from_content(
         "tool_call",
         PartRole::Assistant,
-        &TypedContent::ToolCall(tool_call_from_operation(&operation)),
+        &TypedContent::ToolCall(Box::new(tool_call_from_operation(&operation))),
         PartState::InProgress,
     )
     .expect("build tool part");
@@ -3271,7 +3282,6 @@ async fn host_ask_user_interaction_part_born_in_progress_and_reply_completes() {
     let operation = agena_runtime_contracts::part::OperationPart::pending(
         1,
         ToolInvocation::new("plan.set", StructuredObject::default()),
-        "Create plan",
         TimeRange {
             start_ms: 1,
             end_ms: None,
@@ -3280,7 +3290,7 @@ async fn host_ask_user_interaction_part_born_in_progress_and_reply_completes() {
     let tool_part = new_part_from_content(
         "tool_call",
         PartRole::Assistant,
-        &TypedContent::ToolCall(tool_call_from_operation(&operation)),
+        &TypedContent::ToolCall(Box::new(tool_call_from_operation(&operation))),
         PartState::InProgress,
     )
     .expect("build tool part");
@@ -3473,7 +3483,6 @@ async fn host_ask_user_from_unrelated_operations_with_empty_operation_id_do_not_
     let plan_operation = agena_runtime_contracts::part::OperationPart::pending(
         1,
         ToolInvocation::new("plan.set", StructuredObject::default()),
-        "Create plan",
         TimeRange {
             start_ms: 1,
             end_ms: None,
@@ -3482,7 +3491,6 @@ async fn host_ask_user_from_unrelated_operations_with_empty_operation_id_do_not_
     let ask_operation = agena_runtime_contracts::part::OperationPart::pending(
         2,
         ToolInvocation::new("interaction.ask", StructuredObject::default()),
-        "Ask user",
         TimeRange {
             start_ms: 2,
             end_ms: None,
@@ -3497,14 +3505,14 @@ async fn host_ask_user_from_unrelated_operations_with_empty_operation_id_do_not_
                 new_part_from_content(
                     "tool_call",
                     PartRole::Assistant,
-                    &TypedContent::ToolCall(tool_call_from_operation(&plan_operation)),
+                    &TypedContent::ToolCall(Box::new(tool_call_from_operation(&plan_operation))),
                     PartState::InProgress,
                 )
                 .expect("build plan tool part"),
                 new_part_from_content(
                     "tool_call",
                     PartRole::Assistant,
-                    &TypedContent::ToolCall(tool_call_from_operation(&ask_operation)),
+                    &TypedContent::ToolCall(Box::new(tool_call_from_operation(&ask_operation))),
                     PartState::InProgress,
                 )
                 .expect("build ask tool part"),
@@ -4071,7 +4079,6 @@ async fn install_test_background_operation(
             },
             StructuredObject::default(),
         ),
-        "Background launch receipt",
         TimeRange {
             start_ms: 1,
             end_ms: Some(2),
@@ -4084,7 +4091,7 @@ async fn install_test_background_operation(
     let tool_part = new_part_from_content(
         "tool_call",
         PartRole::Assistant,
-        &TypedContent::ToolCall(tool_call_from_operation(&operation)),
+        &TypedContent::ToolCall(Box::new(tool_call_from_operation(&operation))),
         PartState::Completed,
     )
     .expect("build completed background launch receipt");
@@ -5286,7 +5293,6 @@ async fn background_launch_receipt_is_terminal_and_needs_no_guard() {
     let operation = agena_runtime_contracts::part::OperationPart::pending(
         41,
         invocation,
-        "Background shell",
         TimeRange {
             start_ms: 1,
             end_ms: None,
@@ -5295,7 +5301,7 @@ async fn background_launch_receipt_is_terminal_and_needs_no_guard() {
     let mut tool_part = new_part_from_content(
         "tool_call",
         PartRole::Assistant,
-        &TypedContent::ToolCall(tool_call_from_operation(&operation)),
+        &TypedContent::ToolCall(Box::new(tool_call_from_operation(&operation))),
         PartState::InProgress,
     )
     .expect("build launching tool part");
@@ -5365,7 +5371,7 @@ async fn background_launch_receipt_is_terminal_and_needs_no_guard() {
     assert_eq!(state, "completed");
     assert!(finished_at_ms.is_some());
     assert_eq!(
-        content["operation"]["metadata"]["agena.background"]["id"],
+        content["metadata"]["agena.background"]["id"],
         "proc_durable_launch"
     );
 

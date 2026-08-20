@@ -6,7 +6,9 @@ use crate::session::model::{
     SessionPartRef, SessionPendingInteractiveRequest, SessionPendingPermissionRequest,
     SessionPendingTool,
 };
-use crate::session::store::{OPERATION_ID_METADATA_KEY, typed_content_from_value};
+use crate::session::store::{
+    OPERATION_ID_METADATA_KEY, tool_call_from_operation, typed_content_from_value,
+};
 use agena_domain::UserInputReply;
 use agena_provider::ResponsesApiRequestMetadata;
 use agena_runtime_contracts::part_content::{InteractionContent, operation_from_tool_call};
@@ -194,11 +196,10 @@ pub(super) fn update_resolved_tool_message(
 fn pending_operation_for_resolved(
     resolved: &ResolvedPendingTool,
     invocation: ToolInvocation,
-    title: impl Into<String>,
     lifecycle: TimeRange,
     authorization: agena_domain::OperationAuthorization,
 ) -> OperationPart {
-    let mut operation = OperationPart::pending(resolved.call_id, invocation, title, lifecycle);
+    let mut operation = OperationPart::pending(resolved.call_id, invocation, lifecycle);
     operation.authorization = authorization;
     let operation_id = resolved.operation_id.trim();
     if !operation_id.is_empty() {
@@ -239,9 +240,8 @@ fn operation_authorization(
         .unwrap_or_default()
 }
 
-/// Decode the [`OperationPart`] payload from a `tool_call` part's canonical
-/// content (recovered via the lossless `extra["operation"]` bucket). Returns
-/// `None` for non-tool parts or undecodable payloads.
+/// Decode the [`OperationPart`] projection from a strict flat `tool_call`.
+/// Returns `None` for non-tool parts or incompatible payloads.
 pub(super) fn operation_from_part(part: &Part) -> Option<OperationPart> {
     let content = typed_content_from_value(&part.kind, &part.content).ok()?;
     match content {
@@ -267,53 +267,18 @@ pub(super) fn operation_id_from_part(part: &Part) -> Option<String> {
     })
 }
 
-/// Re-encode a mutated v1 [`OperationPart`] back onto the tool part's content.
+/// Re-encode a mutated [`OperationPart`] back onto the tool part's content.
 ///
-/// The canonical tool_call content is the *flattened* [`ToolCallContent`]
-/// shape: `ToolCallContent` marks `extra` with `#[serde(flatten)]`, so the
-/// operation lives at the top-level `operation` key of the stored JSON (the
-/// same slot [`operation_from_tool_call`] reads back through the flatten
-/// bucket). Writing a nested `content["extra"]["operation"]` would leave the
-/// authoritative top-level copy stale and shadow it on the next decode.
+/// The durable tool_call content is the flat single-source shape; a mutation
+/// is written back through [`tool_call_from_operation`] so the invocation
+/// identity, payload, user-input records and metadata stay in their canonical
+/// slots (there is no `operation` bucket to patch).
 pub(super) fn apply_operation_mutation(part: &mut Part, mutation: impl FnOnce(&mut OperationPart)) {
     let Some(mut operation) = operation_from_part(part) else {
         return;
     };
     mutation(&mut operation);
-    let mut content = part.content.clone();
-    content["operation"] =
-        serde_json::to_value(&operation).expect("operation payload is always JSON serializable");
-    part.content = content;
-}
-
-/// Stable terminal identity for an Operation on paths that carry no composed
-/// result title (failure, non-execution, approval phase). The direct
-/// execution-tool name is the fallback; success-path titles are composed as
-/// "<tool> · <call summary>" by `agena_tool::compose_tool_title`.
-fn terminal_operation_title(invocation: &ToolInvocation) -> String {
-    invocation.name.clone()
-}
-
-/// Whether a tool-supplied execution title is an authorization-phase phrase
-/// ("Awaiting permission", "Awaiting approval", "Permission request", ...)
-/// that must never become an operation's terminal completion title (which
-/// falls back to the tool name instead).
-///
-/// This is intentionally a title-text heuristic, not a typed signal: the
-/// title under test is `execution.view.title` — the self-reported title of a
-/// *third-party* tool that completed. There is no typed marker on the
-/// operation part that classifies the *content* of a foreign tool's title;
-/// `OperationAuthorization` only records pending-permission state, which is
-/// orthogonal to what a tool chose to print as its title. The phrases guarded
-/// here are the same ones the runtime itself writes into pending-operation
-/// summaries ("Awaiting approval · <reason>"), so a tool that echoes its
-/// pending state back is filtered out.
-fn is_authorization_phase_title(title: &str) -> bool {
-    let title = title.trim().to_ascii_lowercase();
-    title.starts_with("awaiting permission")
-        || title.starts_with("awaiting approval")
-        || title.starts_with("awaiting user approval")
-        || title.starts_with("permission request")
+    part.content = tool_call_from_operation(&operation).as_value();
 }
 
 /// Decode an `interaction` part's content into its typed [`InteractionContent`]
@@ -1306,25 +1271,8 @@ impl SessionManager {
                             request_id.as_str(),
                         ));
                     }
-                    let decision = match request.request.reply.kind {
-                        PermissionReplyKind::AllowOnce => "Permission allowed once",
-                        PermissionReplyKind::AllowAlways => "Permission allowed always",
-                        PermissionReplyKind::DenyOnce => "Permission denied once",
-                        PermissionReplyKind::DenyAlways => "Permission denied always",
-                        PermissionReplyKind::AutoApprove => "Permission auto-approved",
-                    };
-                    let summary = request
-                        .request
-                        .reply
-                        .reason
-                        .as_deref()
-                        .filter(|reason| !reason.trim().is_empty())
-                        .map(|reason| format!("{decision} · {reason}"))
-                        .unwrap_or_else(|| decision.to_owned());
-                    operation.set_summary(summary);
-                    let summary = operation.summary.clone();
                     apply_operation_mutation(tool_part, |op| *op = operation);
-                    tool_part.summary = Some(summary);
+                    tool_part.summary = None;
                 }
                 let reply_message_id = assistant_message_id(&session, &pending.tool.part)?;
                 let conversation_identity = self
@@ -2019,10 +1967,10 @@ use super::{
     PromptTurnBudget, ProviderPromptAnchor, ResolvedPendingTool, SessionExecutionReplyRequest,
     SessionManager, SessionManagerState, SessionPermissionReplyRequest, SessionRunOptions,
     SessionRunRequest, SessionRunTermination, StreamingToolExecution, TimeRange, ToolError,
-    ToolInvocation, ToolInvocationExecution, UserInputReplyKind, Utc, ask_user_title,
+    ToolInvocation, ToolInvocationExecution, UserInputReplyKind, Utc,
     background_operation_from_execution, background_operation_id, completed_lifecycle,
     custom_payload_value, execution_control_to_app_error, host_user_input_response, mpsc,
-    operation_blocks_from_tool_output, payload_tool_name_for_invocation, permission_action_key,
-    persisted_rules_for_reply, requested_background_kind, reserve_background_external_id,
-    resolve_pending_tool, run_abort_reason, text_result_blocks, tool_name, user_input_execution,
+    payload_tool_name_for_invocation, permission_action_key, persisted_rules_for_reply,
+    requested_background_kind, reserve_background_external_id, resolve_pending_tool,
+    run_abort_reason, user_input_execution,
 };

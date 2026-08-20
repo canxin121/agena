@@ -32,20 +32,41 @@ export type SettingsSidebarIconKey =
   | 'interface'
   | 'diagnostics'
 
+export type SettingsSidebarNavigationNode = {
+  id: string
+  label: string
+  description?: string
+  keywords?: string[]
+  view?: string
+  children?: SettingsSidebarNavigationNode[]
+}
+
 export type SettingsSidebarTab = {
   id: SettingsTab
   label: string
   icon: SettingsSidebarIconKey
   group: SettingsSidebarGroupId
   keywords?: string[]
+  children?: SettingsSidebarNavigationNode[]
+}
+
+export type SettingsSidebarDestination = {
+  section: SettingsTab
+  view: string
 }
 
 export type SettingsSidebarTabRow = {
-  kind: 'tab'
-  id: SettingsTab
+  kind: 'item'
+  key: string
+  section: SettingsTab
+  view?: string
   label: string
-  icon: SettingsSidebarIconKey
+  icon?: SettingsSidebarIconKey
+  depth: number
   active: boolean
+  branchActive: boolean
+  hasChildren: boolean
+  expanded: boolean
 }
 
 export type SettingsSidebarRenderGroup = {
@@ -209,8 +230,18 @@ export function normalizeRememberedSettingsRoute(value: unknown, fallback: Setti
   return settingsPathForTab(parsed ? canonicalSettingsTab(parsed) : fallback)
 }
 
+function navigationNodeWithDefaultView(node: SettingsSidebarNavigationNode): SettingsSidebarNavigationNode {
+  const children = (node.children || []).map(navigationNodeWithDefaultView)
+  return {
+    ...node,
+    view: node.view || (children.length === 0 ? node.id : undefined),
+    children: children.length > 0 ? children : undefined,
+  }
+}
+
 export function buildSettingsSidebarTabs(
   resolveLabel: (id: SettingsTab, labelKey: string) => string,
+  resolveChildren: (id: SettingsTab) => readonly SettingsSidebarNavigationNode[] = () => [],
 ): SettingsSidebarTab[] {
   return SETTINGS_TAB_CONFIG.map((item) => ({
     id: item.id,
@@ -218,6 +249,7 @@ export function buildSettingsSidebarTabs(
     icon: item.icon,
     group: item.group,
     keywords: item.keywords,
+    children: resolveChildren(item.id).map(navigationNodeWithDefaultView),
   }))
 }
 
@@ -232,12 +264,88 @@ function matchesSidebarQuery(query: string, parts: Array<string | undefined>): b
   return parts.some((part) => normalizeSettingsSidebarQuery(part || '').includes(query))
 }
 
+function filterNavigationNode(
+  node: SettingsSidebarNavigationNode,
+  query: string,
+): SettingsSidebarNavigationNode | null {
+  if (!query) return node
+
+  const selfMatches = matchesSidebarQuery(query, [node.label, node.id, node.description, ...(node.keywords || [])])
+  const matchingChildren = (node.children || [])
+    .map((child) => filterNavigationNode(child, query))
+    .filter((child): child is SettingsSidebarNavigationNode => Boolean(child))
+
+  if (!selfMatches && matchingChildren.length === 0) return null
+  return {
+    ...node,
+    children: selfMatches ? node.children : matchingChildren,
+  }
+}
+
+function nodeContainsActiveView(node: SettingsSidebarNavigationNode, activeView: string): boolean {
+  if (node.view && normalizeSettingsSidebarQuery(node.view) === activeView) return true
+  return (node.children || []).some((child) => nodeContainsActiveView(child, activeView))
+}
+
+function flattenNavigationNode(args: {
+  node: SettingsSidebarNavigationNode
+  section: SettingsTab
+  activeTab: SettingsTab
+  activeView: string
+  expandedNodeKeys: ReadonlySet<string>
+  forceExpanded: boolean
+  key: string
+  depth: number
+  icon?: SettingsSidebarIconKey
+}): SettingsSidebarTabRow[] {
+  const children = args.node.children || []
+  const hasChildren = children.length > 0
+  const branchActive =
+    args.activeTab === args.section &&
+    (args.node.view
+      ? normalizeSettingsSidebarQuery(args.node.view) === args.activeView
+      : nodeContainsActiveView(args.node, args.activeView))
+  const active = Boolean(args.node.view) && branchActive
+  const expanded = hasChildren && (args.forceExpanded || args.expandedNodeKeys.has(args.key))
+  const row: SettingsSidebarTabRow = {
+    kind: 'item',
+    key: args.key,
+    section: args.section,
+    view: args.node.view,
+    label: args.node.label,
+    icon: args.icon,
+    depth: args.depth,
+    active,
+    branchActive,
+    hasChildren,
+    expanded,
+  }
+
+  if (!expanded) return [row]
+  return [
+    row,
+    ...children.flatMap((child) =>
+      flattenNavigationNode({
+        ...args,
+        node: child,
+        key: `${args.key}/${child.id}`,
+        depth: args.depth + 1,
+        icon: undefined,
+      }),
+    ),
+  ]
+}
+
 export function buildSettingsSidebarGroups(args: {
   query: string
   tabs: SettingsSidebarTab[]
   activeTab: SettingsTab
+  activeView?: string
+  expandedNodeKeys?: ReadonlySet<string>
 }): SettingsSidebarRenderGroup[] {
   const query = normalizeSettingsSidebarQuery(args.query)
+  const activeView = normalizeSettingsSidebarQuery(args.activeView || '')
+  const expandedNodeKeys = args.expandedNodeKeys || new Set<string>()
   const groups = new Map<SettingsSidebarGroupId, SettingsSidebarTabRow[]>([
     ['core', []],
     ['application', []],
@@ -245,16 +353,30 @@ export function buildSettingsSidebarGroups(args: {
   ])
 
   for (const tab of args.tabs) {
-    const selfMatches = matchesSidebarQuery(query, [tab.label, tab.id, ...(tab.keywords || [])])
-    if (!selfMatches) continue
+    const filteredRoot = filterNavigationNode(
+      {
+        id: tab.id,
+        label: tab.label,
+        keywords: tab.keywords,
+        children: tab.children,
+      },
+      query,
+    )
+    if (!filteredRoot) continue
 
-    groups.get(tab.group)?.push({
-      kind: 'tab',
-      id: tab.id,
-      label: tab.label,
-      icon: tab.icon,
-      active: args.activeTab === tab.id,
-    })
+    groups.get(tab.group)?.push(
+      ...flattenNavigationNode({
+        node: filteredRoot,
+        section: tab.id,
+        activeTab: args.activeTab,
+        activeView,
+        expandedNodeKeys,
+        forceExpanded: Boolean(query),
+        key: tab.id,
+        depth: 0,
+        icon: tab.icon,
+      }),
+    )
   }
 
   return Array.from(groups.entries())

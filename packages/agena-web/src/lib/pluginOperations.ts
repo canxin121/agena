@@ -133,12 +133,7 @@ export type PluginOperationCatalogItem = {
   target: { kind: 'method'; handler: string } | { kind: 'tool'; tool: string }
 }
 
-export type PluginOperationStatus =
-  | 'succeeded'
-  | 'failed'
-  | 'cancelled'
-  | 'unavailable'
-  | 'permission_required'
+export type PluginOperationStatus = 'succeeded' | 'failed' | 'cancelled' | 'unavailable' | 'permission_required'
 
 export type PluginOperationDiagnostic = {
   code: string

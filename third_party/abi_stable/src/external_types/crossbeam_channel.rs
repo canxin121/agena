@@ -807,7 +807,9 @@ struct VTable<T> {
     receiver_capacity: extern "C" fn(this: RRef<'_, ErasedReceiver<T>>) -> ROption<usize>,
 }
 
-struct MakeVTable<'a, T>(&'a T);
+struct MakeVTable<'a, T> {
+    _marker: &'a T,
+}
 
 impl<'a, T: 'a> MakeVTable<'a, T> {
     const VALUE: VTable<T> = VTable {

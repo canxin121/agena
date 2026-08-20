@@ -4,35 +4,9 @@ import McpServerControlPanel from '@/components/settings/McpServerControlPanel.v
 import PluginMarketplacePanel from '@/components/settings/PluginMarketplacePanel.vue'
 import PluginsPanel from '@/components/settings/PluginsPanel.vue'
 import SettingsSectionWorkbench from '@/components/settings/workbench/SettingsSectionWorkbench.vue'
-import type { SettingsSubpageDefinition } from '@/components/settings/workbench/settingsSectionNavigation'
-import { settingsText as st } from '@/i18n/settingsText'
+import { SETTINGS_DEFAULT_SUBPAGE, buildSettingsSubpages } from '@/components/settings/settingsNavigationCatalog'
 
-const pages: SettingsSubpageDefinition[] = [
-  {
-    id: 'marketplace',
-    label: st('Plugin Marketplace'),
-    description: st('Discover, verify, install, upgrade, and remove GitHub-hosted Agena plugins.'),
-    keywords: ['marketplace', 'github', 'install', 'upgrade', 'release', 'plugins'],
-  },
-  {
-    id: 'plugin-workbench',
-    label: st('Plugin Workbench'),
-    description: st('Configure plugins, run tools and operations, and inspect capabilities, logs, and diagnostics.'),
-    keywords: ['plugins', 'schema', 'config', 'tools', 'operations', 'logs'],
-  },
-  {
-    id: 'mcp-server',
-    label: st('MCP Server'),
-    description: st('Manage the connected server’s MCP listener, OAuth policy, public identity, and tool exposure.'),
-    keywords: ['mcp', 'oauth', 'chatgpt', 'public url', 'tools'],
-  },
-  {
-    id: 'harnesses',
-    label: st('Tool harnesses'),
-    description: st('Create named browser, shell, and editor harness configurations.'),
-    keywords: ['browser', 'shell', 'editor', 'environment', 'commands'],
-  },
-]
+const pages = buildSettingsSubpages('plugins-tools')
 </script>
 
 <template>
@@ -43,7 +17,7 @@ const pages: SettingsSubpageDefinition[] = [
       $st('Operate the plugin runtime, expose Agena through MCP, and configure provider-native tool harnesses.')
     "
     :pages="pages"
-    default-page="plugin-workbench"
+    :default-page="SETTINGS_DEFAULT_SUBPAGE['plugins-tools']"
     v-slot="{ activePage }"
   >
     <PluginsPanel v-if="activePage === 'plugin-workbench'" />

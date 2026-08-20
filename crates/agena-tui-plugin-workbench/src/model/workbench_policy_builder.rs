@@ -46,7 +46,7 @@ pub fn build_plugin_workbench_plugin(
         .and_then(|configured_plugin| configured_plugin.get("settings"))
         .cloned()
         .unwrap_or(JsonValue::Null);
-    let schema = manifest.and_then(|manifest| plugin_settings_schema(manifest));
+    let schema = manifest.and_then(plugin_settings_schema);
     let schema_missing = schema.is_none();
     let default_config = materialized_config_value(schema.as_ref(), &JsonValue::Null);
     let saved_config = materialized_config_value(schema.as_ref(), &raw_config);

@@ -275,7 +275,6 @@ impl ToolExecutor {
         let stream_id = stream.stream_id;
         let chunks = stream.chunks;
         let end = stream.end;
-        let result_policy = resolution.definition.runtime.result_policy.clone();
         let model_tool_name = resolution.canonical_name();
         let executor = self.clone();
         let cancellation = self.cancellation_token.clone();
@@ -305,7 +304,6 @@ impl ToolExecutor {
                                 &invocation,
                                 session_id,
                                 model_tool_name.as_str(),
-                                &result_policy,
                                 call_id,
                                 execution,
                             )
@@ -460,7 +458,6 @@ impl ToolExecutor {
                     invocation,
                     session_id,
                     resolution.canonical_name().as_str(),
-                    &resolution.definition.runtime.result_policy,
                     call_id,
                     execution.into(),
                 )
@@ -503,7 +500,6 @@ impl ToolExecutor {
             invocation,
             session_id,
             resolution.canonical_name().as_str(),
-            &resolution.definition.runtime.result_policy,
             call_id,
             execution,
         )

@@ -290,6 +290,8 @@ impl Application {
                 .map(agena_api::resource::BackgroundActivityResource::from)
                 .collect();
         }
+        self.render_transcript_tool_presentations(&mut resource.parts)
+            .await;
         Ok(resource)
     }
 

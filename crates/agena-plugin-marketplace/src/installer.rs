@@ -350,10 +350,7 @@ fn normalize_github_repository(value: &str) -> Result<String, MarketplaceError> 
 }
 
 fn split_github_reference(value: &str) -> Result<(String, String), MarketplaceError> {
-    let (repository, reference) = value
-        .rsplit_once('@')
-        .map(|(repository, reference)| (repository, reference))
-        .unwrap_or((value, "main"));
+    let (repository, reference) = value.rsplit_once('@').unwrap_or((value, "main"));
     let mut parts = repository.split('/');
     let owner = parts.next().unwrap_or_default();
     let repo = parts.next().unwrap_or_default();
@@ -1276,7 +1273,7 @@ fn write_plugin_config(
     let mut plugin_config = JsonMap::new();
     plugin_config.insert("package".to_string(), JsonValue::Object(package));
     if !version.settings.is_null() {
-        plugin_config.insert("config".to_string(), version.settings.clone());
+        plugin_config.insert("settings".to_string(), version.settings.clone());
     }
     list.insert(plugin_id.to_string(), JsonValue::Object(plugin_config));
     Ok(())
@@ -1321,6 +1318,14 @@ mod config_writer_tests {
         );
         assert_eq!(
             document.pointer("/plugins/list/example.plugin/package/signature"),
+            None
+        );
+        assert_eq!(
+            document.pointer("/plugins/list/example.plugin/settings"),
+            Some(&serde_json::json!({}))
+        );
+        assert_eq!(
+            document.pointer("/plugins/list/example.plugin/config"),
             None
         );
     }

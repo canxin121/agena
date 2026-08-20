@@ -30,6 +30,11 @@ use clap::Parser;
 
 fn main() -> error::Result<()> {
     agena_runtime::ensure_default_thread_stack();
+    // `crw-extract` enables jsonschema's `rustls-no-provider` feature. Cargo
+    // feature unification therefore puts the process-wide reqwest instance in
+    // no-provider mode, so install the provider before any client can be
+    // constructed (including clients created during runtime bootstrap).
+    let _ = rustls::crypto::ring::default_provider().install_default();
     agena_runtime::build_app_runtime()?.block_on(async {
         match AgenaCli::parse().into_launch_mode() {
             LaunchMode::Tui(request) => launch::tui::run(request).await,

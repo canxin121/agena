@@ -18,13 +18,14 @@ import RuntimeSessionPanel from '@/components/settings/RuntimeSessionPanel.vue'
 import InterfaceSettingsPanel from '@/components/settings/InterfaceSettingsPanel.vue'
 import DiagnosticsWorkbenchPanel from '@/components/settings/DiagnosticsWorkbenchPanel.vue'
 import SettingsSectionWorkbench from '@/components/settings/workbench/SettingsSectionWorkbench.vue'
-import type { SettingsSubpageDefinition } from '@/components/settings/workbench/settingsSectionNavigation'
+import { SETTINGS_DEFAULT_SUBPAGE, buildSettingsSubpages } from '@/components/settings/settingsNavigationCatalog'
 import {
   buildSettingsSidebarTabs,
   normalizeRememberedSettingsRoute,
   settingsPathForTab,
   settingsTabFromRouteValue,
   canonicalSettingsTab,
+  type SettingsSidebarDestination,
   type SettingsTab,
 } from '@/components/settings/sidebar/settingsSidebarNavigation'
 import { useDesktopSidebarResize } from '@/composables/useDesktopSidebarResize'
@@ -61,28 +62,7 @@ const SETTINGS_LAST_SECTION_KEY = localStorageKeys.settings.lastRoute
 
 const DEFAULT_SECTION: SettingsTab = 'interface'
 
-const interfacePages = computed<SettingsSubpageDefinition[]>(() => [
-  {
-    id: 'tui',
-    label: st('TUI preferences'),
-    description: st(
-      'Server-backed language, color, graphics, plugin theme, and transcript expansion defaults shared with the TUI.',
-    ),
-    keywords: ['tui', 'locale', 'color', 'graphics', 'theme', 'transcript'],
-  },
-  {
-    id: 'web-appearance',
-    label: st('Web appearance'),
-    description: st('Browser-only theme, fonts, density, spacing, and geometry preferences.'),
-    keywords: ['web', 'appearance', 'font', 'padding', 'radius', 'language'],
-  },
-  {
-    id: 'conversation',
-    label: st('Conversation display'),
-    description: st('Web transcript timestamps, reasoning visibility, activity expansion, and exact tool overrides.'),
-    keywords: ['chat', 'conversation', 'reasoning', 'timestamps', 'activity', 'tools'],
-  },
-])
+const interfacePages = computed(() => buildSettingsSubpages('interface'))
 
 function readInitialSection(): SettingsTab {
   const routeSection = settingsTabFromRouteValue(route.params.section)
@@ -109,12 +89,21 @@ watch(
   },
 )
 
-function goToSection(id: SettingsTab) {
-  const path = settingsPathForTab(id)
-  // A subpage/plugin deep link belongs to its current top-level section. Keep
-  // workspace/window scope query keys, but do not leak stale Settings routing
-  // state into the next domain.
-  const { view: _view, plugin: _plugin, pluginTab: _pluginTab, ...query } = route.query
+function goToSettingsDestination(destination: SettingsSidebarDestination) {
+  const path = settingsPathForTab(destination.section)
+  // A plugin detail deep link remains attached only while staying on Plugin
+  // Workbench. Other destinations receive the shared workspace/window scope
+  // query without stale Settings routing state.
+  const { view: _view, plugin, pluginTab, ...scopeQuery } = route.query
+  const query = { ...scopeQuery, view: destination.view }
+  if (
+    destination.section === 'plugins-tools' &&
+    destination.view === 'plugin-workbench' &&
+    activeSection.value === 'plugins-tools'
+  ) {
+    if (plugin !== undefined) query.plugin = plugin
+    if (pluginTab !== undefined) query.pluginTab = pluginTab
+  }
   void router.push({ path, query, hash: route.hash })
   if (ui.isCompactLayout) ui.setSessionSwitcherOpen(false)
 }
@@ -135,7 +124,12 @@ const showSidebar = computed(() => {
   return true
 })
 
-const tabs = computed(() => buildSettingsSidebarTabs((_id, labelKey) => String(t(labelKey))))
+const tabs = computed(() =>
+  buildSettingsSidebarTabs(
+    (_id, labelKey) => String(t(labelKey)),
+    (section) => buildSettingsSubpages(section),
+  ),
+)
 
 async function refreshSettingsSidebar() {
   // Remount the active server-backed workbench as well as refreshing the
@@ -461,10 +455,11 @@ const dirtyHint = computed(() => (settings.error ? settings.error : null))
           <SettingsSidebar
             :tabs="tabs"
             :active-tab="activeSection"
+            :active-view="String(route.query.view || '')"
             :loading="settings.loading"
             :is-touch-pointer="ui.isTouchPointer"
             @refresh="refreshSettingsSidebar"
-            @navigate-tab="goToSection"
+            @navigate="goToSettingsDestination"
           />
         </aside>
       </Teleport>
@@ -494,7 +489,7 @@ const dirtyHint = computed(() => (settings.error ? settings.error : null))
               )
             "
             :pages="interfacePages"
-            default-page="tui"
+            :default-page="SETTINGS_DEFAULT_SUBPAGE.interface"
             v-slot="{ activePage }"
           >
             <InterfaceSettingsPanel v-if="activePage === 'tui'" />

@@ -675,6 +675,7 @@ impl McpServerState {
         Ok(state)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn with_control(
         application: Application,
         workspace_id: i64,

@@ -4,6 +4,8 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::host_api::HostCallbackContext;
+
 pub const PROTOCOL_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -14,6 +16,11 @@ pub struct Request {
     pub method: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub params: Option<Value>,
+    /// Host-issued callback authority for the lifetime of this Host→Plugin
+    /// request. Older plugin drivers ignore the optional field; current SDK
+    /// drivers install it as task-local context before invoking plugin code.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<HostCallbackContext>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -133,6 +140,7 @@ pub mod method {
     pub const HOOK_EVENT: &str = "hooks/event";
     pub const HOOK_TOOL_BEFORE: &str = "hooks/tool.execute.before";
     pub const HOOK_TOOL_AFTER: &str = "hooks/tool.execute.after";
+    pub const HOOK_TOOL_RENDER: &str = "hooks/tool.render";
     pub const HOOK_TOOL_INVOKE: &str = "hooks/tool.invoke";
     pub const HOOK_TOOL_PERMISSION_PATHS: &str = "hooks/tool.permission_paths";
     pub const HOOK_TOOL_PERMISSION_NETWORKS: &str = "hooks/tool.permission_networks";
@@ -221,4 +229,43 @@ pub mod method {
     pub const HOST_UI_THEME_REGISTER: &str = "host/ui.theme.register";
     pub const HOST_UI_THEME_LIST: &str = "host/ui.theme.list";
     pub const HOST_UI_THEME_REMOVE: &str = "host/ui.theme.remove";
+}
+
+#[cfg(test)]
+mod callback_context_tests {
+    use super::{JsonRpcVersion, Request, RequestId};
+    use crate::host_api::HostCallbackContext;
+
+    #[test]
+    fn request_callback_context_is_optional_and_round_trips() {
+        let request = Request {
+            jsonrpc: JsonRpcVersion,
+            id: RequestId::Num(7),
+            method: "hooks/command.execute.before".to_string(),
+            params: Some(serde_json::json!({"command": "sh"})),
+            context: Some(HostCallbackContext {
+                plugin_id: Some("example.workflow".to_string()),
+                session_id: Some(41),
+                call_id: Some(73),
+                workspace_root: Some("/tmp/workspace".to_string()),
+                tool_name: None,
+                authority_token: Some("ctx-test".to_string()),
+            }),
+        };
+        let encoded = serde_json::to_value(&request).expect("serialize request");
+        assert_eq!(encoded["context"]["authority_token"], "ctx-test");
+        let decoded: Request = serde_json::from_value(encoded).expect("deserialize request");
+        assert_eq!(
+            decoded.context.and_then(|context| context.authority_token),
+            Some("ctx-test".to_string())
+        );
+
+        let legacy: Request = serde_json::from_value(serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 8,
+            "method": "meta/ping"
+        }))
+        .expect("deserialize legacy request");
+        assert!(legacy.context.is_none());
+    }
 }

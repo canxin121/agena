@@ -151,8 +151,8 @@ fn reasoning_preferred_text(think: &ThinkContent) -> String {
 /// Project a persisted part slice at the session/core boundary.
 ///
 /// Consumes storage [`Part`]s directly (R6-T5); each part is decoded to its
-/// typed [`TypedContent`] and projected exactly as the legacy message
-/// projection did, so the wire output is unchanged. Run markers and
+/// typed [`TypedContent`] and projected into the current provider wire
+/// contract. Run markers and
 /// provider-only operations are skipped; the coarse `state` column drives
 /// result emission with the fine-grained denial outcomes recovered from the
 /// rich content.
@@ -160,6 +160,9 @@ pub fn project_persisted(parts: &[Part]) -> Vec<WirePart> {
     let mut wire: Vec<WirePart> = Vec::new();
 
     for part in parts {
+        if !part.visibility.visible_to_ai() {
+            continue;
+        }
         if part.is_run_marker() {
             continue;
         }
@@ -183,13 +186,6 @@ pub fn project_persisted(parts: &[Part]) -> Vec<WirePart> {
                 if !paste.text.is_empty() {
                     wire.push(WirePart::Text {
                         text: paste.text.clone(),
-                    });
-                }
-            }
-            TypedContent::ToolResult(tool_result) => {
-                if !tool_result.output.is_empty() {
-                    wire.push(WirePart::Text {
-                        text: tool_result.output.clone(),
                     });
                 }
             }
@@ -589,12 +585,15 @@ fn is_terminal_result_status(status: ExecutionStatus) -> bool {
 }
 
 /// Best-effort textual rendering of a part slice for the empty-projection
-/// fallback, mirroring the legacy `Message::as_text_lossy` semantics over
-/// storage parts (run markers excluded; hook/notice/interaction/error parts
+/// fallback over storage parts (run markers excluded;
+/// hook/notice/interaction/error parts
 /// contribute their human-facing summary).
 fn parts_as_text_lossy(parts: &[Part]) -> String {
     let mut out: Vec<String> = Vec::new();
     for part in parts {
+        if !part.visibility.visible_to_ai() {
+            continue;
+        }
         if part.is_run_marker() {
             continue;
         }
@@ -603,10 +602,8 @@ fn parts_as_text_lossy(parts: &[Part]) -> String {
         };
         let text = match content {
             TypedContent::Text(text) => Some(text.text.clone()),
-            // The v1 fold degraded these kinds to plain text, which the Text
-            // arm then rendered — preserve that output exactly.
+            // These content kinds contribute their own plain-text facts.
             TypedContent::PasteRef(paste) => Some(paste.text.clone()),
-            TypedContent::ToolResult(tool_result) => Some(tool_result.output.clone()),
             TypedContent::Compaction(compaction) => {
                 Some(compaction.summary.clone().unwrap_or_default())
             }
@@ -647,14 +644,12 @@ fn parts_as_text_lossy(parts: &[Part]) -> String {
     out.join("\n")
 }
 
-/// Best-effort textual rendering of an operation for [`parts_as_text_lossy`],
-/// mirroring the legacy `Message::as_text_lossy` `tool_text_lossy` helper.
+/// Best-effort textual system fallback for an operation.
 fn operation_text_lossy(operation: &OperationPart) -> Option<String> {
     let candidates = [
         operation.output_text(),
         operation.error_message(),
         operation.title(),
-        (!operation.summary.trim().is_empty()).then_some(operation.summary.as_str()),
     ];
     candidates
         .into_iter()
@@ -904,7 +899,8 @@ pub fn project_operation_output(status: ExecutionStatus, exec: &OperationPart) -
         | ExecutionStatus::UserDeclined
         | ExecutionStatus::CapabilityUnavailable
         | ExecutionStatus::ToolUnavailable => {
-            if exec.result.managed_outputs.is_empty() && !exec.details.is_model_truncated() {
+            let raw = exec.raw_output();
+            if raw.is_none_or(|raw| raw.managed_outputs.is_empty() && !raw.truncated) {
                 return structured_operation_output(exec)
                     .or_else(|| generic_structured_operation_output(exec))
                     .unwrap_or_else(|| exec.output_text().unwrap_or_default().to_string());
@@ -953,15 +949,12 @@ fn structured_operation_output(exec: &OperationPart) -> Option<String> {
 }
 
 fn generic_structured_operation_output(exec: &OperationPart) -> Option<String> {
-    let payload = exec
-        .result
-        .structured
-        .clone()
-        .or_else(|| exec.details.to_json_payload())?;
+    let payload = exec.raw_output()?.payload.clone()?;
     serde_json::to_string(&payload).ok()
 }
 
 fn managed_operation_output(exec: &OperationPart) -> Option<String> {
+    let raw = exec.raw_output()?;
     let mut object = serde_json::Map::new();
     let text = exec.output_text().unwrap_or_default();
     if !text.trim().is_empty() {
@@ -970,24 +963,14 @@ fn managed_operation_output(exec: &OperationPart) -> Option<String> {
             serde_json::Value::String(text.to_string()),
         );
     }
-    if let Some(payload) = exec
-        .result
-        .structured
-        .clone()
-        .or_else(|| exec.details.to_json_payload())
-    {
+    if let Some(payload) = raw.payload.clone() {
         object.insert("structured".to_string(), payload);
     }
-    let managed_outputs = if exec.result.managed_outputs.is_empty() {
-        exec.details.managed_outputs.as_slice()
-    } else {
-        exec.result.managed_outputs.as_slice()
-    };
-    if !managed_outputs.is_empty() {
+    if !raw.managed_outputs.is_empty() {
         object.insert(
             "managed_outputs".to_string(),
             serde_json::Value::Array(
-                managed_outputs
+                raw.managed_outputs
                     .iter()
                     .cloned()
                     .filter_map(|output| serde_json::to_value(output).ok())
@@ -1000,13 +983,15 @@ fn managed_operation_output(exec: &OperationPart) -> Option<String> {
 }
 
 fn structured_web_search_output(exec: &OperationPart) -> Option<String> {
+    let output =
+        agena_domain::ToolOutput::from_json_payload(exec.raw_output()?.payload.as_ref()).ok()?;
     let agena_runtime_tools::tool::ToolPayloadOutput::WebSearch {
         query,
         backend,
         results,
     } = agena_runtime_tools::tool::ToolPayloadOutput::from_tool_output(
         exec.invocation.name.as_str(),
-        &exec.details,
+        &output,
     )?
     else {
         return None;
@@ -1040,7 +1025,7 @@ fn structured_web_crawl_output(exec: &OperationPart) -> Option<String> {
         return None;
     }
 
-    let payload = exec.details.to_json_payload()?;
+    let payload = exec.raw_output()?.payload.clone()?;
     let report: ModelWebCrawlReport = serde_json::from_value(payload).ok()?;
     let document_count = report.documents.len();
     let failure_count = report.failures.len();
@@ -1182,15 +1167,15 @@ fn parse_data_url(url: &str) -> Option<(String, String)> {
 mod tests {
     use super::{
         WirePart, completion_input_provider_state, completion_input_result_status,
-        project_completion_input, project_persisted, validate_provider_native_tool_history,
+        parts_as_text_lossy, project_completion_input, project_persisted,
+        validate_provider_native_tool_history,
     };
     use agena_domain::ToolInvocation;
-    use agena_domain::ToolOutput;
     use agena_domain::{ExecutionStatus, ToolApiFunction};
     use agena_domain::{Role, StructuredObject, TimeRange};
-    use agena_runtime_contracts::part::{OperationCompletion, OperationPart};
+    use agena_runtime_contracts::part::OperationPart;
     use agena_storage::store::{Part, PartRole, PartState, PartVisibility};
-    use serde_json::{Map, Value};
+    use serde_json::Value;
 
     fn part(kind: &str, role: PartRole, state: PartState, content: Value) -> Part {
         Part {
@@ -1221,34 +1206,50 @@ mod tests {
         marker
     }
 
+    #[test]
+    fn ai_projection_includes_both_and_ai_but_excludes_user_only_parts() {
+        let mut both = part(
+            "text",
+            PartRole::Assistant,
+            PartState::Completed,
+            serde_json::json!({"text": "both"}),
+        );
+        both.visibility = PartVisibility::Both;
+        let mut ai = part(
+            "text",
+            PartRole::Assistant,
+            PartState::Completed,
+            serde_json::json!({"text": "ai"}),
+        );
+        ai.visibility = PartVisibility::Ai;
+        let mut user = part(
+            "text",
+            PartRole::Assistant,
+            PartState::Completed,
+            serde_json::json!({"text": "user"}),
+        );
+        user.visibility = PartVisibility::User;
+
+        assert_eq!(
+            project_persisted(&[both.clone(), ai.clone(), user.clone()]),
+            vec![
+                WirePart::Text {
+                    text: "both".to_owned()
+                },
+                WirePart::Text {
+                    text: "ai".to_owned()
+                },
+            ]
+        );
+        assert_eq!(parts_as_text_lossy(&[both, ai, user]), "both\nai");
+    }
+
     /// Canonical `tool_call` content for an operation: the invocation identity
     /// as named keys plus the full v1 operation payload under
     /// `operation` (lossless) and `tool_api_call`, mirroring the session
     /// serializer (`tool_call_from_operation`).
     fn tool_call_content(operation: &OperationPart) -> Value {
-        let mut object = Map::new();
-        object.insert(
-            "name".to_owned(),
-            Value::String(operation.invocation.name.clone()),
-        );
-        if let Some(plugin) = &operation.invocation.plugin_name {
-            object.insert("plugin".to_owned(), Value::String(plugin.clone()));
-        }
-        object.insert(
-            "input".to_owned(),
-            Value::from(operation.invocation.input.clone()),
-        );
-        object.insert(
-            "operation".to_owned(),
-            serde_json::to_value(operation).expect("operation is JSON serializable"),
-        );
-        if let Some(api_call) = &operation.invocation.tool_api_call {
-            object.insert(
-                "tool_api_call".to_owned(),
-                serde_json::to_value(api_call).expect("tool api call is JSON serializable"),
-            );
-        }
-        Value::Object(object)
+        agena_runtime_contracts::part_content::tool_call_from_operation(operation).as_value()
     }
 
     fn assistant_operation(invocation: ToolInvocation) -> Part {
@@ -1259,14 +1260,10 @@ mod tests {
             tool_call_content(&OperationPart::completed(
                 0,
                 invocation,
-                OperationCompletion::new(
-                    "Provider tool",
-                    "Completed",
-                    "ok".to_owned(),
-                    Vec::new(),
-                    Vec::new(),
-                    ToolOutput::default(),
-                ),
+                agena_domain::RawOutput {
+                    payload: Some(serde_json::json!({"text": "ok"})),
+                    ..Default::default()
+                },
                 TimeRange::default(),
             )),
         )
@@ -1494,8 +1491,7 @@ mod tests {
         invocation.name = "fs.read".to_owned();
         invocation.input = StructuredObject::try_from(serde_json::json!({ "path": "README.md" }))
             .expect("target input");
-        let pending =
-            OperationPart::pending(1396, invocation, "Read README.md", TimeRange::default());
+        let pending = OperationPart::pending(1396, invocation, TimeRange::default());
         let tool_call = part(
             "tool_call",
             PartRole::Assistant,
@@ -1543,7 +1539,6 @@ mod tests {
         let mut operation = OperationPart::pending(
             1396,
             invocation,
-            "Tool help",
             TimeRange {
                 start_ms: 1,
                 end_ms: Some(2),
@@ -1552,7 +1547,7 @@ mod tests {
         operation
             .metadata
             .insert("agena.operation_id".to_owned(), serde_json::json!("   "));
-        operation.result.state = agena_domain::ToolResultState::Cancelled;
+        operation.state = agena_domain::ToolResultState::Cancelled;
         let tool_call = part(
             "tool_call",
             PartRole::Assistant,

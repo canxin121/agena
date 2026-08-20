@@ -158,7 +158,7 @@ fn tool_input_enum_variant_direct_array_constraints_auto_target_items() {
         auto_tags_schema.pointer("/properties/auto_tags/items/pattern"),
         Some(&json!("^[a-z0-9-]+$"))
     );
-    let auto_tags_relations = schema_relation_labels(&auto_tags_schema);
+    let auto_tags_relations = schema_relation_labels(auto_tags_schema);
     assert!(auto_tags_relations.contains(&"forbid_substrings `auto_tags[]`: \"..\"".to_string()));
     assert!(auto_tags_relations.contains(&"distinct_trimmed `auto_tags[]`".to_string()));
 
@@ -223,12 +223,12 @@ fn tool_input_enum_variant_renamed_fields_resolve_constraint_paths() {
     let schema = VariantRenamedFieldInput::input_schema();
     let run_schema = enum_variant_schema_by_action(&schema, "run")
         .expect("enum schema should include the run variant branch");
-    let run_relations = schema_relation_labels(&run_schema);
+    let run_relations = schema_relation_labels(run_schema);
     assert!(run_relations.contains(&"requires `filePath` -> `mode`".to_string()));
 
     let tags_schema = enum_variant_schema_by_action(&schema, "tags")
         .expect("enum schema should include the tags variant branch");
-    let tags_relations = schema_relation_labels(&tags_schema);
+    let tags_relations = schema_relation_labels(tags_schema);
     assert!(tags_relations.contains(&"distinct_trimmed `tagValues[]`".to_string()));
 }
 
@@ -300,7 +300,7 @@ fn tool_input_enum_variant_field_args_support_name_alias_default_and_constraints
 
     let tags_schema = enum_variant_schema_by_action(&schema, "tags")
         .expect("enum schema should include the tags variant branch");
-    let tags_relations = schema_relation_labels(&tags_schema);
+    let tags_relations = schema_relation_labels(tags_schema);
     assert!(tags_relations.contains(&"distinct_trimmed `tagValues[]`".to_string()));
 }
 

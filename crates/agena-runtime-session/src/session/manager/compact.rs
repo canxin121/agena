@@ -352,10 +352,17 @@ impl SessionManager {
         cancellation: tokio_util::sync::CancellationToken,
     ) -> Result<Option<ProviderCompactionOutput>, AppError> {
         let provider_registry = &state.provider_registry;
+        let mut turns = inputs.turns.clone();
+        prompt_window::render_tool_results_for_model(
+            turns.as_mut_slice(),
+            session.active_window_parts(),
+            &state.tool_executor,
+        )
+        .await;
         let mut request = super::completion_request(
             options,
             options.system.clone(),
-            inputs.turns.clone(),
+            turns,
             inputs.tools.clone(),
             Some(prompt_window::prompt_cache_key_for_session(session)),
             None,

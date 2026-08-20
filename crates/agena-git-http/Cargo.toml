@@ -14,12 +14,8 @@ base64 = { workspace = true }
 dashmap = { workspace = true }
 git2 = { version = "0.21.0", default-features = false, features = ["vendored-libgit2"] }
 ignore = { workspace = true }
-libc = { workspace = true }
-regex = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-sha2 = { workspace = true }
-thiserror = { workspace = true }
 tokio = { workspace = true, features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "sync", "time"] }
 tempfile = { workspace = true }
 tracing = { workspace = true }

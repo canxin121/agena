@@ -12,6 +12,7 @@ use agena_storage::store::{Part, PartRole, PartState};
 
 use super::Session;
 use super::model::{PromptCompactionContent, PromptCompactionMessage, PromptCompactionRuntime};
+use super::store::OPERATION_ID_METADATA_KEY;
 use super::store::parts_into_runs;
 use super::transcript::{
     ProviderTranscript, TranscriptBlock, TranscriptContent, TranscriptFragment, TranscriptToolCall,
@@ -1014,6 +1015,233 @@ pub(crate) fn build_prepared_prompt(
         provider_request_shape,
         continuation_reason,
         continuation_diagnostic,
+    }
+}
+
+/// Replace generic persisted tool-result projections with the owning
+/// plugin/tool's runtime model projection. Only the ephemeral request is
+/// mutated; the raw `Part` rows remain unchanged.
+pub(crate) async fn render_tool_results_for_model(
+    turns: &mut [CompletionInputRun],
+    parts: &[Part],
+    executor: &crate::tool::ToolExecutor,
+) {
+    let mut operations = std::collections::HashMap::new();
+    for part in parts {
+        if part.kind != "tool_call" || !part.visibility.visible_to_ai() {
+            continue;
+        }
+        let Ok(agena_runtime_contracts::part_content::TypedContent::ToolCall(content)) =
+            agena_runtime_contracts::part_content::decode(&part.kind, &part.content)
+        else {
+            continue;
+        };
+        let operation = agena_runtime_contracts::part_content::operation_from_tool_call(&content);
+        let Some(output) = operation.raw_output().cloned() else {
+            continue;
+        };
+        let call_id = operation
+            .metadata
+            .get(OPERATION_ID_METADATA_KEY)
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+            .unwrap_or_else(|| operation.call_id.to_string());
+        operations.insert(call_id, (operation.invocation, output));
+    }
+
+    let mut rendered = std::collections::HashMap::<String, String>::new();
+    for turn in turns {
+        for part in &mut turn.parts {
+            let CompletionInputPart::ToolResult {
+                tool_call_id,
+                output_json,
+                ..
+            } = part
+            else {
+                continue;
+            };
+            if let Some(model) = rendered.get(tool_call_id) {
+                *output_json = model.clone();
+                continue;
+            }
+            let Some((invocation, output)) = operations.get(tool_call_id) else {
+                continue;
+            };
+            let projection = executor.render_tool_result(invocation, output).await;
+            if let Some(model) = projection.model {
+                *output_json = model.clone();
+                rendered.insert(tool_call_id.clone(), model);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tool_result_render_tests {
+    use std::collections::HashMap;
+
+    use super::{
+        CompletionInputPart, CompletionInputRun, OPERATION_ID_METADATA_KEY, Part, PartRole,
+        PartState, Role, render_tool_results_for_model,
+    };
+    use crate::{
+        authorization::ExecutionPrincipal,
+        part::OperationPart,
+        permission::{PermissionPolicy, ToolPermissionPolicy},
+        tool::ToolExecutor,
+    };
+    use agena_domain::{RawOutput, StructuredObject, TimeRange, ToolInvocation};
+    use agena_plugin_host::{
+        ConfiguredPlugin, PluginHost, PluginHostBuildConfig, PluginsConfig,
+        StaticPluginRegistration,
+    };
+    use agena_provider::{CompletionInputToolResultStatus, ModelToolFunction};
+    use agena_storage::store::PartVisibility;
+
+    struct PromptRenderingPlugin;
+
+    #[agena_plugin_host::sdk::async_trait]
+    impl agena_plugin_host::sdk::Plugin for PromptRenderingPlugin {
+        fn manifest(&self) -> agena_plugin_host::sdk::PluginManifest {
+            let mut manifest =
+                agena_plugin_host::sdk::PluginManifest::new("test", "prompt_renderer", "0.1.0");
+            manifest.tools = vec![agena_plugin_host::sdk::ToolDefinition {
+                name: "render".to_owned(),
+                contract: agena_plugin_host::sdk::ToolContract {
+                    input_schema: serde_json::json!({
+                        "type": "object",
+                        "properties": {},
+                        "additionalProperties": true
+                    }),
+                    ..Default::default()
+                },
+                model: Default::default(),
+                docs: agena_plugin_host::sdk::ToolDocs {
+                    summary: Some("Render a prompt fixture.".to_owned()),
+                    ..Default::default()
+                },
+                runtime: Default::default(),
+                permissions: agena_plugin_host::sdk::ToolPermissionContract {
+                    read_only: true,
+                    ..Default::default()
+                },
+                tags: Vec::new(),
+            }];
+            manifest
+        }
+
+        async fn tool_render(
+            &self,
+            input: agena_plugin_host::sdk::ToolRenderInput,
+        ) -> agena_plugin_host::sdk::Result<Option<agena_plugin_host::sdk::ToolRenderOutput>>
+        {
+            assert_eq!(input.tool_name, "render");
+            assert_eq!(input.output.text, "durable raw output");
+            Ok(Some(agena_plugin_host::sdk::ToolRenderOutput {
+                model: Some("plugin-only model projection".to_owned()),
+                human: None,
+            }))
+        }
+    }
+
+    async fn executor() -> ToolExecutor {
+        let workspace_root = std::env::current_dir().expect("resolve test workspace");
+        let plugin_id = "test.prompt_renderer";
+        let mut config = PluginsConfig::default();
+        config
+            .list
+            .insert(plugin_id.to_owned(), ConfiguredPlugin::static_default());
+        let plugins = PluginHost::new(PluginHostBuildConfig {
+            static_plugins: vec![StaticPluginRegistration::new(
+                plugin_id.parse().expect("valid plugin key"),
+                PromptRenderingPlugin,
+            )],
+            config,
+            workspace_root: workspace_root.clone(),
+            agena_version: "test".to_owned(),
+            callback_base_url: None,
+            host_client: None,
+            previous: None,
+            previous_plugins: HashMap::new(),
+        })
+        .await
+        .expect("build prompt renderer host");
+        ToolExecutor::new(
+            workspace_root,
+            ExecutionPrincipal::new(
+                PermissionPolicy::allow_all(),
+                ToolPermissionPolicy::allow_all(),
+            ),
+            plugins,
+            None,
+            None,
+            None,
+        )
+    }
+
+    #[tokio::test]
+    async fn prompt_uses_plugin_model_projection_without_mutating_durable_part() {
+        let invocation =
+            ToolInvocation::new("test.prompt_renderer.render", StructuredObject::default());
+        let mut operation = OperationPart::completed(
+            17,
+            invocation,
+            RawOutput::text("durable raw output"),
+            TimeRange::default(),
+        );
+        operation.metadata.insert(
+            OPERATION_ID_METADATA_KEY.to_owned(),
+            serde_json::Value::String("provider-call-17".to_owned()),
+        );
+        let content =
+            agena_runtime_contracts::part_content::tool_call_from_operation(&operation).as_value();
+        let durable = Part {
+            part_id: 17,
+            kind: "tool_call".to_owned(),
+            role: PartRole::Assistant,
+            state: PartState::Completed,
+            content: content.clone(),
+            summary: None,
+            visibility: PartVisibility::Both,
+            rendered_markdown: None,
+            parent_part_id: None,
+            run_id: Some(1),
+            origin_session_id: 1,
+            revision: 0,
+            started_at_ms: 1,
+            finished_at_ms: Some(2),
+            created_at_ms: 1,
+            updated_at_ms: 2,
+            provider_state: None,
+        };
+        let mut turns = vec![CompletionInputRun {
+            role: Role::Tool,
+            parts: vec![CompletionInputPart::ToolResult {
+                tool_call_id: "provider-call-17".to_owned(),
+                function: ModelToolFunction::new("test.prompt_renderer.render"),
+                arguments_json: "{}".to_owned(),
+                status: CompletionInputToolResultStatus::Completed,
+                output_json: "generic persisted projection".to_owned(),
+            }],
+            provider_state: Default::default(),
+        }];
+
+        render_tool_results_for_model(
+            &mut turns,
+            std::slice::from_ref(&durable),
+            &executor().await,
+        )
+        .await;
+
+        let CompletionInputPart::ToolResult { output_json, .. } = &turns[0].parts[0] else {
+            panic!("tool result projection");
+        };
+        assert_eq!(output_json, "plugin-only model projection");
+        assert_eq!(durable.content, content);
+        assert!(durable.summary.is_none());
+        assert!(durable.rendered_markdown.is_none());
     }
 }
 

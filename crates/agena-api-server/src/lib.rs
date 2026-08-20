@@ -563,6 +563,34 @@ mod router_contract_tests {
             .expect("test runtime composes application repositories")
     }
 
+    async fn wait_for_test_runtime_startup_quiescence(
+        runtime: &agena_runtime::RuntimeBootstrapResult,
+    ) {
+        let status = runtime.application_services().status;
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
+        loop {
+            let snapshot = status.runtime_status().await;
+            let startup_task_running = snapshot.background_tasks.iter().any(|task| {
+                task.is_running()
+                    && matches!(
+                        task.kind,
+                        agena_runtime::RuntimeBackgroundTaskKind::ModelCatalogRefresh
+                            | agena_runtime::RuntimeBackgroundTaskKind::RuntimeReload
+                    )
+            });
+            if !snapshot.model_catalog_refreshing && !startup_task_running {
+                return;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "test runtime startup did not quiesce: generation={}, tasks={:#?}",
+                snapshot.generation,
+                snapshot.background_tasks
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+    }
+
     #[tokio::test]
     async fn health_route_is_served_by_the_real_api_router() {
         let runtime = bootstrap_application_services(RuntimeBootstrapRequest {
@@ -651,7 +679,7 @@ mod router_contract_tests {
                             "value": {
                                 "enabled": true,
                                 "package": {"kind": "static"},
-                                "config": {}
+                                "settings": {}
                             },
                             "dry_run": true,
                             "validate": true,
@@ -2034,6 +2062,11 @@ mod router_contract_tests {
             Some("fake"),
             "test isolation failed: refusing to submit through a non-fake provider"
         );
+        // A fresh in-memory model catalog intentionally refreshes and reloads
+        // the runtime in the background. These API tests are not reload tests,
+        // so wait until that startup generation transition is complete before
+        // starting sessions against the composed services.
+        wait_for_test_runtime_startup_quiescence(&runtime).await;
         let app = router(AppState::from_application(application_for_test(&runtime)));
         let listener = TcpListener::bind(("127.0.0.1", 0))
             .await
@@ -2133,8 +2166,15 @@ mod router_contract_tests {
         // The test-only query controls keep the real HTTP handler subscribed
         // while its one-slot live queue is deliberately flooded before the
         // initial snapshot is read. Production builds expose neither field.
+        let subscription_probe = format!(
+            "session-sse-lag-{session_id}-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock")
+                .as_nanos()
+        );
         let stream_url = format!(
-            "{}/api/v1/sessions/{session_id}/changes/stream?since_version=0&test_queue_capacity=1&test_snapshot_delay_ms=3000",
+            "{}/api/v1/sessions/{session_id}/changes/stream?since_version=0&test_queue_capacity=1&test_snapshot_delay_ms=3000&test_subscription_probe={subscription_probe}",
             server.url
         );
         let http = reqwest::Client::new();
@@ -2147,7 +2187,14 @@ mod router_contract_tests {
                 .await
                 .expect("open delayed session SSE response")
         });
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let subscription_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !crate::rest::take_test_session_stream_subscription(&subscription_probe) {
+            assert!(
+                tokio::time::Instant::now() < subscription_deadline,
+                "session SSE handler did not subscribe before the test flood"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
 
         let update_url = format!("{}/api/v1/sessions/{session_id}", server.url);
         let updates = (0..24).map(|index| {
@@ -2492,6 +2539,86 @@ mod router_contract_tests {
     }
 
     #[tokio::test]
+    async fn runtime_reload_preserves_in_flight_turn_plugin_generation() {
+        let (release_tx, release_rx) = oneshot::channel();
+        let (provider_url, mut requests, provider) = spawn_fake_responses_provider(vec![
+            FakeProviderPlan {
+                events: ask_user_response_events(),
+                release: Some(release_rx),
+            },
+            FakeProviderPlan {
+                events: terminal_response_events("continued after reload", "resp_reload_done"),
+                release: None,
+            },
+        ])
+        .await;
+        let server = start_test_server(provider_url.as_str()).await;
+        let client = AgenaClient::new(server.url.as_str()).expect("build reload client");
+        let submitted = submit_test_run(&client, server.workspace_id, "reload during turn").await;
+        let session_id = submitted.session.id;
+        tokio::time::timeout(std::time::Duration::from_secs(5), requests.recv())
+            .await
+            .expect("fake provider receives pre-reload request")
+            .expect("pre-reload provider request exists");
+
+        let services = server.runtime.application_services();
+        let before = services.status.runtime_status().await.generation;
+        let reload = services
+            .control
+            .reload()
+            .await
+            .expect("reload runtime while provider response is in flight");
+        assert_eq!(reload.previous_generation, before);
+        assert!(reload.generation > before);
+
+        release_tx
+            .send(())
+            .expect("release provider response after reload");
+        let pending = wait_for_execution(&client, session_id, |execution| {
+            !execution
+                .session
+                .state
+                .pending_interactive_requests()
+                .is_empty()
+        })
+        .await;
+        let request_id = pending.session.state.pending_interactive_requests()[0]
+            .request
+            .request_id()
+            .to_owned();
+        client
+            .reply_user_input(ReplyUserInputParams {
+                session_id,
+                options: RunOptions::default(),
+                reply: UserInputReply {
+                    request_id,
+                    kind: UserInputReplyKind::Submit,
+                    answers: BTreeMap::from([("0".to_owned(), vec!["Blue".to_owned()])]),
+                    reason: None,
+                },
+            })
+            .await
+            .expect("reply through retiring plugin generation");
+        tokio::time::timeout(std::time::Duration::from_secs(5), requests.recv())
+            .await
+            .expect("fake provider receives post-reload continuation")
+            .expect("post-reload continuation request exists");
+        let completed = wait_for_execution(&client, session_id, |execution| {
+            execution.session.state.as_str() == "ready"
+                && execution_text(execution).contains("continued after reload")
+        })
+        .await;
+        assert!(
+            completed
+                .session
+                .state
+                .pending_interactive_requests()
+                .is_empty()
+        );
+        provider.await.expect("fake provider exits");
+    }
+
+    #[tokio::test]
     async fn another_client_can_answer_and_racing_replies_have_one_winner() {
         let (provider_url, mut requests, provider) = spawn_fake_responses_provider(vec![
             FakeProviderPlan {
@@ -2573,7 +2700,7 @@ mod router_contract_tests {
             .iter()
             .find_map(|part| {
                 part.content
-                    .pointer("/operation/user_input/requests/0/reply/answers/0")
+                    .pointer("/user_input/requests/0/reply/answers/0")
                     .and_then(serde_json::Value::as_array)
             })
             .expect("one durable user-input reply");
@@ -2695,7 +2822,7 @@ mod router_contract_tests {
             .iter()
             .filter_map(|part| {
                 part.content
-                    .pointer("/operation/authorization/permissions")
+                    .pointer("/authorization/permissions")
                     .and_then(serde_json::Value::as_array)
             })
             .flatten()

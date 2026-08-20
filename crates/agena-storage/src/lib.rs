@@ -4,7 +4,7 @@
 //!
 //! This crate intentionally has no database, filesystem, or runtime-specific
 //! implementation dependency. Concrete SQLite adapters
-//! ([`agena_storage_sqlite`]) implement these contracts in their infrastructure
+//! (`agena_storage_sqlite`) implement these contracts in their infrastructure
 //! layer.
 //!
 //! ## Repositories

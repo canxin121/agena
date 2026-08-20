@@ -9,7 +9,15 @@ yanked = "warn"
 unmaintained = "workspace"
 unsound = "all"
 unused-ignored-advisory = "deny"
-ignore = []
+ignore = [
+    # `rsa` is only pulled by sqlx-mysql; Agena enables sqlite only.
+    "RUSTSEC-2023-0071",
+    # Tantivy 0.26.1 (current latest) pins lru ^0.16.3, while the panic-safety
+    # fix is only available in lru >=0.18.2. Remove this as soon as Tantivy
+    # releases a compatible upgrade; unused-ignored-advisory = "deny" makes
+    # this exception fail closed once it is no longer needed.
+    "RUSTSEC-2026-0253",
+]
 
 [licenses]
 allow = [

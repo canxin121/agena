@@ -41,7 +41,7 @@ pub fn from_notice_part(part: &NoticePart, scope: NotificationScope, now_ms: i64
     }
 }
 
-/// ActivityPayload -> Option<Notification>。
+/// `ActivityPayload -> Option<Notification>`。
 ///
 /// 只把「用户可感知的状态变化」映射为通知：Notice 活动直接转成 Notice 通知；
 /// 其余活动（资源、技能、推理、文本等）属于转录内容而非显示意图，返回 `None`。

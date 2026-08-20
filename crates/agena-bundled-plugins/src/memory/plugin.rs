@@ -185,7 +185,7 @@ impl MemoryPlugin {
         _host: std::sync::Arc<dyn agena_plugin_host::sdk::HostClient>,
     ) -> SdkResult<agena_plugin_host::sdk::InitOutcome> {
         self.config
-            .set(parse_memory_config(ctx.config)?)
+            .set(parse_memory_config(ctx.settings)?)
             .map_err(|_| PluginError::internal("memory plugin initialized more than once"))?;
         self.workspace_root.set(ctx.workspace_root).map_err(|_| {
             PluginError::internal("memory plugin workspace root already initialized")

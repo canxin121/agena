@@ -5,32 +5,16 @@ import { RiRefreshLine } from '@remixicon/vue'
 
 import ServerSettingField from '@/components/settings/ServerSettingField.vue'
 import SettingsSectionWorkbench from '@/components/settings/workbench/SettingsSectionWorkbench.vue'
-import type { SettingsSubpageDefinition } from '@/components/settings/workbench/settingsSectionNavigation'
+import { SETTINGS_DEFAULT_SUBPAGE, buildSettingsSubpages } from '@/components/settings/settingsNavigationCatalog'
 import Button from '@/components/ui/Button.vue'
 import { apiJson } from '@/lib/api'
-import { settingsText as st } from '@/i18n/settingsText'
 
 const { t } = useI18n()
 const refreshBusy = ref(false)
 const refreshError = ref('')
 const clientVersionNonce = ref(0)
 
-const pages: SettingsSubpageDefinition[] = [
-  {
-    id: 'client-versions',
-    label: st('Provider client versions'),
-    description: st(
-      'Pin or refresh the compatibility client versions presented by Codex, Claude, and Gemini adapters.',
-    ),
-    keywords: ['client', 'version', 'codex', 'claude', 'gemini', 'npm'],
-  },
-  {
-    id: 'compaction',
-    label: st('Session compaction'),
-    description: st('Control automatic compaction and the token reserve used when deciding when to compact.'),
-    keywords: ['session', 'compaction', 'context', 'tokens', 'reserve'],
-  },
-]
+const pages = buildSettingsSubpages('runtime-session')
 
 async function refreshClientVersions() {
   if (refreshBusy.value) return
@@ -53,7 +37,7 @@ async function refreshClientVersions() {
     :title="String(t('settings.tabs.runtimeSession'))"
     :description="String(t('settings.tui.runtimeDescription'))"
     :pages="pages"
-    default-page="client-versions"
+    :default-page="SETTINGS_DEFAULT_SUBPAGE['runtime-session']"
     v-slot="{ activePage }"
   >
     <section v-if="activePage === 'client-versions'" class="grid gap-4">

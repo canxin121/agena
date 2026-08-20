@@ -433,3 +433,8 @@ ratex-unicode-font = { path = "third_party/ratex-unicode-font" }
 # input from Crossterm. This source patch keeps the query on the owning thread,
 # uses cancellable descriptor waits, and never mutates tmux configuration.
 ratatui-image = { path = "third_party/ratatui-image" }
+# The upstream bitvec alignment proof assumes align_of(T) == size_of(T), which
+# is false for wider scalar types under the m68k Linux ABI. Bitvec's pointer
+# code already uses the actual Rust alignment, so keep the ABI-correct proof
+# relaxation local until upstream accepts the portability fix.
+bitvec = { path = "third_party/bitvec" }

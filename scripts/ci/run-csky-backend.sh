@@ -79,12 +79,38 @@ AR="$TOOLCHAIN/bin/csky-linux-gnuabiv2-ar"
   exit 1
 }
 
+# The bundled 2021 C-SKY assembler has a 64 KiB PC-relative branch range and
+# no usable long-branch relaxation.  Tree-sitter's generated lexer is a single
+# state-machine function large enough to exceed that range.  The wrapper only
+# transforms generated files containing ts_lex and forwards every other C/C++
+# invocation unchanged; it preserves the lexer state machine and does not
+# remove or replace any grammar.
+WRAP="${RUNNER_TEMP:-/tmp}/agena-csky-wrappers/$TARGET"
+mkdir -p "$WRAP"
+python3 - "$WRAP/cc" "$WRAP/cxx" "$PWD/scripts/ci/csky-cc-wrapper.py" "$CC" "$CXX" <<'PY'
+import pathlib
+import shlex
+import sys
+
+cc_path, cxx_path, wrapper, cc, cxx = sys.argv[1:]
+for path, compiler in ((cc_path, cc), (cxx_path, cxx)):
+    pathlib.Path(path).write_text(
+        "#!/bin/sh\nexec python3 "
+        + shlex.quote(wrapper)
+        + " "
+        + shlex.quote(compiler)
+        + " \"$@\"\n",
+        encoding="utf-8",
+    )
+PY
+chmod +x "$WRAP/cc" "$WRAP/cxx"
+
 key="${TARGET//-/_}"
 key_upper="$(printf '%s' "$key" | tr '[:lower:]' '[:upper:]')"
-export "CC_${key}=$CC"
-export "CXX_${key}=$CXX"
+export "CC_${key}=$WRAP/cc"
+export "CXX_${key}=$WRAP/cxx"
 export "AR_${key}=$AR"
-export "CARGO_TARGET_${key_upper}_LINKER=$CC"
+export "CARGO_TARGET_${key_upper}_LINKER=$WRAP/cc"
 if [[ -n "$extra_cflags" ]]; then
   export "CFLAGS_${key}=$extra_cflags"
   export "CXXFLAGS_${key}=$extra_cflags"

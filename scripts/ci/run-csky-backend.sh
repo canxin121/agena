@@ -13,12 +13,16 @@ esac
 
 case "$TARGET" in
   csky-unknown-linux-gnuabiv2)
-    extra_cflags=""
+    # C-SKY gas/GCC do not reliably relax very large short branches. Generated
+    # tree-sitter parsers overflow the branch range under cc-rs' dev-profile
+    # -O0; optimized code is substantially smaller and is also what Release
+    # packaging uses.
+    extra_cflags="-O2"
     extra_rustflags=""
     ;;
   csky-unknown-linux-gnuabiv2hf)
     # Match the Rust built-in target: ck860fv + hard-float calling convention.
-    extra_cflags="-mcpu=ck860fv -mhard-float"
+    extra_cflags="-O2 -mcpu=ck860fv -mhard-float"
     extra_rustflags="-C link-arg=-mhard-float"
     ;;
   *) echo "ERROR: unsupported C-SKY target: $TARGET" >&2; exit 2 ;;

@@ -387,11 +387,14 @@ rmcp = { path = "third_party/rmcp" }
 nix = { path = "third_party/nix-0.28" }
 prometheus = { path = "third_party/prometheus" }
 portable-pty = { path = "third_party/portable-pty" }
+process-wrap = { path = "third_party/process-wrap" }
 fs4 = { path = "third_party/fs4" }
+getrandom = { path = "third_party/getrandom-0.4" }
 abi_stable = { path = "third_party/abi_stable" }
 blake3 = { path = "third_party/blake3" }
 constant_time_eq = { path = "third_party/constant_time_eq" }
 cpufeatures = { path = "third_party/cpufeatures" }
+cpufeatures-0-3 = { package = "cpufeatures", path = "third_party/cpufeatures-0.3" }
 libgit2-sys = { path = "third_party/libgit2-sys" }
 linux-raw-sys = { path = "third_party/linux-raw-sys-0.12" }
 quanta = { path = "third_party/quanta" }

@@ -11,12 +11,22 @@ case "$(uname -s)-$(uname -m)" in
   *) echo "ERROR: OpenHarmony SDK builder requires Linux x86_64 host" >&2; exit 2 ;;
 esac
 
-ROOT="${RUNNER_TEMP:-/tmp}/agena-ohos-sdk/5.0.0"
+case "$TARGET" in
+  loongarch64-unknown-linux-ohos)
+    SDK_RELEASE=6.0.0.2-Release
+    SDK_CACHE_KEY=6.0.0.2
+    ;;
+  *)
+    SDK_RELEASE=5.0.0-Release
+    SDK_CACHE_KEY=5.0.0
+    ;;
+esac
+
+ROOT="${RUNNER_TEMP:-/tmp}/agena-ohos-sdk/$SDK_CACHE_KEY"
 ARCHIVE="$ROOT/ohos-sdk-windows_linux-public.tar.gz"
 SDK="$ROOT/sdk"
-URL="https://repo.huaweicloud.com/openharmony/os/5.0.0-Release/ohos-sdk-windows_linux-public.tar.gz"
+URL="https://repo.huaweicloud.com/openharmony/os/$SDK_RELEASE/ohos-sdk-windows_linux-public.tar.gz"
 SHA_URL="$URL.sha256"
-NATIVE_ZIP=native-linux-x64-5.0.0.71-Release.zip
 mkdir -p "$ROOT"
 
 if [[ ! -x "$SDK/native/llvm/bin/clang" ]]; then
@@ -53,8 +63,19 @@ if not archive.exists() or digest(archive) != expected:
 PY
   rm -rf "$SDK" "$ROOT/linux"
   mkdir -p "$SDK"
-  tar -xzf "$ARCHIVE" -C "$ROOT" "linux/$NATIVE_ZIP"
-  unzip -q "$ROOT/linux/$NATIVE_ZIP" -d "$SDK"
+  if [[ "$SDK_CACHE_KEY" == 5.0.0 ]]; then
+    native_zip=linux/native-linux-x64-5.0.0.71-Release.zip
+    tar -xzf "$ARCHIVE" -C "$ROOT" "$native_zip"
+  else
+    # OpenHarmony patch releases include the native component's internal build
+    # number in the zip filename. Match the single official Linux native SDK
+    # component instead of coupling this builder to that incidental build id.
+    tar -xzf "$ARCHIVE" -C "$ROOT" --wildcards 'linux/native-linux-x64-*.zip'
+    native_zip="$(find "$ROOT/linux" -maxdepth 1 -type f -name 'native-linux-x64-*.zip' -print -quit)"
+    [[ -n "$native_zip" ]] || { echo "ERROR: native Linux component missing from OpenHarmony SDK" >&2; exit 1; }
+    native_zip="${native_zip#$ROOT/}"
+  fi
+  unzip -q "$ROOT/$native_zip" -d "$SDK"
   rm -rf "$ROOT/linux"
 fi
 

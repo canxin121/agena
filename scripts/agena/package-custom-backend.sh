@@ -48,6 +48,10 @@ case "$BUILDER" in
     exec bash scripts/ci/run-zig-backend.sh "$TARGET" "$zig_target" -- \
       bash scripts/agena/package-backend.sh "$TARGET" "$BUILD_STD"
     ;;
+  hurd)
+    exec bash scripts/ci/run-hurd-backend.sh "$TARGET" -- \
+      bash scripts/agena/package-backend.sh "$TARGET" "$BUILD_STD"
+    ;;
   android-ndk)
     exec bash scripts/ci/run-android-ndk-backend.sh "$TARGET" -- \
       bash scripts/agena/package-backend.sh "$TARGET" "$BUILD_STD"

@@ -27,9 +27,20 @@ if [[ ! -x "$LLD" ]]; then
 fi
 [[ -x "$LLD" ]] || { echo "ERROR: Rust LLD not found for host $host" >&2; exit 1; }
 
-CLANG="${AGENA_CLANG:-$(command -v clang || true)}"
-CLANGXX="${AGENA_CLANGXX:-$(command -v clang++ || true)}"
-AR="${AGENA_LLVM_AR:-$(command -v llvm-ar || command -v ar || true)}"
+if [[ -n "${AGENA_CLANG:-}" ]]; then
+  CLANG="$AGENA_CLANG"
+  CLANGXX="${AGENA_CLANGXX:-${AGENA_CLANG}++}"
+  AR="${AGENA_LLVM_AR:-$(command -v llvm-ar || command -v ar || true)}"
+elif [[ "$(uname -s)-$(uname -m)" == Linux-x86_64 ]]; then
+  PINNED_CLANG="$(bash scripts/ci/fetch-pinned-clang.sh)"
+  CLANG="$PINNED_CLANG/bin/clang"
+  CLANGXX="$PINNED_CLANG/bin/clang++"
+  AR="$PINNED_CLANG/bin/llvm-ar"
+else
+  CLANG="$(command -v clang || true)"
+  CLANGXX="$(command -v clang++ || true)"
+  AR="$(command -v llvm-ar || command -v ar || true)"
+fi
 [[ -x "$CLANG" && -x "$CLANGXX" && -x "$AR" ]] || {
   echo "ERROR: clang/clang++/ar are required for OpenBSD cross builds" >&2
   exit 1

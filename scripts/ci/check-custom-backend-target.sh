@@ -69,6 +69,10 @@ case "$BUILDER" in
     zig_target="$(netbsd_zig_target)"
     exec bash scripts/ci/run-zig-backend.sh "$TARGET" "$zig_target" -- bash "$0" "$TARGET" "$TARGET_OS" "$BUILD_STD" direct
     ;;
+  hurd)
+    exec bash scripts/ci/run-hurd-backend.sh "$TARGET" -- \
+      bash "$0" "$TARGET" "$TARGET_OS" "$BUILD_STD" direct
+    ;;
   android-ndk)
     exec bash scripts/ci/run-android-ndk-backend.sh "$TARGET" -- \
       bash "$0" "$TARGET" "$TARGET_OS" "$BUILD_STD" direct

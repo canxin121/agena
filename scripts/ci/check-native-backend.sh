@@ -4,6 +4,7 @@ set -euo pipefail
 target="${1:?target triple is required}"
 build_std="${2:-false}"
 target_rustflags="${3:-}"
+export RUSTUP_TOOLCHAIN="${AGENA_STABLE_TOOLCHAIN:-1.97.0}"
 combined_rustflags="${RUSTFLAGS:-}"
 if [[ -n "$target_rustflags" ]]; then
   combined_rustflags="${combined_rustflags:+$combined_rustflags }$target_rustflags"
@@ -27,7 +28,7 @@ esac
 
 args=(check --manifest-path Cargo.toml -p agena --target "$target" --locked)
 case "$target" in
-  mipsisa32r6-unknown-linux-gnu|mipsisa32r6el-unknown-linux-gnu)
+  m68k-unknown-linux-gnu|mipsisa32r6-unknown-linux-gnu|mipsisa32r6el-unknown-linux-gnu)
     # rustc 1.97 SIGTRAPs while codegening core in the dev/check profile for
     # the MIPS32r6 built-ins. The same exact Rust 1.97 sources and target ABI
     # compile cleanly under the optimized release profile, which is also what

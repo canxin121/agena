@@ -16,8 +16,6 @@ if ! command -v redoxer >/dev/null 2>&1; then
 fi
 
 export TARGET
-export REDOXER_TOOLCHAIN="${RUNNER_TEMP:-/tmp}/agena-redoxer/$TARGET/toolchain"
-mkdir -p "$(dirname "$REDOXER_TOOLCHAIN")"
 redoxer toolchain
 
 # redoxer env exports the target GCC/binutils/relibc sysroot variables that

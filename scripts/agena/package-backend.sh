@@ -8,6 +8,7 @@ SERVER_TARGET_DIR="$REPO_ROOT/target"
 RELEASE_DIR="$REPO_ROOT/artifacts/agena"
 WEB_PROJECT_DIR="$REPO_ROOT/packages/agena-web"
 WEB_DIST_DIR="$WEB_PROJECT_DIR/dist"
+export RUSTUP_TOOLCHAIN="${AGENA_STABLE_TOOLCHAIN:-1.97.0}"
 
 detect_host_triple() {
   if rustc --print host-tuple >/dev/null 2>&1; then

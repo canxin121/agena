@@ -5,6 +5,7 @@ Param(
 )
 
 $ErrorActionPreference = "Stop"
+$env:RUSTUP_TOOLCHAIN = if ($env:AGENA_STABLE_TOOLCHAIN) { $env:AGENA_STABLE_TOOLCHAIN } else { "1.97.0" }
 
 function Get-HostTriple {
   try {

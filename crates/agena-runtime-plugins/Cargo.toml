@@ -7,7 +7,6 @@ rust-version.workspace = true
 description = "Agena plugin runtime and provided plugins"
 
 [dependencies]
-arc-swap = { workspace = true }
 agena-keyring-store = { workspace = true }
 agena-plugin-host = { workspace = true }
 agena-plugin-sdk = { workspace = true }

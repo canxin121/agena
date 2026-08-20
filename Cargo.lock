@@ -874,7 +874,6 @@ dependencies = [
  "agena-runtime-config",
  "agena-runtime-contracts",
  "agena-runtime-tools",
- "arc-swap",
  "async-trait",
  "blake3",
  "hex",

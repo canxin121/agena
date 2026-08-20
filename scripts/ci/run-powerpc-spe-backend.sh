@@ -185,10 +185,17 @@ if [[ "$MODE" == gnu ]]; then
     mkdir -p "$SYSROOT" "$HOST_ROOT"
     for deb_file in "$DEB_ROOT"/*.deb; do
       case "$(basename "$deb_file")" in
-        # binutils-common carries host-side libbfd/libopcodes shared
-        # libraries. Keep those with the host runtime; the target binutils
-        # package itself remains in the SPE sysroot below.
+        # binutils-common carries some host-side libbfd/libopcodes shared
+        # libraries. Keep those with the host runtime. The target binutils
+        # package also carries its versioned SPE libbfd/libopcodes libraries;
+        # extract it into both roots so the exact SPE tools remain in the
+        # target sysroot while their host loader dependencies are available
+        # through LD_LIBRARY_PATH. Do not substitute a non-SPE binutils.
         binutils-common_*)
+          dpkg-deb -x "$deb_file" "$HOST_ROOT"
+          ;;
+        binutils-powerpc-linux-gnuspe_*)
+          dpkg-deb -x "$deb_file" "$SYSROOT"
           dpkg-deb -x "$deb_file" "$HOST_ROOT"
           ;;
         *powerpcspe*|*powerpc-linux-gnuspe*|gcc-8-cross-base-ports_*)

@@ -304,7 +304,30 @@ fn ring_build_rs_main(c_root_dir: &Path, core_name_and_version: &str) {
     let out_dir = env::var_os("OUT_DIR").unwrap();
     let out_dir = PathBuf::from(out_dir);
 
+    let target_triple = env::var("TARGET").unwrap();
     let mut arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap();
+    if env::var("CARGO_CFG_TARGET_OS").unwrap() == "redox" {
+        // redoxer supplies custom target specifications for several ABIs. A
+        // stale/custom spec can expose the host-width architecture to build
+        // scripts even though TARGET still identifies the real Redox ABI.
+        // Use the triple's first component for ring's assembly selection and
+        // for cc-rs' automatic -m32/-m64 decision.
+        arch = match target_triple.split('-').next().unwrap_or_default() {
+            "i386" | "i486" | "i586" | "i686" => X86.to_owned(),
+            "x86_64" => X86_64.to_owned(),
+            "aarch64" => AARCH64.to_owned(),
+            "arm" | "armv7" | "armv7a" => ARM.to_owned(),
+            _ => arch,
+        };
+        // cc-rs reads this build-script cfg to select its ABI flags. Keep it
+        // aligned with the explicit target canonicalization above; otherwise
+        // it can pass -m64 to an i586 compiler or to an AArch64 compiler.
+        // Build scripts run in their own process, so this cannot alter Cargo's
+        // cfgs for any other package.
+        if env::var("CARGO_CFG_TARGET_ARCH").as_deref() != Some(arch.as_str()) {
+            unsafe { std::env::set_var("CARGO_CFG_TARGET_ARCH", &arch) };
+        }
+    }
     let pointer_width = env::var("CARGO_CFG_TARGET_POINTER_WIDTH").unwrap();
     // arm64_32-apple-watchos is architecturally AArch64 but uses 32-bit
     // pointers. ring's AArch64 assembly and Rust fast paths assume LP64, so

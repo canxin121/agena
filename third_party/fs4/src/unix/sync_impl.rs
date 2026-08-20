@@ -45,6 +45,7 @@ macro_rules! allocate {
             target_os = "redox",
             target_os = "fuchsia",
             target_os = "visionos",
+            target_os = "cygwin",
         ))]
         pub fn allocate(file: &$file, len: u64) -> std::io::Result<()> {
             // No file allocation API available, just set the length if necessary.

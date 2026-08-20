@@ -55,7 +55,6 @@ fn is_windows_target() -> bool {
 }
 
 fn use_msvc_asm() -> bool {
-    const MSVC_NAMES: &[&str] = &["", "cl", "cl.exe"];
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     let target_env = env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default();
     let target_windows_msvc = target_os == "windows" && target_env == "msvc";
@@ -66,7 +65,7 @@ fn use_msvc_asm() -> bool {
     if !target_windows_msvc {
         // We are not building for Windows with the MSVC toolchain.
         false
-    } else if !cross_compiling && MSVC_NAMES.contains(&&*cc) {
+    } else if !cross_compiling && is_msvc_compiler(&cc) {
         // We are building on Windows with the MSVC toolchain (and not cross-compiling for another architecture or target).
         true
     } else {
@@ -84,8 +83,19 @@ fn use_msvc_asm() -> bool {
             .unwrap_or_default()
             .to_ascii_lowercase();
         // Check if we are using the MSVC compiler.
-        MSVC_NAMES.contains(&&*cc)
+        is_msvc_compiler(&cc)
     }
+}
+
+fn is_msvc_compiler(value: &str) -> bool {
+    // cc-rs accepts both a bare compiler name and an absolute path. Windows
+    // environment variables use `\\` even when this build script runs on a
+    // Unix host, so Path::file_name() is not sufficient here.
+    let basename = value.rsplit(['/', '\\']).next().unwrap_or(value);
+    matches!(
+        basename,
+        "" | "cl" | "cl.exe" | "clang-cl" | "clang-cl.exe"
+    )
 }
 
 fn is_x86_32() -> bool {

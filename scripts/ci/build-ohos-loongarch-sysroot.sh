@@ -173,7 +173,10 @@ prepare_source() {
     exit 1
   }
   patch --version | head -n 1 >&2
-  patch --fuzz=0 --forward --batch -p1 < "$patch_file" || {
+  (
+    cd "$SOURCE"
+    patch --fuzz=0 --forward --batch -p1 < "$patch_file"
+  ) || {
     status=$?
     echo "ERROR: failed to apply OpenHarmony LoongArch patch $patch_file (status $status)" >&2
     exit "$status"

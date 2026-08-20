@@ -20,6 +20,7 @@
 
 mod error;
 mod launch;
+mod platform_compat;
 mod server;
 
 pub(crate) use server::{ApiResult, AppError, AppState};

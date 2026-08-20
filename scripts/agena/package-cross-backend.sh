@@ -39,6 +39,11 @@ case "$TARGET_TRIPLE" in
     # default, which makes .got.plt unusable for the n64 PLT sequence.
     export RUSTFLAGS="${RUSTFLAGS:-} -C relocation-model=static -C code-model=large -C llvm-args=--force-mips-long-branch -C link-arg=-Wl,-Ttext-segment=0x10000000"
     ;;
+  sparcv9-sun-solaris|x86_64-pc-solaris)
+    # The pinned cross Solaris 10 images provide /compat.o to map the XPG7
+    # symbols used by modern Rust std back to the Solaris 10 ABI.
+    export RUSTFLAGS="${RUSTFLAGS:-} -C link-arg=/compat.o"
+    ;;
   aarch64_be-unknown-linux-gnu)
     # Rustix's linux_raw backend does not support big-endian AArch64. Force
     # every transitive Rustix version onto its libc backend.

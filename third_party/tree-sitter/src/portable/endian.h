@@ -43,22 +43,48 @@
 
 #elif defined(__sun)
 
-#    include <sys/byteorder.h>
+#    include <sys/isa_defs.h>
 
-#    define htobe16(x) BE_16(x)
-#    define htole16(x) LE_16(x)
-#    define be16toh(x) BE_16(x)
-#    define le16toh(x) LE_16(x)
+/*
+ * Solaris headers do not consistently expose BE_16/LE_16 as preprocessor
+ * macros across the Solaris 10 and illumos cross sysroots.  When they are
+ * absent, treating them like macros silently emits unresolved function calls.
+ * Use the compiler's byte-swap builtins instead; GCC and Clang both support
+ * these on every Solaris architecture that Rust targets.
+ */
+#    if defined(_LITTLE_ENDIAN)
+#        define htobe16(x) __builtin_bswap16(x)
+#        define htole16(x) (x)
+#        define be16toh(x) __builtin_bswap16(x)
+#        define le16toh(x) (x)
 
-#    define htobe32(x) BE_32(x)
-#    define htole32(x) LE_32(x)
-#    define be32toh(x) BE_32(x)
-#    define le32toh(x) LE_32(x)
+#        define htobe32(x) __builtin_bswap32(x)
+#        define htole32(x) (x)
+#        define be32toh(x) __builtin_bswap32(x)
+#        define le32toh(x) (x)
 
-#    define htobe64(x) BE_64(x)
-#    define htole64(x) LE_64(x)
-#    define be64toh(x) BE_64(x)
-#    define le64toh(x) LE_64(x)
+#        define htobe64(x) __builtin_bswap64(x)
+#        define htole64(x) (x)
+#        define be64toh(x) __builtin_bswap64(x)
+#        define le64toh(x) (x)
+#    elif defined(_BIG_ENDIAN)
+#        define htobe16(x) (x)
+#        define htole16(x) __builtin_bswap16(x)
+#        define be16toh(x) (x)
+#        define le16toh(x) __builtin_bswap16(x)
+
+#        define htobe32(x) (x)
+#        define htole32(x) __builtin_bswap32(x)
+#        define be32toh(x) (x)
+#        define le32toh(x) __builtin_bswap32(x)
+
+#        define htobe64(x) (x)
+#        define htole64(x) __builtin_bswap64(x)
+#        define be64toh(x) (x)
+#        define le64toh(x) __builtin_bswap64(x)
+#    else
+#        error Solaris byte order is not defined
+#    endif
 
 #elif defined(__APPLE__)
 #    define __BYTE_ORDER    BYTE_ORDER

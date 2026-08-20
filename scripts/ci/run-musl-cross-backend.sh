@@ -42,37 +42,26 @@ URL="https://musl.cc/$TOOLCHAIN.tgz"
 mkdir -p "$ROOT"
 
 if [[ ! -x "$EXTRACTED/$TOOLCHAIN/bin/$PREFIX-gcc" ]]; then
-  python3 - "$URL" "$ARCHIVE" "$SHA256" <<'PY'
-import hashlib
-import pathlib
-import sys
-import urllib.request
-
-url, archive_path, expected = sys.argv[1:]
-archive = pathlib.Path(archive_path)
-
-def digest(path: pathlib.Path) -> str:
-    h = hashlib.sha256()
-    with path.open("rb") as f:
-        for chunk in iter(lambda: f.read(1024 * 1024), b""):
-            h.update(chunk)
-    return h.hexdigest()
-
-if not archive.exists() or digest(archive) != expected:
-    tmp = archive.with_suffix(archive.suffix + ".tmp")
-    req = urllib.request.Request(url, headers={"User-Agent": "agena-musl-cross"})
-    with urllib.request.urlopen(req, timeout=900) as src, tmp.open("wb") as dst:
-        while True:
-            chunk = src.read(1024 * 1024)
-            if not chunk:
-                break
-            dst.write(chunk)
-    actual = digest(tmp)
-    if actual != expected:
-        tmp.unlink(missing_ok=True)
-        raise SystemExit(f"musl cross toolchain SHA256 mismatch: expected {expected}, got {actual}")
-    tmp.replace(archive)
-PY
+  actual=""
+  if [[ -f "$ARCHIVE" ]]; then
+    actual="$(sha256sum "$ARCHIVE" | awk '{print $1}')"
+  fi
+  if [[ "$actual" != "$SHA256" ]]; then
+    tmp="$ARCHIVE.tmp"
+    rm -f "$tmp"
+    curl --fail --location \
+      --retry 12 --retry-all-errors --retry-delay 5 \
+      --connect-timeout 30 --max-time 1800 \
+      --user-agent 'agena-musl-cross' \
+      "$URL" -o "$tmp"
+    actual="$(sha256sum "$tmp" | awk '{print $1}')"
+    if [[ "$actual" != "$SHA256" ]]; then
+      rm -f "$tmp"
+      echo "ERROR: musl cross toolchain SHA256 mismatch: expected $SHA256, got $actual" >&2
+      exit 1
+    fi
+    mv "$tmp" "$ARCHIVE"
+  fi
   rm -rf "$EXTRACTED"
   mkdir -p "$EXTRACTED"
   tar -xzf "$ARCHIVE" -C "$EXTRACTED"

@@ -756,7 +756,16 @@ impl AddressFamily {
     pub const VSOCK: Self = Self(c::AF_VSOCK as _);
     /// `AF_XDP`
     #[cfg(target_os = "linux")]
-    pub const XDP: Self = Self(c::AF_XDP as _);
+    pub const XDP: Self = Self({
+        #[cfg(target_env = "uclibc")]
+        {
+            44
+        }
+        #[cfg(not(target_env = "uclibc"))]
+        {
+            c::AF_XDP as _
+        }
+    });
 
     /// Constructs a `AddressFamily` from a raw integer.
     #[inline]
@@ -1745,7 +1754,7 @@ pub mod xdp {
     use crate::net::addr::{call_with_sockaddr, SocketAddrArg, SocketAddrLen, SocketAddrOpaque};
     use crate::net::SocketAddrAny;
 
-    use super::{bitflags, c};
+    use super::{AddressFamily, bitflags, c};
 
     bitflags! {
         /// `XDP_OPTIONS_*` constants returned by [`get_xdp_options`].
@@ -1877,7 +1886,7 @@ pub mod xdp {
             f: impl FnOnce(*const SocketAddrOpaque, SocketAddrLen) -> R,
         ) -> R {
             let addr = c::sockaddr_xdp {
-                sxdp_family: c::AF_XDP as _,
+                sxdp_family: AddressFamily::XDP.as_raw() as _,
                 sxdp_flags: self.flags().bits(),
                 sxdp_ifindex: self.interface_index(),
                 sxdp_queue_id: self.queue_id(),
@@ -1925,7 +1934,7 @@ pub mod xdp {
             f: impl FnOnce(*const SocketAddrOpaque, SocketAddrLen) -> R,
         ) -> R {
             let addr = c::sockaddr_xdp {
-                sxdp_family: c::AF_XDP as _,
+                sxdp_family: AddressFamily::XDP.as_raw() as _,
                 sxdp_flags: self.addr.flags().bits(),
                 sxdp_ifindex: self.addr.interface_index(),
                 sxdp_queue_id: self.addr.queue_id(),

@@ -2071,10 +2071,13 @@ pub(crate) fn statx(
     // doesn't represent all the known flags.
     //
     // [it's deprecated]: https://patchwork.kernel.org/project/linux-fsdevel/patch/20200505095915.11275-7-mszeredi@redhat.com/
-    #[cfg(any(not(linux_raw_dep), not(target_env = "musl")))]
+    #[cfg(all(
+        not(target_env = "musl"),
+        not(target_env = "uclibc")
+    ))]
     const STATX__RESERVED: u32 = c::STATX__RESERVED as u32;
-    #[cfg(all(linux_raw_dep, target_env = "musl"))]
-    const STATX__RESERVED: u32 = linux_raw_sys::general::STATX__RESERVED;
+    #[cfg(any(target_env = "musl", target_env = "uclibc"))]
+    const STATX__RESERVED: u32 = 0x8000_0000;
     if (mask.bits() & STATX__RESERVED) == STATX__RESERVED {
         return Err(io::Errno::INVAL);
     }

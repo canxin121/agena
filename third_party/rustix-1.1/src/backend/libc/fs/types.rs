@@ -1129,9 +1129,15 @@ pub type Dev = ffi::c_ulonglong;
 #[cfg(all(
     target_os = "linux",
     not(target_env = "musl"),
+    not(target_env = "uclibc"),
     not(target_arch = "s390x"),
 ))]
 pub type FsWord = c::__fsword_t;
+
+/// uClibc's Linux `statfs` uses `c_long` for the fs-word fields but its Rust
+/// libc bindings do not expose glibc's private `__fsword_t` alias.
+#[cfg(all(target_os = "linux", target_env = "uclibc"))]
+pub type FsWord = c::c_long;
 
 /// `__fsword_t`
 #[cfg(all(

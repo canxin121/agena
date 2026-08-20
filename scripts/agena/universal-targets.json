@@ -848,7 +848,8 @@
       "os": "linux",
       "builder": "uclibc-sysroot",
       "build_std": true,
-      "artifact_kind": "backend"
+      "artifact_kind": "backend",
+      "rustflags": "--cfg rustix_use_experimental_asm"
     },
     {
       "target": "mipsisa32r6-unknown-linux-gnu",

@@ -165,7 +165,13 @@ pub(super) use {lstat64 as lstat, stat64 as stat};
     target_os = "emscripten"
 ))]
 pub(super) use {pread64 as pread, pwrite64 as pwrite};
-#[cfg(any(target_os = "linux", target_os = "hurd", target_os = "emscripten"))]
+#[cfg(all(target_os = "linux", target_env = "uclibc"))]
+pub(super) use {preadv, pwritev};
+#[cfg(any(
+    all(target_os = "linux", not(target_env = "uclibc")),
+    target_os = "hurd",
+    target_os = "emscripten"
+))]
 pub(super) use {preadv64 as preadv, pwritev64 as pwritev};
 
 #[cfg(all(target_os = "linux", any(target_env = "gnu", target_env = "uclibc")))]

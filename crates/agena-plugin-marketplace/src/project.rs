@@ -26,7 +26,7 @@ pub const AGENA_MARKETPLACE_PROJECT_FILENAME: &str = "agena-marketplace.toml";
 /// development this follows the current tree; before publishing templates we
 /// replace it with the verified ecosystem commit SHA so generated repositories
 /// never depend on a mutable branch.
-pub const AGENA_TEMPLATE_BASELINE_REF: &str = "151e6f388d41048a989d8694a01238dbe4349722";
+pub const AGENA_TEMPLATE_BASELINE_REF: &str = "f4968e4cceb885b57670ea81ac24e495eb3dec89";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]

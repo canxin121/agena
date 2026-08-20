@@ -2403,7 +2403,7 @@ mod tests {
             plugins: vec![Arc::new(LoadedPlugin::new(
                 "static",
                 crate::config::ConfiguredPlugin {
-                    config: serde_json::json!({}),
+                    settings: serde_json::json!({}),
                     ..crate::config::ConfiguredPlugin::default()
                 },
                 Arc::new(HangingTransport),

@@ -255,7 +255,7 @@ impl ClaudeToolsPlugin {
     async fn init(&self, ctx: InitContext, host: Arc<dyn HostClient>) -> SdkResult<InitOutcome> {
         let config: ClaudeToolsConfig =
             agena_plugin_host::sdk::macro_support::parse_defaulted_settings(
-                ctx.config,
+                ctx.settings,
                 "invalid Claude tools plugin config",
             )?;
         self.workspace_root

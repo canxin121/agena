@@ -14,7 +14,7 @@ pub use crate::quota::QuotaConfig;
 /// Top-level `plugins` config object, parsed from agena's JSON config layer.
 ///
 /// The host only owns transport and lifecycle fields. Plugin-specific
-/// configuration lives in [`ConfiguredPlugin::config`] as JSON and is validated
+/// settings live in [`ConfiguredPlugin::settings`] as JSON and are validated
 /// against the plugin manifest at load time.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
@@ -117,7 +117,7 @@ pub struct PluginSignature {
 }
 
 /// One configured plugin under `plugins.list.<id>`. The host knows how to
-/// load the `package`; `config` is plugin-owned JSON.
+/// load the `package`; `settings` is plugin-owned JSON.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 /// Configured plugin entry.
@@ -126,7 +126,7 @@ pub struct ConfiguredPlugin {
     pub enabled: bool,
     pub package: PluginPackage,
     #[serde(default)]
-    pub config: serde_json::Value,
+    pub settings: serde_json::Value,
     #[serde(default)]
     pub timeouts: TimeoutsConfig,
     /// Host-owned activation dependencies. `requires` is a hard dependency:
@@ -142,7 +142,7 @@ impl Default for ConfiguredPlugin {
         Self {
             enabled: true,
             package: PluginPackage::Static {},
-            config: serde_json::Value::Null,
+            settings: serde_json::Value::Null,
             timeouts: TimeoutsConfig::default(),
             activation: PluginActivationConfig::default(),
         }
@@ -244,6 +244,21 @@ mod tests {
     }
 
     #[test]
+    fn configured_plugin_serializes_settings_and_rejects_legacy_config_key() {
+        let configured = ConfiguredPlugin::static_settings(serde_json::json!({"mode": "safe"}));
+        let encoded = serde_json::to_value(&configured).expect("encode configured plugin settings");
+        assert_eq!(encoded["settings"]["mode"], "safe");
+        assert!(encoded.get("config").is_none());
+
+        let error = serde_json::from_value::<ConfiguredPlugin>(serde_json::json!({
+            "package": { "kind": "static" },
+            "config": { "mode": "legacy" }
+        }))
+        .expect_err("legacy plugin config key must be rejected");
+        assert!(error.to_string().contains("unknown field `config`"));
+    }
+
+    #[test]
     fn activation_contract_rejects_unknown_fields() {
         let error = serde_json::from_value::<ConfiguredPlugin>(serde_json::json!({
             "package": { "kind": "static" },
@@ -255,22 +270,22 @@ mod tests {
 }
 
 impl ConfiguredPlugin {
-    pub fn static_config(config: serde_json::Value) -> Self {
+    pub fn static_settings(settings: serde_json::Value) -> Self {
         Self {
             enabled: true,
             package: PluginPackage::Static {},
-            config,
+            settings,
             timeouts: TimeoutsConfig::default(),
             activation: PluginActivationConfig::default(),
         }
     }
 
     pub fn static_default() -> Self {
-        Self::static_config(serde_json::Value::Null)
+        Self::static_settings(serde_json::Value::Null)
     }
 
-    pub fn config(&self) -> &serde_json::Value {
-        &self.config
+    pub fn settings(&self) -> &serde_json::Value {
+        &self.settings
     }
 
     pub fn timeouts(&self) -> &TimeoutsConfig {

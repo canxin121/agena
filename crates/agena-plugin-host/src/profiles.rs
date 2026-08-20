@@ -82,7 +82,7 @@ pub enum PluginProfileEntry {
     Replace {
         plugin: ConfiguredPlugin,
     },
-    /// Patch an existing row. `config_patch` uses JSON Merge Patch semantics:
+    /// Patch an existing row. `settings_patch` uses JSON Merge Patch semantics:
     /// object keys merge recursively and nested null values delete keys.
     Patch {
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -90,7 +90,7 @@ pub enum PluginProfileEntry {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         package: Option<PluginPackage>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        config_patch: Option<Value>,
+        settings_patch: Option<Value>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         timeouts: Option<TimeoutsConfig>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -327,7 +327,7 @@ fn apply_entry(
         PluginProfileEntry::Patch {
             enabled,
             package,
-            config_patch,
+            settings_patch,
             timeouts,
             activation,
         } => {
@@ -342,8 +342,8 @@ fn apply_entry(
             if let Some(package) = package {
                 configured.package = package.clone();
             }
-            if let Some(config_patch) = config_patch {
-                apply_json_merge_patch(&mut configured.config, config_patch);
+            if let Some(settings_patch) = settings_patch {
+                apply_json_merge_patch(&mut configured.settings, settings_patch);
             }
             if let Some(timeouts) = timeouts {
                 configured.timeouts = timeouts.clone();
@@ -421,15 +421,15 @@ fn validate_profile_id(profile_id: &str) -> Result<(), String> {
 mod tests {
     use super::*;
 
-    fn configured(config: Value) -> ConfiguredPlugin {
-        ConfiguredPlugin::static_config(config)
+    fn configured(settings: Value) -> ConfiguredPlugin {
+        ConfiguredPlugin::static_settings(settings)
     }
 
-    fn patch(config_patch: Value) -> PluginProfileEntry {
+    fn patch(settings_patch: Value) -> PluginProfileEntry {
         PluginProfileEntry::Patch {
             enabled: None,
             package: None,
-            config_patch: Some(config_patch),
+            settings_patch: Some(settings_patch),
             timeouts: None,
             activation: None,
         }
@@ -479,7 +479,7 @@ mod tests {
 
         assert_eq!(resolution.meta.applied_profiles, ["base-tools", "coding"]);
         assert_eq!(
-            resolution.list["example.plugin"].config(),
+            resolution.list["example.plugin"].settings(),
             &serde_json::json!({
                 "mode": "profile-base",
                 "nested": {"keep": true, "base": 1, "child": 2}
@@ -489,12 +489,12 @@ mod tests {
         assert_eq!(
             resolution.meta.changes[0].paths,
             [
-                "/config/mode",
-                "/config/nested/base",
-                "/config/nested/remove"
+                "/settings/mode",
+                "/settings/nested/base",
+                "/settings/nested/remove"
             ]
         );
-        assert_eq!(resolution.meta.changes[1].paths, ["/config/nested/child"]);
+        assert_eq!(resolution.meta.changes[1].paths, ["/settings/nested/child"]);
     }
 
     #[test]
@@ -526,7 +526,7 @@ mod tests {
         assert!(resolution.list["example.disable"].disabled());
         assert!(!resolution.list.contains_key("example.remove"));
         assert_eq!(
-            resolution.list["example.add"].config(),
+            resolution.list["example.add"].settings(),
             &serde_json::json!({"added": true})
         );
         let changes = resolution

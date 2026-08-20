@@ -31,7 +31,7 @@ impl ToolApiPlugin {
     #[hook(init)]
     async fn init(&self, ctx: InitContext, host: Arc<dyn HostClient>) -> SdkResult<InitOutcome> {
         let tool_discovery = agena_plugin_host::sdk::macro_support::parse_defaulted_settings(
-            ctx.config.clone(),
+            ctx.settings.clone(),
             "invalid tools config",
         )?;
         self.inner.initialize(

@@ -570,7 +570,7 @@ mod tests {
             .expect("parse quoted settings path");
         assert_eq!(
             segments,
-            vec!["plugins", "list", "example.plugin", "config"]
+            vec!["plugins", "list", "example.plugin", "settings"]
         );
         assert_eq!(
             format_settings_path(&segments),

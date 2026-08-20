@@ -24,11 +24,49 @@ pub struct InitContext {
     /// Bearer token the plugin must use when calling back into the host.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub host_callback_token: Option<String>,
-    /// Plugin-owned configuration forwarded from `plugins.list.<id>.config`.
-    #[serde(default)]
-    pub config: serde_json::Value,
+    /// Plugin-owned settings sourced from `plugins.list.<id>.settings`.
+    ///
+    /// Protocol v1 keeps the historical `config` wire key so plugins built
+    /// against the published v0.1.0 SDK continue to receive these settings.
+    #[serde(default, rename = "config")]
+    pub settings: serde_json::Value,
     /// Protocol version both sides agreed on (currently always `1`).
     pub protocol_version: u32,
+}
+
+#[cfg(test)]
+mod init_context_tests {
+    use super::InitContext;
+
+    #[test]
+    fn init_context_exposes_settings_api_but_preserves_protocol_v1_config_wire_key() {
+        let context = InitContext {
+            agena_version: "0.1.0".to_owned(),
+            workspace_root: std::path::PathBuf::from("/workspace"),
+            plugin_id: "example.plugin".parse().expect("valid plugin id"),
+            host_callback_url: None,
+            host_callback_token: None,
+            settings: serde_json::json!({"mode": "safe"}),
+            protocol_version: crate::rpc::PROTOCOL_VERSION,
+        };
+        let encoded = serde_json::to_value(context).expect("encode init context");
+        assert_eq!(encoded["config"]["mode"], "safe");
+        assert!(encoded.get("settings").is_none());
+
+        // The already-published v0.1.0 SDK deserializes this exact field name.
+        assert_eq!(encoded["config"], serde_json::json!({"mode": "safe"}));
+
+        #[derive(serde::Deserialize)]
+        struct PublishedV01InitContext {
+            config: serde_json::Value,
+        }
+        let legacy: PublishedV01InitContext =
+            serde_json::from_value(encoded.clone()).expect("decode with published v0.1.0 shape");
+        assert_eq!(legacy.config["mode"], "safe");
+
+        let decoded: InitContext = serde_json::from_value(encoded).expect("decode v1 init context");
+        assert_eq!(decoded.settings["mode"], "safe");
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -48,7 +86,7 @@ impl InitOutcome {
 }
 
 #[derive(Debug)]
-/// Typed plugin configuration with deferred access.
+/// Typed plugin settings with deferred access.
 pub struct PluginSettings<T> {
     value: OnceLock<T>,
 }
@@ -97,7 +135,7 @@ where
 }
 
 #[doc(hidden)]
-/// Access to the plugin config store.
+/// Access to the plugin settings store.
 pub trait PluginSettingsStoreAccess {
     fn plugin_settings_contract() -> SettingsContract;
 

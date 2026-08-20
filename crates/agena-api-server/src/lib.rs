@@ -651,7 +651,7 @@ mod router_contract_tests {
                             "value": {
                                 "enabled": true,
                                 "package": {"kind": "static"},
-                                "config": {}
+                                "settings": {}
                             },
                             "dry_run": true,
                             "validate": true,

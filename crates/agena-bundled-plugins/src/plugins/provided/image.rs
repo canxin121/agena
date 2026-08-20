@@ -335,7 +335,7 @@ impl OpenAiToolsPlugin {
     async fn init(&self, ctx: InitContext, _host: Arc<dyn HostClient>) -> SdkResult<InitOutcome> {
         let config: OpenAiToolsConfig =
             agena_plugin_host::sdk::macro_support::parse_defaulted_settings(
-                ctx.config,
+                ctx.settings,
                 "invalid OpenAI tools plugin config",
             )?;
         let client = reqwest::Client::builder()

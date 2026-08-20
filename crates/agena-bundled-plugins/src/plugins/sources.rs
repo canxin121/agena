@@ -14,11 +14,11 @@ fn plugin_key(value: &str) -> agena_plugin_host::PluginKey {
 }
 
 fn static_entry(config: serde_json::Value) -> ConfiguredPlugin {
-    ConfiguredPlugin::static_config(config)
+    ConfiguredPlugin::static_settings(config)
 }
 
 pub fn bundled_plugin_entries() -> BTreeMap<String, ConfiguredPlugin> {
-    let entries = BTreeMap::from([
+    BTreeMap::from([
         (
             crate::tool::chatgpt_plugin_id().to_string(),
             static_entry(serde_json::Value::Null),
@@ -111,8 +111,7 @@ pub fn bundled_plugin_entries() -> BTreeMap<String, ConfiguredPlugin> {
             crate::tool::mcp_plugin_id().to_string(),
             static_entry(serde_json::Value::Null),
         ),
-    ]);
-    entries
+    ])
 }
 
 pub fn static_plugin_registrations(

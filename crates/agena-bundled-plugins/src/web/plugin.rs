@@ -1032,7 +1032,7 @@ impl WebPlugin {
     ) -> SdkResult<agena_plugin_host::sdk::InitOutcome> {
         self.state
             .set(WebPluginState::new(
-                parse_web_config(ctx.config)?,
+                parse_web_config(ctx.settings)?,
                 host.clone(),
             ))
             .map_err(|_| PluginError::internal("web plugin initialized more than once"))?;

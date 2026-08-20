@@ -43,7 +43,7 @@ impl Application {
         })?;
         let configured = inspect
             .configured_plugin
-            .map(|configured| configured.config)
+            .map(|configured| configured.settings)
             .unwrap_or(serde_json::Value::Null);
         let mut effective = defaults.clone();
         if !configured.is_null() {

@@ -58,19 +58,19 @@ mod tests {
         let mut bundled = BTreeMap::new();
         bundled.insert(
             "example".to_owned(),
-            ConfiguredPlugin::static_config(serde_json::json!({"origin": "bundled"})),
+            ConfiguredPlugin::static_settings(serde_json::json!({"origin": "bundled"})),
         );
         let mut configured = PluginsConfig::default();
         configured.list.insert(
             "example".to_owned(),
-            ConfiguredPlugin::static_config(serde_json::json!({"origin": "user"})),
+            ConfiguredPlugin::static_settings(serde_json::json!({"origin": "user"})),
         );
 
         let merged =
             merge_bundled_plugin_config(configured, bundled).expect("merge bundled plugin config");
 
         assert_eq!(
-            merged.list["example"].config(),
+            merged.list["example"].settings(),
             &serde_json::json!({"origin": "user"})
         );
     }
@@ -81,7 +81,7 @@ mod tests {
 
         let bundled = BTreeMap::from([(
             "example.plugin".to_owned(),
-            ConfiguredPlugin::static_config(serde_json::json!({
+            ConfiguredPlugin::static_settings(serde_json::json!({
                 "origin": "bundled",
                 "nested": {"keep": true}
             })),
@@ -89,7 +89,7 @@ mod tests {
         let mut configured = PluginsConfig::default();
         configured.list.insert(
             "example.plugin".to_owned(),
-            ConfiguredPlugin::static_config(serde_json::json!({
+            ConfiguredPlugin::static_settings(serde_json::json!({
                 "origin": "user",
                 "nested": {"user": true}
             })),
@@ -102,7 +102,7 @@ mod tests {
                     PluginProfileEntry::Patch {
                         enabled: None,
                         package: None,
-                        config_patch: Some(serde_json::json!({
+                        settings_patch: Some(serde_json::json!({
                             "origin": "profile",
                             "nested": {"profile": true}
                         })),
@@ -119,7 +119,7 @@ mod tests {
             .expect("resolve profiles over bundled config");
 
         assert_eq!(
-            merged.list["example.plugin"].config(),
+            merged.list["example.plugin"].settings(),
             &serde_json::json!({
                 "origin": "profile",
                 "nested": {"user": true, "profile": true}

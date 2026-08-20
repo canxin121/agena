@@ -319,7 +319,7 @@ impl ChatGptToolsPlugin {
     async fn init(&self, ctx: InitContext, host: Arc<dyn HostClient>) -> SdkResult<InitOutcome> {
         let config: ChatGptToolsConfig =
             agena_plugin_host::sdk::macro_support::parse_defaulted_settings(
-                ctx.config,
+                ctx.settings,
                 "invalid ChatGPT tools plugin config",
             )?;
         self.workspace_root.set(ctx.workspace_root).map_err(|_| {

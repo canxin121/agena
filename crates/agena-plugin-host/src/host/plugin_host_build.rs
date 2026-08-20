@@ -1,5 +1,5 @@
 enum BuildCandidate {
-    Prepared(PreparedPlugin),
+    Prepared(Box<PreparedPlugin>),
     Reused(Arc<LoadedPlugin>),
 }
 
@@ -130,7 +130,7 @@ impl PluginHost {
             {
                 Ok(prepared) => {
                     prefetched_manifests.insert(id.clone(), prepared.manifest.clone());
-                    candidates.insert(id.clone(), BuildCandidate::Prepared(prepared));
+                    candidates.insert(id.clone(), BuildCandidate::Prepared(Box::new(prepared)));
                 }
                 Err(error) => {
                     let block = crate::activation::PluginActivationBlock {
@@ -312,7 +312,7 @@ impl PluginHost {
                 .await
                 {
                     Ok(prepared) if prepared.manifest == previous_manifest => {
-                        candidate = BuildCandidate::Prepared(prepared);
+                        candidate = BuildCandidate::Prepared(Box::new(prepared));
                     }
                     Ok(prepared) => {
                         let _ = shutdown_transport(prepared.transport()).await;
@@ -379,7 +379,7 @@ impl PluginHost {
                 }
                 BuildCandidate::Prepared(prepared) => {
                     let transport = prepared.transport();
-                    match activate_entry(prepared, &host_handle, &agena_version, &workspace_root)
+                    match activate_entry(*prepared, &host_handle, &agena_version, &workspace_root)
                         .await
                     {
                         Ok(plugin) => (Arc::new(plugin), false),
@@ -1708,7 +1708,8 @@ mod tests {
         ));
 
         let mut changed_config = current_config.clone();
-        changed_config.get_mut("example.provider").unwrap().config = serde_json::json!({"epoch":2});
+        changed_config.get_mut("example.provider").unwrap().settings =
+            serde_json::json!({"epoch":2});
         assert!(!super::service_epoch_unchanged(
             "example.consumer",
             &current_bindings,

@@ -69,7 +69,7 @@ mod tests {
                     plugin_id: PluginKey::new("agena", "skills").expect("plugin key"),
                     host_callback_url: None,
                     host_callback_token: None,
-                    config,
+                    settings: config,
                     protocol_version: 1,
                 },
                 Arc::new(NoopHostClient),
@@ -374,7 +374,7 @@ mod tests {
                     plugin_id: PluginKey::new("agena", "skills").expect("plugin key"),
                     host_callback_url: None,
                     host_callback_token: None,
-                    config: serde_json::json!({ "additional_roots": ["../outside"] }),
+                    settings: serde_json::json!({ "additional_roots": ["../outside"] }),
                     protocol_version: 1,
                 },
                 Arc::new(NoopHostClient),
@@ -399,7 +399,7 @@ mod tests {
                     plugin_id: PluginKey::new("agena", "skills").expect("plugin key"),
                     host_callback_url: None,
                     host_callback_token: None,
-                    config: serde_json::json!({ "additional_roots": ["linked-skills"] }),
+                    settings: serde_json::json!({ "additional_roots": ["linked-skills"] }),
                     protocol_version: 1,
                 },
                 Arc::new(NoopHostClient),
@@ -946,7 +946,7 @@ impl SkillsPlugin {
     async fn init(&self, ctx: InitContext, _host: Arc<dyn HostClient>) -> SdkResult<InitOutcome> {
         let config: SkillsPluginConfig =
             agena_plugin_host::sdk::macro_support::parse_defaulted_settings(
-                ctx.config,
+                ctx.settings,
                 "invalid skills plugin config",
             )?;
         config.validate_for_workspace(ctx.workspace_root.as_path())?;

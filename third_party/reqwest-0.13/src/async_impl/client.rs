@@ -2459,7 +2459,13 @@ impl Default for Client {
 
 #[cfg(feature = "__rustls")]
 fn default_rustls_crypto_provider() -> Arc<rustls::crypto::CryptoProvider> {
-    #[cfg(not(feature = "__rustls-aws-lc-rs"))]
+    #[cfg(feature = "__rustls-ring")]
+    return Arc::new(rustls::crypto::ring::default_provider());
+
+    #[cfg(all(not(feature = "__rustls-ring"), feature = "__rustls-aws-lc-rs"))]
+    return Arc::new(rustls::crypto::aws_lc_rs::default_provider());
+
+    #[cfg(not(any(feature = "__rustls-ring", feature = "__rustls-aws-lc-rs")))]
     panic!(
         "No rustls crypto provider is configured. \
         When using the `rustls-no-provider` feature you must install a \
@@ -2468,8 +2474,6 @@ fn default_rustls_crypto_provider() -> Arc<rustls::crypto::CryptoProvider> {
         See https://docs.rs/rustls/latest/rustls/#cryptography-providers for details."
     );
 
-    #[cfg(feature = "__rustls-aws-lc-rs")]
-    Arc::new(rustls::crypto::aws_lc_rs::default_provider())
 }
 
 impl Client {

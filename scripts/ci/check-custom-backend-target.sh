@@ -11,20 +11,21 @@ if [[ "$BUILD_STD" == false ]]; then
 fi
 
 run_cargo_check() {
+  local args=(
+    check
+    --manifest-path Cargo.toml
+    -p agena
+    --target "$TARGET"
+    --locked
+  )
   if [[ "$BUILD_STD" == true ]]; then
-    stable_rustc="$(rustup which --toolchain 1.97.0 rustc)"
-    stable_rustdoc="$(rustup which --toolchain 1.97.0 rustdoc)"
-    RUSTC_BOOTSTRAP=1 \
-    RUSTC="$stable_rustc" \
-    RUSTDOC="$stable_rustdoc" \
-      cargo +nightly-2026-08-18 check \
-        --manifest-path Cargo.toml \
-        -p agena \
-        --target "$TARGET" \
-        --locked \
-        -Z build-std=std,panic_abort,proc_macro
+    # Keep every custom build-std target on the same stable-rustc/nightly-
+    # Cargo path.  In particular, redoxer supplies a real Cargo executable
+    # through AGENA_CARGO_DRIVER; invoking `cargo +nightly...` here bypasses
+    # that driver because redoxer's cargo is not a rustup shim.
+    exec bash scripts/ci/run-build-std-cargo.sh "$TARGET" "${args[@]}"
   else
-    cargo check --manifest-path Cargo.toml -p agena --target "$TARGET" --locked
+    exec cargo "${args[@]}"
   fi
 }
 

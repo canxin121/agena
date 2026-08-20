@@ -73,7 +73,14 @@ fn use_msvc_asm() -> bool {
         // We are cross-compiling to Windows with the MSVC toolchain.
         let target_arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
         let target_vendor = env::var("CARGO_CFG_TARGET_VENDOR").unwrap_or_default();
-        let cc = env::var(format!("CC_{target_arch}_{target_vendor}_windows_msvc"))
+        // cc-rs exposes target-specific compiler overrides using the complete
+        // target triple with hyphens converted to underscores.  The shorter
+        // arch/vendor form predates win7 targets and drops the `win7`
+        // component, which can make an MSVC target select the GNU `.S`
+        // assembly files even when `cl.exe` is configured.
+        let target_triple_key = target_triple.replace('-', "_");
+        let cc = env::var(format!("CC_{target_triple_key}"))
+            .or_else(|_| env::var(format!("CC_{target_arch}_{target_vendor}_windows_msvc")))
             .unwrap_or_default()
             .to_ascii_lowercase();
         // Check if we are using the MSVC compiler.

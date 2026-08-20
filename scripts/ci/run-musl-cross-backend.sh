@@ -39,6 +39,7 @@ ROOT="${RUNNER_TEMP:-/tmp}/agena-musl-cross/$TOOLCHAIN"
 ARCHIVE="$ROOT/$TOOLCHAIN.tgz"
 EXTRACTED="$ROOT/root"
 URL="https://musl.cc/$TOOLCHAIN.tgz"
+FALLBACK_URL="http://musl.cc/$TOOLCHAIN.tgz"
 mkdir -p "$ROOT"
 
 if [[ ! -x "$EXTRACTED/$TOOLCHAIN/bin/$PREFIX-gcc" ]]; then
@@ -49,11 +50,28 @@ if [[ ! -x "$EXTRACTED/$TOOLCHAIN/bin/$PREFIX-gcc" ]]; then
   if [[ "$actual" != "$SHA256" ]]; then
     tmp="$ARCHIVE.tmp"
     rm -f "$tmp"
-    curl --fail --location \
-      --retry 12 --retry-all-errors --retry-delay 5 \
-      --connect-timeout 30 --max-time 1800 \
-      --user-agent 'agena-musl-cross' \
-      "$URL" -o "$tmp"
+    download_args=(
+      --fail
+      --location
+      --ipv4
+      --retry 12
+      --retry-all-errors
+      --retry-delay 5
+      --connect-timeout 30
+      --max-time 1800
+      --user-agent agena-musl-cross
+      --output "$tmp"
+    )
+    if ! curl "${download_args[@]}" "$URL"; then
+      # musl.cc is the pinned upstream distribution for these exact ABI
+      # archives.  GitHub-hosted runners have intermittently been unable to
+      # establish TLS to its 443 endpoint even while the same immutable file
+      # is available over port 80.  The SHA256 check below remains mandatory
+      # before the archive can be used.
+      echo "musl.cc HTTPS download failed; retrying the same checksum-pinned archive over HTTP" >&2
+      rm -f "$tmp"
+      curl "${download_args[@]}" "$FALLBACK_URL"
+    fi
     actual="$(sha256sum "$tmp" | awk '{print $1}')"
     if [[ "$actual" != "$SHA256" ]]; then
       rm -f "$tmp"

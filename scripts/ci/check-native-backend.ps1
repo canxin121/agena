@@ -23,12 +23,19 @@ $Args = @(
 
 if ($BuildStd) {
   $StableRustc = (& rustup which --toolchain 1.97.0 rustc).Trim()
+  $StableRustcExit = $LASTEXITCODE
   $StableRustdoc = (& rustup which --toolchain 1.97.0 rustdoc).Trim()
-  if ($LASTEXITCODE -ne 0 -or -not $StableRustc) {
+  $StableRustdocExit = $LASTEXITCODE
+  $NightlyCargo = (& rustup which --toolchain nightly-2026-08-18 cargo).Trim()
+  $NightlyCargoExit = $LASTEXITCODE
+  if ($StableRustcExit -ne 0 -or -not $StableRustc) {
     throw "Failed to locate Rust 1.97.0 rustc"
   }
-  if (-not $StableRustdoc) {
+  if ($StableRustdocExit -ne 0 -or -not $StableRustdoc) {
     throw "Failed to locate Rust 1.97.0 rustdoc"
+  }
+  if ($NightlyCargoExit -ne 0 -or -not $NightlyCargo) {
+    throw "Failed to locate nightly-2026-08-18 Cargo"
   }
   $OldRustc = $env:RUSTC
   $OldRustdoc = $env:RUSTDOC
@@ -42,7 +49,8 @@ if ($BuildStd) {
     $env:RUSTC_BOOTSTRAP = "1"
     $env:CARGO_TARGET_DIR = $BuildTargetDir
     $env:RUSTFLAGS = (($OldRustFlags, $TargetRustFlags) | Where-Object { $_ } | Join-String -Separator " ")
-    & cargo +nightly-2026-08-18 @Args -Z "build-std=std,panic_abort,proc_macro"
+    Write-Host "Using build-std driver: cargo=$NightlyCargo rustc=$StableRustc rustdoc=$StableRustdoc target-dir=$BuildTargetDir"
+    & $NightlyCargo @Args -Z "build-std=std,panic_abort,proc_macro"
   }
   finally {
     $env:RUSTC = $OldRustc

@@ -62,8 +62,22 @@ prepare_source() {
   echo "OpenHarmony LoongArch sysroot: extracting pinned source $MUSL_COMMIT" >&2
   rm -rf "$SOURCE"
   mkdir -p "$SOURCE"
-  tar -tzf "$ARCHIVE" >/dev/null
-  tar -xzf "$ARCHIVE" --strip-components=1 -C "$SOURCE"
+  archive_size="$(wc -c < "$ARCHIVE")"
+  echo "OpenHarmony LoongArch sysroot: source archive size=$archive_size" >&2
+  if tar -tzf "$ARCHIVE" >/dev/null; then
+    :
+  else
+    status=$?
+    echo "ERROR: failed to list OpenHarmony musl source archive $ARCHIVE (status $status)" >&2
+    exit "$status"
+  fi
+  if tar -xzf "$ARCHIVE" --strip-components=1 -C "$SOURCE"; then
+    :
+  else
+    status=$?
+    echo "ERROR: failed to extract OpenHarmony musl source archive into $SOURCE (status $status)" >&2
+    exit "$status"
+  fi
   [[ -x "$SOURCE/configure" ]] || {
     echo "ERROR: OpenHarmony musl archive did not contain configure at $SOURCE/configure" >&2
     exit 1
@@ -113,21 +127,57 @@ prepare_source() {
       exit 1
     }
     mkdir -p "$SOURCE/$to"
-    cp -a "$SOURCE/$from"/. "$SOURCE/$to"/
+    if cp -a "$SOURCE/$from"/. "$SOURCE/$to"/; then
+      :
+    else
+      status=$?
+      echo "ERROR: failed to overlay OpenHarmony porting input $SOURCE/$from -> $SOURCE/$to (status $status)" >&2
+      exit "$status"
+    fi
   done
 
   [[ -d "$SOURCE/scripts/linux" ]] || {
     echo "ERROR: missing OpenHarmony Linux Makefile overlay: $SOURCE/scripts/linux" >&2
     exit 1
   }
-  cp -a "$SOURCE/scripts/linux"/. "$SOURCE"/
+  if cp -a "$SOURCE/scripts/linux"/. "$SOURCE"/; then
+    :
+  else
+    status=$?
+    echo "ERROR: failed to install OpenHarmony Linux Makefile overlay from $SOURCE/scripts/linux (status $status)" >&2
+    exit "$status"
+  fi
 
   download_verified "$FREEBSD_QUEUE_URL" "$FREEBSD_QUEUE_SHA256" "$QUEUE_HEADER"
   mkdir -p "$SOURCE/include/sys"
-  install -m 0644 "$QUEUE_HEADER" "$SOURCE/include/sys/queue.h"
+  install -m 0644 "$QUEUE_HEADER" "$SOURCE/include/sys/queue.h" || {
+    status=$?
+    echo "ERROR: failed to install FreeBSD queue.h into $SOURCE/include/sys/queue.h (status $status)" >&2
+    exit "$status"
+  }
+  [[ -f "$SOURCE/include/sys/queue.h" ]] || {
+    echo "ERROR: FreeBSD queue.h was not installed at $SOURCE/include/sys/queue.h" >&2
+    exit 1
+  }
+  queue_size="$(wc -c < "$SOURCE/include/sys/queue.h")"
+  queue_sha256="$(sha256sum "$SOURCE/include/sys/queue.h" | awk '{print $1}')"
+  echo "OpenHarmony LoongArch sysroot: installed queue.h size=$queue_size sha256=$queue_sha256" >&2
 
-  patch --fuzz=0 --forward --batch -p1 \
-    < "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/openharmony-loongarch-musl.patch"
+  patch_file="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/openharmony-loongarch-musl.patch"
+  [[ -f "$patch_file" ]] || {
+    echo "ERROR: OpenHarmony LoongArch patch not found: $patch_file" >&2
+    exit 1
+  }
+  command -v patch >&2 || {
+    echo "ERROR: GNU patch is required to apply the OpenHarmony LoongArch overlay" >&2
+    exit 1
+  }
+  patch --version | head -n 1 >&2
+  patch --fuzz=0 --forward --batch -p1 < "$patch_file" || {
+    status=$?
+    echo "ERROR: failed to apply OpenHarmony LoongArch patch $patch_file (status $status)" >&2
+    exit "$status"
+  }
 }
 
 mkdir -p "$ROOT"

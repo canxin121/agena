@@ -157,7 +157,7 @@ if [[ "$MODE" == gnu ]]; then
   download_deb 'pool/main/c/cross-toolchain-base-ports/libc6-powerpcspe-cross_2.28-7cross1_all.deb' \
     'dafdaa79f9b5265f57dcd9827b6d973bb8ab72a49c035a4bab6d6f975cdbb17c'
   download_deb 'pool/main/c/cross-toolchain-base-ports/linux-libc-dev-powerpcspe-cross_4.19.20-1cross1_all.deb' \
-    '1bc753bd083120e172414f0b501c5063f0f5f60bd73e893591d8452ba399808'
+    '1bc753bd083120e172414f0b501c5063f0f5f60bd73e893591d8452ba399808a'
 
   # These host packages keep GCC 8's libisl/libgmp/libmpfr/libmpc and C++
   # runtime isolated from whatever newer Ubuntu image happens to be current.

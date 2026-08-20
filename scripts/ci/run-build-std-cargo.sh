@@ -10,6 +10,11 @@ NIGHTLY_TOOLCHAIN="${AGENA_NIGHTLY_TOOLCHAIN:-nightly-2026-08-18}"
 stable_rustc="$(rustup which --toolchain "$STABLE_TOOLCHAIN" rustc)"
 stable_rustdoc="$(rustup which --toolchain "$STABLE_TOOLCHAIN" rustdoc)"
 sysroot="$("$stable_rustc" --print sysroot)"
+if [[ -n "${AGENA_CARGO_DRIVER:-}" ]]; then
+  cargo_driver=("$AGENA_CARGO_DRIVER")
+else
+  cargo_driver=(cargo "+$NIGHTLY_TOOLCHAIN")
+fi
 
 backups=()
 backup_source() {
@@ -61,4 +66,4 @@ esac
 RUSTC_BOOTSTRAP=1 \
 RUSTC="$stable_rustc" \
 RUSTDOC="$stable_rustdoc" \
-  cargo "+$NIGHTLY_TOOLCHAIN" "$@" -Z build-std=std,panic_abort,proc_macro
+  "${cargo_driver[@]}" "$@" -Z build-std=std,panic_abort,proc_macro

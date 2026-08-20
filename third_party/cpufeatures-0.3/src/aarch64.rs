@@ -82,13 +82,14 @@ __expand_check_macro! {
 /// See this issue for more info: <https://github.com/RustCrypto/utils/issues/395>
 #[cfg(any(target_os = "linux", target_os = "android"))]
 pub mod hwcaps {
-    use libc::c_ulong;
-
-    pub const AES: c_ulong = libc::HWCAP_AES | libc::HWCAP_PMULL;
-    pub const DIT: c_ulong = libc::HWCAP_DIT;
-    pub const SHA2: c_ulong = libc::HWCAP_SHA2;
-    pub const SHA3: c_ulong = libc::HWCAP_SHA3 | libc::HWCAP_SHA512;
-    pub const SM4: c_ulong = libc::HWCAP_SM3 | libc::HWCAP_SM4;
+    // `getauxval` is normalized to u64 above. AArch64 ILP32 exposes the libc
+    // HWCAP constants as `c_ulong = u32`, so normalize the masks too instead
+    // of letting the feature macro attempt `u64 & u32`.
+    pub const AES: u64 = (libc::HWCAP_AES | libc::HWCAP_PMULL) as u64;
+    pub const DIT: u64 = libc::HWCAP_DIT as u64;
+    pub const SHA2: u64 = libc::HWCAP_SHA2 as u64;
+    pub const SHA3: u64 = (libc::HWCAP_SHA3 | libc::HWCAP_SHA512) as u64;
+    pub const SM4: u64 = (libc::HWCAP_SM3 | libc::HWCAP_SM4) as u64;
 }
 
 // Apple OS (macOS, iOS, watchOS, and tvOS) `check!` macro.

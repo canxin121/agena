@@ -220,23 +220,7 @@
       "artifact_kind": "backend"
     },
     {
-      "target": "mips-unknown-linux-musl",
-      "build_std": true,
-      "family": "linux",
-      "can_run_in_cross": true,
-      "requires_cpp": true,
-      "artifact_kind": "backend"
-    },
-    {
       "target": "mips64-unknown-linux-gnuabi64",
-      "build_std": true,
-      "family": "linux",
-      "can_run_in_cross": true,
-      "requires_cpp": true,
-      "artifact_kind": "backend"
-    },
-    {
-      "target": "mips64-unknown-linux-muslabi64",
       "build_std": true,
       "family": "linux",
       "can_run_in_cross": true,
@@ -252,23 +236,7 @@
       "artifact_kind": "backend"
     },
     {
-      "target": "mips64el-unknown-linux-muslabi64",
-      "build_std": true,
-      "family": "linux",
-      "can_run_in_cross": true,
-      "requires_cpp": true,
-      "artifact_kind": "backend"
-    },
-    {
       "target": "mipsel-unknown-linux-gnu",
-      "build_std": true,
-      "family": "linux",
-      "can_run_in_cross": true,
-      "requires_cpp": true,
-      "artifact_kind": "backend"
-    },
-    {
-      "target": "mipsel-unknown-linux-musl",
       "build_std": true,
       "family": "linux",
       "can_run_in_cross": true,
@@ -526,14 +494,6 @@
       "platform_family": "windows"
     },
     {
-      "target": "aarch64-uwp-windows-msvc",
-      "runner": "windows-latest",
-      "shell": "pwsh",
-      "build_std": true,
-      "platform_family": "windows",
-      "artifact_kind": "backend"
-    },
-    {
       "target": "arm64_32-apple-watchos",
       "runner": "macos-15",
       "shell": "bash",
@@ -622,22 +582,6 @@
       "platform_family": "windows"
     },
     {
-      "target": "i686-uwp-windows-gnu",
-      "runner": "windows-latest",
-      "shell": "pwsh",
-      "build_std": true,
-      "platform_family": "windows",
-      "artifact_kind": "backend"
-    },
-    {
-      "target": "i686-uwp-windows-msvc",
-      "runner": "windows-latest",
-      "shell": "pwsh",
-      "build_std": true,
-      "platform_family": "windows",
-      "artifact_kind": "backend"
-    },
-    {
       "target": "i686-win7-windows-gnu",
       "runner": "windows-latest",
       "shell": "pwsh",
@@ -655,14 +599,6 @@
     },
     {
       "target": "thumbv7a-pc-windows-msvc",
-      "runner": "windows-latest",
-      "shell": "pwsh",
-      "build_std": true,
-      "platform_family": "windows",
-      "artifact_kind": "backend"
-    },
-    {
-      "target": "thumbv7a-uwp-windows-msvc",
       "runner": "windows-latest",
       "shell": "pwsh",
       "build_std": true,
@@ -724,22 +660,6 @@
       "artifact_kind": "backend",
       "build_std": false,
       "platform_family": "windows"
-    },
-    {
-      "target": "x86_64-uwp-windows-gnu",
-      "runner": "windows-latest",
-      "shell": "pwsh",
-      "build_std": true,
-      "platform_family": "windows",
-      "artifact_kind": "backend"
-    },
-    {
-      "target": "x86_64-uwp-windows-msvc",
-      "runner": "windows-latest",
-      "shell": "pwsh",
-      "build_std": true,
-      "platform_family": "windows",
-      "artifact_kind": "backend"
     },
     {
       "target": "x86_64-win7-windows-gnu",
@@ -881,6 +801,13 @@
       "artifact_kind": "backend"
     },
     {
+      "target": "mips-unknown-linux-musl",
+      "os": "linux",
+      "builder": "musl-cross",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
       "target": "mips-unknown-linux-uclibc",
       "os": "linux",
       "builder": "uclibc-sysroot",
@@ -894,6 +821,27 @@
       "build_std": true,
       "artifact_kind": "backend",
       "zig_target": "mips64-linux-muslabi64"
+    },
+    {
+      "target": "mips64-unknown-linux-muslabi64",
+      "os": "linux",
+      "builder": "musl-cross",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "mips64el-unknown-linux-muslabi64",
+      "os": "linux",
+      "builder": "musl-cross",
+      "build_std": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "mipsel-unknown-linux-musl",
+      "os": "linux",
+      "builder": "musl-cross",
+      "build_std": true,
+      "artifact_kind": "backend"
     },
     {
       "target": "mipsel-unknown-linux-uclibc",
@@ -1166,13 +1114,6 @@
       "artifact_kind": "backend"
     },
     {
-      "target": "armv7-rtems-eabihf",
-      "os": "rtems",
-      "builder": "rtems",
-      "build_std": true,
-      "artifact_kind": "backend"
-    },
-    {
       "target": "armv7-unknown-freebsd",
       "os": "freebsd",
       "builder": "freebsd-image-sysroot",
@@ -1190,13 +1131,6 @@
       "target": "armv7-wrs-vxworks-eabihf",
       "os": "vxworks",
       "builder": "vxworks",
-      "build_std": true,
-      "artifact_kind": "backend"
-    },
-    {
-      "target": "hexagon-unknown-qurt",
-      "os": "qurt",
-      "builder": "qurt",
       "build_std": true,
       "artifact_kind": "backend"
     },
@@ -1467,13 +1401,6 @@
       "artifact_kind": "backend"
     },
     {
-      "target": "x86_64-unknown-l4re-uclibc",
-      "os": "l4re",
-      "builder": "l4re",
-      "build_std": true,
-      "artifact_kind": "backend"
-    },
-    {
       "target": "x86_64-unknown-managarm-mlibc",
       "os": "managarm",
       "builder": "managarm",
@@ -1571,6 +1498,12 @@
       "description": "ARM64 UEFI"
     },
     {
+      "target": "aarch64-uwp-windows-msvc",
+      "target_os": "windows",
+      "reason": "rust-std-process-unsupported",
+      "description": "Windows UWP target; UWP AppContainer does not provide Agena-required child process runtime"
+    },
+    {
       "target": "aarch64_be-unknown-hermit",
       "target_os": "hermit",
       "reason": "rust-std-process-unsupported",
@@ -1641,6 +1574,12 @@
       "target_os": "horizon",
       "reason": "rust-std-process-unsupported",
       "description": "Armv6K Nintendo 3DS, Horizon (Requires devkitARM toolchain); Rust 1.97 std::process uses unsupported PAL"
+    },
+    {
+      "target": "armv7-rtems-eabihf",
+      "target_os": "rtems",
+      "reason": "agena-subprocess-runtime-unsupported",
+      "description": "Armv7 RTEMS (Requires RTEMS toolchain and kernel; OS runtime does not provide Agena-required child process semantics"
     },
     {
       "target": "armv7-sony-vita-newlibeabihf",
@@ -1739,6 +1678,12 @@
       "description": "Bare Hexagon (v60+, HVX)"
     },
     {
+      "target": "hexagon-unknown-qurt",
+      "target_os": "qurt",
+      "reason": "agena-subprocess-runtime-unsupported",
+      "description": "Hexagon QuRT; OS runtime does not provide Agena-required child process semantics"
+    },
+    {
       "target": "i686-unknown-helenos",
       "target_os": "helenos",
       "reason": "rust-std-process-unsupported",
@@ -1749,6 +1694,18 @@
       "target_os": "uefi",
       "reason": "non-os-execution-environment",
       "description": "32-bit UEFI"
+    },
+    {
+      "target": "i686-uwp-windows-gnu",
+      "target_os": "windows",
+      "reason": "rust-std-process-unsupported",
+      "description": "Windows UWP target; UWP AppContainer does not provide Agena-required child process runtime"
+    },
+    {
+      "target": "i686-uwp-windows-msvc",
+      "target_os": "windows",
+      "reason": "rust-std-process-unsupported",
+      "description": "Windows UWP target; UWP AppContainer does not provide Agena-required child process runtime"
     },
     {
       "target": "loongarch32-unknown-none",
@@ -2039,6 +1996,12 @@
       "description": "Rust nuttx target; Rust 1.97 std::process uses unsupported PAL"
     },
     {
+      "target": "thumbv7a-uwp-windows-msvc",
+      "target_os": "windows",
+      "reason": "rust-std-process-unsupported",
+      "description": "Windows UWP target; UWP AppContainer does not provide Agena-required child process runtime"
+    },
+    {
       "target": "thumbv7em-none-eabi",
       "target_os": "none",
       "reason": "non-os-execution-environment",
@@ -2201,6 +2164,12 @@
       "description": "x86_64 Hermit; Rust 1.97 std::process uses unsupported PAL"
     },
     {
+      "target": "x86_64-unknown-l4re-uclibc",
+      "target_os": "l4re",
+      "reason": "agena-subprocess-runtime-unsupported",
+      "description": "Rust l4re target; OS runtime does not provide Agena-required child process semantics"
+    },
+    {
       "target": "x86_64-unknown-linux-none",
       "target_os": "linux",
       "reason": "freestanding-no-userspace-std",
@@ -2223,6 +2192,18 @@
       "target_os": "uefi",
       "reason": "non-os-execution-environment",
       "description": "64-bit UEFI"
+    },
+    {
+      "target": "x86_64-uwp-windows-gnu",
+      "target_os": "windows",
+      "reason": "rust-std-process-unsupported",
+      "description": "Windows UWP target; UWP AppContainer does not provide Agena-required child process runtime"
+    },
+    {
+      "target": "x86_64-uwp-windows-msvc",
+      "target_os": "windows",
+      "reason": "rust-std-process-unsupported",
+      "description": "Windows UWP target; UWP AppContainer does not provide Agena-required child process runtime"
     },
     {
       "target": "xtensa-esp32-espidf",

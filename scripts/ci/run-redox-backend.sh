@@ -17,6 +17,8 @@ fi
 
 export TARGET
 redoxer toolchain
+NIGHTLY_TOOLCHAIN="${AGENA_NIGHTLY_TOOLCHAIN:-nightly-2026-08-18}"
+export AGENA_CARGO_DRIVER="$(rustup which --toolchain "$NIGHTLY_TOOLCHAIN" cargo)"
 
 # redoxer env exports the target GCC/binutils/relibc sysroot variables that
 # native C build scripts need. We still invoke the repository's normal Cargo

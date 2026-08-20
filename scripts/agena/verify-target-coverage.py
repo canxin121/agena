@@ -22,6 +22,18 @@ NON_OS_ENVIRONMENTS = {
     "zkvm",
 }
 
+# These targets may advertise a Unix-family libc surface, but their OS/runtime
+# does not provide the child-process model Agena actually requires:
+# * RTEMS 6.1 documents fork/exec/waitpid as ENOSYS.
+# * QuRT exposes user programs and threads rather than POSIX child processes.
+# * L4Re starts tasks through its Loader/Ned service; its userland has no
+#   fork()/execve() compatibility layer suitable for Rust's generic Unix PAL.
+AGENA_SUBPROCESS_UNSUPPORTED_OS = {
+    "l4re",
+    "qurt",
+    "rtems",
+}
+
 
 def rust_std_process_supported(spec: dict) -> bool:
     """Mirror Rust 1.97 std::sys::process PAL selection.
@@ -33,6 +45,12 @@ def rust_std_process_supported(spec: dict) -> bool:
 
     target_os = spec.get("os") or "none"
     target_families = set(spec.get("target-family") or [])
+    if target_os in AGENA_SUBPROCESS_UNSUPPORTED_OS:
+        return False
+    if target_os == "windows" and spec.get("vendor") == "uwp":
+        # UWP apps run in an AppContainer and cannot create arbitrary child
+        # processes. Agena relies on std::process for git/GPG/PTY/tooling.
+        return False
     if "unix" in target_families:
         return target_os not in RUST_STD_PROCESS_UNSUPPORTED_OS
     return target_os in {"windows", "uefi", "motor"}
@@ -176,6 +194,8 @@ def main() -> None:
                 and target not in NON_OS_TARGETS
                 and executables is not False
             )
+        elif reason == "agena-subprocess-runtime-unsupported":
+            valid = target_os in AGENA_SUBPROCESS_UNSUPPORTED_OS
         else:
             valid = False
         if not valid:

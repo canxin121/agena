@@ -70,10 +70,9 @@ PY
     # OpenHarmony patch releases include the native component's internal build
     # number in the zip filename. Match the single official Linux native SDK
     # component instead of coupling this builder to that incidental build id.
-    tar -xzf "$ARCHIVE" -C "$ROOT" --wildcards 'linux/native-linux-x64-*.zip'
-    native_zip="$(find "$ROOT/linux" -maxdepth 1 -type f -name 'native-linux-x64-*.zip' -print -quit)"
+    native_zip="$(tar -tzf "$ARCHIVE" | grep -E '(^|/)native-linux-x64-[^/]+\.zip$' | head -1)"
     [[ -n "$native_zip" ]] || { echo "ERROR: native Linux component missing from OpenHarmony SDK" >&2; exit 1; }
-    native_zip="${native_zip#$ROOT/}"
+    tar -xzf "$ARCHIVE" -C "$ROOT" "$native_zip"
   fi
   unzip -q "$ROOT/$native_zip" -d "$SDK"
   rm -rf "$ROOT/linux"

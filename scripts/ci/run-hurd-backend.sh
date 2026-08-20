@@ -15,10 +15,12 @@ case "$TARGET" in
   i686-unknown-hurd-gnu)
     deb_arch=hurd-i386
     clang_target=i686-unknown-gnu
+    multiarch=i386-gnu
     ;;
   x86_64-unknown-hurd-gnu)
     deb_arch=hurd-amd64
     clang_target=x86_64-unknown-gnu
+    multiarch=x86_64-gnu
     ;;
   *) echo "ERROR: unsupported Hurd target: $TARGET" >&2; exit 2 ;;
 esac
@@ -144,7 +146,10 @@ for arg in "\$@"; do
     *) filtered+=("\$arg") ;;
   esac
 done
-exec "$compiler" --target="$clang_target" --sysroot="$SYSROOT" --gcc-toolchain="$SYSROOT/usr" -fuse-ld="$LLD" -rtlib=libgcc "\${filtered[@]}"
+exec "$compiler" --target="$clang_target" --sysroot="$SYSROOT" --gcc-toolchain="$SYSROOT/usr" \
+  -isystem "$SYSROOT/usr/include/$multiarch" \
+  -L"$SYSROOT/usr/lib/$multiarch" -L"$SYSROOT/lib/$multiarch" \
+  -fuse-ld="$LLD" -rtlib=libgcc "\${filtered[@]}"
 EOF
   chmod +x "$path"
 }

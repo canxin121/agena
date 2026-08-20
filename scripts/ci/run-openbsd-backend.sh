@@ -31,7 +31,7 @@ if [[ -n "${AGENA_CLANG:-}" ]]; then
   CLANG="$AGENA_CLANG"
   CLANGXX="${AGENA_CLANGXX:-${AGENA_CLANG}++}"
   AR="${AGENA_LLVM_AR:-$(command -v llvm-ar || command -v ar || true)}"
-elif [[ "$(uname -s)-$(uname -m)" == Linux-x86_64 ]]; then
+elif [[ "$(uname -s)-$(uname -m)" == Linux-x86_64 && "$TARGET" == aarch64-unknown-openbsd ]]; then
   PINNED_CLANG="$(bash scripts/ci/fetch-pinned-clang.sh)"
   CLANG="$PINNED_CLANG/bin/clang"
   CLANGXX="$PINNED_CLANG/bin/clang++"
@@ -76,6 +76,16 @@ export "CC_${key}=$WRAP/cc"
 export "CXX_${key}=$WRAP/cxx"
 export "AR_${key}=$AR"
 export "CARGO_TARGET_${key_upper}_LINKER=$WRAP/cc"
+if [[ "$TARGET" == aarch64-unknown-openbsd ]]; then
+  # Both Ubuntu Clang 18 and Rust's pinned Clang 20 hit backend crashes while
+  # compiling large C dependencies for AArch64 OpenBSD at cc-rs' dev-profile
+  # -O0. Optimized codegen avoids those broken backend paths and matches the
+  # release packaging profile.
+  current_cflags="$(printenv "CFLAGS_${key}" || true)"
+  current_cxxflags="$(printenv "CXXFLAGS_${key}" || true)"
+  export "CFLAGS_${key}=${current_cflags:+$current_cflags }-O2"
+  export "CXXFLAGS_${key}=${current_cxxflags:+$current_cxxflags }-O2"
+fi
 export RUSTFLAGS="${RUSTFLAGS:-} -C linker=$WRAP/cc"
 
 exec "$@"

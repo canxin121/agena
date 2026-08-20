@@ -278,6 +278,43 @@
 #    define le32toh(x) ENDIAN_LE32(x)
 #    define le64toh(x) ENDIAN_LE64(x)
 
+#elif defined(__BYTE_ORDER__) && defined(__ORDER_LITTLE_ENDIAN__) && defined(__ORDER_BIG_ENDIAN__)
+
+/*
+ * Generic compiler fallback for targets such as Fuchsia that do not expose a
+ * BSD/Linux endian.h compatibility layer. Clang/GCC provide byte-order macros
+ * and constant-foldable byte-swap builtins on every architecture Rust uses.
+ */
+#    if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+#        define htobe16(x) __builtin_bswap16(x)
+#        define htole16(x) (x)
+#        define be16toh(x) __builtin_bswap16(x)
+#        define le16toh(x) (x)
+#        define htobe32(x) __builtin_bswap32(x)
+#        define htole32(x) (x)
+#        define be32toh(x) __builtin_bswap32(x)
+#        define le32toh(x) (x)
+#        define htobe64(x) __builtin_bswap64(x)
+#        define htole64(x) (x)
+#        define be64toh(x) __builtin_bswap64(x)
+#        define le64toh(x) (x)
+#    elif __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+#        define htobe16(x) (x)
+#        define htole16(x) __builtin_bswap16(x)
+#        define be16toh(x) (x)
+#        define le16toh(x) __builtin_bswap16(x)
+#        define htobe32(x) (x)
+#        define htole32(x) __builtin_bswap32(x)
+#        define be32toh(x) (x)
+#        define le32toh(x) __builtin_bswap32(x)
+#        define htobe64(x) (x)
+#        define htole64(x) __builtin_bswap64(x)
+#        define be64toh(x) (x)
+#        define le64toh(x) __builtin_bswap64(x)
+#    else
+#        error compiler byte order not supported
+#    endif
+
 #else
 
 #    error platform not supported

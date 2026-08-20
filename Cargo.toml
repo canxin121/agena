@@ -389,6 +389,7 @@ prometheus = { path = "third_party/prometheus" }
 portable-pty = { path = "third_party/portable-pty" }
 process-wrap = { path = "third_party/process-wrap" }
 fs4 = { path = "third_party/fs4" }
+getrandom-0-3 = { package = "getrandom", path = "third_party/getrandom-0.3" }
 getrandom = { path = "third_party/getrandom-0.4" }
 abi_stable = { path = "third_party/abi_stable" }
 blake3 = { path = "third_party/blake3" }
@@ -403,6 +404,9 @@ ring = { path = "third_party/ring" }
 serial2 = { path = "third_party/serial2" }
 tree-sitter = { path = "third_party/tree-sitter" }
 tokio = { path = "third_party/tokio" }
+winapi = { path = "third_party/winapi-0.3" }
+windows-sys-0-60 = { package = "windows-sys", path = "third_party/windows-sys-0.60.2" }
+windows-sys-0-61 = { package = "windows-sys", path = "third_party/windows-sys-0.61.2" }
 xxhash-rust = { path = "third_party/xxhash-rust" }
 spider_fingerprint = { path = "third_party/spider_fingerprint" }
 # Agena performs response-bearing terminal queries while the TUI is running.

@@ -63,7 +63,7 @@ function Set-EnvFromVsDevCmd {
   $TargetBin = Join-Path $VCToolsRoot "bin\$HostToolArch\$Arch"
   $Compiler = Join-Path $TargetBin "cl.exe"
   if (-not (Test-Path $Compiler)) {
-    throw "MSVC target compiler missing for host=$HostArch target=$Arch: $Compiler"
+    throw "MSVC target compiler missing for host=$HostArch target=${Arch}: $Compiler"
   }
   $env:PATH = "$TargetBin;$env:PATH"
   $env:VCToolsInstallDir = "$VCToolsRoot\"

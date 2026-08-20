@@ -66,7 +66,6 @@ function objectFieldValue(field: PluginSettingsNode): JsonValue {
   return record.value[field.id] ?? seed(field)
 }
 
-
 function seed(node: PluginSettingsNode): JsonValue {
   if (node.default !== undefined) return clonePluginJson(node.default)
   switch (node.kind) {
@@ -240,7 +239,10 @@ function textInputType() {
       <span v-if="node.secret" class="rounded bg-muted px-1.5 py-0.5 font-mono text-[9px] text-muted-foreground">
         {{ $st('secret reference') }}
       </span>
-      <span v-else-if="node.sensitive" class="rounded bg-muted px-1.5 py-0.5 font-mono text-[9px] text-muted-foreground">
+      <span
+        v-else-if="node.sensitive"
+        class="rounded bg-muted px-1.5 py-0.5 font-mono text-[9px] text-muted-foreground"
+      >
         {{ $st('sensitive') }}
       </span>
     </legend>
@@ -290,7 +292,11 @@ function textInputType() {
     </select>
 
     <div v-else-if="node.kind === 'multi_choice'" class="grid gap-2 sm:grid-cols-2">
-      <label v-for="option in options" :key="option.id" class="flex items-start gap-2 rounded-md border border-border/60 p-2 text-sm">
+      <label
+        v-for="option in options"
+        :key="option.id"
+        class="flex items-start gap-2 rounded-md border border-border/60 p-2 text-sm"
+      >
         <input
           class="mt-1"
           type="checkbox"
@@ -306,7 +312,11 @@ function textInputType() {
 
     <div v-else-if="node.kind === 'object'" class="space-y-4 rounded-md border border-border/70 p-3">
       <div v-if="fields.length === 0" class="text-xs text-muted-foreground">{{ $st('No fields.') }}</div>
-      <div v-for="field in fields" :key="field.id" class="space-y-2 border-b border-border/50 pb-4 last:border-b-0 last:pb-0">
+      <div
+        v-for="field in fields"
+        :key="field.id"
+        class="space-y-2 border-b border-border/50 pb-4 last:border-b-0 last:pb-0"
+      >
         <PluginContractEditor
           v-if="field.required || hasField(field)"
           :node="field"
@@ -332,8 +342,17 @@ function textInputType() {
         <div class="flex items-center justify-between gap-2">
           <span class="font-mono text-[10px] text-muted-foreground">{{ $st('Item') }} {{ index + 1 }}</span>
           <div class="flex gap-1">
-            <Button size="sm" variant="ghost" type="button" :disabled="index === 0" @click="moveListItem(index, -1)">{{ $st('Up') }}</Button>
-            <Button size="sm" variant="ghost" type="button" :disabled="index + 1 === arrayValue.length" @click="moveListItem(index, 1)">{{ $st('Down') }}</Button>
+            <Button size="sm" variant="ghost" type="button" :disabled="index === 0" @click="moveListItem(index, -1)">{{
+              $st('Up')
+            }}</Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              type="button"
+              :disabled="index + 1 === arrayValue.length"
+              @click="moveListItem(index, 1)"
+              >{{ $st('Down') }}</Button
+            >
             <Button size="sm" variant="ghost" type="button" @click="removeListItem(index)">{{ $st('Remove') }}</Button>
           </div>
         </div>
@@ -350,7 +369,11 @@ function textInputType() {
 
     <div v-else-if="node.kind === 'record' && recordValueNode" class="space-y-3 rounded-md border border-border/70 p-3">
       <div v-if="Object.keys(record).length === 0" class="text-xs text-muted-foreground">{{ $st('No entries.') }}</div>
-      <div v-for="key in Object.keys(record).sort()" :key="key" class="space-y-2 rounded-md border border-border/60 p-3">
+      <div
+        v-for="key in Object.keys(record).sort()"
+        :key="key"
+        class="space-y-2 rounded-md border border-border/60 p-3"
+      >
         <div class="flex items-center justify-between gap-2">
           <span class="font-mono text-xs">{{ key }}</span>
           <Button size="sm" variant="ghost" type="button" @click="removeRecordEntry(key)">{{ $st('Remove') }}</Button>
@@ -370,7 +393,9 @@ function textInputType() {
           :placeholder="$st('New entry name')"
           @keydown.enter.prevent="addRecordEntry"
         />
-        <Button size="sm" variant="outline" type="button" :disabled="!recordKey.trim()" @click="addRecordEntry">{{ $st('Add') }}</Button>
+        <Button size="sm" variant="outline" type="button" :disabled="!recordKey.trim()" @click="addRecordEntry">{{
+          $st('Add')
+        }}</Button>
       </div>
     </div>
 
@@ -394,8 +419,12 @@ function textInputType() {
             @update:model-value="setField(field, $event)"
           />
           <div v-if="!field.required" class="flex justify-end">
-            <Button v-if="hasField(field)" size="sm" variant="ghost" type="button" @click="removeField(field)">{{ $st('Unset') }}</Button>
-            <Button v-else size="sm" variant="outline" type="button" @click="enableField(field)">{{ $st('Set') }} {{ field.title }}</Button>
+            <Button v-if="hasField(field)" size="sm" variant="ghost" type="button" @click="removeField(field)">{{
+              $st('Unset')
+            }}</Button>
+            <Button v-else size="sm" variant="outline" type="button" @click="enableField(field)"
+              >{{ $st('Set') }} {{ field.title }}</Button
+            >
           </div>
         </div>
       </div>

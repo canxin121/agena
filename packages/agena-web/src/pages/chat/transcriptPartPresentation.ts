@@ -431,9 +431,7 @@ export function operationPresentation(part: TranscriptDisplayPart): OperationPre
     toolName,
     input,
     inputMarkdown: input === null ? '' : structuredValueMarkdown(input),
-    error:
-      operationFailureMessage(result.error ?? null) ||
-      operationFailureMessage(operation.error ?? null),
+    error: operationFailureMessage(result.error ?? null) || operationFailureMessage(operation.error ?? null),
     humanMarkdown,
     modelOutput: modelOutputText,
     stdout: stdout.text,

@@ -476,12 +476,8 @@ export function normalizeAgenaPart(
       const canonicalInput = asObject(asObject(content).input)
       const operationInput = asObject(invocation.input)
       const input = Object.keys(canonicalInput).length > 0 ? canonicalInput : operationInput
-      const output =
-        stringField(display, ['summary']) ||
-        stringField(operation, ['summary'])
-      const error =
-        operationFailureMessage(result.error) ||
-        operationFailureMessage(operation.error)
+      const output = stringField(display, ['summary']) || stringField(operation, ['summary'])
+      const error = operationFailureMessage(result.error) || operationFailureMessage(operation.error)
       const metaCandidate = {
         ...asObject(operation.metadata),
         ...asObject(result.metadata),

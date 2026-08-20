@@ -178,7 +178,12 @@ test('tool-call parts retain structured results when no display text exists', ()
     },
     presentation: { title: 'Repository status', summary: 'Working tree is clean', blocks: [] },
   })
-  assert.deepEqual(part?.state, { status: 'completed', input: {}, output: 'Working tree is clean', title: 'Repository status' })
+  assert.deepEqual(part?.state, {
+    status: 'completed',
+    input: {},
+    output: 'Working tree is clean',
+    title: 'Repository status',
+  })
 })
 
 test('tool-call parts honor Agena result lifecycle and presentation summary', () => {

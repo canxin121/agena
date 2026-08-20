@@ -11,9 +11,7 @@ function part(id: string, kind: string, content: Record<string, unknown>, state 
     agenaKind: kind,
     agenaRole: 'assistant',
     agenaContent: content,
-    ...(kind === 'tool_call'
-      ? { agenaPresentation: { title: 'Tool operation', summary: '', blocks: [] } }
-      : {}),
+    ...(kind === 'tool_call' ? { agenaPresentation: { title: 'Tool operation', summary: '', blocks: [] } } : {}),
   }
 }
 

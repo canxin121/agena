@@ -4,10 +4,7 @@ import { resolve } from 'node:path'
 import test from 'node:test'
 
 test('Plugin Marketplace uses server-owned GitHub search, lifecycle tasks, and install management', () => {
-  const source = readFileSync(
-    resolve(import.meta.dir, '../src/components/settings/PluginMarketplacePanel.vue'),
-    'utf8',
-  )
+  const source = readFileSync(resolve(import.meta.dir, '../src/components/settings/PluginMarketplacePanel.vue'), 'utf8')
 
   for (const endpoint of [
     '/api/v1/plugins/marketplace/search',
@@ -26,7 +23,7 @@ test('Plugin Marketplace uses server-owned GitHub search, lifecycle tasks, and i
   assert.ok(source.includes('require_signature'))
   assert.ok(source.includes('allow_unverified'))
   assert.ok(source.includes('waitForTask'))
-  assert.ok(source.includes('task.status === \'succeeded\''))
+  assert.ok(source.includes("task.status === 'succeeded'"))
   assert.ok(source.includes('plugin.repository'))
   assert.ok(source.includes('plugin.tags'))
   assert.ok(source.includes('latest_source_commit'))

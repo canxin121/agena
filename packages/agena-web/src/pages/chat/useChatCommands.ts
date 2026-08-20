@@ -143,13 +143,7 @@ export function useChatCommands(opts: {
     const operationId = text(operation.id)
     const slash = text(operation.slash)
     const name = slash.replace(/^\/+/, '').toLowerCase()
-    if (
-      !pluginId ||
-      !operationId ||
-      !name ||
-      /\s/.test(name) ||
-      operation.discoverability?.slash === false
-    ) {
+    if (!pluginId || !operationId || !name || /\s/.test(name) || operation.discoverability?.slash === false) {
       return null
     }
     const requiresArguments = operation.accepts_empty_input !== true

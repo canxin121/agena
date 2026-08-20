@@ -169,7 +169,11 @@ describe('TUI-parity part presentation', () => {
     const projected = operationPresentation(
       operationPart(
         { output: { payload: { text: 'raw text' } } },
-        { title: 'Complete', summary: 'Done', blocks: [{ type: 'log', stream: 'stdout', text: '## Complete\n\n- one' }] },
+        {
+          title: 'Complete',
+          summary: 'Done',
+          blocks: [{ type: 'log', stream: 'stdout', text: '## Complete\n\n- one' }],
+        },
       ),
     )
     expect(projected.stdout).toBe('## Complete\n\n- one')
@@ -184,7 +188,16 @@ describe('TUI-parity part presentation', () => {
         {
           title: 'cargo test',
           summary: '2 passed',
-          blocks: [{ type: 'command', command: 'cargo test', cwd: '/workspace', stdout: '**2 passed**', stderr: 'warning', exit_code: 0 }],
+          blocks: [
+            {
+              type: 'command',
+              command: 'cargo test',
+              cwd: '/workspace',
+              stdout: '**2 passed**',
+              stderr: 'warning',
+              exit_code: 0,
+            },
+          ],
         },
       ),
     )

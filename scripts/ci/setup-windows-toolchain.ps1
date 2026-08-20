@@ -169,7 +169,7 @@ function Set-EnvFromVsDevCmd {
     $SdkUcrtArm = Join-Path (Join-Path (Join-Path $UniversalCrtDir "Lib") $UniversalCrtVersion) "ucrt\arm"
     $MissingSdkArmDirs = @($SdkUmArm, $SdkUcrtArm) | Where-Object { -not (Test-Path $_) }
     if ($MissingSdkArmDirs.Count -gt 0) {
-      throw "ARM Windows SDK library directories missing for $TargetTriple: $($MissingSdkArmDirs -join ', ') (WindowsSdkDir=$WindowsSdkDir, WindowsSDKVersion=$WindowsSdkVersion, UniversalCRTSdkDir=$UniversalCrtDir, UCRTVersion=$UniversalCrtVersion)"
+      throw "ARM Windows SDK library directories missing for ${TargetTriple}: $($MissingSdkArmDirs -join ', ') (WindowsSdkDir=$WindowsSdkDir, WindowsSDKVersion=$WindowsSdkVersion, UniversalCRTSdkDir=$UniversalCrtDir, UCRTVersion=$UniversalCrtVersion)"
     }
     $TargetLibDirs += $SdkUmArm
     $TargetLibDirs += $SdkUcrtArm

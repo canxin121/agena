@@ -1032,27 +1032,28 @@ mod tests {
             crate::sdk::CommandBeforeOutcome::Continue(_)
         ));
 
-        let seen = contexts.lock().expect("command-before context lock");
-        assert_eq!(seen.len(), 1);
-        let context = &seen[0];
-        assert_eq!(
-            context.plugin_id.as_deref(),
-            Some("example.command-context")
-        );
-        assert_eq!(context.session_id, Some(41));
-        assert_eq!(context.call_id, Some(73));
-        assert_eq!(
-            context.workspace_root.as_deref(),
-            Some("/tmp/agena-workspace")
-        );
-        assert!(
-            context
-                .authority_token
-                .as_deref()
-                .is_some_and(|token| token.starts_with("ctx-")),
-            "command.before must inherit a host-issued callback authority"
-        );
-        drop(seen);
+        {
+            let seen = contexts.lock().expect("command-before context lock");
+            assert_eq!(seen.len(), 1);
+            let context = &seen[0];
+            assert_eq!(
+                context.plugin_id.as_deref(),
+                Some("example.command-context")
+            );
+            assert_eq!(context.session_id, Some(41));
+            assert_eq!(context.call_id, Some(73));
+            assert_eq!(
+                context.workspace_root.as_deref(),
+                Some("/tmp/agena-workspace")
+            );
+            assert!(
+                context
+                    .authority_token
+                    .as_deref()
+                    .is_some_and(|token| token.starts_with("ctx-")),
+                "command.before must inherit a host-issued callback authority"
+            );
+        }
 
         host.dispatch_command_after(crate::sdk::CommandAfterInput {
             session_id: Some(41),
@@ -1066,22 +1067,23 @@ mod tests {
         })
         .await
         .expect("dispatch command-after hook");
-        let seen = contexts.lock().expect("command hook context lock");
-        assert_eq!(seen.len(), 2);
-        let context = &seen[1];
-        assert_eq!(
-            context.plugin_id.as_deref(),
-            Some("example.command-context")
-        );
-        assert_eq!(context.session_id, Some(41));
-        assert!(
-            context
-                .authority_token
-                .as_deref()
-                .is_some_and(|token| token.starts_with("ctx-")),
-            "command.after must inherit a host-issued callback authority"
-        );
-        drop(seen);
+        {
+            let seen = contexts.lock().expect("command hook context lock");
+            assert_eq!(seen.len(), 2);
+            let context = &seen[1];
+            assert_eq!(
+                context.plugin_id.as_deref(),
+                Some("example.command-context")
+            );
+            assert_eq!(context.session_id, Some(41));
+            assert!(
+                context
+                    .authority_token
+                    .as_deref()
+                    .is_some_and(|token| token.starts_with("ctx-")),
+                "command.after must inherit a host-issued callback authority"
+            );
+        }
         host.shutdown().await;
     }
 

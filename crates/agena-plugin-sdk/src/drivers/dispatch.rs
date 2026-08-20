@@ -329,6 +329,62 @@ fn ok_json<T: Serialize>(value: &T) -> Result<Value> {
     serde_json::to_value(value).map_err(|e| PluginError::invalid_params(e.to_string()))
 }
 
+impl<P: Plugin> PluginDispatcher<P> {
+    /// Run a streaming tool invocation. Returns a stream id immediately
+    /// (the plugin's `tool_invoke_stream` runs in a background task) plus a
+    /// receiver of [`ToolStreamChunk`]s and a oneshot for the terminal
+    /// [`ToolStreamEnd`] (or error). Transports translate these into the
+    /// `tool.stream.chunk` / `tool.stream.end` notifications.
+    pub fn dispatch_stream(self: &std::sync::Arc<Self>, input: ToolInvokeInput) -> StreamHandle {
+        let stream_id = format!("stream-{}", _random_id());
+        let (tx, rx) = tokio::sync::mpsc::channel::<ToolStreamChunk>(64);
+        let (mut end_tx, end_rx) = tokio::sync::oneshot::channel::<Result<ToolStreamEnd>>();
+        let sink = ToolStreamSink::new(stream_id.clone(), tx);
+        let plugin = std::sync::Arc::clone(&self.plugin);
+        let inherited_context = crate::host_api::current_host_callback_context();
+        tokio::spawn(async move {
+            let ctx = crate::host_api::HostCallbackContext {
+                session_id: Some(input.session_id),
+                call_id: Some(input.call_id),
+                workspace_root: Some(input.workspace_root.clone()),
+                tool_name: Some(input.tool_name.clone()),
+                ..inherited_context.unwrap_or_default()
+            };
+            let invoke = crate::host_api::run_in_host_callback_context(
+                ctx,
+                plugin.tool_invoke_stream(input, sink),
+            );
+            let result = tokio::select! {
+                biased;
+                _ = end_tx.closed() => return,
+                result = invoke => result,
+            };
+            let _ = end_tx.send(result);
+        });
+        StreamHandle {
+            stream_id,
+            chunks: rx,
+            end: end_rx,
+        }
+    }
+}
+
+/// Handle to a tool stream.
+pub struct StreamHandle {
+    pub stream_id: String,
+    pub chunks: tokio::sync::mpsc::Receiver<ToolStreamChunk>,
+    pub end: tokio::sync::oneshot::Receiver<Result<ToolStreamEnd>>,
+}
+
+fn _random_id() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0);
+    format!("{nanos:x}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::PluginDispatcher;
@@ -390,60 +446,4 @@ mod tests {
         );
         assert_eq!(rendered.human.unwrap().blocks.len(), 1);
     }
-}
-
-impl<P: Plugin> PluginDispatcher<P> {
-    /// Run a streaming tool invocation. Returns a stream id immediately
-    /// (the plugin's `tool_invoke_stream` runs in a background task) plus a
-    /// receiver of [`ToolStreamChunk`]s and a oneshot for the terminal
-    /// [`ToolStreamEnd`] (or error). Transports translate these into the
-    /// `tool.stream.chunk` / `tool.stream.end` notifications.
-    pub fn dispatch_stream(self: &std::sync::Arc<Self>, input: ToolInvokeInput) -> StreamHandle {
-        let stream_id = format!("stream-{}", _random_id());
-        let (tx, rx) = tokio::sync::mpsc::channel::<ToolStreamChunk>(64);
-        let (mut end_tx, end_rx) = tokio::sync::oneshot::channel::<Result<ToolStreamEnd>>();
-        let sink = ToolStreamSink::new(stream_id.clone(), tx);
-        let plugin = std::sync::Arc::clone(&self.plugin);
-        let inherited_context = crate::host_api::current_host_callback_context();
-        tokio::spawn(async move {
-            let ctx = crate::host_api::HostCallbackContext {
-                session_id: Some(input.session_id),
-                call_id: Some(input.call_id),
-                workspace_root: Some(input.workspace_root.clone()),
-                tool_name: Some(input.tool_name.clone()),
-                ..inherited_context.unwrap_or_default()
-            };
-            let invoke = crate::host_api::run_in_host_callback_context(
-                ctx,
-                plugin.tool_invoke_stream(input, sink),
-            );
-            let result = tokio::select! {
-                biased;
-                _ = end_tx.closed() => return,
-                result = invoke => result,
-            };
-            let _ = end_tx.send(result);
-        });
-        StreamHandle {
-            stream_id,
-            chunks: rx,
-            end: end_rx,
-        }
-    }
-}
-
-/// Handle to a tool stream.
-pub struct StreamHandle {
-    pub stream_id: String,
-    pub chunks: tokio::sync::mpsc::Receiver<ToolStreamChunk>,
-    pub end: tokio::sync::oneshot::Receiver<Result<ToolStreamEnd>>,
-}
-
-fn _random_id() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos() as u64)
-        .unwrap_or(0);
-    format!("{nanos:x}")
 }

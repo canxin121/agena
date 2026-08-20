@@ -699,7 +699,8 @@ mod interaction_part_routing_tests {
                 "name": "plan.review",
                 "input": {},
                 "call_id": 5,
-                "state": "in_progress",
+                "state": "running",
+                "lifecycle": { "start_ms": 0 },
                 "user_input": {
                     "requests": [{
                         "request": request,

@@ -498,7 +498,7 @@ pub struct PartDelta {
     pub finished_at_ms: Option<i64>,
 }
 
-/// Outcome of [`PersistenceEngine::complete_run`] — how a run marker ends.
+/// Outcome of [`crate::store::PersistenceEngine::complete_run`] — how a run marker ends.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RunOutcome {
     /// `completed` | `failed` | `cancelled` (never a non-terminal state).
@@ -511,7 +511,7 @@ pub struct RunOutcome {
     pub provider_state: Option<Value>,
 }
 
-/// Result of [`PersistenceEngine::submit_user_run`].
+/// Result of [`crate::store::PersistenceEngine::submit_user_run`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct SubmitOutcome {
     /// The run marker part id (the run identity).
@@ -652,7 +652,7 @@ pub struct SessionCursor {
     pub id: i64,
 }
 
-/// Query for [`PersistenceEngine::list_session_summaries`].
+/// Query for [`crate::store::PersistenceEngine::list_session_summaries`].
 ///
 /// The listing surface (13.1 / 14.1) filters by workspace, optional parent,
 /// optional roots-only, optional title search, and pages newest-first by the
@@ -685,7 +685,7 @@ pub struct LeaseState {
     pub heartbeat_at_ms: i64,
 }
 
-/// Result of [`PersistenceEngine::try_acquire_lease`].
+/// Result of [`crate::store::PersistenceEngine::try_acquire_lease`].
 #[derive(Debug, Clone, PartialEq)]
 pub enum LeaseAcquire {
     /// This caller now owns the lease. Any stale in-flight run markers were
@@ -704,7 +704,7 @@ pub enum LeaseAcquire {
     },
 }
 
-/// Result of [`PersistenceEngine::reconcile`] (17.4 step 2c).
+/// Result of [`crate::store::PersistenceEngine::reconcile`] (17.4 step 2c).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ReconcileOutcome {
     /// Run markers marked `failed` (abort_reason = `process_restart`).
@@ -746,7 +746,7 @@ pub struct UsageRecord {
     pub detail_json: Option<Value>,
 }
 
-/// Query for [`PersistenceEngine::usage_stats`]. All shapes are pure SQL over
+/// Query for [`crate::store::PersistenceEngine::usage_stats`]. All shapes are pure SQL over
 /// index ranges (16.3).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct UsageQuery {

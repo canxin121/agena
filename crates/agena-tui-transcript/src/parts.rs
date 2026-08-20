@@ -1051,8 +1051,10 @@ mod tests {
                 serde_json::json!({
                     "name": "tools_search",
                     "input": {},
+                    "call_id": 4,
                     "state": "completed",
-                    "output": {"payload": {"text": "ok"}}
+                    "output": {"payload": {"text": "ok"}},
+                    "lifecycle": {"start_ms": 0}
                 }),
             ),
             run(7, "assistant", "in_progress"),
@@ -1064,8 +1066,10 @@ mod tests {
                 serde_json::json!({
                     "name": "tools_help",
                     "input": {},
+                    "call_id": 8,
                     "state": "completed",
-                    "output": {"payload": {"text": "ok"}}
+                    "output": {"payload": {"text": "ok"}},
+                    "lifecycle": {"start_ms": 0}
                 }),
             ),
             run(11, "assistant", "completed"),
@@ -1089,8 +1093,8 @@ mod tests {
         // state from the LAST marker (live turn shows InProgress while running).
         assert_eq!(entries[1].id, TranscriptEntryId::StoredMessage(3));
         assert_eq!(entries[1].state, RunStatus::Completed);
-        // All tool calls, results and the final text live in the one block;
-        // the final assistant text is the answer part, tool results stay plain.
+        // Every tool call and its result stay in one Operation activity; the
+        // final assistant text is the Answer activity in the same block.
         let kinds = entries[1]
             .parts
             .iter()
@@ -1101,7 +1105,7 @@ mod tests {
                 _ => "other",
             })
             .collect::<Vec<_>>();
-        assert_eq!(kinds, vec!["op", "text", "op", "text", "answer"]);
+        assert_eq!(kinds, vec!["op", "op", "answer"]);
     }
 
     #[test]

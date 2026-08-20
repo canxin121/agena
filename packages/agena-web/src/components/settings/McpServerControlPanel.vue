@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { RiRefreshLine } from '@remixicon/vue'
 
+import SettingsSaveBar from '@/components/settings/SettingsSaveBar.vue'
 import Button from '@/components/ui/Button.vue'
 import IconButton from '@/components/ui/IconButton.vue'
 import Input from '@/components/ui/Input.vue'
@@ -34,11 +35,6 @@ type McpOAuthStatus = {
   authorizationServerMetadata: string
 }
 
-async function saveOAuthIssuerUrl() {
-  const value = oauthIssuerUrl.value.trim()
-  await updateControl({ oauthIssuerUrl: value || null })
-}
-
 type McpServerControl = {
   enabled: boolean
   authEnabled: boolean
@@ -57,6 +53,7 @@ const loading = ref(false)
 const saving = ref(false)
 const error = ref('')
 const control = ref<McpServerControl | null>(null)
+const enabled = ref(false)
 const publicUrl = ref('')
 const oauthIssuerUrl = ref('')
 const authMode = ref<McpAuthMode>('none')
@@ -66,19 +63,31 @@ const oauthPassword = ref('')
 const copiedEndpoint = ref('')
 
 const oauth = computed(() => control.value?.oauth || null)
+const controlDirty = computed(() => {
+  const value = control.value
+  if (!value) return false
+  return (
+    enabled.value !== value.enabled ||
+    publicUrl.value.trim() !== String(value.publicUrl || '') ||
+    oauthIssuerUrl.value.trim() !== String(value.oauthIssuerUrl || '') ||
+    authMode.value !== value.authMode ||
+    anonymousAccess.value !== value.anonymousAccess ||
+    clientRegistration.value !== value.clientRegistration
+  )
+})
 const mcpSurfaceSummary = computed(() => {
   const value = control.value
   if (!value) return ''
-  if (!value.enabled) {
+  if (!enabled.value) {
     return st('The /mcp endpoint is disabled. The management API remains available so it can be enabled again.')
   }
-  if (value.authMode === 'oauth') {
+  if (authMode.value === 'oauth') {
     return st('The /mcp endpoint is available. Full OAuth protects the complete MCP transport.')
   }
-  if (value.authMode === 'mixed' && value.anonymousAccess === 'read_only') {
+  if (authMode.value === 'mixed' && anonymousAccess.value === 'read_only') {
     return st('The /mcp endpoint is available. Mixed auth keeps discovery and opted-in read-only tools public.')
   }
-  if (value.authMode === 'mixed') {
+  if (authMode.value === 'mixed') {
     return st('The /mcp endpoint is available. Mixed auth keeps discovery public and protects every tool call.')
   }
   return st('The /mcp endpoint is available. MCP calls are anonymous.')
@@ -139,6 +148,7 @@ function errorMessage(value: unknown): string {
 
 function applyControl(value: McpServerControl) {
   control.value = value
+  enabled.value = value.enabled
   publicUrl.value = value.publicUrl || ''
   oauthIssuerUrl.value = value.oauthIssuerUrl || ''
   authMode.value = value.authMode || (value.authEnabled ? 'oauth' : 'none')
@@ -159,7 +169,8 @@ async function copyEndpoint(label: string, value: string | undefined) {
   }
 }
 
-async function refresh() {
+async function refresh(force = false) {
+  if (!force && controlDirty.value && !window.confirm(st('Discard unsaved MCP changes and refresh?'))) return
   loading.value = true
   error.value = ''
   try {
@@ -205,28 +216,28 @@ async function updateControl(body: {
   }
 }
 
-async function toggleEnabled() {
-  if (!control.value) return
-  await updateControl({ enabled: !control.value.enabled })
+function toggleEnabled() {
+  enabled.value = !enabled.value
 }
 
-async function saveAuthMode() {
-  await updateControl({ authMode: authMode.value })
+async function saveControlDraft() {
+  const highRisk =
+    enabled.value &&
+    (authMode.value === 'none' || anonymousAccess.value === 'read_only' || clientRegistration.value === 'cimd_and_dcr')
+  if (highRisk && !window.confirm(st('Apply this high-risk MCP configuration?'))) return
+  await updateControl({
+    enabled: enabled.value,
+    authMode: authMode.value,
+    anonymousAccess: anonymousAccess.value,
+    publicUrl: publicUrl.value.trim() || null,
+    oauthIssuerUrl: oauthIssuerUrl.value.trim() || null,
+    clientRegistration: clientRegistration.value,
+  })
 }
 
-async function saveAnonymousAccess() {
-  await updateControl({ anonymousAccess: anonymousAccess.value })
+function discardControlDraft() {
+  if (control.value) applyControl(control.value)
 }
-
-async function saveClientRegistration() {
-  await updateControl({ clientRegistration: clientRegistration.value })
-}
-
-async function savePublicUrl() {
-  const value = publicUrl.value.trim()
-  await updateControl({ publicUrl: value || null })
-}
-
 async function setPassword() {
   const password = oauthPassword.value
   if (!password.trim() || saving.value) return
@@ -263,7 +274,7 @@ async function clearPassword() {
 }
 
 onMounted(() => {
-  void refresh()
+  void refresh(true)
 })
 </script>
 
@@ -314,8 +325,8 @@ onMounted(() => {
             {{ mcpSurfaceSummary }}
           </div>
         </div>
-        <Button :variant="control.enabled ? 'outline' : 'default'" :disabled="saving" @click="toggleEnabled">
-          {{ control.enabled ? $st('Disable MCP') : $st('Enable MCP') }}
+        <Button :variant="enabled ? 'outline' : 'default'" :disabled="saving" @click="toggleEnabled">
+          {{ enabled ? $st('Disable MCP') : $st('Enable MCP') }}
         </Button>
       </div>
 
@@ -339,16 +350,13 @@ onMounted(() => {
 
       <div class="grid gap-2">
         <div class="text-sm font-medium">{{ $st('Public MCP resource URL') }}</div>
-        <div class="flex flex-col gap-2 sm:flex-row">
+        <div>
           <Input
             v-model="publicUrl"
             class="font-mono text-xs"
             placeholder="https://your-domain.example/mcp or https://tunnel-service.../v1/mcp/tunnel_id"
             :disabled="saving"
           />
-          <Button class="shrink-0" variant="outline" :disabled="saving" @click="savePublicUrl">{{
-            $st('Save URL')
-          }}</Button>
         </div>
         <div class="text-xs text-muted-foreground">
           {{ $st('Enter the canonical HTTPS MCP resource. Secure MCP Tunnel URLs may include the full') }}
@@ -364,16 +372,13 @@ onMounted(() => {
 
       <div class="grid gap-2">
         <div class="text-sm font-medium">{{ $st('OAuth issuer URL') }}</div>
-        <div class="flex flex-col gap-2 sm:flex-row">
+        <div>
           <Input
             v-model="oauthIssuerUrl"
             class="font-mono text-xs"
             placeholder="https://auth.your-domain.example"
             :disabled="saving"
           />
-          <Button class="shrink-0" variant="outline" :disabled="saving" @click="saveOAuthIssuerUrl">{{
-            $st('Save issuer')
-          }}</Button>
         </div>
         <div class="text-xs text-muted-foreground">
           {{ $st('This is the stable authorization-server identity placed in OAuth discovery, signed access-token') }}
@@ -388,7 +393,7 @@ onMounted(() => {
 
       <div class="grid gap-2">
         <div class="text-sm font-medium">{{ $st('MCP authentication mode') }}</div>
-        <div class="flex flex-col gap-2 sm:flex-row sm:items-end">
+        <div>
           <OptionPicker
             v-model="authMode"
             class="min-w-0 flex-1"
@@ -397,9 +402,6 @@ onMounted(() => {
             :title="$st('MCP authentication mode')"
             :disabled="saving"
           />
-          <Button class="shrink-0" variant="outline" :disabled="saving" @click="saveAuthMode">{{
-            $st('Save auth mode')
-          }}</Button>
         </div>
         <div
           v-if="authMode === 'none'"
@@ -422,7 +424,7 @@ onMounted(() => {
 
       <div v-if="authMode === 'mixed'" class="grid gap-2">
         <div class="text-sm font-medium">{{ $st('Anonymous tool access in mixed mode') }}</div>
-        <div class="flex flex-col gap-2 sm:flex-row sm:items-end">
+        <div>
           <OptionPicker
             v-model="anonymousAccess"
             class="min-w-0 flex-1"
@@ -431,9 +433,6 @@ onMounted(() => {
             :title="$st('Mixed-auth anonymous tool access')"
             :disabled="saving"
           />
-          <Button class="shrink-0" variant="outline" :disabled="saving" @click="saveAnonymousAccess">{{
-            $st('Save anonymous access')
-          }}</Button>
         </div>
         <div
           v-if="anonymousAccess === 'read_only'"
@@ -452,7 +451,7 @@ onMounted(() => {
 
       <div class="grid gap-2">
         <div class="text-sm font-medium">{{ $st('OAuth client registration') }}</div>
-        <div class="flex flex-col gap-2 sm:flex-row sm:items-end">
+        <div>
           <OptionPicker
             v-model="clientRegistration"
             class="min-w-0 flex-1"
@@ -461,9 +460,6 @@ onMounted(() => {
             :title="$st('OAuth client registration')"
             :disabled="saving"
           />
-          <Button class="shrink-0" variant="outline" :disabled="saving" @click="saveClientRegistration">{{
-            $st('Save registration')
-          }}</Button>
         </div>
         <div
           v-if="clientRegistration === 'cimd_and_dcr'"
@@ -477,7 +473,17 @@ onMounted(() => {
         </div>
       </div>
 
-      <div v-if="control.authMode !== 'none'" class="grid gap-3 border-t border-border/60 pt-4">
+      <SettingsSaveBar
+        :dirty="controlDirty"
+        :saving="saving"
+        :error="error"
+        :save-label="$st('Save MCP configuration')"
+        sticky
+        @save="saveControlDraft"
+        @discard="discardControlDraft"
+      />
+
+      <div v-if="authMode !== 'none'" class="grid gap-3 border-t border-border/60 pt-4">
         <div>
           <div class="text-sm font-medium">{{ $st('OAuth authorization') }}</div>
           <div class="mt-1 text-xs text-muted-foreground">
@@ -548,7 +554,7 @@ onMounted(() => {
         </div>
       </div>
 
-      <details v-if="control.authMode !== 'none' && oauth" class="border-t border-border/60 pt-4">
+      <details v-if="authMode !== 'none' && oauth" class="border-t border-border/60 pt-4">
         <summary class="cursor-pointer text-sm font-medium">{{ $st('OAuth discovery endpoints') }}</summary>
         <dl class="mt-3 grid gap-2 text-xs">
           <div

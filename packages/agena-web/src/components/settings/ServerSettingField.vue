@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
-import { RiDeleteBinLine, RiRefreshLine, RiSave3Line } from '@remixicon/vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { RiCheckboxCircleLine, RiDeleteBinLine, RiLoader4Line, RiRefreshLine } from '@remixicon/vue'
 
 import Button from '@/components/ui/Button.vue'
 import IconButton from '@/components/ui/IconButton.vue'
@@ -73,6 +73,8 @@ const saving = ref(false)
 const error = ref('')
 const sources = ref<RuntimeSettingsReadBundle | null>(null)
 const localValue = ref<string | number | boolean>(props.defaultValue)
+const savedValue = ref<string | number | boolean>(props.defaultValue)
+let autoSaveTimer: ReturnType<typeof setTimeout> | null = null
 
 const selectOptions = computed<SettingOption[]>(() => {
   if (props.kind !== 'select') return props.options
@@ -91,6 +93,7 @@ const workspaceResponse = computed<RuntimeSettingReadResponse | null>(() => sour
 const hasOverride = computed(() =>
   hasPersistedSetting(props.targetLayer === 'workspace' ? workspaceResponse.value : globalResponse.value),
 )
+const dirty = computed(() => JSON.stringify(localValue.value) !== JSON.stringify(savedValue.value))
 
 function normalizeLocal(value: JsonValue): string | number | boolean {
   if (props.kind === 'boolean') {
@@ -108,6 +111,7 @@ function normalizeLocal(value: JsonValue): string | number | boolean {
 function syncLocal() {
   const effective = settingValue(effectiveResponse.value, props.defaultValue)
   localValue.value = normalizeLocal(effective as JsonValue)
+  savedValue.value = localValue.value
 }
 
 async function refresh() {
@@ -137,7 +141,8 @@ function serializedValue(): JsonValue {
 }
 
 async function save() {
-  if (busy.value) return
+  if (busy.value || !dirty.value) return
+  clearAutoSaveTimer()
   saving.value = true
   error.value = ''
   try {
@@ -181,17 +186,50 @@ async function clearOverride() {
   }
 }
 
+function clearAutoSaveTimer() {
+  if (autoSaveTimer !== null) {
+    clearTimeout(autoSaveTimer)
+    autoSaveTimer = null
+  }
+}
+
+function scheduleAutoSave(delay = 650) {
+  clearAutoSaveTimer()
+  autoSaveTimer = setTimeout(() => {
+    autoSaveTimer = null
+    void save()
+  }, delay)
+}
+
+function flushAutoSave() {
+  clearAutoSaveTimer()
+  void save()
+}
+
 function onNumberInput(event: Event) {
   const target = event.target as HTMLInputElement
   localValue.value = target.value === '' ? 0 : Number(target.value)
+  scheduleAutoSave()
 }
 
 function onTextInput(event: Event) {
   localValue.value = (event.target as HTMLInputElement).value
+  scheduleAutoSave()
+}
+
+function onBooleanCheckbox(event: Event) {
+  localValue.value = (event.target as HTMLInputElement).checked
+  scheduleAutoSave(0)
 }
 
 function onBooleanSelect(value: string) {
   localValue.value = value === 'true' ? true : value === 'false' ? false : ''
+  scheduleAutoSave(0)
+}
+
+function onSelectValue(value: string) {
+  localValue.value = value
+  scheduleAutoSave(0)
 }
 
 function effectiveLabel(response: RuntimeSettingReadResponse | null): string {
@@ -210,6 +248,7 @@ watch(
 )
 
 onMounted(() => void refresh())
+onBeforeUnmount(clearAutoSaveTimer)
 </script>
 
 <template>
@@ -240,7 +279,7 @@ onMounted(() => void refresh())
 
     <div class="flex min-w-0 flex-wrap items-end gap-2">
       <label v-if="kind === 'boolean' && !includeEmpty" class="inline-flex min-h-9 items-center gap-2 text-sm">
-        <input v-model="localValue" type="checkbox" :disabled="busy" />
+        <input :checked="localValue === true" type="checkbox" :disabled="busy" @change="onBooleanCheckbox" />
         <span>{{ localValue ? $st('Enabled') : $st('Disabled') }}</span>
       </label>
       <OptionPicker
@@ -268,7 +307,7 @@ onMounted(() => void refresh())
         :disabled="busy"
         :monospace="monospace"
         class="min-w-[14rem] flex-1"
-        @update:model-value="localValue = $event"
+        @update:model-value="onSelectValue"
       />
       <input
         v-else-if="kind === 'number'"
@@ -278,6 +317,8 @@ onMounted(() => void refresh())
         :disabled="busy"
         class="h-9 min-w-[10rem] flex-1 rounded-md border border-input bg-transparent px-3 text-sm outline-none focus:border-ring"
         @input="onNumberInput"
+        @blur="flushAutoSave"
+        @keydown.enter="flushAutoSave"
       />
       <input
         v-else
@@ -290,11 +331,17 @@ onMounted(() => void refresh())
           monospace ? 'font-mono' : '',
         ]"
         @input="onTextInput"
+        @blur="flushAutoSave"
+        @keydown.enter="flushAutoSave"
       />
-      <Button size="sm" :disabled="busy" @click="save">
-        <RiSave3Line class="mr-1.5 h-4 w-4" />
-        {{ saving ? $st('Saving…') : $st('Save') }}
-      </Button>
+      <div class="inline-flex min-h-8 items-center gap-1.5 px-1 text-[11px]" aria-live="polite">
+        <RiLoader4Line v-if="saving" class="h-3.5 w-3.5 animate-spin text-primary" />
+        <span v-else-if="dirty" class="h-1.5 w-1.5 rounded-full bg-amber-500" />
+        <RiCheckboxCircleLine v-else class="h-3.5 w-3.5 text-emerald-500" />
+        <span :class="error ? 'text-destructive' : 'text-muted-foreground'">{{
+          saving ? $st('Saving automatically…') : dirty ? $st('Waiting to save…') : $st('Saved automatically')
+        }}</span>
+      </div>
       <Button
         v-if="hasOverride"
         variant="ghost"

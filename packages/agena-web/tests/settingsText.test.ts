@@ -10,7 +10,7 @@ test('Settings source-string translations interpolate named parameters in locale
       layer: '工作区',
       path: 'permission',
     }),
-    '删除工作区覆盖 permission？',
+    '删除工作区配置层中 permission 的覆盖？',
   )
   assert.equal(settingsTextForLocale('fr-FR', 'Page {page} of {pages}', { page: 2, pages: 8 }), 'Page 2 de 8')
 })

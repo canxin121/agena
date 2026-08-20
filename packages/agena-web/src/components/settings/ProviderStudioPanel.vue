@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { RiAddLine, RiDeleteBinLine, RiRefreshLine, RiSave3Line } from '@remixicon/vue'
+import { RiAddLine, RiCloudLine, RiDeleteBinLine, RiEditLine, RiPlugLine, RiRefreshLine } from '@remixicon/vue'
 
+import SettingsDisclosureRow from '@/components/settings/SettingsDisclosureRow.vue'
+import SettingsSaveBar from '@/components/settings/SettingsSaveBar.vue'
 import Button from '@/components/ui/Button.vue'
 import IconButton from '@/components/ui/IconButton.vue'
 import Input from '@/components/ui/Input.vue'
@@ -102,7 +104,6 @@ const editingModel = ref<{ adapterId: string; modelId: string } | null>(null)
 const modelValue = ref<LooseRecord | null>(null)
 const modelJson = ref('')
 const modelLoading = ref(false)
-const modelSaving = ref(false)
 const modelError = ref('')
 const modelConfigValues = ref<Record<string, LooseRecord>>({})
 const configuredAdapterIds = ref<Set<string>>(new Set())
@@ -110,6 +111,12 @@ const configuredModelKeys = ref<Set<string>>(new Set())
 const mutationBusy = ref(false)
 const authPolling = ref(false)
 const authRequestInFlight = ref(false)
+const expandedProviderKey = ref('')
+const expandedAdapterIds = ref<Set<string>>(new Set())
+const savedEditorState = ref('')
+const pendingDeletedAdapterIds = ref<Set<string>>(new Set())
+const pendingDeletedModelKeys = ref<Set<string>>(new Set())
+const NEW_PROVIDER_ROW_KEY = '__new_provider__'
 let authPollTimer: ReturnType<typeof setTimeout> | null = null
 let draftRequestGeneration = 0
 let modelListingGeneration = 0
@@ -459,6 +466,75 @@ function modelKey(adapterId: string, modelId: string): string {
   return `${adapterId}\u001f${modelId}`
 }
 
+type ProviderRow = {
+  key: string
+  providerId: string
+  summary: ProviderSummary | null
+  isNew: boolean
+}
+
+const providerRows = computed<ProviderRow[]>(() => {
+  const rows = providers.value.map((provider) => ({
+    key: provider.provider_id,
+    providerId: provider.provider_id,
+    summary: provider,
+    isNew: false,
+  }))
+  if (draft.value && !String(draft.value.source_provider_id || '').trim()) {
+    rows.unshift({ key: NEW_PROVIDER_ROW_KEY, providerId: '', summary: null, isNew: true })
+  }
+  return rows
+})
+
+const providerDirty = computed(() => {
+  if (!draft.value) return false
+  if (!String(draft.value.source_provider_id || '').trim()) return true
+  return Boolean(
+    pendingDeletedAdapterIds.value.size ||
+    pendingDeletedModelKeys.value.size ||
+    (savedEditorState.value && providerEditorStateFingerprint() !== savedEditorState.value),
+  )
+})
+
+const adapterRows = computed<AdapterModels[]>(() => {
+  const byId = new Map(adapterModels.value.map((adapter) => [adapter.adapter_id, adapter]))
+  return [...new Set([...adapterCandidates.value, ...byId.keys()])].map((adapterId) => {
+    const existing = byId.get(adapterId)
+    return {
+      adapter_id: adapterId,
+      enabled: selectedAdapterIds.value.has(adapterId),
+      resolved_base_url: existing?.resolved_base_url,
+      failure: existing?.failure,
+      models: existing?.models || [],
+    }
+  })
+})
+
+function providerRowLabel(row: ProviderRow): string {
+  if (row.isNew) return String(draft.value?.provider_id || '').trim() || st('New provider')
+  return row.summary ? providerLabel(row.summary) : row.providerId
+}
+
+function providerRowSummary(row: ProviderRow): string {
+  if (row.isNew) return st('Not saved yet')
+  const adapters = row.summary?.adapters || []
+  const enabled = adapters.filter((adapter) => adapter.enabled).length
+  return st('{enabled} enabled · {total} adapters', { enabled: enabled, total: adapters.length })
+}
+
+function adapterRowSummary(adapter: AdapterModels): string {
+  if (adapterFailure(adapter)) return adapterFailure(adapter)
+  const route = adapter.resolved_base_url ? ` · ${adapter.resolved_base_url}` : ''
+  return st('{count} models{route}', { count: adapter.models.length, route: route })
+}
+
+function toggleAdapterRow(adapterId: string) {
+  const next = new Set(expandedAdapterIds.value)
+  if (next.has(adapterId)) next.delete(adapterId)
+  else next.add(adapterId)
+  expandedAdapterIds.value = next
+}
+
 function canPersistExistingProvider(): boolean {
   const source = String(draft.value?.source_provider_id || '').trim()
   const providerId = String(draft.value?.provider_id || '').trim()
@@ -521,7 +597,6 @@ function clearModelStudioState() {
   manualModelAdapterId.value = ''
   editingModel.value = null
   modelLoading.value = false
-  modelSaving.value = false
   modelValue.value = null
   modelJson.value = ''
   modelError.value = ''
@@ -938,11 +1013,17 @@ async function loadDraft(providerId?: string) {
         .flatMap((adapter) => adapter.models.map((model) => modelKey(adapter.adapter_id, model.id))),
     )
     syncManualModelAdapter()
+    expandedAdapterIds.value = new Set([...selectedAdapterIds.value].slice(0, 1))
+    pendingDeletedAdapterIds.value = new Set()
+    pendingDeletedModelKeys.value = new Set()
+    savedEditorState.value = providerEditorStateFingerprint()
+    expandedProviderKey.value = providerId || NEW_PROVIDER_ROW_KEY
     if (configuredModelsError) error.value = configuredModelsError
   } catch (reason) {
     if (requestGeneration !== draftRequestGeneration) return
     error.value = reason instanceof Error ? reason.message : String(reason)
     draft.value = null
+    savedEditorState.value = ''
   } finally {
     if (requestGeneration === draftRequestGeneration) loading.value = false
   }
@@ -986,6 +1067,13 @@ async function listDraftModels() {
           )
     if (requestGeneration !== modelListingGeneration) return
     const refreshed = normalizeProviderAdapterModels<ProviderModel>(response)
+      .filter((adapter) => !pendingDeletedAdapterIds.value.has(adapter.adapter_id))
+      .map((adapter) => ({
+        ...adapter,
+        models: adapter.models.filter(
+          (model) => !pendingDeletedModelKeys.value.has(modelKey(adapter.adapter_id, model.id)),
+        ),
+      }))
     const byAdapter = new Map(adapterModels.value.map((adapter) => [adapter.adapter_id, adapter]))
     for (const adapter of refreshed) byAdapter.set(adapter.adapter_id, adapter)
     adapterModels.value = [...byAdapter.values()]
@@ -1015,17 +1103,15 @@ async function listDraftModels() {
 }
 
 function toggleAdapter(adapterId: string) {
-  if (
-    mutationBusy.value ||
-    listingModels.value ||
-    saving.value ||
-    modelSaving.value ||
-    !supportedAdapterIds.value.has(adapterId)
-  )
-    return
+  if (mutationBusy.value || listingModels.value || saving.value || !supportedAdapterIds.value.has(adapterId)) return
   const next = new Set(selectedAdapterIds.value)
   if (next.has(adapterId)) next.delete(adapterId)
-  else next.add(adapterId)
+  else {
+    next.add(adapterId)
+    const deleted = new Set(pendingDeletedAdapterIds.value)
+    deleted.delete(adapterId)
+    pendingDeletedAdapterIds.value = deleted
+  }
   selectedAdapterIds.value = next
   syncManualModelAdapter()
   // Adapter selection is a local draft edit. Model discovery is an explicit
@@ -1036,7 +1122,7 @@ function toggleAdapter(adapterId: string) {
 }
 
 function toggleModel(adapterId: string, modelId: string) {
-  if (mutationBusy.value || listingModels.value || saving.value || modelSaving.value) return
+  if (mutationBusy.value || listingModels.value || saving.value) return
   const key = modelKey(adapterId, modelId)
   const next = new Set(selectedModelKeys.value)
   if (next.has(key)) next.delete(key)
@@ -1100,7 +1186,7 @@ function setDefaultModel(value: string) {
 }
 
 async function saveDraft() {
-  if (!draft.value || saving.value || mutationBusy.value || listingModels.value || modelSaving.value) return
+  if (!draft.value || saving.value || mutationBusy.value || listingModels.value) return
   const draftSnapshot = clone(draft.value)
   const submittedDraftJson = JSON.stringify(draftSnapshot)
   const submittedDraftGeneration = draftRequestGeneration
@@ -1108,6 +1194,8 @@ async function saveDraft() {
   const selectedAdapterIdsSnapshot = [...selectedAdapterIds.value]
   const selectedModelKeysSnapshot = [...selectedModelKeys.value]
   const modelConfigValuesSnapshot = clone(modelConfigValues.value)
+  const deletedAdapterIdsSnapshot = [...pendingDeletedAdapterIds.value]
+  const deletedModelKeysSnapshot = [...pendingDeletedModelKeys.value]
   const submittedEditorState = providerEditorStateFingerprint(
     draftSnapshot,
     adapterModelListsSnapshot,
@@ -1133,6 +1221,27 @@ async function saveDraft() {
     const responseRecord = record(response)
     const savedResult = record(responseRecord.ProviderDraftSaved ?? responseRecord.provider_draft_saved)
     const savedId = String(savedResult.provider_id || draftSnapshot.provider_id || '').trim()
+    const persistedDraftSnapshot = {
+      ...draftSnapshot,
+      provider_id: savedId,
+      source_provider_id: savedId,
+    }
+    for (const key of deletedModelKeysSnapshot) {
+      const [adapterId, modelId] = key.split('\u001f')
+      if (!adapterId || !modelId || deletedAdapterIdsSnapshot.includes(adapterId)) continue
+      await apiJson('/api/v1/provider-studio/delete-model', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ draft: persistedDraftSnapshot, adapter_id: adapterId, model_id: modelId }),
+      })
+    }
+    for (const adapterId of deletedAdapterIdsSnapshot) {
+      await apiJson('/api/v1/provider-studio/delete-adapter', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ draft: persistedDraftSnapshot, adapter_id: adapterId }),
+      })
+    }
     toasts.push('success', st('Provider configuration saved'))
     await loadProviders()
     // Keep edits made while the request was in flight in the editor. A late
@@ -1188,7 +1297,13 @@ async function deleteProvider() {
       providerDraftIdentity(draft.value) === submittedDraftIdentity &&
       providerEditorStateFingerprint() === submittedEditorState
     ) {
-      await loadDraft()
+      const nextProviderId = providers.value[0]?.provider_id
+      if (nextProviderId) await loadDraft(nextProviderId)
+      else {
+        draft.value = null
+        expandedProviderKey.value = ''
+        savedEditorState.value = ''
+      }
     }
   } catch (reason) {
     error.value = reason instanceof Error ? reason.message : String(reason)
@@ -1262,7 +1377,7 @@ async function startAuth(action: 'start' | 'continue', silent = false) {
 }
 
 function addManualModel() {
-  if (mutationBusy.value || listingModels.value || saving.value || modelSaving.value) return
+  if (mutationBusy.value || listingModels.value || saving.value) return
   const adapterId = String(manualModelAdapterId.value || draft.value?.default_adapter || '').trim()
   const modelId = newModelId.value.trim()
   if (!draft.value || !adapterId || !modelId || !selectedAdapterIds.value.has(adapterId)) {
@@ -1287,7 +1402,11 @@ function addManualModel() {
   if (adapter) adapter.models = [...adapter.models.filter((item) => item.id !== modelId), model]
   else adapterModels.value = [...adapterModels.value, { adapter_id: adapterId, enabled: true, models: [model] }]
   selectedAdapterIds.value = new Set([...selectedAdapterIds.value, adapterId])
-  selectedModelKeys.value = new Set([...selectedModelKeys.value, modelKey(adapterId, modelId)])
+  const key = modelKey(adapterId, modelId)
+  selectedModelKeys.value = new Set([...selectedModelKeys.value, key])
+  const deleted = new Set(pendingDeletedModelKeys.value)
+  deleted.delete(key)
+  pendingDeletedModelKeys.value = deleted
   newModelId.value = ''
 }
 
@@ -1299,6 +1418,13 @@ async function openModelEditor(adapterId: string, model: ProviderModel) {
   modelError.value = ''
   modelValue.value = null
   modelJson.value = ''
+  const staged = modelConfigValues.value[modelKey(adapterId, model.id)]
+  if (staged) {
+    modelValue.value = canonicalizeModelConfig(staged)
+    modelJson.value = JSON.stringify(modelValue.value, null, 2)
+    modelLoading.value = false
+    return
+  }
   try {
     const response = await apiJson<{ value?: JsonValue }>('/api/v1/provider-studio/draft/model', {
       method: 'POST',
@@ -1322,7 +1448,6 @@ function closeModelEditor() {
   ++modelEditorGeneration
   editingModel.value = null
   modelLoading.value = false
-  modelSaving.value = false
   modelValue.value = null
   modelJson.value = ''
   modelError.value = ''
@@ -1462,6 +1587,7 @@ function setModelFieldValue(key: string, value: string | number | boolean) {
   }
   modelValue.value = next
   modelJson.value = JSON.stringify(next, null, 2)
+  stageCurrentModelValue(next)
   modelError.value = ''
 }
 
@@ -1478,10 +1604,19 @@ function applyModelJson() {
   try {
     const next = syncModelValueFromJson()
     modelJson.value = JSON.stringify(next, null, 2)
+    stageCurrentModelValue(next)
     modelError.value = ''
   } catch (reason) {
     modelError.value = reason instanceof Error ? reason.message : String(reason)
   }
+}
+
+function stageCurrentModelValue(value: LooseRecord) {
+  const editing = editingModel.value
+  if (!editing) return
+  const key = modelKey(editing.adapterId, editing.modelId)
+  modelConfigValues.value = { ...modelConfigValues.value, [key]: clone(value) }
+  updateModelRowFromValue(editing.adapterId, editing.modelId, value)
 }
 
 function updateModelRowFromValue(adapterId: string, modelId: string, value: LooseRecord) {
@@ -1501,70 +1636,6 @@ function updateModelRowFromValue(adapterId: string, modelId: string, value: Loos
   })
 }
 
-async function saveModel() {
-  if (!draft.value || !editingModel.value || modelSaving.value || mutationBusy.value) return
-  const editorGeneration = modelEditorGeneration
-  const draftSnapshot = clone(draft.value)
-  const draftIdentity = providerDraftIdentity(draftSnapshot)
-  const draftSnapshotJson = JSON.stringify(draftSnapshot)
-  const persist = canPersistExistingProvider()
-  const editing = { ...editingModel.value }
-  const key = modelKey(editing.adapterId, editing.modelId)
-  const previousConfig = modelConfigValues.value[key]
-  modelSaving.value = true
-  mutationBusy.value = true
-  modelError.value = ''
-  try {
-    const parsed = syncModelValueFromJson()
-    const submittedModelJson = modelJson.value
-    if (persist) {
-      await apiJson('/api/v1/provider-studio/save-model', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          draft: draftSnapshot,
-          adapter_id: editing.adapterId,
-          model_id: editing.modelId,
-          model_value: parsed,
-        }),
-      })
-      if (
-        editorGeneration !== modelEditorGeneration ||
-        providerDraftIdentity(draft.value) !== draftIdentity ||
-        JSON.stringify(draft.value) !== draftSnapshotJson ||
-        modelJson.value !== submittedModelJson
-      )
-        return
-      toasts.push('success', st('Provider model configuration saved'))
-      configuredAdapterIds.value = new Set([...configuredAdapterIds.value, editing.adapterId])
-      configuredModelKeys.value = new Set([...configuredModelKeys.value, key])
-    } else if (
-      editorGeneration !== modelEditorGeneration ||
-      providerDraftIdentity(draft.value) !== draftIdentity ||
-      JSON.stringify(draft.value) !== draftSnapshotJson ||
-      modelJson.value !== submittedModelJson
-    ) {
-      return
-    }
-    modelConfigValues.value = {
-      ...modelConfigValues.value,
-      [key]: clone(parsed),
-    }
-    updateModelRowFromValue(editing.adapterId, editing.modelId, parsed)
-    if (!persist) toasts.push('success', st('Model configuration staged; save the Provider to apply it'))
-    modelValue.value = record(parsed)
-    modelJson.value = JSON.stringify(modelValue.value, null, 2)
-  } catch (reason) {
-    if (persist && previousConfig !== undefined && editorGeneration === modelEditorGeneration) {
-      modelConfigValues.value = { ...modelConfigValues.value, [key]: previousConfig }
-    }
-    modelError.value = reason instanceof Error ? reason.message : String(reason)
-  } finally {
-    if (editorGeneration === modelEditorGeneration) modelSaving.value = false
-    mutationBusy.value = false
-  }
-}
-
 async function deleteModel(adapterId: string, modelId: string) {
   if (
     !draft.value ||
@@ -1572,55 +1643,29 @@ async function deleteModel(adapterId: string, modelId: string) {
     !window.confirm(st('Delete model {adapterId}/{modelId}?', { adapterId: adapterId, modelId: modelId }))
   )
     return
-  const draftSnapshot = clone(draft.value)
-  const draftIdentity = providerDraftIdentity(draftSnapshot)
-  const submittedEditorState = providerEditorStateFingerprint()
-  const requestGeneration = draftRequestGeneration
-  const providerId = draftSnapshot.provider_id
   const key = modelKey(adapterId, modelId)
-  const persist = canPersistExistingProvider() && configuredModelKeys.value.has(key)
-  if (editingModel.value?.adapterId === adapterId && editingModel.value?.modelId === modelId) closeModelEditor()
-  mutationBusy.value = true
-  try {
-    if (persist) {
-      await apiJson('/api/v1/provider-studio/delete-model', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ draft: draftSnapshot, adapter_id: adapterId, model_id: modelId }),
-      })
-    }
-    if (requestGeneration !== draftRequestGeneration) return
-    const editorWasUnchanged =
-      providerDraftIdentity(draft.value) === draftIdentity && providerEditorStateFingerprint() === submittedEditorState
-    const nextValues = { ...modelConfigValues.value }
-    delete nextValues[key]
-    modelConfigValues.value = nextValues
-    adapterModels.value = adapterModels.value.map((adapter) =>
-      adapter.adapter_id === adapterId
-        ? { ...adapter, models: adapter.models.filter((model) => model.id !== modelId) }
-        : adapter,
-    )
-    const next = new Set(selectedModelKeys.value)
-    next.delete(key)
-    selectedModelKeys.value = next
-    configuredModelKeys.value = new Set([...configuredModelKeys.value].filter((configuredKey) => configuredKey !== key))
-    if (draft.value.default_adapter === adapterId && draft.value.default_model === modelId) {
-      const nextDraft = clone(draft.value)
-      nextDraft.default_model = ''
-      draft.value = nextDraft
-    }
-    toasts.push('success', persist ? st('Provider model deleted') : st('Model removed from draft'))
-    if (persist) {
-      await loadProviders()
-      if (requestGeneration === draftRequestGeneration && editorWasUnchanged) await loadDraft(providerId)
-    }
-  } catch (reason) {
-    error.value = reason instanceof Error ? reason.message : String(reason)
-  } finally {
-    mutationBusy.value = false
+  if (configuredModelKeys.value.has(key)) {
+    pendingDeletedModelKeys.value = new Set([...pendingDeletedModelKeys.value, key])
   }
+  if (editingModel.value?.adapterId === adapterId && editingModel.value?.modelId === modelId) closeModelEditor()
+  const nextValues = { ...modelConfigValues.value }
+  delete nextValues[key]
+  modelConfigValues.value = nextValues
+  adapterModels.value = adapterModels.value.map((adapter) =>
+    adapter.adapter_id === adapterId
+      ? { ...adapter, models: adapter.models.filter((model) => model.id !== modelId) }
+      : adapter,
+  )
+  const next = new Set(selectedModelKeys.value)
+  next.delete(key)
+  selectedModelKeys.value = next
+  if (draft.value.default_adapter === adapterId && draft.value.default_model === modelId) {
+    const nextDraft = clone(draft.value)
+    nextDraft.default_model = ''
+    draft.value = nextDraft
+  }
+  toasts.push('success', st('Model removal staged; save the Provider to apply it'))
 }
-
 async function deleteAdapter(adapterId: string) {
   if (
     !draft.value ||
@@ -1628,150 +1673,115 @@ async function deleteAdapter(adapterId: string) {
     !window.confirm(st('Delete adapter {adapterId}?', { adapterId: adapterId }))
   )
     return
-  const draftSnapshot = clone(draft.value)
-  const draftIdentity = providerDraftIdentity(draftSnapshot)
-  const submittedEditorState = providerEditorStateFingerprint()
-  const requestGeneration = draftRequestGeneration
-  const providerId = draftSnapshot.provider_id
-  const persist = canPersistExistingProvider() && configuredAdapterIds.value.has(adapterId)
+  if (configuredAdapterIds.value.has(adapterId)) {
+    pendingDeletedAdapterIds.value = new Set([...pendingDeletedAdapterIds.value, adapterId])
+  }
   if (editingModel.value?.adapterId === adapterId) closeModelEditor()
-  mutationBusy.value = true
-  try {
-    if (persist) {
-      await apiJson('/api/v1/provider-studio/delete-adapter', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ draft: draftSnapshot, adapter_id: adapterId }),
-      })
-    }
-    if (requestGeneration !== draftRequestGeneration) return
-    const editorWasUnchanged =
-      providerDraftIdentity(draft.value) === draftIdentity && providerEditorStateFingerprint() === submittedEditorState
-    selectedAdapterIds.value = new Set([...selectedAdapterIds.value].filter((id) => id !== adapterId))
-    if (manualModelAdapterId.value === adapterId) syncManualModelAdapter()
-    adapterModels.value = adapterModels.value.filter((adapter) => adapter.adapter_id !== adapterId)
-    const nextValues = { ...modelConfigValues.value }
-    for (const key of Object.keys(nextValues)) if (key.startsWith(`${adapterId}\u001f`)) delete nextValues[key]
-    modelConfigValues.value = nextValues
-    configuredAdapterIds.value = new Set([...configuredAdapterIds.value].filter((id) => id !== adapterId))
-    configuredModelKeys.value = new Set(
-      [...configuredModelKeys.value].filter((key) => !key.startsWith(`${adapterId}\u001f`)),
-    )
-    if (draft.value.default_adapter === adapterId) {
-      const nextDraft = clone(draft.value)
-      nextDraft.default_adapter = ''
-      nextDraft.default_model = ''
-      draft.value = nextDraft
-    }
-    toasts.push('success', persist ? st('Provider adapter deleted') : st('Adapter removed from draft'))
-    if (persist) {
-      await loadProviders()
-      if (requestGeneration === draftRequestGeneration && editorWasUnchanged) {
-        await loadDraft(
-          providers.value.some((provider) => provider.provider_id === providerId) ? providerId : undefined,
-        )
-      }
-    }
-  } catch (reason) {
-    error.value = reason instanceof Error ? reason.message : String(reason)
-  } finally {
-    mutationBusy.value = false
+  selectedAdapterIds.value = new Set([...selectedAdapterIds.value].filter((id) => id !== adapterId))
+  if (manualModelAdapterId.value === adapterId) syncManualModelAdapter()
+  adapterModels.value = adapterModels.value.filter((adapter) => adapter.adapter_id !== adapterId)
+  const nextValues = { ...modelConfigValues.value }
+  for (const key of Object.keys(nextValues)) if (key.startsWith(`${adapterId}\u001f`)) delete nextValues[key]
+  modelConfigValues.value = nextValues
+  selectedModelKeys.value = new Set([...selectedModelKeys.value].filter((key) => !key.startsWith(`${adapterId}\u001f`)))
+  if (draft.value.default_adapter === adapterId) {
+    const nextDraft = clone(draft.value)
+    nextDraft.default_adapter = ''
+    nextDraft.default_model = ''
+    draft.value = nextDraft
+  }
+  const nextExpanded = new Set(expandedAdapterIds.value)
+  nextExpanded.delete(adapterId)
+  expandedAdapterIds.value = nextExpanded
+  toasts.push('success', st('Adapter removal staged; save the Provider to apply it'))
+}
+async function openProviderRow(row: ProviderRow) {
+  if (mutationBusy.value || loading.value) return
+  if (expandedProviderKey.value === row.key) {
+    expandedProviderKey.value = ''
+    return
+  }
+  const currentKey = expandedProviderKey.value
+  if (providerDirty.value && currentKey && currentKey !== row.key) {
+    const discard = window.confirm(st('Discard unsaved provider changes and open another provider?'))
+    if (!discard) return
+  }
+  expandedProviderKey.value = row.key
+  if (row.isNew) return
+  if (selectedProviderId.value !== row.providerId || !draft.value) await loadDraft(row.providerId)
+}
+
+async function discardProviderChanges() {
+  if (!draft.value || mutationBusy.value) return
+  const sourceProviderId = String(draft.value.source_provider_id || '').trim()
+  if (sourceProviderId) {
+    await loadDraft(sourceProviderId)
+    return
+  }
+  const firstProviderId = providers.value[0]?.provider_id
+  if (firstProviderId) await loadDraft(firstProviderId)
+  else {
+    draft.value = null
+    expandedProviderKey.value = ''
+    savedEditorState.value = ''
   }
 }
 
-async function saveAdapter(adapter: AdapterModels) {
-  if (!draft.value || mutationBusy.value || saving.value || listingModels.value || modelSaving.value) return
-  if (!supportedAdapterIds.value.has(adapter.adapter_id)) {
-    error.value = st('{adapter_id} is not supported by the current authentication subtype.', {
-      adapter_id: adapter.adapter_id,
-    })
+async function refreshActiveProvider() {
+  if (providerDirty.value && !window.confirm(st('Discard unsaved provider changes and refresh from the server?')))
+    return
+  const sourceProviderId = String(draft.value?.source_provider_id || selectedProviderId.value || '').trim()
+  await loadDraft(sourceProviderId || undefined)
+}
+
+async function deleteProviderRow(row: ProviderRow) {
+  if (row.isNew) {
+    await discardProviderChanges()
     return
   }
-  if (!selectedAdapterIds.value.has(adapter.adapter_id)) {
-    error.value = st('Select {adapter_id} before saving its adapter matches.', { adapter_id: adapter.adapter_id })
-    return
-  }
-  if (adapterFailure(adapter)) {
-    error.value = st('Cannot save {adapter_id} while its model list has failed to load.', {
-      adapter_id: adapter.adapter_id,
-    })
-    return
-  }
-  const draftSnapshot = clone(draft.value)
-  const draftIdentity = providerDraftIdentity(draftSnapshot)
-  const requestGeneration = draftRequestGeneration
-  const providerId = draftSnapshot.provider_id
-  const persist = canPersistExistingProvider()
-  const selectedModelKeysSnapshot = new Set(selectedModelKeys.value)
-  const submittedEditorState = providerEditorStateFingerprint(
-    draftSnapshot,
-    clone(adapterModels.value),
-    new Set(selectedAdapterIds.value),
-    selectedModelKeysSnapshot,
-    clone(modelConfigValues.value),
-  )
-  mutationBusy.value = true
-  try {
-    const adapterForSave: AdapterModels = {
-      ...adapter,
-      models: adapter.models.filter((model) => selectedModelKeysSnapshot.has(modelKey(adapter.adapter_id, model.id))),
-    }
-    if (persist) {
-      await apiJson('/api/v1/provider-studio/save-adapter', {
+  if (selectedProviderId.value !== row.providerId || !draft.value) {
+    if (!window.confirm(st('Delete provider {providerId}?', { providerId: row.providerId }))) return
+    mutationBusy.value = true
+    try {
+      await apiJson('/api/v1/provider-studio/delete-provider', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ draft: draftSnapshot, adapter_models: adapterForSave }),
+        body: JSON.stringify({ provider_id: row.providerId }),
       })
-      if (
-        requestGeneration !== draftRequestGeneration ||
-        providerDraftIdentity(draft.value) !== draftIdentity ||
-        providerEditorStateFingerprint() !== submittedEditorState
-      )
-        return
-      toasts.push('success', st('Saved {adapter_id} adapter matches', { adapter_id: adapter.adapter_id }))
+      toasts.push('success', st('Provider deleted'))
       await loadProviders()
-      if (
-        requestGeneration === draftRequestGeneration &&
-        providerDraftIdentity(draft.value) === draftIdentity &&
-        providerEditorStateFingerprint() === submittedEditorState
-      ) {
-        await loadDraft(providerId)
-      }
-    } else {
-      if (requestGeneration !== draftRequestGeneration || providerDraftIdentity(draft.value) !== draftIdentity) return
-      const index = adapterModels.value.findIndex((item) => item.adapter_id === adapter.adapter_id)
-      if (index >= 0) {
-        const next = [...adapterModels.value]
-        next[index] = { ...next[index], enabled: true }
-        adapterModels.value = next
-      }
-      toasts.push(
-        'success',
-        st('{adapter_id} adapter staged; save the Provider to apply it', { adapter_id: adapter.adapter_id }),
-      )
+      if (expandedProviderKey.value === row.key) expandedProviderKey.value = ''
+    } catch (reason) {
+      error.value = reason instanceof Error ? reason.message : String(reason)
+    } finally {
+      mutationBusy.value = false
     }
-  } catch (reason) {
-    error.value = reason instanceof Error ? reason.message : String(reason)
-  } finally {
-    mutationBusy.value = false
+    return
   }
+  await deleteProvider()
 }
 
 async function createProvider() {
   if (mutationBusy.value || loading.value) return
+  if (providerDirty.value && !window.confirm(st('Discard unsaved provider changes and create a new provider?'))) return
   await loadDraft()
   if (draft.value) {
     const next = clone(draft.value)
     next.provider_id = ''
     next.source_provider_id = null
     draft.value = normalizeDraftShape(next)
+    selectedProviderId.value = ''
+    expandedProviderKey.value = NEW_PROVIDER_ROW_KEY
+    expandedAdapterIds.value = new Set()
+    savedEditorState.value = ''
   }
 }
 
 onMounted(async () => {
   try {
     await Promise.all([loadProviders(), loadAwsProfiles()])
-    await loadDraft(providers.value[0]?.provider_id)
+    const firstProviderId = providers.value[0]?.provider_id
+    if (firstProviderId) await loadDraft(firstProviderId)
   } catch (reason) {
     error.value = reason instanceof Error ? reason.message : String(reason)
   }
@@ -1797,15 +1807,6 @@ onBeforeUnmount(() => {
         </p>
       </div>
       <div class="flex flex-wrap gap-2">
-        <Button
-          variant="outline"
-          size="sm"
-          :disabled="loading || mutationBusy"
-          @click="loadDraft(selectedProviderId || undefined)"
-        >
-          <RiRefreshLine class="mr-2 h-4 w-4" :class="loading ? 'animate-spin' : ''" />
-          {{ $st('Refresh draft') }}
-        </Button>
         <Button variant="outline" size="sm" :disabled="loading || mutationBusy" @click="createProvider">
           <RiAddLine class="mr-2 h-4 w-4" />
           {{ $st('New provider') }}
@@ -1820,313 +1821,317 @@ onBeforeUnmount(() => {
       {{ error }}
     </div>
 
-    <div class="grid gap-4 lg:grid-cols-[minmax(13rem,0.7fr)_minmax(0,2fr)]">
-      <div class="grid content-start gap-2">
-        <div class="text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">
-          {{ $st('Providers') }}
-        </div>
-        <button
-          v-for="provider in providers"
-          :key="provider.provider_id"
-          type="button"
-          class="rounded-md border px-3 py-2 text-left text-xs transition-colors"
-          :class="
-            selectedProviderId === provider.provider_id
-              ? 'border-primary bg-primary/10 text-foreground'
-              : 'border-border/60 hover:bg-muted/40'
-          "
-          :disabled="loading || mutationBusy"
-          @click="loadDraft(provider.provider_id)"
-        >
-          <span class="block truncate font-mono font-semibold">{{ providerLabel(provider) }}</span>
-          <span class="mt-1 block text-[10px] text-muted-foreground"
-            >{{ provider.adapters?.length || 0 }} {{ $st('adapters') }}</span
+    <div class="grid gap-2">
+      <SettingsDisclosureRow
+        v-for="row in providerRows"
+        :key="row.key"
+        :open="expandedProviderKey === row.key"
+        :label="providerRowLabel(row)"
+        :summary="providerRowSummary(row)"
+        :tone="expandedProviderKey === row.key && providerDirty ? 'dirty' : 'default'"
+        @toggle="openProviderRow(row)"
+      >
+        <template #leading>
+          <RiCloudLine class="h-4 w-4 shrink-0 text-primary" />
+        </template>
+        <template #badges>
+          <span
+            v-if="expandedProviderKey === row.key && providerDirty"
+            class="rounded-full bg-amber-500/10 px-1.5 py-0.5 text-[10px] text-amber-700 dark:text-amber-300"
+            >{{ $st('Unsaved') }}</span
           >
-        </button>
-        <div
-          v-if="providers.length === 0"
-          class="rounded-md border border-dashed border-border/60 px-3 py-4 text-center text-xs text-muted-foreground"
-        >
-          {{ $st('No providers configured.') }}
-        </div>
-      </div>
+          <span v-else-if="row.isNew" class="rounded-full bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary">{{
+            $st('New')
+          }}</span>
+        </template>
+        <template #actions>
+          <IconButton
+            v-if="expandedProviderKey === row.key"
+            variant="ghost"
+            size="sm"
+            :tooltip="$st('Refresh provider')"
+            :aria-label="$st('Refresh provider')"
+            :disabled="loading || mutationBusy"
+            @click="refreshActiveProvider"
+          >
+            <RiRefreshLine class="h-4 w-4" :class="loading ? 'animate-spin' : ''" />
+          </IconButton>
+          <IconButton
+            variant="ghost"
+            size="sm"
+            :tooltip="row.isNew ? $st('Discard new provider') : $st('Delete provider')"
+            :aria-label="row.isNew ? $st('Discard new provider') : $st('Delete provider')"
+            :disabled="mutationBusy"
+            @click="deleteProviderRow(row)"
+          >
+            <RiDeleteBinLine class="h-4 w-4 text-destructive" />
+          </IconButton>
+        </template>
 
-      <div v-if="draft" class="grid min-w-0 gap-5">
-        <section class="grid gap-3">
-          <div class="flex flex-wrap items-center justify-between gap-2">
-            <div class="text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">
-              {{ $st('Draft') }}
-            </div>
-            <div class="flex gap-2">
-              <Button
-                variant="ghost"
-                size="sm"
-                class="text-destructive"
-                :disabled="loading || mutationBusy || !draft.source_provider_id"
-                @click="deleteProvider"
-              >
-                <RiDeleteBinLine class="mr-1.5 h-4 w-4" /> {{ $st('Delete provider') }}
-              </Button>
-              <Button size="sm" :disabled="loading || mutationBusy || !draft.provider_id" @click="saveDraft">
-                <RiSave3Line class="mr-1.5 h-4 w-4" /> {{ saving ? $st('Saving…') : $st('Save provider') }}
-              </Button>
-            </div>
-          </div>
-          <div class="grid gap-3 sm:grid-cols-2">
-            <label class="grid gap-1.5">
-              <span class="text-xs text-muted-foreground">{{ $st('Provider ID') }}</span>
-              <Input
-                :value="draft.provider_id"
-                class="font-mono"
-                placeholder="openai"
-                @input="setFieldValue('provider_id', ($event.target as HTMLInputElement).value)"
-              />
-            </label>
-            <label class="grid gap-1.5">
-              <span class="text-xs text-muted-foreground">{{ $st('Auth mode') }}</span>
-              <OptionPicker
-                :model-value="authMode"
-                :options="authModeOptions"
-                :include-empty="false"
-                :title="$st('Auth mode')"
-                @update:model-value="setAuthMode"
-              />
-            </label>
-            <label v-if="authMode !== 'none' && authMode !== 'unset'" class="grid gap-1.5">
-              <span class="text-xs text-muted-foreground">{{ $st('Auth subtype') }}</span>
-              <OptionPicker
-                :model-value="authSubtype"
-                :options="authSubtypeOptions"
-                :include-empty="false"
-                :title="$st('Auth subtype')"
-                @update:model-value="setAuthSubtype"
-              />
-            </label>
-            <label class="grid gap-1.5">
-              <span class="text-xs text-muted-foreground">{{ $st('Default adapter') }}</span>
-              <OptionPicker
-                :model-value="draft.default_adapter"
-                :options="adapterCandidates.map((value) => ({ value, label: value }))"
-                :include-empty="true"
-                :empty-label="$st('No default adapter')"
-                :title="$st('Default adapter')"
-                monospace
-                @update:model-value="setDefaultAdapter"
-              />
-            </label>
-            <label class="grid gap-1.5">
-              <span class="text-xs text-muted-foreground">{{ $st('Default model') }}</span>
-              <OptionPicker
-                :model-value="selectedDefaultModelKey"
-                :options="defaultModelOptions"
-                :include-empty="true"
-                :empty-label="$st('No default model')"
-                :title="$st('Default model')"
-                monospace
-                :disabled="defaultModelOptions.length === 0"
-                @update:model-value="setDefaultModel"
-              />
-            </label>
-            <label class="grid gap-1.5">
-              <span class="text-xs text-muted-foreground">{{ $st('Request timeout (seconds)') }}</span>
-              <Input
-                :value="draft.request_timeout_secs"
-                type="number"
-                @input="setFieldValue('request_timeout_secs', Number(($event.target as HTMLInputElement).value))"
-              />
-            </label>
-            <label class="grid gap-1.5">
-              <span class="text-xs text-muted-foreground">{{ $st('Connect timeout (seconds)') }}</span>
-              <Input
-                :value="draft.connect_timeout_secs"
-                type="number"
-                @input="setFieldValue('connect_timeout_secs', Number(($event.target as HTMLInputElement).value))"
-              />
-            </label>
-          </div>
-        </section>
-
-        <section v-if="authMode !== 'none' && authMode !== 'unset'" class="grid gap-3 border-t border-border/60 pt-4">
-          <div class="flex flex-wrap items-center justify-between gap-2">
+        <div v-if="draft && expandedProviderKey === row.key" class="grid min-w-0 gap-5">
+          <section class="grid gap-3">
             <div>
-              <div class="text-sm font-medium">{{ $st('Authentication details') }}</div>
+              <div class="text-sm font-medium">{{ $st('Provider configuration') }}</div>
               <div class="mt-1 text-xs text-muted-foreground">
-                {{ $st('Secret values are sent only to the provider-studio endpoint and are masked in the form.') }}
+                {{
+                  $st(
+                    'Edit provider identity, authentication, defaults, adapters, and models, then save them together.',
+                  )
+                }}
               </div>
             </div>
-            <div v-if="interactiveAuthAvailable" class="flex gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                :disabled="mutationBusy || authRequestInFlight || authPolling"
-                @click="startAuth('start')"
-                >{{ authRequestInFlight ? $st('Working…') : $st('Start auth') }}</Button
-              >
-              <Button
-                variant="outline"
-                size="sm"
-                :disabled="mutationBusy || authRequestInFlight || authPolling"
-                @click="startAuth('continue')"
-                >{{ authPolling ? $st('Waiting…') : $st('Continue auth') }}</Button
-              >
+            <div class="grid gap-3 sm:grid-cols-2">
+              <label class="grid gap-1.5">
+                <span class="text-xs text-muted-foreground">{{ $st('Provider ID') }}</span>
+                <Input
+                  :value="draft.provider_id"
+                  class="font-mono"
+                  placeholder="openai"
+                  @input="setFieldValue('provider_id', ($event.target as HTMLInputElement).value)"
+                />
+              </label>
+              <label class="grid gap-1.5">
+                <span class="text-xs text-muted-foreground">{{ $st('Auth mode') }}</span>
+                <OptionPicker
+                  :model-value="authMode"
+                  :options="authModeOptions"
+                  :include-empty="false"
+                  :title="$st('Auth mode')"
+                  @update:model-value="setAuthMode"
+                />
+              </label>
+              <label v-if="authMode !== 'none' && authMode !== 'unset'" class="grid gap-1.5">
+                <span class="text-xs text-muted-foreground">{{ $st('Auth subtype') }}</span>
+                <OptionPicker
+                  :model-value="authSubtype"
+                  :options="authSubtypeOptions"
+                  :include-empty="false"
+                  :title="$st('Auth subtype')"
+                  @update:model-value="setAuthSubtype"
+                />
+              </label>
+              <label class="grid gap-1.5">
+                <span class="text-xs text-muted-foreground">{{ $st('Default adapter') }}</span>
+                <OptionPicker
+                  :model-value="draft.default_adapter"
+                  :options="adapterCandidates.map((value) => ({ value, label: value }))"
+                  :include-empty="true"
+                  :empty-label="$st('No default adapter')"
+                  :title="$st('Default adapter')"
+                  monospace
+                  @update:model-value="setDefaultAdapter"
+                />
+              </label>
+              <label class="grid gap-1.5">
+                <span class="text-xs text-muted-foreground">{{ $st('Default model') }}</span>
+                <OptionPicker
+                  :model-value="selectedDefaultModelKey"
+                  :options="defaultModelOptions"
+                  :include-empty="true"
+                  :empty-label="$st('No default model')"
+                  :title="$st('Default model')"
+                  monospace
+                  :disabled="defaultModelOptions.length === 0"
+                  @update:model-value="setDefaultModel"
+                />
+              </label>
+              <label class="grid gap-1.5">
+                <span class="text-xs text-muted-foreground">{{ $st('Request timeout (seconds)') }}</span>
+                <Input
+                  :value="draft.request_timeout_secs"
+                  type="number"
+                  @input="setFieldValue('request_timeout_secs', Number(($event.target as HTMLInputElement).value))"
+                />
+              </label>
+              <label class="grid gap-1.5">
+                <span class="text-xs text-muted-foreground">{{ $st('Connect timeout (seconds)') }}</span>
+                <Input
+                  :value="draft.connect_timeout_secs"
+                  type="number"
+                  @input="setFieldValue('connect_timeout_secs', Number(($event.target as HTMLInputElement).value))"
+                />
+              </label>
             </div>
-          </div>
-          <div v-if="authMessage" class="rounded-md border border-border/60 bg-muted/20 px-3 py-2 text-xs">
-            {{ authMessage }}
-          </div>
-          <div
-            v-if="pendingDeviceAuth"
-            class="grid gap-1 rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-xs"
-          >
-            <div class="font-medium">{{ $st('Device authorization is pending') }}</div>
-            <a
-              v-if="pendingDeviceAuth.verification_url"
-              class="break-all text-primary underline underline-offset-2"
-              :href="pendingDeviceAuth.verification_url"
-              target="_blank"
-              rel="noreferrer"
-            >
-              {{ $st('Open verification page') }}
-            </a>
-            <div
-              v-if="pendingDeviceAuth.verification_url"
-              class="break-all font-mono text-[11px] text-muted-foreground"
-            >
-              {{ pendingDeviceAuth.verification_url }}
-            </div>
-            <div v-if="pendingDeviceAuth.user_code" class="font-mono text-sm">
-              {{ $st('Code:') }} {{ pendingDeviceAuth.user_code }}
-            </div>
-            <div class="text-muted-foreground">
-              {{
-                $st(
-                  'The Web client polls this device flow using the provider interval. You can also press Continue auth.',
-                )
-              }}
-            </div>
-          </div>
-          <div
-            v-if="pendingBrowserAuth"
-            class="grid gap-1 rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-xs text-muted-foreground"
-          >
-            <div class="font-medium text-foreground">{{ $st('Browser authorization is pending') }}</div>
-            <a
-              v-if="pendingBrowserAuth.display_url || pendingBrowserAuth.authorize_url"
-              class="break-all text-primary underline underline-offset-2"
-              :href="pendingBrowserAuth.display_url || pendingBrowserAuth.authorize_url"
-              target="_blank"
-              rel="noreferrer"
-            >
-              {{ $st('Open authorization page') }}
-            </a>
-            <div
-              v-if="pendingBrowserAuth.display_url || pendingBrowserAuth.authorize_url"
-              class="break-all font-mono text-[11px]"
-            >
-              {{ pendingBrowserAuth.display_url || pendingBrowserAuth.authorize_url }}
-            </div>
-            <div>
-              {{
-                $st('Finish the browser flow, paste the callback URL into the field above, then press Continue auth.')
-              }}
-            </div>
-          </div>
-          <div class="grid gap-3 sm:grid-cols-2">
-            <label v-for="field in visibleAuthFields" :key="field.path" class="grid gap-1.5">
-              <span class="text-xs text-muted-foreground">{{ field.label }}</span>
-              <div
-                v-if="field.readOnly"
-                class="flex h-9 items-center rounded-md border border-input bg-muted/20 px-3 font-mono text-sm text-muted-foreground"
-              >
-                {{ field.value || '—' }}
-              </div>
-              <OptionPicker
-                v-else-if="field.type === 'select'"
-                :model-value="fieldValue(field.path)"
-                :options="field.options || []"
-                :title="field.label"
-                :include-empty="field.includeEmpty ?? false"
-                :empty-label="field.emptyLabel"
-                :allow-custom="field.allowCustom ?? false"
-                :monospace="field.path.includes('source_kind')"
-                @update:model-value="setFieldValue(field.path, $event)"
-              />
-              <Input
-                v-else
-                :value="fieldValue(field.path)"
-                :type="field.secret ? 'password' : field.type || 'text'"
-                :placeholder="field.placeholder"
-                :class="field.secret || field.path.includes('url') || field.path.includes('token') ? 'font-mono' : ''"
-                @input="setFieldValue(field.path, ($event.target as HTMLInputElement).value)"
-              />
-            </label>
-          </div>
-        </section>
+          </section>
 
-        <section class="grid gap-3 border-t border-border/60 pt-4">
-          <div class="flex flex-wrap items-center justify-between gap-2">
-            <div>
-              <div class="text-sm font-medium">{{ $st('Adapter model lists') }}</div>
-              <div class="mt-1 text-xs text-muted-foreground">
-                {{ modelListingDescription }} {{ $st('Selected routes are persisted when you save the Provider.') }}
+          <section v-if="authMode !== 'none' && authMode !== 'unset'" class="grid gap-3 border-t border-border/60 pt-4">
+            <div class="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <div class="text-sm font-medium">{{ $st('Authentication details') }}</div>
+                <div class="mt-1 text-xs text-muted-foreground">
+                  {{ $st('Secret values are sent only to the provider-studio endpoint and are masked in the form.') }}
+                </div>
               </div>
-            </div>
-            <Button
-              variant="outline"
-              size="sm"
-              :disabled="mutationBusy || listingModels || modelListingKind === 'unavailable'"
-              @click="listDraftModels"
-            >
-              <RiRefreshLine class="mr-1.5 h-4 w-4" :class="listingModels ? 'animate-spin' : ''" />
-              {{ modelListingKind === 'saved' ? $st('Refresh saved models') : $st('List provider models') }}
-            </Button>
-          </div>
-          <div class="grid gap-2 sm:grid-cols-2">
-            <label
-              v-for="adapterId in adapterCandidates"
-              :key="adapterId"
-              class="flex items-center gap-2 rounded-md border border-border/60 px-3 py-2 text-xs"
-              :class="!supportedAdapterIds.has(adapterId) ? 'opacity-60' : ''"
-            >
-              <input
-                type="checkbox"
-                :checked="selectedAdapterIds.has(adapterId)"
-                :disabled="mutationBusy || listingModels || !supportedAdapterIds.has(adapterId)"
-                @change="toggleAdapter(adapterId)"
-              />
-              <span class="font-mono"
-                >{{ !supportedAdapterIds.has(adapterId) ? '[-]' : selectedAdapterIds.has(adapterId) ? '[x]' : '[ ]' }}
-                {{ adapterId }}</span
-              >
-              <span v-if="!supportedAdapterIds.has(adapterId)" class="ml-auto text-[10px] text-muted-foreground">{{
-                $st('unsupported')
-              }}</span>
-            </label>
-          </div>
-          <div v-if="adapterModels.length === 0 && !listingModels" class="text-xs text-muted-foreground">
-            {{ $st('No adapter models loaded. Select an adapter and list live models.') }}
-          </div>
-          <div v-for="adapter in adapterModels" :key="adapter.adapter_id" class="rounded-md border border-border/60">
-            <div class="flex flex-wrap items-center justify-between gap-2 border-b border-border/60 px-3 py-2">
-              <div class="flex items-center gap-2 text-xs">
-                <span class="font-mono font-semibold">{{ adapter.adapter_id }}</span>
-                <span v-if="adapter.resolved_base_url" class="break-all text-muted-foreground">{{
-                  adapter.resolved_base_url
-                }}</span>
-                <span v-if="adapterFailure(adapter)" class="text-destructive">{{ adapterFailure(adapter) }}</span>
-              </div>
-              <div class="flex gap-1">
+              <div v-if="interactiveAuthAvailable" class="flex gap-2">
                 <Button
-                  variant="ghost"
+                  variant="outline"
                   size="sm"
-                  :disabled="
-                    mutationBusy ||
-                    !selectedAdapterIds.has(adapter.adapter_id) ||
-                    !supportedAdapterIds.has(adapter.adapter_id)
-                  "
-                  @click="saveAdapter(adapter)"
-                  >{{ $st('Save adapter') }}</Button
+                  :disabled="mutationBusy || authRequestInFlight || authPolling"
+                  @click="startAuth('start')"
+                  >{{ authRequestInFlight ? $st('Working…') : $st('Start auth') }}</Button
                 >
+                <Button
+                  variant="outline"
+                  size="sm"
+                  :disabled="mutationBusy || authRequestInFlight || authPolling"
+                  @click="startAuth('continue')"
+                  >{{ authPolling ? $st('Waiting…') : $st('Continue auth') }}</Button
+                >
+              </div>
+            </div>
+            <div v-if="authMessage" class="rounded-md border border-border/60 bg-muted/20 px-3 py-2 text-xs">
+              {{ authMessage }}
+            </div>
+            <div
+              v-if="pendingDeviceAuth"
+              class="grid gap-1 rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-xs"
+            >
+              <div class="font-medium">{{ $st('Device authorization is pending') }}</div>
+              <a
+                v-if="pendingDeviceAuth.verification_url"
+                class="break-all text-primary underline underline-offset-2"
+                :href="pendingDeviceAuth.verification_url"
+                target="_blank"
+                rel="noreferrer"
+              >
+                {{ $st('Open verification page') }}
+              </a>
+              <div
+                v-if="pendingDeviceAuth.verification_url"
+                class="break-all font-mono text-[11px] text-muted-foreground"
+              >
+                {{ pendingDeviceAuth.verification_url }}
+              </div>
+              <div v-if="pendingDeviceAuth.user_code" class="font-mono text-sm">
+                {{ $st('Code:') }} {{ pendingDeviceAuth.user_code }}
+              </div>
+              <div class="text-muted-foreground">
+                {{
+                  $st(
+                    'The Web client polls this device flow using the provider interval. You can also press Continue auth.',
+                  )
+                }}
+              </div>
+            </div>
+            <div
+              v-if="pendingBrowserAuth"
+              class="grid gap-1 rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-xs text-muted-foreground"
+            >
+              <div class="font-medium text-foreground">{{ $st('Browser authorization is pending') }}</div>
+              <a
+                v-if="pendingBrowserAuth.display_url || pendingBrowserAuth.authorize_url"
+                class="break-all text-primary underline underline-offset-2"
+                :href="pendingBrowserAuth.display_url || pendingBrowserAuth.authorize_url"
+                target="_blank"
+                rel="noreferrer"
+              >
+                {{ $st('Open authorization page') }}
+              </a>
+              <div
+                v-if="pendingBrowserAuth.display_url || pendingBrowserAuth.authorize_url"
+                class="break-all font-mono text-[11px]"
+              >
+                {{ pendingBrowserAuth.display_url || pendingBrowserAuth.authorize_url }}
+              </div>
+              <div>
+                {{
+                  $st('Finish the browser flow, paste the callback URL into the field above, then press Continue auth.')
+                }}
+              </div>
+            </div>
+            <div class="grid gap-3 sm:grid-cols-2">
+              <label v-for="field in visibleAuthFields" :key="field.path" class="grid gap-1.5">
+                <span class="text-xs text-muted-foreground">{{ field.label }}</span>
+                <div
+                  v-if="field.readOnly"
+                  class="flex h-9 items-center rounded-md border border-input bg-muted/20 px-3 font-mono text-sm text-muted-foreground"
+                >
+                  {{ field.value || '—' }}
+                </div>
+                <OptionPicker
+                  v-else-if="field.type === 'select'"
+                  :model-value="fieldValue(field.path)"
+                  :options="field.options || []"
+                  :title="field.label"
+                  :include-empty="field.includeEmpty ?? false"
+                  :empty-label="field.emptyLabel"
+                  :allow-custom="field.allowCustom ?? false"
+                  :monospace="field.path.includes('source_kind')"
+                  @update:model-value="setFieldValue(field.path, $event)"
+                />
+                <Input
+                  v-else
+                  :value="fieldValue(field.path)"
+                  :type="field.secret ? 'password' : field.type || 'text'"
+                  :placeholder="field.placeholder"
+                  :class="field.secret || field.path.includes('url') || field.path.includes('token') ? 'font-mono' : ''"
+                  @input="setFieldValue(field.path, ($event.target as HTMLInputElement).value)"
+                />
+              </label>
+            </div>
+          </section>
+
+          <section class="grid gap-3 border-t border-border/60 pt-4">
+            <div class="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <div class="text-sm font-medium">{{ $st('Adapter model lists') }}</div>
+                <div class="mt-1 text-xs text-muted-foreground">
+                  {{ modelListingDescription }} {{ $st('Selected routes are persisted when you save the Provider.') }}
+                </div>
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                :disabled="mutationBusy || listingModels || modelListingKind === 'unavailable'"
+                @click="listDraftModels"
+              >
+                <RiRefreshLine class="mr-1.5 h-4 w-4" :class="listingModels ? 'animate-spin' : ''" />
+                {{ modelListingKind === 'saved' ? $st('Refresh saved models') : $st('List provider models') }}
+              </Button>
+            </div>
+            <div v-if="adapterRows.length === 0 && !listingModels" class="text-xs text-muted-foreground">
+              {{ $st('No adapter models loaded. Select an adapter and list live models.') }}
+            </div>
+            <SettingsDisclosureRow
+              v-for="adapter in adapterRows"
+              :key="adapter.adapter_id"
+              :open="expandedAdapterIds.has(adapter.adapter_id)"
+              :label="adapter.adapter_id"
+              :summary="adapterRowSummary(adapter)"
+              :tone="
+                adapterFailure(adapter) ? 'error' : selectedAdapterIds.has(adapter.adapter_id) ? 'default' : 'disabled'
+              "
+              nested
+              @toggle="toggleAdapterRow(adapter.adapter_id)"
+            >
+              <template #leading>
+                <RiPlugLine class="h-4 w-4 shrink-0 text-muted-foreground" />
+              </template>
+              <template #badges>
+                <span
+                  v-if="!supportedAdapterIds.has(adapter.adapter_id)"
+                  class="rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground"
+                  >{{ $st('unsupported') }}</span
+                >
+                <span
+                  v-else-if="selectedAdapterIds.has(adapter.adapter_id)"
+                  class="rounded-full bg-emerald-500/10 px-1.5 py-0.5 text-[10px] text-emerald-700 dark:text-emerald-300"
+                  >{{ $st('Enabled') }}</span
+                >
+              </template>
+              <template #actions>
+                <label
+                  class="mr-1 inline-flex items-center gap-1.5 rounded-md px-1.5 py-1 text-[10px] text-muted-foreground hover:bg-muted/40"
+                  :title="selectedAdapterIds.has(adapter.adapter_id) ? $st('Disable adapter') : $st('Enable adapter')"
+                >
+                  <input
+                    type="checkbox"
+                    :checked="selectedAdapterIds.has(adapter.adapter_id)"
+                    :disabled="mutationBusy || listingModels || !supportedAdapterIds.has(adapter.adapter_id)"
+                    @change="toggleAdapter(adapter.adapter_id)"
+                  />
+                  <span>{{ selectedAdapterIds.has(adapter.adapter_id) ? $st('On') : $st('Off') }}</span>
+                </label>
                 <IconButton
                   variant="ghost"
                   size="sm"
@@ -2134,184 +2139,223 @@ onBeforeUnmount(() => {
                   :aria-label="$st('Delete adapter')"
                   :disabled="mutationBusy"
                   @click="deleteAdapter(adapter.adapter_id)"
-                  ><RiDeleteBinLine class="h-4 w-4 text-destructive"
-                /></IconButton>
-              </div>
-            </div>
-            <div class="grid gap-1 p-2">
-              <label
-                v-for="model in adapter.models"
-                :key="model.id"
-                class="flex min-w-0 items-center gap-2 rounded px-2 py-1.5 text-xs hover:bg-muted/40"
-              >
-                <input
-                  type="checkbox"
-                  :checked="selectedModelKeys.has(modelKey(adapter.adapter_id, model.id))"
-                  :disabled="mutationBusy || listingModels"
-                  @change="toggleModel(adapter.adapter_id, model.id)"
-                />
-                <button
-                  type="button"
-                  class="min-w-0 flex-1 truncate text-left"
-                  :disabled="mutationBusy || listingModels"
-                  @click="openModelEditor(adapter.adapter_id, model)"
                 >
-                  <span>{{ model.display_name || model.id }}</span>
-                  <code v-if="model.display_name" class="ml-2 font-mono text-[10px] text-muted-foreground">{{
-                    model.id
-                  }}</code>
-                </button>
-                <IconButton
-                  variant="ghost"
-                  size="sm"
-                  :tooltip="$st('Delete model')"
-                  :aria-label="$st('Delete model')"
-                  :disabled="mutationBusy"
-                  @click.stop="deleteModel(adapter.adapter_id, model.id)"
-                  ><RiDeleteBinLine class="h-3.5 w-3.5 text-destructive"
-                /></IconButton>
-              </label>
-              <div v-if="adapter.models.length === 0" class="px-2 py-3 text-xs text-muted-foreground">
-                {{ $st('No models listed.') }}
-              </div>
-            </div>
-          </div>
-          <div class="flex flex-wrap items-end gap-2">
-            <label class="grid min-w-[12rem] gap-1.5">
-              <span class="text-xs text-muted-foreground">{{ $st('Adapter') }}</span>
-              <OptionPicker
-                :model-value="manualModelAdapterId"
-                :options="manualModelAdapterOptions"
-                :include-empty="false"
-                :placeholder="$st('Select adapter')"
-                :title="$st('Adapter for manual model')"
-                monospace
-                :disabled="mutationBusy || listingModels || manualModelAdapterOptions.length === 0"
-                @update:model-value="manualModelAdapterId = $event"
-              />
-            </label>
-            <label class="grid min-w-[14rem] gap-1.5">
-              <span class="text-xs text-muted-foreground">{{ $st('Add model id') }}</span>
-              <Input v-model="newModelId" class="font-mono" placeholder="model-name" @keydown.enter="addManualModel" />
-            </label>
-            <Button
-              variant="outline"
-              size="sm"
-              :disabled="mutationBusy || listingModels || !newModelId.trim() || !manualModelAdapterId"
-              @click="addManualModel"
-              ><RiAddLine class="mr-1.5 h-4 w-4" /> {{ $st('Add model') }}</Button
-            >
-          </div>
-        </section>
+                  <RiDeleteBinLine class="h-4 w-4 text-destructive" />
+                </IconButton>
+              </template>
 
-        <section v-if="editingModel" class="grid gap-3 border-t border-border/60 pt-4">
-          <div class="flex flex-wrap items-start justify-between gap-2">
-            <div>
-              <div class="text-sm font-medium">
-                {{ $st('Model ·') }} {{ editingModel.adapterId }}/{{ editingModel.modelId }}
+              <div v-if="adapterFailure(adapter)" class="mb-2 text-xs text-destructive">
+                {{ adapterFailure(adapter) }}
               </div>
-              <div class="mt-1 text-xs text-muted-foreground">
-                {{ $st('The TUI exposes these 15 model configuration fields through its persisted JSON editor.') }}
-              </div>
-            </div>
-            <Button variant="ghost" size="sm" @click="closeModelEditor">{{ $st('Close') }}</Button>
-          </div>
-          <div v-if="modelLoading" class="text-sm text-muted-foreground">{{ $st('Loading model configuration…') }}</div>
-          <div v-else-if="modelError" class="text-sm text-destructive">{{ modelError }}</div>
-          <template v-else>
-            <div class="grid gap-2 sm:grid-cols-2">
-              <div v-for="field in modelFields" :key="field.key" class="rounded border border-border/50 px-3 py-2">
-                <div class="grid gap-1.5">
-                  <div class="flex items-center justify-between gap-2">
-                    <label
-                      :for="`provider-model-${field.key.replaceAll('.', '-')}`"
-                      class="text-[10px] uppercase tracking-wide text-muted-foreground"
-                      >{{ field.label }}</label
-                    >
-                    <span v-if="field.kind === 'readonly'" class="text-[10px] text-muted-foreground">{{
-                      $st('read-only')
-                    }}</span>
-                  </div>
-                  <div
-                    v-if="field.kind === 'readonly'"
-                    :id="`provider-model-${field.key.replaceAll('.', '-')}`"
-                    class="break-all font-mono text-xs"
-                  >
-                    {{ modelFieldValue(field.key) || '—' }}
-                  </div>
+              <div class="grid gap-1">
+                <div
+                  v-for="model in adapter.models"
+                  :key="model.id"
+                  class="flex min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-xs hover:bg-muted/40"
+                >
                   <input
-                    v-else-if="field.kind === 'boolean'"
-                    :id="`provider-model-${field.key.replaceAll('.', '-')}`"
                     type="checkbox"
-                    class="h-4 w-4 justify-self-start accent-primary"
-                    :checked="modelFieldBooleanValue(field.key)"
-                    @change="setModelFieldValue(field.key, ($event.target as HTMLInputElement).checked)"
+                    :checked="selectedModelKeys.has(modelKey(adapter.adapter_id, model.id))"
+                    :disabled="mutationBusy || listingModels || !selectedAdapterIds.has(adapter.adapter_id)"
+                    @change="toggleModel(adapter.adapter_id, model.id)"
                   />
-                  <OptionPicker
-                    v-else-if="field.kind === 'select'"
-                    :id="`provider-model-${field.key.replaceAll('.', '-')}`"
-                    :model-value="modelFieldValue(field.key)"
-                    :options="field.options || []"
-                    :include-empty="field.key === 'lifecycle'"
-                    :empty-label="field.key === 'lifecycle' ? $st('Default / unset') : undefined"
-                    :title="field.label"
-                    @update:model-value="setModelFieldValue(field.key, $event)"
-                  />
-                  <textarea
-                    v-else-if="field.kind === 'textarea'"
-                    :id="`provider-model-${field.key.replaceAll('.', '-')}`"
-                    :value="modelFieldValue(field.key)"
-                    :placeholder="field.placeholder"
-                    rows="3"
-                    class="w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm outline-none focus:border-ring"
-                    @input="setModelFieldValue(field.key, ($event.target as HTMLTextAreaElement).value)"
-                  />
-                  <Input
-                    v-else
-                    :id="`provider-model-${field.key.replaceAll('.', '-')}`"
-                    :value="modelFieldValue(field.key)"
-                    :type="field.kind === 'number' ? 'number' : 'text'"
-                    :placeholder="field.placeholder"
-                    :class="field.kind === 'csv' || field.kind === 'number' ? 'font-mono' : ''"
-                    @input="
-                      field.kind === 'csv'
-                        ? undefined
-                        : setModelFieldValue(field.key, ($event.target as HTMLInputElement).value)
-                    "
-                    @change="
-                      field.kind === 'csv'
-                        ? setModelFieldValue(field.key, ($event.target as HTMLInputElement).value)
-                        : undefined
-                    "
-                  />
-                  <div v-if="field.help" class="text-[10px] text-muted-foreground">{{ field.help }}</div>
+                  <button
+                    type="button"
+                    class="min-w-0 flex-1 truncate text-left"
+                    :disabled="mutationBusy || listingModels"
+                    @click="openModelEditor(adapter.adapter_id, model)"
+                  >
+                    <span>{{ model.display_name || model.id }}</span>
+                    <code v-if="model.display_name" class="ml-2 font-mono text-[10px] text-muted-foreground">{{
+                      model.id
+                    }}</code>
+                  </button>
+                  <IconButton
+                    variant="ghost"
+                    size="sm"
+                    :tooltip="$st('Edit model')"
+                    :aria-label="$st('Edit model')"
+                    :disabled="mutationBusy || listingModels"
+                    @click="openModelEditor(adapter.adapter_id, model)"
+                  >
+                    <RiEditLine class="h-3.5 w-3.5" />
+                  </IconButton>
+                  <IconButton
+                    variant="ghost"
+                    size="sm"
+                    :tooltip="$st('Delete model')"
+                    :aria-label="$st('Delete model')"
+                    :disabled="mutationBusy"
+                    @click="deleteModel(adapter.adapter_id, model.id)"
+                  >
+                    <RiDeleteBinLine class="h-3.5 w-3.5 text-destructive" />
+                  </IconButton>
+                </div>
+                <div v-if="adapter.models.length === 0" class="px-2 py-3 text-xs text-muted-foreground">
+                  {{ $st('No models listed.') }}
                 </div>
               </div>
-            </div>
-            <label class="grid gap-1.5">
-              <span class="text-xs text-muted-foreground">{{ $st('Persisted model JSON') }}</span>
-              <textarea
-                v-model="modelJson"
-                rows="16"
-                spellcheck="false"
-                class="w-full rounded-md border border-input bg-transparent p-3 font-mono text-xs outline-none focus:border-ring"
-              />
-            </label>
-            <div v-if="modelError" class="text-xs text-destructive">{{ modelError }}</div>
-            <div class="flex flex-wrap gap-2">
-              <Button variant="outline" :disabled="modelSaving || mutationBusy" @click="applyModelJson">{{
-                $st('Apply JSON')
-              }}</Button>
-              <Button :disabled="modelSaving || mutationBusy" @click="saveModel"
-                ><RiSave3Line class="mr-1.5 h-4 w-4" />
-                {{ modelSaving ? $st('Saving…') : $st('Save model config') }}</Button
+            </SettingsDisclosureRow>
+            <div class="flex flex-wrap items-end gap-2">
+              <label class="grid min-w-[12rem] gap-1.5">
+                <span class="text-xs text-muted-foreground">{{ $st('Adapter') }}</span>
+                <OptionPicker
+                  :model-value="manualModelAdapterId"
+                  :options="manualModelAdapterOptions"
+                  :include-empty="false"
+                  :placeholder="$st('Select adapter')"
+                  :title="$st('Adapter for manual model')"
+                  monospace
+                  :disabled="mutationBusy || listingModels || manualModelAdapterOptions.length === 0"
+                  @update:model-value="manualModelAdapterId = $event"
+                />
+              </label>
+              <label class="grid min-w-[14rem] gap-1.5">
+                <span class="text-xs text-muted-foreground">{{ $st('Add model id') }}</span>
+                <Input
+                  v-model="newModelId"
+                  class="font-mono"
+                  placeholder="model-name"
+                  @keydown.enter="addManualModel"
+                />
+              </label>
+              <Button
+                variant="outline"
+                size="sm"
+                :disabled="mutationBusy || listingModels || !newModelId.trim() || !manualModelAdapterId"
+                @click="addManualModel"
+                ><RiAddLine class="mr-1.5 h-4 w-4" /> {{ $st('Add model') }}</Button
               >
             </div>
-          </template>
-        </section>
-      </div>
-      <div v-else class="rounded-md border border-dashed border-border/60 px-4 py-8 text-sm text-muted-foreground">
-        {{ $st('Loading provider draft…') }}
+          </section>
+
+          <section v-if="editingModel" class="grid gap-3 border-t border-border/60 pt-4">
+            <div class="flex flex-wrap items-start justify-between gap-2">
+              <div>
+                <div class="text-sm font-medium">
+                  {{ $st('Model ·') }} {{ editingModel.adapterId }}/{{ editingModel.modelId }}
+                </div>
+                <div class="mt-1 text-xs text-muted-foreground">
+                  {{ $st('The TUI exposes these 15 model configuration fields through its persisted JSON editor.') }}
+                </div>
+              </div>
+              <Button variant="ghost" size="sm" @click="closeModelEditor">{{ $st('Close') }}</Button>
+            </div>
+            <div v-if="modelLoading" class="text-sm text-muted-foreground">
+              {{ $st('Loading model configuration…') }}
+            </div>
+            <div v-else-if="modelError" class="text-sm text-destructive">{{ modelError }}</div>
+            <template v-else>
+              <div class="grid gap-2 sm:grid-cols-2">
+                <div v-for="field in modelFields" :key="field.key" class="rounded border border-border/50 px-3 py-2">
+                  <div class="grid gap-1.5">
+                    <div class="flex items-center justify-between gap-2">
+                      <label
+                        :for="`provider-model-${field.key.replaceAll('.', '-')}`"
+                        class="text-[10px] uppercase tracking-wide text-muted-foreground"
+                        >{{ field.label }}</label
+                      >
+                      <span v-if="field.kind === 'readonly'" class="text-[10px] text-muted-foreground">{{
+                        $st('read-only')
+                      }}</span>
+                    </div>
+                    <div
+                      v-if="field.kind === 'readonly'"
+                      :id="`provider-model-${field.key.replaceAll('.', '-')}`"
+                      class="break-all font-mono text-xs"
+                    >
+                      {{ modelFieldValue(field.key) || '—' }}
+                    </div>
+                    <input
+                      v-else-if="field.kind === 'boolean'"
+                      :id="`provider-model-${field.key.replaceAll('.', '-')}`"
+                      type="checkbox"
+                      class="h-4 w-4 justify-self-start accent-primary"
+                      :checked="modelFieldBooleanValue(field.key)"
+                      @change="setModelFieldValue(field.key, ($event.target as HTMLInputElement).checked)"
+                    />
+                    <OptionPicker
+                      v-else-if="field.kind === 'select'"
+                      :id="`provider-model-${field.key.replaceAll('.', '-')}`"
+                      :model-value="modelFieldValue(field.key)"
+                      :options="field.options || []"
+                      :include-empty="field.key === 'lifecycle'"
+                      :empty-label="field.key === 'lifecycle' ? $st('Default / unset') : undefined"
+                      :title="field.label"
+                      @update:model-value="setModelFieldValue(field.key, $event)"
+                    />
+                    <textarea
+                      v-else-if="field.kind === 'textarea'"
+                      :id="`provider-model-${field.key.replaceAll('.', '-')}`"
+                      :value="modelFieldValue(field.key)"
+                      :placeholder="field.placeholder"
+                      rows="3"
+                      class="w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm outline-none focus:border-ring"
+                      @input="setModelFieldValue(field.key, ($event.target as HTMLTextAreaElement).value)"
+                    />
+                    <Input
+                      v-else
+                      :id="`provider-model-${field.key.replaceAll('.', '-')}`"
+                      :value="modelFieldValue(field.key)"
+                      :type="field.kind === 'number' ? 'number' : 'text'"
+                      :placeholder="field.placeholder"
+                      :class="field.kind === 'csv' || field.kind === 'number' ? 'font-mono' : ''"
+                      @input="
+                        field.kind === 'csv'
+                          ? undefined
+                          : setModelFieldValue(field.key, ($event.target as HTMLInputElement).value)
+                      "
+                      @change="
+                        field.kind === 'csv'
+                          ? setModelFieldValue(field.key, ($event.target as HTMLInputElement).value)
+                          : undefined
+                      "
+                    />
+                    <div v-if="field.help" class="text-[10px] text-muted-foreground">{{ field.help }}</div>
+                  </div>
+                </div>
+              </div>
+              <label class="grid gap-1.5">
+                <span class="text-xs text-muted-foreground">{{ $st('Persisted model JSON') }}</span>
+                <textarea
+                  v-model="modelJson"
+                  rows="16"
+                  spellcheck="false"
+                  class="w-full rounded-md border border-input bg-transparent p-3 font-mono text-xs outline-none focus:border-ring"
+                />
+              </label>
+              <div v-if="modelError" class="text-xs text-destructive">{{ modelError }}</div>
+              <div class="flex flex-wrap items-center gap-2">
+                <Button variant="outline" :disabled="mutationBusy" @click="applyModelJson">{{
+                  $st('Apply JSON to provider draft')
+                }}</Button>
+                <span class="text-xs text-muted-foreground">{{
+                  $st('Model field changes are staged automatically and saved with the Provider.')
+                }}</span>
+              </div>
+            </template>
+          </section>
+          <SettingsSaveBar
+            :dirty="providerDirty"
+            :saving="saving"
+            :disabled="mutationBusy || listingModels || !draft.provider_id.trim()"
+            :error="error"
+            :save-label="$st('Save provider changes')"
+            sticky
+            @save="saveDraft"
+            @discard="discardProviderChanges"
+          />
+        </div>
+        <div v-else-if="loading" class="py-6 text-center text-sm text-muted-foreground">
+          {{ $st('Loading provider draft…') }}
+        </div>
+      </SettingsDisclosureRow>
+
+      <div
+        v-if="providerRows.length === 0"
+        class="rounded-lg border border-dashed border-border/60 px-4 py-8 text-center text-sm text-muted-foreground"
+      >
+        {{ $st('No providers configured. Create one to get started.') }}
       </div>
     </div>
   </section>

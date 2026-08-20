@@ -258,6 +258,156 @@ for (const file of overlayFiles) {
   if (missing.length) errors.push(`${locale} settings overlay misses current keys: ${missing.join(' | ')}`)
 }
 
+const sameAsEnglishAllowlist = new Set([
+  'Alpha',
+  'Beta',
+  'Bedrock SigV4',
+  'Cline API',
+  'Configuration',
+  'Driver',
+  'Experimental',
+  'GitHub Copilot',
+  'GitLab',
+  'GitLab API',
+  'Global',
+  'Google ADC',
+  'Mode',
+  'No',
+  'OpenAI ChatGPT',
+  'Plugins',
+  'Provenance',
+  'SAP AI Core',
+  'Source',
+  'Unicode',
+  'global',
+  'owner/repository@v0.1.0',
+  'tool_calling, reasoning, streaming',
+  '{adapter_id} / {id}',
+  '{path} · {target_path}',
+  '{provider_id} · {defaultLabel}',
+  '{tool_name} · {qualifier}',
+  '{type} {index}',
+])
+
+const contextualGlossary = {
+  'ar-SA': {
+    'All states': 'جميع حالات التنفيذ',
+    Driver: 'برنامج التشغيل',
+    Adapter: 'مهايئ',
+    Providers: 'مقدّمو الخدمات',
+    'Tool harnesses': 'بيئات تنفيذ الأدوات',
+    Global: 'عام',
+    Workspace: 'مساحة العمل',
+    'Provider configuration': 'إعدادات مزوّد الخدمة',
+    'Save changes': 'حفظ التغييرات',
+    'Discard changes': 'التراجع عن التغييرات',
+    'Apply JSON': 'تطبيق JSON',
+    Dark: 'داكن',
+    Light: 'فاتح',
+    'Clear approval model': 'مسح نموذج الموافقة',
+    'Plugin Marketplace': 'متجر الإضافات',
+  },
+  'es-ES': {
+    'All states': 'Todos los estados de ejecución',
+    Driver: 'Controlador',
+    Adapter: 'Adaptador',
+    Providers: 'Proveedores',
+    'Tool harnesses': 'Entornos de ejecución de herramientas',
+    Global: 'Global',
+    Workspace: 'Espacio de trabajo',
+    'Provider configuration': 'Configuración del proveedor',
+    'Save changes': 'Guardar cambios',
+    'Discard changes': 'Descartar cambios',
+    'Apply JSON': 'Aplicar JSON',
+    Dark: 'Oscuro',
+    Light: 'Claro',
+    'Clear approval model': 'Borrar modelo de aprobación',
+    'Plugin Marketplace': 'Marketplace de plugins',
+  },
+  'fr-FR': {
+    'All states': "Tous les statuts d'exécution",
+    Driver: 'Pilote',
+    Adapter: 'Adaptateur',
+    Providers: 'Fournisseurs',
+    'Tool harnesses': 'Environnements d’exécution des outils',
+    Global: 'Global',
+    Workspace: 'Espace de travail',
+    'Provider configuration': 'Configuration du fournisseur',
+    'Save changes': 'Enregistrer les modifications',
+    'Discard changes': 'Annuler les modifications',
+    'Apply JSON': 'Appliquer le JSON',
+    Dark: 'Sombre',
+    Light: 'Clair',
+    'Clear approval model': 'Effacer le modèle d’approbation',
+    'Plugin Marketplace': 'Place de marché des plugins',
+  },
+  'hi-IN': {
+    'All states': 'सभी निष्पादन स्थितियाँ',
+    Driver: 'ड्राइवर',
+    Adapter: 'एडाप्टर',
+    Providers: 'प्रदाता',
+    'Tool harnesses': 'टूल निष्पादन परिवेश',
+    Global: 'वैश्विक',
+    Workspace: 'कार्यक्षेत्र',
+    'Provider configuration': 'एआई प्रदाता कॉन्फ़िगरेशन',
+    'Save changes': 'परिवर्तन सहेजें',
+    'Discard changes': 'परिवर्तन त्यागें',
+    'Apply JSON': 'JSON लागू करें',
+    Dark: 'गहरा',
+    Light: 'हल्का',
+    'Clear approval model': 'अनुमोदन मॉडल हटाएँ',
+    'Plugin Marketplace': 'प्लगइन मार्केटप्लेस',
+  },
+  'pt-BR': {
+    'All states': 'Todos os status de execução',
+    Driver: 'Driver',
+    Adapter: 'Adaptador',
+    Providers: 'Provedores',
+    'Tool harnesses': 'Ambientes de execução de ferramentas',
+    Global: 'Global',
+    Workspace: 'Espaço de trabalho',
+    'Provider configuration': 'Configuração do provedor',
+    'Save changes': 'Salvar alterações',
+    'Discard changes': 'Descartar alterações',
+    'Apply JSON': 'Aplicar JSON',
+    Dark: 'Escuro',
+    Light: 'Claro',
+    'Clear approval model': 'Limpar modelo de aprovação',
+    'Plugin Marketplace': 'Marketplace de plugins',
+  },
+  'zh-CN': {
+    'All states': '所有状态',
+    Driver: '驱动',
+    Adapter: '适配器',
+    Providers: '服务商',
+    'Tool harnesses': '工具执行环境',
+    Global: '全局',
+    Workspace: '工作区',
+    'Provider configuration': '服务商配置',
+    'Save changes': '保存修改',
+    'Discard changes': '放弃修改',
+    'Apply JSON': '应用 JSON',
+    Dark: '深色',
+    Light: '浅色',
+    'Clear approval model': '清除审批模型',
+    'Plugin Marketplace': '插件市场',
+  },
+}
+
+for (const [locale, catalog] of Object.entries(catalogs)) {
+  if (locale === 'en-US') continue
+  for (const source of referenced) {
+    if (catalog[source] === english[source] && !sameAsEnglishAllowlist.has(source)) {
+      errors.push(`${locale} leaves user-facing Settings text in English: ${source}`)
+    }
+  }
+  for (const [source, expected] of Object.entries(contextualGlossary[locale] || {})) {
+    if (catalog[source] !== expected) {
+      errors.push(`${locale} violates Settings glossary for ${source}: expected=${expected} actual=${catalog[source]}`)
+    }
+  }
+}
+
 const coreTranslatedSources = [
   'Advanced settings',
   'Allow',

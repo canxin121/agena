@@ -1640,6 +1640,12 @@ mod tests {
                 installed.artifact_path.display().to_string()
             ))
         );
+        let installed_sha256 = sha256_file(&installed.artifact_path).unwrap();
+        assert_ne!(installed_sha256, packaged.sha256);
+        assert_eq!(
+            config.pointer("/plugins/list/example.hello/package/sha256"),
+            Some(&serde_json::json!(installed_sha256))
+        );
     }
 
     #[test]

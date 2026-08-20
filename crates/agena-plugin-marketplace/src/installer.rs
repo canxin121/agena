@@ -639,6 +639,27 @@ impl<F: HttpFetcher> MarketplaceClient<F> {
             self.cache.save_manifest_snapshot(&plugin.id, &version)?;
         }
 
+        // `version.sha256` and `version.signature` authenticate the downloaded
+        // release artifact. For archived releases that artifact is the tar.gz,
+        // while the runtime package points at the extracted entrypoint. Reusing
+        // the archive digest/signature in agena.json would make runtime
+        // validation hash a different byte sequence and fail every time.
+        // Preserve the release digest in installed.json for provenance, but pin
+        // the actual runtime entrypoint in the generated config.
+        let runtime_sha256 = if version.sha256.is_some() {
+            if archive_extracted {
+                if req.dry_run {
+                    None
+                } else {
+                    Some(sha256_hex(&std::fs::read(&artifact_path)?))
+                }
+            } else {
+                Some(actual_sha.clone())
+            }
+        } else {
+            None
+        };
+
         // Update config
         let config_path = req.config_path.clone();
         let mut document = read_or_create_doc(&config_path)?;
@@ -646,7 +667,14 @@ impl<F: HttpFetcher> MarketplaceClient<F> {
         if already_present && !req.force {
             return Err(MarketplaceError::AlreadyInstalled(plugin.id.clone()));
         }
-        write_plugin_config(&mut document, &plugin.id, &version, &artifact_path)?;
+        write_plugin_config(
+            &mut document,
+            &plugin.id,
+            &version,
+            &artifact_path,
+            runtime_sha256.as_deref(),
+            archive_extracted,
+        )?;
         if !req.dry_run {
             write_config_doc(&config_path, &document)?;
         }
@@ -1185,6 +1213,8 @@ fn write_plugin_config(
     plugin_id: &str,
     version: &PluginVersion,
     artifact_path: &Path,
+    runtime_sha256: Option<&str>,
+    archive_extracted: bool,
 ) -> Result<(), MarketplaceError> {
     let list = ensure_plugins_list_object(doc)?;
     let mut package = JsonMap::new();
@@ -1198,10 +1228,13 @@ fn write_plugin_config(
                 "path".to_string(),
                 JsonValue::from(artifact_path.display().to_string()),
             );
-            if let Some(sha) = version.sha256.as_ref() {
-                package.insert("sha256".to_string(), JsonValue::from(sha.as_str()));
+            if let Some(sha) = runtime_sha256 {
+                package.insert("sha256".to_string(), JsonValue::from(sha));
             }
-            if let Some(sig) = version.signature.as_ref() {
+            // Release signatures are over the distributed bytes. They can be
+            // reused at runtime only when those bytes are loaded directly;
+            // archive signatures do not verify the extracted cdylib.
+            if !archive_extracted && let Some(sig) = version.signature.as_ref() {
                 package.insert(
                     "signature".to_string(),
                     serde_json::json!({
@@ -1216,8 +1249,8 @@ fn write_plugin_config(
                 "path".to_string(),
                 JsonValue::from(artifact_path.display().to_string()),
             );
-            if let Some(sha) = version.sha256.as_ref() {
-                package.insert("sha256".to_string(), JsonValue::from(sha.as_str()));
+            if let Some(sha) = runtime_sha256 {
+                package.insert("sha256".to_string(), JsonValue::from(sha));
             }
         }
         PluginKind::Stdio => {
@@ -1232,8 +1265,8 @@ fn write_plugin_config(
             if !version.env.is_empty() {
                 package.insert("env".to_string(), serde_json::json!(version.env));
             }
-            if let Some(sha) = version.sha256.as_ref() {
-                package.insert("sha256".to_string(), JsonValue::from(sha.as_str()));
+            if let Some(sha) = runtime_sha256 {
+                package.insert("sha256".to_string(), JsonValue::from(sha));
             }
         }
         PluginKind::Http => {
@@ -1247,6 +1280,50 @@ fn write_plugin_config(
     }
     list.insert(plugin_id.to_string(), JsonValue::Object(plugin_config));
     Ok(())
+}
+
+#[cfg(test)]
+mod config_writer_tests {
+    use super::{PluginVersion, write_plugin_config};
+    use std::path::Path;
+
+    #[test]
+    fn archived_cdylib_pins_entrypoint_digest_without_reusing_archive_signature() {
+        let version: PluginVersion = serde_json::from_value(serde_json::json!({
+            "version": "0.1.0",
+            "kind": "cdylib",
+            "platform": "aarch64-apple-darwin",
+            "url": "https://example.invalid/plugin.tar.gz",
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "signature": {
+                "key_id": "release-key",
+                "signature": "deadbeef"
+            },
+            "settings": {}
+        }))
+        .unwrap();
+        let mut document = serde_json::json!({});
+        let runtime_sha = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+        write_plugin_config(
+            &mut document,
+            "example.plugin",
+            &version,
+            Path::new("/plugins/example/libexample.dylib"),
+            Some(runtime_sha),
+            true,
+        )
+        .unwrap();
+
+        assert_eq!(
+            document.pointer("/plugins/list/example.plugin/package/sha256"),
+            Some(&serde_json::json!(runtime_sha))
+        );
+        assert_eq!(
+            document.pointer("/plugins/list/example.plugin/package/signature"),
+            None
+        );
+    }
 }
 
 fn remove_plugin_config(doc: &mut JsonValue, plugin_id: &str) {

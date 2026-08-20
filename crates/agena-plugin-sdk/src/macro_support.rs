@@ -197,7 +197,7 @@ pub fn typed_tool_summary(value: &Value) -> String {
         Value::Null => "No result".to_string(),
         Value::Bool(value) => value.to_string(),
         Value::Number(value) => value.to_string(),
-        Value::String(value) => agena_tool::normalize_tool_summary(value),
+        Value::String(value) => agena_plugin_contracts::normalize_tool_summary(value),
         Value::Array(items) => format!("{} items", items.len()),
         Value::Object(fields) => {
             if let Some(summary) = fields
@@ -205,7 +205,7 @@ pub fn typed_tool_summary(value: &Value) -> String {
                 .and_then(Value::as_str)
                 .filter(|summary| !summary.trim().is_empty())
             {
-                return agena_tool::normalize_tool_summary(summary);
+                return agena_plugin_contracts::normalize_tool_summary(summary);
             }
             if let Some(status) = fields
                 .get("status")

@@ -26,7 +26,7 @@ test('models and plugin workbenches expose the high-value parity subpages', () =
   }
 
   const plugins = readFileSync(resolve(import.meta.dir, components.plugins), 'utf8')
-  for (const id of ['plugin-workbench', 'mcp-server', 'harnesses']) {
+  for (const id of ['plugin-workbench', 'marketplace', 'mcp-server', 'harnesses']) {
     assert.ok(plugins.includes(`id: '${id}'`), `missing plugins subpage ${id}`)
   }
 })

@@ -5,8 +5,9 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 [dependencies]
-agena-plugin-host = { workspace = true, features = ["signing"] }
+agena-plugin-contracts = { workspace = true }
 chrono = { workspace = true }
+ed25519-dalek = { workspace = true }
 flate2 = { workspace = true }
 hex = { workspace = true }
 reqwest = { workspace = true, features = ["blocking", "rustls"] }
@@ -17,7 +18,9 @@ sha2 = { workspace = true }
 tar = { workspace = true }
 tempfile = { workspace = true }
 thiserror = { workspace = true }
+toml = { workspace = true }
 tracing = { workspace = true }
+walkdir = { workspace = true }
 
 [lints]
 workspace = true

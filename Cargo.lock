@@ -481,8 +481,10 @@ dependencies = [
 name = "agena-marketplace-server"
 version = "0.1.0"
 dependencies = [
+ "agena-plugin-marketplace",
  "axum",
- "serde_json",
+ "hex",
+ "sha2 0.11.0",
  "tokio",
 ]
 
@@ -578,6 +580,18 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
+ "unicode-segmentation",
+ "unicode-width 0.2.2",
+]
+
+[[package]]
+name = "agena-plugin-dev"
+version = "0.1.0"
+dependencies = [
+ "agena-plugin-marketplace",
+ "clap",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -619,8 +633,9 @@ dependencies = [
 name = "agena-plugin-marketplace"
 version = "0.1.0"
 dependencies = [
- "agena-plugin-host",
+ "agena-plugin-contracts",
  "chrono",
+ "ed25519-dalek 3.0.0",
  "flate2",
  "hex",
  "reqwest 0.13.4",
@@ -631,7 +646,9 @@ dependencies = [
  "tar",
  "tempfile",
  "thiserror 2.0.19",
+ "toml",
  "tracing",
+ "walkdir",
 ]
 
 [[package]]
@@ -644,7 +661,6 @@ dependencies = [
  "agena-macros",
  "agena-plugin-contracts",
  "agena-stdio-codec",
- "agena-tool",
  "async-trait",
  "axum",
  "bitflags 2.13.1",
@@ -1236,6 +1252,7 @@ version = "0.1.0"
 dependencies = [
  "agena-domain",
  "agena-failure",
+ "agena-plugin-contracts",
  "ast-grep-core",
  "ast-grep-language",
  "ignore",
@@ -1246,7 +1263,6 @@ dependencies = [
  "thiserror 2.0.19",
  "tracing",
  "tree-sitter",
- "unicode-segmentation",
  "unicode-width 0.2.2",
 ]
 

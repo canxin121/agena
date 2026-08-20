@@ -8,6 +8,8 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use unicode_segmentation::UnicodeSegmentation;
+use unicode_width::UnicodeWidthStr;
 
 pub const SETTINGS_CONTRACT_VERSION: u32 = 1;
 pub const MAX_SETTINGS_DEPTH: usize = 16;
@@ -26,6 +28,126 @@ pub const MAX_OPERATION_ALIASES: usize = 16;
 pub const MAX_OPERATION_DIAGNOSTICS: usize = 32;
 pub const MAX_OPERATION_EFFECTS: usize = 8;
 pub const MAX_PLUGIN_SERVICES: usize = 128;
+
+/// Durable Operation titles are compact scan labels, not result previews.
+pub const TOOL_TITLE_MAX_DISPLAY_WIDTH: usize = 96;
+/// Durable Operation summaries are compact result statements.
+pub const TOOL_SUMMARY_MAX_DISPLAY_WIDTH: usize = 120;
+
+/// Normalize a tool/plugin title at the shared contract boundary. This lives
+/// in the lightweight contract crate so SDK authors do not need Agena's
+/// syntax-tree/runtime tool implementation just to format one-line metadata.
+pub fn normalize_tool_title(title: impl AsRef<str>) -> String {
+    normalize_tool_presentation_line(title, TOOL_TITLE_MAX_DISPLAY_WIDTH)
+}
+
+/// Normalize a tool/plugin summary at the shared contract boundary.
+pub fn normalize_tool_summary(summary: impl AsRef<str>) -> String {
+    normalize_tool_presentation_line(summary, TOOL_SUMMARY_MAX_DISPLAY_WIDTH)
+}
+
+fn normalize_tool_presentation_line(value: impl AsRef<str>, max_width: usize) -> String {
+    let normalized = value
+        .as_ref()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    if UnicodeWidthStr::width(normalized.as_str()) <= max_width {
+        return normalized;
+    }
+    let content_width = max_width.saturating_sub(1);
+    let mut width = 0_usize;
+    let mut bounded = String::new();
+    for grapheme in normalized.graphemes(true) {
+        let grapheme_width = UnicodeWidthStr::width(grapheme);
+        if width.saturating_add(grapheme_width) > content_width {
+            break;
+        }
+        bounded.push_str(grapheme);
+        width = width.saturating_add(grapheme_width);
+    }
+    bounded = bounded.trim_end().to_owned();
+    bounded.push('…');
+    bounded
+}
+
+/// Host-neutral syntax error for Agena's stable `namespace.plugin` identity.
+/// The SDK, marketplace, runtime configuration and tooling all delegate to
+/// this contract so independent tooling never grows a second slug grammar.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PluginIdentityError {
+    MissingSeparator(String),
+    InvalidComponent {
+        label: &'static str,
+        value: String,
+        reason: String,
+    },
+}
+
+impl fmt::Display for PluginIdentityError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MissingSeparator(value) => {
+                write!(f, "plugin key `{value}` must use `namespace.plugin` format")
+            }
+            Self::InvalidComponent {
+                label,
+                value,
+                reason,
+            } => write!(f, "invalid {label} `{value}`: {reason}"),
+        }
+    }
+}
+
+impl std::error::Error for PluginIdentityError {}
+
+pub fn normalize_plugin_identity_parts(
+    namespace: &str,
+    name: &str,
+) -> Result<(String, String), PluginIdentityError> {
+    fn segment(value: &str, label: &'static str) -> Result<String, PluginIdentityError> {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            return Err(PluginIdentityError::InvalidComponent {
+                label,
+                value: value.to_string(),
+                reason: "cannot be empty".to_string(),
+            });
+        }
+        if trimmed.contains('.') {
+            return Err(PluginIdentityError::InvalidComponent {
+                label,
+                value: value.to_string(),
+                reason: "must not contain `.`".to_string(),
+            });
+        }
+        Ok(trimmed.to_string())
+    }
+
+    Ok((
+        segment(namespace, "plugin namespace")?,
+        segment(name, "plugin name")?,
+    ))
+}
+
+pub fn normalize_plugin_identity(value: &str) -> Result<(String, String), PluginIdentityError> {
+    let trimmed = value.trim();
+    let Some((namespace, name)) = trimmed.split_once('.') else {
+        return Err(PluginIdentityError::MissingSeparator(trimmed.to_string()));
+    };
+    if name.contains('.') {
+        return Err(PluginIdentityError::InvalidComponent {
+            label: "plugin name",
+            value: name.to_string(),
+            reason: "must not contain `.`".to_string(),
+        });
+    }
+    normalize_plugin_identity_parts(namespace, name)
+}
+
+pub fn validate_plugin_identity(value: &str) -> Result<(), PluginIdentityError> {
+    normalize_plugin_identity(value).map(|_| ())
+}
 
 /// A complete settings/form contract. The root is normally a fixed object,
 /// but the AST also supports a bounded primitive root for small plugins.
@@ -1890,6 +2012,19 @@ mod tests {
             secret: false,
             kind,
         }
+    }
+
+    #[test]
+    fn plugin_identity_contract_matches_runtime_key_grammar() {
+        assert_eq!(
+            normalize_plugin_identity(" agena-tools.FileSystem ").unwrap(),
+            ("agena-tools".to_string(), "FileSystem".to_string())
+        );
+        assert!(validate_plugin_identity("agena.fs").is_ok());
+        assert!(validate_plugin_identity("agena").is_err());
+        assert!(validate_plugin_identity("agena.fs.tools").is_err());
+        assert!(normalize_plugin_identity_parts("agena.tools", "fs").is_err());
+        assert!(normalize_plugin_identity_parts("agena", "fs.tools").is_err());
     }
 
     #[test]

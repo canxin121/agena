@@ -66,6 +66,7 @@ members = [
     "examples/echo_plugin_stdio",
     "examples/multi_tool_plugin_stdio",
     "tools/agena-e2e",
+    "tools/agena-plugin-dev",
 ]
 # Keep the repository-root edit loop focused on the terminal application.
 # Full validation remains explicit through `--workspace`.

@@ -229,7 +229,7 @@ impl ToolInvokeOutput {
         let s = s.into();
         Self {
             title: String::new(),
-            summary: agena_tool::normalize_tool_summary(&s),
+            summary: agena_plugin_contracts::normalize_tool_summary(&s),
             output_text: s,
             sections: Vec::new(),
             payload: None,
@@ -247,8 +247,8 @@ impl ToolInvokeOutput {
         attachments: Vec<AttachmentItem>,
     ) -> Self {
         Self {
-            title: agena_tool::normalize_tool_title(title.into()),
-            summary: agena_tool::normalize_tool_summary(summary.into()),
+            title: agena_plugin_contracts::normalize_tool_title(title.into()),
+            summary: agena_plugin_contracts::normalize_tool_summary(summary.into()),
             output_text: output_text.into(),
             sections: Vec::new(),
             payload,
@@ -369,7 +369,7 @@ impl ToolStreamEnd {
         Self {
             stream_id: stream_id.into(),
             title: String::new(),
-            summary: agena_tool::normalize_tool_summary(&output_text),
+            summary: agena_plugin_contracts::normalize_tool_summary(&output_text),
             output_text,
             sections: Vec::new(),
             payload: None,
@@ -402,8 +402,8 @@ impl ToolStreamEnd {
     ) -> Self {
         Self {
             stream_id: stream_id.into(),
-            title: agena_tool::normalize_tool_title(title.into()),
-            summary: agena_tool::normalize_tool_summary(summary.into()),
+            title: agena_plugin_contracts::normalize_tool_title(title.into()),
+            summary: agena_plugin_contracts::normalize_tool_summary(summary.into()),
             output_text: output_text.into(),
             sections: Vec::new(),
             payload,

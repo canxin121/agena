@@ -10,6 +10,7 @@ description = "Provider-independent tool invocation and permission contracts"
 [dependencies]
 agena-domain = { workspace = true }
 agena-failure = { workspace = true }
+agena-plugin-contracts = { workspace = true }
 ast-grep-core = { workspace = true }
 ast-grep-language = { workspace = true }
 ignore = { workspace = true }
@@ -19,11 +20,10 @@ schemars.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 tree-sitter = { workspace = true }
-unicode-segmentation = { workspace = true }
-unicode-width = { workspace = true }
 
 [lints]
 workspace = true
 
 [dev-dependencies]
 tempfile = { workspace = true }
+unicode-width = { workspace = true }

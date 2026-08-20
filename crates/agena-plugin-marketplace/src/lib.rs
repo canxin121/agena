@@ -4,6 +4,7 @@ pub mod cache;
 pub mod error;
 pub mod installer;
 pub mod manifest;
+pub mod project;
 
 use std::io::Read;
 use std::time::Duration;
@@ -13,11 +14,25 @@ pub use cache::{
 };
 pub use error::MarketplaceError;
 pub use installer::{
-    InstallOutcome, InstallRequest, MarketplaceClient, OutdatedRecord, RegistryHandle,
-    RegistrySpec, UninstallOutcome, UpgradeOutcome,
+    DEFAULT_MARKETPLACE_SOURCE, InstallOutcome, InstallRequest, MarketplaceClient, OutdatedRecord,
+    PluginInstallLocator, RegistryHandle, RegistrySpec, UninstallOutcome, UpgradeOutcome,
+    current_target_triple, parse_plugin_install_locator,
 };
 pub use manifest::{
-    ArchiveSpec, DependencySpec, PluginKind, PluginRecord, PluginVersion, RegistryIndex,
+    AGENA_MARKETPLACE_FILENAME, AGENA_RELEASE_MANIFEST_FILENAME, ArchiveSpec, DependencySpec,
+    MarketplaceMetadata, MarketplaceOwner, MarketplaceReviewTier, PluginKind, PluginRecord,
+    PluginReleaseArtifact, PluginReleaseManifest, PluginReleaseSource, PluginSignature,
+    PluginVersion, RegistryIndex,
+};
+pub use project::{
+    AGENA_MARKETPLACE_PROJECT_FILENAME, AGENA_PROJECT_MANIFEST_FILENAME,
+    AGENA_TEMPLATE_BASELINE_REF, AddMarketplaceReleaseOutcome, AddMarketplaceReleaseRequest,
+    AssembleReleaseOutcome, AssembleReleaseRequest, BuildMarketplaceOutcome,
+    BuildMarketplaceRequest, MarketplacePluginPolicy, MarketplaceProjectManifest,
+    PackagePluginOutcome, PackagePluginRequest, PluginProjectManifest, PluginTemplateKind,
+    ScaffoldMarketplaceRequest, ScaffoldPluginRequest, add_marketplace_release, assemble_release,
+    build_marketplace, generate_plugin_lockfile, package_plugin, scaffold_marketplace,
+    scaffold_plugin,
 };
 
 /// Pluggable HTTP fetcher so tests can supply local bytes without a network.

@@ -10,8 +10,13 @@ use sha2::{Digest, Sha256};
 
 use crate::cache::{InstalledRecord, MarketplaceCache, write_secure_file};
 use crate::error::MarketplaceError;
-use crate::manifest::{PluginKind, PluginVersion, RegistryIndex};
+use crate::manifest::{
+    AGENA_MARKETPLACE_FILENAME, AGENA_RELEASE_MANIFEST_FILENAME, PluginKind, PluginVersion,
+    RegistryIndex, parse_registry_document_with_policy,
+};
 use crate::{HttpFetcher, ReqwestFetcher};
+
+pub const DEFAULT_MARKETPLACE_SOURCE: &str = "canxin121/agena-plugin-marketplace";
 
 /// Configured registry endpoint.
 #[derive(Debug, Clone)]
@@ -19,6 +24,258 @@ pub struct RegistrySpec {
     pub id: String,
     pub url: String,
     pub require_signature: bool,
+    pub require_github_distribution: bool,
+}
+
+fn verify_signature_bytes(
+    bytes: &[u8],
+    signature: &crate::manifest::PluginSignature,
+    trusted_keys: &BTreeMap<String, String>,
+) -> Result<(), String> {
+    use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+
+    let key_hex = trusted_keys
+        .get(&signature.key_id)
+        .ok_or_else(|| format!("unknown trusted key id `{}`", signature.key_id))?;
+    let key_bytes = hex::decode(key_hex).map_err(|error| {
+        format!(
+            "trusted key `{}` is not valid hex: {error}",
+            signature.key_id
+        )
+    })?;
+    let key_array: [u8; 32] = key_bytes
+        .try_into()
+        .map_err(|_| format!("trusted key `{}` must be 32 bytes", signature.key_id))?;
+    let verifier = VerifyingKey::from_bytes(&key_array)
+        .map_err(|error| format!("invalid ed25519 public key `{}`: {error}", signature.key_id))?;
+    let signature_bytes = hex::decode(&signature.signature)
+        .map_err(|error| format!("signature is not valid hex: {error}"))?;
+    let signature_array: [u8; 64] = signature_bytes
+        .try_into()
+        .map_err(|_| "signature must be 64 bytes".to_string())?;
+    verifier
+        .verify(bytes, &Signature::from_bytes(&signature_array))
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(test)]
+mod source_tests {
+    use super::{PluginInstallLocator, RegistrySpec, parse_plugin_install_locator};
+    use crate::manifest::parse_registry_document_with_policy;
+
+    #[test]
+    fn github_and_marketplace_sources_have_one_closed_parser() {
+        assert_eq!(
+            parse_plugin_install_locator("example.notes@0.2.0").unwrap(),
+            PluginInstallLocator::Marketplace {
+                plugin_id: "example.notes".to_string(),
+                version: Some("0.2.0".to_string()),
+            }
+        );
+        assert_eq!(
+            parse_plugin_install_locator("github:owner/repository@v0.2.0").unwrap(),
+            PluginInstallLocator::GitHubRelease {
+                repository: "owner/repository".to_string(),
+                tag: Some("v0.2.0".to_string()),
+            }
+        );
+    }
+
+    #[test]
+    fn github_marketplace_and_release_shorthands_resolve_to_standard_assets() {
+        let default_marketplace =
+            RegistrySpec::from_source("default", "owner/catalog", false).unwrap();
+        assert_eq!(
+            default_marketplace.url,
+            "https://raw.githubusercontent.com/owner/catalog/main/agena-marketplace.json"
+        );
+        let marketplace =
+            RegistrySpec::from_source("example", "owner/catalog@main", false).unwrap();
+        assert_eq!(
+            marketplace.url,
+            "https://raw.githubusercontent.com/owner/catalog/main/agena-marketplace.json"
+        );
+        assert!(marketplace.require_github_distribution);
+        let release = RegistrySpec::github_release("owner/plugin", Some("v0.2.0"), false).unwrap();
+        assert_eq!(
+            release.url,
+            "https://github.com/owner/plugin/releases/download/v0.2.0/agena-plugin-release.json"
+        );
+        assert!(release.require_github_distribution);
+    }
+
+    #[test]
+    fn direct_github_release_requires_immutable_source_provenance() {
+        let mut release = serde_json::json!({
+            "schema_version": 1,
+            "id": "example.notes",
+            "name": "Notes",
+            "description": "Example",
+            "repository": "https://github.com/example/notes",
+            "version": "0.1.0",
+            "artifacts": [{
+                "target": "any",
+                "kind": "stdio",
+                "asset": "example-notes-v0.1.0.tar.gz",
+                "url": "https://github.com/example/notes/releases/download/v0.1.0/example-notes-v0.1.0.tar.gz",
+                "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "archive": { "format": "tar_gz", "entrypoint": "example-notes" },
+                "settings": {}
+            }]
+        });
+        let bytes = serde_json::to_vec(&release).unwrap();
+        let error = parse_registry_document_with_policy(
+            &bytes,
+            "https://github.com/example/notes/releases/latest/download/agena-plugin-release.json",
+            true,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("source provenance"));
+
+        release["source"] = serde_json::json!({
+            "repository": "https://github.com/example/notes",
+            "tag": "v0.1.0",
+            "commit": "0123456789abcdef0123456789abcdef01234567",
+            "workflow_run_url": "https://github.com/example/notes/actions/runs/123"
+        });
+        let index = parse_registry_document_with_policy(
+            &serde_json::to_vec(&release).unwrap(),
+            "https://github.com/example/notes/releases/latest/download/agena-plugin-release.json",
+            true,
+        )
+        .unwrap();
+        assert_eq!(
+            index.plugins[0].versions[0]
+                .source
+                .as_ref()
+                .unwrap()
+                .commit
+                .len(),
+            40
+        );
+    }
+}
+
+fn looks_like_github_repository(spec: &str) -> bool {
+    if spec.starts_with("github:") || spec.starts_with("https://github.com/") {
+        return true;
+    }
+    let repository = spec
+        .rsplit_once('@')
+        .map(|(value, _)| value)
+        .unwrap_or(spec);
+    repository.split('/').count() == 2
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+/// User-facing plugin install locator. Marketplace ids and direct GitHub
+/// repositories intentionally share one parser so CLI, REST, and future UIs
+/// cannot disagree about installation semantics.
+pub enum PluginInstallLocator {
+    Marketplace {
+        plugin_id: String,
+        version: Option<String>,
+    },
+    GitHubRelease {
+        repository: String,
+        tag: Option<String>,
+    },
+}
+
+pub fn parse_plugin_install_locator(
+    spec: impl AsRef<str>,
+) -> Result<PluginInstallLocator, MarketplaceError> {
+    let spec = spec.as_ref().trim();
+    if spec.is_empty() {
+        return Err(MarketplaceError::Index(
+            "plugin install specification cannot be empty".to_string(),
+        ));
+    }
+    if looks_like_github_repository(spec) {
+        let spec = spec.strip_prefix("github:").unwrap_or(spec);
+        let (repository, tag) = match spec.rsplit_once('@') {
+            Some((repository, tag)) if !repository.is_empty() && !tag.is_empty() => {
+                (repository, Some(tag.to_string()))
+            }
+            _ => (spec, None),
+        };
+        return Ok(PluginInstallLocator::GitHubRelease {
+            repository: normalize_github_repository(repository)?,
+            tag,
+        });
+    }
+    let (plugin_id, version) = match spec.rsplit_once('@') {
+        Some((plugin_id, version)) if !plugin_id.is_empty() && !version.is_empty() => {
+            (plugin_id, Some(version.to_string()))
+        }
+        _ => (spec, None),
+    };
+    agena_plugin_contracts::validate_plugin_identity(plugin_id)
+        .map_err(|error| MarketplaceError::Index(error.to_string()))?;
+    if let Some(version) = version.as_deref() {
+        semver::Version::parse(version.trim_start_matches('v')).map_err(|error| {
+            MarketplaceError::Index(format!(
+                "invalid requested plugin version `{version}`: {error}"
+            ))
+        })?;
+    }
+    Ok(PluginInstallLocator::Marketplace {
+        plugin_id: plugin_id.to_string(),
+        version,
+    })
+}
+
+impl RegistrySpec {
+    pub fn from_source(
+        id: impl Into<String>,
+        source: impl AsRef<str>,
+        require_signature: bool,
+    ) -> Result<Self, MarketplaceError> {
+        let source = source.as_ref().trim();
+        let url = normalize_marketplace_source(source)?;
+        let require_github_distribution = is_github_backed_source(source, url.as_str());
+        Ok(Self {
+            id: id.into(),
+            url,
+            require_signature,
+            require_github_distribution,
+        })
+    }
+
+    pub fn github_release(
+        repository: impl AsRef<str>,
+        tag: Option<&str>,
+        require_signature: bool,
+    ) -> Result<Self, MarketplaceError> {
+        let repository = normalize_github_repository(repository.as_ref())?;
+        let id = format!("github-{}", repository.replace('/', "-"));
+        let url = match tag.map(str::trim).filter(|tag| !tag.is_empty()) {
+            Some(tag) => format!(
+                "https://github.com/{repository}/releases/download/{tag}/{AGENA_RELEASE_MANIFEST_FILENAME}"
+            ),
+            None => format!(
+                "https://github.com/{repository}/releases/latest/download/{AGENA_RELEASE_MANIFEST_FILENAME}"
+            ),
+        };
+        Ok(Self {
+            id,
+            url,
+            require_signature,
+            require_github_distribution: true,
+        })
+    }
+}
+
+fn is_github_backed_source(source: &str, normalized_url: &str) -> bool {
+    source.starts_with("github:")
+        || (!source.starts_with("http://")
+            && !source.starts_with("https://")
+            && !source.starts_with("file://")
+            && !Path::new(source).is_absolute()
+            && !source.starts_with("./")
+            && !source.starts_with("../"))
+        || normalized_url.starts_with("https://raw.githubusercontent.com/")
+        || normalized_url.starts_with("https://github.com/")
 }
 
 /// Lazily-fetched registry handle bound to a [`MarketplaceCache`].
@@ -39,14 +296,86 @@ impl<'a, F: HttpFetcher> RegistryHandle<'a, F> {
         persist_cache: bool,
     ) -> Result<RegistryIndex, MarketplaceError> {
         if !force_refresh && let Some(bytes) = self.cache.load_index_raw(&self.spec.id)? {
-            return Ok(serde_json::from_slice(&bytes)?);
+            return parse_registry_document_with_policy(
+                &bytes,
+                self.spec.url.as_str(),
+                self.spec.require_github_distribution,
+            );
         }
         let bytes = self.fetcher.fetch(&self.spec.url)?;
+        let index = parse_registry_document_with_policy(
+            &bytes,
+            self.spec.url.as_str(),
+            self.spec.require_github_distribution,
+        )?;
         if persist_cache {
             self.cache.save_index(&self.spec.id, &bytes)?;
         }
-        Ok(serde_json::from_slice(&bytes)?)
+        Ok(index)
     }
+}
+
+fn normalize_marketplace_source(source: &str) -> Result<String, MarketplaceError> {
+    if source.starts_with("https://")
+        || source.starts_with("http://")
+        || source.starts_with("file://")
+    {
+        return Ok(source.to_string());
+    }
+    let path = Path::new(source);
+    if path.is_absolute() || source.starts_with("./") || source.starts_with("../") {
+        let absolute = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            std::env::current_dir()?.join(path)
+        };
+        return Ok(format!("file://{}", absolute.display()));
+    }
+    let source = source.strip_prefix("github:").unwrap_or(source);
+    let (repository, reference) = split_github_reference(source)?;
+    Ok(format!(
+        "https://raw.githubusercontent.com/{repository}/{reference}/{AGENA_MARKETPLACE_FILENAME}"
+    ))
+}
+
+fn normalize_github_repository(value: &str) -> Result<String, MarketplaceError> {
+    let value = value.trim().trim_end_matches('/');
+    let value = value.strip_prefix("github:").unwrap_or(value);
+    let value = value
+        .strip_prefix("https://github.com/")
+        .unwrap_or(value)
+        .trim_end_matches(".git");
+    let (repository, _) = split_github_reference(value)?;
+    Ok(repository)
+}
+
+fn split_github_reference(value: &str) -> Result<(String, String), MarketplaceError> {
+    let (repository, reference) = value
+        .rsplit_once('@')
+        .map(|(repository, reference)| (repository, reference))
+        .unwrap_or((value, "main"));
+    let mut parts = repository.split('/');
+    let owner = parts.next().unwrap_or_default();
+    let repo = parts.next().unwrap_or_default();
+    if owner.is_empty()
+        || repo.is_empty()
+        || parts.next().is_some()
+        || !owner.chars().all(github_name_character)
+        || !repo.chars().all(github_name_character)
+        || reference.is_empty()
+        || !reference.chars().all(github_reference_character)
+    {
+        return Err(MarketplaceError::InvalidUrl(value.to_string()));
+    }
+    Ok((format!("{owner}/{repo}"), reference.to_string()))
+}
+
+fn github_name_character(character: char) -> bool {
+    character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.')
+}
+
+fn github_reference_character(character: char) -> bool {
+    github_name_character(character) || character == '/'
 }
 
 /// Top-level marketplace operations.
@@ -251,11 +580,12 @@ impl<F: HttpFetcher> MarketplaceClient<F> {
         }
 
         if let Some(signature) = version.signature.as_ref() {
-            agena_plugin_host::verify_signature_bytes(&bytes, signature, &self.trusted_keys)
-                .map_err(|err| MarketplaceError::SignatureFailed {
+            verify_signature_bytes(&bytes, signature, &self.trusted_keys).map_err(|err| {
+                MarketplaceError::SignatureFailed {
                     plugin: plugin.id.clone(),
                     message: err,
-                })?;
+                }
+            })?;
         } else if req.registry.require_signature {
             return Err(MarketplaceError::SignatureFailed {
                 plugin: plugin.id.clone(),
@@ -309,6 +639,27 @@ impl<F: HttpFetcher> MarketplaceClient<F> {
             self.cache.save_manifest_snapshot(&plugin.id, &version)?;
         }
 
+        // `version.sha256` and `version.signature` authenticate the downloaded
+        // release artifact. For archived releases that artifact is the tar.gz,
+        // while the runtime package points at the extracted entrypoint. Reusing
+        // the archive digest/signature in agena.json would make runtime
+        // validation hash a different byte sequence and fail every time.
+        // Preserve the release digest in installed.json for provenance, but pin
+        // the actual runtime entrypoint in the generated config.
+        let runtime_sha256 = if version.sha256.is_some() {
+            if archive_extracted {
+                if req.dry_run {
+                    None
+                } else {
+                    Some(sha256_hex(&std::fs::read(&artifact_path)?))
+                }
+            } else {
+                Some(actual_sha.clone())
+            }
+        } else {
+            None
+        };
+
         // Update config
         let config_path = req.config_path.clone();
         let mut document = read_or_create_doc(&config_path)?;
@@ -316,7 +667,14 @@ impl<F: HttpFetcher> MarketplaceClient<F> {
         if already_present && !req.force {
             return Err(MarketplaceError::AlreadyInstalled(plugin.id.clone()));
         }
-        write_plugin_config(&mut document, &plugin.id, &version, &artifact_path)?;
+        write_plugin_config(
+            &mut document,
+            &plugin.id,
+            &version,
+            &artifact_path,
+            runtime_sha256.as_deref(),
+            archive_extracted,
+        )?;
         if !req.dry_run {
             write_config_doc(&config_path, &document)?;
         }
@@ -336,6 +694,8 @@ impl<F: HttpFetcher> MarketplaceClient<F> {
                 installed_at: Utc::now(),
                 registry_id: req.registry.id.clone(),
                 registry_url: req.registry.url.clone(),
+                require_signature: req.registry.require_signature,
+                require_github_distribution: req.registry.require_github_distribution,
                 archive_extracted,
             },
         );
@@ -464,7 +824,8 @@ impl<F: HttpFetcher> MarketplaceClient<F> {
                             record.registry_id.clone()
                         },
                         url: record.registry_url.clone(),
-                        require_signature: false,
+                        require_signature: record.require_signature,
+                        require_github_distribution: record.require_github_distribution,
                     })
                 }
             })
@@ -536,7 +897,8 @@ impl<F: HttpFetcher> MarketplaceClient<F> {
                     record.registry_id.clone()
                 },
                 url: record.registry_url.clone(),
-                require_signature: false,
+                require_signature: record.require_signature,
+                require_github_distribution: record.require_github_distribution,
             };
             let handle = self.registry(registry);
             let index = match handle.fetch_index(true) {
@@ -759,7 +1121,7 @@ fn select_version(
     candidates.first().cloned().cloned()
 }
 
-fn current_target_triple() -> &'static str {
+pub fn current_target_triple() -> &'static str {
     // Best-effort: use `cfg!` to compose a triple. Cargo sets TARGET in
     // build.rs; here we synthesize a reasonable default for common hosts.
     if cfg!(all(target_arch = "x86_64", target_os = "linux")) {
@@ -851,6 +1213,8 @@ fn write_plugin_config(
     plugin_id: &str,
     version: &PluginVersion,
     artifact_path: &Path,
+    runtime_sha256: Option<&str>,
+    archive_extracted: bool,
 ) -> Result<(), MarketplaceError> {
     let list = ensure_plugins_list_object(doc)?;
     let mut package = JsonMap::new();
@@ -864,10 +1228,13 @@ fn write_plugin_config(
                 "path".to_string(),
                 JsonValue::from(artifact_path.display().to_string()),
             );
-            if let Some(sha) = version.sha256.as_ref() {
-                package.insert("sha256".to_string(), JsonValue::from(sha.as_str()));
+            if let Some(sha) = runtime_sha256 {
+                package.insert("sha256".to_string(), JsonValue::from(sha));
             }
-            if let Some(sig) = version.signature.as_ref() {
+            // Release signatures are over the distributed bytes. They can be
+            // reused at runtime only when those bytes are loaded directly;
+            // archive signatures do not verify the extracted cdylib.
+            if !archive_extracted && let Some(sig) = version.signature.as_ref() {
                 package.insert(
                     "signature".to_string(),
                     serde_json::json!({
@@ -882,8 +1249,8 @@ fn write_plugin_config(
                 "path".to_string(),
                 JsonValue::from(artifact_path.display().to_string()),
             );
-            if let Some(sha) = version.sha256.as_ref() {
-                package.insert("sha256".to_string(), JsonValue::from(sha.as_str()));
+            if let Some(sha) = runtime_sha256 {
+                package.insert("sha256".to_string(), JsonValue::from(sha));
             }
         }
         PluginKind::Stdio => {
@@ -898,8 +1265,8 @@ fn write_plugin_config(
             if !version.env.is_empty() {
                 package.insert("env".to_string(), serde_json::json!(version.env));
             }
-            if let Some(sha) = version.sha256.as_ref() {
-                package.insert("sha256".to_string(), JsonValue::from(sha.as_str()));
+            if let Some(sha) = runtime_sha256 {
+                package.insert("sha256".to_string(), JsonValue::from(sha));
             }
         }
         PluginKind::Http => {
@@ -913,6 +1280,50 @@ fn write_plugin_config(
     }
     list.insert(plugin_id.to_string(), JsonValue::Object(plugin_config));
     Ok(())
+}
+
+#[cfg(test)]
+mod config_writer_tests {
+    use super::{PluginVersion, write_plugin_config};
+    use std::path::Path;
+
+    #[test]
+    fn archived_cdylib_pins_entrypoint_digest_without_reusing_archive_signature() {
+        let version: PluginVersion = serde_json::from_value(serde_json::json!({
+            "version": "0.1.0",
+            "kind": "cdylib",
+            "platform": "aarch64-apple-darwin",
+            "url": "https://example.invalid/plugin.tar.gz",
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "signature": {
+                "key_id": "release-key",
+                "signature": "deadbeef"
+            },
+            "settings": {}
+        }))
+        .unwrap();
+        let mut document = serde_json::json!({});
+        let runtime_sha = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+        write_plugin_config(
+            &mut document,
+            "example.plugin",
+            &version,
+            Path::new("/plugins/example/libexample.dylib"),
+            Some(runtime_sha),
+            true,
+        )
+        .unwrap();
+
+        assert_eq!(
+            document.pointer("/plugins/list/example.plugin/package/sha256"),
+            Some(&serde_json::json!(runtime_sha))
+        );
+        assert_eq!(
+            document.pointer("/plugins/list/example.plugin/package/signature"),
+            None
+        );
+    }
 }
 
 fn remove_plugin_config(doc: &mut JsonValue, plugin_id: &str) {

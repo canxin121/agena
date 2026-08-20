@@ -6,6 +6,7 @@ use std::str::FromStr;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::error::PluginError;
+pub use agena_plugin_contracts::PluginIdentityError as PluginKeyParseError;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 /// Stable identifier of a plugin.
@@ -19,9 +20,13 @@ impl PluginKey {
         namespace: impl Into<String>,
         name: impl Into<String>,
     ) -> Result<Self, PluginKeyParseError> {
+        let namespace = namespace.into();
+        let name = name.into();
+        let (namespace, name) =
+            agena_plugin_contracts::normalize_plugin_identity_parts(&namespace, &name)?;
         Ok(Self {
-            namespace: KeySegment::new(namespace.into(), "plugin namespace")?,
-            name: KeySegment::new(name.into(), "plugin name")?,
+            namespace: KeySegment(namespace),
+            name: KeySegment(name),
         })
     }
 
@@ -44,18 +49,11 @@ impl FromStr for PluginKey {
     type Err = PluginKeyParseError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let trimmed = s.trim();
-        let Some((namespace, name)) = trimmed.split_once('.') else {
-            return Err(PluginKeyParseError::MissingSeparator(trimmed.to_string()));
-        };
-        if name.contains('.') {
-            return Err(PluginKeyParseError::InvalidComponent {
-                label: "plugin name",
-                value: name.to_string(),
-                reason: "must not contain `.`".to_string(),
-            });
-        }
-        Self::new(namespace, name)
+        let (namespace, name) = agena_plugin_contracts::normalize_plugin_identity(s)?;
+        Ok(Self {
+            namespace: KeySegment(namespace),
+            name: KeySegment(name),
+        })
     }
 }
 
@@ -153,27 +151,6 @@ impl<'de> Deserialize<'de> for ToolKey {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 struct KeySegment(String);
 
-impl KeySegment {
-    fn new(value: String, label: &'static str) -> Result<Self, PluginKeyParseError> {
-        let trimmed = value.trim();
-        if trimmed.is_empty() {
-            return Err(PluginKeyParseError::InvalidComponent {
-                label,
-                value,
-                reason: "cannot be empty".to_string(),
-            });
-        }
-        if trimmed.contains('.') {
-            return Err(PluginKeyParseError::InvalidComponent {
-                label,
-                value,
-                reason: "must not contain `.`".to_string(),
-            });
-        }
-        Ok(Self(trimmed.to_string()))
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 struct ToolName(String);
 
@@ -185,19 +162,6 @@ impl ToolName {
         }
         Ok(Self(trimmed.to_string()))
     }
-}
-
-#[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
-/// Error parsing a plugin key.
-pub enum PluginKeyParseError {
-    #[error("plugin key `{0}` must use `namespace.plugin` format")]
-    MissingSeparator(String),
-    #[error("invalid {label} `{value}`: {reason}")]
-    InvalidComponent {
-        label: &'static str,
-        value: String,
-        reason: String,
-    },
 }
 
 #[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]

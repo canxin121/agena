@@ -1,6 +1,6 @@
-//! Backend for the plugin marketplace. The `server` feature builds an
-//! axum app that serves the registry index and signed plugin tarballs
-//! consumed by `agena-plugin-marketplace` clients.
+//! Optional typed mirror for the GitHub-backed Agena plugin marketplace. The
+//! `server` feature serves the same standard index, release manifests, and
+//! immutable artifacts consumed by `agena-plugin-marketplace` clients.
 
 #[cfg(feature = "server")]
 pub mod server;

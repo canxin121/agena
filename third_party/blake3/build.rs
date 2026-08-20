@@ -94,6 +94,10 @@ fn is_aarch64() -> bool {
     target_components()[0] == "aarch64"
 }
 
+fn is_aarch64_ilp32() -> bool {
+    is_aarch64() && env::var("CARGO_CFG_TARGET_POINTER_WIDTH").as_deref() == Ok("32")
+}
+
 fn is_armv7() -> bool {
     target_components()[0] == "armv7"
 }
@@ -370,8 +374,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         panic!("The NEON implementation doesn't support big-endian ARM.")
     }
 
-    if (is_arm() && is_neon())
-        || (!is_no_neon() && !is_pure() && is_aarch64() && is_little_endian())
+    // The AArch64 ILP32 ABI still has the AArch64 instruction set, but its
+    // cross sysroots do not consistently ship an ILP32-compatible arm_neon.h.
+    // Keep the complete Rust implementation for this ABI and only omit the
+    // optional C optimization; the BLAKE3 algorithm and API remain unchanged.
+    if !is_aarch64_ilp32()
+        && ((is_arm() && is_neon())
+            || (!is_no_neon() && !is_pure() && is_aarch64() && is_little_endian()))
     {
         println!("cargo:rustc-cfg=blake3_neon");
         build_neon_c_intrinsics();

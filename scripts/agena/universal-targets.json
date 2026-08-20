@@ -1138,13 +1138,6 @@
       "artifact_kind": "backend"
     },
     {
-      "target": "aarch64-unknown-nuttx",
-      "os": "nuttx",
-      "builder": "nuttx",
-      "build_std": true,
-      "artifact_kind": "backend"
-    },
-    {
       "target": "aarch64-unknown-openbsd",
       "os": "openbsd",
       "builder": "openbsd",
@@ -1208,23 +1201,9 @@
       "artifact_kind": "backend"
     },
     {
-      "target": "armv6k-nintendo-3ds",
-      "os": "horizon",
-      "builder": "horizon",
-      "build_std": true,
-      "artifact_kind": "backend"
-    },
-    {
       "target": "armv7-rtems-eabihf",
       "os": "rtems",
       "builder": "rtems",
-      "build_std": true,
-      "artifact_kind": "backend"
-    },
-    {
-      "target": "armv7-sony-vita-newlibeabihf",
-      "os": "vita",
-      "builder": "vita",
       "build_std": true,
       "artifact_kind": "backend"
     },
@@ -1253,20 +1232,6 @@
       "target": "armv7-wrs-vxworks-eabihf",
       "os": "vxworks",
       "builder": "vxworks",
-      "build_std": true,
-      "artifact_kind": "backend"
-    },
-    {
-      "target": "armv7a-nuttx-eabi",
-      "os": "nuttx",
-      "builder": "nuttx",
-      "build_std": true,
-      "artifact_kind": "backend"
-    },
-    {
-      "target": "armv7a-nuttx-eabihf",
-      "os": "nuttx",
-      "builder": "nuttx",
       "build_std": true,
       "artifact_kind": "backend"
     },
@@ -1446,51 +1411,9 @@
       "artifact_kind": "backend"
     },
     {
-      "target": "riscv32imac-esp-espidf",
-      "os": "espidf",
-      "builder": "espidf",
-      "build_std": true,
-      "artifact_kind": "backend"
-    },
-    {
-      "target": "riscv32imac-unknown-nuttx-elf",
-      "os": "nuttx",
-      "builder": "nuttx",
-      "build_std": true,
-      "artifact_kind": "backend"
-    },
-    {
       "target": "riscv32imac-unknown-xous-elf",
       "os": "xous",
       "builder": "xous",
-      "build_std": true,
-      "artifact_kind": "backend"
-    },
-    {
-      "target": "riscv32imafc-esp-espidf",
-      "os": "espidf",
-      "builder": "espidf",
-      "build_std": true,
-      "artifact_kind": "backend"
-    },
-    {
-      "target": "riscv32imafc-unknown-nuttx-elf",
-      "os": "nuttx",
-      "builder": "nuttx",
-      "build_std": true,
-      "artifact_kind": "backend"
-    },
-    {
-      "target": "riscv32imc-esp-espidf",
-      "os": "espidf",
-      "builder": "espidf",
-      "build_std": true,
-      "artifact_kind": "backend"
-    },
-    {
-      "target": "riscv32imc-unknown-nuttx-elf",
-      "os": "nuttx",
-      "builder": "nuttx",
       "build_std": true,
       "artifact_kind": "backend"
     },
@@ -1544,13 +1467,6 @@
       "artifact_kind": "backend"
     },
     {
-      "target": "riscv64gc-unknown-nuttx-elf",
-      "os": "nuttx",
-      "builder": "nuttx",
-      "build_std": true,
-      "artifact_kind": "backend"
-    },
-    {
       "target": "riscv64gc-unknown-openbsd",
       "os": "openbsd",
       "builder": "openbsd",
@@ -1561,13 +1477,6 @@
       "target": "riscv64gc-unknown-redox",
       "os": "redox",
       "builder": "redox",
-      "build_std": true,
-      "artifact_kind": "backend"
-    },
-    {
-      "target": "riscv64imac-unknown-nuttx-elf",
-      "os": "nuttx",
-      "builder": "nuttx",
       "build_std": true,
       "artifact_kind": "backend"
     },
@@ -1589,69 +1498,6 @@
       "target": "sparc64-unknown-openbsd",
       "os": "openbsd",
       "builder": "openbsd",
-      "build_std": true,
-      "artifact_kind": "backend"
-    },
-    {
-      "target": "thumbv6m-nuttx-eabi",
-      "os": "nuttx",
-      "builder": "nuttx",
-      "build_std": true,
-      "artifact_kind": "backend"
-    },
-    {
-      "target": "thumbv7a-nuttx-eabi",
-      "os": "nuttx",
-      "builder": "nuttx",
-      "build_std": true,
-      "artifact_kind": "backend"
-    },
-    {
-      "target": "thumbv7a-nuttx-eabihf",
-      "os": "nuttx",
-      "builder": "nuttx",
-      "build_std": true,
-      "artifact_kind": "backend"
-    },
-    {
-      "target": "thumbv7em-nuttx-eabi",
-      "os": "nuttx",
-      "builder": "nuttx",
-      "build_std": true,
-      "artifact_kind": "backend"
-    },
-    {
-      "target": "thumbv7em-nuttx-eabihf",
-      "os": "nuttx",
-      "builder": "nuttx",
-      "build_std": true,
-      "artifact_kind": "backend"
-    },
-    {
-      "target": "thumbv7m-nuttx-eabi",
-      "os": "nuttx",
-      "builder": "nuttx",
-      "build_std": true,
-      "artifact_kind": "backend"
-    },
-    {
-      "target": "thumbv8m.base-nuttx-eabi",
-      "os": "nuttx",
-      "builder": "nuttx",
-      "build_std": true,
-      "artifact_kind": "backend"
-    },
-    {
-      "target": "thumbv8m.main-nuttx-eabi",
-      "os": "nuttx",
-      "builder": "nuttx",
-      "build_std": true,
-      "artifact_kind": "backend"
-    },
-    {
-      "target": "thumbv8m.main-nuttx-eabihf",
-      "os": "nuttx",
-      "builder": "nuttx",
       "build_std": true,
       "artifact_kind": "backend"
     },
@@ -1773,27 +1619,6 @@
       "builder": "vxworks",
       "build_std": true,
       "artifact_kind": "backend"
-    },
-    {
-      "target": "xtensa-esp32-espidf",
-      "os": "espidf",
-      "builder": "espidf",
-      "build_std": true,
-      "artifact_kind": "backend"
-    },
-    {
-      "target": "xtensa-esp32s2-espidf",
-      "os": "espidf",
-      "builder": "espidf",
-      "build_std": true,
-      "artifact_kind": "backend"
-    },
-    {
-      "target": "xtensa-esp32s3-espidf",
-      "os": "espidf",
-      "builder": "espidf",
-      "build_std": true,
-      "artifact_kind": "backend"
     }
   ],
   "excluded": [
@@ -1820,6 +1645,12 @@
       "target_os": "none",
       "reason": "non-os-execution-environment",
       "description": "Bare ARM64, softfloat"
+    },
+    {
+      "target": "aarch64-unknown-nuttx",
+      "target_os": "nuttx",
+      "reason": "rust-std-process-unsupported",
+      "description": "AArch64 NuttX; Rust 1.97 std::process uses unsupported PAL"
     },
     {
       "target": "aarch64-unknown-uefi",
@@ -1888,6 +1719,18 @@
       "description": "Bare ARMv6 hard-float"
     },
     {
+      "target": "armv6k-nintendo-3ds",
+      "target_os": "horizon",
+      "reason": "rust-std-process-unsupported",
+      "description": "Armv6K Nintendo 3DS, Horizon (Requires devkitARM toolchain); Rust 1.97 std::process uses unsupported PAL"
+    },
+    {
+      "target": "armv7-sony-vita-newlibeabihf",
+      "target_os": "vita",
+      "reason": "rust-std-process-unsupported",
+      "description": "Armv7-A Cortex-A9 Sony PlayStation Vita (requires VITASDK toolchain); Rust 1.97 std::process uses unsupported PAL"
+    },
+    {
       "target": "armv7a-kmc-solid_asp3-eabi",
       "target_os": "solid_asp3",
       "reason": "rust-target-no-executables",
@@ -1910,6 +1753,18 @@
       "target_os": "none",
       "reason": "non-os-execution-environment",
       "description": "Bare Armv7-A, hardfloat"
+    },
+    {
+      "target": "armv7a-nuttx-eabi",
+      "target_os": "nuttx",
+      "reason": "rust-std-process-unsupported",
+      "description": "ARMv7-A Cortex-A with NuttX; Rust 1.97 std::process uses unsupported PAL"
+    },
+    {
+      "target": "armv7a-nuttx-eabihf",
+      "target_os": "nuttx",
+      "reason": "rust-std-process-unsupported",
+      "description": "ARMv7-A Cortex-A with NuttX (hard float); Rust 1.97 std::process uses unsupported PAL"
     },
     {
       "target": "armv7r-none-eabi",
@@ -2068,10 +1923,28 @@
       "description": "Bare RISC-V (RV32IMA ISA)"
     },
     {
+      "target": "riscv32imac-esp-espidf",
+      "target_os": "espidf",
+      "reason": "rust-std-process-unsupported",
+      "description": "RISC-V ESP-IDF; Rust 1.97 std::process uses unsupported PAL"
+    },
+    {
       "target": "riscv32imac-unknown-none-elf",
       "target_os": "none",
       "reason": "non-os-execution-environment",
       "description": "Bare RISC-V (RV32IMAC ISA)"
+    },
+    {
+      "target": "riscv32imac-unknown-nuttx-elf",
+      "target_os": "nuttx",
+      "reason": "rust-std-process-unsupported",
+      "description": "Rust nuttx target; Rust 1.97 std::process uses unsupported PAL"
+    },
+    {
+      "target": "riscv32imafc-esp-espidf",
+      "target_os": "espidf",
+      "reason": "rust-std-process-unsupported",
+      "description": "RISC-V ESP-IDF; Rust 1.97 std::process uses unsupported PAL"
     },
     {
       "target": "riscv32imafc-unknown-none-elf",
@@ -2080,16 +1953,40 @@
       "description": "Bare RISC-V (RV32IMAFC ISA)"
     },
     {
+      "target": "riscv32imafc-unknown-nuttx-elf",
+      "target_os": "nuttx",
+      "reason": "rust-std-process-unsupported",
+      "description": "Rust nuttx target; Rust 1.97 std::process uses unsupported PAL"
+    },
+    {
+      "target": "riscv32imc-esp-espidf",
+      "target_os": "espidf",
+      "reason": "rust-std-process-unsupported",
+      "description": "RISC-V ESP-IDF; Rust 1.97 std::process uses unsupported PAL"
+    },
+    {
       "target": "riscv32imc-unknown-none-elf",
       "target_os": "none",
       "reason": "non-os-execution-environment",
       "description": "Bare RISC-V (RV32IMC ISA)"
     },
     {
+      "target": "riscv32imc-unknown-nuttx-elf",
+      "target_os": "nuttx",
+      "reason": "rust-std-process-unsupported",
+      "description": "Rust nuttx target; Rust 1.97 std::process uses unsupported PAL"
+    },
+    {
       "target": "riscv64gc-unknown-none-elf",
       "target_os": "none",
       "reason": "non-os-execution-environment",
       "description": "Bare RISC-V (RV64IMAFDC ISA)"
+    },
+    {
+      "target": "riscv64gc-unknown-nuttx-elf",
+      "target_os": "nuttx",
+      "reason": "rust-std-process-unsupported",
+      "description": "Rust nuttx target; Rust 1.97 std::process uses unsupported PAL"
     },
     {
       "target": "riscv64im-unknown-none-elf",
@@ -2102,6 +1999,12 @@
       "target_os": "none",
       "reason": "non-os-execution-environment",
       "description": "Bare RISC-V (RV64IMAC ISA)"
+    },
+    {
+      "target": "riscv64imac-unknown-nuttx-elf",
+      "target_os": "nuttx",
+      "reason": "rust-std-process-unsupported",
+      "description": "Rust nuttx target; Rust 1.97 std::process uses unsupported PAL"
     },
     {
       "target": "s390x-unknown-none-softfloat",
@@ -2140,6 +2043,12 @@
       "description": "Bare ARMv6-M"
     },
     {
+      "target": "thumbv6m-nuttx-eabi",
+      "target_os": "nuttx",
+      "reason": "rust-std-process-unsupported",
+      "description": "Rust nuttx target; Rust 1.97 std::process uses unsupported PAL"
+    },
+    {
       "target": "thumbv7a-none-eabi",
       "target_os": "none",
       "reason": "non-os-execution-environment",
@@ -2150,6 +2059,18 @@
       "target_os": "none",
       "reason": "non-os-execution-environment",
       "description": "Thumb-mode Bare Armv7-A, hardfloat"
+    },
+    {
+      "target": "thumbv7a-nuttx-eabi",
+      "target_os": "nuttx",
+      "reason": "rust-std-process-unsupported",
+      "description": "Rust nuttx target; Rust 1.97 std::process uses unsupported PAL"
+    },
+    {
+      "target": "thumbv7a-nuttx-eabihf",
+      "target_os": "nuttx",
+      "reason": "rust-std-process-unsupported",
+      "description": "Rust nuttx target; Rust 1.97 std::process uses unsupported PAL"
     },
     {
       "target": "thumbv7em-none-eabi",
@@ -2164,10 +2085,28 @@
       "description": "Bare ARMv7E-M, hardfloat"
     },
     {
+      "target": "thumbv7em-nuttx-eabi",
+      "target_os": "nuttx",
+      "reason": "rust-std-process-unsupported",
+      "description": "Rust nuttx target; Rust 1.97 std::process uses unsupported PAL"
+    },
+    {
+      "target": "thumbv7em-nuttx-eabihf",
+      "target_os": "nuttx",
+      "reason": "rust-std-process-unsupported",
+      "description": "Rust nuttx target; Rust 1.97 std::process uses unsupported PAL"
+    },
+    {
       "target": "thumbv7m-none-eabi",
       "target_os": "none",
       "reason": "non-os-execution-environment",
       "description": "Bare ARMv7-M"
+    },
+    {
+      "target": "thumbv7m-nuttx-eabi",
+      "target_os": "nuttx",
+      "reason": "rust-std-process-unsupported",
+      "description": "Rust nuttx target; Rust 1.97 std::process uses unsupported PAL"
     },
     {
       "target": "thumbv7r-none-eabi",
@@ -2188,6 +2127,12 @@
       "description": "Bare ARMv8-M Baseline"
     },
     {
+      "target": "thumbv8m.base-nuttx-eabi",
+      "target_os": "nuttx",
+      "reason": "rust-std-process-unsupported",
+      "description": "Rust nuttx target; Rust 1.97 std::process uses unsupported PAL"
+    },
+    {
       "target": "thumbv8m.main-none-eabi",
       "target_os": "none",
       "reason": "non-os-execution-environment",
@@ -2198,6 +2143,18 @@
       "target_os": "none",
       "reason": "non-os-execution-environment",
       "description": "Bare ARMv8-M Mainline, hardfloat"
+    },
+    {
+      "target": "thumbv8m.main-nuttx-eabi",
+      "target_os": "nuttx",
+      "reason": "rust-std-process-unsupported",
+      "description": "Rust nuttx target; Rust 1.97 std::process uses unsupported PAL"
+    },
+    {
+      "target": "thumbv8m.main-nuttx-eabihf",
+      "target_os": "nuttx",
+      "reason": "rust-std-process-unsupported",
+      "description": "Rust nuttx target; Rust 1.97 std::process uses unsupported PAL"
     },
     {
       "target": "thumbv8r-none-eabihf",
@@ -2284,16 +2241,34 @@
       "description": "64-bit UEFI"
     },
     {
+      "target": "xtensa-esp32-espidf",
+      "target_os": "espidf",
+      "reason": "rust-std-process-unsupported",
+      "description": "Rust espidf target; Rust 1.97 std::process uses unsupported PAL"
+    },
+    {
       "target": "xtensa-esp32-none-elf",
       "target_os": "none",
       "reason": "non-os-execution-environment",
       "description": "Xtensa ESP32"
     },
     {
+      "target": "xtensa-esp32s2-espidf",
+      "target_os": "espidf",
+      "reason": "rust-std-process-unsupported",
+      "description": "Rust espidf target; Rust 1.97 std::process uses unsupported PAL"
+    },
+    {
       "target": "xtensa-esp32s2-none-elf",
       "target_os": "none",
       "reason": "non-os-execution-environment",
       "description": "Xtensa ESP32-S2"
+    },
+    {
+      "target": "xtensa-esp32s3-espidf",
+      "target_os": "espidf",
+      "reason": "rust-std-process-unsupported",
+      "description": "Rust espidf target; Rust 1.97 std::process uses unsupported PAL"
     },
     {
       "target": "xtensa-esp32s3-none-elf",

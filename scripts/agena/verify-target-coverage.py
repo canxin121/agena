@@ -22,6 +22,17 @@ NON_OS_ENVIRONMENTS = {
     "zkvm",
 }
 
+# Agena's full backend requires working process/PTY semantics at runtime. Rust
+# 1.97 explicitly routes these OS targets to std::sys::process::unsupported,
+# so accepting them would merely move a build-time portability gap into a
+# runtime `Unsupported` error.
+RUST_STD_PROCESS_UNSUPPORTED_OS = {
+    "espidf",
+    "horizon",
+    "nuttx",
+    "vita",
+}
+
 FREESTANDING_OS_TARGETS = {
     # Rust models these with an OS-flavoured target_os, but the actual target
     # ABI is deliberately freestanding and has no userspace std/libc surface.
@@ -115,6 +126,7 @@ def main() -> None:
             target_os in NON_OS_ENVIRONMENTS
             or target in FREESTANDING_OS_TARGETS
             or target in NON_OS_TARGETS
+            or target_os in RUST_STD_PROCESS_UNSUPPORTED_OS
             or executables is False
         ):
             invalid_backends.append(
@@ -140,6 +152,8 @@ def main() -> None:
             valid = target in FREESTANDING_OS_TARGETS
         elif reason == "rust-target-no-executables":
             valid = executables is False
+        elif reason == "rust-std-process-unsupported":
+            valid = target_os in RUST_STD_PROCESS_UNSUPPORTED_OS
         else:
             valid = False
         if not valid:
@@ -166,7 +180,7 @@ def main() -> None:
     print(f"Distributed full backend targets: {len(distributed_backends)}")
     print(f"Build-std full backend targets: {len(build_std_backends)}")
     print(f"Full backend release target triples: {len(backend_targets)}")
-    print(f"Excluded no-std/non-OS target triples: {len(excluded_targets)}")
+    print(f"Excluded non-full-runtime target triples: {len(excluded_targets)}")
     print(f"Std status unknown/WIP backend targets: {len(std_unknown)}")
 
 

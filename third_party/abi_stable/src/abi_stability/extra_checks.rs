@@ -590,7 +590,7 @@
 //!
 
 use crate::{
-    rtry, sabi_trait,
+    sabi_trait,
     sabi_types::{RMut, RRef},
     std_types::{RBox, RBoxError, RCowSlice, RNone, ROk, ROption, RResult},
     traits::IntoReprC,

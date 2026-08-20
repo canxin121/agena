@@ -57,7 +57,9 @@ where
     GetEmptySlice::<'a, T>::EMPTY
 }
 
-struct GetEmptySlice<'a, T>(&'a T);
+struct GetEmptySlice<'a, T> {
+    _marker: &'a T,
+}
 
 impl<'a, T> GetEmptySlice<'a, T>
 where

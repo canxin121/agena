@@ -418,7 +418,7 @@ impl<F> Closure<F> {
     where
         M: FnOnce(F, ROnceState),
     {
-        let mut this = unsafe { this.transmute_into_mut::<Self>() };
+        let this = unsafe { this.transmute_into_mut::<Self>() };
         let res = panic::catch_unwind(AssertUnwindSafe(|| {
             let closure = this.closure.take().unwrap();
             method(closure, state);

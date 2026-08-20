@@ -22,4 +22,28 @@ fn main() {
         netbsdlike: { any(netbsd, openbsd) },
         solarish: { any(illumos, solaris) },
     }
+
+    for alias in [
+        "android",
+        "dragonfly",
+        "ios",
+        "freebsd",
+        "illumos",
+        "linux",
+        "macos",
+        "netbsd",
+        "openbsd",
+        "solaris",
+        "watchos",
+        "tvos",
+        "fbsd14",
+        "apple_targets",
+        "bsd",
+        "linux_android",
+        "freebsdlike",
+        "netbsdlike",
+        "solarish",
+    ] {
+        println!("cargo:rustc-check-cfg=cfg({alias})");
+    }
 }

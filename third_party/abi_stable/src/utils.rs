@@ -155,8 +155,6 @@ macro_rules! const_transmute {
     };
 }
 
-pub(crate) use const_transmute;
-
 //////////////////////////////////
 
 /// Leaks `value` into the heap, and returns a reference to it.
@@ -258,9 +256,6 @@ pub(crate) trait FmtPadding {
     where
         T: Display;
 
-    fn debug_pad<'a, T>(&'a mut self, padding: usize, v: &T) -> Result<LeftPadder<'a>, fmt::Error>
-    where
-        T: Debug;
 }
 
 macro_rules! impl_fmt_padding {
@@ -284,23 +279,6 @@ macro_rules! impl_fmt_padding {
                 Ok(this.left_padder(padding))
             }
 
-            fn debug_pad<'a, T>(
-                &'a mut self,
-                padding: usize,
-                v: &T,
-            ) -> Result<LeftPadder<'a>, fmt::Error>
-            where
-                T: Debug,
-            {
-                use std::fmt::Write;
-                let this = self.as_type_mut();
-
-                this.clear();
-
-                writeln!(this, "{:#?}", v)?;
-
-                Ok(this.left_padder(padding))
-            }
         }
     };
 }

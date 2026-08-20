@@ -27,7 +27,9 @@ pub type GetStaticEquivalent<T> = <T as GetStaticEquivalent_>::StaticEquivalent;
 ///
 /// It's fine to use this instead of `str` and `[T]` since the type is
 /// only required to be unique.
-pub struct Unsized<T: ?Sized>(fn(&T));
+pub struct Unsized<T: ?Sized> {
+    _marker: fn(&T),
+}
 
 ////////////////////////////////////////////////////////////////////////////////
 //                      Impls for non-StableAbi types

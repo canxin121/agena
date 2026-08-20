@@ -823,8 +823,6 @@ unsafe impl<T> ImmutableRef for T where T: Copy + GetPointerKind<Kind = PK_Refer
 pub mod immutable_ref {
     use super::*;
 
-    use crate::utils::const_transmute;
-
     /// Converts the `from` pointer to a `NonNull`.
     ///
     /// # Example

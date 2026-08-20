@@ -10,11 +10,6 @@ description = "Runtime primitives and concrete application composition"
 arc-swap = { workspace = true }
 base64 = { workspace = true }
 agena-provider = { workspace = true }
-agena-provider-bedrock-auth = { workspace = true }
-agena-provider-bedrock-signing = { workspace = true }
-agena-provider-bedrock-streaming = { workspace = true }
-agena-provider-google-auth = { workspace = true }
-agena-web = { workspace = true }
 agena-domain = { workspace = true }
 agena-failure = { workspace = true }
 agena-runtime-contracts = { workspace = true }
@@ -33,52 +28,28 @@ agena-plugin-sdk = { workspace = true }
 agena-mcp-client = { workspace = true }
 agena-lsp = { workspace = true }
 agena-tool = { workspace = true }
-agena-keyring-store = { workspace = true }
-agena-macros = { workspace = true }
-agena-memory-index = { workspace = true }
-agena-skills = { workspace = true }
 async-trait = { workspace = true }
-async-stream = { workspace = true }
 axum = { workspace = true }
-blake3 = { workspace = true }
-derive_more = { workspace = true, features = ["display", "from", "into"] }
 futures-util = { workspace = true }
-futures-core = { workspace = true }
-globset = { workspace = true }
 chrono = { workspace = true }
 hex = { workspace = true }
 html_escape = { workspace = true }
 http = { workspace = true }
-imagesize = { workspace = true }
 infer = { workspace = true }
-indexmap = { workspace = true }
-libc = { workspace = true }
 log = { workspace = true }
-merge = { workspace = true }
-mime_guess = { workspace = true }
 parking_lot = { workspace = true }
-path-clean = { workspace = true }
-os_info = { workspace = true }
 oauth2 = { workspace = true }
 regex = { workspace = true }
 reqwest = { workspace = true, features = ["json", "rustls", "stream"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
-serde_yaml = { workspace = true }
-schemars = { workspace = true }
-scraper = { workspace = true }
 sea-orm = { workspace = true }
 sha2 = { workspace = true }
-shlex = { workspace = true }
-smol_str = { workspace = true }
-strum = { workspace = true, features = ["derive"] }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-util = { workspace = true, features = ["rt"] }
-tokio-tungstenite = { workspace = true }
 uuid = { workspace = true }
 url = { workspace = true }
-walkdir = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter", "registry"] }
 tracing = { workspace = true }
 

@@ -28,7 +28,6 @@ async-trait = { workspace = true }
 base64 = { workspace = true }
 chrono = { workspace = true }
 futures-util = { workspace = true }
-globset = { workspace = true }
 hex = { workspace = true }
 notify = { workspace = true }
 process_control = { workspace = true }

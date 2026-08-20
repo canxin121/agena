@@ -15,7 +15,6 @@ reqwest = { workspace = true, features = ["json", "rustls", "stream"] }
 secrecy = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-thiserror = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "net", "time", "io-util"] }
 tracing = { workspace = true }
 tokio_sse_codec = { workspace = true }

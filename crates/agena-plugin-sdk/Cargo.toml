@@ -16,7 +16,6 @@ async-trait = { workspace = true }
 bitflags = { workspace = true }
 bytes = { workspace = true, optional = true }
 futures-util = { workspace = true, features = ["sink"], optional = true }
-indexmap = { workspace = true }
 regex = { workspace = true }
 schemars = { workspace = true }
 serde = { workspace = true }

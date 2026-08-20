@@ -22,7 +22,6 @@ agena-client = { workspace = true }
 agena-domain = { workspace = true }
 agena-git-http = { workspace = true }
 agena-mcp-server = { workspace = true }
-agena-provider = { workspace = true }
 agena-runtime = { workspace = true }
 agena-tui = { workspace = true }
 agena-tui-app = { workspace = true }

@@ -18,37 +18,30 @@ agena-runtime-contracts = { workspace = true }
 agena-scheduler = { workspace = true }
 agena-lsp = { workspace = true }
 agena-tool = { workspace = true }
-async-trait = { workspace = true }
 base64 = { workspace = true }
 blake3 = { workspace = true }
 chrono = { workspace = true }
 content_inspector = { workspace = true }
-futures-core = { workspace = true }
 futures-util = { workspace = true }
 fs4 = { workspace = true }
 globset = { workspace = true }
 grep-regex = { workspace = true }
 grep-searcher = { workspace = true }
 hex = { workspace = true }
-html_escape = { workspace = true }
 ignore = { workspace = true }
 imagesize = { workspace = true }
 infer = { workspace = true }
-indexmap = { workspace = true }
 libc = { workspace = true }
 mime_guess = { workspace = true }
 parking_lot = { workspace = true }
 path-clean = { workspace = true }
 process_control = { workspace = true }
 regex = { workspace = true }
-reqwest = { workspace = true, features = ["json", "rustls", "stream"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 schemars = { workspace = true }
 sha2 = { workspace = true }
-shlex = { workspace = true }
 similar = { workspace = true }
-smol_str = { workspace = true }
 strum = { workspace = true, features = ["derive"] }
 thiserror = { workspace = true }
 tempfile = { workspace = true }

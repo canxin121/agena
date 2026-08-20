@@ -9,7 +9,6 @@ description = "Provider configuration presentation model and effect protocol"
 [dependencies]
 agena-domain = { workspace = true }
 agena-provider = { workspace = true }
-agena-tui = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 

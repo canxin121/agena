@@ -13,20 +13,21 @@ agena-macros = { workspace = true }
 agena-provider = { workspace = true }
 agena-plugin-host = { workspace = true }
 agena-plugin-sdk = { workspace = true }
-agena-storage = { workspace = true }
 agena-tool = { workspace = true }
 chrono = { workspace = true }
 indexmap = { workspace = true }
-parking_lot = { workspace = true }
 path-clean = { workspace = true }
 schemars = { workspace = true }
 sea-orm = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-serde_yaml = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
-uuid = { workspace = true }
+
+[package.metadata.cargo-machete]
+# ToolInput derive expansions reference agena_plugin_sdk even though the
+# dependency is not named directly in this crate's source text.
+ignored = ["agena-plugin-sdk"]
 
 [lints]
 workspace = true

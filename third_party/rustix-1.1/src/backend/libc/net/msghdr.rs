@@ -19,7 +19,7 @@ use core::mem::zeroed;
         target_os = "redox",
         all(
             target_os = "linux",
-            not(target_env = "musl"),
+            not(any(target_env = "musl", target_env = "ohos")),
             not(all(target_env = "uclibc", any(target_arch = "arm", target_arch = "mips")))
         )
     )
@@ -37,7 +37,7 @@ fn msg_iov_len(len: usize) -> c::size_t {
         target_os = "redox",
         all(
             target_os = "linux",
-            not(target_env = "musl"),
+            not(any(target_env = "musl", target_env = "ohos")),
             not(all(target_env = "uclibc", any(target_arch = "arm", target_arch = "mips")))
         )
     ))
@@ -51,7 +51,7 @@ fn msg_iov_len(len: usize) -> c::c_int {
 #[cfg(any(
     bsd,
     solarish,
-    target_env = "musl",
+    any(target_env = "musl", target_env = "ohos"),
     target_os = "aix",
     target_os = "cygwin",
     target_os = "emscripten",
@@ -70,7 +70,7 @@ fn msg_control_len(len: usize) -> c::socklen_t {
     bsd,
     solarish,
     windows,
-    target_env = "musl",
+    any(target_env = "musl", target_env = "ohos"),
     target_os = "aix",
     target_os = "cygwin",
     target_os = "emscripten",

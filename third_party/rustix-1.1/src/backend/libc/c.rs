@@ -7,11 +7,11 @@
 pub(crate) use libc::*;
 
 /// `PROC_SUPER_MAGIC`—The magic number for the procfs filesystem.
-#[cfg(all(linux_kernel, target_env = "musl"))]
+#[cfg(all(linux_kernel, any(target_env = "musl", target_env = "ohos")))]
 pub(crate) const PROC_SUPER_MAGIC: u32 = 0x0000_9fa0;
 
 /// `NFS_SUPER_MAGIC`—The magic number for the NFS filesystem.
-#[cfg(all(linux_kernel, target_env = "musl"))]
+#[cfg(all(linux_kernel, any(target_env = "musl", target_env = "ohos")))]
 pub(crate) const NFS_SUPER_MAGIC: u32 = 0x0000_6969;
 
 #[cfg(feature = "process")]
@@ -194,7 +194,7 @@ pub(super) unsafe fn prlimit(
     prlimit64(pid, resource, new_limit, old_limit)
 }
 
-#[cfg(all(target_os = "linux", target_env = "musl"))]
+#[cfg(all(target_os = "linux", any(target_env = "musl", target_env = "ohos")))]
 pub(super) unsafe fn prlimit(
     pid: pid_t,
     resource: c_int,
@@ -488,7 +488,10 @@ pub(super) use readwrite_pv64v2::{preadv64v2 as preadv2, pwritev64v2 as pwritev2
     not(any(
         target_os = "emscripten",
         target_env = "gnu",
-        all(target_arch = "loongarch64", target_env = "musl")
+        all(
+            target_arch = "loongarch64",
+            any(target_env = "musl", target_env = "ohos")
+        )
     ))
 ))]
 mod statx_flags {
@@ -512,7 +515,10 @@ mod statx_flags {
         target_os = "android",
         target_os = "emscripten",
         target_env = "gnu",
-        all(target_arch = "loongarch64", target_env = "musl")
+        all(
+            target_arch = "loongarch64",
+            any(target_env = "musl", target_env = "ohos")
+        )
     ))
 ))]
 pub(crate) use statx_flags::*;

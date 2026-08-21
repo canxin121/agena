@@ -2072,11 +2072,15 @@ pub(crate) fn statx(
     //
     // [it's deprecated]: https://patchwork.kernel.org/project/linux-fsdevel/patch/20200505095915.11275-7-mszeredi@redhat.com/
     #[cfg(all(
-        not(target_env = "musl"),
+        not(any(target_env = "musl", target_env = "ohos")),
         not(target_env = "uclibc")
     ))]
     const STATX__RESERVED: u32 = c::STATX__RESERVED as u32;
-    #[cfg(any(target_env = "musl", target_env = "uclibc"))]
+    #[cfg(any(
+        target_env = "musl",
+        target_env = "ohos",
+        target_env = "uclibc"
+    ))]
     const STATX__RESERVED: u32 = 0x8000_0000;
     if (mask.bits() & STATX__RESERVED) == STATX__RESERVED {
         return Err(io::Errno::INVAL);

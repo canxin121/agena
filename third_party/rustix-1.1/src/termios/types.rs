@@ -370,7 +370,7 @@ bitflags! {
 
         /// `CR1`
         #[cfg(not(any(
-            target_env = "musl",
+            any(target_env = "musl", target_env = "ohos"),
             bsd,
             solarish,
             target_os = "emscripten",
@@ -381,7 +381,7 @@ bitflags! {
 
         /// `CR2`
         #[cfg(not(any(
-            target_env = "musl",
+            any(target_env = "musl", target_env = "ohos"),
             bsd,
             solarish,
             target_os = "emscripten",
@@ -392,7 +392,7 @@ bitflags! {
 
         /// `CR3`
         #[cfg(not(any(
-            target_env = "musl",
+            any(target_env = "musl", target_env = "ohos"),
             bsd,
             solarish,
             target_os = "emscripten",
@@ -422,7 +422,7 @@ bitflags! {
 
         /// `TAB1`
         #[cfg(not(any(
-            target_env = "musl",
+            any(target_env = "musl", target_env = "ohos"),
             bsd,
             solarish,
             target_os = "emscripten",
@@ -433,7 +433,7 @@ bitflags! {
 
         /// `TAB2`
         #[cfg(not(any(
-            target_env = "musl",
+            any(target_env = "musl", target_env = "ohos"),
             bsd,
             solarish,
             target_os = "emscripten",
@@ -444,7 +444,7 @@ bitflags! {
 
         /// `TAB3`
         #[cfg(not(any(
-            target_env = "musl",
+            any(target_env = "musl", target_env = "ohos"),
             bsd,
             solarish,
             target_os = "emscripten",
@@ -473,7 +473,7 @@ bitflags! {
 
         /// `BS1`
         #[cfg(not(any(
-            target_env = "musl",
+            any(target_env = "musl", target_env = "ohos"),
             bsd,
             solarish,
             target_os = "emscripten",
@@ -492,7 +492,7 @@ bitflags! {
 
         /// `FF1`
         #[cfg(not(any(
-            target_env = "musl",
+            any(target_env = "musl", target_env = "ohos"),
             bsd,
             solarish,
             target_os = "emscripten",
@@ -511,7 +511,7 @@ bitflags! {
 
         /// `VT1`
         #[cfg(not(any(
-            target_env = "musl",
+            any(target_env = "musl", target_env = "ohos"),
             bsd,
             solarish,
             target_os = "emscripten",
@@ -1559,7 +1559,11 @@ mod tests {
                 check_renamed_struct_renamed_field!(Termios, termios, input_speed, c_ispeed);
                 check_renamed_struct_renamed_field!(Termios, termios, output_speed, c_ospeed);
             }
-            #[cfg(any(target_env = "musl", target_os = "fuchsia"))]
+            #[cfg(any(
+                target_env = "musl",
+                target_env = "ohos",
+                target_os = "fuchsia"
+            ))]
             {
                 check_renamed_struct_renamed_field!(Termios, termios, input_speed, __c_ispeed);
                 check_renamed_struct_renamed_field!(Termios, termios, output_speed, __c_ospeed);

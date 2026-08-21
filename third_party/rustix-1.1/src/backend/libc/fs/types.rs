@@ -272,7 +272,10 @@ bitflags! {
         /// `O_FSYNC`
         #[cfg(any(
             bsd,
-            all(target_os = "linux", not(target_env = "musl")),
+            all(
+                target_os = "linux",
+                not(any(target_env = "musl", target_env = "ohos"))
+            ),
         ))]
         const FSYNC = bitcast!(c::O_FSYNC);
 
@@ -1128,7 +1131,7 @@ pub type Dev = ffi::c_ulonglong;
 /// `__fsword_t`
 #[cfg(all(
     target_os = "linux",
-    not(target_env = "musl"),
+    not(any(target_env = "musl", target_env = "ohos")),
     not(target_env = "uclibc"),
     not(target_arch = "s390x"),
 ))]
@@ -1141,14 +1144,26 @@ pub type FsWord = c::c_long;
 
 /// `__fsword_t`
 #[cfg(all(
-    any(target_os = "android", all(target_os = "linux", target_env = "musl")),
+    any(
+        target_os = "android",
+        all(
+            target_os = "linux",
+            any(target_env = "musl", target_env = "ohos")
+        )
+    ),
     target_pointer_width = "32",
 ))]
 pub type FsWord = u32;
 
 /// `__fsword_t`
 #[cfg(all(
-    any(target_os = "android", all(target_os = "linux", target_env = "musl")),
+    any(
+        target_os = "android",
+        all(
+            target_os = "linux",
+            any(target_env = "musl", target_env = "ohos")
+        )
+    ),
     not(target_arch = "s390x"),
     target_pointer_width = "64",
 ))]
@@ -1162,7 +1177,11 @@ pub type FsWord = u32;
 
 /// `__fsword_t`
 // s390x uses `u64` for `statfs` entries on musl.
-#[cfg(all(target_os = "linux", target_arch = "s390x", target_env = "musl"))]
+#[cfg(all(
+    target_os = "linux",
+    target_arch = "s390x",
+    any(target_env = "musl", target_env = "ohos")
+))]
 pub type FsWord = u64;
 
 /// `copyfile_state_t`—State for use with [`fcopyfile`].

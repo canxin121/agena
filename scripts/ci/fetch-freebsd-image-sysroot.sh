@@ -77,6 +77,31 @@ if ! valid_sysroot; then
     sudo apt-get install -y --no-install-recommends libguestfs-tools
   fi
 
+  # Ubuntu hosted runners can have libguestfs-tools installed while omitting
+  # the distribution kernel image that supermin uses for its appliance.  In
+  # that state guestfish fails before it ever opens the supplied image.  Add a
+  # real generic kernel/modules package when the runner has no bootable kernel
+  # image, then fail explicitly if the prerequisite is still absent.
+  if ! compgen -G "/boot/vmlinuz-*" >/dev/null 2>&1; then
+    if ! command -v sudo >/dev/null 2>&1; then
+      echo "ERROR: a bootable Linux kernel is required by libguestfs supermin" >&2
+      exit 1
+    fi
+    sudo apt-get update -y
+    sudo apt-get install -y --no-install-recommends linux-image-generic
+  fi
+  compgen -G "/boot/vmlinuz-*" >/dev/null 2>&1 || {
+    echo "ERROR: libguestfs supermin still has no /boot/vmlinuz-* kernel image" >&2
+    exit 1
+  }
+
+  # Keep the appliance launch diagnostics in the job log.  This makes a
+  # future hosted-image regression actionable without changing the read-only
+  # image extraction semantics below.
+  export LIBGUESTFS_BACKEND="direct"
+  export LIBGUESTFS_DEBUG="1"
+  export LIBGUESTFS_TRACE="1"
+
   rm -rf "$SYSROOT"
   mkdir -p "$SYSROOT/usr"
   fs_list="$ROOT/filesystems.txt"

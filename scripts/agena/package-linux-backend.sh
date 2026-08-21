@@ -47,6 +47,14 @@ case "$BUILDER" in
       "$TARGET" m68k-68xxx m68k-68xxx--glibc--stable-2025.08-1 '' -- \
       bash scripts/agena/package-backend.sh "$TARGET" "$BUILD_STD" "$TARGET_RUSTFLAGS"
     ;;
+  sparc-gcc)
+    # Keep C/C++ dependencies on the 32-bit SPARC ABI.  Rust's target spec
+    # supplies -m32 for the final linker invocation, while cc-rs needs the
+    # explicit flag through the checksum-verified Bootlin toolchain wrapper.
+    exec bash scripts/ci/run-bootlin-backend.sh \
+      "$TARGET" sparc64 sparc64--glibc--stable-2025.08-1 '-m32' -- \
+      bash scripts/agena/package-backend.sh "$TARGET" "$BUILD_STD" "$TARGET_RUSTFLAGS"
+    ;;
   powerpc-spe-sysroot)
     exec bash scripts/ci/run-powerpc-spe-backend.sh "$TARGET" -- \
       bash scripts/agena/package-backend.sh "$TARGET" "$BUILD_STD" "$TARGET_RUSTFLAGS"

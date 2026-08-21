@@ -51,6 +51,15 @@ case "$BUILDER" in
       "$TARGET" m68k-68xxx m68k-68xxx--glibc--stable-2025.08-1 '' -- \
       bash scripts/ci/check-native-backend.sh "$TARGET" "$BUILD_STD" "$TARGET_RUSTFLAGS"
     ;;
+  sparc-gcc)
+    # The Rust 32-bit SPARC target adds -m32 to its linker arguments, but
+    # cc-rs does not infer that ABI for C/C++ dependencies.  Bootlin's
+    # sparc64 glibc toolchain has the matching multilib and must be invoked
+    # explicitly in 32-bit mode so the generated objects use the same ABI.
+    exec bash scripts/ci/run-bootlin-backend.sh \
+      "$TARGET" sparc64 sparc64--glibc--stable-2025.08-1 '-m32' -- \
+      bash scripts/ci/check-native-backend.sh "$TARGET" "$BUILD_STD" "$TARGET_RUSTFLAGS"
+    ;;
   powerpc-spe-sysroot)
     exec bash scripts/ci/run-powerpc-spe-backend.sh "$TARGET" -- \
       bash scripts/ci/check-native-backend.sh "$TARGET" "$BUILD_STD" "$TARGET_RUSTFLAGS"

@@ -216,6 +216,12 @@ function Set-EnvFromVsDevCmd {
         $env:VCToolsVersion = $ToolsVersion
       }
     }
+    $ArmCompilerPath = Join-Path $VCToolsRoot "bin\$HostToolArch\arm\cl.exe"
+    $ArmLibraryPath = Join-Path $VCToolsRoot "lib\arm"
+    if (-not (Test-Path -LiteralPath $ArmCompilerPath -PathType Leaf) -or
+      -not (Test-Path -LiteralPath $ArmLibraryPath -PathType Container)) {
+      throw "official ARM32 MSVC compiler and libraries are required for C/C++ sources: compiler=$ArmCompilerPath libraries=$ArmLibraryPath"
+    }
   }
 
   $TargetBin = Join-Path $VCToolsRoot "bin\$HostToolArch\$CompilerArch"
@@ -225,9 +231,9 @@ function Set-EnvFromVsDevCmd {
     # ring contains ARM assembly sources with a .S suffix. MSVC's legacy ARM
     # cl.exe does not assemble that suffix: it warns and ignores the source,
     # then the linker fails because the expected .o file was never produced.
-    # Always use the official LLVM clang-cl driver for the ARM32 target, even
-    # when the legacy ARM cl.exe is installed. This is a real ARMv7 MSVC
-    # compiler invocation, not a stub or a host-ABI fallback.
+    # Dispatch only those assembly sources to the official LLVM clang-cl
+    # driver; keep ordinary C/C++ sources on the official ARM32 MSVC compiler
+    # because clang-cl's ARMv7 target does not implement Windows SEH __try.
     function Find-ClangCl {
       $ClangCandidates = @(
         (Join-Path $Install "VC\Tools\Llvm\x64\bin\clang-cl.exe"),
@@ -286,11 +292,43 @@ function Set-EnvFromVsDevCmd {
 
     $WrapperRoot = Join-Path $env:RUNNER_TEMP "agena-msvc-clang\$TargetTriple"
     New-Item -ItemType Directory -Force -Path $WrapperRoot | Out-Null
-    $Compiler = Join-Path $WrapperRoot "clang-cl-arm.cmd"
-    $WrapperText = "@echo off`r`n`"$ClangCl`" --target=thumbv7a-pc-windows-msvc %*`r`nexit /b %ERRORLEVEL%`r`n"
+    # Keep "clang-cl" in the wrapper filename so cc-rs emits the MSVC object
+    # flag and the real clang-cl target selection. The wrapper then removes the
+    # two clang-cl-only arguments before dispatching ordinary C/C++ to the
+    # official ARM32 MSVC compiler. This preserves cc-rs's correct assembly
+    # command without asking clang-cl to compile SQLite's ARM32 SEH code.
+    $Compiler = Join-Path $WrapperRoot "clang-cl-arm-dispatch.cmd"
+    $WrapperLines = @(
+      '@echo off'
+      'setlocal EnableExtensions EnableDelayedExpansion'
+      'set "USE_CLANG="'
+      'for %%A in (%*) do ('
+      '  if /I "%%~xA"==".S" set "USE_CLANG=1"'
+      '  if /I "%%~xA"==".s" set "USE_CLANG=1"'
+      '  if /I "%%~A"=="-E" set "USE_CLANG=1"'
+      ')'
+      'if defined USE_CLANG ('
+      "  `"$ClangCl`" %*"
+      '  set "EXIT_CODE=!ERRORLEVEL!"'
+      '  endlocal & exit /b !EXIT_CODE!'
+      ')'
+      'set "MSVC_ARGS="'
+      'for %%A in (%*) do ('
+      '  set "ARG=%%~A"'
+      '  if /I "!ARG!"=="--" ('
+      '  ) else if /I "!ARG:~0,9!"=="--target=" ('
+      '  ) else ('
+      '    set "MSVC_ARGS=!MSVC_ARGS! "%%~A""'
+      '  )'
+      ')'
+      "`"$ArmCompilerPath`" !MSVC_ARGS!"
+      'set "EXIT_CODE=!ERRORLEVEL!"'
+      'endlocal & exit /b !EXIT_CODE!'
+    )
+    $WrapperText = ($WrapperLines -join "`r`n") + "`r`n"
     [IO.File]::WriteAllText($Compiler, $WrapperText, [Text.Encoding]::ASCII)
     $UsingClangCl = $true
-    Write-Host "Using official clang-cl ARMv7 MSVC compiler: $ClangCl --target=thumbv7a-pc-windows-msvc"
+    Write-Host "Using official ARM32 MSVC cl.exe for C/C++ and official clang-cl for .S: cl=$ArmCompilerPath clang=$ClangCl --target=thumbv7a-pc-windows-msvc"
   } elseif (-not (Test-Path $Compiler)) {
     throw "MSVC target compiler missing for host=$HostArch target=${Arch}: $Compiler"
   }
@@ -441,10 +479,11 @@ function Set-EnvFromVsDevCmd {
   }
   Write-Host "Using official Windows SDK UCRT headers: $(Join-Path $UcrtInclude 'stddef.h')"
 
-  # cc-rs invokes cl.exe directly and does not print or normalize inherited
-  # INCLUDE values in its command diagnostics. Add both verified official
-  # header trees as target-scoped compiler flags so C build scripts cannot lose
-  # the MSVC runtime or UCRT headers when they replace the environment.
+  # cc-rs invokes the selected compiler wrapper directly and does not print or
+  # normalize inherited INCLUDE values in its command diagnostics. Add both
+  # verified official header trees as target-scoped compiler flags so C build
+  # scripts cannot lose the MSVC runtime or UCRT headers when they replace the
+  # environment.
   $HeaderIncludes = @($VCToolsInclude, $UcrtInclude)
   # cc-rs normally splits *FLAGS on whitespace. Enable its documented shell
   # parser so the quoted official Windows paths remain one compiler argument

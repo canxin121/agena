@@ -32,10 +32,14 @@ if [[ -n "${AGENA_CLANG:-}" ]]; then
   CLANGXX="${AGENA_CLANGXX:-${AGENA_CLANG}++}"
   AR="${AGENA_LLVM_AR:-$(command -v llvm-ar || command -v ar || true)}"
 elif [[ "$(uname -s)-$(uname -m)" == Linux-x86_64 && "$TARGET" == aarch64-unknown-openbsd ]]; then
-  PINNED_CLANG="$(bash scripts/ci/fetch-pinned-clang.sh)"
-  CLANG="$PINNED_CLANG/bin/clang"
-  CLANGXX="$PINNED_CLANG/bin/clang++"
-  AR="$PINNED_CLANG/bin/llvm-ar"
+  # The Fuchsia-pinned compiler is intentionally not used here: it is a
+  # trimmed cross toolchain and has a reproducible backend crash in zstd's
+  # AArch64 OpenBSD legacy sources.  Use the complete, signed LLVM 22 package
+  # instead so this target gets the normal AArch64 backend.
+  LLVM_ROOT="$(bash scripts/ci/install-pinned-llvm22.sh)"
+  CLANG="$LLVM_ROOT/bin/clang"
+  CLANGXX="$LLVM_ROOT/bin/clang++"
+  AR="$LLVM_ROOT/bin/llvm-ar"
 else
   CLANG="$(command -v clang || true)"
   CLANGXX="$(command -v clang++ || true)"

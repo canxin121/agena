@@ -52,7 +52,10 @@ if ! valid_sysroot; then
   if [[ ! -x "$SOURCE/build.sh" ]]; then
     rm -rf "$SOURCE"
     mkdir -p "$SOURCE"
-    tar -xzf "$ARCHIVE" --strip-components=1 -C "$SOURCE"
+    # src.tgz has the fixed archive prefix usr/src (not just src).  Strip
+    # both packaging components so build.sh lands at $SOURCE/build.sh and the
+    # source builder cannot accidentally invoke a missing path.
+    tar -xzf "$ARCHIVE" --strip-components=2 -C "$SOURCE"
   fi
 
   common_env=(

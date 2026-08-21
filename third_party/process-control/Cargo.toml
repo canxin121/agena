@@ -64,11 +64,11 @@ path = "src/lib.rs"
 [dependencies.attr_alias]
 version = "0.1.0"
 
-[target.'cfg(all(unix, any(target_os = "espidf", target_os = "fuchsia", target_os = "horizon", target_os = "openbsd", target_os = "redox", target_os = "tvos", target_os = "vxworks")))'.dependencies.parking_lot]
+[target.'cfg(all(unix, any(target_os = "cygwin", target_os = "espidf", target_os = "fuchsia", target_os = "horizon", target_os = "openbsd", target_os = "redox", target_os = "tvos", target_os = "vxworks")))'.dependencies.parking_lot]
 version = "0.12"
 optional = true
 
-[target.'cfg(all(unix, any(target_os = "espidf", target_os = "fuchsia", target_os = "horizon", target_os = "openbsd", target_os = "redox", target_os = "tvos", target_os = "vxworks")))'.dependencies.signal-hook]
+[target.'cfg(all(unix, any(target_os = "cygwin", target_os = "espidf", target_os = "fuchsia", target_os = "horizon", target_os = "openbsd", target_os = "redox", target_os = "tvos", target_os = "vxworks")))'.dependencies.signal-hook]
 version = "0.3"
 
 [target."cfg(unix)".dependencies.libc]

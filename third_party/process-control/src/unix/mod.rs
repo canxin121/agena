@@ -112,7 +112,16 @@ impl RawPid {
 #[attr_alias::eval]
 #[derive(Debug)]
 pub(super) struct Process<'a> {
-    #[attr_alias(unix_waitid, cfg(not(*)))]
+    #[cfg(any(
+        target_os = "cygwin",
+        target_os = "espidf",
+        target_os = "fuchsia",
+        target_os = "horizon",
+        target_os = "openbsd",
+        target_os = "redox",
+        target_os = "tvos",
+        target_os = "vxworks",
+    ))]
     inner: &'a mut Child,
     #[attr_alias(raw_pid)]
     pid: RawPid,
@@ -125,7 +134,16 @@ impl<'a> Process<'a> {
         Self {
             #[attr_alias(raw_pid)]
             pid: RawPid::new(process),
-            #[attr_alias(unix_waitid, cfg(not(*)))]
+            #[cfg(any(
+                target_os = "cygwin",
+                target_os = "espidf",
+                target_os = "fuchsia",
+                target_os = "horizon",
+                target_os = "openbsd",
+                target_os = "redox",
+                target_os = "tvos",
+                target_os = "vxworks",
+            ))]
             inner: process,
             _marker: PhantomData,
         }

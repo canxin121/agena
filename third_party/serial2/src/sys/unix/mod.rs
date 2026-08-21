@@ -9,14 +9,20 @@ use std::time::Duration;
 // targets below, even though their shipped libc headers and kernels do.  Keep
 // the real ABI values here instead of dropping the operation or returning a
 // synthetic success.
-// musl, Android, and Fuchsia's ioctl declarations use an int request
-// argument, while glibc and the other Unix libc ABIs exposed by this module
-// use unsigned long.  The command values are the same kernel ABI values; only
-// the Rust FFI argument width differs.
-#[cfg(any(target_env = "musl", target_os = "android", target_os = "fuchsia"))]
+// musl, OpenHarmony, Android, and Fuchsia's ioctl declarations use an int
+// request argument, while glibc and the other Unix libc ABIs exposed by this
+// module use unsigned long.  The command values are the same kernel ABI
+// values; only the Rust FFI argument width differs.
+#[cfg(any(
+    target_env = "musl",
+    target_env = "ohos",
+    target_os = "android",
+    target_os = "fuchsia"
+))]
 type IoctlRequest = libc::c_int;
 #[cfg(not(any(
     target_env = "musl",
+    target_env = "ohos",
     target_os = "android",
     target_os = "fuchsia"
 )))]
@@ -33,6 +39,21 @@ const TIOCSBRK_IOCTL: IoctlRequest = 0x5427;
 #[cfg(target_os = "fuchsia")]
 const TIOCCBRK_IOCTL: IoctlRequest = 0x5428;
 
+// Redox relibc currently implements the POSIX termios ioctl subset but does
+// not implement the modem-control or break requests below.  Keep the
+// standard request numbers so a caller reaches Redox's real ioctl dispatcher
+// and receives its real EINVAL result instead of a compile-only no-op.
+#[cfg(target_os = "redox")]
+const TIOCMGET_IOCTL: IoctlRequest = 0x5415;
+#[cfg(target_os = "redox")]
+const TIOCMBIS_IOCTL: IoctlRequest = 0x5416;
+#[cfg(target_os = "redox")]
+const TIOCMBIC_IOCTL: IoctlRequest = 0x5417;
+#[cfg(target_os = "redox")]
+const TIOCSBRK_IOCTL: IoctlRequest = 0x5427;
+#[cfg(target_os = "redox")]
+const TIOCCBRK_IOCTL: IoctlRequest = 0x5428;
+
 #[cfg(target_os = "hurd")]
 const TIOCMGET_IOCTL: IoctlRequest = 0x6008_076a;
 #[cfg(target_os = "hurd")]
@@ -44,41 +65,41 @@ const TIOCSBRK_IOCTL: IoctlRequest = 0x077b;
 #[cfg(target_os = "hurd")]
 const TIOCCBRK_IOCTL: IoctlRequest = 0x077a;
 
-#[cfg(not(any(target_os = "fuchsia", target_os = "hurd")))]
+#[cfg(not(any(target_os = "fuchsia", target_os = "hurd", target_os = "redox")))]
 const TIOCMGET_IOCTL: IoctlRequest = libc::TIOCMGET as IoctlRequest;
-#[cfg(not(any(target_os = "fuchsia", target_os = "hurd")))]
+#[cfg(not(any(target_os = "fuchsia", target_os = "hurd", target_os = "redox")))]
 const TIOCMBIS_IOCTL: IoctlRequest = libc::TIOCMBIS as IoctlRequest;
-#[cfg(not(any(target_os = "fuchsia", target_os = "hurd")))]
+#[cfg(not(any(target_os = "fuchsia", target_os = "hurd", target_os = "redox")))]
 const TIOCMBIC_IOCTL: IoctlRequest = libc::TIOCMBIC as IoctlRequest;
-#[cfg(not(any(target_os = "fuchsia", target_os = "hurd")))]
+#[cfg(not(any(target_os = "fuchsia", target_os = "hurd", target_os = "redox")))]
 const TIOCSBRK_IOCTL: IoctlRequest = libc::TIOCSBRK as IoctlRequest;
-#[cfg(not(any(target_os = "fuchsia", target_os = "hurd")))]
+#[cfg(not(any(target_os = "fuchsia", target_os = "hurd", target_os = "redox")))]
 const TIOCCBRK_IOCTL: IoctlRequest = libc::TIOCCBRK as IoctlRequest;
 
-#[cfg(any(target_os = "fuchsia", target_os = "hurd"))]
+#[cfg(any(target_os = "fuchsia", target_os = "hurd", target_os = "redox"))]
 const TIOCM_RTS_VALUE: c_int = 0x004;
-#[cfg(any(target_os = "fuchsia", target_os = "hurd"))]
+#[cfg(any(target_os = "fuchsia", target_os = "hurd", target_os = "redox"))]
 const TIOCM_CTS_VALUE: c_int = 0x020;
-#[cfg(any(target_os = "fuchsia", target_os = "hurd"))]
+#[cfg(any(target_os = "fuchsia", target_os = "hurd", target_os = "redox"))]
 const TIOCM_DTR_VALUE: c_int = 0x002;
-#[cfg(any(target_os = "fuchsia", target_os = "hurd"))]
+#[cfg(any(target_os = "fuchsia", target_os = "hurd", target_os = "redox"))]
 const TIOCM_DSR_VALUE: c_int = 0x100;
-#[cfg(any(target_os = "fuchsia", target_os = "hurd"))]
+#[cfg(any(target_os = "fuchsia", target_os = "hurd", target_os = "redox"))]
 const TIOCM_RI_VALUE: c_int = 0x080;
-#[cfg(any(target_os = "fuchsia", target_os = "hurd"))]
+#[cfg(any(target_os = "fuchsia", target_os = "hurd", target_os = "redox"))]
 const TIOCM_CD_VALUE: c_int = 0x040;
 
-#[cfg(not(any(target_os = "fuchsia", target_os = "hurd")))]
+#[cfg(not(any(target_os = "fuchsia", target_os = "hurd", target_os = "redox")))]
 const TIOCM_RTS_VALUE: c_int = libc::TIOCM_RTS as c_int;
-#[cfg(not(any(target_os = "fuchsia", target_os = "hurd")))]
+#[cfg(not(any(target_os = "fuchsia", target_os = "hurd", target_os = "redox")))]
 const TIOCM_CTS_VALUE: c_int = libc::TIOCM_CTS as c_int;
-#[cfg(not(any(target_os = "fuchsia", target_os = "hurd")))]
+#[cfg(not(any(target_os = "fuchsia", target_os = "hurd", target_os = "redox")))]
 const TIOCM_DTR_VALUE: c_int = libc::TIOCM_DTR as c_int;
-#[cfg(not(any(target_os = "fuchsia", target_os = "hurd")))]
+#[cfg(not(any(target_os = "fuchsia", target_os = "hurd", target_os = "redox")))]
 const TIOCM_DSR_VALUE: c_int = libc::TIOCM_DSR as c_int;
-#[cfg(not(any(target_os = "fuchsia", target_os = "hurd")))]
+#[cfg(not(any(target_os = "fuchsia", target_os = "hurd", target_os = "redox")))]
 const TIOCM_RI_VALUE: c_int = libc::TIOCM_RI as c_int;
-#[cfg(not(any(target_os = "fuchsia", target_os = "hurd")))]
+#[cfg(not(any(target_os = "fuchsia", target_os = "hurd", target_os = "redox")))]
 const TIOCM_CD_VALUE: c_int = libc::TIOCM_CD as c_int;
 
 pub struct SerialPort {
@@ -167,7 +188,7 @@ cfg_if! {
 		#[derive(Clone)]
 		pub struct Settings {
 			pub termios: RawTermios,
-			#[cfg(target_os = "aix")]
+			#[cfg(any(target_os = "aix", target_os = "redox"))]
 			pub rts_cts: bool,
 		}
 
@@ -178,7 +199,7 @@ cfg_if! {
 					check(libc::tcgetattr(file.as_raw_fd(), &mut termios))?;
 					Ok(Settings {
 						termios,
-						#[cfg(target_os = "aix")]
+						#[cfg(any(target_os = "aix", target_os = "redox"))]
 						rts_cts: false,
 					})
 				}
@@ -188,6 +209,14 @@ cfg_if! {
 				#[cfg(target_os = "aix")]
 				if self.rts_cts {
 					return Err(std::io::Error::new(std::io::ErrorKind::Other, "RTS/CTS flow control is not supported on AIX"));
+				}
+				#[cfg(target_os = "redox")]
+				if self.rts_cts {
+					// Redox relibc's termios ABI has no CRTSCTS flag and its
+					// TtyCall protocol has no hardware-flow-control operation.
+					// Fail with the OS's documented not-supported errno rather
+					// than silently applying software-only settings.
+					return Err(std::io::Error::from_raw_os_error(libc::EOPNOTSUPP));
 				}
 				unsafe {
 					check(libc::tcsetattr(file.as_raw_fd(), libc::TCSADRAIN, &self.termios))?;
@@ -693,24 +722,32 @@ impl Settings {
 		match flow_control {
 			crate::FlowControl::None => {
 				self.termios.c_iflag &= !(libc::IXON | libc::IXOFF);
-				#[cfg(not(target_os = "aix"))]
+				#[cfg(any(target_os = "aix", target_os = "redox"))]
+				{
+					self.rts_cts = false;
+				}
+				#[cfg(not(any(target_os = "aix", target_os = "redox")))]
 				{
 					self.termios.c_cflag &= !libc::CRTSCTS;
 				}
 			},
 			crate::FlowControl::XonXoff => {
 				self.termios.c_iflag |= libc::IXON | libc::IXOFF;
-				#[cfg(not(target_os = "aix"))]
+				#[cfg(any(target_os = "aix", target_os = "redox"))]
+				{
+					self.rts_cts = false;
+				}
+				#[cfg(not(any(target_os = "aix", target_os = "redox")))]
 				{
 					self.termios.c_cflag &= !libc::CRTSCTS;
 				}
 			},
 			crate::FlowControl::RtsCts => {
-				#[cfg(target_os = "aix")]
+				#[cfg(any(target_os = "aix", target_os = "redox"))]
 				{
 					self.rts_cts = true;
 				}
-				#[cfg(not(target_os = "aix"))]
+				#[cfg(not(any(target_os = "aix", target_os = "redox")))]
 				{
 					self.termios.c_iflag &= !(libc::IXON | libc::IXOFF);
 					self.termios.c_cflag |= libc::CRTSCTS;
@@ -724,7 +761,9 @@ impl Settings {
 		let ixoff = self.termios.c_iflag & libc::IXOFF != 0;
 		#[cfg(target_os = "aix")]
 		let crtscts = false;
-		#[cfg(not(target_os = "aix"))]
+		#[cfg(target_os = "redox")]
+		let crtscts = self.rts_cts;
+		#[cfg(not(any(target_os = "aix", target_os = "redox")))]
 		let crtscts = self.termios.c_cflag & libc::CRTSCTS != 0;
 
 		if !crtscts && !ixon && !ixoff {

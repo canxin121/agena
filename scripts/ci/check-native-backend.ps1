@@ -48,7 +48,18 @@ if ($BuildStd) {
     $env:RUSTDOC = $StableRustdoc
     $env:RUSTC_BOOTSTRAP = "1"
     $env:CARGO_TARGET_DIR = $BuildTargetDir
-    $env:RUSTFLAGS = (($OldRustFlags, $TargetRustFlags) | Where-Object { $_ } | Join-String -Separator " ")
+    $RustFlags = @($OldRustFlags, $TargetRustFlags) | Where-Object { $_ }
+    if ($TargetTriple -match "-win7-windows-(msvc|gnu)$") {
+      # Build-std places the target's real libcore/libstd artifacts under the
+      # target-specific debug deps directory.  Cargo passes that path to
+      # normal target rustc invocations, but direct rustc probes launched by
+      # build scripts (notably autocfg) only see CARGO_ENCODED_RUSTFLAGS.  Add
+      # the actual build-std search path so those probes use the same target
+      # standard library instead of falling back to the host sysroot.
+      $BuildStdDeps = Join-Path $BuildTargetDir "$TargetTriple\debug\deps"
+      $RustFlags += @("-L", "dependency=$BuildStdDeps")
+    }
+    $env:RUSTFLAGS = ($RustFlags | Join-String -Separator " ")
     Write-Host "Using build-std driver: cargo=$NightlyCargo rustc=$StableRustc rustdoc=$StableRustdoc target-dir=$BuildTargetDir"
     $CargoExtraArgs = @()
     if ($TargetTriple -match "-win7-windows-(msvc|gnu)$") {

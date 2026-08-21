@@ -212,13 +212,7 @@ impl From<std::process::ExitStatus> for ExitStatus {
             use std::os::unix::process::ExitStatusExt;
 
             if let Some(signal) = status.signal() {
-                let signame = unsafe { libc::strsignal(signal) };
-                let signal = if signame.is_null() {
-                    format!("Signal {}", signal)
-                } else {
-                    let signame = unsafe { std::ffi::CStr::from_ptr(signame) };
-                    signame.to_string_lossy().to_string()
-                };
+                let signal = signal_name(signal);
 
                 return ExitStatus {
                     code: status.code().map(|c| c as u32).unwrap_or(1),
@@ -235,6 +229,26 @@ impl From<std::process::ExitStatus> for ExitStatus {
 
         ExitStatus { code, signal: None }
     }
+}
+
+#[cfg(not(target_os = "fuchsia"))]
+fn signal_name(signal: i32) -> String {
+    let signame = unsafe { libc::strsignal(signal) };
+    if signame.is_null() {
+        format!("Signal {}", signal)
+    } else {
+        let signame = unsafe { std::ffi::CStr::from_ptr(signame) };
+        signame.to_string_lossy().to_string()
+    }
+}
+
+// Fuchsia's libc does not provide strsignal(3).  Preserve the signal
+// information in the public status object without inventing a successful
+// exit or hiding the signal termination; only the human-readable label is
+// necessarily numeric on this platform.
+#[cfg(target_os = "fuchsia")]
+fn signal_name(signal: i32) -> String {
+    format!("Signal {}", signal)
 }
 
 impl std::fmt::Display for ExitStatus {

@@ -189,20 +189,32 @@ function Set-EnvFromVsDevCmd {
     # select the newest installed official MSVC include tree that contains the
     # required standard header while retaining the target-specific compiler
     # and libraries selected above.
-    $HeaderToolsRoot = Get-ChildItem -Path $ToolsRoot -Directory -ErrorAction SilentlyContinue |
-      Sort-Object Name -Descending |
-      Where-Object { Test-Path (Join-Path $_.FullName "include\stddef.h") } |
-      Select-Object -First 1
+    function Find-MsvcHeaderToolsRoot {
+      Get-ChildItem -Path $ToolsRoot -Directory -ErrorAction SilentlyContinue |
+        Sort-Object Name -Descending |
+        Where-Object { Test-Path (Join-Path $_.FullName "include\stddef.h") } |
+        Select-Object -First 1
+    }
+
+    $HeaderToolsRoot = Find-MsvcHeaderToolsRoot
     if (-not $HeaderToolsRoot) {
       Write-Host "Installing official Visual Studio C++ build tools to obtain MSVC headers"
       Install-VsComponents -Installer $VsInstaller -InstallPath $Install -Components @(
         "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
         "Microsoft.VisualStudio.Component.VC.CoreBuildTools"
       )
-      $HeaderToolsRoot = Get-ChildItem -Path $ToolsRoot -Directory -ErrorAction SilentlyContinue |
-        Sort-Object Name -Descending |
-        Where-Object { Test-Path (Join-Path $_.FullName "include\stddef.h") } |
-        Select-Object -First 1
+
+      # setup.exe delegates modify operations to the Visual Studio installer
+      # service and can return before the selected toolset has been unpacked.
+      # Do not race that service: wait for a real official MSVC header tree to
+      # appear, rather than falling through to a host compiler or synthetic
+      # header substitute.
+      $Deadline = (Get-Date).AddMinutes(5)
+      do {
+        $HeaderToolsRoot = Find-MsvcHeaderToolsRoot
+        if ($HeaderToolsRoot) { break }
+        Start-Sleep -Seconds 2
+      } while ((Get-Date) -lt $Deadline)
     }
     if (-not $HeaderToolsRoot) {
       throw "MSVC C headers missing: no installed toolset contains include\stddef.h after installing official C++ build tools"

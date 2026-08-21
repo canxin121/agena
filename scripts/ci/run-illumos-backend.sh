@@ -298,9 +298,16 @@ LLD="$RUST_SYSROOT/lib/rustlib/$HOST/bin/gcc-ld/ld.lld"
 [[ -x "$LLD" ]] || LLD="$RUST_SYSROOT/lib/rustlib/$HOST/bin/rust-lld"
 [[ -x "$LLD" ]] || { echo "ERROR: Rust LLD missing for host $HOST" >&2; exit 1; }
 
-CLANG="${AGENA_CLANG:-$(command -v clang || true)}"
-CLANGXX="${AGENA_CLANGXX:-$(command -v clang++ || true)}"
-AR="${AGENA_LLVM_AR:-$(command -v llvm-ar || true)}"
+if [[ -n "${AGENA_CLANG:-}" ]]; then
+  CLANG="$AGENA_CLANG"
+  CLANGXX="${AGENA_CLANGXX:-${AGENA_CLANG}++}"
+  AR="${AGENA_LLVM_AR:-$(command -v llvm-ar || true)}"
+else
+  LLVM_ROOT="$(bash scripts/ci/install-pinned-llvm22.sh)"
+  CLANG="$LLVM_ROOT/bin/clang"
+  CLANGXX="$LLVM_ROOT/bin/clang++"
+  AR="$LLVM_ROOT/bin/llvm-ar"
+fi
 [[ -x "$CLANG" && -x "$CLANGXX" && -x "$AR" ]] || {
   echo "ERROR: clang, clang++, and llvm-ar are required for illumos cross builds" >&2
   exit 1

@@ -111,7 +111,6 @@ jobs:
           print(f"Native/SDK backend targets: {len(data['native_backend'])}")
           print(f"Linux Zig backend targets: {len(data['linux_zig_backend'])}")
           print(f"Custom OS backend targets: {len(data['custom_backend'])}")
-          print(f"Excluded no-std/non-OS targets: {len(data['excluded'])}")
           PY
 
   web:

@@ -51,7 +51,6 @@ jobs:
           print(f"Loaded {len(data['native_backend'])} native/SDK backend definitions")
           print(f"Loaded {len(data['linux_zig_backend'])} Linux Zig backend definitions")
           print(f"Loaded {len(data['custom_backend'])} custom OS backend definitions")
-          print(f"Excluded {len(data['excluded'])} no-std/non-OS definitions")
           PY_MATRIX
 
   cross-tool:

@@ -25,7 +25,7 @@ attr_alias = "0.1.0"
 [target.'cfg(unix)'.dependencies]
 libc = "0.2.120"
 
-[target.'cfg(all(unix, any(target_os = "espidf", target_os = "fuchsia", target_os = "horizon", target_os = "openbsd", target_os = "redox", target_os = "tvos", target_os = "vxworks")))'.dependencies]
+[target.'cfg(all(unix, any(target_os = "cygwin", target_os = "espidf", target_os = "fuchsia", target_os = "horizon", target_os = "openbsd", target_os = "redox", target_os = "tvos", target_os = "vxworks")))'.dependencies]
 parking_lot = { version = "0.12", optional = true }
 signal-hook = "0.3"
 

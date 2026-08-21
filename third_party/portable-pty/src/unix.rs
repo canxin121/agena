@@ -105,6 +105,7 @@ impl Read for PtyFd {
     }
 }
 
+#[cfg(not(target_os = "fuchsia"))]
 fn tty_name(fd: RawFd) -> Option<PathBuf> {
     let mut buf = vec![0 as std::ffi::c_char; 128];
 
@@ -130,6 +131,20 @@ fn tty_name(fd: RawFd) -> Option<PathBuf> {
             None
         };
     }
+}
+
+// Fuchsia's libc exports ttyname(3) but not the POSIX ttyname_r(3) wrapper.
+// The underlying tty lookup is still a real libc operation; copy its result
+// immediately because the returned pointer is owned by libc and may be
+// overwritten by a later call.
+#[cfg(target_os = "fuchsia")]
+fn tty_name(fd: RawFd) -> Option<PathBuf> {
+    let name = unsafe { libc::ttyname(fd) };
+    if name.is_null() {
+        return None;
+    }
+    let cstr = unsafe { std::ffi::CStr::from_ptr(name) };
+    Some(PathBuf::from(OsStr::from_bytes(cstr.to_bytes())))
 }
 
 /// On Big Sur, Cocoa leaks various file descriptors to child processes,

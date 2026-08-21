@@ -175,9 +175,12 @@ if ! valid_sysroot; then
     for suffix in "" a b c d e f g h; do
       candidate="/dev/sda${partition}${suffix}"
       probe=""
-      if probe="$(guestfish --ro -a "$IMAGE" <<EOF 2>/dev/null
+      if probe="$(guestfish --ro --format=raw -a "$IMAGE" <<EOF 2>/dev/null
 run
-mount-ro $candidate /mnt
+# FreeBSD's UFS2 variant is not self-identifying to the Linux UFS driver.
+# Tell the real read-only guestfish mount operation which ABI is present;
+# mount-ro's auto-detection otherwise rejects the official BSD root slice.
+mount-options ro,ufstype=ufs2 $candidate /mnt
 exists /mnt/usr/include/stdio.h
 EOF
 )" && [[ "$probe" == *true* ]]; then
@@ -191,7 +194,9 @@ EOF
     exit 1
   }
 
-  guestfish --ro -a "$IMAGE" -m "$rootdev" <<EOF
+  guestfish --ro --format=raw -a "$IMAGE" <<EOF
+run
+mount-options ro,ufstype=ufs2 $rootdev /
 copy-out /usr/include $SYSROOT/usr
 copy-out /usr/lib $SYSROOT/usr
 copy-out /lib $SYSROOT

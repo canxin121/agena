@@ -243,6 +243,7 @@ fi
 
 if ! probe="$(guestfish --ro --format=raw -a "$SLICE_IMAGE" <<EOF
 run
+mkdir /mnt
 mount-options ro,ufstype=ufs2 /dev/sda /mnt
 exists /mnt/usr/include/stdio.h
 EOF

@@ -106,7 +106,8 @@ function Set-EnvFromVsDevCmd {
       # can expose it in a side-by-side VS installation/toolset different from
       # the one selected by VsDevCmd. Search every real VS installation and
       # every installed MSVC toolset for the matching compiler and libraries.
-      # Never fall back to ARM64 or x64 paths: that would produce the wrong ABI.
+      # Never accept an x64 compiler or ARM64 library: that would produce the
+      # wrong ABI.
       $VsWherePath = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
       $InstallPaths = @($Install)
       if (Test-Path $VsWherePath) {
@@ -119,12 +120,22 @@ function Set-EnvFromVsDevCmd {
         $CandidateToolsRoot = Join-Path $InstallPath "VC\Tools\MSVC"
         if (-not (Test-Path $CandidateToolsRoot)) { continue }
         foreach ($Candidate in (Get-ChildItem -Path $CandidateToolsRoot -Directory -ErrorAction SilentlyContinue | Sort-Object Name -Descending)) {
-          $CompilerPath = Join-Path $Candidate.FullName "bin\$HostToolArch\arm64ec\cl.exe"
           $LibraryPath = Join-Path $Candidate.FullName "lib\arm64ec"
-          if ((Test-Path $CompilerPath) -and (Test-Path $LibraryPath)) {
-            return [pscustomobject]@{
-              InstallPath = $InstallPath
-              ToolsRoot = $Candidate.FullName
+          if (-not (Test-Path $LibraryPath)) {
+            continue
+          }
+          # Visual Studio's ARM64EC toolset uses the ARM64 cl.exe binary and
+          # selects the distinct ARM64EC ABI with /arm64EC.  Some older VS
+          # toolsets exposed a separate arm64ec directory, so accept either
+          # official layout but never accept an x64 compiler or ARM64 library.
+          foreach ($CandidateCompilerArch in @("arm64ec", "arm64")) {
+            $CompilerPath = Join-Path $Candidate.FullName "bin\$HostToolArch\$CandidateCompilerArch\cl.exe"
+            if ((Test-Path $CompilerPath) -and (Test-Path $LibraryPath)) {
+              return [pscustomobject]@{
+                InstallPath = $InstallPath
+                ToolsRoot = $Candidate.FullName
+                CompilerArch = $CandidateCompilerArch
+              }
             }
           }
         }
@@ -142,6 +153,7 @@ function Set-EnvFromVsDevCmd {
         "Microsoft.VisualStudio.Workload.NativeDesktop",
         "Microsoft.VisualStudio.Component.VC.Tools.ARM64EC",
         "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
+        "Microsoft.VisualStudio.Component.VC.14.44.17.14.x86.x64",
         "Microsoft.VisualStudio.Component.VC.CoreBuildTools"
       )
 
@@ -159,13 +171,16 @@ function Set-EnvFromVsDevCmd {
       } while ((Get-Date) -lt $Deadline)
     }
     if (-not $Arm64EcTool) {
-      throw "MSVC ARM64EC component missing after official installation: no official VS installation contains bin\$HostToolArch\arm64ec\cl.exe and lib\arm64ec"
+      throw "MSVC ARM64EC component missing after official installation: no official VS installation contains bin\$HostToolArch\arm64ec-or-arm64\cl.exe and lib\arm64ec"
     }
     $Install = $Arm64EcTool.InstallPath
     $ToolsRoot = Join-Path $Install "VC\Tools\MSVC"
     $VCToolsRoot = $Arm64EcTool.ToolsRoot
     $ToolsVersion = Split-Path $VCToolsRoot -Leaf
     $env:VCToolsVersion = $ToolsVersion
+    $CompilerArch = $Arm64EcTool.CompilerArch
+  } else {
+    $CompilerArch = $Arch
   }
 
   if ($Arch -eq "arm") {
@@ -179,7 +194,9 @@ function Set-EnvFromVsDevCmd {
       Install-VsComponents -Installer $VsInstaller -InstallPath $Install -Components @(
         "Microsoft.VisualStudio.Workload.NativeDesktop",
         "Microsoft.VisualStudio.Component.VC.Tools.ARM",
+        "Microsoft.VisualStudio.Component.VC.14.29.16.11.ARM",
         "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
+        "Microsoft.VisualStudio.Component.VC.14.44.17.14.x86.x64",
         "Microsoft.VisualStudio.Component.VC.CoreBuildTools"
       )
 
@@ -201,7 +218,7 @@ function Set-EnvFromVsDevCmd {
     }
   }
 
-  $TargetBin = Join-Path $VCToolsRoot "bin\$HostToolArch\$Arch"
+  $TargetBin = Join-Path $VCToolsRoot "bin\$HostToolArch\$CompilerArch"
   $Compiler = Join-Path $TargetBin "cl.exe"
   $UsingClangCl = $false
   if (-not (Test-Path $Compiler)) {
@@ -303,6 +320,7 @@ function Set-EnvFromVsDevCmd {
       Install-VsComponents -Installer $VsInstaller -InstallPath $Install -Components @(
         "Microsoft.VisualStudio.Workload.NativeDesktop",
         "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
+        "Microsoft.VisualStudio.Component.VC.14.44.17.14.x86.x64",
         "Microsoft.VisualStudio.Component.VC.CoreBuildTools"
       )
 
@@ -329,9 +347,19 @@ function Set-EnvFromVsDevCmd {
   # accidentally lose stddef.h when they replace the environment.
   $TargetEnvKey = $TargetTriple.Replace("-", "_")
   $HeaderFlag = "/I`"$VCToolsInclude`""
+  $AbiFlags = @($HeaderFlag)
+  if ($Arch -eq "arm64ec") {
+    # cl.exe is shared with the ARM64 toolset on current VS releases. This
+    # switch is what makes cc-rs C/C++ objects use the real ARM64EC ABI.
+    $AbiFlags += "/arm64EC"
+  }
   foreach ($FlagName in @("CFLAGS_$TargetEnvKey", "CXXFLAGS_$TargetEnvKey")) {
     $ExistingFlags = [Environment]::GetEnvironmentVariable($FlagName, "Process")
-    $CombinedFlags = if ($ExistingFlags) { "$HeaderFlag $ExistingFlags" } else { $HeaderFlag }
+    $AllFlags = @($AbiFlags)
+    if ($ExistingFlags) {
+      $AllFlags += $ExistingFlags
+    }
+    $CombinedFlags = $AllFlags -join " "
     [Environment]::SetEnvironmentVariable($FlagName, $CombinedFlags, "Process")
   }
   $VCToolsLib = Join-Path $VCToolsRoot "lib\$Arch"

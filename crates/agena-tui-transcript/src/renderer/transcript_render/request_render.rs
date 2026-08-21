@@ -1,15 +1,15 @@
 use super::super::{
     I18n, Modifier, RenderedLine, Style, first_non_empty_preview_line, push_label_value,
-    push_multiline, push_section_heading, tool_execution_preview, transcript_part_content,
+    push_section_heading, tool_execution_preview, transcript_part_content,
 };
 use crate::ui_text;
 use crate::{
-    RequestPartResource, TranscriptActivityContent, TranscriptAssistantReplyLifecycle,
-    TranscriptEntryPart, TranscriptPartContent,
+    TranscriptActivityContent, TranscriptAssistantReplyLifecycle, TranscriptEntryPart,
+    TranscriptPartContent,
 };
 
 pub(crate) fn render_file_changes(
-    changes: &[agena_api::part::FileChangeRecordResource],
+    changes: &[agena_domain::FileChangeRecord],
     out: &mut Vec<RenderedLine>,
     width: u16,
     i18n: &I18n,
@@ -29,62 +29,25 @@ pub(crate) fn render_file_changes(
         push_label_value(
             out,
             "      - ",
-            &file_change_resource_list_item_text(entry, i18n),
-            file_change_resource_style(entry.kind),
+            &file_change_list_item_text(entry, i18n),
+            file_change_style(entry.kind),
             width,
         );
     }
 }
 
-pub(crate) fn render_checklist(
-    items: &[agena_api::part::TodoItemResource],
-    out: &mut Vec<RenderedLine>,
-    width: u16,
-    i18n: &I18n,
-) {
-    if items.is_empty() {
-        return;
-    }
-    push_section_heading(
-        out,
-        &format!("    {}", ui_text::t(i18n, "message-todo-list")),
-        Style::default()
-            .fg(agena_tui_components::theme::accent_color())
-            .add_modifier(Modifier::BOLD),
-        width,
-    );
-    for item in items {
-        push_label_value(
-            out,
-            "      - ",
-            &format!(
-                "[{}|{}] {}",
-                todo_status_resource_label(i18n, item.status),
-                todo_priority_resource_label(i18n, item.priority),
-                item.content
-            ),
-            Style::default(),
-            width,
-        );
-    }
-}
-
-fn file_change_resource_list_item_text(
-    change: &agena_api::part::FileChangeRecordResource,
-    i18n: &I18n,
-) -> String {
-    use agena_api::part::FileChangeKindResource;
+fn file_change_list_item_text(change: &agena_domain::FileChangeRecord, i18n: &I18n) -> String {
     let marker = match change.kind {
-        FileChangeKindResource::Added => "A",
-        FileChangeKindResource::Updated => "M",
-        FileChangeKindResource::Deleted => "D",
-        FileChangeKindResource::Moved => "R",
+        agena_domain::FileChangeKind::Added => "A",
+        agena_domain::FileChangeKind::Updated => "M",
+        agena_domain::FileChangeKind::Deleted => "D",
+        agena_domain::FileChangeKind::Moved => "R",
     };
     let label = match change.kind {
-        FileChangeKindResource::Added => ui_text::t(i18n, "file-change-added"),
-        FileChangeKindResource::Updated => ui_text::t(i18n, "file-change-updated"),
-        FileChangeKindResource::Deleted => ui_text::t(i18n, "file-change-deleted"),
-        FileChangeKindResource::Moved => ui_text::t(i18n, "file-change-moved"),
+        agena_domain::FileChangeKind::Added => ui_text::t(i18n, "file-change-added"),
+        agena_domain::FileChangeKind::Updated => ui_text::t(i18n, "file-change-updated"),
+        agena_domain::FileChangeKind::Deleted => ui_text::t(i18n, "file-change-deleted"),
+        agena_domain::FileChangeKind::Moved => ui_text::t(i18n, "file-change-moved"),
     };
     let path = change
         .from_path
@@ -94,89 +57,20 @@ fn file_change_resource_list_item_text(
     format!("{marker} {path} ({label})")
 }
 
-fn file_change_resource_style(kind: agena_api::part::FileChangeKindResource) -> Style {
+fn file_change_style(kind: agena_domain::FileChangeKind) -> Style {
     match kind {
-        agena_api::part::FileChangeKindResource::Added => {
+        agena_domain::FileChangeKind::Added => {
             Style::default().fg(agena_tui_components::theme::success_color())
         }
-        agena_api::part::FileChangeKindResource::Updated => {
+        agena_domain::FileChangeKind::Updated => {
             Style::default().fg(agena_tui_components::theme::warning_color())
         }
-        agena_api::part::FileChangeKindResource::Deleted => {
+        agena_domain::FileChangeKind::Deleted => {
             Style::default().fg(agena_tui_components::theme::danger_color())
         }
-        agena_api::part::FileChangeKindResource::Moved => {
+        agena_domain::FileChangeKind::Moved => {
             Style::default().fg(agena_tui_components::theme::accent_color())
         }
-    }
-}
-
-fn todo_status_resource_label(i18n: &I18n, status: agena_api::part::TodoStatusResource) -> String {
-    let key = match status {
-        agena_api::part::TodoStatusResource::Pending => "todo-pending",
-        agena_api::part::TodoStatusResource::InProgress => "todo-in-progress",
-        agena_api::part::TodoStatusResource::Completed => "todo-completed",
-        agena_api::part::TodoStatusResource::Cancelled => "todo-cancelled",
-    };
-    ui_text::t(i18n, key)
-}
-
-fn todo_priority_resource_label(
-    i18n: &I18n,
-    priority: agena_api::part::TodoPriorityResource,
-) -> String {
-    let key = match priority {
-        agena_api::part::TodoPriorityResource::High => "todo-priority-high",
-        agena_api::part::TodoPriorityResource::Medium => "todo-priority-medium",
-        agena_api::part::TodoPriorityResource::Low => "todo-priority-low",
-    };
-    ui_text::t(i18n, key)
-}
-
-pub(crate) fn render_user_input_request(
-    request: &agena_api::resource::UserInputRequest,
-    reply: Option<&agena_api::resource::UserInputReply>,
-    out: &mut Vec<RenderedLine>,
-    width: u16,
-    i18n: &I18n,
-) {
-    match reply {
-        Some(reply) => {
-            push_multiline(
-                out,
-                "  ▸ ",
-                &i18n.text_args(
-                    "message-user-input-replied",
-                    &agena_tui::fl_args!("request_id" => reply.request_id.as_str()),
-                ),
-                Style::default().fg(agena_tui_components::theme::success_color()),
-                width,
-            );
-            for value in reply.answers.values().flatten() {
-                push_multiline(out, "    ✓ ", value, Style::default(), width);
-            }
-        }
-        None => {
-            push_multiline(
-                out,
-                "  ▸ ",
-                &i18n.text_args(
-                    "message-awaiting-user-input",
-                    &agena_tui::fl_args!("request_id" => request.request_id.as_str()),
-                ),
-                Style::default().fg(agena_tui_components::theme::special_color()),
-                width,
-            );
-        }
-    }
-    for question in &request.questions {
-        push_multiline(
-            out,
-            "    ",
-            &ui_text::message_question_line(i18n, question.question.as_str()),
-            Style::default(),
-            width,
-        );
     }
 }
 
@@ -187,13 +81,13 @@ pub(crate) fn preview_for_part(part: &TranscriptEntryPart, i18n: &I18n) -> Optio
         }
         TranscriptPartContent::Text(text) => first_non_empty_preview_line(text.text.as_str()),
         TranscriptPartContent::Activity(TranscriptActivityContent::Canonical(payload)) => {
-            Some(crate::snapshot::activity_presentation(payload).1)
+            Some(crate::activity_presentation::activity_presentation(payload).1)
         }
         TranscriptPartContent::Activity(TranscriptActivityContent::TextSegment(segment))
         | TranscriptPartContent::Activity(TranscriptActivityContent::Answer(segment)) => Some(
-            crate::snapshot::activity_presentation(&agena_domain::ActivityPayload::TextSegment(
-                segment.as_ref().clone(),
-            ))
+            crate::activity_presentation::activity_presentation(
+                &agena_domain::ActivityPayload::TextSegment(segment.as_ref().clone()),
+            )
             .1,
         ),
         TranscriptPartContent::Activity(TranscriptActivityContent::Reasoning(reasoning)) => {
@@ -244,14 +138,6 @@ pub(crate) fn preview_for_part(part: &TranscriptEntryPart, i18n: &I18n) -> Optio
                 .skills
                 .first()
                 .map(|skill| format!("Skill: {}", skill.name))
-        }
-        TranscriptPartContent::Activity(TranscriptActivityContent::Request(request)) => {
-            match request.as_ref() {
-                RequestPartResource::UserInput { request, .. } => request
-                    .questions
-                    .first()
-                    .map(|question| question.question.clone()),
-            }
         }
         TranscriptPartContent::Activity(TranscriptActivityContent::Fold { .. }) => None,
     }

@@ -410,7 +410,6 @@ mod tests {
         assert_eq!(output.summary, "Returned 2 of 3 tools.");
         assert!(output.payload.is_none());
         assert!(output.metadata.is_empty());
-        assert!(output.sections.is_empty());
         assert!(output.attachments.is_empty());
     }
 

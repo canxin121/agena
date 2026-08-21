@@ -26,9 +26,6 @@ pub enum Query {
     ListSessions(ListSessionsParams),
     GetSession(GetSessionParams),
     GetSessionState(GetSessionParams),
-    /// Lazily fetch the human-facing detail of one tool Activity. Clients call
-    /// this on expansion; the runtime derives Markdown from compact data.
-    GetOperationDetail(GetOperationDetailParams),
     ListPermissionRules(ListPermissionRulesParams),
     GetPermissionRule(GetPermissionRuleParams),
     ListActivities(ListActivitiesParams),
@@ -51,7 +48,6 @@ pub enum QueryResult {
     Sessions(PaginatedResponse<SessionResource>),
     Session(SessionResource),
     SessionState(crate::resource::SessionExecutionResource),
-    OperationDetail(crate::resource::OperationDetailResource),
     PermissionRules(PaginatedResponse<PermissionRuleResource>),
     PermissionRule(PermissionRuleResource),
     Activities(Vec<BackgroundActivityResource>),
@@ -196,13 +192,6 @@ pub struct ListSessionsParams {
 /// Parameters for fetching a session by id.
 pub struct GetSessionParams {
     pub session_id: i64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-/// Parameters for fetching the detail of an operation (activity) in a session.
-pub struct GetOperationDetailParams {
-    pub session_id: i64,
-    pub activity_id: agena_domain::ActivityId,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

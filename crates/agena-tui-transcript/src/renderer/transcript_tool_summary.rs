@@ -1,9 +1,9 @@
 pub(crate) fn tool_execution_preview(
     part: &TranscriptEntryPart,
-    tool: &OperationPartResource,
+    tool: &ToolCallView,
     _i18n: &I18n,
 ) -> String {
-    let label = tool_invocation_label(&tool.invocation);
+    let label = tool_invocation_label(&tool.operation.invocation);
     format!("{} {label}", activity_status_icon(part.status))
 }
 
@@ -103,20 +103,21 @@ pub(crate) fn push_expanded_markdown(
 
 pub(crate) fn tool_output_copy_text(
     part: &TranscriptEntryPart,
-    tool: &OperationPartResource,
+    tool: &ToolCallView,
     i18n: &I18n,
 ) -> String {
     let label = tool_display_label(tool);
     let mut sections = vec![tool_execution_preview(part, tool, i18n), label];
     if should_render_tool_model_output(tool, tool.error_message()) {
-        sections.push(tool.model_output.text.trim().to_string());
+        sections.push(tool.model_text().trim().to_string());
     }
-    if let Some(diff) = apply_patch_details(&tool.details).map(|payload| payload.diff)
+    if let Some(diff) = apply_patch_details(&tool.details()).map(|payload| payload.diff)
         && !diff.trim().is_empty()
     {
         sections.push(diff.trim().to_string());
     }
     let operation_blocks = tool
+        .presentation
         .blocks
         .iter()
         .map(|block| operation_block_copy_text(block, i18n))
@@ -269,7 +270,7 @@ pub(crate) fn bounded_title_summary(title: &str, summary: &str, max_width: usize
 #[cfg(test)]
 pub(crate) fn tool_execution_compact_summary(
     status: PartExecutionStatusResource,
-    tool: &OperationPartResource,
+    tool: &ToolCallView,
     width: u16,
 ) -> String {
     const COLLAPSED_PREFIX_WIDTH: usize = 4;
@@ -282,7 +283,7 @@ pub(crate) fn tool_execution_compact_summary(
         activity_status_icon(status),
         bounded_title_summary(
             tool_display_label(tool).as_str(),
-            tool.summary.as_str(),
+            tool.summary(),
             content_width,
         )
     )
@@ -369,7 +370,7 @@ fn truncate_with_ellipsis(value: &str, max_width: usize) -> String {
 /// user sees `fs.grep` or `web.search`, rather than the Tool API implementation
 /// that happened to dispatch it.
 pub(crate) fn compact_tool_identity(
-    invocation: &ToolInvocationResource,
+    invocation: &agena_domain::ToolInvocation,
 ) -> (String, serde_json::Value) {
     let input = serde_json::Value::from(invocation.input.clone());
     if tool_api_display_name(invocation.name.as_str()) == Some("tools.call")
@@ -399,18 +400,10 @@ pub(crate) fn compact_tool_name(name: &str) -> String {
         "agena_fs_apply_patch" | "agena.fs.apply_patch" | "apply_patch" => {
             "fs.apply_patch".to_string()
         }
-        "agena_shell_run" | "agena.shell.run" | "agena_process_run" | "agena.process.run" => {
-            "shell.run".to_string()
-        }
-        "agena_shell_list" | "agena.shell.list" | "agena_process_list" | "agena.process.list" => {
-            "shell.list".to_string()
-        }
-        "agena_shell_logs" | "agena.shell.logs" | "agena_process_logs" | "agena.process.logs" => {
-            "shell.logs".to_string()
-        }
-        "agena_shell_stop" | "agena.shell.stop" | "agena_process_stop" | "agena.process.stop" => {
-            "shell.stop".to_string()
-        }
+        "agena_shell_run" | "agena.shell.run" => "shell.run".to_string(),
+        "agena_shell_list" | "agena.shell.list" => "shell.list".to_string(),
+        "agena_shell_logs" | "agena.shell.logs" => "shell.logs".to_string(),
+        "agena_shell_stop" | "agena.shell.stop" => "shell.stop".to_string(),
         other => other.strip_prefix("agena.").unwrap_or(other).to_string(),
     }
 }
@@ -431,8 +424,5 @@ use super::{
     tool_api_display_name, tool_display_label, tool_invocation_label, tool_output_preview,
     truncate_display_width,
 };
-use crate::{
-    OperationPartResource, PartExecutionStatusResource, ToolInvocationResource,
-    TranscriptEntryPart, truncate_rich_line,
-};
+use crate::{PartExecutionStatusResource, ToolCallView, TranscriptEntryPart, truncate_rich_line};
 use unicode_segmentation::UnicodeSegmentation;

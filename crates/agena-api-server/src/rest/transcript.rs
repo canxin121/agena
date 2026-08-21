@@ -330,14 +330,11 @@ async fn load_all_run_parts(
 fn logical_blocks(parts: &[Part]) -> Vec<LogicalBlock> {
     let mut marker_indexes = HashMap::<i64, usize>::new();
     let mut units = Vec::<RunUnit>::new();
-    let mut unit_by_run = HashMap::<i64, usize>::new();
-    let mut unit_by_orphan = HashMap::<i64, usize>::new();
 
     for part in parts {
         if part.kind == "run" {
             let index = units.len();
             marker_indexes.insert(part.part_id, index);
-            unit_by_run.insert(part.part_id, index);
             units.push(RunUnit {
                 run_id: Some(part.part_id),
                 role: part.role.as_str().to_owned(),
@@ -347,36 +344,17 @@ fn logical_blocks(parts: &[Part]) -> Vec<LogicalBlock> {
     }
 
     for part in parts.iter().filter(|part| part.kind != "run") {
-        let index = if let Some(run_id) = part.run_id {
-            if let Some(index) = marker_indexes.get(&run_id).copied() {
-                index
-            } else if let Some(index) = unit_by_orphan.get(&run_id).copied() {
-                index
-            } else {
-                let index = units.len();
-                unit_by_orphan.insert(run_id, index);
-                units.push(RunUnit {
-                    run_id: Some(run_id),
-                    role: part.role.as_str().to_owned(),
-                    parts: Vec::new(),
-                });
-                index
-            }
-        } else {
-            let index = units.len();
-            units.push(RunUnit {
-                run_id: None,
-                role: part.role.as_str().to_owned(),
-                parts: Vec::new(),
-            });
-            index
+        let Some(run_id) = part.run_id else {
+            continue;
+        };
+        let Some(index) = marker_indexes.get(&run_id).copied() else {
+            continue;
         };
         units[index].parts.push(part.clone());
     }
 
-    // Marker order is canonical, while orphan units created in the second
-    // pass are rare compatibility rows. Re-sort every unit by its earliest
-    // physical part before applying the assistant fold.
+    // Marker order is canonical. Content is already ordered by the raw part
+    // scan, and every content part has exactly one durable marker owner.
     units.sort_by_key(|unit| {
         unit.parts
             .iter()
@@ -485,7 +463,9 @@ fn visible_assistant_block(
         return (visible, Vec::new());
     }
     let anchor = &activities[visible_start];
-    let anchor_run_id = anchor.run_id.unwrap_or(run_ids[0]);
+    let Some(anchor_run_id) = anchor.run_id else {
+        return (visible, Vec::new());
+    };
     let next_cursor = encode_fold_cursor(
         session_id,
         &run_ids,
@@ -611,7 +591,6 @@ mod tests {
             content: serde_json::json!({}),
             summary: None,
             visibility: agena_storage::store::PartVisibility::Both,
-            rendered_markdown: None,
             parent_part_id: None,
             run_id: Some(100),
             origin_session_id: 1,

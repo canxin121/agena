@@ -194,13 +194,6 @@ pub(crate) use agena_runtime_session::{
     ExecutionControl, ExecutionControlError, ExecutionRegistry,
 };
 pub use agena_runtime_session::{
-    OperationDetail, SessionExecutionContext, SessionPresentation,
-    SessionProjectedModelVisibleOutput, SessionProjectedOperationBlock,
-    SessionProjectedOperationPart, SessionProjectedPart, SessionProjectedPartDetail,
-    SessionProjectedRun, SessionProjectedRunHeader, SessionProjectedToolResult, SessionQueryError,
-    SessionQueryService,
-};
-pub use agena_runtime_session::{
     RuntimeActiveSnapshot, RuntimeManagedSnapshot, RuntimeSnapshotStatus, SessionExecutionControl,
     SessionExecutionControlError,
 };
@@ -215,6 +208,10 @@ pub use agena_runtime_session::{
 };
 pub use agena_runtime_session::{
     SessionExecutionCommandError, SessionExecutionCommandOutcome, SessionExecutionCommandService,
+};
+pub use agena_runtime_session::{
+    SessionExecutionContext, SessionPresentation, SessionProjectedPart, SessionProjectedPartDetail,
+    SessionProjectedRun, SessionProjectedRunHeader, SessionQueryError, SessionQueryService,
 };
 pub use agena_runtime_session::{
     SessionPluginOperationError, SessionPluginOperationRequest, SessionPluginOperationService,

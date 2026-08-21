@@ -118,7 +118,6 @@ export type ChatPageViewContext = {
   isActivityExpanded: (key: string) => boolean
   setActivityExpanded: (key: string, expanded: boolean) => void
   isReasoningPart: (part: DynamicRecord) => boolean
-  isJustificationPart: (part: DynamicRecord) => boolean
   isMetaPart: (part: DynamicRecord) => boolean
   transcriptPartExpanded: (part: TranscriptDisplayPart) => boolean
   setTranscriptPartExpanded: (part: TranscriptDisplayPart, expanded: boolean) => void

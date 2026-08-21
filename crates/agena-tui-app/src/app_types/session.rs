@@ -247,9 +247,8 @@ pub(crate) struct TranscriptState {
     pub(crate) session_title: String,
     #[cfg(test)]
     pub(crate) messages: Vec<RunResource>,
-    /// The session's v2 part transcript (ordered parts, including `run`
-    /// markers), mirroring `SessionExecutionResource.parts`. Replaces the v1
-    /// `TranscriptSnapshot` aggregate.
+    /// The session's canonical part transcript (ordered parts, including
+    /// `run` markers), mirroring `SessionExecutionResource.parts`.
     pub(crate) parts: Vec<agena_api::resource::SessionTranscriptPart>,
     /// Last failure observed per run marker. A continuation run clears the
     /// runtime failure projection when the reply recovers, but the chat keeps
@@ -331,9 +330,8 @@ pub(crate) struct TranscriptCache {
     pub(crate) expanded_operation_activity_ids: BTreeSet<agena_domain::ActivityId>,
 }
 
-/// A live activity-v2 overlay entry. The TUI keeps this separate from the
-/// persisted `TranscriptSnapshot`: activity-v2 events are broadcast in memory
-/// only, so the live detail is owned here and merged from
+/// A live activity-v2 overlay entry. Activity-v2 events are broadcast in
+/// memory only, so the live detail is owned here and merged from
 /// `ActivityLiveEvent::DetailDelta` blocks.
 #[derive(Debug, Clone)]
 pub(crate) struct V2LiveActivity {

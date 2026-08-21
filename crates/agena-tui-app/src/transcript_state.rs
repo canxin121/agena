@@ -439,12 +439,16 @@ impl TranscriptState {
     /// completes, but the chat is a user-facing history: the failure stays.
     fn record_reply_failures(&mut self) {
         let mut failures = BTreeMap::new();
-        let mut current_run: Option<i64> = None;
+        let marker_ids = self
+            .parts
+            .iter()
+            .filter(|part| part.kind == "run")
+            .map(|part| part.part_id)
+            .collect::<BTreeSet<_>>();
         for part in &self.parts {
-            if part.kind == "run" {
-                current_run = Some(part.part_id);
-            } else if part.kind == "error"
-                && let Some(run_id) = current_run
+            if part.kind == "error"
+                && let Some(run_id) = part.run_id
+                && marker_ids.contains(&run_id)
                 && let Ok(error) = serde_json::from_value::<agena_api::part::ErrorPartResource>(
                     part.content.clone(),
                 )
@@ -464,11 +468,9 @@ impl TranscriptState {
         height: u16,
     ) -> bool {
         let refresh_needed = match &event.kind {
-            // v2 has no incremental transcript patch surface: both a committed
-            // part patch and the legacy transcript patch invalidate the cached
-            // projection and trigger a full parts reload.
+            // A committed part/meta patch invalidates the cached projection
+            // and triggers a full parts reload.
             agena_runtime::RuntimePresentationEventKind::PartPatch(_) => true,
-            agena_runtime::RuntimePresentationEventKind::TranscriptPatch(_) => true,
             agena_runtime::RuntimePresentationEventKind::Refresh { .. } => true,
             agena_runtime::RuntimePresentationEventKind::ActivityChanged { .. } => true,
             agena_runtime::RuntimePresentationEventKind::ActivityV2(_) => {
@@ -3423,37 +3425,18 @@ fn weave_pending_user_entries<'a>(
 }
 
 fn empty_active_run_ids(parts: &[agena_api::resource::SessionTranscriptPart]) -> BTreeSet<i64> {
-    let mut active = BTreeSet::new();
-    let mut current_run: Option<agena_api::resource::SessionTranscriptPart> = None;
-    let mut run_has_text = false;
-    for part in parts {
-        if part.kind == "run" {
-            if let Some(marker) = current_run.take()
-                && is_empty_active_run(&marker, run_has_text)
-            {
-                active.insert(marker.part_id);
-            }
-            current_run = Some(part.clone());
-            run_has_text = false;
-        } else if part.kind == "text" {
-            run_has_text = true;
-        }
-    }
-    if let Some(marker) = current_run
-        && is_empty_active_run(&marker, run_has_text)
-    {
-        active.insert(marker.part_id);
-    }
-    active
-}
-
-fn is_empty_active_run(
-    marker: &agena_api::resource::SessionTranscriptPart,
-    has_text: bool,
-) -> bool {
-    marker.role == "assistant"
-        && !has_text
-        && !agena_tui_transcript::part_state_is_terminal(&marker.state)
+    let text_run_ids = parts
+        .iter()
+        .filter(|part| part.kind == "text")
+        .filter_map(|part| part.run_id)
+        .collect::<BTreeSet<_>>();
+    parts
+        .iter()
+        .filter(|part| part.kind == "run" && part.role == "assistant")
+        .filter(|marker| !text_run_ids.contains(&marker.part_id))
+        .filter(|marker| !agena_tui_transcript::part_state_is_terminal(&marker.state))
+        .map(|marker| marker.part_id)
+        .collect()
 }
 
 fn inject_remembered_failures(
@@ -4090,7 +4073,7 @@ mod stall_recovery_tests {
                 summary: None,
                 created_at_ms: 0,
                 parent_part_id: None,
-                run_id: Some(1),
+                run_id: None,
             });
 
         assert!(state.has_non_terminal_replies());
@@ -4369,7 +4352,6 @@ mod activity_v2_tests {
             summary: String::new(),
             state: ActivityState::Completed,
             raw_output: None,
-            sections: Vec::new(),
         };
         transcript.apply_presentation_event(
             &v2_event(

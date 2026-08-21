@@ -5,14 +5,13 @@ import test from 'node:test'
 
 import {
   BUILTIN_CHAT_ACTIVITY_KINDS,
-  DEFAULT_CHAT_ACTIVITY_EXPANDED_TOOL_FILTERS,
+  DEFAULT_CHAT_TOOL_EXPANDED_CATEGORIES,
   DEFAULT_CHAT_ACTIVITY_KIND_EXPANDED,
-  DEFAULT_CHAT_TOOL_ACTIVITY_FILTERS,
   chatActivityKindIdForTranscriptPart,
-  migrateLegacyChatActivityDefaultExpanded,
   normalizeChatActivityKindCatalog,
   normalizeChatActivityKindDefaultExpanded,
   normalizeChatToolActivityId,
+  normalizeChatToolActivityCategories,
   normalizeChatToolExpansionOverrides,
   normalizeChatToolPreferenceId,
   resolveChatActivityKindDefaultExpanded,
@@ -66,19 +65,14 @@ test('server activity catalog normalization retains plugin-contributed kinds', (
   )
 })
 
-test('part expansion defaults migrate old keys without treating them as Agena kinds', () => {
+test('part expansion defaults use only the canonical activity preference', () => {
   assert.deepEqual(DEFAULT_CHAT_ACTIVITY_KIND_EXPANDED, ['reasoning'])
   assert.deepEqual(normalizeChatActivityKindDefaultExpanded([' operation ', 'reasoning', 'OPERATION']), [
     'operation',
     'reasoning',
     'OPERATION',
   ])
-  assert.deepEqual(
-    migrateLegacyChatActivityDefaultExpanded(['snapshot', 'patch', 'retry', 'thinking', 'compaction', 'justification']),
-    ['reasoning', 'notice'],
-  )
   assert.deepEqual(resolveChatActivityKindDefaultExpanded(null), ['reasoning'])
-  assert.deepEqual(resolveChatActivityKindDefaultExpanded({ chatActivityDefaultExpanded: [] }), ['reasoning'])
   assert.deepEqual(resolveChatActivityKindDefaultExpanded({ chatActivityKindDefaultExpanded: [] }), [])
   assert.deepEqual(
     resolveChatActivityKindDefaultExpanded({ chatActivityKindDefaultExpanded: ['operation', 'example.trace'] }),
@@ -100,16 +94,19 @@ test('transcript presentation kinds resolve to server activity kind ids', () => 
 })
 
 test('default expansion opens editing tools and otherwise inherits operation', () => {
-  assert.deepEqual(DEFAULT_CHAT_ACTIVITY_EXPANDED_TOOL_FILTERS, ['edit', 'write', 'apply_patch', 'multiedit'])
-  for (const tool of DEFAULT_CHAT_ACTIVITY_EXPANDED_TOOL_FILTERS) {
-    assert.equal(DEFAULT_CHAT_TOOL_ACTIVITY_FILTERS.includes(tool), true)
-  }
+  assert.deepEqual(DEFAULT_CHAT_TOOL_EXPANDED_CATEGORIES, ['edit', 'write', 'apply_patch', 'multiedit'])
+  const defaults = new Set<string>(DEFAULT_CHAT_TOOL_EXPANDED_CATEGORIES)
+  assert.equal(resolveChatToolDefaultExpanded('fs.replace', {}, defaults, false), true)
+  assert.equal(resolveChatToolDefaultExpanded('fs.glob', {}, defaults, false), false)
+  assert.equal(resolveChatToolDefaultExpanded('fs.glob', {}, defaults, true), true)
+  assert.equal(resolveChatToolDefaultExpanded('fs.glob', { 'fs.glob': false }, defaults, true), false)
+})
 
-  const legacy = new Set<string>(DEFAULT_CHAT_ACTIVITY_EXPANDED_TOOL_FILTERS)
-  assert.equal(resolveChatToolDefaultExpanded('fs.replace', {}, legacy, false), true)
-  assert.equal(resolveChatToolDefaultExpanded('fs.glob', {}, legacy, false), false)
-  assert.equal(resolveChatToolDefaultExpanded('fs.glob', {}, legacy, true), true)
-  assert.equal(resolveChatToolDefaultExpanded('fs.glob', { 'fs.glob': false }, legacy, true), false)
+test('tool category preferences use the current category identities', () => {
+  assert.deepEqual(normalizeChatToolActivityCategories(['edit', ' invalid ', 'EDIT', '', 3 as never]), [
+    'edit',
+    'invalid',
+  ])
 })
 
 test('Agena namespaced tools map to categories while exact preferences stay distinct', () => {

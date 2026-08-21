@@ -288,7 +288,6 @@ impl ToolExecutor {
                             title: end.title,
                             summary: end.summary,
                             output_text: end.output_text,
-                            sections: end.sections,
                             metadata: end.metadata.into_iter().collect(),
                             attachments: end.attachments,
                         };
@@ -485,7 +484,6 @@ impl ToolExecutor {
             title: response.title.clone(),
             summary: response.summary.clone(),
             output_text: response.output_text.clone(),
-            sections: response.sections.clone(),
             metadata: response.metadata.into_iter().collect(),
             attachments: response.attachments,
         };

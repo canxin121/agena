@@ -26,30 +26,19 @@
 use std::collections::BTreeMap;
 
 use crate::{
-    RequestPartResource, TranscriptActivityContent, TranscriptEntryPart, TranscriptPartContent,
+    ToolCallView, TranscriptActivityContent, TranscriptEntryPart, TranscriptPartContent,
     renderer::push_markdown_document,
 };
 
-/// The `request_id` of a pending user-input interaction part, or `None` when
-/// the part is not an interaction or has already been answered. Only pending
-/// parts are interactive in the transcript, so the key router and the inline
-/// renderer agree on this boundary.
+/// The `request_id` of a pending user-input record on a canonical `tool_call`,
+/// or `None` when the part is not awaiting input. Only pending records are
+/// interactive in the transcript, so the key router and inline renderer share
+/// the same boundary.
 pub fn interaction_request_id_for_part<'a>(part: &'a TranscriptEntryPart<'a>) -> Option<&'a str> {
     match &part.content {
-        TranscriptPartContent::Activity(TranscriptActivityContent::Request(request)) => {
-            match request.as_ref() {
-                RequestPartResource::UserInput { request, reply } => {
-                    reply.is_none().then_some(request.request_id.as_str())
-                }
-            }
-        }
-        // The canonical single-activity shape: the ask lives inside the tool
-        // operation's `user_input` records. Only a still-awaiting record makes
-        // the part interactive — an answered operation's record has a reply,
-        // so `awaiting()` is empty and the part is no longer an interaction
-        // surface (it stays expandable, read-only).
         TranscriptPartContent::Activity(TranscriptActivityContent::Operation(operation)) => {
             operation
+                .operation
                 .user_input
                 .awaiting()
                 .next()
@@ -62,10 +51,8 @@ pub fn interaction_request_id_for_part<'a>(part: &'a TranscriptEntryPart<'a>) ->
 /// Whether a projected tool operation is currently awaiting a user-input
 /// reply. This is the canonical "pending interaction part" predicate for the
 /// single-activity shape (a tool_call activity IS the ask).
-pub fn operation_has_awaiting_user_input(
-    operation: &agena_api::part::OperationPartResource,
-) -> bool {
-    operation.user_input.awaiting().next().is_some()
+pub fn operation_has_awaiting_user_input(operation: &ToolCallView) -> bool {
+    operation.operation.user_input.awaiting().next().is_some()
 }
 
 /// The minimal request facts the layout helpers need. Implemented for both the

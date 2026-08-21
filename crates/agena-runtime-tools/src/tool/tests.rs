@@ -505,7 +505,7 @@ async fn compact_builtin_targets_execute_through_the_orchestrator() {
 
     let read_invocation = ToolInvocation::new(
         "fs.read",
-        StructuredObject::try_from(serde_json::json!({"path": "fixture.txt"}))
+        StructuredObject::try_from(serde_json::json!({"file_path": "fixture.txt"}))
             .expect("valid read input"),
     );
     let prepared_read = executor

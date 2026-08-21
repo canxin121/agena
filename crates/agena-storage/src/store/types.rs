@@ -1,4 +1,4 @@
-//! Pure data types for the v2 parts-first store.
+//! Pure data types for the parts-first store.
 //!
 //! These are the only values that cross the store boundary. No database or
 //! SeaORM type appears anywhere in this module, so both the SQLite engine and
@@ -9,7 +9,7 @@ use agena_domain::{SessionLifecycleState, SessionRelationKind};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-/// Author of a part. The v2 schema allows `runtime` in addition to the four
+/// Author of a part. The schema allows `runtime` in addition to the four
 /// message roles, so this is a superset of `agena_domain::Role`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -388,11 +388,11 @@ impl PartVisibility {
     }
 }
 
-/// A persisted part — the only chat-content entity in v2.
+/// A persisted part — the only chat-content entity.
 ///
 /// `kind` is an open set (`run`, `text`, `think`, `tool_call`, `file_ref`,
-/// `paste_ref`, `skill_ref`, `notice`, `hook`, `compaction`, `error`,
-/// `interaction`, ...). Ordering within a session is always
+/// `paste_ref`, `skill_ref`, `notice`, `hook`, `compaction`, `error`, ...).
+/// Ordering within a session is always
 /// `(created_at_ms, part_id)` (decision D4).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Part {
@@ -405,8 +405,6 @@ pub struct Part {
     pub content: Value,
     pub summary: Option<String>,
     pub visibility: PartVisibility,
-    /// Human-friendly Markdown rendered by the producing plugin/tool, when any.
-    pub rendered_markdown: Option<String>,
     pub parent_part_id: Option<i64>,
     /// The run marker this part belongs to (`NULL` on run markers themselves).
     pub run_id: Option<i64>,
@@ -442,7 +440,6 @@ pub struct SessionPartView {
     pub state: PartState,
     pub summary: Option<String>,
     pub content: Value,
-    pub rendered_markdown: Option<String>,
     pub parent_part_id: Option<i64>,
     pub run_id: Option<i64>,
     pub revision: i64,
@@ -459,7 +456,6 @@ pub struct NewPart {
     pub content: Value,
     pub summary: Option<String>,
     pub visibility: PartVisibility,
-    pub rendered_markdown: Option<String>,
     pub parent_part_id: Option<i64>,
     /// Initial state. `pending` is typical; `completed` is used for parts
     /// created already-done (for example, an imported completed text part).
@@ -474,7 +470,6 @@ impl NewPart {
             content,
             summary: None,
             visibility: PartVisibility::Both,
-            rendered_markdown: None,
             parent_part_id: None,
             state: PartState::Pending,
         }
@@ -492,7 +487,6 @@ pub struct PartDelta {
     /// Append a string delta to a text-shaped content value (streaming).
     pub content_text_delta: Option<String>,
     pub summary: Option<String>,
-    pub rendered_markdown: Option<String>,
     pub provider_state: Option<Value>,
     /// Explicit terminal timestamp (used on completion); defaults to "now".
     pub finished_at_ms: Option<i64>,
@@ -716,13 +710,6 @@ pub struct ReconcileOutcome {
     pub updated_parts: Vec<Part>,
 }
 
-/// Rows changed by the atomic answer-interaction transaction (17.5).
-#[derive(Debug, Clone, PartialEq)]
-pub struct InteractionAnswerOutcome {
-    pub interaction: Part,
-    pub reply: Part,
-}
-
 /// One provider model call (section 16). Append-only, immutable, one row per
 /// provider response.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -793,7 +780,7 @@ pub enum SessionState {
     Ready,
     /// An in-flight run marker with a fresh lease.
     Running,
-    /// A pending interaction part gates the session — user's turn.
+    /// An in-flight `tool_call` with unanswered `user_input` gates the session.
     AwaitingInteraction,
     /// An in-flight run marker with a stale/no lease (crash) — reconciling.
     Interrupted,

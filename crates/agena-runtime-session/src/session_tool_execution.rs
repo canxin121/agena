@@ -34,7 +34,6 @@ impl SessionToolExecutionOutcome {
                     "The operation was not executed because the required capability is unavailable: {}",
                     unavailable.reason
                 ),
-                sections: Vec::new(),
                 payload: Some(serde_json::json!({
                     "status": "capability_unavailable",
                     "code": "capability_unavailable",
@@ -56,7 +55,6 @@ impl SessionToolExecutionOutcome {
                     "The operation was not executed because the tool is unavailable: {}",
                     unavailable.reason
                 ),
-                sections: Vec::new(),
                 payload: Some(serde_json::json!({
                     "status": "tool_unavailable",
                     "code": "tool_unavailable",

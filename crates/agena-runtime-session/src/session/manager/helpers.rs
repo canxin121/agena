@@ -56,10 +56,9 @@ pub(super) fn run_abort_reason(error: &AppError) -> RunAbortReason {
 }
 
 /// Resolve a pending tool ref to its decoded operation payload. The tool part
-/// is the durable `tool_call` part itself; the operation (with its call id,
-/// invocation, advertised identity, and lifecycle) rides in the part's
-/// canonical content under `extra.operation` (v2 has no in-memory message
-/// record — the store is the single source of truth).
+/// is the durable `tool_call` part itself; the operation projection (with its
+/// call id, invocation, advertised identity, and lifecycle) is rebuilt from
+/// the flat canonical content (v2 has no separate in-memory message record).
 pub(super) fn resolve_pending_tool(
     session: &Session,
     pending_tool: &SessionPendingTool,

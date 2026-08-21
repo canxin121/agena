@@ -267,10 +267,7 @@ impl App {
                     input.as_str(),
                 )
                 .map_err(crate::UiFailure::message)?;
-                if !matches!(
-                    tool_name.as_str(),
-                    "shell" | "bash" | "agena.shell.run" | "agena.process.run"
-                ) {
+                if !matches!(tool_name.as_str(), "agena.shell.run") {
                     self.flash_warning(ui_text::t(
                         &self.i18n,
                         "permission-studio-command-rules-shell-only",

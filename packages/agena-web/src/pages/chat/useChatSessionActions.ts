@@ -34,7 +34,6 @@ export function useChatSessionActions(opts: {
 
   sessionTitle: ComputedRef<string>
   showThinking: Ref<boolean>
-  showJustification: Ref<boolean>
 
   copyToClipboard: (text: string) => Promise<void>
 
@@ -43,7 +42,7 @@ export function useChatSessionActions(opts: {
 }) {
   const { t } = useI18n()
 
-  const { chat, toasts, sessionTitle, showThinking, showJustification, copyToClipboard, onSessionForked } = opts
+  const { chat, toasts, sessionTitle, showThinking, copyToClipboard, onSessionForked } = opts
 
   const renameDialogOpen = ref(false)
   const renameDraft = ref('')
@@ -77,7 +76,7 @@ export function useChatSessionActions(opts: {
     }
   }
 
-  const includeThinking = computed(() => Boolean(showThinking.value || showJustification.value))
+  const includeThinking = computed(() => Boolean(showThinking.value))
 
   function buildTranscriptText(): string {
     const session = chat.selectedSession

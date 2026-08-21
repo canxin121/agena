@@ -104,7 +104,7 @@ mod permission_studio_tests {
             .get_or_insert_with(Default::default)
             .rules
             .insert(
-                "shell".to_string(),
+                "agena.shell.run".to_string(),
                 ToolPermissionRules::Mode(PermissionMode::Ask),
             );
 
@@ -112,7 +112,7 @@ mod permission_studio_tests {
             &i18n,
             &mut permission,
             &PermissionStudioModeTarget::ToolCommandPattern {
-                tool_name: "shell".to_string(),
+                tool_name: "agena.shell.run".to_string(),
                 pattern: "git status".to_string(),
             },
             "allow",
@@ -122,7 +122,7 @@ mod permission_studio_tests {
         let Some(ToolPermissionRules::Ordered(entries)) = permission
             .tools
             .as_ref()
-            .and_then(|tools| tools.rules.get("shell"))
+            .and_then(|tools| tools.rules.get("agena.shell.run"))
         else {
             panic!("tool rule should become an ordered command rule set");
         };
@@ -259,13 +259,13 @@ mod permission_overlay_tests {
     fn custom_rule_studio_draft_preserves_the_pending_request_details() {
         let tool = permission_rule_draft_from_request(&request_for(
             PermissionAction::Tool {
-                tool_name: "shell".to_string(),
+                tool_name: "agena.shell.run".to_string(),
                 qualifier: Some("git push origin main".to_string()),
             },
             Some(42),
         ));
         assert_eq!(tool.subject_kind, PermissionRuleSubjectKind::Tool);
-        assert_eq!(tool.tool_name, "shell");
+        assert_eq!(tool.tool_name, "agena.shell.run");
         assert_eq!(tool.qualifier, "git push origin main");
         assert_eq!(tool.scope, "session");
         assert_eq!(tool.session_id, "42");

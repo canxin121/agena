@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use schemars::JsonSchema;
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
 
 /// Kind of a file-system change reported in message activity.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -102,31 +102,6 @@ pub fn user_input_answers_is_empty(value: &BTreeMap<String, Vec<String>>) -> boo
     value.is_empty()
 }
 
-pub fn deserialize_user_input_answers<'de, D>(
-    deserializer: D,
-) -> Result<BTreeMap<String, Vec<String>>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum RawAnswerValues {
-        Single(String),
-        Multiple(Vec<String>),
-    }
-    let raw = BTreeMap::<String, RawAnswerValues>::deserialize(deserializer)?;
-    Ok(raw
-        .into_iter()
-        .map(|(question_id, values)| {
-            let values = match values {
-                RawAnswerValues::Single(value) => vec![value],
-                RawAnswerValues::Multiple(values) => values,
-            };
-            (question_id, values)
-        })
-        .collect())
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 /// Request for user input presented to the user.
 pub struct UserInputRequest {
@@ -140,13 +115,11 @@ pub struct UserInputRequest {
     /// leave it empty and the dialog shows only the questions.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub body_markdown: String,
-    #[serde(default)]
     pub kind: crate::UserInputKind,
     /// Origin of the request: the runtime's own host `ask_user` (`Host`) vs a
-    /// third-party/tool `interaction.ask` (`Plugin`). Legacy rows predate the
-    /// field and default to `Plugin`; their real origin is recovered from the
-    /// correlation ids by the runtime's typed accessor.
-    #[serde(default, skip_serializing_if = "user_input_source_is_default")]
+    /// third-party/tool `interaction.ask` (`Plugin`). This field is required
+    /// in the canonical stored request so origin never has to be inferred from
+    /// an opaque correlation id.
     pub source: crate::UserInputSource,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_resolution_ms: Option<u64>,
@@ -162,20 +135,12 @@ pub struct UserInputRequest {
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
-pub fn user_input_source_is_default(source: &crate::UserInputSource) -> bool {
-    *source == crate::UserInputSource::default()
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 /// The user's reply to a [`UserInputRequest`].
 pub struct UserInputReply {
     pub request_id: String,
     pub kind: crate::UserInputReplyKind,
-    #[serde(
-        default,
-        deserialize_with = "deserialize_user_input_answers",
-        skip_serializing_if = "user_input_answers_is_empty"
-    )]
+    #[serde(default, skip_serializing_if = "user_input_answers_is_empty")]
     pub answers: BTreeMap<String, Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
@@ -273,13 +238,13 @@ mod tests {
     }
 
     #[test]
-    fn user_input_reply_accepts_scalar_and_array_answers() {
+    fn user_input_reply_accepts_canonical_array_answers() {
         let reply: UserInputReply = serde_json::from_value(serde_json::json!({
             "request_id": "r1",
             "kind": "submit",
-            "answers": {"one": "yes", "many": ["a", "b"]}
+            "answers": {"one": ["yes"], "many": ["a", "b"]}
         }))
-        .expect("decode mixed answer shapes");
+        .expect("decode canonical answer shape");
         assert_eq!(reply.answers["one"], vec!["yes"]);
         assert_eq!(reply.answers["many"], vec!["a", "b"]);
     }

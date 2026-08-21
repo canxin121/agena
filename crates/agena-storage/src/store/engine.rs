@@ -13,10 +13,10 @@ use async_trait::async_trait;
 
 use super::{
     BackgroundDelivery, BackgroundEventRequest, BackgroundOperation, BackgroundOperationTransition,
-    BackgroundSettleOutcome, InteractionAnswerOutcome, LeaseAcquire, NewBackgroundOperation,
-    NewPart, NewSession, Part, PartCursor, PartDelta, PartState, ReconcileOutcome, RunOutcome,
-    SessionListQuery, SessionMeta, SessionMetadataPatch, SessionPartPage, SessionState,
-    SessionSummary, SessionView, StoreError, SubmitOutcome, UsageQuery, UsageRecord, UsageStats,
+    BackgroundSettleOutcome, LeaseAcquire, NewBackgroundOperation, NewPart, NewSession, Part,
+    PartCursor, PartDelta, PartState, ReconcileOutcome, RunOutcome, SessionListQuery, SessionMeta,
+    SessionMetadataPatch, SessionPartPage, SessionState, SessionSummary, SessionView, StoreError,
+    SubmitOutcome, UsageQuery, UsageRecord, UsageStats,
 };
 
 /// A live-update notification derived from an operation and emitted after
@@ -364,9 +364,6 @@ pub trait PersistenceEngine: Send + Sync {
     /// idempotency replay: a replay must remain owned by the execution that
     /// originally created the marker.
     ///
-    /// The default forwards to the historical method so lightweight test
-    /// engines retain the old behavior until they opt into the stronger
-    /// cancellation-recovery contract.
     async fn submit_user_run_for_execution(
         &self,
         session_id: i64,
@@ -375,11 +372,7 @@ pub trait PersistenceEngine: Send + Sync {
         idempotency_key: Option<String>,
         execution_id: &str,
         now_ms: i64,
-    ) -> Result<SubmitOutcome, StoreError> {
-        let _ = execution_id;
-        self.submit_user_run(session_id, owner_id, parts, idempotency_key, now_ms)
-            .await
-    }
+    ) -> Result<SubmitOutcome, StoreError>;
 
     /// Atomically settle a background operation against the run that launched
     /// it (the agena analog of Claude Code's `<task-notification>` arriving on
@@ -475,17 +468,6 @@ pub trait PersistenceEngine: Send + Sync {
         run_id: i64,
         now_ms: i64,
     ) -> Result<Vec<Part>, StoreError>;
-
-    /// Answer a pending interaction: mark it completed and append a user reply
-    /// part bound to the interaction (17.5).
-    async fn answer_interaction(
-        &self,
-        session_id: i64,
-        owner_id: &str,
-        interaction_part_id: i64,
-        reply: NewPart,
-        now_ms: i64,
-    ) -> Result<InteractionAnswerOutcome, StoreError>;
 
     // --- fork / rewind (eager edge copy, 7.3) ---
 

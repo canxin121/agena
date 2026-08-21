@@ -181,7 +181,7 @@ async fn async_main() -> anyhow::Result<()> {
         bail!("session remained blocked after AllowOnce");
     }
     let messages = queries
-        .list_projected_runs(session.session_id, true)
+        .list_projected_runs(session.session_id)
         .await
         .context("load completed probe transcript")?;
     assert_tool_api_trace(&messages, "web.fetch")?;
@@ -214,9 +214,9 @@ fn assert_tool_api_trace(
         .iter()
         .flat_map(|message| message.parts.iter())
         .filter_map(|part| match part.detail.as_ref() {
-            Some(SessionProjectedPartDetail::Operation(operation)) => Some((
-                operation.invocation.name.as_str(),
-                Some(serde_json::Value::from(operation.invocation.input.clone())),
+            Some(SessionProjectedPartDetail::ToolCall(operation)) => Some((
+                operation.name.as_str(),
+                Some(serde_json::Value::from(operation.input.clone())),
             )),
             _ => None,
         })

@@ -226,7 +226,6 @@ impl Application {
                 state: part.state,
                 summary: part.summary,
                 content: part.content,
-                rendered_markdown: part.rendered_markdown,
                 parent_part_id: part.parent_part_id,
                 run_id: part.run_id,
                 revision: part.revision,

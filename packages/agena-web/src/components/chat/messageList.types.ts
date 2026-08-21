@@ -61,7 +61,6 @@ export type TranscriptPartKind =
   | 'skill'
   | 'notice'
   | 'compaction'
-  | 'interaction'
   | 'lifecycle'
   | 'error'
   | 'unknown'

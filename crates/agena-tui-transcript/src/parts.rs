@@ -9,17 +9,14 @@
 //! variants, and unknown or malformed parts fall back to a plain text part so
 //! nothing in the transcript is silently dropped.
 //!
-//! Unlike [`super::transcript_entries`] (which borrows from a domain
-//! `TranscriptSnapshot`), this projection owns every value: parts arrive as
-//! JSON and are decoded into the render model here, so entries are `'static`.
+//! This projection owns every value: parts arrive as JSON and are decoded into
+//! the render model here, so entries are `'static`.
 
 use agena_api::live::SessionTranscriptFoldResource;
 use agena_api::{
     part::{
-        AttachmentPartResource, ErrorPartResource, HookPartResource, OperationPartResource,
-        PartExecutionStatusResource, ReasoningPartResource, RequestPartResource,
-        SkillReferencePartResource, StructuredFieldResource, StructuredObjectResource,
-        StructuredValueResource, TextPartResource, ToolInvocationResource,
+        AttachmentPartResource, ErrorPartResource, HookPartResource, PartExecutionStatusResource,
+        ReasoningPartResource, SkillReferencePartResource, TextPartResource,
     },
     resource::{
         PartAttachment, PartAttachmentKind, PartAttachmentSource, PartSkillReference, RunRole,
@@ -28,12 +25,13 @@ use agena_api::{
     },
 };
 use agena_domain::TextSegmentActivity;
-use agena_runtime_contracts::part_content::InteractionContent;
+use agena_runtime_contracts::part_content::{ToolCallContent, operation_from_tool_call};
 use serde_json::Value;
 
 use crate::{
-    TranscriptActivityContent, TranscriptAssistantReplyLifecycle, TranscriptContentId,
-    TranscriptEntry, TranscriptEntryId, TranscriptEntryPart, TranscriptPartContent,
+    ToolCallView, TranscriptActivityContent, TranscriptAssistantReplyLifecycle,
+    TranscriptContentId, TranscriptEntry, TranscriptEntryId, TranscriptEntryPart,
+    TranscriptPartContent,
 };
 
 /// Project an ordered v2 part list into transcript entries. Each `run` marker
@@ -43,7 +41,8 @@ use crate::{
 /// assistant block. Content ownership is resolved exclusively through
 /// `run_id`, not physical row position: a background Hook may be appended much
 /// later while still belonging to the assistant run that launched it.
-/// Content parts whose referenced marker is absent become their own entry.
+/// Content parts whose referenced marker is absent are excluded: the current
+/// wire contract has no owner reconstruction rule.
 pub fn parts_entries(parts: &[SessionTranscriptPart]) -> Vec<TranscriptEntry<'static>> {
     parts_entries_with_folds(parts, &[])
 }
@@ -70,10 +69,9 @@ pub fn parts_entries_with_folds(
         }
     }
 
-    // Build entries in marker/orphan order, but attach content by its durable
+    // Build entries in marker order and attach content only by its durable
     // owner. This is the same projection contract used by Web.
     let mut projected = Vec::new();
-    let mut latest_marker_index = None;
     for part in parts {
         if part.kind == "run" {
             let mut entry = run_marker_entry(part);
@@ -81,22 +79,6 @@ pub fn parts_entries_with_folds(
                 entry.parts.extend(content.into_iter().map(entry_part));
             }
             projected.push(entry);
-            latest_marker_index = Some(projected.len() - 1);
-        } else if part.run_id.is_none() {
-            // Compatibility for pre-v2/test projections that omitted run_id:
-            // physical adjacency is used only when no owner was recorded at
-            // all. A present run_id is always authoritative, even when its
-            // part arrives much later than another run marker.
-            if let Some(index) = latest_marker_index {
-                projected[index].parts.push(entry_part(part));
-            } else {
-                projected.push(orphan_entry(part));
-            }
-        } else if part
-            .run_id
-            .is_some_and(|run_id| !marker_ids.contains(&run_id))
-        {
-            projected.push(orphan_entry(part));
         }
     }
 
@@ -155,24 +137,17 @@ pub fn parts_have_non_terminal_runs(parts: &[SessionTranscriptPart]) -> bool {
 /// optimistic-entry boundary: a user input becomes visible exactly when its
 /// run's text part appears in the projection.
 pub fn parts_visible_user_inputs(parts: &[SessionTranscriptPart]) -> usize {
-    let mut count = 0usize;
-    let mut current_role: Option<&str> = None;
-    let mut current_has_text = false;
-    for part in parts {
-        if part.kind == "run" {
-            if current_role == Some("user") && current_has_text {
-                count += 1;
-            }
-            current_role = Some(part.role.as_str());
-            current_has_text = false;
-        } else if part.kind == "text" {
-            current_has_text = true;
-        }
-    }
-    if current_role == Some("user") && current_has_text {
-        count += 1;
-    }
-    count
+    let user_runs = parts
+        .iter()
+        .filter(|part| part.kind == "run" && part.role == "user")
+        .map(|part| part.part_id)
+        .collect::<std::collections::BTreeSet<_>>();
+    let text_runs = parts
+        .iter()
+        .filter(|part| part.kind == "text")
+        .filter_map(|part| part.run_id)
+        .collect::<std::collections::BTreeSet<_>>();
+    user_runs.intersection(&text_runs).count()
 }
 
 /// The last assistant reply's text from the parts projection: the text parts
@@ -266,7 +241,7 @@ fn finalize_run_entry(mut entry: TranscriptEntry<'static>) -> TranscriptEntry<'s
                 Box::new(TextSegmentActivity { text: segment }),
             ));
         }
-        // Mirror the v1 reply projection: an assistant run renders a trailing
+        // An assistant run renders a trailing
         // lifecycle row when it has no content yet (the active envelope) or when
         // it ended without a durable Error part carrying the outcome (failed,
         // cancelled, denied). A completed run with body content needs no row.
@@ -295,16 +270,6 @@ fn finalize_run_entry(mut entry: TranscriptEntry<'static>) -> TranscriptEntry<'s
         }
     }
     entry
-}
-
-fn orphan_entry(part: &SessionTranscriptPart) -> TranscriptEntry<'static> {
-    TranscriptEntry {
-        id: TranscriptEntryId::StoredMessage(part.part_id),
-        role: role_from_string(&part.role),
-        state: message_status_from_string(&part.state),
-        created_at: timestamp(part.created_at_ms),
-        parts: vec![entry_part(part)],
-    }
 }
 
 fn entry_part(part: &SessionTranscriptPart) -> TranscriptEntryPart<'static> {
@@ -343,7 +308,7 @@ fn part_content(part: &SessionTranscriptPart) -> TranscriptPartContent<'static> 
             },
         )),
         "tool_call" => {
-            if let Some(operation) = operation_resource_from_part(part) {
+            if let Some(operation) = tool_call_view_from_part(part) {
                 return TranscriptPartContent::Activity(TranscriptActivityContent::Operation(
                     Box::new(operation),
                 ));
@@ -445,41 +410,6 @@ fn part_content(part: &SessionTranscriptPart) -> TranscriptPartContent<'static> 
                 synthetic: false,
             }),
         },
-        "interaction" => {
-            // v1 requests arrive in the `RequestPartResource` shape (tagged
-            // `request_type`). The v2 canonical `interaction` shape instead
-            // carries `type`/`prompt`/`options` plus the lossless `request`
-            // and `reply` objects under `extra`. Decode both so the row
-            // renders as a friendly awaiting-user-input part rather than
-            // dumping its raw JSON as body text. The v2 shape is read through
-            // the typed [`InteractionContent`] accessors rather than raw JSON
-            // keys, so request/reply reconstruction stays in one place.
-            match serde_json::from_value::<RequestPartResource>(part.content.clone()) {
-                Ok(request) => TranscriptPartContent::Activity(TranscriptActivityContent::Request(
-                    Box::new(request),
-                )),
-                Err(_) => match InteractionContent::try_from(content) {
-                    Ok(interaction) => match interaction_request_resource(&interaction) {
-                        Some(request) => {
-                            TranscriptPartContent::Activity(TranscriptActivityContent::Request(
-                                Box::new(RequestPartResource::UserInput {
-                                    request,
-                                    reply: interaction_reply_resource(&interaction),
-                                }),
-                            ))
-                        }
-                        None => TranscriptPartContent::Text(TextPartResource {
-                            text: fallback_json_text(content),
-                            synthetic: false,
-                        }),
-                    },
-                    Err(_) => TranscriptPartContent::Text(TextPartResource {
-                        text: fallback_json_text(content),
-                        synthetic: false,
-                    }),
-                },
-            }
-        }
         _ => TranscriptPartContent::Text(TextPartResource {
             text: fallback_json_text(content),
             synthetic: false,
@@ -487,234 +417,15 @@ fn part_content(part: &SessionTranscriptPart) -> TranscriptPartContent<'static> 
     }
 }
 
-/// Recover the lossless operation envelope stored below canonical
-/// `tool_call.operation`. The v2 top-level keys intentionally carry only the
-/// invocation identity; execution output, display text and lifecycle live in
-/// this nested envelope. Projecting only the shallow keys makes a completed
-/// tool look expandable in the TUI while giving it an empty body.
-/// Rewrite one stored `ViewBlock` JSON object into the API
-/// `OperationBlockResource` wire shape in place:
-///
-/// - `table`: `columns: ["name"]` → `[{"key":"name","label":null}]`
-/// - `search_results`: `items: [{title,url,snippet}]` → `results: [{title,uri,snippet}]`
-/// - `custom`: expose `presentation`/`schema` as the required `value`
-///
-/// Known-compatible kinds (text/markdown/json/log/command/diff/file_changes/
-/// media) are left untouched. Unknown kinds stay as-is so the typed decode can
-/// still represent them.
-fn operation_resource_from_part(part: &SessionTranscriptPart) -> Option<OperationPartResource> {
-    use agena_runtime_contracts::part_content::ToolCallContent;
-
+/// Decode the canonical `tool_call` facts and keep the human presentation in
+/// its native `ViewBlock` form. No API envelope or flattened mirror is built.
+fn tool_call_view_from_part(part: &SessionTranscriptPart) -> Option<ToolCallView> {
     let content = ToolCallContent::try_from(&part.content).ok()?;
-    let name = content.name.clone();
-    let input = match &content.input {
-        Value::Object(map) => StructuredObjectResource {
-            fields: map
-                .iter()
-                .map(|(name, value)| StructuredFieldResource {
-                    name: name.clone(),
-                    value: structured_value(value),
-                })
-                .collect(),
-        },
-        _ => return None,
-    };
-    let presentation = part.presentation.clone().unwrap_or_else(|| {
-        agena_api::live::ToolHumanPresentationResource {
-            title: name.clone(),
-            summary: String::new(),
-            blocks: Vec::new(),
-        }
-    });
-    let title = presentation.title;
-    let summary = presentation.summary;
-    let blocks = presentation
-        .blocks
-        .iter()
-        .filter_map(operation_block_from_view)
-        .collect::<Vec<_>>();
-    let state = serde_json::from_value::<agena_api::part::ToolResultStateResource>(
-        serde_json::to_value(content.state).ok()?,
-    )
-    .unwrap_or(agena_api::part::ToolResultStateResource::Pending);
-    let gateway_name = content
-        .tool_api_call
-        .as_ref()
-        .map(|call| call.function.function_name())
-        .unwrap_or(name.as_str());
-    let lifecycle = serde_json::from_value::<agena_api::part::TimeRangeResource>(
-        serde_json::to_value(&content.lifecycle).ok()?,
-    )
-    .unwrap_or_default();
-    let display = agena_api::part::ToolResultDisplayResource {
-        title: title.clone(),
-        summary: summary.clone(),
-        sections: Vec::new(),
-    };
-    let result = agena_api::part::ToolResultEnvelopeResource {
-        state,
-        structured: None,
-        content: blocks.clone(),
-        display,
-        ..Default::default()
-    };
-    Some(OperationPartResource {
-        call_id: content.call_id,
-        invocation: ToolInvocationResource {
-            gateway_function: gateway_function(gateway_name),
-            name,
-            plugin_name: content.plugin,
-            input,
-        },
-        title,
-        summary,
-        authorization: content.authorization,
-        user_input: content.user_input,
-        blocks,
-        attachments: Vec::new(),
-        structured: None,
-        result,
-        lifecycle,
-        error: content
-            .error
-            .map(|error| agena_api::part::OperationErrorResource {
-                failure: (&error.failure).into(),
-            }),
-        metadata: content.metadata,
-        ..Default::default()
-    })
-}
-
-fn operation_block_from_view(
-    block: &agena_domain::ViewBlock,
-) -> Option<agena_api::part::OperationBlockResource> {
-    let mut value = serde_json::to_value(block).ok()?;
-    let object = value.as_object_mut()?;
-    match object.get("type").and_then(Value::as_str) {
-        Some("table") => {
-            if let Some(columns) = object.get_mut("columns").and_then(Value::as_array_mut) {
-                for column in columns {
-                    if let Some(key) = column.as_str().map(ToOwned::to_owned) {
-                        *column = serde_json::json!({"key": key});
-                    }
-                }
-            }
-        }
-        Some("search_results") => {
-            if let Some(items) = object.remove("items") {
-                let mut items = items.as_array().cloned().unwrap_or_default();
-                for item in &mut items {
-                    if let Some(item) = item.as_object_mut()
-                        && let Some(url) = item.remove("url")
-                    {
-                        item.insert("uri".to_owned(), url);
-                    }
-                }
-                object.insert("results".to_owned(), Value::Array(items));
-            }
-            object.remove("total");
-        }
-        Some("custom") => {
-            let schema = object.remove("schema").unwrap_or(Value::Null);
-            let presentation = object.remove("presentation").unwrap_or(Value::Null);
-            object.insert(
-                "value".to_owned(),
-                serde_json::json!({"schema": schema, "presentation": presentation}),
-            );
-            object.insert("schema".to_owned(), Value::Null);
-            object.remove("kind");
-        }
-        _ => {}
-    }
-    object.remove("id");
-    serde_json::from_value(value).ok()
-}
-
-fn gateway_function(name: &str) -> Option<agena_api::part::ToolGatewayFunctionResource> {
-    use agena_api::part::ToolGatewayFunctionResource as Gateway;
-
-    match name {
-        "tools_list" => Some(Gateway::List),
-        "tools_search" => Some(Gateway::Search),
-        "tools_help" => Some(Gateway::Help),
-        "tools_tags" => Some(Gateway::Tags),
-        "tools_call" => Some(Gateway::Call),
-        _ => None,
-    }
-}
-
-fn structured_value(value: &Value) -> StructuredValueResource {
-    match value {
-        Value::Null => StructuredValueResource::Null,
-        Value::Bool(value) => StructuredValueResource::Boolean { value: *value },
-        Value::Number(value) => value
-            .as_i64()
-            .map(|value| StructuredValueResource::Integer { value })
-            .unwrap_or_else(|| StructuredValueResource::Number {
-                value: value.to_string(),
-            }),
-        Value::String(value) => StructuredValueResource::Text {
-            value: value.clone(),
-        },
-        Value::Array(items) => StructuredValueResource::Array {
-            items: items.iter().map(structured_value).collect(),
-        },
-        Value::Object(map) => StructuredValueResource::Object {
-            fields: map
-                .iter()
-                .map(|(name, value)| StructuredFieldResource {
-                    name: name.clone(),
-                    value: structured_value(value),
-                })
-                .collect(),
-        },
-    }
-}
-
-/// Recover a [`UserInputRequest`] from the typed `interaction` content:
-/// prefer the lossless typed `request()` accessor, otherwise reconstruct from
-/// the display keys (`kind`/`prompt`/`options`). Returns `None` only when the
-/// content carries neither a usable request nor enough display fields.
-fn interaction_request_resource(interaction: &InteractionContent) -> Option<UserInputRequest> {
-    if let Some(request) = interaction.request() {
-        return Some(user_input_request_resource(request));
-    }
-    let kind = interaction.kind.as_str();
-    let questions = interaction
-        .options
-        .as_ref()
-        .and_then(|value| serde_json::from_value::<Vec<UserInputQuestion>>(value.clone()).ok())
-        .unwrap_or_default();
-    if interaction.kind == agena_domain::UserInputKind::AskUser
-        && interaction.prompt.is_none()
-        && questions.is_empty()
-    {
-        return None;
-    }
-    Some(UserInputRequest {
-        request_id: interaction
-            .request_id()
-            .unwrap_or_else(|| format!("interaction-{}", kind)),
-        session_id: None,
-        title: interaction.prompt.clone().unwrap_or_default(),
-        body_markdown: interaction
-            .request()
-            .map(|request| request.body_markdown)
-            .unwrap_or_default(),
-        kind: kind.to_owned(),
-        source: interaction.source(),
-        auto_resolution_ms: None,
-        presented_at: None,
-        questions,
-        created_at: chrono::Utc::now(),
-    })
-}
-
-/// Recover an optional [`UserInputReply`] from the typed `interaction`
-/// content via the `reply()` accessor (`extra["reply"]`, falling back to the
-/// display `response` key).
-fn interaction_reply_resource(interaction: &InteractionContent) -> Option<UserInputReply> {
-    interaction.reply().map(user_input_reply_resource)
+    let operation = operation_from_tool_call(&content);
+    Some(ToolCallView::from_operation(
+        operation,
+        part.presentation.clone(),
+    ))
 }
 
 /// Project a typed domain request onto the API presentation resource,
@@ -942,7 +653,6 @@ fn assistant_reply_lifecycle(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::interaction_request_id_for_part;
     use agena_api::resource::SessionTranscriptPart;
 
     fn run(part_id: i64, role: &str, state: &str) -> SessionTranscriptPart {
@@ -956,7 +666,7 @@ mod tests {
             summary: None,
             created_at_ms: part_id * 10,
             parent_part_id: None,
-            run_id: Some(part_id),
+            run_id: None,
         }
     }
 
@@ -1397,13 +1107,18 @@ mod tests {
             panic!("expected operation activity");
         };
         assert_eq!(
-            operation.invocation.gateway_function,
-            Some(agena_api::part::ToolGatewayFunctionResource::Search)
+            operation
+                .operation
+                .invocation
+                .tool_api_call
+                .as_ref()
+                .map(|call| call.function),
+            Some(agena_domain::ToolApiFunction::Search)
         );
-        assert!(operation.model_output.text.is_empty());
-        assert_eq!(operation.blocks.len(), 1);
-        assert_eq!(operation.title, "Search tools");
-        assert_eq!(operation.summary, "Returned 3 matching tools.");
+        assert_eq!(operation.model_text(), "raw result");
+        assert_eq!(operation.presentation.blocks.len(), 1);
+        assert_eq!(operation.title(), "Search tools");
+        assert_eq!(operation.summary(), "Returned 3 matching tools.");
     }
 
     #[test]
@@ -1414,7 +1129,7 @@ mod tests {
     }
 
     #[test]
-    fn orphan_content_parts_become_their_own_entry() {
+    fn content_without_a_canonical_run_owner_is_not_projected() {
         let parts = vec![content_part(
             9,
             "text",
@@ -1422,9 +1137,7 @@ mod tests {
             serde_json::json!({ "text": "standalone" }),
         )];
         let entries = parts_entries(&parts);
-        assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].id, TranscriptEntryId::StoredMessage(9));
-        assert_eq!(entries[0].parts.len(), 1);
+        assert!(entries.is_empty());
     }
 
     #[test]
@@ -1516,164 +1229,5 @@ mod tests {
         assert_eq!(last_assistant_reply_text(&parts), None);
         let bare = vec![run(3, "assistant", "completed")];
         assert_eq!(last_assistant_reply_text(&bare), None);
-    }
-
-    #[test]
-    fn canonical_interaction_part_renders_as_a_request_not_raw_json() {
-        // The v2 canonical `interaction` shape (`type`/`prompt`/`options` plus
-        // the lossless `request` object) must project to a Request activity,
-        // not fall back to dumping its JSON as transcript body text.
-        // (Regression: workflow plan review dumped `{options, prompt, request,
-        // type}` verbatim because only the v1 `request_type` shape was tried.)
-        let part = content_part(
-            2,
-            "interaction",
-            "assistant",
-            serde_json::json!({
-                "type": "review",
-                "prompt": "Approve New Plan",
-                "options": [
-                    {
-                        "header": "Decision",
-                        "question": "Choose whether this plan should move to active.",
-                        "options": [{ "label": "Approve", "description": "Move it to active." }],
-                        "multiple": false,
-                        "allow_custom": true
-                    }
-                ],
-                "request": {
-                    "request_id": "host-input:1:2:0",
-                    "session_id": 1,
-                    "title": "Approve New Plan",
-                    "kind": "review",
-                    "auto_resolution_ms": 600000,
-                    "questions": [
-                        {
-                            "header": "Decision",
-                            "question": "Choose whether this plan should move to active.",
-                            "options": [{ "label": "Approve", "description": "Move it to active." }],
-                            "multiple": false,
-                            "allow_custom": true
-                        }
-                    ],
-                    "created_at": "2026-08-11T00:00:00Z"
-                }
-            }),
-        );
-        let content = entry_part(&part).content;
-        let TranscriptPartContent::Activity(TranscriptActivityContent::Request(request)) = content
-        else {
-            panic!("v2 interaction part must project to a Request activity, got raw text/JSON");
-        };
-        let RequestPartResource::UserInput { request, reply } = request.as_ref();
-        assert_eq!(request.request_id, "host-input:1:2:0");
-        assert_eq!(request.title, "Approve New Plan");
-        assert_eq!(request.kind, "review");
-        assert_eq!(request.questions.len(), 1);
-        assert_eq!(
-            request.questions[0].question,
-            "Choose whether this plan should move to active."
-        );
-        assert!(reply.is_none());
-    }
-
-    #[test]
-    fn canonical_interaction_replying_reconstructs_the_reply() {
-        let part = content_part(
-            2,
-            "interaction",
-            "assistant",
-            serde_json::json!({
-                "type": "review",
-                "prompt": "Approve New Plan",
-                "request": {
-                    "request_id": "host-input:1:2:0",
-                    "session_id": 1,
-                    "title": "Approve New Plan",
-                    "kind": "review",
-                    "questions": [],
-                    "created_at": "2026-08-11T00:00:00Z"
-                },
-                "reply": {
-                    "request_id": "host-input:1:2:0",
-                    "kind": "submit",
-                    "answers": { "decision": ["approve"] }
-                }
-            }),
-        );
-        let content = entry_part(&part).content;
-        let TranscriptPartContent::Activity(TranscriptActivityContent::Request(request)) = content
-        else {
-            panic!("replied v2 interaction part must project to a Request activity");
-        };
-        let RequestPartResource::UserInput { request, reply } = request.as_ref();
-        assert_eq!(request.kind, "review");
-        let reply = reply
-            .as_ref()
-            .expect("reply is recovered from the reply object");
-        assert_eq!(reply.answers["decision"], ["approve"]);
-    }
-
-    #[test]
-    fn interaction_request_id_is_only_exposed_for_pending_parts() {
-        // `interaction_request_id_for_part` is the correlation key the app
-        // uses to attach a live `UserInputPresentation` to an expanded pending
-        // interaction part. It must return the request_id only while the part
-        // is unanswered; once a reply lands the part is no longer interactive
-        // and the id must be withheld so key routing can never target it.
-        let pending = content_part(
-            2,
-            "interaction",
-            "assistant",
-            serde_json::json!({
-                "type": "review",
-                "prompt": "Approve New Plan",
-                "request": {
-                    "request_id": "host-input:1:2:0",
-                    "session_id": 1,
-                    "title": "Approve New Plan",
-                    "kind": "review",
-                    "questions": [],
-                    "created_at": "2026-08-11T00:00:00Z"
-                }
-            }),
-        );
-        let entries = parts_entries(&[pending]);
-        let part = &entries[0].parts[0];
-        assert_eq!(
-            interaction_request_id_for_part(part),
-            Some("host-input:1:2:0")
-        );
-
-        let answered = content_part(
-            3,
-            "interaction",
-            "assistant",
-            serde_json::json!({
-                "type": "review",
-                "prompt": "Approve New Plan",
-                "request": {
-                    "request_id": "host-input:1:2:0",
-                    "session_id": 1,
-                    "title": "Approve New Plan",
-                    "kind": "review",
-                    "questions": [],
-                    "created_at": "2026-08-11T00:00:00Z"
-                },
-                "reply": {
-                    "request_id": "host-input:1:2:0",
-                    "kind": "submit",
-                    "answers": { "decision": ["approve"] }
-                }
-            }),
-        );
-        let entries = parts_entries(&[answered]);
-        let part = &entries[0].parts[0];
-        assert_eq!(interaction_request_id_for_part(part), None);
-
-        // Non-interaction parts never expose a request id.
-        let text = content_part(4, "text", "assistant", serde_json::json!({ "text": "hi" }));
-        let entries = parts_entries(&[text]);
-        assert_eq!(interaction_request_id_for_part(&entries[0].parts[0]), None);
     }
 }

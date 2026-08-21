@@ -2420,7 +2420,6 @@ export default {
           },
           status: {
             failed: 'Failed',
-            loadingDetails: 'Loading details...',
             completedWithoutOutput: '(Completed with no output)',
             stoppedSessionEnded: '(Stopped: session ended)',
             running: 'Running...',
@@ -2440,14 +2439,11 @@ export default {
             auto: 'auto',
             manual: 'manual',
           },
-          loadingDetails: 'Loading details...',
         },
         reasoningInvocation: {
           types: {
             thinking: 'Thinking',
-            justification: 'Justification',
           },
-          loadingDetails: 'Loading details...',
         },
       },
       optimistic: {

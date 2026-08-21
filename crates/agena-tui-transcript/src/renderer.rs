@@ -27,9 +27,7 @@ mod transcript_tool_summary;
 pub(super) use self::transcript_aux::*;
 pub(super) use self::transcript_diff::*;
 pub use self::transcript_render::*;
-pub use self::transcript_render::{
-    render_entry_export, render_transcript_snapshot_export_markdown, rewind_message_preview,
-};
+pub use self::transcript_render::{render_entry_export, rewind_message_preview};
 pub use self::transcript_text::*;
 pub use self::transcript_tool_summary::*;
 pub(super) use crate::{
@@ -119,8 +117,8 @@ pub fn render_entry_detailed_with_interactions(
 
 /// Like [`render_entry_detailed_with_interactions`], but allows the caller to
 /// reveal a bounded number of older activities from each folded run. A `true`
-/// entry in `expansions` still means "show all" for compatibility with the
-/// ordinary per-part expansion map.
+/// entry in `expansions` means "show all" for the ordinary per-part expansion
+/// map.
 #[allow(clippy::too_many_arguments)]
 pub fn render_entry_detailed_with_progressive_expansion(
     message: &TranscriptEntry,
@@ -194,7 +192,7 @@ pub fn render_entry_detailed_with_progressive_expansion(
                         .unwrap_or(COLLAPSED_ACTIVITY_VISIBLE_COUNT)
                 };
                 let collapsed_prefix_len = foldable_count.saturating_sub(visible_count);
-                // Keep the summary node when the legacy bool map explicitly
+                // Keep the summary node when the ordinary expansion map explicitly
                 // expands a run: existing cursor/selection state uses that
                 // stable anchor to collapse it again. Progressive expansion
                 // removes the marker only after its bounded count reaches the
@@ -361,22 +359,24 @@ mod tests {
         I18n, Line, RunStatus, TRANSCRIPT_EXPORT_WIDTH, TranscriptDetailDefaults, TranscriptEntry,
         TranscriptNodeKey, TranscriptNodeKind, UnicodeWidthStr, activity_status_icon,
         bounded_title_summary, markdown_blocks, refresh_spinner_line, render_entry_detailed,
-        render_entry_detailed_with_interactions, render_entry_export, render_markdown_block,
-        render_tool_execution, render_transcript_entries_export_markdown,
-        should_suppress_markdown_block, spinner_frame, thinking_collapsed_summary,
-        tool_execution_compact_summary, tool_invocation_label, transcript_spinner_placeholder,
+        render_entry_export, render_markdown_block, render_tool_execution,
+        render_transcript_entries_export_markdown, should_suppress_markdown_block, spinner_frame,
+        thinking_collapsed_summary, tool_execution_compact_summary, tool_invocation_label,
+        transcript_spinner_placeholder,
     };
     use crate::{
-        OperationPartResource, PartExecutionStatusResource, RequestPartResource,
-        ToolInvocationResource, TranscriptActivityContent, TranscriptContentId, TranscriptEntryId,
-        TranscriptEntryPart, TranscriptFixture, TranscriptPartContent,
+        PartExecutionStatusResource, ToolCallView, TranscriptActivityContent, TranscriptContentId,
+        TranscriptEntryId, TranscriptEntryPart, TranscriptFixture, TranscriptPartContent,
     };
-    use agena_domain::ExecutionStatus;
+    use agena_api::live::ToolHumanPresentationResource;
+    use agena_domain::{
+        AttachmentItem, AttachmentKind, AttachmentSource, ExecutionStatus, OperationError,
+        RawOutput, StructuredObject, TimeRange, ToolInvocation, ToolResultState, ViewBlock,
+    };
+    use agena_runtime_contracts::part::OperationPart;
     use chrono::{DateTime, Utc};
 
-    fn operation_resource<'a>(
-        part: &'a crate::TranscriptEntryPart<'a>,
-    ) -> &'a crate::OperationPartResource {
+    fn tool_view<'a>(part: &'a crate::TranscriptEntryPart<'a>) -> &'a crate::ToolCallView {
         match &part.content {
             crate::TranscriptPartContent::Activity(
                 crate::TranscriptActivityContent::Operation(operation),
@@ -401,16 +401,25 @@ mod tests {
         }
     }
 
-    fn fixture_operation(call_id: i64, name: &str, title: &str) -> OperationPartResource {
-        OperationPartResource {
-            call_id,
-            invocation: ToolInvocationResource {
-                name: name.to_owned(),
-                ..Default::default()
+    fn fixture_operation(call_id: i64, name: &str, title: &str) -> ToolCallView {
+        ToolCallView::from_operation(
+            OperationPart {
+                call_id,
+                invocation: ToolInvocation::new(name, StructuredObject::default()),
+                authorization: Default::default(),
+                user_input: Default::default(),
+                output: None,
+                state: ToolResultState::Completed,
+                error: None,
+                metadata: Default::default(),
+                lifecycle: TimeRange::default(),
             },
-            title: title.to_owned(),
-            ..Default::default()
-        }
+            Some(ToolHumanPresentationResource {
+                title: title.to_owned(),
+                summary: String::new(),
+                blocks: Vec::new(),
+            }),
+        )
     }
 
     #[test]
@@ -588,529 +597,6 @@ mod tests {
                 .iter()
                 .all(|node| node.start_line >= activity.end_line
                     && node.end_line <= rendered.lines.len())
-        );
-    }
-
-    #[test]
-    fn pending_interaction_part_renders_the_inline_document_when_expanded() {
-        let now = Utc::now();
-        let part = TranscriptEntryPart {
-            id: TranscriptContentId::StoredPart(5),
-            status: PartExecutionStatusResource::InProgress,
-            content: TranscriptPartContent::Activity(TranscriptActivityContent::Request(Box::new(
-                RequestPartResource::UserInput {
-                    request: agena_api::resource::UserInputRequest {
-                        request_id: "host-input:1:2:0".to_owned(),
-                        session_id: Some(1),
-                        title: "Approve New Plan".to_owned(),
-                        body_markdown: "## Proposed Plan".to_owned(),
-                        kind: "review".to_owned(),
-                        source: agena_domain::UserInputSource::Host,
-                        auto_resolution_ms: None,
-                        presented_at: Some(now),
-                        questions: vec![agena_api::resource::UserInputQuestion {
-                            header: "Decision".to_owned(),
-                            question: "Choose whether this plan should move to active.".to_owned(),
-                            options: vec![agena_api::resource::UserInputOption {
-                                label: "Approve".to_owned(),
-                                description: "Move it to active.".to_owned(),
-                            }],
-                            multiple: false,
-                            allow_custom: true,
-                        }],
-                        created_at: now,
-                    },
-                    reply: None,
-                },
-            ))),
-        };
-        let message = entry(
-            3,
-            agena_api::resource::RunRole::Assistant,
-            RunStatus::InProgress,
-            now,
-            vec![part],
-        );
-        let node_key = TranscriptNodeKey::Activity {
-            entry_id: TranscriptEntryId::StoredMessage(3),
-            content_id: TranscriptContentId::StoredPart(5),
-        };
-        let plan_body_lines =
-            crate::interaction_view::interaction_plan_body_lines("## Proposed Plan", 80);
-        let view =
-            |selected_option, editing_custom| crate::interaction_view::PendingInteractionView {
-                selected_option,
-                custom_text: String::new(),
-                custom_draft: String::new(),
-                editing_custom,
-                custom_cursor: 0,
-                editing_question: None,
-                answers: std::collections::BTreeMap::new(),
-                plan_body_lines,
-                plan_width: 80,
-            };
-        // A collapsed pending part must not draw the inline body even when a
-        // view is provided for its request_id.
-        let collapsed = render_entry_detailed_with_interactions(
-            &message,
-            80,
-            &I18n::english(),
-            &TranscriptDetailDefaults {
-                activity_default_expanded: false,
-                kind_defaults: std::collections::BTreeMap::new(),
-            },
-            &Default::default(),
-            &std::collections::BTreeMap::from([(
-                "host-input:1:2:0".to_owned(),
-                view(Some(0), false),
-            )]),
-        );
-        let collapsed_text = collapsed
-            .lines
-            .iter()
-            .map(|line| line.text.as_str())
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert!(!collapsed_text.contains("(x) Approve"), "{collapsed_text}");
-
-        // Expanded + pending + a view: the plan body renders natively through
-        // the Markdown pipeline at the activity indent, then a separator and
-        // the decision rows, making the part the interaction surface.
-        let expanded = render_entry_detailed_with_interactions(
-            &message,
-            80,
-            &I18n::english(),
-            &TranscriptDetailDefaults {
-                activity_default_expanded: false,
-                kind_defaults: std::collections::BTreeMap::new(),
-            },
-            &std::collections::BTreeMap::from([(node_key.clone(), true)]),
-            &std::collections::BTreeMap::from([(
-                "host-input:1:2:0".to_owned(),
-                view(Some(0), false),
-            )]),
-        );
-        let expanded_text = expanded
-            .lines
-            .iter()
-            .map(|line| line.text.as_str())
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert!(expanded_text.contains("Proposed Plan"), "{expanded_text}");
-        assert!(expanded_text.contains("(x) Approve"), "{expanded_text}");
-        assert!(
-            expanded_text.contains("Feedback to agent"),
-            "{expanded_text}"
-        );
-        assert!(
-            expanded
-                .nodes
-                .iter()
-                .any(|node| node.key == node_key && node.expanded),
-            "the pending interaction node stays the expanded Activity node"
-        );
-
-        // Selection tracking: moving the cursor onto the custom feedback label
-        // switches the marker to `(x)` on the custom row.
-        let custom_selected = render_entry_detailed_with_interactions(
-            &message,
-            80,
-            &I18n::english(),
-            &TranscriptDetailDefaults {
-                activity_default_expanded: true,
-                kind_defaults: std::collections::BTreeMap::new(),
-            },
-            &std::collections::BTreeMap::from([(node_key, true)]),
-            &std::collections::BTreeMap::from([(
-                "host-input:1:2:0".to_owned(),
-                view(Some(1), false),
-            )]),
-        );
-        let custom_text = custom_selected
-            .lines
-            .iter()
-            .map(|line| line.text.as_str())
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert!(custom_text.contains("( ) Approve"), "{custom_text}");
-        assert!(
-            custom_text.contains("(x) Feedback to agent"),
-            "{custom_text}"
-        );
-
-        // Answered parts never draw the inline body, only the plain body.
-        let answered = TranscriptEntryPart {
-            id: TranscriptContentId::StoredPart(5),
-            status: PartExecutionStatusResource::Completed,
-            content: TranscriptPartContent::Activity(TranscriptActivityContent::Request(Box::new(
-                RequestPartResource::UserInput {
-                    request: agena_api::resource::UserInputRequest {
-                        request_id: "host-input:1:2:0".to_owned(),
-                        session_id: Some(1),
-                        title: "Approve New Plan".to_owned(),
-                        body_markdown: String::new(),
-                        kind: "review".to_owned(),
-                        source: agena_domain::UserInputSource::Host,
-                        auto_resolution_ms: None,
-                        presented_at: Some(now),
-                        questions: vec![agena_api::resource::UserInputQuestion {
-                            header: "Decision".to_owned(),
-                            question: "Choose whether this plan should move to active.".to_owned(),
-                            options: vec![agena_api::resource::UserInputOption {
-                                label: "Approve".to_owned(),
-                                description: String::new(),
-                            }],
-                            multiple: false,
-                            allow_custom: true,
-                        }],
-                        created_at: now,
-                    },
-                    reply: Some(agena_api::resource::UserInputReply {
-                        request_id: "host-input:1:2:0".to_owned(),
-                        kind: agena_api::resource::UserInputReplyKind::Submit,
-                        answers: std::collections::BTreeMap::new(),
-                        reason: None,
-                    }),
-                },
-            ))),
-        };
-        let message = entry(
-            3,
-            agena_api::resource::RunRole::Assistant,
-            RunStatus::Completed,
-            now,
-            vec![answered],
-        );
-        let answered_rendered = render_entry_detailed_with_interactions(
-            &message,
-            80,
-            &I18n::english(),
-            &TranscriptDetailDefaults {
-                activity_default_expanded: true,
-                kind_defaults: std::collections::BTreeMap::new(),
-            },
-            &Default::default(),
-            &std::collections::BTreeMap::from([(
-                "host-input:1:2:0".to_owned(),
-                view(Some(0), false),
-            )]),
-        );
-        let answered_text = answered_rendered
-            .lines
-            .iter()
-            .map(|line| line.text.as_str())
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert!(!answered_text.contains("(x) Approve"), "{answered_text}");
-    }
-
-    #[test]
-    fn expanded_pending_interaction_body_row_count_matches_classifier() {
-        use crate::{
-            InteractionLineKind, PendingInteractionView, classify_interaction_line,
-            interaction_plan_body_lines, interaction_question_layouts,
-        };
-        let now = Utc::now();
-        let request = agena_api::resource::UserInputRequest {
-            request_id: "host-input:1:2:0".to_owned(),
-            session_id: Some(1),
-            title: "Approve New Plan".to_owned(),
-            body_markdown: "## Proposed Plan".to_owned(),
-            kind: "review".to_owned(),
-            source: agena_domain::UserInputSource::Host,
-            auto_resolution_ms: None,
-            presented_at: Some(now),
-            questions: vec![agena_api::resource::UserInputQuestion {
-                header: "Decision".to_owned(),
-                question: "Choose whether this plan should move to active.".to_owned(),
-                options: vec![
-                    agena_api::resource::UserInputOption {
-                        label: "Approve".to_owned(),
-                        description: "Move it to active.".to_owned(),
-                    },
-                    agena_api::resource::UserInputOption {
-                        label: "Revise".to_owned(),
-                        description: String::new(),
-                    },
-                ],
-                multiple: false,
-                allow_custom: true,
-            }],
-            created_at: now,
-        };
-        let part = TranscriptEntryPart {
-            id: TranscriptContentId::StoredPart(5),
-            status: PartExecutionStatusResource::InProgress,
-            content: TranscriptPartContent::Activity(TranscriptActivityContent::Request(Box::new(
-                RequestPartResource::UserInput {
-                    request: request.clone(),
-                    reply: None,
-                },
-            ))),
-        };
-        let message = entry(
-            3,
-            agena_api::resource::RunRole::Assistant,
-            RunStatus::InProgress,
-            now,
-            vec![part],
-        );
-        let node_key = TranscriptNodeKey::Activity {
-            entry_id: TranscriptEntryId::StoredMessage(3),
-            content_id: TranscriptContentId::StoredPart(5),
-        };
-        let plan_body_lines = interaction_plan_body_lines(&request.body_markdown, 80);
-        let layouts = interaction_question_layouts(&request, &std::collections::BTreeMap::new());
-        let view = PendingInteractionView {
-            selected_option: None,
-            custom_text: String::new(),
-            custom_draft: String::new(),
-            editing_custom: false,
-            custom_cursor: 0,
-            editing_question: None,
-            answers: std::collections::BTreeMap::new(),
-            plan_body_lines,
-            plan_width: 80,
-        };
-        let rendered = render_entry_detailed_with_interactions(
-            &message,
-            80,
-            &I18n::english(),
-            &TranscriptDetailDefaults {
-                activity_default_expanded: true,
-                kind_defaults: std::collections::BTreeMap::new(),
-            },
-            &std::collections::BTreeMap::from([(node_key.clone(), true)]),
-            &std::collections::BTreeMap::from([("host-input:1:2:0".to_owned(), view)]),
-        );
-        let node = rendered
-            .nodes
-            .iter()
-            .find(|node| node.key == node_key)
-            .expect("the pending interaction node");
-        // Headline occupies exactly one line; everything after it is the body.
-        let body_rows = node.end_line - node.start_line - 1;
-        // Plan rows + one separator + ONE row per option + one custom row +
-        // one footer-hint row (review dropped the per-option detail lines).
-        let decision_rows = crate::interaction_view::review_decision_rows_count(2, true);
-        let predicted = plan_body_lines + 1 + decision_rows + 1;
-        assert_eq!(
-            body_rows, predicted,
-            "renderer body rows match classifier budget"
-        );
-
-        // Every DECISION row (separator and beyond, excluding the footer hint)
-        // classifies to a concrete kind — never the default PlanBody fallback —
-        // so the App's key routing always sees a row kind there.
-        let question = layouts[0];
-        for body_offset in plan_body_lines..(plan_body_lines + 1 + decision_rows) {
-            let kind = classify_interaction_line(&layouts, plan_body_lines, body_offset, false);
-            assert!(
-                !matches!(kind, InteractionLineKind::PlanBody),
-                "decision row {body_offset} must classify (got PlanBody)"
-            );
-            let _ = question;
-        }
-    }
-
-    #[test]
-    fn ask_user_continuous_body_row_count_matches_the_layout_contract() {
-        use crate::interaction_view::{
-            InteractionLineKind, PendingInteractionAnswerView, PendingInteractionView,
-            ask_user_body_rows, ask_user_question_block_rows, ask_user_question_landing_offset,
-            classify_ask_user_line, interaction_plan_body_lines, interaction_question_layouts,
-        };
-        let now = Utc::now();
-        // A long plan body so the plan region carries more than one row — the
-        // exact drift class the old AskUser classifier missed.
-        let plan_body = format!("## Proposed Plan\n\n{}", "word ".repeat(20));
-        let request = agena_api::resource::UserInputRequest {
-            request_id: "host-input:1:2:0".to_owned(),
-            session_id: Some(1),
-            title: "Flavor Survey".to_owned(),
-            body_markdown: plan_body.clone(),
-            kind: "ask_user".to_owned(),
-            source: agena_domain::UserInputSource::Host,
-            auto_resolution_ms: None,
-            presented_at: Some(now),
-            questions: vec![
-                agena_api::resource::UserInputQuestion {
-                    header: "Flavor".to_owned(),
-                    question: "Pick one.".to_owned(),
-                    options: vec![
-                        agena_api::resource::UserInputOption {
-                            label: "Vanilla".to_owned(),
-                            description: "Classic.".to_owned(),
-                        },
-                        agena_api::resource::UserInputOption {
-                            label: "Chocolate".to_owned(),
-                            description: "Rich.".to_owned(),
-                        },
-                    ],
-                    multiple: false,
-                    allow_custom: true,
-                },
-                agena_api::resource::UserInputQuestion {
-                    header: "Toppings".to_owned(),
-                    question: "Choose any.".to_owned(),
-                    options: vec![
-                        agena_api::resource::UserInputOption {
-                            label: "Sprinkles".to_owned(),
-                            description: String::new(),
-                        },
-                        agena_api::resource::UserInputOption {
-                            label: "Nuts".to_owned(),
-                            description: String::new(),
-                        },
-                    ],
-                    multiple: true,
-                    allow_custom: false,
-                },
-            ],
-            created_at: now,
-        };
-        let part = TranscriptEntryPart {
-            id: TranscriptContentId::StoredPart(5),
-            status: PartExecutionStatusResource::InProgress,
-            content: TranscriptPartContent::Activity(TranscriptActivityContent::Request(Box::new(
-                RequestPartResource::UserInput {
-                    request: request.clone(),
-                    reply: None,
-                },
-            ))),
-        };
-        let message = entry(
-            3,
-            agena_api::resource::RunRole::Assistant,
-            RunStatus::InProgress,
-            now,
-            vec![part],
-        );
-        let node_key = TranscriptNodeKey::Activity {
-            entry_id: TranscriptEntryId::StoredMessage(3),
-            content_id: TranscriptContentId::StoredPart(5),
-        };
-        let plan_body_lines = interaction_plan_body_lines(&plan_body, 80);
-        assert!(
-            plan_body_lines > 1,
-            "plan body must wrap: {plan_body_lines}"
-        );
-        let render = |view: PendingInteractionView| {
-            let rendered = render_entry_detailed_with_interactions(
-                &message,
-                80,
-                &I18n::english(),
-                &TranscriptDetailDefaults {
-                    activity_default_expanded: true,
-                    kind_defaults: std::collections::BTreeMap::new(),
-                },
-                &std::collections::BTreeMap::from([(node_key.clone(), true)]),
-                &std::collections::BTreeMap::from([("host-input:1:2:0".to_owned(), view)]),
-            );
-            let node = rendered
-                .nodes
-                .iter()
-                .find(|node| node.key == node_key)
-                .expect("the pending interaction node");
-            let body_rows = node.end_line - node.start_line - 1;
-            let text = rendered
-                .lines
-                .iter()
-                .map(|line| line.text.as_str())
-                .collect::<Vec<_>>()
-                .join("\n");
-            (body_rows, text)
-        };
-        let view = |answers: std::collections::BTreeMap<usize, PendingInteractionAnswerView>| {
-            PendingInteractionView {
-                selected_option: None,
-                custom_text: String::new(),
-                custom_draft: String::new(),
-                editing_custom: false,
-                custom_cursor: 0,
-                editing_question: None,
-                answers,
-                plan_body_lines,
-                plan_width: 80,
-            }
-        };
-        let empty = std::collections::BTreeMap::new();
-        let layouts_empty = interaction_question_layouts(&request, &empty);
-        // The continuous body: plan + separator + every question block + footer.
-        let (body_rows, text) = render(view(empty.clone()));
-        assert_eq!(
-            body_rows,
-            ask_user_body_rows(plan_body_lines, &layouts_empty),
-            "the rendered body matches the shared layout contract"
-        );
-        assert!(
-            text.contains("Proposed Plan"),
-            "the body renders the plan: {text}"
-        );
-        assert!(text.contains("Flavor"), "{text}");
-        assert!(text.contains("Toppings"), "{text}");
-        assert!(text.contains("Vanilla"), "{text}");
-        assert!(text.contains("Nuts"), "{text}");
-        // No paging artifacts: no `▸` option cursor, no page indicator, no
-        // summary page.
-        assert!(!text.contains('▸'), "no presentation option cursor: {text}");
-        assert!(
-            !text.contains("1/2") && !text.contains("2/2"),
-            "no page footer: {text}"
-        );
-        // The classifier covers the whole budget, one row kind per offset.
-        let total = ask_user_body_rows(plan_body_lines, &layouts_empty);
-        for body_offset in 0..(total - 1) {
-            let kind = classify_ask_user_line(&layouts_empty, plan_body_lines, body_offset, false);
-            assert!(
-                !matches!(kind, InteractionLineKind::AskFooter),
-                "footer is the LAST row, not offset {body_offset}"
-            );
-            let _ = kind;
-        }
-        assert_eq!(
-            classify_ask_user_line(&layouts_empty, plan_body_lines, total - 1, false),
-            InteractionLineKind::AskFooter,
-            "the budget's last offset is the footer"
-        );
-        assert_eq!(
-            classify_ask_user_line(&layouts_empty, plan_body_lines, total + 5, false),
-            InteractionLineKind::AskFooter,
-            "anything beyond the budget is the footer"
-        );
-        // The landing offset is the first option row (or the header without
-        // options).
-        assert_eq!(
-            ask_user_question_landing_offset(plan_body_lines, &layouts_empty, 0),
-            plan_body_lines + 1 + 2,
-            "Q0 lands on its first option row (header + text)"
-        );
-        // An answered question adds one preview row to its block's budget.
-        let answered = std::collections::BTreeMap::from([(
-            0usize,
-            PendingInteractionAnswerView {
-                picked: vec![0],
-                custom_values: Vec::new(),
-            },
-        )]);
-        let layouts_answered = interaction_question_layouts(&request, &answered);
-        assert!(
-            layouts_answered[0].answered,
-            "the answer snapshot marks the question answered"
-        );
-        let (answered_rows, answered_text) = render(view(answered));
-        assert_eq!(
-            answered_rows,
-            ask_user_body_rows(plan_body_lines, &layouts_answered),
-            "answered block adds its preview row"
-        );
-        assert!(
-            answered_text.contains("(x) Vanilla"),
-            "answered preview row present: {answered_text}"
-        );
-        assert_eq!(
-            ask_user_question_block_rows(&layouts_answered[0]),
-            ask_user_question_block_rows(&layouts_empty[0]) + 1
         );
     }
 
@@ -1898,19 +1384,13 @@ mod tests {
 
     #[test]
     fn tool_api_calls_show_the_model_action_and_execution_tool() {
-        let input = agena_api::part::StructuredObjectResource {
-            fields: vec![agena_api::part::StructuredFieldResource {
-                name: "tool".to_owned(),
-                value: agena_api::part::StructuredValueResource::Text {
-                    value: "web.search".to_owned(),
-                },
-            }],
-        };
-        let invocation = crate::ToolInvocationResource {
-            name: "tools_call".to_owned(),
-            input,
-            ..Default::default()
-        };
+        let invocation = ToolInvocation::new(
+            "tools_call",
+            StructuredObject::try_from(serde_json::json!({
+                "tool": "web.search",
+            }))
+            .expect("structured tool input"),
+        );
 
         assert_eq!(
             tool_invocation_label(&invocation),
@@ -1920,26 +1400,33 @@ mod tests {
 
     #[test]
     fn interaction_notifications_render_as_markdown_cards() {
-        let operation = OperationPartResource {
-            call_id: 7,
-            invocation: ToolInvocationResource {
-                name: "agena.interaction.notify".to_owned(),
-                ..Default::default()
-            },
-            title: "Production ready".to_owned(),
-            model_output: agena_api::part::ModelVisibleOutputResource {
-                text: "**Deployment finished**".to_owned(),
-                ..Default::default()
-            },
-            result: agena_api::part::ToolResultEnvelopeResource {
+        let operation = ToolCallView::from_operation(
+            OperationPart {
+                call_id: 7,
+                invocation: ToolInvocation::new(
+                    "agena.interaction.notify",
+                    StructuredObject::default(),
+                ),
+                authorization: Default::default(),
+                user_input: Default::default(),
+                output: Some(RawOutput {
+                    text: "**Deployment finished**".to_owned(),
+                    ..Default::default()
+                }),
+                state: ToolResultState::Completed,
+                error: None,
                 metadata: std::collections::BTreeMap::from([(
                     "agena.notification.level".to_owned(),
                     serde_json::Value::String("success".to_owned()),
                 )]),
-                ..Default::default()
+                lifecycle: TimeRange::default(),
             },
-            ..Default::default()
-        };
+            Some(ToolHumanPresentationResource {
+                title: "Production ready".to_owned(),
+                summary: String::new(),
+                blocks: Vec::new(),
+            }),
+        );
         let part = TranscriptFixture::operation_part(
             9,
             3,
@@ -1950,7 +1437,7 @@ mod tests {
         let mut rendered = Vec::new();
         render_tool_execution(
             &part,
-            operation_resource(&part),
+            tool_view(&part),
             &mut rendered,
             80,
             &I18n::english(),
@@ -1975,15 +1462,27 @@ mod tests {
             })
             .collect::<Vec<_>>()
             .join("\n");
-        let operation = OperationPartResource {
-            call_id: 7,
-            invocation: ToolInvocationResource {
-                name: "agena.test".to_owned(),
-                ..Default::default()
+        let operation = ToolCallView::from_operation(
+            OperationPart {
+                call_id: 7,
+                invocation: ToolInvocation::new("agena.test", StructuredObject::default()),
+                authorization: Default::default(),
+                user_input: Default::default(),
+                output: None,
+                state: ToolResultState::Completed,
+                error: None,
+                metadata: Default::default(),
+                lifecycle: TimeRange::default(),
             },
-            blocks: vec![agena_api::part::OperationBlockResource::Text { text: output }],
-            ..Default::default()
-        };
+            Some(ToolHumanPresentationResource {
+                title: "agena.test".to_owned(),
+                summary: String::new(),
+                blocks: vec![ViewBlock::Text {
+                    id: None,
+                    text: output,
+                }],
+            }),
+        );
         let part = TranscriptFixture::operation_part(
             9,
             3,
@@ -1995,7 +1494,7 @@ mod tests {
 
         render_tool_execution(
             &part,
-            operation_resource(&part),
+            tool_view(&part),
             &mut rendered,
             80,
             &I18n::english(),
@@ -2014,40 +1513,32 @@ mod tests {
 
     #[test]
     fn expanded_tool_input_renders_as_nested_markdown_bullets() {
-        let operation = OperationPartResource {
-            call_id: 7,
-            invocation: ToolInvocationResource {
-                name: "agena.fs.read".to_owned(),
-                input: agena_api::part::StructuredObjectResource {
-                    fields: vec![
-                        agena_api::part::StructuredFieldResource {
-                            name: "path".to_owned(),
-                            value: agena_api::part::StructuredValueResource::Text {
-                                value: "README.md".to_owned(),
-                            },
-                        },
-                        agena_api::part::StructuredFieldResource {
-                            name: "line_count".to_owned(),
-                            value: agena_api::part::StructuredValueResource::Integer { value: 5 },
-                        },
-                        agena_api::part::StructuredFieldResource {
-                            name: "options".to_owned(),
-                            value: agena_api::part::StructuredValueResource::Object {
-                                fields: vec![agena_api::part::StructuredFieldResource {
-                                    name: "follow_symlinks".to_owned(),
-                                    value: agena_api::part::StructuredValueResource::Boolean {
-                                        value: true,
-                                    },
-                                }],
-                            },
-                        },
-                    ],
-                },
-                ..Default::default()
+        let operation = ToolCallView::from_operation(
+            OperationPart {
+                call_id: 7,
+                invocation: ToolInvocation::new(
+                    "agena.fs.read",
+                    StructuredObject::try_from(serde_json::json!({
+                        "file_path": "README.md",
+                        "line_count": 5,
+                        "options": { "follow_symlinks": true },
+                    }))
+                    .expect("structured tool input"),
+                ),
+                authorization: Default::default(),
+                user_input: Default::default(),
+                output: None,
+                state: ToolResultState::Completed,
+                error: None,
+                metadata: Default::default(),
+                lifecycle: TimeRange::default(),
             },
-            title: "fs.read · Read README.md".to_owned(),
-            ..Default::default()
-        };
+            Some(ToolHumanPresentationResource {
+                title: "fs.read · Read README.md".to_owned(),
+                summary: String::new(),
+                blocks: Vec::new(),
+            }),
+        );
         let part = TranscriptFixture::operation_part(
             9,
             3,
@@ -2058,7 +1549,7 @@ mod tests {
         let mut rendered = Vec::new();
         render_tool_execution(
             &part,
-            operation_resource(&part),
+            tool_view(&part),
             &mut rendered,
             80,
             &I18n::english(),
@@ -2072,7 +1563,7 @@ mod tests {
         assert!(text.contains("▾ Input"), "{text}");
         // Markdown bullets render as terminal list markers; `**` emphasis and
         // backticks are styling, not literal text.
-        assert!(text.contains("• path: README.md"), "{text}");
+        assert!(text.contains("• file_path: README.md"), "{text}");
         assert!(text.contains("• line_count: 5"), "{text}");
         assert!(text.contains("• options:"), "{text}");
         assert!(text.contains("◦ follow_symlinks: true"), "{text}");
@@ -2081,17 +1572,9 @@ mod tests {
     #[test]
     fn exact_tool_default_overrides_the_operation_activity_kind() {
         let now = Utc::now();
-        let operation = OperationPartResource {
-            call_id: 7,
-            invocation: ToolInvocationResource {
-                name: "fs.read".to_owned(),
-                plugin_name: Some("agena.fs".to_owned()),
-                ..Default::default()
-            },
-            title: "fs.read · README.md".to_owned(),
-            summary: "Read README.md".to_owned(),
-            ..Default::default()
-        };
+        let mut operation = fixture_operation(7, "fs.read", "fs.read · README.md");
+        operation.operation.invocation.plugin_name = Some("agena.fs".to_owned());
+        operation.presentation.summary = "Read README.md".to_owned();
         let message = entry(
             3,
             agena_api::resource::RunRole::Assistant,
@@ -2135,36 +1618,39 @@ mod tests {
     }
 
     #[test]
-    fn legacy_operation_input_and_output_are_independent_and_default_collapsed() {
+    fn canonical_tool_call_input_and_output_are_independent_and_default_collapsed() {
         let now = Utc::now();
-        let operation = OperationPartResource {
-            call_id: 7,
-            invocation: ToolInvocationResource {
-                name: "agena.shell.run".to_owned(),
-                input: agena_api::part::StructuredObjectResource {
-                    fields: vec![agena_api::part::StructuredFieldResource {
-                        name: "script".to_owned(),
-                        value: agena_api::part::StructuredValueResource::Text {
-                            value: "private input sentinel".to_owned(),
-                        },
-                    }],
-                },
-                ..Default::default()
+        let operation = ToolCallView::from_operation(
+            OperationPart {
+                call_id: 7,
+                invocation: ToolInvocation::new(
+                    "agena.shell.run",
+                    StructuredObject::try_from(serde_json::json!({
+                        "script": "private input sentinel",
+                    }))
+                    .expect("structured tool input"),
+                ),
+                authorization: Default::default(),
+                user_input: Default::default(),
+                output: Some(RawOutput::text("model output sentinel")),
+                state: ToolResultState::Completed,
+                error: None,
+                metadata: Default::default(),
+                lifecycle: TimeRange::default(),
             },
-            title: "shell.run · Execute command".to_owned(),
-            model_output: agena_api::part::ModelVisibleOutputResource {
-                text: "model output sentinel".to_owned(),
-                ..Default::default()
-            },
-            blocks: vec![agena_api::part::OperationBlockResource::Command {
-                command: "printf output".to_owned(),
-                cwd: None,
-                exit_code: Some(0),
-                stdout: Some("stdout sentinel".to_owned()),
-                stderr: Some("stderr sentinel".to_owned()),
-            }],
-            ..Default::default()
-        };
+            Some(ToolHumanPresentationResource {
+                title: "shell.run · Execute command".to_owned(),
+                summary: String::new(),
+                blocks: vec![ViewBlock::Command {
+                    id: None,
+                    command: "printf output".to_owned(),
+                    cwd: None,
+                    exit_code: Some(0),
+                    stdout: "stdout sentinel".to_owned(),
+                    stderr: "stderr sentinel".to_owned(),
+                }],
+            }),
+        );
         let part =
             TranscriptFixture::operation_part(9, 3, now, ExecutionStatus::Completed, operation);
         let message = entry(
@@ -2222,7 +1708,7 @@ mod tests {
                 .nodes
                 .iter()
                 .find(|node| &node.key == key)
-                .expect("folded legacy operation section node");
+                .expect("folded operation section node");
             assert!(node.toggleable);
             assert!(!node.expanded);
         }
@@ -2230,7 +1716,7 @@ mod tests {
             .nodes
             .iter()
             .find(|node| node.key == activity_key)
-            .expect("legacy operation Activity node");
+            .expect("operation Activity node");
         assert!(!parent.copy_text.contains("private input sentinel"));
         assert!(!parent.copy_text.contains("stdout sentinel"));
 
@@ -2288,7 +1774,7 @@ mod tests {
             .nodes
             .iter()
             .find(|node| node.key == activity_key)
-            .expect("legacy operation Activity node");
+            .expect("operation Activity node");
         assert!(parent.copy_text.contains("stdout sentinel"));
         assert!(!parent.copy_text.contains("private input sentinel"));
 
@@ -2310,36 +1796,31 @@ mod tests {
 
     #[test]
     fn tools_call_input_unwraps_to_the_inner_tool_arguments() {
-        let operation = OperationPartResource {
-            call_id: 7,
-            invocation: ToolInvocationResource {
-                name: "tools_call".to_owned(),
-                input: agena_api::part::StructuredObjectResource {
-                    fields: vec![
-                        agena_api::part::StructuredFieldResource {
-                            name: "tool".to_owned(),
-                            value: agena_api::part::StructuredValueResource::Text {
-                                value: "web.search".to_owned(),
-                            },
-                        },
-                        agena_api::part::StructuredFieldResource {
-                            name: "input".to_owned(),
-                            value: agena_api::part::StructuredValueResource::Object {
-                                fields: vec![agena_api::part::StructuredFieldResource {
-                                    name: "query".to_owned(),
-                                    value: agena_api::part::StructuredValueResource::Text {
-                                        value: "agena docs".to_owned(),
-                                    },
-                                }],
-                            },
-                        },
-                    ],
-                },
-                ..Default::default()
+        let operation = ToolCallView::from_operation(
+            OperationPart {
+                call_id: 7,
+                invocation: ToolInvocation::new(
+                    "tools_call",
+                    StructuredObject::try_from(serde_json::json!({
+                        "tool": "web.search",
+                        "input": { "query": "agena docs" },
+                    }))
+                    .expect("structured tool input"),
+                ),
+                authorization: Default::default(),
+                user_input: Default::default(),
+                output: None,
+                state: ToolResultState::Completed,
+                error: None,
+                metadata: Default::default(),
+                lifecycle: TimeRange::default(),
             },
-            title: "tools.call · web.search".to_owned(),
-            ..Default::default()
-        };
+            Some(ToolHumanPresentationResource {
+                title: "tools.call · web.search".to_owned(),
+                summary: String::new(),
+                blocks: Vec::new(),
+            }),
+        );
         let part = TranscriptFixture::operation_part(
             9,
             3,
@@ -2350,7 +1831,7 @@ mod tests {
         let mut rendered = Vec::new();
         render_tool_execution(
             &part,
-            operation_resource(&part),
+            tool_view(&part),
             &mut rendered,
             80,
             &I18n::english(),
@@ -2370,43 +1851,51 @@ mod tests {
 
     #[test]
     fn json_table_log_and_custom_blocks_render_richly() {
-        let operation = OperationPartResource {
-            call_id: 7,
-            invocation: ToolInvocationResource {
-                name: "agena.test".to_owned(),
-                ..Default::default()
+        let operation = ToolCallView::from_operation(
+            OperationPart {
+                call_id: 7,
+                invocation: ToolInvocation::new("agena.test", StructuredObject::default()),
+                authorization: Default::default(),
+                user_input: Default::default(),
+                output: None,
+                state: ToolResultState::Completed,
+                error: None,
+                metadata: Default::default(),
+                lifecycle: TimeRange::default(),
             },
-            blocks: vec![
-                agena_api::part::OperationBlockResource::Json {
-                    value: serde_json::json!({ "key": "value", "n": 42 }),
-                },
-                agena_api::part::OperationBlockResource::Table {
-                    columns: vec![
-                        agena_api::part::TableColumnResource {
-                            key: "name".to_owned(),
-                            label: None,
-                        },
-                        agena_api::part::TableColumnResource {
-                            key: "score".to_owned(),
-                            label: Some("Score".to_owned()),
-                        },
-                    ],
-                    rows: vec![
-                        vec![serde_json::json!("alice"), serde_json::json!(9.5)],
-                        vec![serde_json::json!("bob"), serde_json::json!(8)],
-                    ],
-                },
-                agena_api::part::OperationBlockResource::Log {
-                    stream: Some("stderr".to_owned()),
-                    text: "warning: something odd".to_owned(),
-                },
-                agena_api::part::OperationBlockResource::Custom {
-                    schema: None,
-                    value: serde_json::json!({ "presentation": { "title": "Chips" } }),
-                },
-            ],
-            ..Default::default()
-        };
+            Some(ToolHumanPresentationResource {
+                title: "agena.test".to_owned(),
+                summary: String::new(),
+                blocks: vec![
+                    ViewBlock::Json {
+                        id: None,
+                        value: serde_json::json!({ "key": "value", "n": 42 }),
+                    },
+                    ViewBlock::Table {
+                        id: None,
+                        columns: vec!["name".to_owned(), "Score".to_owned()],
+                        rows: vec![
+                            vec![serde_json::json!("alice"), serde_json::json!(9.5)],
+                            vec![serde_json::json!("bob"), serde_json::json!(8)],
+                        ],
+                    },
+                    ViewBlock::Log {
+                        id: None,
+                        stream: agena_domain::CommandOutputStream::Stderr,
+                        text: "warning: something odd".to_owned(),
+                    },
+                    ViewBlock::Custom {
+                        id: None,
+                        kind: "chips".to_owned(),
+                        schema: serde_json::Value::Null,
+                        presentation: std::collections::BTreeMap::from([(
+                            "title".to_owned(),
+                            "Chips".to_owned(),
+                        )]),
+                    },
+                ],
+            }),
+        );
         let part = TranscriptFixture::operation_part(
             9,
             3,
@@ -2417,7 +1906,7 @@ mod tests {
         let mut rendered = Vec::new();
         render_tool_execution(
             &part,
-            operation_resource(&part),
+            tool_view(&part),
             &mut rendered,
             80,
             &I18n::english(),
@@ -2451,10 +1940,10 @@ mod tests {
             "+A8AAQUBAScY42YAAAAASUVORK5CYII="
         )
         .to_owned();
-        let attachment = agena_api::resource::PartAttachment {
-            kind: agena_api::resource::PartAttachmentKind::Image,
+        let attachment = AttachmentItem {
+            kind: AttachmentKind::Image,
             mime: "image/png".to_owned(),
-            source: agena_api::resource::PartAttachmentSource::Base64 { data: png.clone() },
+            source: AttachmentSource::Base64 { data: png.clone() },
             filename: Some("pixel.png".to_owned()),
             title: None,
             size_bytes: None,
@@ -2464,25 +1953,24 @@ mod tests {
             duration_ms: None,
             page_count: None,
         };
-        let operation = OperationPartResource {
-            call_id: 7,
-            invocation: ToolInvocationResource {
-                name: "agena.image".to_owned(),
-                ..Default::default()
+        let operation = ToolCallView::from_operation(
+            OperationPart {
+                call_id: 7,
+                invocation: ToolInvocation::new("agena.image", StructuredObject::default()),
+                authorization: Default::default(),
+                user_input: Default::default(),
+                output: Some(RawOutput {
+                    text: "created an image".to_owned(),
+                    attachments: vec![attachment],
+                    ..Default::default()
+                }),
+                state: ToolResultState::Completed,
+                error: None,
+                metadata: Default::default(),
+                lifecycle: TimeRange::default(),
             },
-            model_output: agena_api::part::ModelVisibleOutputResource {
-                text: "created an image".to_owned(),
-                ..Default::default()
-            },
-            blocks: vec![agena_api::part::OperationBlockResource::EmbeddedResource {
-                uri: "pixel.png".to_owned(),
-                mime: "image/png".to_owned(),
-                text: None,
-                base64: Some(png),
-            }],
-            attachments: vec![attachment],
-            ..Default::default()
-        };
+            None,
+        );
         let part = TranscriptFixture::operation_part(
             9,
             3,
@@ -2493,7 +1981,7 @@ mod tests {
         let mut rendered = Vec::new();
         render_tool_execution(
             &part,
-            operation_resource(&part),
+            tool_view(&part),
             &mut rendered,
             80,
             &I18n::english(),
@@ -2505,16 +1993,16 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         assert!(text.contains("attachments"), "{text}");
-        assert_eq!(text.matches("pixel.png").count(), 2, "{text}");
+        assert_eq!(text.matches("pixel.png").count(), 1, "{text}");
         assert!(text.contains("embedded image"));
     }
 
     #[test]
     fn tool_image_attachment_without_a_block_keeps_its_attachment_section() {
-        let attachment = agena_api::resource::PartAttachment {
-            kind: agena_api::resource::PartAttachmentKind::Image,
+        let attachment = AttachmentItem {
+            kind: AttachmentKind::Image,
             mime: "image/png".to_owned(),
-            source: agena_api::resource::PartAttachmentSource::Url {
+            source: AttachmentSource::Url {
                 url: "https://example.com/pixel.png".to_owned(),
             },
             filename: Some("pixel.png".to_owned()),
@@ -2526,19 +2014,24 @@ mod tests {
             duration_ms: None,
             page_count: None,
         };
-        let operation = OperationPartResource {
-            call_id: 7,
-            invocation: ToolInvocationResource {
-                name: "agena.image".to_owned(),
-                ..Default::default()
+        let operation = ToolCallView::from_operation(
+            OperationPart {
+                call_id: 7,
+                invocation: ToolInvocation::new("agena.image", StructuredObject::default()),
+                authorization: Default::default(),
+                user_input: Default::default(),
+                output: Some(RawOutput {
+                    text: "created an image".to_owned(),
+                    attachments: vec![attachment],
+                    ..Default::default()
+                }),
+                state: ToolResultState::Completed,
+                error: None,
+                metadata: Default::default(),
+                lifecycle: TimeRange::default(),
             },
-            model_output: agena_api::part::ModelVisibleOutputResource {
-                text: "created an image".to_owned(),
-                ..Default::default()
-            },
-            attachments: vec![attachment],
-            ..Default::default()
-        };
+            None,
+        );
         let part = TranscriptFixture::operation_part(
             9,
             3,
@@ -2549,7 +2042,7 @@ mod tests {
         let mut rendered = Vec::new();
         render_tool_execution(
             &part,
-            operation_resource(&part),
+            tool_view(&part),
             &mut rendered,
             80,
             &I18n::english(),
@@ -2567,40 +2060,33 @@ mod tests {
 
     #[test]
     fn folded_operation_headline_uses_the_composed_operation_title() {
-        let input = agena_api::part::StructuredObjectResource {
-            fields: vec![
-                agena_api::part::StructuredFieldResource {
-                    name: "tool".to_owned(),
-                    value: agena_api::part::StructuredValueResource::Text {
-                        value: "fs.apply_patch".to_owned(),
-                    },
-                },
-                agena_api::part::StructuredFieldResource {
-                    name: "input".to_owned(),
-                    value: agena_api::part::StructuredValueResource::Object {
-                        fields: vec![agena_api::part::StructuredFieldResource {
-                            name: "patch".to_owned(),
-                            value: agena_api::part::StructuredValueResource::Text {
-                                value: "*** Begin Patch\n*** Update File: apps/agena-cli/src/app.rs\n@@\n-old\n+new\n*** End Patch".to_owned(),
-                            },
-                        }],
-                    },
-                },
-            ],
-        };
-        let tool = OperationPartResource {
-            call_id: 0,
-            invocation: ToolInvocationResource {
-                name: "fs.apply_patch".to_owned(),
-                input,
-                ..Default::default()
+        let tool = ToolCallView::from_operation(
+            OperationPart {
+                call_id: 0,
+                invocation: ToolInvocation::new(
+                    "fs.apply_patch",
+                    StructuredObject::try_from(serde_json::json!({
+                        "tool": "fs.apply_patch",
+                        "input": {
+                            "patch": "*** Begin Patch\n*** Update File: apps/agena-cli/src/app.rs\n@@\n-old\n+new\n*** End Patch",
+                        },
+                    }))
+                    .expect("structured tool input"),
+                ),
+                authorization: Default::default(),
+                user_input: Default::default(),
+                output: None,
+                state: ToolResultState::Completed,
+                error: None,
+                metadata: Default::default(),
+                lifecycle: TimeRange::default(),
             },
-            // The composed operation title is the headline; the bare
-            // execution-tool name is not repeated.
-            title: "Apply patch".to_owned(),
-            summary: "1 file changed · +1 −1".to_owned(),
-            ..Default::default()
-        };
+            Some(ToolHumanPresentationResource {
+                title: "Apply patch".to_owned(),
+                summary: "1 file changed · +1 −1".to_owned(),
+                blocks: Vec::new(),
+            }),
+        );
 
         assert_eq!(
             tool_execution_compact_summary(PartExecutionStatusResource::Completed, &tool, 80),
@@ -2634,62 +2120,38 @@ mod tests {
 
     #[test]
     fn folded_tool_headline_shows_the_composed_operation_title_and_reports_result_count() {
-        let input = agena_api::part::StructuredObjectResource {
-            fields: vec![
-                agena_api::part::StructuredFieldResource {
-                    name: "tool".to_owned(),
-                    value: agena_api::part::StructuredValueResource::Text {
-                        value: "fs.grep".to_owned(),
-                    },
-                },
-                agena_api::part::StructuredFieldResource {
-                    name: "input".to_owned(),
-                    value: agena_api::part::StructuredValueResource::Object {
-                        fields: vec![
-                            agena_api::part::StructuredFieldResource {
-                                name: "pattern".to_owned(),
-                                value: agena_api::part::StructuredValueResource::Text {
-                                    value: "TODO".to_owned(),
-                                },
-                            },
-                            agena_api::part::StructuredFieldResource {
-                                name: "path".to_owned(),
-                                value: agena_api::part::StructuredValueResource::Text {
-                                    value: "crates".to_owned(),
-                                },
-                            },
-                            agena_api::part::StructuredFieldResource {
-                                name: "include".to_owned(),
-                                value: agena_api::part::StructuredValueResource::Text {
-                                    value: "*.rs".to_owned(),
-                                },
-                            },
-                        ],
-                    },
-                },
-            ],
-        };
-        let tool = OperationPartResource {
-            call_id: 0,
-            invocation: ToolInvocationResource {
-                name: "fs.grep".to_owned(),
-                input,
-                ..Default::default()
+        let tool = ToolCallView::from_operation(
+            OperationPart {
+                call_id: 0,
+                invocation: ToolInvocation::new(
+                    "fs.grep",
+                    StructuredObject::try_from(serde_json::json!({
+                        "tool": "fs.grep",
+                        "input": {
+                            "pattern": "TODO",
+                            "path": "crates",
+                            "include": "*.rs",
+                        },
+                    }))
+                    .expect("structured tool input"),
+                ),
+                authorization: Default::default(),
+                user_input: Default::default(),
+                output: Some(RawOutput {
+                    payload: Some(serde_json::json!({ "matches": 36 })),
+                    ..Default::default()
+                }),
+                state: ToolResultState::Completed,
+                error: None,
+                metadata: Default::default(),
+                lifecycle: TimeRange::default(),
             },
-            // The composed operation title is the headline.
-            title: "Grep TODO".to_owned(),
-            summary: "36 matches in crates".to_owned(),
-            details: agena_api::part::ToolOutputResource {
-                payload: agena_api::part::StructuredObjectResource {
-                    fields: vec![agena_api::part::StructuredFieldResource {
-                        name: "matches".to_owned(),
-                        value: agena_api::part::StructuredValueResource::Integer { value: 36 },
-                    }],
-                },
-                ..Default::default()
-            },
-            ..Default::default()
-        };
+            Some(ToolHumanPresentationResource {
+                title: "Grep TODO".to_owned(),
+                summary: "36 matches in crates".to_owned(),
+                blocks: Vec::new(),
+            }),
+        );
 
         assert_eq!(
             tool_execution_compact_summary(PartExecutionStatusResource::Completed, &tool, 80),
@@ -2699,40 +2161,43 @@ mod tests {
 
     #[test]
     fn folded_tool_keeps_failure_reason_on_the_same_line() {
-        let input = agena_api::part::StructuredObjectResource {
-            fields: vec![agena_api::part::StructuredFieldResource {
-                name: "file_path".to_owned(),
-                value: agena_api::part::StructuredValueResource::Text {
-                    value: "secrets.env".to_owned(),
-                },
-            }],
-        };
-        let tool = OperationPartResource {
-            call_id: 0,
-            invocation: ToolInvocationResource {
-                name: "agena.fs.read".to_owned(),
-                input,
-                ..Default::default()
-            },
-            title: "Read secrets.env".to_owned(),
-            summary: "permission denied by workspace policy".to_owned(),
-            error: Some(agena_api::part::OperationErrorResource {
-                failure: agena_failure::Failure::new(
-                    agena_failure::FailureCode::new("tool.permission_denied"),
-                    agena_failure::FailureCategory::PermissionDenied,
-                    agena_failure::FailureResponsibility::Policy,
-                    agena_failure::RetryDirective::AfterUserAction,
-                    agena_failure::RecoveryDirective::RequestPermission,
-                    agena_failure::FailureImpact::OperationFailed,
-                    agena_failure::UserPresentation::new(
-                        "tool-permission-denied",
-                        "permission denied by workspace policy",
+        let tool = ToolCallView::from_operation(
+            OperationPart {
+                call_id: 0,
+                invocation: ToolInvocation::new(
+                    "agena.fs.read",
+                    StructuredObject::try_from(serde_json::json!({
+                        "file_path": "secrets.env",
+                    }))
+                    .expect("structured tool input"),
+                ),
+                authorization: Default::default(),
+                user_input: Default::default(),
+                output: None,
+                state: ToolResultState::Failed,
+                error: Some(OperationError {
+                    failure: agena_failure::Failure::new(
+                        agena_failure::FailureCode::new("tool.permission_denied"),
+                        agena_failure::FailureCategory::PermissionDenied,
+                        agena_failure::FailureResponsibility::Policy,
+                        agena_failure::RetryDirective::AfterUserAction,
+                        agena_failure::RecoveryDirective::RequestPermission,
+                        agena_failure::FailureImpact::OperationFailed,
+                        agena_failure::UserPresentation::new(
+                            "tool-permission-denied",
+                            "permission denied by workspace policy",
+                        ),
                     ),
-                )
-                .into(),
+                }),
+                metadata: Default::default(),
+                lifecycle: TimeRange::default(),
+            },
+            Some(ToolHumanPresentationResource {
+                title: "Read secrets.env".to_owned(),
+                summary: "permission denied by workspace policy".to_owned(),
+                blocks: Vec::new(),
             }),
-            ..Default::default()
-        };
+        );
 
         assert_eq!(
             tool_execution_compact_summary(PartExecutionStatusResource::Failed, &tool, 80),
@@ -2742,16 +2207,8 @@ mod tests {
 
     #[test]
     fn folded_tool_makes_pending_permission_actionable() {
-        let tool = OperationPartResource {
-            call_id: 0,
-            invocation: ToolInvocationResource {
-                name: "agena.lsp.servers".to_owned(),
-                ..Default::default()
-            },
-            title: "Language servers".to_owned(),
-            summary: "Awaiting approval".to_owned(),
-            ..Default::default()
-        };
+        let mut tool = fixture_operation(0, "agena.lsp.servers", "Language servers");
+        tool.presentation.summary = "Awaiting approval".to_owned();
 
         assert_eq!(
             tool_execution_compact_summary(PartExecutionStatusResource::Pending, &tool, 80),

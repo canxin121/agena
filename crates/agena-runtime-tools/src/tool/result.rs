@@ -2,7 +2,6 @@ use std::collections::BTreeMap;
 
 use crate::part::AttachmentItem;
 use agena_domain::ToolOutput;
-use agena_tool::ToolPresentationSection;
 
 use super::ToolPayloadOutput;
 use agena_tool::ApplyPatchExecution;
@@ -13,7 +12,6 @@ pub struct ToolExecutionView {
     pub title: String,
     pub summary: String,
     pub output_text: String,
-    pub sections: Vec<ToolPresentationSection>,
     pub metadata: BTreeMap<String, String>,
     pub attachments: Vec<AttachmentItem>,
 }
@@ -28,7 +26,6 @@ impl ToolExecutionView {
             title: agena_tool::normalize_tool_title(title.into()),
             summary: agena_tool::normalize_tool_summary(summary.into()),
             output_text: output_text.into(),
-            sections: Vec::new(),
             metadata: BTreeMap::new(),
             attachments: Vec::new(),
         }
@@ -41,7 +38,6 @@ impl ToolExecutionView {
             title: self.title.clone(),
             summary: self.summary.clone(),
             output_text: self.output_text.clone(),
-            sections: self.sections.clone(),
             payload: None,
             metadata: self.metadata.clone(),
             attachments: self
@@ -157,22 +153,15 @@ impl ToolInvocationExecution {
 #[cfg(test)]
 mod tests {
     use super::ToolExecutionView;
-    use agena_tool::ToolPresentationSection;
-
     #[test]
     fn view_projects_stable_fields_into_tool_contract() {
         let mut view = ToolExecutionView::simple("title", "one-line summary", "output");
-        view.sections.push(ToolPresentationSection {
-            title: "Files".to_owned(),
-            text: "README.md".to_owned(),
-        });
         view.metadata
             .insert("path".to_owned(), "README.md".to_owned());
         let summary = view.summary();
         assert_eq!(summary.title, "title");
         assert_eq!(summary.summary, "one-line summary");
         assert_eq!(summary.output_text, "output");
-        assert_eq!(summary.sections[0].title, "Files");
         assert_eq!(summary.metadata["path"], "README.md");
     }
 

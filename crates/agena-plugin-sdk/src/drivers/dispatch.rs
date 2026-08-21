@@ -406,7 +406,7 @@ mod tests {
             input: ToolRenderInput,
         ) -> crate::Result<Option<ToolRenderOutput>> {
             assert_eq!(input.tool_name, "fs.read");
-            assert_eq!(input.input, serde_json::json!({"path": "README.md"}));
+            assert_eq!(input.input, serde_json::json!({"file_path": "README.md"}));
             assert_eq!(input.output.text, "raw result");
             Ok(Some(ToolRenderOutput {
                 model: Some("plugin model projection".to_owned()),
@@ -430,7 +430,7 @@ mod tests {
                 method::HOOK_TOOL_RENDER,
                 serde_json::to_value(ToolRenderInput {
                     tool_name: "fs.read".to_owned(),
-                    input: serde_json::json!({"path": "README.md"}),
+                    input: serde_json::json!({"file_path": "README.md"}),
                     output: agena_domain::RawOutput::text("raw result"),
                 })
                 .unwrap(),

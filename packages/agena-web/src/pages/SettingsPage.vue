@@ -36,17 +36,16 @@ import { useWorkspacePaneContext } from '@/app/workspace/workspacePaneContext'
 import { WORKSPACE_SIDEBAR_PANEL_HOST_SELECTOR } from '@/layout/workspaceSidebarHost'
 import {
   BUILTIN_CHAT_ACTIVITY_KINDS,
-  DEFAULT_CHAT_ACTIVITY_EXPANDED_TOOL_FILTERS,
+  DEFAULT_CHAT_TOOL_EXPANDED_CATEGORIES,
   normalizeChatActivityKindCatalog,
   normalizeChatActivityKindDefaultExpanded,
-  normalizeChatToolActivityFilters,
+  normalizeChatToolActivityCategories,
   normalizeChatToolExpansionOverrides,
   normalizeChatToolPreferenceId,
   resolveChatActivityKindDefaultExpanded,
   resolveChatToolDefaultExpanded,
   type ChatActivityKindCatalogItem,
   type ChatToolExpansionOverrides,
-  type ChatToolActivityType,
 } from '@/lib/chatActivity'
 import { settingsText as st } from '@/i18n/settingsText'
 
@@ -290,16 +289,16 @@ function toggleActivityKindDefaultExpanded(id: string) {
   chatActivityKindDefaultExpanded.value = [...ordered, ...remaining]
 }
 
-const chatActivityDefaultExpandedToolFilters = computed<ChatToolActivityType[]>({
+const chatToolActivityDefaultExpandedCategories = computed<string[]>({
   get() {
     const s = settings.data
-    if (s && Object.prototype.hasOwnProperty.call(s, 'chatActivityDefaultExpandedToolFilters')) {
-      return normalizeChatToolActivityFilters(s.chatActivityDefaultExpandedToolFilters)
+    if (s && Object.prototype.hasOwnProperty.call(s, 'chatToolActivityDefaultExpandedCategories')) {
+      return normalizeChatToolActivityCategories(s.chatToolActivityDefaultExpandedCategories)
     }
-    return DEFAULT_CHAT_ACTIVITY_EXPANDED_TOOL_FILTERS.slice()
+    return DEFAULT_CHAT_TOOL_EXPANDED_CATEGORIES.slice()
   },
   set(value) {
-    void settings.save({ chatActivityDefaultExpandedToolFilters: value })
+    void settings.save({ chatToolActivityDefaultExpandedCategories: normalizeChatToolActivityCategories(value) })
   },
 })
 
@@ -402,13 +401,15 @@ const chatToolActivityDefaultExpandedOverrides = computed<ChatToolExpansionOverr
   },
 })
 
-const legacyExpandedToolCategories = computed(() => new Set<string>(chatActivityDefaultExpandedToolFilters.value))
+const defaultExpandedToolCategories = computed(
+  () => new Set<string>(chatToolActivityDefaultExpandedCategories.value),
+)
 
 function toolDefaultExpandedEnabled(toolId: string): boolean {
   return resolveChatToolDefaultExpanded(
     toolId,
     chatToolActivityDefaultExpandedOverrides.value,
-    legacyExpandedToolCategories.value,
+    defaultExpandedToolCategories.value,
     activityKindDefaultExpandedEnabled('operation'),
   )
 }

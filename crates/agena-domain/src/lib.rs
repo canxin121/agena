@@ -98,14 +98,11 @@ mod user_input_events;
 pub mod activity_v2;
 pub use access::{AccessKind, AccessSelector};
 pub use activity::{
-    ActivityActor, ActivityLifecycle, ActivityNode, ActivityOwner, ActivityPayload,
-    ActivityProvenance, ActivityState, AssistantReplySnapshot, AssistantReplyStatus,
-    CancellationOutcome, CancellationResult, ComposerActivity, ComposerDocument, ComposerNode,
-    ContentDocument, ContentNode, ContentPosition, ErrorActivity, ExecutionTarget,
-    InteractionActivity, NoticeActivity, OperationActivity, OperationActivityError,
-    OperationAuthorization, OperationPermission, ReasoningActivity, ResourceActivity, ResourceKind,
-    ResourceReference, SkillReferenceActivity, TextArtifactActivity, TextSegment,
-    TextSegmentActivity, TranscriptPatch, TranscriptSnapshot, TurnSnapshot,
+    ActivityPayload, ActivityProvenance, ActivityState, CancellationOutcome, CancellationResult,
+    ComposerActivity, ComposerDocument, ComposerNode, ErrorActivity, ExecutionTarget,
+    InteractionActivity, NoticeActivity, OperationAuthorization, OperationPermission,
+    ReasoningActivity, ResourceActivity, ResourceKind, ResourceReference, SkillReferenceActivity,
+    TextArtifactActivity, TextSegmentActivity,
 };
 pub use activity_kind::{
     ACTIVITY_KIND_ERROR, ACTIVITY_KIND_HOOK, ACTIVITY_KIND_INTERACTION, ACTIVITY_KIND_NOTICE,
@@ -145,7 +142,7 @@ pub use json_path::{JsonPathError, format_json_path, get_json_path, parse_json_p
 pub use message_activity::{
     ArtifactRef, FileChangeKind, OperationUserInput, OperationUserInputRecord, SearchResultItem,
     TableColumn, TodoItem, TodoPriority, TodoStatus, UserInputOption, UserInputQuestion,
-    UserInputReply, UserInputRequest, deserialize_user_input_answers, user_input_answers_is_empty,
+    UserInputReply, UserInputRequest, user_input_answers_is_empty,
 };
 pub use message_activity_values::{
     ErrorPart, FileChangeRecord, ReasoningPart, TextPart, WebSearchResult,
@@ -219,7 +216,7 @@ pub use tool_permission_contract::{
     InputNetworkSpec, InputPathSpec, NetworkAccessSpec, PathAccessSpec, PathKind,
     ToolPermissionContract,
 };
-pub use tool_result::{ToolPresentationSection, ToolResultDisplay, ToolResultState};
+pub use tool_result::ToolResultState;
 pub use usage_period::UsagePeriod;
 pub use usage_query::UsageStatsQuery;
 pub use usage_stats::{

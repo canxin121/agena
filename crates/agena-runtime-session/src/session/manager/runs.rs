@@ -19,10 +19,9 @@ use agena_runtime_contracts::part_content::{
 use agena_storage::store::{Part, PartRole, PartState};
 use std::path::Path;
 
-/// The lossy visible text of one run group, mirroring the v1
-/// `Message::visible_text_lossy` over the run's decoded content parts: text
-/// and skill-reference parts render their content, operation parts their
-/// best-effort output, and the remaining part kinds fall back to their
+/// The lossy visible text of one run group, derived from its decoded content
+/// parts: text and skill-reference parts render their content, tool-call parts
+/// their best-effort output, and the remaining part kinds fall back to their
 /// summary.
 pub(crate) fn run_visible_text_lossy(run: &[Part]) -> String {
     run.iter()
@@ -45,8 +44,7 @@ pub(crate) fn run_visible_text_lossy(run: &[Part]) -> String {
         .join("\n")
 }
 
-/// Best-effort textual rendering of an operation part, mirroring the v1
-/// `Message::tool_text_lossy` (private in contracts): first non-empty of
+/// Best-effort textual rendering of a tool-call projection: first non-empty of
 /// output text, error message, title, or summary.
 fn tool_visible_text_lossy(tool: &agena_runtime_contracts::part::OperationPart) -> Option<String> {
     let candidates = [tool.output_text(), tool.error_message(), tool.title()];
@@ -136,7 +134,7 @@ impl SessionManager {
         let child = self
             .require_subtask_session(parent_session_id, task_id)
             .await?;
-        self.cancel_active_execution(child.id).await?;
+        self.cancel_active_execution_with_outcome(child.id).await?;
         Ok(child.id)
     }
 
@@ -273,8 +271,8 @@ impl SessionManager {
         let input_parts = request.parts;
         // The user's message is persisted as a `user_send` run: one run
         // marker plus one `text` content part per submitted payload (the same
-        // shape `drain_steer_input` writes). v2 parts carry no activity
-        // identity, so the v1 `bind_activity` step is dropped here.
+        // shape `drain_steer_input` writes). Parts carry no separate activity
+        // identity; presentation identities are derived when queried.
         let user_parts = input_parts
             .iter()
             .map(|part| new_part_from_content("text", PartRole::User, part, PartState::Completed))
@@ -714,7 +712,7 @@ impl SessionManager {
                     if self.execution_registry.is_active(child_id).await {
                         let _ = tokio::time::timeout(
                             std::time::Duration::from_secs(2),
-                            self.cancel_active_execution(child_id),
+                            self.cancel_active_execution_with_outcome(child_id),
                         )
                         .await;
                         match tokio::time::timeout(std::time::Duration::from_secs(5), &mut run)

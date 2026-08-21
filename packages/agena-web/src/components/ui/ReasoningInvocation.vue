@@ -1,18 +1,15 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
-import { RiBrainAi3Line, RiChat4Line } from '@remixicon/vue'
+import { computed, ref, watch } from 'vue'
+import { RiBrainAi3Line } from '@remixicon/vue'
 import { useI18n } from 'vue-i18n'
 
 import ActivityDisclosureButton from '@/components/ui/ActivityDisclosureButton.vue'
 import { stripMarkdownToText } from '@/lib/markdown'
-import { useChatStore } from '@/stores/chat'
 import type { JsonValue } from '@/types/json'
 
 type ReasoningPart = {
-  type?: string
   text?: string
   content?: string
-  ocLazy?: boolean
   [k: string]: JsonValue
 }
 
@@ -27,32 +24,10 @@ const { t } = useI18n()
 
 const isOpen = ref(Boolean(props.initiallyExpanded))
 
-const chat = useChatStore()
-const detailLoading = ref(false)
-const isLazy = computed(() => props.part?.ocLazy === true)
-
-async function ensureDetail() {
-  if (detailLoading.value) return
-  if (!isLazy.value) return
-  detailLoading.value = true
-  try {
-    await chat.ensureMessagePartDetail(props.part)
-  } finally {
-    detailLoading.value = false
-  }
-}
-
 function toggleOpen() {
   const next = !isOpen.value
   isOpen.value = next
-  if (next) void ensureDetail()
 }
-
-onMounted(() => {
-  if (isOpen.value) void ensureDetail()
-})
-
-type ReasoningVariant = 'thinking' | 'justification'
 
 function reasoningSummary(text: string): string {
   const trimmed = (text || '').trim()
@@ -74,18 +49,8 @@ const rawText = computed(() => {
 
 const textContent = computed(() => stripMarkdownToText(rawText.value))
 
-const variant = computed<ReasoningVariant>(() => {
-  const t = String(props.part?.type || '').toLowerCase()
-  if (t.includes('justification')) return 'justification'
-  return 'thinking'
-})
-
-const label = computed(() =>
-  variant.value === 'thinking'
-    ? t('chat.messages.activity.reasoningInvocation.types.thinking')
-    : t('chat.messages.activity.reasoningInvocation.types.justification'),
-)
-const Icon = computed(() => (variant.value === 'thinking' ? RiBrainAi3Line : RiChat4Line))
+const label = computed(() => t('chat.messages.activity.reasoningInvocation.types.thinking'))
+const Icon = RiBrainAi3Line
 const summary = computed(() => reasoningSummary(textContent.value))
 
 const hasText = computed(() => textContent.value.trim().length > 0)
@@ -115,9 +80,6 @@ watch(
     <Transition name="toolreveal">
       <div v-show="isOpen" class="pl-6 pt-0.5 pb-1">
         <div class="oc-activity-detail">
-          <div v-if="detailLoading" class="px-3 py-2 text-[11px] text-muted-foreground/70 italic">
-            {{ t('chat.messages.activity.reasoningInvocation.loadingDetails') }}
-          </div>
           <div
             class="max-h-80 overflow-auto whitespace-pre-wrap break-words text-[11px] text-muted-foreground/70 px-3 py-2"
           >

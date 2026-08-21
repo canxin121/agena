@@ -126,7 +126,7 @@ test('tool-call parts read canonical operation invocation and result fields', ()
     state: 'completed',
     content: {
       name: 'agena.fs.read',
-      input: { path: 'README.md' },
+      input: { file_path: 'README.md' },
       state: 'completed',
       output: { payload: { text: 'README contents', bytes: 42 } },
       metadata: { cache: true },
@@ -142,7 +142,7 @@ test('tool-call parts read canonical operation invocation and result fields', ()
   assert.equal(part?.tool, 'agena.fs.read')
   assert.deepEqual(part?.state, {
     status: 'completed',
-    input: { path: 'README.md' },
+    input: { file_path: 'README.md' },
     output: 'README contents',
     title: 'Read README.md',
     metadata: { cache: true },
@@ -152,7 +152,7 @@ test('tool-call parts read canonical operation invocation and result fields', ()
   assert.equal(part?.partState, 'completed')
   assert.deepEqual(part?.agenaContent, {
     name: 'agena.fs.read',
-    input: { path: 'README.md' },
+    input: { file_path: 'README.md' },
     state: 'completed',
     output: { payload: { text: 'README contents', bytes: 42 } },
     metadata: { cache: true },
@@ -194,7 +194,7 @@ test('tool-call parts honor Agena result lifecycle and presentation summary', ()
     state: 'completed',
     content: {
       name: 'fs.read',
-      input: { path: 'missing.txt' },
+      input: { file_path: 'missing.txt' },
       state: 'capability_unavailable',
       output: { payload: { text: 'This runtime cannot read files.' } },
     },
@@ -207,34 +207,9 @@ test('tool-call parts honor Agena result lifecycle and presentation summary', ()
 
   assert.deepEqual(part?.state, {
     status: 'error',
-    input: { path: 'missing.txt' },
+    input: { file_path: 'missing.txt' },
     output: 'This runtime cannot read files.',
     title: 'File capability unavailable',
-  })
-})
-
-test('interaction parts render a question activity instead of raw JSON', () => {
-  const part = normalizeAgenaPart('13', '7', '10', {
-    part_id: 13,
-    kind: 'interaction',
-    role: 'assistant',
-    state: 'in_progress',
-    content: {
-      type: 'ask_user',
-      prompt: 'Choose a target',
-      options: ['one', 'two'],
-      request: { questions: [{ question_id: 'target', prompt: 'Target?' }] },
-    },
-  })
-  assert.equal(part?.type, 'tool')
-  assert.equal(part?.tool, 'question')
-  assert.deepEqual(part?.state, {
-    status: 'running',
-    input: {
-      prompt: 'Choose a target',
-      options: ['one', 'two'],
-      questions: [{ question_id: 'target', prompt: 'Target?' }],
-    },
   })
 })
 

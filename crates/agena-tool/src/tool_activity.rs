@@ -10,7 +10,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use agena_domain::{ArtifactRef, RawOutput, RenderDelta, ToolPresentationSection, ViewBlock};
+use agena_domain::{ArtifactRef, RawOutput, RenderDelta, ViewBlock};
 
 /// Realtime event a tool pushes during execution (07 §5.1).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -33,8 +33,6 @@ pub enum ToolActivityEvent {
         #[serde(default, skip_serializing_if = "String::is_empty")]
         summary: String,
     },
-    /// Collapsible section (aggregated at end).
-    Section(ToolPresentationSection),
     /// Attachment fact.
     Attachment(ArtifactRef),
     /// Metadata fact.
@@ -51,8 +49,6 @@ pub struct ToolActivityResult {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub summary: Option<String>,
     pub raw_output: RawOutput,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub sections: Vec<ToolPresentationSection>,
 }
 
 impl ToolActivityResult {
@@ -142,10 +138,6 @@ mod tests {
                 "out",
                 ViewBlock::log("out", CommandOutputStream::Stdout, "ok\n"),
             )),
-            ToolActivityEvent::Section(ToolPresentationSection {
-                title: "stdout".into(),
-                text: "ok".into(),
-            }),
             ToolActivityEvent::Attachment(ArtifactRef {
                 uri: "file:///a".into(),
                 mime: "text/plain".into(),
@@ -210,10 +202,6 @@ mod tests {
                 text: "ok".into(),
                 ..RawOutput::default()
             },
-            sections: vec![ToolPresentationSection {
-                title: "x".into(),
-                text: "y".into(),
-            }],
         };
         let encoded = serde_json::to_string(&result).unwrap();
         let decoded: ToolActivityResult = serde_json::from_str(&encoded).unwrap();

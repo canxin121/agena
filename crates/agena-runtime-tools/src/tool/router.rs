@@ -47,7 +47,7 @@ pub fn permission_network_targets_for(
     input: &serde_json::Value,
 ) -> SdkResult<Vec<String>> {
     match tool {
-        "shell" | "process" => {
+        "shell" => {
             let payload: ShellToolInput = parse_shape_input(input)?;
             match payload {
                 ShellToolInput::Run { command, .. } => declared_shell_network_targets(
@@ -106,7 +106,6 @@ pub fn tool_execution_to_invoke_output(execution: ToolPayloadExecution) -> ToolI
         title: summary.title,
         summary: summary.summary,
         output_text: summary.output_text,
-        sections: summary.sections,
         payload,
         metadata: metadata.into_iter().collect(),
         attachments: execution.view.attachments,

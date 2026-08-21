@@ -978,7 +978,6 @@ mod tool_api_history_tests {
             content,
             summary: None,
             visibility: PartVisibility::Both,
-            rendered_markdown: None,
             parent_part_id: None,
             run_id: Some(1),
             origin_session_id: 1,
@@ -1097,7 +1096,7 @@ mod tool_api_history_tests {
     fn content_only_reasoning_replays_when_the_model_declares_reasoning_content() {
         let invocation = ToolInvocation::new(
             "fs.read",
-            StructuredObject::try_from(serde_json::json!({ "path": "a.txt" }))
+            StructuredObject::try_from(serde_json::json!({ "file_path": "a.txt" }))
                 .expect("structured input"),
         );
         let operation = completed_operation(
@@ -1303,7 +1302,7 @@ mod tool_api_history_tests {
     fn encrypted_reasoning_replay_drops_plaintext_content_array() {
         let invocation = ToolInvocation::new(
             "fs.read",
-            StructuredObject::try_from(serde_json::json!({ "path": "a.txt" }))
+            StructuredObject::try_from(serde_json::json!({ "file_path": "a.txt" }))
                 .expect("structured input"),
         );
         let operation = completed_operation(0, invocation, "Read", "Read file", "contents", None);

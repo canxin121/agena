@@ -4,8 +4,6 @@
 //! is intentionally restricted to values that can cross the boundary without
 //! exposing those core implementation types.
 
-use std::collections::BTreeMap;
-
 use async_trait::async_trait;
 
 use agena_domain::{
@@ -40,23 +38,6 @@ pub struct SessionProjectedRunHeader {
     pub metadata: serde_json::Value,
     pub usage: Option<serde_json::Value>,
     pub part_count: u64,
-}
-
-/// The human-facing detail of a tool Activity, derived on demand.
-///
-/// The durable record stores only the compact tool data; this value is the
-/// runtime's lazily-derived Markdown for a single expanded Activity. Clients
-/// request it when expanding and cache it while expanded; collapsing the
-/// Activity drops it, so detail is neither persisted nor transferred while
-/// collapsed.
-#[derive(Debug, Clone)]
-/// Detail of an operation.
-pub struct OperationDetail {
-    pub activity_id: agena_domain::ActivityId,
-    pub markdown: String,
-    /// True while the tool is still streaming; the client should subscribe for
-    /// live delta updates rather than treat this as a final frame.
-    pub streaming: bool,
 }
 
 /// Stable transcript projection for presentation paths that need run-part
@@ -96,31 +77,6 @@ pub struct SessionProjectedPart {
     pub content: Option<serde_json::Value>,
 }
 
-/// A stable, runtime-owned projection of a recorded tool operation. The
-/// persisted Runtime aggregate is adapted to this value; consumers must not use
-/// its JSON serialization as an API contract.
-#[derive(Debug, Clone)]
-/// A projected operation part.
-pub struct SessionProjectedOperationPart {
-    pub call_id: i64,
-    pub invocation: agena_domain::ToolInvocation,
-    pub authorization: agena_domain::OperationAuthorization,
-    pub user_input: agena_domain::OperationUserInput,
-    pub title: String,
-    pub summary: String,
-    pub model_output: SessionProjectedModelVisibleOutput,
-    pub blocks: Vec<SessionProjectedOperationBlock>,
-    pub artifacts: Vec<agena_domain::ArtifactRef>,
-    pub attachments: Vec<agena_plugin_host::sdk::attachment::AttachmentItem>,
-    pub details: agena_domain::ToolOutput,
-    pub result: SessionProjectedToolResult,
-    pub structured: Option<serde_json::Value>,
-    pub metadata: BTreeMap<String, serde_json::Value>,
-    pub error: Option<agena_domain::OperationError>,
-    pub raw: Option<serde_json::Value>,
-    pub lifecycle: agena_domain::TimeRange,
-}
-
 /// A stable, runtime-owned projection of a recorded hook run. Hook activity
 /// (for example the workflow plan's `agent.stop` autorun continuation) rides
 /// the same transcript pipeline as tool calls.
@@ -137,124 +93,8 @@ pub struct SessionProjectedHookPart {
     pub message: Option<String>,
 }
 
-#[derive(Debug, Clone, Default)]
-/// Model-visible output of a projected tool result.
-pub struct SessionProjectedModelVisibleOutput {
-    pub text: String,
-    pub attachments: Vec<agena_plugin_host::sdk::attachment::AttachmentItem>,
-    pub truncated: bool,
-}
-
-#[derive(Debug, Clone, Default)]
-/// Projected tool result.
-pub struct SessionProjectedToolResult {
-    pub state: agena_domain::ToolResultState,
-    pub structured: Option<serde_json::Value>,
-    pub content: Vec<SessionProjectedOperationBlock>,
-    pub model_preview: SessionProjectedModelVisibleOutput,
-    pub managed_outputs: Vec<agena_domain::ToolManagedOutput>,
-    pub display: agena_domain::ToolResultDisplay,
-    pub attachments: Vec<agena_plugin_host::sdk::attachment::AttachmentItem>,
-    pub error: Option<agena_domain::OperationError>,
-    pub metadata: BTreeMap<String, serde_json::Value>,
-    pub raw: Option<serde_json::Value>,
-}
-
-/// Presentation blocks emitted by tools. This is deliberately exhaustive so
-/// transcript consumers can map each value to their own protocol without
-/// depending on Runtime's private message implementation.
-#[derive(Debug, Clone)]
-/// A block of a projected operation.
-pub enum SessionProjectedOperationBlock {
-    Text {
-        text: String,
-    },
-    Markdown {
-        text: String,
-    },
-    Json {
-        value: serde_json::Value,
-    },
-    Table {
-        columns: Vec<agena_domain::TableColumn>,
-        rows: Vec<Vec<serde_json::Value>>,
-    },
-    Log {
-        stream: Option<String>,
-        text: String,
-    },
-    Command {
-        command: String,
-        cwd: Option<String>,
-        exit_code: Option<i32>,
-        stdout: Option<String>,
-        stderr: Option<String>,
-    },
-    Diff {
-        diff: String,
-        language: Option<String>,
-    },
-    FileChanges {
-        changes: Vec<agena_domain::FileChangeRecord>,
-    },
-    SearchResults {
-        query: Option<String>,
-        results: Vec<agena_domain::SearchResultItem>,
-    },
-    Citation {
-        uri: String,
-        title: Option<String>,
-        snippet: Option<String>,
-    },
-    Image {
-        mime: String,
-        url: String,
-    },
-    Audio {
-        mime: String,
-        url: String,
-    },
-    ResourceLink {
-        uri: String,
-        title: Option<String>,
-        mime_type: Option<String>,
-    },
-    EmbeddedResource {
-        uri: String,
-        mime: String,
-        text: Option<String>,
-        base64: Option<String>,
-    },
-    File {
-        url: String,
-        filename: String,
-        mime: String,
-    },
-    Media {
-        mime_type: String,
-        artifact: agena_domain::ArtifactRef,
-    },
-    Checklist {
-        items: Vec<agena_domain::TodoItem>,
-    },
-    NestedTask {
-        task_id: String,
-        title: Option<String>,
-        status: agena_domain::ExecutionStatus,
-    },
-    Progress {
-        message: String,
-        percent: Option<f32>,
-    },
-    Custom {
-        schema: Option<String>,
-        value: serde_json::Value,
-    },
-}
-
 /// Typed detail values that are already stable outside Runtime's persisted
-/// aggregate. `Opaque` remains solely for legacy/missing persisted content;
-/// every current message-part variant has an explicit projection.
+/// aggregate. Every current message-part variant has an explicit projection.
 #[derive(Debug, Clone)]
 /// Detail kind of a projected part.
 pub enum SessionProjectedPartDetail {
@@ -276,7 +116,7 @@ pub enum SessionProjectedPartDetail {
         request: agena_domain::UserInputRequest,
         reply: Option<agena_domain::UserInputReply>,
     },
-    Operation(Box<SessionProjectedOperationPart>),
+    ToolCall(agena_runtime_contracts::part_content::ToolCallContent),
     Hook(Box<SessionProjectedHookPart>),
     Notice {
         summary: String,
@@ -362,33 +202,9 @@ pub trait SessionQueryService: Send + Sync {
         session_id: i64,
     ) -> Result<SessionPresentation, SessionQueryError>;
 
-    async fn transcript_snapshot(
-        &self,
-        session_id: i64,
-    ) -> Result<agena_domain::TranscriptSnapshot, SessionQueryError> {
-        Ok(agena_domain::TranscriptSnapshot {
-            session_id,
-            ..Default::default()
-        })
-    }
-
-    /// Lazily derive the human-facing detail of one tool Activity. The client
-    /// calls this on expansion; the runtime derives Markdown from the compact
-    /// tool data. Returning `None` means the Activity is not an Operation or
-    /// carries no derivable result.
-    async fn operation_detail(
-        &self,
-        session_id: i64,
-        activity_id: agena_domain::ActivityId,
-    ) -> Result<Option<OperationDetail>, SessionQueryError> {
-        let _ = (session_id, activity_id);
-        Ok(None)
-    }
-
     async fn list_projected_runs(
         &self,
         session_id: i64,
-        include_content: bool,
     ) -> Result<Vec<SessionProjectedRun>, SessionQueryError>;
     async fn list_session_tree(
         &self,
@@ -462,7 +278,6 @@ mod tests {
         async fn list_projected_runs(
             &self,
             _session_id: i64,
-            _include_content: bool,
         ) -> Result<Vec<super::SessionProjectedRun>, SessionQueryError> {
             Ok(Vec::new())
         }

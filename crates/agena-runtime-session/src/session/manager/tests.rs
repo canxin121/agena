@@ -32,14 +32,13 @@ use crate::provider::{ModelRuntime, ProviderError};
 use crate::session::manager::replies::{operation_from_part, operation_id_from_part};
 use crate::session::manager::runs::run_visible_text_lossy;
 use crate::session::store::{
-    OPERATION_ID_METADATA_KEY, ProcessorPartIdAllocator, interaction_from_request,
-    new_part_from_content, parts_into_runs, run_marker_content, text_content,
-    tool_call_from_operation, typed_content_from_value, typed_content_to_value,
+    OPERATION_ID_METADATA_KEY, ProcessorPartIdAllocator, new_part_from_content, parts_into_runs,
+    run_marker_content, text_content, tool_call_from_operation, typed_content_from_value,
+    typed_content_to_value,
 };
 use crate::{
     ContextGovernor, RuntimeSessionManagerConfig, SessionExecutionReplyRequest,
     authorization::ExecutionPrincipal,
-    part::{InteractiveRequestPart, RequestPart},
     permission::{PermissionPolicy, ToolPermissionPolicy},
     provider::ProviderRegistry,
     session::{Session, SessionProcessor},
@@ -140,7 +139,7 @@ async fn cancellation_force_aborts_unresponsive_operation_and_releases_registry(
     .await
     .expect("execution registers");
     manager
-        .cancel_active_execution(session_id)
+        .cancel_active_execution_with_outcome(session_id)
         .await
         .expect("request cancellation");
 
@@ -221,7 +220,7 @@ async fn cancellation_suppresses_queued_background_notification_wakes() {
     );
 
     manager
-        .cancel_active_execution(session.id)
+        .cancel_active_execution_with_outcome(session.id)
         .await
         .expect("cancel session and queued wakes");
     assert!(
@@ -702,33 +701,38 @@ async fn open_session_preserves_a_run_paused_for_user_input_without_a_lease() {
         )
         .await
         .expect("start in-flight run");
+    let mut operation = agena_runtime_contracts::part::OperationPart::pending(
+        1,
+        ToolInvocation::new("interaction.ask", StructuredObject::default()),
+        TimeRange::default(),
+    );
+    operation
+        .user_input
+        .push_pending(agena_domain::UserInputRequest {
+            request_id: "ask-1".to_owned(),
+            session_id: Some(session.id),
+            title: "Choose a path".to_owned(),
+            body_markdown: String::new(),
+            kind: "ask_user".to_owned().into(),
+            source: UserInputSource::Plugin,
+            auto_resolution_ms: None,
+            presented_at: None,
+            questions: Vec::new(),
+            created_at: chrono::Utc::now(),
+        });
     manager
         .store
         .append_parts(
             session.id,
             run_id,
             vec![NewPart::pending(
-                "interaction",
-                PartRole::Runtime,
-                interaction_from_request(&RequestPart::UserInput(InteractiveRequestPart::pending(
-                    agena_domain::UserInputRequest {
-                        request_id: "ask-1".to_owned(),
-                        session_id: Some(session.id),
-                        title: "Choose a path".to_owned(),
-                        body_markdown: String::new(),
-                        kind: "ask_user".to_owned().into(),
-                        source: UserInputSource::Plugin,
-                        auto_resolution_ms: None,
-                        presented_at: None,
-                        questions: Vec::new(),
-                        created_at: chrono::Utc::now(),
-                    },
-                )))
-                .as_value(),
+                "tool_call",
+                PartRole::Assistant,
+                tool_call_from_operation(&operation).as_value(),
             )],
         )
         .await
-        .expect("append pending interaction");
+        .expect("append pending tool call");
 
     // Fault injection through the persistence engine: an open session must
     // derive AwaitingInteraction even when the paused run has no lease. Production
@@ -762,13 +766,13 @@ async fn open_session_preserves_a_run_paused_for_user_input_without_a_lease() {
         .iter()
         .find(|part| part.part_id == run_id)
         .expect("run marker remains");
-    let interaction = after
+    let tool = after
         .parts
         .iter()
-        .find(|part| part.kind == "interaction")
-        .expect("interaction remains");
+        .find(|part| part.kind == "tool_call")
+        .expect("tool call remains");
     assert!(marker.state.is_in_flight(), "paused run is not aborted");
-    assert_eq!(interaction.state, PartState::Pending);
+    assert_eq!(tool.state, PartState::Pending);
     assert_eq!(
         facade
             .session_state(session.id)
@@ -859,7 +863,7 @@ async fn query_projection_is_derived_from_persisted_parts() {
     )
     .await;
     let projected = manager
-        .list_projected_runs(session.id, true)
+        .list_projected_runs(session.id)
         .await
         .expect("list projected messages");
     assert_eq!(projected.len(), 1);
@@ -899,7 +903,6 @@ async fn projection_preserves_precise_part_kind() {
                     content: serde_json::json!({"summary": ["thinking…"]}),
                     summary: None,
                     visibility: PartVisibility::Both,
-                    rendered_markdown: None,
                     parent_part_id: None,
                     state: PartState::Completed,
                 },
@@ -916,7 +919,6 @@ async fn projection_preserves_precise_part_kind() {
                     }),
                     summary: None,
                     visibility: PartVisibility::Both,
-                    rendered_markdown: None,
                     parent_part_id: None,
                     state: PartState::Completed,
                 },
@@ -926,7 +928,7 @@ async fn projection_preserves_precise_part_kind() {
         .expect("append assistant parts");
 
     let projected = manager
-        .list_projected_runs(session.id, true)
+        .list_projected_runs(session.id)
         .await
         .expect("list projected runs");
     let assistant_run = projected
@@ -2158,7 +2160,6 @@ async fn processor_run_turn_streams_parts_through_the_facade_without_v1_double_w
                 content: serde_json::json!({ "type": "text", "text": "" }),
                 summary: None,
                 visibility: PartVisibility::Both,
-                rendered_markdown: None,
                 parent_part_id: None,
                 state: PartState::InProgress,
             }],
@@ -2665,11 +2666,8 @@ async fn idless_plugin_asks_are_unique_and_cancellation_is_scoped_and_model_visi
         "a late retry of the removed id-less ask must still resolve as a duplicate of the terminal operation"
     );
     assert!(
-        crate::provider::project_session_tool_result_output(
-            first_operation.status(),
-            &first_operation
-        )
-        .contains("cancelled"),
+        crate::provider::project_operation_output(first_operation.status(), &first_operation)
+            .contains("cancelled"),
         "a cancelled function call must replay a non-empty result to the model"
     );
 
@@ -2939,8 +2937,8 @@ async fn host_user_input_does_not_downgrade_an_in_progress_tool_part() {
 
     // The plugin asks the user a question (plan approval) while the tool is
     // mid-execution. This is the exact mutation `request_host_user_input`
-    // applies before suspending on the reply; the interaction part is created
-    // and the tool part must survive the suspension without an invalid
+    // applies before suspending on the reply; the tool_call part gains a
+    // nested user_input record and must survive the suspension without an invalid
     // `in_progress -> pending` downgrade.
     let request = crate::part::AskUserToolInput {
         title: "Approve New Plan".to_owned(),
@@ -2980,14 +2978,11 @@ async fn host_user_input_does_not_downgrade_an_in_progress_tool_part() {
     );
 }
 
-/// The canonical `interaction` part created by a host ask_user (plan approval)
-/// must be resolvable by the reply machinery: it carries the flat
-/// `request_id`/`tool_part_id`/`operation_id` correlation keys alongside the
-/// canonical `request` object, so replying to it does not error with "pending
-/// user input request not found" (regression: plan approval dialog selection
-/// failed because the reply lookup only read the flat v1 keys).
+/// A host ask_user nested in a `tool_call` (plan approval) must be resolvable
+/// by the reply machinery through its durable request id, so replying to it
+/// does not error with "pending user input request not found".
 #[tokio::test]
-async fn host_ask_user_interaction_part_is_reply_resolvable() {
+async fn host_ask_user_is_reply_resolvable_on_tool_call() {
     let (manager, _database) = test_manager_with_database().await;
     let session = create(&manager, "host ask_user reply resolution").await;
 
@@ -3076,8 +3071,9 @@ async fn host_ask_user_interaction_part_is_reply_resolvable() {
         pending.request.part_id, tool_part_id,
         "the request ref IS the tool_call operation activity in the single-activity shape"
     );
-    let resolved_request = super::replies::pending_user_input_request(&session, &pending)
-        .expect("request payload is recoverable");
+    let resolved_request =
+        super::replies::pending_user_input_request(&session, &pending, "host-input:1:1:0")
+            .expect("request payload is recoverable");
     assert_eq!(resolved_request.title, "Approve New Plan");
     assert_eq!(resolved_request.kind, agena_domain::UserInputKind::Review);
     assert_eq!(
@@ -3088,12 +3084,12 @@ async fn host_ask_user_interaction_part_is_reply_resolvable() {
 }
 
 /// A non-host user-input reply (Submit/Cancel/Timeout — the request id is the
-/// operation id, not a `host-input:` prefix) completes the interaction part
-/// in-memory and must persist that completion. Regression: the non-host branch
-/// only persisted the tool part, so an answered request resurrected as pending
-/// on reload.
+/// operation id, not a `host-input:` prefix) completes the nested user_input
+/// record in-memory and must persist that completion. Regression: the
+/// non-host branch only persisted the tool part before the canonical record
+/// was updated, so an answered request resurrected as pending on reload.
 #[tokio::test]
-async fn non_host_user_input_reply_persists_completed_interaction_part() {
+async fn non_host_user_input_reply_persists_on_tool_call() {
     let provider = Arc::new(FakeProvider {
         provider_id: "fake",
         model: ModelId::new("fake-model"),
@@ -3134,8 +3130,8 @@ async fn non_host_user_input_reply_persists_completed_interaction_part() {
         },
     );
     // A plugin ask_user carries the operation id as its request id (exactly
-    // what `apply_tool_execution_result` produces), so the legacy origin
-    // inference classifies it as `Plugin`.
+    // what `apply_tool_execution_result` produces), so the request source is
+    // `Plugin`.
     operation.metadata.insert(
         OPERATION_ID_METADATA_KEY.to_owned(),
         serde_json::json!("ask-1"),
@@ -3267,15 +3263,12 @@ async fn non_host_user_input_reply_persists_completed_interaction_part() {
     );
 }
 
-/// Regression for the born-InProgress lifecycle (the core of the strong-typing
-/// fix): the `interaction` part a host ask_user creates must be `InProgress`
-/// (NOT `Pending`) so the reply can complete through the legal
-/// `in_progress -> completed` edge — the store forbids `pending -> completed`
-/// (17.2) and would otherwise reject the reply with `StoreError::InvalidState`.
-/// `mark_interactive_request_presented` must also stamp `presented_at` on the
-/// in-flight part (its guard is `is_in_flight()`).
+/// Regression for the born-InProgress lifecycle: the `tool_call` carrying a
+/// host ask_user must remain `InProgress` so the reply can complete through
+/// the legal `in_progress -> completed` edge. `mark_interactive_request_presented`
+/// must also stamp `presented_at` on the nested in-flight request.
 #[tokio::test]
-async fn host_ask_user_interaction_part_born_in_progress_and_reply_completes() {
+async fn host_ask_user_tool_call_born_in_progress_and_reply_completes() {
     let (manager, _database) = test_manager_with_database().await;
     let session = create(&manager, "host ask_user lifecycle").await;
 

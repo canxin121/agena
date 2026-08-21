@@ -266,15 +266,7 @@ impl SessionManager {
         let command_capable = pending.prepared_shell_command.is_some()
             || matches!(
                 pending.invocation.name.as_str(),
-                "shell"
-                    | "shell.run"
-                    | "agena.shell.run"
-                    | "powershell"
-                    | "powershell.run"
-                    | "agena.powershell.run"
-                    | "process"
-                    | "process.run"
-                    | "agena.process.run"
+                "shell" | "shell.run" | "agena.shell.run" | "agena_shell_run"
             );
         command_capable.then(|| self.command_event_sink_for_pending(session_id, pending))
     }
@@ -3079,12 +3071,10 @@ impl SessionManager {
         };
         let authorization = operation_authorization(&session, &resolved);
 
-        // The ask lives INSIDE the operation activity (like permission): the
+        // The ask lives inside the operation activity (like permission): the
         // request record is pushed onto the tool_call part's operation
         // `user_input` bucket, so one host ask produces exactly one transcript
-        // activity — the operation itself. No separate `interaction` part is
-        // created. Legacy rows (kind == "interaction") are still read by the
-        // dual-source accessor in replies.rs.
+        // activity — the operation itself.
         update_resolved_tool_message(&mut session, &resolved, |tool_part| {
             let mut operation = pending_operation_for_resolved(
                 &resolved,

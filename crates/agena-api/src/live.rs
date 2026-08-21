@@ -31,8 +31,6 @@ pub struct PartResource {
     pub summary: Option<String>,
     pub visibility: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub rendered_markdown: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_part_id: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run_id: Option<i64>,
@@ -90,7 +88,7 @@ mod tests {
     fn tool_presentation_serializes_beside_unchanged_raw_content() {
         let raw_content = serde_json::json!({
             "name": "fs.read",
-            "input": {"path": "README.md"},
+            "input": {"file_path": "README.md"},
             "state": "completed",
             "output": {"text": "durable raw result"}
         });
@@ -110,7 +108,6 @@ mod tests {
             }),
             summary: None,
             visibility: "both".to_owned(),
-            rendered_markdown: None,
             parent_part_id: None,
             run_id: Some(1),
             origin_session_id: 1,

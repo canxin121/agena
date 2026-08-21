@@ -19,11 +19,10 @@ use agena_api::{
     },
     notifications::Notification,
     queries::{
-        ActivityLogsParams, GetActivityParams, GetOperationDetailParams, GetPermissionRuleParams,
-        GetSessionParams, GetWorkspaceParams, ListPermissionRulesParams,
-        ListProviderAdapterModelsParams, ListProviderModelsParams,
-        ListSavedProviderAdapterModelsParams, ListSessionsParams, ListWorkspacesParams, Query,
-        QueryResult,
+        ActivityLogsParams, GetActivityParams, GetPermissionRuleParams, GetSessionParams,
+        GetWorkspaceParams, ListPermissionRulesParams, ListProviderAdapterModelsParams,
+        ListProviderModelsParams, ListSavedProviderAdapterModelsParams, ListSessionsParams,
+        ListWorkspacesParams, Query, QueryResult,
     },
     resource::{
         BackgroundActivityResource, HealthResponse, PermissionRuleResource,
@@ -2231,15 +2230,6 @@ impl AgenaClient {
             Query::GetSessionState(GetSessionParams { session_id }) => Ok(
                 QueryResult::SessionState(self.get_session_state(session_id).await?),
             ),
-            Query::GetOperationDetail(GetOperationDetailParams {
-                session_id,
-                activity_id,
-            }) => Ok(QueryResult::OperationDetail(
-                self.get_json(&format!(
-                    "/api/v1/sessions/{session_id}/operations/{activity_id}/detail"
-                ))
-                .await?,
-            )),
             Query::ListPermissionRules(ListPermissionRulesParams {
                 cursor,
                 limit,

@@ -556,7 +556,7 @@ async fn session_transcript_parts(
     session_id: i64,
 ) -> ApplicationResult<Vec<agena_api::resource::SessionTranscriptPart>> {
     let runs = session_queries
-        .list_projected_runs(session_id, true)
+        .list_projected_runs(session_id)
         .await
         .map_err(session_query_error)?;
     Ok(crate::session::project_session_transcript(&runs))

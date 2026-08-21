@@ -40,10 +40,7 @@ pub(crate) fn build_timeline_item(
         ));
     }
     detail_lines.push(app_detail_plain_line(String::new()));
-    let body = record
-        .rendered_markdown
-        .clone()
-        .unwrap_or_else(|| serde_json::to_string_pretty(&record.content).unwrap_or_default());
+    let body = serde_json::to_string_pretty(&record.content).unwrap_or_default();
     detail_lines.push(app_detail_plain_line(body.clone()));
     let detail_document =
         build_detail_document(detail_lines.as_slice(), &DetailTextSpec::label_width(16));

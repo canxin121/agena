@@ -164,15 +164,7 @@ pub(super) fn filesystem_effects_from_input(
         };
         return Ok(Some(FilesystemEffects { read, write }));
     }
-    let Some(value) = input
-        .get("filesystem_effects")
-        .or_else(|| input.pointer("/args/filesystem_effects"))
-    else {
-        return Ok(None);
-    };
-    let effects = serde_json::from_value(value.clone())
-        .map_err(|err| ToolError::invalid_input(format!("filesystem_effects: {err}")))?;
-    Ok(Some(effects))
+    Ok(None)
 }
 
 pub(super) fn invocation_name(invocation: &ToolInvocation) -> String {

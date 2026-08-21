@@ -48,27 +48,17 @@ function formatDurationMs(start?: number, end?: number): string {
 function isReasoningPart(part: JsonValue): boolean {
   const rec = asPartRecord(part)
   const t = normalizeText(rec?.type).toLowerCase()
-  return t === 'reasoning' || t === 'thinking' || t === 'reasoning_content' || t === 'reasoning_details'
-}
-
-function isJustificationPart(part: JsonValue): boolean {
-  const rec = asPartRecord(part)
-  const t = normalizeText(rec?.type).toLowerCase()
-  return t === 'justification'
+  return t === 'reasoning'
 }
 
 function isToolPart(part: JsonValue): boolean {
   const rec = asPartRecord(part)
-  const t = normalizeText(rec?.type).toLowerCase()
-  if (t === 'tool') return true
-  return !t && typeof rec?.tool === 'string' && Boolean(rec?.state)
+  return normalizeText(rec?.type).toLowerCase() === 'tool'
 }
 
 function partText(part: JsonValue): string {
   const rec = asPartRecord(part)
-  if (typeof rec?.text === 'string') return rec.text
-  if (typeof rec?.content === 'string') return rec.content
-  return ''
+  return typeof rec?.text === 'string' ? rec.text : ''
 }
 
 export function formatTranscript(
@@ -137,12 +127,6 @@ function formatPart(part: JsonValue, options: TranscriptOptions): string {
     return text ? `_Thinking:_\n\n${text}\n\n` : ''
   }
 
-  if (isJustificationPart(part)) {
-    if (!options.thinking) return ''
-    const text = partText(part)
-    return text ? `_Justification:_\n\n${text}\n\n` : ''
-  }
-
   if (rec?.type === 'file') {
     const label = normalizeText(rec?.filename) || normalizeText(rec?.url) || 'attachment'
     return `_Attachment:_ ${label}\n\n`
@@ -154,7 +138,7 @@ function formatPart(part: JsonValue, options: TranscriptOptions): string {
     let result = `\`\`\`\nTool: ${tool}\n`
     const state = asPartRecord(rec?.state)
     const input = state?.input
-    const output = state?.output ?? state?.result
+    const output = state?.output
     const error = state?.error
     if (input !== undefined) {
       result += `\n**Input:**\n\`\`\`json\n${safeJson(input)}\n\`\`\``

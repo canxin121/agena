@@ -200,7 +200,6 @@ impl LspPlugin {
             title: "Language servers".to_string(),
             summary: format!("{} configured servers", summary.servers.len()),
             output_text: body,
-            sections: Vec::new(),
             payload: serde_json::to_value(&summary).ok(),
             metadata: Default::default(),
             attachments: Vec::new(),

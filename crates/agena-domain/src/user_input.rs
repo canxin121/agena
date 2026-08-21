@@ -1,4 +1,4 @@
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as DeError};
 
 /// How an interactive user-input request was resolved.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -11,13 +11,13 @@ pub enum UserInputReplyKind {
 
 /// Display kind of a user-input request, canonicalized from the free-form
 /// plugin `kind` string at the runtime boundary (third-party plugins may send
-/// arbitrary strings, so the SDK keeps `String`; the coercion to this enum is
-/// lenient). `Review` drives the TUI's single-choice plan-review dialog;
-/// `AskUser` is the default for anything without an explicit kind.
+/// arbitrary non-empty strings, so the SDK keeps `String`; unknown values are
+/// preserved as `Custom`). `Review` drives the TUI's single-choice plan-review
+/// dialog; `AskUser` is the explicit default chosen by the runtime.
 ///
 /// Serializes to the plain string (`"review"` / `"ask_user"` / the custom
-/// value) so the wire and stored-content shapes are byte-identical to the
-/// previous free string; unknown or empty values deserialize leniently.
+/// value). The decoder accepts one required non-empty string and never treats
+/// `null` or a missing field as a historical request.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum UserInputKind {
     Review,
@@ -60,10 +60,14 @@ impl Serialize for UserInputKind {
 
 impl<'de> Deserialize<'de> for UserInputKind {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        // Accept `null`/absent (via the field's serde default) and any string;
-        // unknown strings are preserved as `Custom`.
-        let kind = Option::<String>::deserialize(deserializer)?;
-        Ok(kind.map(UserInputKind::from).unwrap_or_default())
+        let kind = String::deserialize(deserializer)?;
+        if kind.is_empty() {
+            return Err(D::Error::invalid_value(
+                serde::de::Unexpected::Str(&kind),
+                &"a non-empty user-input kind",
+            ));
+        }
+        Ok(UserInputKind::from(kind))
     }
 }
 
@@ -72,10 +76,8 @@ impl<'de> Deserialize<'de> for UserInputKind {
 /// This is the typed replacement for the historical `host-input:` request-id
 /// prefix, which remains only an opaque correlation id.
 ///
-/// Serializes to the plain string (`"host"` / `"plugin"`) so the wire and
-/// stored-content shapes are byte-identical to the previous string protocol;
-/// unknown or empty values deserialize leniently to `Plugin` — the safe
-/// default for third-party/tool asks.
+/// Serializes to the plain string (`"host"` / `"plugin"`). The decoder
+/// accepts only those two canonical values.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum UserInputSource {
     Host,
@@ -92,21 +94,6 @@ impl UserInputSource {
     }
 }
 
-impl From<String> for UserInputSource {
-    fn from(source: String) -> Self {
-        match source.as_str() {
-            "host" => Self::Host,
-            _ => Self::Plugin,
-        }
-    }
-}
-
-impl From<&str> for UserInputSource {
-    fn from(source: &str) -> Self {
-        Self::from(source.to_owned())
-    }
-}
-
 impl Serialize for UserInputSource {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         serializer.serialize_str(self.as_str())
@@ -115,10 +102,11 @@ impl Serialize for UserInputSource {
 
 impl<'de> Deserialize<'de> for UserInputSource {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        // Accept `null`/absent (via the field's serde default) and any string;
-        // unknown strings fall back to the safe `Plugin` default.
-        let source = Option::<String>::deserialize(deserializer)?;
-        Ok(source.map(UserInputSource::from).unwrap_or_default())
+        match String::deserialize(deserializer)?.as_str() {
+            "host" => Ok(Self::Host),
+            "plugin" => Ok(Self::Plugin),
+            other => Err(D::Error::unknown_variant(other, &["host", "plugin"])),
+        }
     }
 }
 
@@ -171,7 +159,7 @@ mod tests {
     }
 
     #[test]
-    fn user_input_kind_deserializes_leniently() {
+    fn user_input_kind_deserializes_canonical_values() {
         assert_eq!(
             serde_json::from_value::<UserInputKind>(json!("review")).unwrap(),
             UserInputKind::Review
@@ -184,20 +172,8 @@ mod tests {
             serde_json::from_value::<UserInputKind>(json!("weird")).unwrap(),
             UserInputKind::Custom("weird".into())
         );
-        // Empty, null, and absent (field default) all fall back to AskUser.
-        assert_eq!(
-            serde_json::from_value::<UserInputKind>(json!("")).unwrap(),
-            UserInputKind::AskUser
-        );
-        assert_eq!(
-            serde_json::from_value::<UserInputKind>(serde_json::Value::Null).unwrap(),
-            UserInputKind::AskUser
-        );
-        let request: UserInputRequest = serde_json::from_value(
-            json!({"request_id": "r1", "created_at": "2026-01-01T00:00:00Z"}),
-        )
-        .unwrap();
-        assert_eq!(request.kind, UserInputKind::AskUser);
+        assert!(serde_json::from_value::<UserInputKind>(json!("")).is_err());
+        assert!(serde_json::from_value::<UserInputKind>(serde_json::Value::Null).is_err());
     }
 
     #[test]
@@ -213,7 +189,7 @@ mod tests {
     }
 
     #[test]
-    fn user_input_source_deserializes_leniently() {
+    fn user_input_source_deserializes_canonical_values() {
         assert_eq!(
             serde_json::from_value::<UserInputSource>(json!("host")).unwrap(),
             UserInputSource::Host
@@ -222,29 +198,18 @@ mod tests {
             serde_json::from_value::<UserInputSource>(json!("plugin")).unwrap(),
             UserInputSource::Plugin
         );
-        // Unknown, empty, and null (field default) all fall back to Plugin,
-        // the safe default for third-party/tool asks.
-        assert_eq!(
-            serde_json::from_value::<UserInputSource>(json!("weird")).unwrap(),
-            UserInputSource::Plugin
-        );
-        assert_eq!(
-            serde_json::from_value::<UserInputSource>(json!("")).unwrap(),
-            UserInputSource::Plugin
-        );
-        assert_eq!(
-            serde_json::from_value::<UserInputSource>(serde_json::Value::Null).unwrap(),
-            UserInputSource::Plugin
-        );
+        assert!(serde_json::from_value::<UserInputSource>(json!("weird")).is_err());
+        assert!(serde_json::from_value::<UserInputSource>(json!("")).is_err());
+        assert!(serde_json::from_value::<UserInputSource>(serde_json::Value::Null).is_err());
     }
 
     #[test]
-    fn user_input_source_defaults_to_plugin_on_legacy_rows() {
-        let request: UserInputRequest = serde_json::from_value(
-            json!({"request_id": "r1", "created_at": "2026-01-01T00:00:00Z"}),
-        )
-        .unwrap();
-        assert_eq!(request.source, UserInputSource::Plugin);
+    fn user_input_request_requires_kind_and_source() {
+        let value = json!({
+            "request_id": "r1",
+            "created_at": "2026-01-01T00:00:00Z"
+        });
+        assert!(serde_json::from_value::<UserInputRequest>(value).is_err());
     }
 
     #[test]

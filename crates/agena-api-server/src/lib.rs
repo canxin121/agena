@@ -359,10 +359,6 @@ pub fn router(state: AppState) -> Router {
                 axum::routing::put(rest::replace_session_selection),
             )
             .route(
-                "/api/v1/sessions/{session_id}/operations/{activity_id}/detail",
-                get(rest::get_operation_detail),
-            )
-            .route(
                 "/api/v1/sessions/{session_id}/permission",
                 axum::routing::put(rest::replace_session_permission),
             )
@@ -1942,7 +1938,7 @@ mod router_contract_tests {
         let arguments = serde_json::json!({
             "tool": "fs.read",
             "input": {
-                "path": "permission-fixture.txt"
+                "file_path": "permission-fixture.txt"
             }
         })
         .to_string();
@@ -2333,7 +2329,7 @@ mod router_contract_tests {
             .invoke_operator_tool(
                 server.workspace_id,
                 "fs.read",
-                Some(serde_json::json!({"path": "permission-fixture.txt"})),
+                Some(serde_json::json!({"file_path": "permission-fixture.txt"})),
             )
             .await
             .expect("invoke operator tool in authoritative workspace");
@@ -2379,7 +2375,7 @@ mod router_contract_tests {
             .invoke_operator_tool(
                 i64::MAX,
                 "fs.read",
-                Some(serde_json::json!({"path": marker})),
+                Some(serde_json::json!({"file_path": marker})),
             )
             .await
             .expect_err("unknown workspace id must be rejected");

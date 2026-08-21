@@ -132,7 +132,7 @@ pub(crate) fn execute_tool(
         "task" => task::execute(executor, &parse_shape_input(input)?),
         "tool_search" => tool_search::execute(executor, &parse_shape_input(input)?),
         "ask_user" => ask_user::execute(&parse_shape_input(input)?),
-        "shell" | "process" => process_tool::execute(executor, &parse_shape_input(input)?, context),
+        "shell" => process_tool::execute(executor, &parse_shape_input(input)?, context),
         "enter_snapshot" => {
             snapshot::execute_enter(executor, &parse_shape_input(input)?, context.session_id)
         }

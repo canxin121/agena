@@ -10,10 +10,6 @@ use agena_domain::{ActivityId, ActivityState, RawOutput, RenderDelta, ViewBlock}
 use agena_tool::{ToolActivityEvent, ToolActivityResult};
 
 /// Converged activity kinds (07 §4.1): the only nine live variants.
-pub mod projection;
-pub use projection::{fallback_human_view, for_model};
-
-/// Converged activity kinds (07 §4.1): the only nine live variants.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ActivityKind {
@@ -41,8 +37,6 @@ pub struct ActivityStateNode {
     pub state: ActivityState,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub raw_output: Option<RawOutput>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub sections: Vec<agena_domain::ToolPresentationSection>,
 }
 
 /// Unified live wire event: one shape for TUI and Web (07 §5.2).
@@ -88,7 +82,6 @@ pub struct ActivityHandler {
     summary: String,
     state: ActivityState,
     live_blocks: Vec<ViewBlock>,
-    sections: Vec<agena_domain::ToolPresentationSection>,
     attachments: Vec<agena_domain::AttachmentItem>,
     metadata: std::collections::BTreeMap<String, serde_json::Value>,
 }
@@ -121,7 +114,6 @@ impl ActivityHandler {
             summary: String::new(),
             state: ActivityState::Pending,
             live_blocks: Vec::new(),
-            sections: Vec::new(),
             attachments: Vec::new(),
             metadata: Default::default(),
         }
@@ -174,9 +166,6 @@ impl ActivityHandler {
                     summary,
                 });
             }
-            ToolActivityEvent::Section(section) => {
-                self.sections.push(section);
-            }
             ToolActivityEvent::Attachment(artifact) => {
                 self.attachments.push(artifact.into());
             }
@@ -215,9 +204,6 @@ impl ActivityHandler {
         if let Some(summary) = result.summary.filter(|s| !s.trim().is_empty()) {
             self.summary = summary;
         }
-        for section in result.sections {
-            self.sections.push(section);
-        }
         let mut raw_output = result.raw_output;
         if raw_output.is_empty() {
             // Accumulated facts from streaming events.
@@ -238,7 +224,6 @@ impl ActivityHandler {
             summary: self.summary.clone(),
             state,
             raw_output: Some(raw_output),
-            sections: std::mem::take(&mut self.sections),
         }
     }
 

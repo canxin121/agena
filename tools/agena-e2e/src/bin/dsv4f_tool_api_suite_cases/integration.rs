@@ -112,7 +112,7 @@ pub(crate) async fn run_task_case(
             {
                 let messages = harness
                     .session_queries
-                    .list_projected_runs(child_id, true)
+                    .list_projected_runs(child_id)
                     .await
                     .context("load completed tasks.run child transcript")?;
                 return Ok::<_, anyhow::Error>(messages);
@@ -139,8 +139,18 @@ fn projected_transcript_text(messages: &[agena_runtime::SessionProjectedRun]) ->
             Some(agena_runtime::SessionProjectedPartDetail::Text { text, .. }) => {
                 Some(text.as_str())
             }
-            Some(agena_runtime::SessionProjectedPartDetail::Operation(operation)) => {
-                Some(operation.model_output.text.as_str())
+            Some(agena_runtime::SessionProjectedPartDetail::ToolCall(operation)) => {
+                operation.output.as_ref().and_then(|output| {
+                    if !output.text.is_empty() {
+                        Some(output.text.as_str())
+                    } else {
+                        output.payload.as_ref().and_then(|payload| {
+                            payload
+                                .as_str()
+                                .or_else(|| payload.get("text").and_then(Value::as_str))
+                        })
+                    }
+                })
             }
             _ => None,
         })
@@ -215,7 +225,7 @@ pub(crate) async fn run_web_cases(
             session,
             "web.search",
             "web.search",
-            json!({"query": "Agena DSV4F Tool API probe", "engine": "auto", "limit": 1}),
+            json!({"query": "Agena DSV4F Tool API probe", "engine": "auto", "max_results": 1}),
             PendingReply::None,
             true,
         )

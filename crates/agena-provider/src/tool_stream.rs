@@ -643,7 +643,7 @@ mod tests {
                     ToolStreamInputKind::Delta,
                     &["call:call_one", "idx:0"],
                     Some("call_one"),
-                    Some(r#"{"tool":"fs.read","input":{"path":"a"}}"#),
+                    Some(r#"{"tool":"fs.read","input":{"file_path":"a"}}"#),
                 ),
             )
             .expect("first call delta");

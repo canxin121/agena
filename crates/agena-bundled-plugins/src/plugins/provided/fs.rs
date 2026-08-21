@@ -134,7 +134,7 @@ impl FsPlugin {
         summary = "Read workspace files.",
         help = "Use `read` for text previews, directory listings, or file attachments via `mode = text|attachment|auto` (default `auto`).",
         read_only,
-        examples(r#"{"path":"Cargo.toml"}"#),
+        examples(r#"{"file_path":"Cargo.toml"}"#),
         concurrency_safe
     )]
     async fn invoke_read(

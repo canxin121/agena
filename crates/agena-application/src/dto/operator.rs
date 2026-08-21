@@ -60,7 +60,7 @@ mod tests {
         let request = serde_json::from_value::<OperatorToolInvokeRequest>(serde_json::json!({
             "workspace_id": 42,
             "tool": "fs.read",
-            "input": {"path": "README.md"}
+            "input": {"file_path": "README.md"}
         }))
         .expect("decode workspace-bound operator invocation");
         assert_eq!(request.workspace_id, 42);

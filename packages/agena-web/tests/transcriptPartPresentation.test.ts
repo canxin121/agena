@@ -62,7 +62,7 @@ describe('TUI-parity part presentation', () => {
       operationPart(
         {
           name: 'fs.read',
-          input: { path: 'README.md' },
+          input: { file_path: 'README.md' },
           lifecycle: { start_ms: 10, end_ms: 35 },
           state: 'completed',
           output: { payload: { preview: 'raw value' } },
@@ -76,7 +76,7 @@ describe('TUI-parity part presentation', () => {
       ),
     )
     expect(projected.title).toBe('fs.read · README.md')
-    expect(projected.humanMarkdown).toBe('')
+    expect(projected.structured).toEqual({ preview: 'raw value' })
     expect(projected.blocks).toEqual([{ type: 'json', value: { preview: '**README**' } }])
     expect(projected.metadata).toEqual({ cache: true })
     expect(projected.durationMs).toBe(25)
@@ -143,7 +143,7 @@ describe('TUI-parity part presentation', () => {
       },
     )
     const projected = operationPresentation(part)
-    expect(projected.modelOutput).toBe('')
+    expect(projected.structured).toEqual(structured)
     expect(projected.blocks).toEqual([
       {
         type: 'search_results',
@@ -177,7 +177,7 @@ describe('TUI-parity part presentation', () => {
       ),
     )
     expect(projected.stdout).toBe('## Complete\n\n- one')
-    expect(projected.humanMarkdown).toBe('')
+    expect(projected.structured).toBeNull()
     expect(projected.blocks).toEqual([])
   })
 
@@ -221,11 +221,8 @@ describe('TUI-parity part presentation', () => {
       ),
     )
     expect(projected.stdout).toBe('# Result')
-    expect(projected.humanMarkdown).toBe('')
-    expect(projected.modelOutput).toBe('')
     expect(projected.structured).toBeNull()
     expect(projected.blocks).toEqual([])
-    expect(projected.displaySections).toEqual([])
     expect(projected.attachments).toEqual([])
   })
 

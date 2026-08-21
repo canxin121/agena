@@ -270,10 +270,8 @@ pub trait SessionStore: Send + Sync {
     ) -> Result<SubmitOutcome, StoreError>;
 
     /// User-send variant that records the execution identity on a newly
-    /// created marker. The default preserves compatibility for alternate
-    /// facade implementations; the production facade forwards it to the
-    /// engine so cancellation can recover a transaction committed just before
-    /// the execution task was interrupted.
+    /// created marker so cancellation can recover a transaction committed just
+    /// before the execution task was interrupted.
     async fn submit_user_run_for_execution(
         &self,
         session_id: i64,
@@ -281,11 +279,7 @@ pub trait SessionStore: Send + Sync {
         parts: Vec<NewPart>,
         idempotency_key: Option<String>,
         execution_id: &str,
-    ) -> Result<SubmitOutcome, StoreError> {
-        let _ = execution_id;
-        self.submit_user_run(session_id, owner_id, parts, idempotency_key)
-            .await
-    }
+    ) -> Result<SubmitOutcome, StoreError>;
 
     /// Atomically mutate a background operation against the run that launched
     /// it. At launch this durably checkpoints the InProgress tool part and its
@@ -370,15 +364,6 @@ pub trait SessionStore: Send + Sync {
     /// lease: usage is written once per model call by the engine and never
     /// updated.
     async fn record_usage(&self, record: UsageRecord) -> Result<(), StoreError>;
-
-    /// Answer a pending interaction: complete it and append the user reply.
-    async fn answer_interaction(
-        &self,
-        session_id: i64,
-        owner_id: &str,
-        interaction_part_id: i64,
-        reply: NewPart,
-    ) -> Result<(), StoreError>;
 
     /// Fork the session at a part, copying membership edges up to the cutoff
     /// (7.3). Returns the new session id.
@@ -1093,7 +1078,6 @@ where
                     content: Some(part.content),
                     content_text_delta: None,
                     summary: part.summary,
-                    rendered_markdown: part.rendered_markdown,
                     provider_state: part.provider_state,
                     finished_at_ms: part.finished_at_ms,
                 },
@@ -1821,34 +1805,6 @@ where
         self.engine.record_usage(record).await
     }
 
-    async fn answer_interaction(
-        &self,
-        session_id: i64,
-        owner_id: &str,
-        interaction_part_id: i64,
-        reply: NewPart,
-    ) -> Result<(), StoreError> {
-        let owner = self.owner(owner_id);
-        self.ensure_lease(session_id, &owner).await?;
-        let outcome = self
-            .engine
-            .answer_interaction(session_id, &owner, interaction_part_id, reply, self.now())
-            .await?;
-        let meta = self.engine.session_meta(session_id).await?;
-        let committed = [outcome.interaction.clone(), outcome.reply.clone()];
-        self.memory
-            .apply_committed(session_id, &committed, Some(meta.version));
-        self.bus.emit(SessionChange::PartUpdated {
-            session_id,
-            part: outcome.interaction,
-        });
-        self.bus.emit(SessionChange::PartAdded {
-            session_id,
-            part: outcome.reply,
-        });
-        Ok(())
-    }
-
     async fn fork(
         &self,
         session_id: i64,
@@ -2150,9 +2106,6 @@ fn apply_buffered_delta(
     if let Some(summary) = delta.summary {
         part.summary = Some(summary);
     }
-    if let Some(rendered_markdown) = delta.rendered_markdown {
-        part.rendered_markdown = Some(rendered_markdown);
-    }
     if let Some(provider_state) = delta.provider_state {
         part.provider_state = Some(provider_state);
     }
@@ -2194,8 +2147,8 @@ fn append_buffered_text_delta(content: &mut Value, delta: &str) -> Result<(), St
 mod tests {
     use super::*;
     use crate::store::{
-        InMemoryEngine, InteractionAnswerOutcome, LeaseState, NewSession, PartRole, PartState,
-        ReconcileOutcome, SessionChange, SessionListQuery, SessionState,
+        InMemoryEngine, LeaseState, NewSession, PartRole, PartState, ReconcileOutcome,
+        SessionChange, SessionListQuery, SessionState,
     };
     use agena_domain::SessionRelationKind;
     use portable_atomic::AtomicI64;
@@ -2244,6 +2197,33 @@ mod tests {
             .expect("acquire lease");
         assert!(matches!(acquire, LeaseAcquire::Acquired { .. }));
         meta.id
+    }
+
+    fn pending_tool_call(title: &str, kind: &str) -> NewPart {
+        NewPart::pending(
+            "tool_call",
+            PartRole::Assistant,
+            json!({
+                "name": "interaction.ask",
+                "input": {},
+                "call_id": 1,
+                "state": "pending",
+                "user_input": {
+                    "requests": [{
+                        "request": {
+                            "request_id": "ask-1",
+                            "session_id": null,
+                            "title": title,
+                            "kind": kind,
+                            "source": "plugin",
+                            "questions": [],
+                            "created_at": "2026-08-21T00:00:00Z"
+                        }
+                    }]
+                },
+                "lifecycle": {"start_ms": 1}
+            }),
+        )
     }
 
     /// A facade over a fresh in-memory engine with a deterministic clock. The
@@ -2334,7 +2314,6 @@ mod tests {
                     content: json!({"text": ""}),
                     summary: None,
                     visibility: crate::store::PartVisibility::Both,
-                    rendered_markdown: None,
                     parent_part_id: None,
                     state: PartState::InProgress,
                 }],
@@ -2476,7 +2455,6 @@ mod tests {
                     content: json!({"summary": []}),
                     summary: None,
                     visibility: crate::store::PartVisibility::Both,
-                    rendered_markdown: None,
                     parent_part_id: None,
                     state: PartState::InProgress,
                 }],
@@ -2692,7 +2670,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn pending_interaction_gates_to_awaiting_interaction() {
+    async fn pending_tool_call_gates_to_awaiting_interaction() {
         let (facade, _clock) = harness();
         let session_id = ready_session(&facade, 1, "t").await;
         let outcome = facade
@@ -2708,38 +2686,21 @@ mod tests {
             )
             .await
             .expect("submit");
-        let run_id = outcome.run_id;
         facade
             .append_parts(
                 session_id,
                 "owner-a",
-                run_id,
-                vec![NewPart::pending(
-                    "interaction",
-                    PartRole::Assistant,
-                    json!({"kind": "ask_user", "prompt": "which?"}),
-                )],
+                outcome.run_id,
+                vec![pending_tool_call("which?", "ask_user")],
             )
             .await
-            .expect("append interaction");
+            .expect("append tool call");
 
         let awaiting = facade.session_state(session_id).await.expect("state");
         assert_eq!(awaiting.state, SessionState::AwaitingInteraction);
         let pending = awaiting.pending_interaction.expect("pending interaction");
         assert_eq!(pending.kind, "ask_user");
         assert_eq!(pending.prompt, "which?");
-
-        facade
-            .answer_interaction(
-                session_id,
-                "owner-a",
-                pending.part_id,
-                NewPart::pending("text", PartRole::User, json!({"text": "option 1"})),
-            )
-            .await
-            .expect("answer");
-        let after = facade.session_state(session_id).await.expect("state");
-        assert_eq!(after.state, SessionState::Running, "interaction answered");
     }
 
     #[tokio::test]
@@ -3337,65 +3298,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn answer_interaction_emits_updated_interaction_before_added_reply() {
-        let (facade, _clock) = harness();
-        let session_id = ready_session(&facade, 1, "answer patches").await;
-        let outcome = facade
-            .submit_user_run(
-                session_id,
-                "owner-a",
-                vec![NewPart::pending(
-                    "interaction",
-                    PartRole::Assistant,
-                    json!({"kind": "ask_user", "prompt": "Continue?"}),
-                )],
-                None,
-            )
-            .await
-            .expect("submit interaction");
-        let run_id = outcome.run_id;
-        let interaction_id = facade
-            .load(session_id)
-            .await
-            .expect("load interaction")
-            .parts[1]
-            .part_id;
-        let seen = Arc::new(Mutex::new(Vec::new()));
-        let _subscription = facade.subscribe(session_id, {
-            let seen = Arc::clone(&seen);
-            Arc::new(move |change| seen.lock().expect("seen lock").push(change))
-        });
-
-        facade
-            .answer_interaction(
-                session_id,
-                "owner-a",
-                interaction_id,
-                NewPart::pending("text", PartRole::User, json!({"text": "yes"})),
-            )
-            .await
-            .expect("answer interaction");
-
-        let changes = seen.lock().expect("seen lock");
-        assert_eq!(changes.len(), 2);
-        match &changes[0] {
-            SessionChange::PartUpdated { part, .. } => {
-                assert_eq!(part.part_id, interaction_id);
-                assert_eq!(part.state, PartState::Completed);
-                assert_eq!(part.revision, 2);
-            }
-            other => panic!("expected interaction update first, got {other:?}"),
-        }
-        match &changes[1] {
-            SessionChange::PartAdded { part, .. } => {
-                assert_eq!(part.parent_part_id, Some(interaction_id));
-                assert_eq!(part.run_id, Some(run_id));
-            }
-            other => panic!("expected reply addition second, got {other:?}"),
-        }
-    }
-
-    #[tokio::test]
     async fn cancel_emits_only_changed_marker_and_child_before_meta() {
         let (facade, _clock) = harness();
         let session_id = ready_session(&facade, 1, "cancel patches").await;
@@ -3410,7 +3312,6 @@ mod tests {
                         content: json!({"text": "streaming"}),
                         summary: None,
                         visibility: crate::store::PartVisibility::Both,
-                        rendered_markdown: None,
                         parent_part_id: None,
                         state: PartState::InProgress,
                     },
@@ -3420,7 +3321,6 @@ mod tests {
                         content: json!({"message": "already done"}),
                         summary: None,
                         visibility: crate::store::PartVisibility::Both,
-                        rendered_markdown: None,
                         parent_part_id: None,
                         state: PartState::Completed,
                     },
@@ -3474,7 +3374,6 @@ mod tests {
                     content: json!({"text": "partial"}),
                     summary: None,
                     visibility: crate::store::PartVisibility::Both,
-                    rendered_markdown: None,
                     parent_part_id: None,
                     state: PartState::InProgress,
                 }],
@@ -3530,11 +3429,7 @@ mod tests {
             .submit_user_run(
                 session_id,
                 "owner-a",
-                vec![NewPart::pending(
-                    "interaction",
-                    PartRole::Assistant,
-                    json!({"kind": "ask_user", "prompt": "paused?"}),
-                )],
+                vec![pending_tool_call("paused?", "ask_user")],
                 None,
             )
             .await
@@ -3990,6 +3885,27 @@ mod tests {
                 .await
         }
 
+        async fn submit_user_run_for_execution(
+            &self,
+            session_id: i64,
+            owner_id: &str,
+            parts: Vec<NewPart>,
+            idempotency_key: Option<String>,
+            execution_id: &str,
+            now_ms: i64,
+        ) -> Result<SubmitOutcome, StoreError> {
+            self.inner
+                .submit_user_run_for_execution(
+                    session_id,
+                    owner_id,
+                    parts,
+                    idempotency_key,
+                    execution_id,
+                    now_ms,
+                )
+                .await
+        }
+
         async fn settle_background_run(
             &self,
             session_id: i64,
@@ -4085,19 +4001,6 @@ mod tests {
         ) -> Result<Vec<Part>, StoreError> {
             self.inner
                 .withdraw_user_run(session_id, owner_id, run_id, now_ms)
-                .await
-        }
-
-        async fn answer_interaction(
-            &self,
-            session_id: i64,
-            owner_id: &str,
-            interaction_part_id: i64,
-            reply: NewPart,
-            now_ms: i64,
-        ) -> Result<InteractionAnswerOutcome, StoreError> {
-            self.inner
-                .answer_interaction(session_id, owner_id, interaction_part_id, reply, now_ms)
                 .await
         }
 

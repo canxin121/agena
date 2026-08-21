@@ -310,10 +310,10 @@ struct ToolApiOutcome {
 impl ToolApiOutcome {
     fn payload(&self) -> Value {
         self.call
-            .result
-            .structured
-            .clone()
-            .or_else(|| self.call.structured.clone())
+            .value
+            .output
+            .as_ref()
+            .and_then(|output| output.payload.clone())
             .unwrap_or(Value::Null)
     }
 

@@ -20,7 +20,6 @@ type JsonRecord = Record<string, JsonValue>
 
 export type TranscriptProjectionOptions = {
   showReasoning: boolean
-  showJustification: boolean
   revert: RevertLike | null
 }
 
@@ -104,28 +103,21 @@ export function transcriptPartText(part: MessagePartLike): string {
     const user = record(problem.user)
     return firstText(user, ['fallback']) || firstText(problem, ['message']) || firstText(content, ['message'])
   }
-  return rawText(part.text) || rawText(part.content)
+  return rawText(part.text)
 }
 
-function operationEnvelope(part: MessagePartLike): JsonRecord {
+function toolCallView(part: MessagePartLike): JsonRecord {
   const content = durablePartContent(part)
   const presentation = record(part.agenaPresentation)
   const title = firstText(presentation, ['title'])
   const summary = firstText(presentation, ['summary'])
-  const state = firstText(content, ['state'])
   const invocation = {
-    name: firstText(content, ['name', 'tool']) || 'unknown',
+    name: firstText(content, ['name']) || 'unknown',
     plugin_name: content.plugin,
     input: record(content.input),
     tool_api_call: record(content.tool_api_call),
   }
   const blocks = Array.isArray(presentation.blocks) ? presentation.blocks : []
-  const result = {
-    state,
-    content: blocks,
-    display: { title, summary, sections: [] },
-    human: { summary },
-  }
   return {
     call_id: content.call_id ?? 0,
     invocation,
@@ -137,31 +129,25 @@ function operationEnvelope(part: MessagePartLike): JsonRecord {
     metadata: record(content.metadata),
     error: content.error ?? null,
     lifecycle: record(content.lifecycle),
-    result,
+    output: content.output ?? null,
   }
 }
 
 function operationTitle(part: MessagePartLike): string {
   const content = durablePartContent(part)
-  const operation = operationEnvelope(part)
-  const result = record(operation.result)
-  const display = record(result.display)
+  const operation = toolCallView(part)
   return (
     firstText(operation, ['title']) ||
-    firstText(display, ['title']) ||
-    firstText(content, ['name', 'tool']) ||
+    firstText(content, ['name']) ||
     text(part.tool) ||
     'Operation'
   )
 }
 
 function operationSummary(part: MessagePartLike): string {
-  const operation = operationEnvelope(part)
-  const result = record(operation.result)
-  const display = record(result.display)
+  const operation = toolCallView(part)
   return (
     firstText(operation, ['summary']) ||
-    firstText(display, ['summary']) ||
     text(part.agenaSummary) ||
     firstText(record(part.state), ['title'])
   )
@@ -169,7 +155,7 @@ function operationSummary(part: MessagePartLike): string {
 
 function operationCopyText(part: MessagePartLike): string {
   const content = durablePartContent(part)
-  const operation = operationEnvelope(part)
+  const operation = toolCallView(part)
   const invocation = record(operation.invocation)
   const presentation = record(part.agenaPresentation)
   const input = Object.keys(record(content.input)).length ? record(content.input) : record(invocation.input)
@@ -220,22 +206,8 @@ function noticeSummary(part: MessagePartLike): string {
   return firstText(content, ['summary', 'body', 'message', 'detail']) || text(part.agenaSummary)
 }
 
-function interactionSummary(part: MessagePartLike): string {
-  const content = durablePartContent(part)
-  const request = record(content.request)
-  const questions = Array.isArray(request.questions)
-    ? request.questions
-    : Array.isArray(content.options)
-      ? content.options
-      : []
-  const first = questions.length ? record(questions[0]) : {}
-  return (
-    firstText(first, ['question', 'title', 'header']) || firstText(content, ['prompt']) || firstText(request, ['title'])
-  )
-}
-
 function operationHasPendingInteraction(part: MessagePartLike): boolean {
-  const operation = operationEnvelope(part)
+  const operation = toolCallView(part)
   const userInput = record(operation.user_input)
   const userInputPending = (Array.isArray(userInput.requests) ? userInput.requests : []).some((value) => {
     const request = record(value)
@@ -248,11 +220,6 @@ function operationHasPendingInteraction(part: MessagePartLike): boolean {
     const permission = record(value)
     return permission.reply === null || permission.reply === undefined
   })
-}
-
-function interactionIsPending(part: MessagePartLike): boolean {
-  const content = durablePartContent(part)
-  return content.reply === null || content.reply === undefined
 }
 
 function classifyPart(part: MessagePartLike, answerPartId: string | null, assistant: boolean): TranscriptPartKind {
@@ -268,7 +235,6 @@ function classifyPart(part: MessagePartLike, answerPartId: string | null, assist
   if (kind === 'skill_ref') return 'skill'
   if (kind === 'notice' || kind === 'hook' || kind === 'system_notification') return 'notice'
   if (kind === 'compaction') return 'compaction'
-  if (kind === 'interaction') return 'interaction'
   if (kind === 'assistant_reply_lifecycle') return 'lifecycle'
   if (kind === 'error') return 'error'
   return 'unknown'
@@ -300,14 +266,6 @@ function displayFields(
   if (kind === 'skill') {
     const labels = skillLabels(part)
     return { title: 'Skill', summary: labels.join(', '), copyText: labels.join('\n') }
-  }
-  if (kind === 'interaction') {
-    const content = durablePartContent(part)
-    const request = record(content.request)
-    const inputKind = firstText(request, ['kind']) || firstText(content, ['kind', 'type'])
-    const title = inputKind === 'review' ? 'Plan review' : 'User input'
-    const summary = interactionSummary(part)
-    return { title, summary, copyText: [title, summary, prettyJson(content)].filter(Boolean).join('\n') }
   }
   if (kind === 'lifecycle') {
     const state = normalizeRunState(text(part.partState) || firstText(durablePartContent(part), ['state']))
@@ -341,9 +299,7 @@ function projectPart(part: MessagePartLike, role: string, answerPartId: string |
   const kind = classifyPart(part, answerPartId, role === 'assistant')
   const fields = displayFields(part, kind)
   const toggleable = !['text', 'lifecycle'].includes(kind)
-  const pendingInteraction =
-    (kind === 'interaction' && interactionIsPending(part)) ||
-    (kind === 'operation' && operationHasPendingInteraction(part))
+  const pendingInteraction = kind === 'operation' && operationHasPendingInteraction(part)
   return {
     key: `part:${id || compactJson(part).slice(0, 48)}`,
     id,
@@ -465,8 +421,6 @@ export function projectTranscriptBlocks(messages: MessageLike[], options: Transc
         .map((part) => projectPart(part, role, answerId))
         .filter((part) => {
           if (part.kind === 'reasoning') return options.showReasoning
-          const legacyType = text(part.source.type).toLowerCase()
-          if (legacyType.includes('justification')) return options.showJustification
           return true
         })
       const runState = text(message.info.runState) || text(message.info.finish)

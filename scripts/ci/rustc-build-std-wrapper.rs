@@ -3,11 +3,11 @@
 //!
 //! Cargo adds the target `core`/`std` artifacts to ordinary rustc commands. A
 //! build script such as autocfg can instead invoke the RUSTC executable itself
-//! and omit Cargo's `--extern` arguments. That is especially visible for the
-//! Win7 target specs, whose standard library is built in the target directory
-//! rather than being present in the host sysroot. This wrapper only augments an
-//! explicit Win7 target invocation and only with artifacts discovered below the
-//! target's real build directory.
+//! and omit Cargo's `--extern` arguments. That is especially visible for
+//! Windows build-std target specs, whose standard library is built in the
+//! target directory rather than being present in the host sysroot. This
+//! wrapper only augments an explicit Windows build-std target invocation and
+//! only with artifacts discovered below the target's real build directory.
 
 use std::env;
 use std::ffi::OsString;
@@ -149,15 +149,15 @@ fn main() {
     );
     let args: Vec<OsString> = env::args_os().skip(1).collect();
     let target = target_argument(&args);
-    let is_win7 = target.as_deref().is_some_and(|value| {
-        value.ends_with("-win7-windows-msvc") || value.ends_with("-win7-windows-gnu")
+    let is_windows_build_std = target.as_deref().is_some_and(|value| {
+        value.ends_with("-windows-msvc") || value.ends_with("-windows-gnu")
     });
 
     let mut command = Command::new(real_rustc);
     command.args(&args);
 
-    if is_win7 {
-        // Cargo's own build-std compilation already has its exact externs, and
+    if is_windows_build_std {
+        // Cargo's own Windows build-std compilation already has its exact externs, and
         // normal target compilation does too. Only direct probe crates need
         // these additions. Never inject host or synthetic standard-library
         // artifacts, and never try to bootstrap core/std while they are being

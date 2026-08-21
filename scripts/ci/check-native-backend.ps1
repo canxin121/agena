@@ -49,11 +49,11 @@ if ($BuildStd) {
     $env:RUSTC_BOOTSTRAP = "1"
     $env:CARGO_TARGET_DIR = $BuildTargetDir
     $RustFlags = @($OldRustFlags, $TargetRustFlags) | Where-Object { $_ }
-    if ($TargetTriple -match "-win7-windows-(msvc|gnu)$") {
-      # Build-std places the target's real libcore/libstd artifacts under the
-      # target-specific debug deps directory.  Cargo passes that path to
-      # normal target rustc invocations, but direct rustc probes launched by
-      # build scripts (notably autocfg) only see CARGO_ENCODED_RUSTFLAGS.  Add
+    if ($TargetTriple -match "-windows-(msvc|gnu)$") {
+      # Windows build-std places the target's real libcore/libstd artifacts
+      # under the target-specific debug deps directory. Cargo passes that path
+      # to normal target rustc invocations, but direct rustc probes launched by
+      # build scripts (notably autocfg) only see CARGO_ENCODED_RUSTFLAGS. Add
       # the actual build-std search path so those probes use the same target
       # standard library instead of falling back to the host sysroot.
       $BuildStdProfile = Join-Path $BuildTargetDir "$TargetTriple\debug"
@@ -64,7 +64,8 @@ if ($BuildStd) {
       # not only into debug\deps. Cargo knows those paths for ordinary target
       # rustc invocations, but build scripts such as autocfg invoke RUSTC
       # directly. Use the shared wrapper so those probes receive the exact
-      # target artifacts generated in this target directory.
+      # target artifacts generated in this target directory. This applies to
+      # every Windows target built from source, including thumbv7a.
       $RepoRoot = Resolve-Path (Join-Path $PSScriptRoot "../..")
       $RustcWrapperDir = Join-Path $env:RUNNER_TEMP "agena-rustc-build-std\$TargetTriple"
       New-Item -ItemType Directory -Force -Path $RustcWrapperDir | Out-Null
@@ -86,11 +87,11 @@ if ($BuildStd) {
     $env:RUSTFLAGS = ($RustFlags | Join-String -Separator " ")
     Write-Host "Using build-std driver: cargo=$NightlyCargo rustc=$StableRustc rustdoc=$StableRustdoc target-dir=$BuildTargetDir"
     $CargoExtraArgs = @()
-    if ($TargetTriple -match "-win7-windows-(msvc|gnu)$") {
-      # Win7 custom target builds have historically failed only after the
-      # dependency graph is built. Keep the target real, but expose the exact
-      # rustc --extern/search-path command so a dependency-sysroot regression
-      # cannot be diagnosed from E0463 names alone.
+    if ($TargetTriple -match "-windows-(msvc|gnu)$") {
+      # Windows build-std target builds can fail only after the dependency
+      # graph is built. Keep the target real, but expose the exact rustc
+      # --extern/search-path command so a dependency-sysroot regression cannot
+      # be diagnosed from E0463 names alone.
       $CargoExtraArgs += "-vv"
     }
     & $NightlyCargo @Args @CargoExtraArgs -Z "build-std=std,panic_abort,proc_macro"

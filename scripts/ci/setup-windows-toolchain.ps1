@@ -95,6 +95,46 @@ function Set-EnvFromVsDevCmd {
     throw "Visual Studio installer not found at $VsInstaller"
   }
 
+  if ($Arch -eq "arm64ec") {
+    $Arm64EcCompilerPath = Join-Path $VCToolsRoot "bin\$HostToolArch\arm64ec\cl.exe"
+    $Arm64EcLibraryPath = Join-Path $VCToolsRoot "lib\arm64ec"
+    if (-not (Test-Path $Arm64EcCompilerPath) -or -not (Test-Path $Arm64EcLibraryPath)) {
+      # ARM64EC is an optional, distinct MSVC ABI component.  Do not point an
+      # ARM64EC build at the ARM64 compiler or libraries: install Microsoft's
+      # official component when the hosted image omitted it.
+      Write-Host "Installing official Visual Studio ARM64EC MSVC component: Microsoft.VisualStudio.Component.VC.Tools.ARM64EC"
+      Install-VsComponents -Installer $VsInstaller -InstallPath $Install -Components @(
+        "Microsoft.VisualStudio.Component.VC.Tools.ARM64EC"
+      )
+
+      # The installer may add a side-by-side toolset and returns before the
+      # files are visible. Wait for a complete compiler/library pair instead
+      # of falling through to another architecture.
+      $Arm64EcToolsRoot = $null
+      $Deadline = (Get-Date).AddMinutes(5)
+      do {
+        $Arm64EcToolsRoot = Get-ChildItem -Path $ToolsRoot -Directory -ErrorAction SilentlyContinue |
+          Sort-Object Name -Descending |
+          Where-Object {
+            (Test-Path (Join-Path $_.FullName "bin\$HostToolArch\arm64ec\cl.exe")) -and
+            (Test-Path (Join-Path $_.FullName "lib\arm64ec"))
+          } |
+          Select-Object -First 1
+        if ($Arm64EcToolsRoot) {
+          $ToolsVersion = $Arm64EcToolsRoot.Name
+          $VCToolsRoot = $Arm64EcToolsRoot.FullName
+          $env:VCToolsVersion = $ToolsVersion
+          break
+        }
+        Start-Sleep -Seconds 2
+      } while ((Get-Date) -lt $Deadline)
+    }
+    if (-not (Test-Path (Join-Path $VCToolsRoot "bin\$HostToolArch\arm64ec\cl.exe")) -or
+        -not (Test-Path (Join-Path $VCToolsRoot "lib\arm64ec"))) {
+      throw "MSVC ARM64EC component missing after official installation: expected bin\$HostToolArch\arm64ec\cl.exe and lib\arm64ec under $VCToolsRoot"
+    }
+  }
+
   if ($Arch -eq "arm") {
     $ArmCompilerPath = Join-Path $VCToolsRoot "bin\$HostToolArch\arm\cl.exe"
     $ArmLibraryPath = Join-Path $VCToolsRoot "lib\arm"

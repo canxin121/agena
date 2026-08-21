@@ -23,12 +23,11 @@ use agena_domain::{SessionLifecycleState, SessionRelationKind};
 use agena_storage::store::{
     BackgroundDelivery, BackgroundDeliveryPhase, BackgroundEventRequest, BackgroundOperation,
     BackgroundOperationKind, BackgroundOperationPhase, BackgroundOperationTransition,
-    BackgroundSettleOutcome, InFlightRun, InteractionAnswerOutcome, LeaseAcquire, LeaseState,
-    MaintenanceOutcome, NewBackgroundOperation, NewPart, NewSession, Part, PartCursor, PartDelta,
-    PartRole, PartState, PartVisibility, PersistenceEngine, ReconcileOutcome, RunOutcome,
-    SessionListQuery, SessionMeta, SessionMetadataPatch, SessionPartPage, SessionState,
-    SessionSummary, SessionView, StoreError, SubmitOutcome, UsageGroup, UsageQuery, UsageRecord,
-    UsageStats, apply_part_transition,
+    BackgroundSettleOutcome, InFlightRun, LeaseAcquire, LeaseState, MaintenanceOutcome,
+    NewBackgroundOperation, NewPart, NewSession, Part, PartCursor, PartDelta, PartRole, PartState,
+    PartVisibility, PersistenceEngine, ReconcileOutcome, RunOutcome, SessionListQuery, SessionMeta,
+    SessionMetadataPatch, SessionPartPage, SessionState, SessionSummary, SessionView, StoreError,
+    SubmitOutcome, UsageGroup, UsageQuery, UsageRecord, UsageStats, apply_part_transition,
 };
 use async_trait::async_trait;
 use sea_orm::{
@@ -46,7 +45,7 @@ fn text_value(option: Option<String>) -> Value {
 /// Every part column, aliased so the row mapper reads them by field name.
 const PART_COLS: &str = "\
     p.part_id, p.kind, p.role, p.state, CAST(p.content AS TEXT) AS content, p.summary, \
-    p.visibility, p.rendered_markdown, p.parent_part_id, p.run_id, p.origin_session_id, \
+    p.visibility, p.parent_part_id, p.run_id, p.origin_session_id, \
     p.revision, p.started_at_ms, p.finished_at_ms, p.created_at_ms, p.updated_at_ms, \
     CAST(p.provider_state AS TEXT) AS provider_state";
 
@@ -191,10 +190,10 @@ async fn insert_part_tx(txn: &DatabaseTransaction, part: &Part) -> Result<(), Db
     txn.execute(Statement::from_sql_and_values(
         DatabaseBackend::Sqlite,
         "INSERT INTO agena_parts \
-         (part_id, kind, role, state, content, summary, visibility, rendered_markdown, \
-          parent_part_id, run_id, origin_session_id, revision, started_at_ms, finished_at_ms, \
-          created_at_ms, updated_at_ms, provider_state) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+         (part_id, kind, role, state, content, summary, visibility, parent_part_id, run_id, \
+          origin_session_id, revision, started_at_ms, finished_at_ms, created_at_ms, \
+          updated_at_ms, provider_state) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         [
             part.part_id.into(),
             part.kind.clone().into(),
@@ -203,7 +202,6 @@ async fn insert_part_tx(txn: &DatabaseTransaction, part: &Part) -> Result<(), Db
             text_value(Some(content)),
             text_value(part.summary.clone()),
             part.visibility.as_str().into(),
-            text_value(part.rendered_markdown.clone()),
             Value::BigInt(part.parent_part_id),
             Value::BigInt(part.run_id),
             part.origin_session_id.into(),
@@ -445,7 +443,6 @@ fn part_from_row(row: sea_orm::QueryResult) -> Result<Part, DbErr> {
         content,
         summary: row.try_get("", "summary")?,
         visibility,
-        rendered_markdown: row.try_get("", "rendered_markdown")?,
         parent_part_id: row.try_get("", "parent_part_id")?,
         run_id: row.try_get("", "run_id")?,
         origin_session_id: row.try_get("", "origin_session_id")?,
@@ -625,13 +622,10 @@ fn session_state_projection_sql(now_ms: i64) -> String {
            JOIN agena_parts pi ON pi.part_id = spi.part_id \
            WHERE spi.session_id = s.id \
              AND pi.state IN ('pending', 'in_progress') \
-             AND ( \
-               pi.kind = 'interaction' \
-               OR (pi.kind = 'tool_call' AND EXISTS ( \
+             AND pi.kind = 'tool_call' AND EXISTS ( \
                  SELECT 1 \
-                 FROM json_each(pi.content, '$.operation.user_input.requests') request \
+                 FROM json_each(pi.content, '$.user_input.requests') request \
                  WHERE json_type(request.value, '$.reply') IS NULL \
-               )) \
              ) \
          ) THEN 'awaiting_interaction' \
          WHEN EXISTS ( \
@@ -732,7 +726,6 @@ fn marker_part(
         content,
         summary: None,
         visibility: PartVisibility::Both,
-        rendered_markdown: None,
         parent_part_id: None,
         run_id: None,
         origin_session_id: session_id,
@@ -755,7 +748,6 @@ fn content_part(id: i64, session_id: i64, run_id: i64, new_part: NewPart, now_ms
         content: new_part.content,
         summary: new_part.summary,
         visibility: new_part.visibility,
-        rendered_markdown: new_part.rendered_markdown,
         parent_part_id: new_part.parent_part_id,
         run_id: Some(run_id),
         origin_session_id: session_id,
@@ -1843,7 +1835,7 @@ impl PersistenceEngine for SqliteEngine {
                 };
                 notification_content.insert(
                     "delivery_protocol".to_owned(),
-                    serde_json::Value::String("provider_round_v1".to_owned()),
+                    serde_json::Value::String("provider_round".to_owned()),
                 );
                 let notification_part = if let Some(run_id) = current.launch_run_id {
                     let run = load_part_by_id(txn, run_id)
@@ -2571,7 +2563,7 @@ impl PersistenceEngine for SqliteEngine {
                 txn.execute(Statement::from_sql_and_values(
                     DatabaseBackend::Sqlite,
                     "UPDATE agena_parts \
-                     SET state = ?, content = ?, summary = ?, rendered_markdown = ?, \
+                     SET state = ?, content = ?, summary = ?, \
                          provider_state = ?, finished_at_ms = ?, \
                          revision = revision + 1, updated_at_ms = ? \
                      WHERE part_id = ?",
@@ -2583,7 +2575,6 @@ impl PersistenceEngine for SqliteEngine {
                             },
                         )?)),
                         text_value(part.summary.clone()),
-                        text_value(part.rendered_markdown.clone()),
                         text_value(
                             part.provider_state
                                 .as_ref()
@@ -2840,89 +2831,6 @@ impl PersistenceEngine for SqliteEngine {
                 .map_err(map_db_err)?;
                 bump_session_version_tx(txn, session_id, now_ms).await?;
                 Ok(removed)
-            })
-        })
-        .await
-    }
-
-    async fn answer_interaction(
-        &self,
-        session_id: i64,
-        owner_id: &str,
-        interaction_part_id: i64,
-        reply: NewPart,
-        now_ms: i64,
-    ) -> Result<InteractionAnswerOutcome, StoreError> {
-        let db = self.db();
-        let owner_id = owner_id.to_owned();
-        run_write(db, move |txn| {
-            Box::pin(async move {
-                ensure_lease_tx(txn, session_id, &owner_id, now_ms).await?;
-                let mut interaction = load_part_by_id(txn, interaction_part_id)
-                    .await?
-                    .ok_or_else(|| {
-                        StoreError::not_found(format!("interaction part {interaction_part_id}"))
-                    })?;
-                if interaction.kind != "interaction" || !interaction.state.is_in_flight() {
-                    return Err(StoreError::InvalidState(format!(
-                        "part {interaction_part_id} is not a pending interaction"
-                    )));
-                }
-                if interaction.origin_session_id != session_id {
-                    return Err(StoreError::InvalidState(format!(
-                        "interaction {interaction_part_id} is shared; only its origin session may answer it"
-                    )));
-                }
-                let owning_run = interaction.run_id;
-                interaction.state = PartState::Completed;
-                interaction.finished_at_ms = Some(now_ms);
-                interaction.updated_at_ms = now_ms;
-                interaction.revision += 1;
-                txn.execute(Statement::from_sql_and_values(
-                    DatabaseBackend::Sqlite,
-                    "UPDATE agena_parts \
-                     SET state = 'completed', finished_at_ms = ?, updated_at_ms = ?, \
-                         revision = revision + 1 \
-                     WHERE part_id = ?",
-                    [now_ms.into(), now_ms.into(), interaction_part_id.into()],
-                ))
-                .await
-                .map_err(map_db_err)?;
-
-                let reply_id = next_part_id_tx(txn).await.map_err(map_db_err)?;
-                let reply_part = Part {
-                    part_id: reply_id,
-                    kind: reply.kind,
-                    role: reply.role,
-                    state: reply.state,
-                    content: reply.content,
-                    summary: reply.summary,
-                    visibility: reply.visibility,
-                    rendered_markdown: reply.rendered_markdown,
-                    parent_part_id: Some(interaction_part_id),
-                    run_id: owning_run,
-                    origin_session_id: session_id,
-                    revision: 1,
-                    started_at_ms: now_ms,
-                    finished_at_ms: reply.state.is_terminal().then_some(now_ms),
-                    created_at_ms: now_ms,
-                    updated_at_ms: now_ms,
-                    provider_state: None,
-                };
-                insert_part_tx(txn, &reply_part).await.map_err(map_db_err)?;
-                insert_membership_tx(txn, session_id, reply_id, now_ms)
-                    .await
-                    .map_err(map_db_err)?;
-                bump_member_session_versions_for_parts_tx(
-                    txn,
-                    &[interaction_part_id, reply_id],
-                    now_ms,
-                )
-                .await?;
-                Ok(InteractionAnswerOutcome {
-                    interaction,
-                    reply: reply_part,
-                })
             })
         })
         .await
@@ -3508,9 +3416,6 @@ fn apply_delta(part: &mut Part, delta: PartDelta, now_ms: i64) -> Result<(), Sto
     }
     if let Some(summary) = delta.summary {
         part.summary = Some(summary);
-    }
-    if let Some(rendered) = delta.rendered_markdown {
-        part.rendered_markdown = Some(rendered);
     }
     if let Some(provider_state) = delta.provider_state {
         part.provider_state = Some(provider_state);

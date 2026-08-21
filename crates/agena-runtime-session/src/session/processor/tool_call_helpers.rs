@@ -356,7 +356,7 @@ mod tests {
         let available = vec![tools_call()];
         // The model passed a JSON-encoded string instead of the { tool, input }
         // object itself.
-        let arguments_json = r#""{\"tool\":\"fs.read\",\"input\":{\"path\":\"README.md\"}}""#;
+        let arguments_json = r#""{\"tool\":\"fs.read\",\"input\":{\"file_path\":\"README.md\"}}""#;
         let invocation = parse_tool_invocation_lossy(13, "tools_call", arguments_json, &available)
             .expect("string arguments must produce a diagnostic invocation");
         assert_eq!(invocation.name, "tools_call");

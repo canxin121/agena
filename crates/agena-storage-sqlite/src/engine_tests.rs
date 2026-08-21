@@ -68,6 +68,33 @@ fn text_part(text: &str) -> NewPart {
     NewPart::pending("text", PartRole::User, json!({ "text": text }))
 }
 
+fn pending_tool_call(title: &str, kind: &str) -> NewPart {
+    NewPart::pending(
+        "tool_call",
+        PartRole::Assistant,
+        json!({
+            "name": "interaction.ask",
+            "input": {},
+            "call_id": 1,
+            "state": "pending",
+            "user_input": {
+                "requests": [{
+                    "request": {
+                        "request_id": "ask-1",
+                        "session_id": null,
+                        "title": title,
+                        "kind": kind,
+                        "source": "plugin",
+                        "questions": [],
+                        "created_at": "2026-08-21T00:00:00Z"
+                    }
+                }]
+            },
+            "lifecycle": {"start_ms": 1}
+        }),
+    )
+}
+
 fn completed_text_part(text: &str) -> NewPart {
     let mut part = text_part(text);
     part.state = PartState::Completed;
@@ -785,7 +812,6 @@ async fn fork_during_streaming_shares_parent_updates_and_child_diverges_by_appen
                 content: json!({"text": "partial"}),
                 summary: None,
                 visibility: PartVisibility::Both,
-                rendered_markdown: None,
                 parent_part_id: None,
                 state: PartState::InProgress,
             }],
@@ -897,7 +923,6 @@ async fn retry_transitions_failed_to_in_progress_with_revision_bump_but_not_for_
                 content: json!({ "name": "fs.read", "input": {} }),
                 summary: None,
                 visibility: PartVisibility::Both,
-                rendered_markdown: None,
                 parent_part_id: None,
                 state: PartState::InProgress,
             }],
@@ -990,10 +1015,9 @@ async fn retry_history_keeps_the_error_beside_the_updated_tool_call_result() {
             vec![NewPart {
                 kind: "tool_call".to_owned(),
                 role: PartRole::Assistant,
-                content: json!({"name": "fs.read", "input": {"path": "missing"}}),
+                content: json!({"name": "fs.read", "input": {"file_path": "missing"}}),
                 summary: None,
                 visibility: PartVisibility::Both,
-                rendered_markdown: None,
                 parent_part_id: None,
                 state: PartState::InProgress,
             }],
@@ -1034,7 +1058,6 @@ async fn retry_history_keeps_the_error_beside_the_updated_tool_call_result() {
                 }),
                 summary: Some("attempt 1 failed".to_owned()),
                 visibility: PartVisibility::Both,
-                rendered_markdown: None,
                 parent_part_id: Some(tool_id),
                 state: PartState::Failed,
             }],
@@ -1066,7 +1089,7 @@ async fn retry_history_keeps_the_error_beside_the_updated_tool_call_result() {
                 state: Some(PartState::Completed),
                 content: Some(json!({
                     "name": "fs.read",
-                    "input": {"path": "missing"},
+                    "input": {"file_path": "missing"},
                     "state": "completed",
                     "output": {"payload": {"output": "contents", "ok": true}}
                 })),
@@ -1217,7 +1240,6 @@ async fn resume_mid_stream_without_a_lease_reconciles_to_ready() {
                 content: json!({"text": "partial"}),
                 summary: None,
                 visibility: PartVisibility::Both,
-                rendered_markdown: None,
                 parent_part_id: None,
                 state: PartState::InProgress,
             }],
@@ -1303,11 +1325,7 @@ async fn resume_mid_ask_without_a_lease_remains_awaiting_interaction() {
         .submit_user_run(
             session_id,
             "owner-a",
-            vec![NewPart::pending(
-                "interaction",
-                PartRole::Runtime,
-                json!({"kind": "ask_user", "prompt": "Continue?"}),
-            )],
+            vec![pending_tool_call("Continue?", "ask_user")],
             None,
             1_000_000,
         )
@@ -1336,7 +1354,7 @@ async fn resume_mid_ask_without_a_lease_remains_awaiting_interaction() {
             .get(&session_id),
         Some(&agena_storage::store::SessionState::AwaitingInteraction)
     );
-    let interaction_id = awaiting
+    let tool_part_id = awaiting
         .pending_interaction
         .expect("pending interaction")
         .part_id;
@@ -1352,8 +1370,8 @@ async fn resume_mid_ask_without_a_lease_remains_awaiting_interaction() {
     assert_eq!(
         view.parts
             .iter()
-            .find(|part| part.part_id == interaction_id)
-            .expect("interaction")
+            .find(|part| part.part_id == tool_part_id)
+            .expect("tool call")
             .state,
         PartState::Pending
     );
@@ -1380,7 +1398,6 @@ async fn resume_mid_tool_preserves_error_context_and_cancels_the_tool() {
                 content: json!({"name": "shell", "input": {"command": "sleep"}}),
                 summary: None,
                 visibility: PartVisibility::Both,
-                rendered_markdown: None,
                 parent_part_id: None,
                 state: PartState::InProgress,
             }],
@@ -1404,7 +1421,6 @@ async fn resume_mid_tool_preserves_error_context_and_cancels_the_tool() {
                 }),
                 summary: Some("diagnostic".to_owned()),
                 visibility: PartVisibility::User,
-                rendered_markdown: None,
                 parent_part_id: Some(tool_id),
                 state: PartState::Failed,
             }],
@@ -1469,10 +1485,9 @@ async fn jsonl_round_trip_preserves_single_source_tool_output_and_ordering() {
             vec![NewPart {
                 kind: "tool_call".to_owned(),
                 role: PartRole::Assistant,
-                content: json!({"name": "fs.read", "input": {"path": "README.md"}}),
+                content: json!({"name": "fs.read", "input": {"file_path": "README.md"}}),
                 summary: None,
                 visibility: PartVisibility::Both,
-                rendered_markdown: None,
                 parent_part_id: None,
                 state: PartState::InProgress,
             }],
@@ -1491,7 +1506,7 @@ async fn jsonl_round_trip_preserves_single_source_tool_output_and_ordering() {
                 state: Some(PartState::Completed),
                 content: Some(json!({
                     "name": "fs.read",
-                    "input": {"path": "README.md"},
+                    "input": {"file_path": "README.md"},
                     "state": "completed",
                     "output": {"payload": {"output": "hello", "ok": true}}
                 })),
@@ -1999,21 +2014,21 @@ async fn every_sqlite_part_mutation_bumps_version_but_idempotency_replay_does_no
             "owner-a",
             submitted.run_id,
             vec![NewPart::pending(
-                "interaction",
+                "text",
                 PartRole::Assistant,
-                json!({"kind": "ask_user", "prompt": "Continue?"}),
+                json!({"text": "progress"}),
             )],
             1_000_002,
         )
         .await
-        .expect("append interaction");
+        .expect("append part");
     assert_eq!(engine.session_meta(session_id).await.unwrap().version, 3);
 
     engine
         .update_part(
             session_id,
             "owner-a",
-            submitted.parts[1].part_id,
+            appended[0].part_id,
             PartDelta {
                 state: Some(PartState::InProgress),
                 ..Default::default()
@@ -2025,15 +2040,18 @@ async fn every_sqlite_part_mutation_bumps_version_but_idempotency_replay_does_no
     assert_eq!(engine.session_meta(session_id).await.unwrap().version, 4);
 
     engine
-        .answer_interaction(
+        .update_part(
             session_id,
             "owner-a",
             appended[0].part_id,
-            NewPart::pending("text", PartRole::User, json!({"text": "yes"})),
+            PartDelta {
+                summary: Some("updated".to_owned()),
+                ..Default::default()
+            },
             1_000_004,
         )
         .await
-        .expect("answer");
+        .expect("update summary");
     assert_eq!(engine.session_meta(session_id).await.unwrap().version, 5);
 
     engine
@@ -2107,66 +2125,6 @@ async fn every_sqlite_part_mutation_bumps_version_but_idempotency_replay_does_no
         .await
         .expect("import");
     assert_eq!(engine.session_meta(imported_id).await.unwrap().version, 2);
-}
-
-#[tokio::test]
-async fn sqlite_fork_cannot_answer_a_shared_interaction_in_place() {
-    let db = in_memory_db().await;
-    let (engine, session_id) = setup(db).await;
-    let outcome = engine
-        .submit_user_run(
-            session_id,
-            "owner-a",
-            vec![NewPart::pending(
-                "interaction",
-                PartRole::Assistant,
-                json!({"kind": "ask_user", "prompt": "Continue?"}),
-            )],
-            None,
-            1_000_000,
-        )
-        .await
-        .expect("submit interaction");
-    let interaction_id = outcome.parts[1].part_id;
-    let child = engine
-        .fork_session(
-            session_id,
-            interaction_id,
-            "fork".to_owned(),
-            false,
-            1_000_000,
-        )
-        .await
-        .expect("fork");
-    engine
-        .try_acquire_lease(child.id, "child-owner", 1_000_000)
-        .await
-        .expect("child lease");
-
-    let error = engine
-        .answer_interaction(
-            child.id,
-            "child-owner",
-            interaction_id,
-            NewPart::pending("text", PartRole::User, json!({"text": "yes"})),
-            1_000_000,
-        )
-        .await
-        .expect_err("shared interaction is origin-owned");
-    assert!(matches!(
-        error,
-        agena_storage::store::StoreError::InvalidState(_)
-    ));
-    let parent = engine.load_session(session_id).await.expect("parent");
-    assert_eq!(
-        parent
-            .parts
-            .iter()
-            .find(|part| part.part_id == interaction_id)
-            .expect("interaction")
-            .state,
-        PartState::Pending
-    );
 }
 
 /// Process B reads exactly what process A committed — cross-process catch-up

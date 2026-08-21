@@ -946,24 +946,18 @@ impl Session {
     }
 
     /// Whether `part` carries an unanswered user-input ask: an in-flight
-    /// `tool_call` operation whose `user_input` bucket has an awaiting record
-    /// (canonical single-activity shape), or an in-flight legacy
-    /// `interaction` part.
+    /// `tool_call` operation whose `user_input` bucket has an awaiting record.
     fn pending_user_input_part(&self, part: &Part) -> bool {
         if !part.state.is_in_flight() {
             return false;
         }
-        match part.kind.as_str() {
-            "interaction" => true,
-            "tool_call" => operation_from_part(part)
+        part.kind == "tool_call"
+            && operation_from_part(part)
                 .map(|operation| operation.user_input.awaiting().next().is_some())
-                .unwrap_or(false),
-            _ => false,
-        }
+                .unwrap_or(false)
     }
 
-    /// Pending user-input asks: in-flight `interaction` parts (legacy) plus
-    /// in-flight `tool_call` operations carrying an awaiting user-input record.
+    /// Pending user-input asks carried by in-flight `tool_call` operations.
     pub fn pending_interactions(&self) -> impl Iterator<Item = &Part> {
         self.parts
             .iter()
@@ -1033,12 +1027,8 @@ impl Session {
     ///   unresolved authorization record on that operation also becomes a
     ///   [`SessionPendingOperation::Permission`], and a suspended tool whose
     ///   operation carries an awaiting `user_input` record is also a
-    ///   [`SessionPendingOperation::UserInput`] — the single-activity shape,
-    ///   where each interaction lives inside the operation;
-    /// - legacy `interaction` parts in flight become
-    ///   [`SessionPendingOperation::UserInput`]. Permissions are never recorded
-    ///   on interaction parts: they live on the `tool_call` part's operation
-    ///   authorization.
+    ///   [`SessionPendingOperation::UserInput`] — each ask lives inside the
+    ///   operation;
     fn derive_pending_operations(&self) -> Vec<SessionPendingOperation> {
         let mut operations = Vec::new();
         for (index, part) in self.parts.iter().enumerate() {
@@ -1066,15 +1056,6 @@ impl Session {
                             });
                         }
                     }
-                }
-                "interaction" if part.state.is_in_flight() => {
-                    let part_ref = SessionPartRef::new(index, part);
-                    operations.push(SessionPendingOperation::UserInput {
-                        pending: SessionPendingInteractiveRequest {
-                            request: part_ref.clone(),
-                            tool: SessionPendingTool { part: part_ref },
-                        },
-                    });
                 }
                 _ => {}
             }
@@ -1153,11 +1134,6 @@ impl Session {
         for part in &self.parts {
             bytes = bytes
                 .saturating_add(part.summary.as_ref().map_or(0, |value| value.len()))
-                .saturating_add(
-                    part.rendered_markdown
-                        .as_ref()
-                        .map_or(0, |value| value.len()),
-                )
                 .saturating_add(text_from_part(part).map_or(0, |text| text.len()));
         }
         bytes
@@ -1192,10 +1168,10 @@ mod parts_projection_tests {
     use agena_storage::store::PartVisibility;
     use serde_json::json;
 
-    /// Build a v2 part. Content follows the 4.1.1 shapes: run markers carry
-    /// `{"run_kind": ...}`, text/think carry `{"text": ...}`, tool calls
-    /// `{"name", "input"}`, tool results `{"output", "ok"}`, interactions
-    /// `{"kind", "prompt", ...}`.
+    /// Build a part using the current durable content shapes: run markers carry
+    /// `{"run_kind": ...}`, text/think carry `{"text": ...}`, and a
+    /// `tool_call` carries invocation, lifecycle, output, authorization, and
+    /// user-input state in one strict content object.
     fn part(
         part_id: i64,
         kind: &str,
@@ -1211,7 +1187,6 @@ mod parts_projection_tests {
             content,
             summary: None,
             visibility: PartVisibility::Both,
-            rendered_markdown: None,
             parent_part_id: None,
             run_id: (kind != "run").then_some(1),
             origin_session_id: 1,
@@ -1259,13 +1234,7 @@ mod parts_projection_tests {
         assert!(!session.blocked());
         assert_eq!(session.workflow_state(), WorkflowState::Quiescent);
 
-        session.install_projected_parts(vec![part(
-            1,
-            "interaction",
-            PartRole::Runtime,
-            PartState::Pending,
-            json!({"kind": "ask_user", "prompt": "continue?"}),
-        )]);
+        session.install_projected_parts(vec![tool_call_with_ask(1, "host-input:1:1:0", false)]);
         assert_eq!(session.parts().len(), 1);
         assert!(session.blocked());
         assert_eq!(session.workflow_state(), WorkflowState::AwaitingInteraction);
@@ -1544,19 +1513,10 @@ mod parts_projection_tests {
         // record is both a pending Tool and a pending UserInput (one tool_call
         // activity == one ask in the single-activity shape).
         let ask = tool_call_with_ask(31, "host-input:1:1:0", false);
-        // Legacy interaction parts stay UserInput, strictly user input.
-        let legacy = part(
-            32,
-            "interaction",
-            PartRole::Runtime,
-            PartState::Pending,
-            json!({"kind": "ask_user", "prompt": "proceed?"}),
-        );
-
-        let session = session_with(vec![tool, ask, legacy]);
+        let session = session_with(vec![tool, ask]);
         let ops = &session.pending_operations;
 
-        assert_eq!(ops.len(), 4);
+        assert_eq!(ops.len(), 3);
         match &ops[0] {
             SessionPendingOperation::Tool { tool } => assert_eq!(tool.part.part_id, 30),
             _ => panic!("expected Tool op"),
@@ -1565,14 +1525,12 @@ mod parts_projection_tests {
             SessionPendingOperation::Tool { tool } => assert_eq!(tool.part.part_id, 31),
             _ => panic!("expected Tool op for the suspended ask tool"),
         }
-        for (index, expected_part_id) in [(2, 31), (3, 32)] {
-            match &ops[index] {
-                SessionPendingOperation::UserInput { pending } => {
-                    assert_eq!(pending.request.part_id, expected_part_id);
-                    assert_eq!(pending.tool.part.part_id, expected_part_id);
-                }
-                _ => panic!("expected UserInput op for part {expected_part_id}"),
+        match &ops[2] {
+            SessionPendingOperation::UserInput { pending } => {
+                assert_eq!(pending.request.part_id, 31);
+                assert_eq!(pending.tool.part.part_id, 31);
             }
+            _ => panic!("expected UserInput op for the suspended ask tool"),
         }
 
         let tool_refs = session.pending_tools();

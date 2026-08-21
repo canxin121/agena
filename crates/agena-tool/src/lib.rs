@@ -23,7 +23,6 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-pub use agena_domain::ToolPresentationSection;
 pub mod tool_activity;
 use agena_domain::{
     CommandBeginEvent, CommandEndEvent, CommandOutputDeltaEvent, PermissionAction,
@@ -397,8 +396,6 @@ pub struct ToolExecutionSummary {
     pub title: String,
     pub summary: String,
     pub output_text: String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub sections: Vec<ToolPresentationSection>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub payload: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -576,7 +573,6 @@ mod tests {
         ApplyPatchExecution, BuiltinToolProfile, PatchOpKind, PreparedShellCommand,
         SnapshotBackend, SnapshotBackendCapabilities, SnapshotBackendSupport,
         ToolAttachmentSummary, ToolAvailability, ToolExecutionSummary, ToolOutputTruncationPolicy,
-        ToolPresentationSection,
     };
 
     #[test]
@@ -644,10 +640,6 @@ mod tests {
             title: "Read README".to_owned(),
             summary: "README.md · 1 file".to_owned(),
             output_text: "content".to_owned(),
-            sections: vec![ToolPresentationSection {
-                title: "Result".to_owned(),
-                text: "content".to_owned(),
-            }],
             payload: Some(serde_json::json!({"kind": "read"})),
             metadata: BTreeMap::from([(String::from("path"), String::from("README.md"))]),
             attachments: Vec::new(),

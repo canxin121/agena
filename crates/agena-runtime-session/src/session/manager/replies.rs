@@ -11,8 +11,8 @@ use crate::session::store::{
 };
 use agena_domain::UserInputReply;
 use agena_provider::ResponsesApiRequestMetadata;
-use agena_runtime_contracts::part_content::{InteractionContent, operation_from_tool_call};
-use agena_storage::store::{Part, PartRole, PartState};
+use agena_runtime_contracts::part_content::operation_from_tool_call;
+use agena_storage::store::{Part, PartRole};
 use agena_tool::ToolPermissionCheck;
 
 mod replies_execution;
@@ -142,7 +142,16 @@ pub(super) fn run_marker_for_part<'a>(
     let part = session
         .part(part_ref)
         .ok_or_else(|| pending_tool_part_not_found_error(part_ref))?;
-    let run_id = part.run_id.unwrap_or(part.part_id);
+    let run_id = if part.kind == "run" {
+        part.part_id
+    } else {
+        part.run_id.ok_or_else(|| {
+            AppError::Internal(format!(
+                "content part {} has no owning run marker",
+                part.part_id
+            ))
+        })?
+    };
     session
         .parts()
         .iter()
@@ -281,45 +290,25 @@ pub(super) fn apply_operation_mutation(part: &mut Part, mutation: impl FnOnce(&m
     part.content = tool_call_from_operation(&operation).as_value();
 }
 
-/// Decode an `interaction` part's content into its typed [`InteractionContent`]
-/// view. Both the canonical shape (`type`/`prompt`/`options`/`request`/…) and
-/// the legacy v1-flat shape (`kind`/`request_id`/`tool_part_id`/`request`/
-/// `response`) collapse into this one struct — the flat keys land in the
-/// `#[serde(flatten)]` `extra` bucket or the aliased `kind` field — so every
-/// correlation/lifecycle read below goes through its typed accessors instead
-/// of raw JSON keys.
-fn interaction_from_part(part: &Part) -> Option<InteractionContent> {
-    if part.kind != "interaction" {
-        return None;
-    }
-    InteractionContent::try_from(&part.content).ok()
-}
-
-/// Read the user-input request/reply pairs carried by a part through both
-/// sources: the canonical `operation.user_input` bucket on a `tool_call` part
-/// (one ask == one operation activity) or a legacy `kind == "interaction"`
-/// part that predates the single-activity refactor. Every correlation read
-/// below goes through this accessor so legacy rows keep projecting.
+/// Read the user-input request/reply pairs carried by a canonical `tool_call`
+/// part. User input is part of the operation facts; there is no companion
+/// interaction row to inspect.
 fn user_input_records_from_part(
     part: &Part,
 ) -> Vec<(
     agena_domain::UserInputRequest,
     Option<agena_domain::UserInputReply>,
 )> {
-    if let Some(operation) = operation_from_part(part) {
-        return operation
-            .user_input
-            .requests
-            .iter()
-            .map(|record| (record.request.clone(), record.reply.clone()))
-            .collect();
-    }
-    if let Some(interaction) = interaction_from_part(part)
-        && let Some(request) = interaction.request()
-    {
-        return vec![(request, interaction.reply())];
-    }
-    Vec::new()
+    operation_from_part(part)
+        .map(|operation| {
+            operation
+                .user_input
+                .requests
+                .iter()
+                .map(|record| (record.request.clone(), record.reply.clone()))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn matching_request_part_refs(
@@ -351,84 +340,50 @@ fn matching_request_part_refs(
 
 /// An operation's user-input asks live inside the operation activity itself,
 /// so once that operation reaches any terminal state, leaving an unanswered
-/// record pending would create an unanswerable approval: the UI can still
+/// record pending would create an unanswerable request: the UI can still
 /// submit it, but there is no pending tool left to resume. Drop the awaiting
 /// records (keeping answered ones) in the same message checkpoint as the
-/// operation's terminal result. Legacy `interaction` children are cancelled
-/// the way they always were.
+/// operation's terminal result.
 pub(super) fn cancel_unanswered_request_parts_for_operation(
     session: &mut Session,
     tool_part_id: i64,
-    operation_id: &str,
 ) -> Result<Vec<i64>, AppError> {
-    let operation_id = operation_id.trim();
-    let mut changed_part_ids = Vec::new();
-    for part_index in 0..session.parts().len() {
-        let part_ref = SessionPartRef {
-            part_index,
-            part_id: session.parts()[part_index].part_id,
-        };
-        let part = session.part_mut(&part_ref).ok_or_else(|| {
+    let (part_index, part_id) = session
+        .parts()
+        .iter()
+        .enumerate()
+        .find(|(_, part)| part.part_id == tool_part_id && part.kind == "tool_call")
+        .map(|(index, part)| (index, part.part_id))
+        .ok_or_else(|| {
             AppError::Internal(format!(
-                "pending interaction part not found while closing tool part {tool_part_id} (operation {operation_id}): part={}",
-                part_ref.part_id,
+                "pending tool part not found while closing tool part {tool_part_id}"
             ))
         })?;
-        if part.kind == "tool_call" {
-            // Canonical: clear the unanswered records on the operation bucket.
-            // The tool part is already terminal when this runs (the caller
-            // completed it in the same checkpoint), so no in-flight check.
-            // The durable tool part id is always present and session-unique;
-            // provider operation ids are optional and therefore cannot own
-            // this correlation.
-            if part.part_id != tool_part_id {
-                continue;
-            }
-            let mut cleared = false;
-            apply_operation_mutation(part, |operation| {
-                let before = operation.user_input.requests.len();
-                operation
-                    .user_input
-                    .requests
-                    .retain(|record| record.reply.is_some());
-                cleared = before != operation.user_input.requests.len();
-            });
-            if cleared {
-                part.summary = Some(
-                    "Cancelled because the associated tool already reached a terminal result."
-                        .to_owned(),
-                );
-                changed_part_ids.push(part_ref.part_id);
-            }
-            continue;
-        }
-        // Legacy: cancel the still in-flight child interaction part.
-        if !part.state.is_in_flight() {
-            continue;
-        }
-        let interaction = interaction_from_part(part);
-        let interaction_tool_part_id = interaction.as_ref().and_then(|value| value.tool_part_id());
-        let matches_tool_part = interaction_tool_part_id == Some(tool_part_id);
-        // Only rows old enough to lack the durable tool-part correlation may
-        // fall back to the provider id. If a canonical row names another tool
-        // part, a duplicated/reused provider id must never cancel that row.
-        let matches_non_empty_operation = interaction_tool_part_id.is_none()
-            && !operation_id.is_empty()
-            && interaction
-                .as_ref()
-                .and_then(|value| value.operation_id())
-                .map(str::trim)
-                == Some(operation_id);
-        if matches_tool_part || matches_non_empty_operation {
-            part.state = PartState::Cancelled;
-            part.summary = Some(
-                "Cancelled because the associated tool already reached a terminal result."
-                    .to_owned(),
-            );
-            changed_part_ids.push(part_ref.part_id);
-        }
+    let part_ref = SessionPartRef {
+        part_index,
+        part_id,
+    };
+    let part = session.part_mut(&part_ref).ok_or_else(|| {
+        AppError::Internal(format!(
+            "pending tool part not found while closing tool part {tool_part_id}"
+        ))
+    })?;
+    let mut cleared = false;
+    apply_operation_mutation(part, |operation| {
+        let before = operation.user_input.requests.len();
+        operation
+            .user_input
+            .requests
+            .retain(|record| record.reply.is_some());
+        cleared = before != operation.user_input.requests.len();
+    });
+    if cleared {
+        part.summary = Some(
+            "Cancelled because the associated tool already reached a terminal result.".to_owned(),
+        );
+        return Ok(vec![part_ref.part_id]);
     }
-    Ok(changed_part_ids)
+    Ok(Vec::new())
 }
 
 fn push_unique_permission_action(actions: &mut Vec<PermissionAction>, action: PermissionAction) {
@@ -546,18 +501,9 @@ pub(super) fn pending_permission_request(
         .map(|permission| permission.request.clone())
 }
 
-pub(super) fn find_tool_part_by_id(session: &Session, part_id: i64) -> Option<(usize, &Part)> {
-    session
-        .parts()
-        .iter()
-        .enumerate()
-        .find(|(_, part)| part.part_id == part_id && part.kind == "tool_call")
-}
-
-/// Find the pending user-input request whose request id matches: an awaiting
-/// `user_input` record on an in-flight `tool_call` operation (canonical — the
-/// request ref and the tool ref are the same operation part), or an in-flight
-/// legacy `interaction` part carrying `request_id`.
+/// Find the pending user-input request whose request id matches an awaiting
+/// record on an in-flight canonical `tool_call`. The request and tool refs are
+/// deliberately the same part.
 pub(super) fn find_pending_user_input_by_request_id(
     session: &Session,
     request_id: &str,
@@ -570,41 +516,20 @@ pub(super) fn find_pending_user_input_by_request_id(
             if !part.state.is_in_flight() {
                 return None;
             }
-            if part.kind == "tool_call" {
-                let operation = operation_from_part(part)?;
-                if operation.user_input.find(request_id)?.reply.is_some() {
-                    return None;
-                }
-                let request = SessionPartRef {
-                    part_index,
-                    part_id: part.part_id,
-                };
-                return Some(SessionPendingInteractiveRequest {
-                    request: request.clone(),
-                    tool: SessionPendingTool { part: request },
-                });
+            if part.kind != "tool_call" {
+                return None;
             }
-            // Legacy: the request ref is the interaction part; the tool ref
-            // resolves through the `tool_part_id` recorded at creation.
-            let interaction = interaction_from_part(part)?;
-            if interaction.request_id().as_deref() != Some(request_id) {
+            let operation = operation_from_part(part)?;
+            if operation.user_input.find(request_id)?.reply.is_some() {
                 return None;
             }
             let request = SessionPartRef {
                 part_index,
                 part_id: part.part_id,
             };
-            let (tool_index, tool_part) = interaction
-                .tool_part_id()
-                .and_then(|part_id| find_tool_part_by_id(session, part_id))?;
             Some(SessionPendingInteractiveRequest {
-                request,
-                tool: SessionPendingTool {
-                    part: SessionPartRef {
-                        part_index: tool_index,
-                        part_id: tool_part.part_id,
-                    },
-                },
+                request: request.clone(),
+                tool: SessionPendingTool { part: request },
             })
         })
 }
@@ -620,18 +545,14 @@ pub(super) fn has_replied_user_input_request(session: &Session, request_id: &str
 pub(super) fn pending_user_input_request(
     session: &Session,
     pending: &SessionPendingInteractiveRequest,
+    request_id: &str,
 ) -> Option<agena_domain::UserInputRequest> {
-    let part = session.part(&pending.request)?;
-    if let Some(operation) = operation_from_part(part) {
-        // The caller found the pending request by id; return its awaiting
-        // record's request (an operation may accumulate several asks).
-        return operation
-            .user_input
-            .awaiting()
-            .next()
-            .map(|record| record.request.clone());
-    }
-    interaction_from_part(part)?.request()
+    let operation = operation_from_part(session.part(&pending.request)?)?;
+    operation
+        .user_input
+        .find(request_id)
+        .filter(|record| record.reply.is_none())
+        .map(|record| record.request.clone())
 }
 
 /// Whether the operation owning `operation_id` reached a terminal state. Used
@@ -750,63 +671,20 @@ pub(super) fn operation_permission_approved_actions(
         .unwrap_or_default()
 }
 
-/// The `sequence_index`-th interactive user-input request owned by the tool
-/// operation identified by its durable `tool_part_id` (the `extra["tool_part_id"]`
-/// every request records at creation).
-///
-/// The tool part id is the correlation key host `ask_user` re-entry uses to
-/// find a request it already created for the same pending tool call (after a
-/// reload the in-memory per-call sequence counter resets, so the request must
-/// be rediscovered from the parts projection). It is unique per operation and
-/// never empty, unlike the provider operation id (`agena.operation_id`), which
-/// collapses to `""` for every operation when the provider streams no tool-call
-/// id — keying on the empty id made host asks from *unrelated* operations (e.g.
-/// `plan.review` and `interaction.ask`) share one dedup bucket and mismatch
-/// each other's questions.
+/// Return the `sequence_index`-th user-input record owned by a canonical
+/// `tool_call` part. Host ask re-entry is keyed by the durable tool part id,
+/// which remains stable even when the provider omits its call id.
 pub(super) fn user_input_request_for_tool_part(
     session: &Session,
     tool_part_id: i64,
     sequence_index: usize,
-) -> Option<
-    crate::part::InteractiveRequestPart<
-        agena_domain::UserInputRequest,
-        agena_domain::UserInputReply,
-    >,
-> {
-    let mut seen = 0usize;
-    for part in session.parts() {
-        // Canonical: records live on the tool part's own operation bucket.
-        if part.kind == "tool_call" && part.part_id == tool_part_id {
-            if let Some(operation) = operation_from_part(part) {
-                for record in &operation.user_input.requests {
-                    if seen == sequence_index {
-                        return Some(crate::part::InteractiveRequestPart {
-                            request: record.request.clone(),
-                            reply: record.reply.clone(),
-                        });
-                    }
-                    seen += 1;
-                }
-            }
-            continue;
-        }
-        // Legacy: interaction parts carrying the tool_part_id correlation key.
-        let Some(interaction) = interaction_from_part(part) else {
-            continue;
-        };
-        if interaction.tool_part_id() != Some(tool_part_id) {
-            continue;
-        }
-        let request = interaction.request()?;
-        if seen == sequence_index {
-            return Some(crate::part::InteractiveRequestPart {
-                request,
-                reply: interaction.reply(),
-            });
-        }
-        seen += 1;
-    }
-    None
+) -> Option<agena_domain::OperationUserInputRecord> {
+    let part = session
+        .parts()
+        .iter()
+        .find(|part| part.part_id == tool_part_id && part.kind == "tool_call")?;
+    let operation = operation_from_part(part)?;
+    operation.user_input.requests.get(sequence_index).cloned()
 }
 
 impl SessionManager {
@@ -855,19 +733,12 @@ impl SessionManager {
             .ok_or_else(|| pending_reply_payload_missing_error(request_kind, request_id))
     }
 
-    /// Record `reply` for the pending user-input request identified by
-    /// `request_id` and return the id of the part that changed (the tool_call
-    /// operation activity in the canonical single-activity shape, or the
-    /// legacy `interaction` part it replaces). The reply is written into the
-    /// operation's `user_input` record on the tool part — the same activity
-    /// that asked — so the answered request renders read-only inside the
-    /// operation; legacy rows get the replied canonical content and terminal
-    /// `completed` state they always did.
+    /// Record `reply` on the matching user-input record inside the canonical
+    /// `tool_call` part. The operation activity that asked owns the answer.
     fn record_user_input_reply(
         &self,
         session: &mut Session,
         request_id: &str,
-        user_input_request: &agena_domain::UserInputRequest,
         reply: agena_domain::UserInputReply,
     ) -> Result<i64, AppError> {
         let request_part = matching_request_part_refs(session, request_id, true)
@@ -875,51 +746,15 @@ impl SessionManager {
             .next()
             .ok_or_else(|| pending_reply_part_missing_error("user input", request_id))?;
         let replied_at_ms = Utc::now().timestamp_millis();
-        {
-            let part = session
-                .part_mut(&request_part)
-                .ok_or_else(|| pending_reply_part_missing_error("user input", request_id))?;
-            if part.kind == "tool_call" {
-                apply_operation_mutation(part, |operation| {
-                    operation
-                        .user_input
-                        .record_reply(reply.clone(), replied_at_ms);
-                });
-                return Ok(request_part.part_id);
-            }
-            // Legacy interaction part: write the replied canonical content and
-            // the terminal `completed` state, with the `request_id` /
-            // `tool_part_id` / `operation_id` correlation keys mirrored at the
-            // top level so every reader still resolves it.
-            let interaction = interaction_from_part(part)
-                .ok_or_else(|| pending_reply_part_missing_error("user input", request_id))?;
-            let operation_id = interaction
-                .operation_id()
-                .map(ToOwned::to_owned)
-                .unwrap_or_default();
-            let tool_part_id = interaction.tool_part_id().unwrap_or(request_part.part_id);
-            let mut replied = crate::session::store::interaction_from_request(
-                &crate::part::RequestPart::UserInput(crate::part::InteractiveRequestPart::replied(
-                    user_input_request.clone(),
-                    reply.clone(),
-                )),
-            );
-            replied.extra.insert(
-                "request_id".to_owned(),
-                serde_json::to_value(request_id).expect("request id is always JSON serializable"),
-            );
-            replied.extra.insert(
-                "tool_part_id".to_owned(),
-                serde_json::to_value(tool_part_id).expect("part id is always JSON serializable"),
-            );
-            replied.extra.insert(
-                "operation_id".to_owned(),
-                serde_json::to_value(operation_id.as_str())
-                    .expect("operation id is always JSON serializable"),
-            );
-            part.content = replied.as_value();
-            part.state = PartState::Completed;
+        let part = session
+            .part_mut(&request_part)
+            .ok_or_else(|| pending_reply_part_missing_error("user input", request_id))?;
+        if part.kind != "tool_call" {
+            return Err(pending_reply_part_missing_error("user input", request_id));
         }
+        apply_operation_mutation(part, |operation| {
+            operation.user_input.record_reply(reply, replied_at_ms);
+        });
         Ok(request_part.part_id)
     }
 
@@ -1139,7 +974,6 @@ impl SessionManager {
         let mut changed_part_ids = cancel_unanswered_request_parts_for_operation(
             &mut session,
             resolved.pending.part.part_id,
-            resolved.operation_id.as_str(),
         )?;
         changed_part_ids.push(resolved.pending.part.part_id);
         self.persist_session_changes_with_rules(
@@ -1486,38 +1320,20 @@ impl SessionManager {
                     let part = session.part_mut(request_part).ok_or_else(|| {
                         pending_reply_part_missing_error("user input", request_id.as_str())
                     })?;
-                    if part.kind == "tool_call" {
-                        // Canonical: stamp `presented_at` into the operation's
-                        // request record.
-                        if !part.state.is_in_flight() {
-                            continue;
-                        }
-                        let mut touched = false;
-                        apply_operation_mutation(part, |operation| {
-                            if let Some(record) = operation.user_input.find_mut(request_id.as_str())
-                                && record.reply.is_none()
-                                && record.request.presented_at.is_none()
-                            {
-                                record.request.presented_at = Some(Utc::now());
-                                touched = true;
-                            }
-                        });
-                        if touched {
-                            presented = true;
-                            changed_part_ids.push(request_part.part_id);
-                        }
+                    if !part.state.is_in_flight() || part.kind != "tool_call" {
                         continue;
                     }
-                    // Legacy interaction part: the request lives in the content.
-                    let Some(mut request) = part.content.get("request").and_then(|value| {
-                        serde_json::from_value::<agena_domain::UserInputRequest>(value.clone()).ok()
-                    }) else {
-                        continue;
-                    };
-                    if part.state.is_in_flight() && request.presented_at.is_none() {
-                        request.presented_at = Some(Utc::now());
-                        part.content["request"] = serde_json::to_value(&request)
-                            .expect("user input request is JSON serializable");
+                    let mut touched = false;
+                    apply_operation_mutation(part, |operation| {
+                        if let Some(record) = operation.user_input.find_mut(request_id.as_str())
+                            && record.reply.is_none()
+                            && record.request.presented_at.is_none()
+                        {
+                            record.request.presented_at = Some(Utc::now());
+                            touched = true;
+                        }
+                    });
+                    if touched {
                         presented = true;
                         changed_part_ids.push(request_part.part_id);
                     }
@@ -1587,33 +1403,22 @@ impl SessionManager {
                     &pending,
                     request_id.as_str(),
                     "user input",
-                    pending_user_input_request,
+                    |session, pending| {
+                        pending_user_input_request(session, pending, request_id.as_str())
+                    },
                 )?;
-                // Record the reply into the operation's `user_input` bucket on
-                // the tool_call activity (canonical single-activity shape) or
-                // the legacy interaction part; returns the id of the changed
-                // part. For a tool (plugin) ask this must run BEFORE the
-                // terminal tool-success/user-declined transition, which
-                // preserves the answered record through the completion payload.
+                // Record the reply into the operation's `user_input` bucket
+                // before terminalizing the tool, so the answered record stays
+                // attached to the activity that asked.
                 let changed_part_id = self.record_user_input_reply(
                     &mut session,
                     request_id.as_str(),
-                    &user_input_request,
                     request.reply.clone(),
                 )?;
 
-                // Origin is typed (not the request-id prefix): a request is a
-                // host `ask_user` exactly when its stored `source` is `Host`.
-                // Legacy rows without a stored source fall back to the typed
-                // inference inside `InteractionContent::source()` (host parts
-                // always wrote `request_id = host-input:...` ≠ `operation_id`).
-                let is_host = user_input_request.source == agena_domain::UserInputSource::Host
-                    || session
-                        .part(&pending.request)
-                        .and_then(interaction_from_part)
-                        .map(|interaction| interaction.source())
-                        .unwrap_or_default()
-                        == agena_domain::UserInputSource::Host;
+                // Origin is typed: host `ask_user` requests are persisted and
+                // returned to the waiting plugin instead of resuming the model.
+                let is_host = user_input_request.source == agena_domain::UserInputSource::Host;
                 let host_response = if is_host {
                     let response = host_user_input_response(&user_input_request, &request.reply)?;
                     session = self
@@ -1668,26 +1473,6 @@ impl SessionManager {
                                 )
                                 .await?;
                         }
-                    }
-                    // The canonical tool part was already persisted by the
-                    // terminal tool-success/user-declined handling (which
-                    // preserved the answered record). Only a legacy
-                    // `interaction` part needs its own InProgress->Completed
-                    // write here so an answered request cannot resurrect as
-                    // pending on reload.
-                    let is_legacy_part = session
-                        .parts()
-                        .iter()
-                        .any(|part| part.part_id == changed_part_id && part.kind == "interaction");
-                    if is_legacy_part {
-                        session = self
-                            .persist_session_changes(
-                                session,
-                                vec![changed_part_id],
-                                None,
-                                state.clone(),
-                            )
-                            .await?;
                     }
                     None
                 };
@@ -1899,7 +1684,6 @@ mod tests {
             ),
             summary: None,
             visibility: PartVisibility::Both,
-            rendered_markdown: None,
             parent_part_id: None,
             run_id: None,
             origin_session_id: 1,

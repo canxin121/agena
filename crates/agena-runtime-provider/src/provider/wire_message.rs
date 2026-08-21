@@ -116,8 +116,7 @@ fn projected_content(part: &Part) -> Option<TypedContent> {
 /// serialization stashes the provider operation id under
 /// `agena.operation_id` inside the rich [`OperationPart`] metadata (see
 /// `agena-runtime-session` `serialize_part_content`). When that stash is
-/// missing we fall back to the operation's numeric call id, matching the v1
-/// projection's `part.operation_id` → `exec.call_id()` fallback.
+/// missing, the operation's numeric call id is the deterministic fallback.
 fn project_operation_call_id(exec: &OperationPart) -> String {
     exec.metadata
         .get("agena.operation_id")
@@ -128,17 +127,15 @@ fn project_operation_call_id(exec: &OperationPart) -> String {
         .unwrap_or_else(|| exec.call_id().to_string())
 }
 
-// ─── Rich-content recovery (v1 payloads from typed shapes) ────────────────────
+// ─── Typed-content projections ───────────────────────────────────────────────
 //
-// The v1 payload structs (`OperationPart`, `AttachmentPart`, `SkillReferencePart`,
-// `ReasoningPart`) survive the T8 migration — they ride losslessly in the typed
-// content's `extra` bucket and are recovered through the public extractor
-// helpers in `agena_runtime_contracts::part_content`
+// Provider projection uses the runtime-facing values recovered through the
+// public extractor helpers in `agena_runtime_contracts::part_content`
 // (`operation_from_tool_call`, `attachment_from_file_ref`,
 // `skill_reference_from_skill_ref`, …).
 
-/// Rebuild the reasoning text the v1 [`ReasoningPart`] prefers from the
-/// canonical `think` shape (summary wins, raw content otherwise).
+/// Derive the reasoning text providers prefer from the canonical `think`
+/// shape (summary wins, raw content otherwise).
 fn reasoning_preferred_text(think: &ThinkContent) -> String {
     ReasoningPart {
         summary: think.summary.clone(),
@@ -179,9 +176,8 @@ pub fn project_persisted(parts: &[Part]) -> Vec<WirePart> {
                     });
                 }
             }
-            // The v1 fold degraded Run/PasteRef/ToolResult/Compaction to plain
-            // text, which the Text arm then projected as text when non-empty —
-            // preserve that wire output exactly.
+            // Paste and compaction are textual provider context; emit their
+            // text directly when non-empty.
             TypedContent::PasteRef(paste) => {
                 if !paste.text.is_empty() {
                     wire.push(WirePart::Text {
@@ -298,7 +294,7 @@ pub fn project_persisted(parts: &[Part]) -> Vec<WirePart> {
                     });
                 }
             }
-            TypedContent::Notice(_) | TypedContent::Interaction(_) | TypedContent::Error(_) => {}
+            TypedContent::Notice(_) | TypedContent::Error(_) => {}
         }
     }
 
@@ -618,10 +614,9 @@ fn parts_as_text_lossy(parts: &[Part]) -> String {
             TypedContent::ToolCall(tool_call) => {
                 operation_text_lossy(&operation_from_tool_call(&tool_call))
             }
-            TypedContent::FileRef(_)
-            | TypedContent::Notice(_)
-            | TypedContent::Interaction(_)
-            | TypedContent::Error(_) => part.summary.clone(),
+            TypedContent::FileRef(_) | TypedContent::Notice(_) | TypedContent::Error(_) => {
+                part.summary.clone()
+            }
             TypedContent::Hook(hook) => hook
                 .message
                 .as_deref()
@@ -1186,7 +1181,6 @@ mod tests {
             content,
             summary: None,
             visibility: PartVisibility::Both,
-            rendered_markdown: None,
             parent_part_id: None,
             run_id: Some(1),
             origin_session_id: 1,
@@ -1244,10 +1238,9 @@ mod tests {
         assert_eq!(parts_as_text_lossy(&[both, ai, user]), "both\nai");
     }
 
-    /// Canonical `tool_call` content for an operation: the invocation identity
-    /// as named keys plus the full v1 operation payload under
-    /// `operation` (lossless) and `tool_api_call`, mirroring the session
-    /// serializer (`tool_call_from_operation`).
+    /// Canonical `tool_call` content for an operation: invocation/control
+    /// fields plus one raw output envelope, mirroring the session serializer
+    /// (`tool_call_from_operation`).
     fn tool_call_content(operation: &OperationPart) -> Value {
         agena_runtime_contracts::part_content::tool_call_from_operation(operation).as_value()
     }
@@ -1480,7 +1473,7 @@ mod tests {
             ToolApiFunction::Call.function_name(),
             StructuredObject::try_from(serde_json::json!({
                 "tool": "fs.read",
-                "input": { "path": "README.md" }
+                "input": { "file_path": "README.md" }
             }))
             .expect("structured Tool API payload"),
         );
@@ -1489,8 +1482,9 @@ mod tests {
             arguments: invocation.input.clone(),
         });
         invocation.name = "fs.read".to_owned();
-        invocation.input = StructuredObject::try_from(serde_json::json!({ "path": "README.md" }))
-            .expect("target input");
+        invocation.input =
+            StructuredObject::try_from(serde_json::json!({ "file_path": "README.md" }))
+                .expect("target input");
         let pending = OperationPart::pending(1396, invocation, TimeRange::default());
         let tool_call = part(
             "tool_call",
@@ -1621,7 +1615,7 @@ mod tests {
     }
 
     #[test]
-    fn dotted_legacy_tool_api_handler_is_rejected_during_replay() {
+    fn dotted_tool_api_handler_is_rejected_during_replay() {
         let part = assistant_operation(ToolInvocation::new(
             "agena.tools.help",
             StructuredObject::try_from(serde_json::json!({ "tool": "session.rename" }))

@@ -1,10 +1,8 @@
-//! The v2 data boundary for the session manager.
+//! The parts-first data boundary for the session manager.
 //!
-//! v1 kept a session store that owned the database, projected an event log
-//! into model messages, reserved ids, and ran leases. All of that is gone in
-//! v2 (design 14-15): the sealed [`agena_storage::SessionStore`] facade owns
-//! ids, leases, and transactions; parts are the only chat entity; there is no
-//! event log and no live `EventKind` plumbing.
+//! The sealed [`agena_storage::SessionStore`] facade owns ids, leases, and
+//! transactions; parts are the only chat entity; there is no event log and no
+//! live `EventKind` plumbing.
 //!
 //! This module is the manager's thin adapter over that facade. It:
 //!
@@ -41,7 +39,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::AppError;
-use crate::part::{OperationPart, RequestPart, SkillReferencePart};
+use crate::part::{OperationPart, SkillReferencePart};
 use crate::session::Session;
 
 /// The facade-backed store adapter used by [`crate::SessionManager`].
@@ -50,11 +48,10 @@ use crate::session::Session;
 /// [`agena_storage::SessionFacade::new`]; every write routes through the
 /// facade's lease validation so the manager never touches leases itself.
 ///
-/// v1 reserved database ids up front and built messages with them. v2 makes
-/// the engine the only id source (design 14.2), so freshly built in-memory
-/// parts carry a negative placeholder until the facade returns the real id.
-/// The adapter remaps placeholders to engine ids on every write and rewrites
-/// the in-memory aggregate so message/part references stay consistent.
+/// The engine is the only id source, so freshly built in-memory parts carry a
+/// negative placeholder until the facade returns the real id. The adapter
+/// remaps placeholders to engine ids on every write and rewrites the
+/// in-memory aggregate so part references stay consistent.
 #[derive(Clone)]
 pub(crate) struct StoreAdapter {
     pub(crate) facade: Arc<dyn SessionStore>,
@@ -617,11 +614,9 @@ impl StoreAdapter {
     }
 
     /// List session rows for the workspace as the shared domain DTO. The
-    /// facade pages by `(updated_at_ms, id)` cursor; the legacy
+    /// facade pages by `(updated_at_ms, id)` cursor; the
     /// `SessionListRequest.offset` paging is emulated by skipping the first
-    /// `offset` rows, and `include_subagents = false` drops subtask rows
-    /// (13.11 keeps the DTO shape; the watermark fields v2 dissolved — source
-    /// cutoff / message id / subtask access — are `None`).
+    /// `offset` rows, and `include_subagents = false` drops subtask rows.
     pub(crate) async fn list_session_summaries(
         &self,
         workspace_id: i64,
@@ -747,15 +742,14 @@ fn store_error(error: StoreError) -> AppError {
     }
 }
 
-/// Rebuild the execution-engine [`Session`] aggregate from a v2
-/// [`SessionView`] (metadata + ordered parts).
+/// Rebuild the execution-engine [`Session`] aggregate from a [`SessionView`]
+/// (metadata + ordered parts).
 ///
 /// The engine operates on the flat parts projection ([`Session::parts`],
 /// design 14-15): this installs the ordered part list and recomputes the
-/// derived state (pending operations, workflow, approx bytes) from it. The
-/// v1 [`Message`] grouping is not materialized on the aggregate; consumers
-/// rebuild logical runs on demand through [`parts_into_runs`] / the
-/// provider projectors.
+/// derived state (pending operations, workflow, approx bytes) from it.
+/// Consumers rebuild logical runs on demand through [`parts_into_runs`] and
+/// the provider projectors.
 pub(crate) fn session_from_view(view: SessionView) -> Result<Session, AppError> {
     let SessionView { meta, parts } = view;
     let mut session = Session::new(
@@ -835,7 +829,7 @@ pub(crate) fn parts_into_runs(parts: &[Part]) -> Vec<Vec<Part>> {
 
 /// The key under which the adapter persists a part's provider `operation_id`
 /// (the provider tool-call id used to correlate an invocation with the
-/// ephemeral provider result emitted from that same `tool_call` part). The v2
+/// ephemeral provider result emitted from that same `tool_call` part). The
 /// parts schema has no column for it (design 4.1), so it
 /// rides inside the rich `OperationPart.metadata` map — a reserved key the
 /// engine never treats as its own. This is the adapter's private contract and
@@ -865,7 +859,6 @@ pub(crate) fn typed_content_to_value(content: &TypedContent) -> Result<Value, Ap
             serde_json::to_value(part).expect("compaction content is always JSON serializable")
         }
         TypedContent::Error(part) => part.as_value(),
-        TypedContent::Interaction(part) => part.as_value(),
     };
     Ok(value)
 }
@@ -887,7 +880,6 @@ pub(crate) fn new_part_from_content(
         content: value,
         summary: part_summary(content),
         visibility: PartVisibility::Both,
-        rendered_markdown: None,
         parent_part_id: None,
         state,
     })
@@ -906,9 +898,6 @@ fn part_summary(content: &TypedContent) -> Option<String> {
         }
         TypedContent::SkillRef(reference) => {
             truncate(&part_content::skill_reference_from_skill_ref(reference).summary())
-        }
-        TypedContent::Interaction(request) => {
-            truncate(&part_content::interaction_from_content(request).summary_text())
         }
         TypedContent::Hook(hook) => truncate(&hook.summary),
         TypedContent::Notice(notice) => truncate(&notice.summary),
@@ -965,7 +954,7 @@ pub(crate) fn tool_call_from_operation(operation: &OperationPart) -> part_conten
     part_content::tool_call_from_operation(operation)
 }
 
-/// Project a v1 [`AttachmentPart`] onto the canonical `file_ref` shape: the
+/// Project an [`AttachmentPart`] onto the canonical `file_ref` shape: the
 /// first item's identity as named keys, the item's extended keys (`kind`,
 /// `source`, media dimensions), and the full attachment list losslessly under
 /// `extra["attachments"]` (covers multi-attachment parts).
@@ -1022,9 +1011,9 @@ pub(crate) fn file_ref_from_attachment(part: &AttachmentPart) -> part_content::F
     }
 }
 
-/// Project a v1 [`SkillReferencePart`] onto the canonical `skill_ref` shape:
-/// the first skill name as the named key, and the full snapshot losslessly
-/// under `extra["skills"]` (transition period — the engine still writes it).
+/// Project a [`SkillReferencePart`] onto the canonical `skill_ref` shape: the
+/// first skill name as the named key, and the full snapshot losslessly under
+/// `extra["skills"]` so the typed content remains lossless.
 pub(crate) fn skill_ref_from_reference(part: &SkillReferencePart) -> part_content::SkillRefContent {
     let mut extra = BTreeMap::new();
     if !part.skills.is_empty() {
@@ -1040,37 +1029,6 @@ pub(crate) fn skill_ref_from_reference(part: &SkillReferencePart) -> part_conten
     }
 }
 
-/// Project a v1 [`RequestPart`] onto the canonical `interaction` shape: the
-/// display-oriented named keys (`type`/`prompt`/`options`/`response`) plus the
-/// full request and reply losslessly under `extra["request"]`/`extra["reply"]`.
-pub(crate) fn interaction_from_request(part: &RequestPart) -> part_content::InteractionContent {
-    let mut extra = BTreeMap::new();
-    let mut reply_value = None;
-    let RequestPart::UserInput(interactive) = part;
-    extra.insert(
-        "request".to_owned(),
-        serde_json::to_value(&interactive.request)
-            .expect("user input request is always JSON serializable"),
-    );
-    if let Some(reply) = &interactive.reply {
-        let reply_json =
-            serde_json::to_value(reply).expect("user input reply is always JSON serializable");
-        extra.insert("reply".to_owned(), reply_json.clone());
-        reply_value = Some(reply_json);
-    }
-    part_content::InteractionContent {
-        kind: interactive.request.kind.clone(),
-        prompt: (!interactive.request.title.is_empty())
-            .then_some(interactive.request.title.clone()),
-        options: (!interactive.request.questions.is_empty()).then_some(
-            serde_json::to_value(&interactive.request.questions)
-                .expect("questions are always JSON serializable"),
-        ),
-        response: reply_value,
-        extra,
-    }
-}
-
 /// Build the canonical `text` typed content for a plain text payload.
 pub(crate) fn text_content(text: impl Into<String>) -> part_content::TextContent {
     part_content::TextContent {
@@ -1082,8 +1040,7 @@ pub(crate) fn text_content(text: impl Into<String>) -> part_content::TextContent
 
 /// The coarse [`agena_domain::PartKind`] of a typed payload: text is
 /// `Text`, every other kind is `Activity`.
-/// The plain text of a `TypedContent::Text` payload, if any (the v1
-/// `text_value`-style extraction over typed content).
+/// The plain text of a `TypedContent::Text` payload, if any.
 pub(crate) fn typed_text(content: &TypedContent) -> Option<&str> {
     match content {
         TypedContent::Text(text) => Some(text.text.as_str()),
@@ -1091,17 +1048,14 @@ pub(crate) fn typed_text(content: &TypedContent) -> Option<&str> {
     }
 }
 
-// ─── Rich-content recovery (v1 payloads from typed shapes) ────────────────────
+// ─── Typed-content projections ───────────────────────────────────────────────
 //
-// The v1 payload structs (`OperationPart`, `AttachmentPart`,
-// `SkillReferencePart`, `ReasoningPart`, `RequestPart`, `UserProblem`) survive
-// the T8 migration — they ride losslessly in the typed content's `extra`
-// bucket and are recovered through the public extractor helpers in
-// `agena_runtime_contracts::part_content` (`operation_from_tool_call`,
-// `attachment_from_file_ref`, `skill_reference_from_skill_ref`,
-// `user_problem_from_error`, `interaction_from_content`).
+// Runtime-facing domain values (`OperationPart`, `AttachmentPart`,
+// `SkillReferencePart`, `ReasoningPart`, `UserProblem`) are reconstructed from
+// canonical typed content through the extractor helpers in
+// `agena_runtime_contracts::part_content`.
 
-/// Rebuild a v1 [`ReasoningPart`] from the canonical `think` shape.
+/// Rebuild a [`ReasoningPart`] from the canonical `think` shape.
 pub(crate) fn reasoning_from_think(part: &part_content::ThinkContent) -> ReasoningPart {
     ReasoningPart {
         summary: part.summary.clone(),
@@ -1346,10 +1300,9 @@ pub(crate) fn timestamp_millis_to_utc(timestamp_ms: i64) -> Result<DateTime<Utc>
         .ok_or_else(|| AppError::Internal(format!("invalid timestamp {timestamp_ms}ms")))
 }
 
-/// Convert a facade summary row into the shared domain DTO. v2 dissolved the
-/// v1 event-watermark columns (`source_cutoff_seq_global`, `source_message_id`)
-/// and per-summary `subtask_access` (13.2); the domain DTO keeps the fields for
-/// wire compatibility and they are always `None` in v2.
+/// Convert a facade summary row into the shared domain DTO. The current facade
+/// does not populate the optional source-watermark or per-summary subtask
+/// fields, so those values remain `None` in this projection.
 pub(crate) fn domain_summary_from_storage(
     summary: agena_storage::store::SessionSummary,
 ) -> Result<agena_domain::SessionSummary, AppError> {
@@ -1476,7 +1429,6 @@ mod tests {
             content,
             summary: None,
             visibility: PartVisibility::Both,
-            rendered_markdown: None,
             parent_part_id: None,
             run_id,
             origin_session_id: 1,
@@ -1747,7 +1699,6 @@ mod tests {
         .expect("canonical tool part");
 
         assert!(part.summary.is_none());
-        assert!(part.rendered_markdown.is_none());
         assert_eq!(
             part.content["error"]["failure"]["user"]["fallback"],
             "the original tool failure"

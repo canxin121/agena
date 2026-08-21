@@ -27,7 +27,6 @@ impl SessionProcessor {
                     content: serde_json::json!({ "type": "text", "text": "" }),
                     summary: None,
                     visibility: PartVisibility::Both,
-                    rendered_markdown: None,
                     parent_part_id: None,
                     state: PartState::InProgress,
                 }],
@@ -60,13 +59,12 @@ impl SessionProcessor {
                 vec![NewPart {
                     kind: "think".to_owned(),
                     role: PartRole::Assistant,
-                    // Canonical v2 thinking shape (4.1.1): `summary`/`raw`
-                    // arrays. The v1 `type`/`activity_type`/`payload` keys are
-                    // gone so `as_value()` round-trips a clean document.
+                    // Canonical thinking shape (4.1.1): `summary`/`raw`
+                    // arrays. The typed content serializer owns the exact
+                    // persisted document.
                     content: serde_json::json!({ "summary": [], "raw": [] }),
                     summary: None,
                     visibility: PartVisibility::Both,
-                    rendered_markdown: None,
                     parent_part_id: None,
                     state: PartState::InProgress,
                 }],
@@ -199,7 +197,6 @@ impl SessionProcessor {
                     content: Some(content),
                     content_text_delta: None,
                     summary: part.summary.clone(),
-                    rendered_markdown: None,
                     provider_state: None,
                     finished_at_ms: part
                         .state
@@ -221,7 +218,7 @@ impl SessionProcessor {
     ///
     /// Called only on the success path: failed/cancelled runs drop in-flight
     /// operation placeholders (ghost calls) before this runs, so they never
-    /// reach the database (matching the pre-R2 v1 persist behavior).
+    /// reach the database, so failed/cancelled runs leave no ghost calls.
     pub(crate) async fn persist_deferred_tool_parts(
         &self,
         run: &SessionRunRequest,

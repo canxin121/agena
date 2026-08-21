@@ -408,7 +408,6 @@ fn placeholder_part(
         content,
         summary: None,
         visibility: PartVisibility::Both,
-        rendered_markdown: None,
         parent_part_id: None,
         run_id: Some(run_id),
         origin_session_id: 0,

@@ -22,9 +22,9 @@ use super::PendingInteraction;
 use super::{
     BackgroundDelivery, BackgroundDeliveryPhase, BackgroundEventRequest, BackgroundOperation,
     BackgroundOperationPhase, BackgroundOperationTransition, BackgroundSettleOutcome, InFlightRun,
-    InteractionAnswerOutcome, LEASE_STALENESS_MS, LeaseAcquire, LeaseState, MaintenanceOutcome,
-    NewBackgroundOperation, NewPart, NewSession, Part, PartCursor, PartDelta, PartRole, PartState,
-    PartVisibility, PersistenceEngine, ReconcileOutcome, RunOutcome, SessionListQuery, SessionMeta,
+    LEASE_STALENESS_MS, LeaseAcquire, LeaseState, MaintenanceOutcome, NewBackgroundOperation,
+    NewPart, NewSession, Part, PartCursor, PartDelta, PartRole, PartState, PartVisibility,
+    PersistenceEngine, ReconcileOutcome, RunOutcome, SessionListQuery, SessionMeta,
     SessionMetadataPatch, SessionPartPage, SessionState, SessionSummary, SessionView, StateInputs,
     StoreError, SubmitOutcome, UsageGroup, UsageQuery, UsageRecord, UsageStats,
     apply_part_transition, derive_session_state,
@@ -198,7 +198,6 @@ impl InMemoryEngine {
             content: marker_content,
             summary: None,
             visibility: PartVisibility::Both,
-            rendered_markdown: None,
             parent_part_id: None,
             run_id: None,
             origin_session_id: session_id,
@@ -230,7 +229,6 @@ impl InMemoryEngine {
                     content: new_part.content,
                     summary: new_part.summary,
                     visibility: new_part.visibility,
-                    rendered_markdown: new_part.rendered_markdown,
                     parent_part_id: new_part.parent_part_id,
                     run_id: Some(marker_id),
                     origin_session_id: session_id,
@@ -1457,7 +1455,7 @@ impl PersistenceEngine for InMemoryEngine {
         };
         notification_content.insert(
             "delivery_protocol".to_owned(),
-            serde_json::Value::String("provider_round_v1".to_owned()),
+            serde_json::Value::String("provider_round".to_owned()),
         );
         let notification_part = if let Some(run_id) = current.launch_run_id {
             let run = self
@@ -1486,7 +1484,6 @@ impl PersistenceEngine for InMemoryEngine {
                 content: notification.content,
                 summary: notification.summary,
                 visibility: notification.visibility,
-                rendered_markdown: notification.rendered_markdown,
                 parent_part_id: notification.parent_part_id,
                 run_id: Some(run_id),
                 origin_session_id: current.session_id,
@@ -1928,7 +1925,6 @@ impl PersistenceEngine for InMemoryEngine {
                     content: new_part.content,
                     summary: new_part.summary,
                     visibility: new_part.visibility,
-                    rendered_markdown: new_part.rendered_markdown,
                     parent_part_id: new_part.parent_part_id,
                     run_id: Some(run_id),
                     origin_session_id: session_id,
@@ -2011,7 +2007,6 @@ impl PersistenceEngine for InMemoryEngine {
                     content: new_part.content,
                     summary: new_part.summary,
                     visibility: new_part.visibility,
-                    rendered_markdown: new_part.rendered_markdown,
                     parent_part_id: new_part.parent_part_id,
                     run_id: Some(run_id),
                     origin_session_id: session_id,
@@ -2063,9 +2058,6 @@ impl PersistenceEngine for InMemoryEngine {
             }
             if let Some(summary) = delta.summary {
                 part.summary = Some(summary);
-            }
-            if let Some(rendered) = delta.rendered_markdown {
-                part.rendered_markdown = Some(rendered);
             }
             if let Some(provider_state) = delta.provider_state {
                 part.provider_state = Some(provider_state);
@@ -2253,71 +2245,6 @@ impl PersistenceEngine for InMemoryEngine {
             .retain(|(sid, _), mapped_run_id| *sid != session_id || *mapped_run_id != run_id);
         self.bump_session_version(session_id, now_ms)?;
         Ok(removed)
-    }
-
-    async fn answer_interaction(
-        &self,
-        session_id: i64,
-        owner_id: &str,
-        interaction_part_id: i64,
-        reply: NewPart,
-        now_ms: i64,
-    ) -> Result<InteractionAnswerOutcome, StoreError> {
-        self.ensure_lease(session_id, owner_id, now_ms)?;
-        let mut parts = self.parts.write().expect("parts lock");
-        let interaction = parts.get_mut(&interaction_part_id).ok_or_else(|| {
-            StoreError::not_found(format!("interaction part {interaction_part_id}"))
-        })?;
-        if interaction.kind != "interaction" || !interaction.state.is_in_flight() {
-            return Err(StoreError::InvalidState(format!(
-                "part {interaction_part_id} is not a pending interaction"
-            )));
-        }
-        if interaction.origin_session_id != session_id {
-            return Err(StoreError::InvalidState(format!(
-                "interaction {interaction_part_id} is shared; only its origin session may answer it"
-            )));
-        }
-        let owning_run = interaction.run_id;
-        interaction.state = PartState::Completed;
-        interaction.finished_at_ms = Some(now_ms);
-        interaction.updated_at_ms = now_ms;
-        interaction.revision += 1;
-        let interaction_part = interaction.clone();
-
-        let reply_id = self.next_part_id();
-        let reply_part = Part {
-            part_id: reply_id,
-            kind: reply.kind,
-            role: reply.role,
-            state: reply.state,
-            content: reply.content,
-            summary: reply.summary,
-            visibility: reply.visibility,
-            rendered_markdown: reply.rendered_markdown,
-            parent_part_id: Some(interaction_part_id),
-            run_id: owning_run,
-            origin_session_id: session_id,
-            revision: 1,
-            started_at_ms: now_ms,
-            finished_at_ms: reply.state.is_terminal().then_some(now_ms),
-            created_at_ms: now_ms,
-            updated_at_ms: now_ms,
-            provider_state: None,
-        };
-        parts.insert(reply_id, reply_part.clone());
-        drop(parts);
-        self.membership
-            .write()
-            .expect("membership lock")
-            .entry(session_id)
-            .or_default()
-            .insert(reply_id);
-        self.bump_member_session_versions(&[interaction_part_id, reply_id], now_ms)?;
-        Ok(InteractionAnswerOutcome {
-            interaction: interaction_part,
-            reply: reply_part,
-        })
     }
 
     async fn fork_session(
@@ -2620,22 +2547,18 @@ fn derive_state(
             created_at_ms: part.created_at_ms,
         })
         .collect();
-    let interactions: Vec<PendingInteraction> = parts
+    let pending_interactions: Vec<PendingInteraction> = parts
         .iter()
         .filter(|part| {
             if !part.state.is_in_flight() {
                 return false;
             }
-            // Legacy `interaction` parts, plus canonical in-flight tool_call
-            // parts whose operation is awaiting a user-input reply.
-            part.kind == "interaction"
-                || (part.kind == "tool_call"
-                    && super::state::tool_call_first_awaiting_user_input(&part.content).is_some())
+            part.kind == "tool_call"
+                && super::state::tool_call_first_awaiting_user_input(&part.content).is_some()
         })
         .map(|part| PendingInteraction {
             part_id: part.part_id,
             created_at_ms: part.created_at_ms,
-            part_kind: part.kind.clone(),
             content: part.content.clone(),
         })
         .collect();
@@ -2647,7 +2570,7 @@ fn derive_state(
     super::presentation(
         meta.as_ref(),
         &in_flight,
-        &interactions,
+        &pending_interactions,
         last_error.as_ref(),
         lease.as_ref(),
         now_ms,
@@ -2661,6 +2584,33 @@ mod tests {
 
     fn text_part(text: &str) -> NewPart {
         NewPart::pending("text", PartRole::User, json!({ "text": text }))
+    }
+
+    fn pending_tool_call(title: &str, kind: &str) -> NewPart {
+        NewPart::pending(
+            "tool_call",
+            PartRole::Assistant,
+            json!({
+                "name": "interaction.ask",
+                "input": {},
+                "call_id": 1,
+                "state": "pending",
+                "user_input": {
+                    "requests": [{
+                        "request": {
+                            "request_id": "ask-1",
+                            "session_id": null,
+                            "title": title,
+                            "kind": kind,
+                            "source": "plugin",
+                            "questions": [],
+                            "created_at": "2026-08-21T00:00:00Z"
+                        }
+                    }]
+                },
+                "lifecycle": {"start_ms": 1}
+            }),
+        )
     }
 
     async fn setup() -> (InMemoryEngine, i64) {
@@ -3035,7 +2985,6 @@ mod tests {
                     content: json!({"text": "partial"}),
                     summary: None,
                     visibility: PartVisibility::Both,
-                    rendered_markdown: None,
                     parent_part_id: None,
                     state: PartState::InProgress,
                 }],
@@ -3122,7 +3071,6 @@ mod tests {
                     content: json!({"name": "fs.read", "input": {}}),
                     summary: None,
                     visibility: PartVisibility::Both,
-                    rendered_markdown: None,
                     parent_part_id: None,
                     // A tool call starts executing immediately (in_progress).
                     state: PartState::InProgress,
@@ -3210,7 +3158,6 @@ mod tests {
                     content: json!({"name": "fs.read", "input": {}}),
                     summary: None,
                     visibility: PartVisibility::Both,
-                    rendered_markdown: None,
                     parent_part_id: None,
                     state: PartState::InProgress,
                 }],
@@ -3244,7 +3191,6 @@ mod tests {
                     content: json!({"message": "attempt one failed", "attempt": 1}),
                     summary: None,
                     visibility: PartVisibility::Both,
-                    rendered_markdown: None,
                     parent_part_id: Some(tool_id),
                     state: PartState::Failed,
                 }],
@@ -3369,103 +3315,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn answer_interaction_completes_it_and_appends_a_reply_part() {
-        let (engine, session_id) = setup().await;
-        let outcome = engine
-            .submit_user_run(
-                session_id,
-                "owner-a",
-                vec![NewPart::pending(
-                    "interaction",
-                    PartRole::Runtime,
-                    json!({"kind": "ask_user", "prompt": "Continue?"}),
-                )],
-                None,
-                engine.now_ms(),
-            )
-            .await
-            .expect("submit");
-        let interaction_id = outcome.parts[1].part_id;
-        let answer = engine
-            .answer_interaction(
-                session_id,
-                "owner-a",
-                interaction_id,
-                NewPart::pending("text", PartRole::User, json!({"text": "yes"})),
-                engine.now_ms(),
-            )
-            .await
-            .expect("answer");
-        assert_eq!(answer.reply.parent_part_id, Some(interaction_id));
-        assert_eq!(answer.reply.run_id, Some(outcome.run_id));
-        assert_eq!(answer.interaction.part_id, interaction_id);
-        assert_eq!(answer.interaction.state, PartState::Completed);
-        let view = engine.load_session(session_id).await.expect("load");
-        let interaction = view
-            .parts
-            .iter()
-            .find(|part| part.part_id == interaction_id)
-            .expect("interaction");
-        assert_eq!(interaction.state, PartState::Completed);
-    }
-
-    #[tokio::test]
-    async fn fork_cannot_answer_a_shared_interaction_in_place() {
-        let (engine, session_id) = setup().await;
-        let outcome = engine
-            .submit_user_run(
-                session_id,
-                "owner-a",
-                vec![NewPart::pending(
-                    "interaction",
-                    PartRole::Assistant,
-                    json!({"kind": "ask_user", "prompt": "Continue?"}),
-                )],
-                None,
-                engine.now_ms(),
-            )
-            .await
-            .expect("submit interaction");
-        let interaction_id = outcome.parts[1].part_id;
-        let child = engine
-            .fork_session(
-                session_id,
-                interaction_id,
-                "fork".to_owned(),
-                false,
-                engine.now_ms(),
-            )
-            .await
-            .expect("fork");
-        engine
-            .try_acquire_lease(child.id, "child-owner", engine.now_ms())
-            .await
-            .expect("child lease");
-
-        let error = engine
-            .answer_interaction(
-                child.id,
-                "child-owner",
-                interaction_id,
-                NewPart::pending("text", PartRole::User, json!({"text": "yes"})),
-                engine.now_ms(),
-            )
-            .await
-            .expect_err("shared interaction is origin-owned");
-        assert!(matches!(error, StoreError::InvalidState(_)));
-        let parent = engine.load_session(session_id).await.expect("parent");
-        assert_eq!(
-            parent
-                .parts
-                .iter()
-                .find(|part| part.part_id == interaction_id)
-                .expect("interaction")
-                .state,
-            PartState::Pending
-        );
-    }
-
-    #[tokio::test]
     async fn state_derivation_covers_all_sessions_states() {
         let (engine, session_id) = setup().await;
         engine
@@ -3509,11 +3358,7 @@ mod tests {
             .submit_user_run(
                 session_id,
                 "owner-a",
-                vec![NewPart::pending(
-                    "interaction",
-                    PartRole::Runtime,
-                    json!({"kind": "plan_review", "prompt": "Approve?"}),
-                )],
+                vec![pending_tool_call("Approve?", "review")],
                 None,
                 engine.now_ms(),
             )
@@ -3528,7 +3373,7 @@ mod tests {
         let awaiting = derive_state(&engine, session_id).expect("presentation");
         assert_eq!(awaiting.state, SessionState::AwaitingInteraction);
         let interaction = awaiting.pending_interaction.expect("pending interaction");
-        assert_eq!(interaction.kind, "plan_review");
+        assert_eq!(interaction.kind, "review");
         let paused_view = engine.load_session(session_id).await.expect("paused view");
         assert!(
             paused_view
@@ -3747,21 +3592,21 @@ mod tests {
                 "owner-a",
                 submitted.run_id,
                 vec![NewPart::pending(
-                    "interaction",
+                    "text",
                     PartRole::Assistant,
-                    json!({"kind": "ask_user", "prompt": "Continue?"}),
+                    json!({"text": "progress"}),
                 )],
                 engine.now_ms(),
             )
             .await
-            .expect("append interaction");
+            .expect("append part");
         assert_eq!(engine.session_meta(session_id).await.unwrap().version, 3);
 
         engine
             .update_part(
                 session_id,
                 "owner-a",
-                submitted.parts[1].part_id,
+                appended[0].part_id,
                 PartDelta {
                     state: Some(PartState::InProgress),
                     ..Default::default()
@@ -3773,15 +3618,18 @@ mod tests {
         assert_eq!(engine.session_meta(session_id).await.unwrap().version, 4);
 
         engine
-            .answer_interaction(
+            .update_part(
                 session_id,
                 "owner-a",
                 appended[0].part_id,
-                NewPart::pending("text", PartRole::User, json!({"text": "yes"})),
+                PartDelta {
+                    summary: Some("updated".to_owned()),
+                    ..Default::default()
+                },
                 engine.now_ms(),
             )
             .await
-            .expect("answer");
+            .expect("update summary");
         assert_eq!(engine.session_meta(session_id).await.unwrap().version, 5);
 
         engine

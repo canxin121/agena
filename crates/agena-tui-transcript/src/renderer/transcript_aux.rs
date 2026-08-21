@@ -279,7 +279,7 @@ fn diff_target_language(diff_lines: &[&str]) -> Option<String> {
     None
 }
 
-pub(crate) fn tool_invocation_label(invocation: &crate::ToolInvocationResource) -> String {
+pub(crate) fn tool_invocation_label(invocation: &agena_domain::ToolInvocation) -> String {
     let input = serde_json::Value::from(invocation.input.clone());
     if let Some(function_name) = tool_api_display_name(invocation.name.as_str())
         && let Some(tool_name) = input.get("tool").and_then(serde_json::Value::as_str)

@@ -521,7 +521,7 @@ mod tests {
             id: None,
             created_at_ms: None,
             updated_at_ms: None,
-            action_key: "shell.execute".to_owned(),
+            action_key: "agena.shell.run".to_owned(),
             mode: PermissionMode::Ask,
             scope,
             session_id,
@@ -560,7 +560,7 @@ mod tests {
             .await
             .expect("session rule");
         let resolved = repository
-            .resolve("shell.execute", Some(7), Some(9))
+            .resolve("agena.shell.run", Some(7), Some(9))
             .await
             .expect("resolve");
         assert_eq!(resolved.len(), 3);
@@ -585,7 +585,7 @@ mod tests {
         assert!(revoked.revoked_at_ms.is_some());
         assert!(
             repository
-                .resolve("shell.execute", None, None)
+                .resolve("agena.shell.run", None, None)
                 .await
                 .expect("resolve")
                 .is_empty()
@@ -593,7 +593,7 @@ mod tests {
         assert_eq!(
             repository
                 .list(PermissionRuleListQuery {
-                    search: Some("shell".to_owned()),
+                    search: Some("agena.shell.run".to_owned()),
                     before_updated_at_ms: None,
                     before_id: None,
                     limit: 10

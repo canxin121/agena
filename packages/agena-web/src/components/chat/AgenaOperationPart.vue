@@ -47,8 +47,6 @@ watch(
   },
 )
 
-const primaryOutput = computed(() => operation.value.humanMarkdown || operation.value.modelOutput)
-const primaryOutputIsMarkdown = computed(() => Boolean(operation.value.humanMarkdown))
 const primaryInteraction = computed(() => operation.value.userInputs[0] || null)
 const headlineTitle = computed(() =>
   primaryInteraction.value ? operation.value.toolName || operation.value.title : operation.value.title,
@@ -59,9 +57,7 @@ const headlineSummary = computed(
 const hasOutput = computed(() => {
   const value = operation.value
   return Boolean(
-    primaryOutput.value ||
     value.structured !== null ||
-    value.displaySections.length ||
     value.blocks.length ||
     value.attachments.length,
   )
@@ -275,23 +271,6 @@ function interactionAnswers(interaction: InteractionPresentation, questionIndex:
         </button>
 
         <div v-if="outputExpanded" class="space-y-3 pl-5 pt-1">
-          <MarkdownRenderer
-            v-if="primaryOutput && primaryOutputIsMarkdown"
-            :content="primaryOutput"
-            mode="markdown"
-            :stream="false"
-          />
-          <pre
-            v-else-if="primaryOutput"
-            class="overflow-x-auto whitespace-pre-wrap break-words font-mono text-xs leading-relaxed"
-            >{{ primaryOutput }}</pre
-          >
-
-          <section v-for="section in operation.displaySections" :key="`${section.title}:${section.text}`">
-            <div class="mb-1 text-xs font-semibold text-primary">› {{ section.title }}</div>
-            <MarkdownRenderer :content="section.text" mode="markdown" :stream="false" />
-          </section>
-
           <AgenaOperationBlock
             v-for="(block, index) in operation.blocks"
             :key="String(block.id || `${block.type || block.kind || 'block'}:${index}`)"
@@ -314,7 +293,7 @@ function interactionAnswers(interaction: InteractionPresentation, questionIndex:
           </div>
 
           <CodeBlock
-            v-if="operation.structured !== null && !primaryOutput && !operation.blocks.length"
+            v-if="operation.structured !== null && !operation.blocks.length"
             :code="prettyJson(operation.structured)"
             lang="json"
             compact

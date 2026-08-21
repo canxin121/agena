@@ -8,8 +8,8 @@ use super::{
     sanitize_terminal_text, tool_invocation_label, trim_empty_line_edges, truncate_display_width,
 };
 use crate::ui_text;
-use crate::{OperationBlockResource, OperationPartResource};
-use crate::{TranscriptEntryPart, TranscriptPartContent};
+use crate::{ToolCallView, TranscriptEntryPart, TranscriptPartContent};
+use agena_domain::ViewBlock;
 use unicode_segmentation::UnicodeSegmentation;
 
 pub(crate) fn transcript_message_parts<'a>(
@@ -24,12 +24,12 @@ pub(crate) fn transcript_part_content<'a>(
     &part.content
 }
 
-pub(crate) fn operation_block_copy_text(block: &OperationBlockResource, i18n: &I18n) -> String {
+pub(crate) fn operation_block_copy_text(block: &ViewBlock, i18n: &I18n) -> String {
     match block {
-        OperationBlockResource::Text { text }
-        | OperationBlockResource::Markdown { text }
-        | OperationBlockResource::Diff { diff: text, .. } => text.clone(),
-        OperationBlockResource::Command {
+        ViewBlock::Text { text, .. }
+        | ViewBlock::Markdown { text, .. }
+        | ViewBlock::Diff { diff: text, .. } => text.clone(),
+        ViewBlock::Command {
             command,
             exit_code,
             stdout,
@@ -37,14 +37,10 @@ pub(crate) fn operation_block_copy_text(block: &OperationBlockResource, i18n: &I
             ..
         } => {
             let mut parts = vec![format!("$ {command}")];
-            if let Some(stdout) = stdout
-                && !stdout.trim().is_empty()
-            {
+            if !stdout.trim().is_empty() {
                 parts.push(stdout.trim().to_string());
             }
-            if let Some(stderr) = stderr
-                && !stderr.trim().is_empty()
-            {
+            if !stderr.trim().is_empty() {
                 parts.push(stderr.trim().to_string());
             }
             if let Some(exit_code) = exit_code {
@@ -52,19 +48,11 @@ pub(crate) fn operation_block_copy_text(block: &OperationBlockResource, i18n: &I
             }
             parts.join("\n")
         }
-        OperationBlockResource::SearchResults { query, results } => {
-            let mut out = Vec::new();
-            if let Some(query) = query {
-                out.push(ui_text::operation_search_heading(
-                    i18n,
-                    Some(query.as_str()),
-                ));
-            } else {
-                out.push(ui_text::operation_search_heading(i18n, None));
-            }
-            for result in results {
+        ViewBlock::SearchResults { items, .. } => {
+            let mut out = vec![ui_text::operation_search_heading(i18n, None)];
+            for result in items {
                 out.push(result.title.clone());
-                out.push(result.uri.clone());
+                out.push(result.url.clone());
                 if let Some(snippet) = &result.snippet
                     && !snippet.trim().is_empty()
                 {
@@ -73,49 +61,20 @@ pub(crate) fn operation_block_copy_text(block: &OperationBlockResource, i18n: &I
             }
             out.join("\n")
         }
-        OperationBlockResource::EmbeddedResource { uri, text, .. } => text
-            .as_deref()
-            .map(str::to_string)
-            .unwrap_or_else(|| uri.clone()),
-        OperationBlockResource::Checklist { items } => items
-            .iter()
-            .map(|item| item.content.clone())
-            .collect::<Vec<_>>()
-            .join("\n"),
-        OperationBlockResource::FileChanges { changes } => changes
+        ViewBlock::FileChanges { changes, .. } => changes
             .iter()
             .map(|change| file_change_list_item_text(change, i18n))
             .collect::<Vec<_>>()
             .join("\n"),
-        OperationBlockResource::ResourceLink { uri, title, .. }
-        | OperationBlockResource::Citation { uri, title, .. } => {
-            title.clone().unwrap_or_else(|| uri.clone())
-        }
-        OperationBlockResource::Image { url, .. }
-        | OperationBlockResource::Audio { url, .. }
-        | OperationBlockResource::File { url, .. } => url.clone(),
-        OperationBlockResource::Media { artifact, .. } => artifact
+        ViewBlock::Media { artifact, .. } => artifact
             .name
             .clone()
             .unwrap_or_else(|| artifact.uri.clone()),
-        OperationBlockResource::Progress { message, .. } => message.clone(),
-        OperationBlockResource::NestedTask {
-            task_id,
-            title,
-            status,
-        } => ui_text::operation_nested_task_summary(
-            i18n,
-            title.as_deref().unwrap_or(task_id.as_str()),
-            *status,
-        ),
-        OperationBlockResource::Json { value } => {
+        ViewBlock::Json { value, .. } => {
             serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string())
         }
-        OperationBlockResource::Table { columns, rows } => {
-            let headings = columns
-                .iter()
-                .map(|column| column.label.as_deref().unwrap_or(column.key.as_str()))
-                .collect::<Vec<_>>();
+        ViewBlock::Table { columns, rows, .. } => {
+            let headings = columns.iter().map(String::as_str).collect::<Vec<_>>();
             let mut table = format!(
                 "| {} |\n| {} |\n",
                 headings.join(" | "),
@@ -135,48 +94,56 @@ pub(crate) fn operation_block_copy_text(block: &OperationBlockResource, i18n: &I
             }
             table
         }
-        OperationBlockResource::Log { stream, text } => match stream.as_deref() {
-            Some(stream) if !stream.trim().is_empty() => format!("[{stream}]\n{text}"),
-            _ => text.clone(),
-        },
-        OperationBlockResource::Custom { schema: _, value } => {
-            serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string())
+        ViewBlock::Log { stream, text, .. } => {
+            let stream = match stream {
+                agena_domain::CommandOutputStream::Stdout => "stdout",
+                agena_domain::CommandOutputStream::Stderr => "stderr",
+            };
+            format!("[{stream}]\n{text}")
         }
+        ViewBlock::Custom {
+            kind,
+            schema,
+            presentation,
+            ..
+        } => serde_json::to_string_pretty(&serde_json::json!({
+            "kind": kind,
+            "schema": schema,
+            "presentation": presentation,
+        }))
+        .unwrap_or_else(|_| kind.clone()),
     }
 }
 
-pub(crate) fn tool_display_label(tool: &OperationPartResource) -> String {
-    // The activity headline is the composed tool title the runtime produced:
-    // "fs.read · Read README.md", "tools.list · List tools · 2/133". Fall
-    // back to the direct execution-tool name only when no title was generated
-    // yet (very early streaming or a malformed call), then to the generic
-    // invocation label.
-    let title = tool.title.trim();
+pub(crate) fn tool_display_label(tool: &ToolCallView) -> String {
+    let title = tool.title().trim();
     if !title.is_empty() {
         title.to_owned()
     } else {
-        let tool_name = tool.invocation.name.trim();
+        let tool_name = tool.operation.invocation.name.trim();
         if !tool_name.is_empty() {
             tool_name.to_owned()
         } else {
-            tool_invocation_label(&tool.invocation)
+            tool_invocation_label(&tool.operation.invocation)
         }
     }
 }
 
 pub(crate) fn should_render_tool_model_output(
-    tool: &OperationPartResource,
+    tool: &ToolCallView,
     skipped_text: Option<&str>,
 ) -> bool {
-    let model_output = normalized_tool_text(tool.model_output.text.as_str());
+    let model_text = tool.model_text();
+    let model_output = normalized_tool_text(model_text.as_str());
     if model_output.is_empty() {
         return false;
     }
-    if tool.invocation.name == "agena_web__search"
+    if tool.operation.invocation.name == "agena_web__search"
         && tool
+            .presentation
             .blocks
             .iter()
-            .any(|block| matches!(block, OperationBlockResource::SearchResults { .. }))
+            .any(|block| matches!(block, ViewBlock::SearchResults { .. }))
     {
         return false;
     }
@@ -184,7 +151,7 @@ pub(crate) fn should_render_tool_model_output(
     if tool_label == model_output {
         return false;
     }
-    if normalized_tool_text(tool.summary.as_str()) == model_output {
+    if normalized_tool_text(tool.summary()) == model_output {
         return false;
     }
     if let Some(prefix) = tool_label.strip_suffix(model_output.as_str())
@@ -197,17 +164,16 @@ pub(crate) fn should_render_tool_model_output(
         return false;
     }
     !tool
+        .presentation
         .blocks
         .iter()
         .filter_map(operation_text_block_text)
         .any(|text| normalized_tool_text(text) == model_output)
 }
 
-pub(crate) fn operation_text_block_text(block: &OperationBlockResource) -> Option<&str> {
+pub(crate) fn operation_text_block_text(block: &ViewBlock) -> Option<&str> {
     match block {
-        OperationBlockResource::Text { text } | OperationBlockResource::Markdown { text } => {
-            Some(text.as_str())
-        }
+        ViewBlock::Text { text, .. } | ViewBlock::Markdown { text, .. } => Some(text.as_str()),
         _ => None,
     }
 }

@@ -38,11 +38,10 @@ pub(crate) struct SessionRunRequest {
     pub input_notification_part_ids: Vec<i64>,
     pub part_ids: ProcessorPartIdAllocator,
     pub next_call_id: i64,
-    /// The v2 facade-backed store. R2 makes parts the only durable write
-    /// source for a model turn: the processor appends content parts under the
-    /// run marker (`append_parts`), streams deltas (`update_part`), and
-    /// terminalizes the run (`complete_run`/`cancel_run`) itself, so the
-    /// caller never re-persists the turn from a v1 message.
+    /// The facade-backed store. Parts are the only durable write source for a
+    /// model turn: the processor appends content parts under the run marker
+    /// (`append_parts`), streams deltas (`update_part`), and terminalizes the
+    /// run (`complete_run`/`cancel_run`) itself.
     pub store: Arc<StoreAdapter>,
     /// Optional cancel handle. When the token fires the stream loop
     /// terminates between provider events and surfaces a `RunAbortReason::
@@ -50,9 +49,8 @@ pub(crate) struct SessionRunRequest {
     pub cancel: Option<tokio_util::sync::CancellationToken>,
 }
 
-/// Result of one processor model turn (R2). The turn's durable state is
-/// carried as persisted parts — the run marker plus every content part under
-/// it — never as a v1 `Message`.
+/// Result of one processor model turn. The turn's durable state is carried as
+/// persisted parts: the run marker plus every content part under it.
 #[derive(Debug)]
 pub(crate) struct SessionRunResult {
     /// The run marker part id — the durable identity of this assistant message.

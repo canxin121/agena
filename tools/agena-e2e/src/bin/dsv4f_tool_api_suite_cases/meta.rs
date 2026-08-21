@@ -147,7 +147,7 @@ pub(crate) async fn run_tool_api_meta_suite(
         });
         let start_message_count = harness
             .session_queries
-            .list_projected_runs(session, true)
+            .list_projected_runs(session)
             .await?
             .len();
         let mut options = harness.options.clone();
@@ -170,12 +170,12 @@ pub(crate) async fn run_tool_api_meta_suite(
         ensure!(
             operations
                 .iter()
-                .all(|operation| operation.invocation.name != TOOLS_HELP_HANDLER_KEY),
+                .all(|operation| operation.name != TOOLS_HELP_HANDLER_KEY),
             "batched tools_call unexpectedly requested tools_help"
         );
         let calls = operations
             .iter()
-            .filter(|operation| operation.invocation.name == TOOLS_CALL_HANDLER_KEY)
+            .filter(|operation| operation.name == TOOLS_CALL_HANDLER_KEY)
             .collect::<Vec<_>>();
         ensure!(
             calls.len() == 2,
@@ -183,7 +183,7 @@ pub(crate) async fn run_tool_api_meta_suite(
         );
         let actual = calls
             .iter()
-            .map(|operation| Value::from(operation.invocation.input.clone()))
+            .map(|operation| Value::from(operation.input.clone()))
             .collect::<Vec<_>>();
         ensure!(
             actual.contains(&first) && actual.contains(&second),
@@ -222,7 +222,7 @@ pub(crate) async fn run_tool_api_meta_suite(
         });
         let start_message_count = harness
             .session_queries
-            .list_projected_runs(session, true)
+            .list_projected_runs(session)
             .await?
             .len();
         let prompt = format!(
@@ -237,12 +237,12 @@ pub(crate) async fn run_tool_api_meta_suite(
         ensure!(
             operations
                 .iter()
-                .all(|operation| operation.invocation.name != TOOLS_HELP_HANDLER_KEY),
+                .all(|operation| operation.name != TOOLS_HELP_HANDLER_KEY),
             "automatic-help recovery unexpectedly made a separate tools_help call"
         );
         let calls = operations
             .iter()
-            .filter(|operation| operation.invocation.name == TOOLS_CALL_HANDLER_KEY)
+            .filter(|operation| operation.name == TOOLS_CALL_HANDLER_KEY)
             .collect::<Vec<_>>();
         ensure!(
             calls.len() == 2,
@@ -250,7 +250,7 @@ pub(crate) async fn run_tool_api_meta_suite(
             calls.len()
         );
         ensure!(
-            Value::from(calls[0].invocation.input.clone()) == invalid,
+            Value::from(calls[0].input.clone()) == invalid,
             "automatic-help probe did not preserve the intentionally invalid input"
         );
         ensure!(
@@ -264,7 +264,7 @@ pub(crate) async fn run_tool_api_meta_suite(
             calls[0].error_message().unwrap_or("<no error>")
         );
         ensure!(
-            Value::from(calls[1].invocation.input.clone()) == corrected,
+            Value::from(calls[1].input.clone()) == corrected,
             "automatic-help retry input differed from the corrected object"
         );
         ensure!(

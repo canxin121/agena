@@ -31,7 +31,6 @@ fn is_zero_u64(value: &u64) -> bool {
 #[strum(serialize_all = "snake_case")]
 /// Input payload of a tool execution.
 pub enum ToolPayloadInput {
-    #[serde(alias = "process")]
     Shell(ShellToolInput),
     Monitor(MonitorToolInput),
     Read(ReadToolInput),
@@ -109,9 +108,9 @@ impl ToolPayloadInput {
 
     /// Reconstruct a `ToolPayloadInput` from a [`ToolInvocation`], or `None`
     /// if the invocation does not use one of the typed payload tool names.
-    /// Namespaced forms like `plugin__tool` and dotted forms like `fs.read`
-    /// are matched by their terminal segment so user-installed replacements
-    /// inherit the same semantics.
+    /// Only the registered compact, canonical, and plugin-wire spellings are
+    /// accepted; an unknown invocation name is not coerced into a payload
+    /// variant.
     pub fn from_invocation(invocation: &ToolInvocation) -> Option<Self> {
         let value: serde_json::Value = invocation.input.clone().into();
         let mut object = match value {
@@ -119,8 +118,7 @@ impl ToolPayloadInput {
             serde_json::Value::Null => serde_json::Map::new(),
             _ => return None,
         };
-        let payload_name = payload_name_for_invocation(invocation.name.as_str(), &mut object)
-            .unwrap_or_else(|| canonical_tool_payload_name(invocation.name.as_str()).to_string());
+        let payload_name = payload_name_for_invocation(invocation.name.as_str(), &mut object)?;
         object.insert("tool".to_string(), serde_json::Value::String(payload_name));
         serde_json::from_value(serde_json::Value::Object(object)).ok()
     }
@@ -290,14 +288,12 @@ pub enum ToolPayloadOutput {
     AskUser {
         #[serde(
             default,
-            deserialize_with = "agena_domain::deserialize_user_input_answers",
             skip_serializing_if = "agena_domain::user_input_answers_is_empty"
         )]
         answers: BTreeMap<String, Vec<String>>,
         #[serde(default, skip_serializing_if = "is_false")]
         timed_out: bool,
     },
-    #[serde(alias = "process")]
     Shell {
         action: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -418,10 +414,7 @@ impl ToolPayloadOutput {
     /// tool name, if one maps to a typed output variant. `None` means the
     /// payload is opaque and renders as a fallback JSON card.
     pub fn payload_name_for(tool_name: &str) -> Option<String> {
-        payload_name_for_output_tool(tool_name).or_else(|| {
-            let canonical = canonical_tool_payload_name(tool_name);
-            payload_name_for_output_tool(canonical)
-        })
+        payload_name_for_output_tool(tool_name)
     }
 
     /// Convert into the plugin-neutral [`ToolOutput`] payload used by
@@ -452,18 +445,10 @@ impl ToolPayloadOutput {
             serde_json::Value::Null => serde_json::Map::new(),
             _ => return None,
         };
-        let payload_name = payload_name_for_output_tool(tool_name)
-            .unwrap_or_else(|| canonical_tool_payload_name(tool_name).to_string());
+        let payload_name = payload_name_for_output_tool(tool_name)?;
         object.insert("tool".to_string(), serde_json::Value::String(payload_name));
         serde_json::from_value(serde_json::Value::Object(object)).ok()
     }
-}
-
-fn canonical_tool_payload_name(name: &str) -> &str {
-    name.rsplit_once("__")
-        .or_else(|| name.rsplit_once('.'))
-        .map(|(_, tool_name)| tool_name)
-        .unwrap_or(name)
 }
 
 /// One-to-one payload variant mappings for every typed tool family:
@@ -599,35 +584,6 @@ fn payload_name_for_table(tool_name: &str) -> Option<String> {
         .map(|(tag, _, _, _)| tag.to_string())
 }
 
-fn is_payload_variant_tag(name: &str) -> bool {
-    matches!(
-        name,
-        "read"
-            | "glob"
-            | "monitor"
-            | "grep"
-            | "apply_patch"
-            | "task"
-            | "tool_search"
-            | "ask_user"
-            | "web_fetch"
-            | "web_search"
-            | "enter_snapshot"
-            | "exit_snapshot"
-            | "cron_create"
-            | "cron_list"
-            | "cron_delete"
-            | "cron_update"
-            | "cron_pause"
-            | "cron_resume"
-            | "cron_history"
-            | "lsp_definition"
-            | "lsp_references"
-            | "lsp_hover"
-            | "lsp_diagnostics"
-    )
-}
-
 const DIRECT_TOOL_MAPPINGS: &[(&str, &str, &str)] = &[
     ("read", "agena.fs", "read"),
     ("glob", "agena.fs", "glob"),
@@ -663,7 +619,7 @@ fn invocation_name_for_payload_tool(
     Some(match tool {
         "web_fetch" => canonical_registry_tool_name("agena.web", "fetch"),
         "web_search" => canonical_registry_tool_name("agena.web", "search"),
-        "shell" | "process" | "command" => {
+        "shell" => {
             let action = input
                 .remove("action")
                 .and_then(|value| value.as_str().map(str::to_string))
@@ -733,44 +689,40 @@ fn payload_name_for_invocation(
         "agena_web__search" | "web.search" | "web_search" => {
             return Some("web_search".to_string());
         }
-        "agena_fs_read" | "agena.fs.read" | "read" => {
+        "agena_fs_read" | "agena.fs.read" => {
             return Some("read".to_string());
         }
-        "agena_fs_glob" | "agena.fs.glob" | "glob" => {
+        "agena_fs_glob" | "agena.fs.glob" => {
             return Some("glob".to_string());
         }
-        "agena_fs_grep" | "agena.fs.grep" | "grep" => {
+        "agena_fs_grep" | "agena.fs.grep" => {
             return Some("grep".to_string());
         }
-        "agena_fs_apply_patch" | "agena.fs.apply_patch" | "apply_patch" => {
+        "agena_fs_apply_patch" | "agena.fs.apply_patch" => {
             return Some("apply_patch".to_string());
         }
-        "shell.run" | "powershell.run" | "process.run" | "agena_shell_run" | "agena.shell.run"
-        | "agena_process_run" | "agena.process.run" => {
+        "shell.run" | "agena_shell_run" | "agena.shell.run" => {
             input.insert(
                 "action".to_string(),
                 serde_json::Value::String("run".to_string()),
             );
             return Some("shell".to_string());
         }
-        "shell.list" | "powershell.list" | "process.list" | "agena_shell_list"
-        | "agena.shell.list" | "agena_process_list" | "agena.process.list" => {
+        "shell.list" | "agena_shell_list" | "agena.shell.list" => {
             input.insert(
                 "action".to_string(),
                 serde_json::Value::String("list".to_string()),
             );
             return Some("shell".to_string());
         }
-        "shell.logs" | "powershell.logs" | "process.logs" | "agena_shell_logs"
-        | "agena.shell.logs" | "agena_process_logs" | "agena.process.logs" => {
+        "shell.logs" | "agena_shell_logs" | "agena.shell.logs" => {
             input.insert(
                 "action".to_string(),
                 serde_json::Value::String("logs".to_string()),
             );
             return Some("shell".to_string());
         }
-        "shell.stop" | "powershell.stop" | "process.stop" | "agena_shell_stop"
-        | "agena.shell.stop" | "agena_process_stop" | "agena.process.stop" => {
+        "shell.stop" | "agena_shell_stop" | "agena.shell.stop" => {
             input.insert(
                 "action".to_string(),
                 serde_json::Value::String("stop".to_string()),
@@ -793,9 +745,7 @@ fn payload_name_for_invocation(
         }
         _ => {}
     }
-    // Every other typed payload reuses the output-tag mapping, which
-    // recognizes compact (`fs.read`), canonical (`agena.fs.read`), plugin
-    // (`agena_fs_read`), and bare (`read`) spellings for every family.
+    // Every other typed payload reuses the explicit current-name mapping.
     payload_name_for_output_tool(invocation_name)
 }
 
@@ -823,16 +773,6 @@ fn payload_name_for_output_tool(tool_name: &str) -> Option<String> {
             | "shell.list"
             | "shell.logs"
             | "shell.stop"
-            | "process"
-            | "process.run"
-            | "process.list"
-            | "process.logs"
-            | "process.stop"
-            | "powershell"
-            | "powershell.run"
-            | "powershell.list"
-            | "powershell.logs"
-            | "powershell.stop"
             | "agena.shell.run"
             | "agena.shell.list"
             | "agena.shell.logs"
@@ -841,24 +781,10 @@ fn payload_name_for_output_tool(tool_name: &str) -> Option<String> {
             | "agena_shell_list"
             | "agena_shell_logs"
             | "agena_shell_stop"
-            | "agena.process.run"
-            | "agena.process.list"
-            | "agena.process.logs"
-            | "agena.process.stop"
-            | "agena_process_run"
-            | "agena_process_list"
-            | "agena_process_logs"
-            | "agena_process_stop"
     ) {
         return Some("shell".to_string());
     }
-    payload_name_for_table(tool_name).or_else(|| {
-        // The terminal segment of a tool name may already be the serialized
-        // variant tag (`read`, `glob`, `cron_create`, ...). Accept bare tags
-        // and names whose last segment is one of them.
-        let canonical = canonical_tool_payload_name(tool_name);
-        is_payload_variant_tag(canonical).then(|| canonical.to_string())
-    })
+    payload_name_for_table(tool_name)
 }
 
 #[cfg(test)]
@@ -950,29 +876,31 @@ mod tests {
     }
 
     #[test]
-    fn legacy_process_invocations_remain_readable() {
+    fn unsupported_process_invocations_are_not_decoded() {
         let invocation = ToolInvocation::new("agena.process.list", StructuredObject::default());
 
-        let payload = ToolPayloadInput::from_invocation(&invocation).expect("legacy payload");
-
-        assert!(matches!(
-            payload,
-            ToolPayloadInput::Shell(ShellToolInput::List {})
-        ));
+        assert!(ToolPayloadInput::from_invocation(&invocation).is_none());
     }
 
     #[test]
-    fn legacy_process_payload_tag_remains_readable() {
-        let payload: ToolPayloadInput = serde_json::from_value(serde_json::json!({
+    fn unsupported_process_payload_tag_is_rejected() {
+        let result = serde_json::from_value::<ToolPayloadInput>(serde_json::json!({
             "tool": "process",
             "action": "list"
-        }))
-        .expect("legacy process payload");
+        }));
 
-        assert!(matches!(
-            payload,
-            ToolPayloadInput::Shell(ShellToolInput::List {})
-        ));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn bare_builtin_invocation_names_are_not_decoded() {
+        for name in ["read", "glob", "grep", "apply_patch"] {
+            let invocation = ToolInvocation::new(name, StructuredObject::default());
+            assert!(
+                ToolPayloadInput::from_invocation(&invocation).is_none(),
+                "bare tool name {name} must be rejected"
+            );
+        }
     }
 
     #[test]
@@ -980,17 +908,14 @@ mod tests {
         // The provider emits the compact name `shell.run`; the payload layer
         // must reconstruct the `shell` discriminant from it exactly like it
         // does for the canonical `agena.shell.run` form.
-        // This input intentionally keeps the legacy `filesystem_effects` /
-        // `network_effects` wire shape to pin the read-only compatibility
-        // path that merges them into the flattened `reads`/`writes`/`network`
-        // fields.
         let invocation = ToolInvocation::new(
             "shell.run",
             StructuredObject::try_from(serde_json::json!({
                 "command": "cargo test",
-                "background": false,
-                "filesystem_effects": {"read": [], "write": []},
-                "network_effects": [],
+                "run_in_background": false,
+                "reads": [],
+                "writes": [],
+                "network": [],
             }))
             .expect("structured shell.run input"),
         );
@@ -1023,8 +948,8 @@ mod tests {
 
     #[test]
     fn every_payload_tool_spelling_resolves_to_its_variant_tag() {
-        // The provider catalog, workflows, plugin wire format, and legacy bare
-        // tags each spell the same tool differently. Every spelling must map to
+        // The provider catalog, canonical registry, and plugin wire format each
+        // spell the same tool differently. Every supported spelling must map to
         // the same output variant tag, otherwise the renderer falls back to
         // dumping the whole payload as a raw JSON card.
         let cases: &[(&str, &str)] = &[
@@ -1032,32 +957,23 @@ mod tests {
             ("fs.read", "read"),
             ("agena.fs.read", "read"),
             ("agena_fs_read", "read"),
-            ("read", "read"),
             ("fs.glob", "glob"),
             ("agena.fs.glob", "glob"),
             ("agena_fs_glob", "glob"),
-            ("glob", "glob"),
             ("fs.grep", "grep"),
             ("agena.fs.grep", "grep"),
             ("agena_fs_grep", "grep"),
-            ("grep", "grep"),
             ("fs.apply_patch", "apply_patch"),
             ("agena.fs.apply_patch", "apply_patch"),
             ("agena_fs_apply_patch", "apply_patch"),
-            ("apply_patch", "apply_patch"),
-            // shell / process family
+            // shell family
             ("shell", "shell"),
             ("shell.run", "shell"),
             ("shell.list", "shell"),
             ("shell.logs", "shell"),
             ("shell.stop", "shell"),
-            ("process", "shell"),
-            ("process.run", "shell"),
-            ("powershell.run", "shell"),
             ("agena.shell.run", "shell"),
             ("agena_shell_run", "shell"),
-            ("agena.process.list", "shell"),
-            ("agena_process_stop", "shell"),
             // monitor family
             ("monitor", "monitor"),
             ("monitor.start", "monitor"),
@@ -1070,42 +986,33 @@ mod tests {
             ("tasks.run", "task"),
             ("agena.tasks.run", "task"),
             ("agena_tasks_run", "task"),
-            ("task", "task"),
             ("tools.search", "tool_search"),
             ("agena.tools.search", "tool_search"),
             ("agena_tools_search", "tool_search"),
-            ("tool_search", "tool_search"),
             ("interaction.ask", "ask_user"),
             ("agena.interaction.ask", "ask_user"),
             ("agena_interaction_ask", "ask_user"),
-            ("ask_user", "ask_user"),
             // web family
             ("web.fetch", "web_fetch"),
             ("agena.web.fetch", "web_fetch"),
             ("agena_web__fetch", "web_fetch"),
-            ("web_fetch", "web_fetch"),
             ("web.search", "web_search"),
             ("agena.web.search", "web_search"),
             ("agena_web__search", "web_search"),
-            ("web_search", "web_search"),
             // snapshot family
             ("snapshot.enter", "enter_snapshot"),
             ("agena.snapshot.enter", "enter_snapshot"),
             ("agena_snapshot_enter", "enter_snapshot"),
-            ("enter_snapshot", "enter_snapshot"),
             ("snapshot.exit", "exit_snapshot"),
             ("agena.snapshot.exit", "exit_snapshot"),
             ("agena_snapshot_exit", "exit_snapshot"),
-            ("exit_snapshot", "exit_snapshot"),
             // cron family
             ("cron.create", "cron_create"),
             ("agena.cron.create", "cron_create"),
             ("agena_cron_create", "cron_create"),
-            ("cron_create", "cron_create"),
             ("cron.list", "cron_list"),
             ("agena.cron.list", "cron_list"),
             ("agena_cron_list", "cron_list"),
-            ("cron_list", "cron_list"),
             ("cron.delete", "cron_delete"),
             ("cron.update", "cron_update"),
             ("cron.pause", "cron_pause"),
@@ -1115,7 +1022,6 @@ mod tests {
             ("lsp.definition", "lsp_definition"),
             ("agena.lsp.definition", "lsp_definition"),
             ("agena_lsp_definition", "lsp_definition"),
-            ("lsp_definition", "lsp_definition"),
             ("lsp.references", "lsp_references"),
             ("lsp.hover", "lsp_hover"),
             ("lsp.diagnostics", "lsp_diagnostics"),

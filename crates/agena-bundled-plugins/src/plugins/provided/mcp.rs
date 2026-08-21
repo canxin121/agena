@@ -774,18 +774,18 @@ fn invoke_tool_output(
         )));
     }
 
-    let mut blocks: Vec<agena_domain::ViewBlock> = result
+    let mut rendered_blocks: Vec<agena_domain::ViewBlock> = result
         .content
         .iter()
         .filter_map(content_block_to_result_block)
         .collect();
     if let Some(structured) = result.structured_content.clone() {
-        blocks.push(agena_domain::ViewBlock::Json {
+        rendered_blocks.push(agena_domain::ViewBlock::Json {
             id: None,
             value: structured,
         });
     }
-    let output_text = blocks
+    let output_text = rendered_blocks
         .iter()
         .filter_map(|block| match block {
             agena_domain::ViewBlock::Text { text, .. } => Some(text.as_str()),
@@ -793,14 +793,14 @@ fn invoke_tool_output(
         })
         .collect::<Vec<_>>()
         .join("\n");
-    let attachments = blocks
+    let attachments = rendered_blocks
         .iter()
         .filter_map(view_block_to_attachment_item)
         .collect::<Vec<AttachmentItem>>();
     let payload = serde_json::json!({
         "server": server,
         "tool": tool,
-        "content_blocks": blocks,
+        "content": result.content,
         "structured_content": result.structured_content,
         "mcp_meta": result.meta,
     });

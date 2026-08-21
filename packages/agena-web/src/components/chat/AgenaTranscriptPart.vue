@@ -3,18 +3,15 @@ import { computed } from 'vue'
 
 import MarkdownRenderer from '@/components/markdown/MarkdownRenderer.vue'
 import CodeBlock from '@/components/ui/CodeBlock.vue'
-import AttentionPanel from '@/components/chat/AttentionPanel.vue'
 import AgenaOperationPart from '@/components/chat/AgenaOperationPart.vue'
 import type { AttentionLike, TranscriptDisplayPart } from '@/components/chat/messageList.types'
 import { durablePartContent, transcriptPartText } from '@/pages/chat/transcriptProjection'
 import {
   attachmentPresentations,
   errorPresentation,
-  interactionPresentation,
   partStatusPresentation,
   prettyJson,
   skillPresentations,
-  attentionRequestId,
 } from '@/pages/chat/transcriptPartPresentation'
 import { buildWorkspaceRawFileUrl } from '@/lib/workspaceLinks'
 import { useDirectoryStore } from '@/stores/directory'
@@ -42,14 +39,7 @@ const body = computed(() => transcriptPartText(props.part.source))
 const content = computed(() => durablePartContent(props.part.source))
 const attachments = computed(() => attachmentPresentations(props.part))
 const skills = computed(() => skillPresentations(props.part))
-const interaction = computed(() => interactionPresentation(props.part))
 const failure = computed(() => errorPresentation(props.part))
-const activeAttentionRequestId = computed(() => attentionRequestId(props.attention?.payload))
-const interactionOwnsAttention = computed(
-  () =>
-    Boolean(interaction.value.pending && interaction.value.requestId) &&
-    interaction.value.requestId === activeAttentionRequestId.value,
-)
 
 function toggle() {
   emit('select')
@@ -221,44 +211,6 @@ function isAudio(mime: string, label: string): boolean {
             {{ [skill.source, skill.contentHash].filter(Boolean).join(' · ') }}
           </div>
         </section>
-      </div>
-
-      <div v-else-if="part.kind === 'interaction'" class="space-y-3 py-1 text-sm">
-        <AttentionPanel
-          v-if="interactionOwnsAttention && attention && sessionId"
-          :kind="attention.kind"
-          :session-id="sessionId"
-          :payload="attention.payload"
-          inline
-        />
-        <template v-else>
-          <MarkdownRenderer
-            v-if="interaction.bodyMarkdown"
-            :content="interaction.bodyMarkdown"
-            mode="markdown"
-            :stream="false"
-          />
-          <section
-            v-for="(question, questionIndex) in interaction.questions"
-            :key="`${question.question}:${questionIndex}`"
-          >
-            <div v-if="question.header" class="text-[10px] font-semibold uppercase text-muted-foreground">
-              {{ question.header }}
-            </div>
-            <div class="font-medium">{{ question.question }}</div>
-            <div class="mt-1 border-y border-border/50">
-              <div v-for="option in question.options" :key="option.label" class="py-1.5 text-xs">
-                <span class="font-mono text-primary">○</span>
-                <span class="ml-2 font-medium">{{ option.label }}</span>
-                <span v-if="option.description" class="ml-2 text-muted-foreground">{{ option.description }}</span>
-              </div>
-            </div>
-          </section>
-          <div v-if="interaction.pending" class="font-mono text-[11px] text-amber-600 dark:text-amber-400">
-            Awaiting user input
-          </div>
-          <CodeBlock v-else :code="prettyJson(interaction.reply)" lang="json" compact />
-        </template>
       </div>
 
       <div v-else-if="part.kind === 'error'" class="space-y-2 py-1 text-sm text-rose-800 dark:text-rose-200">

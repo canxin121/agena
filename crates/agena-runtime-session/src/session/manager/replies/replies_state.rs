@@ -75,7 +75,6 @@ impl SessionManager {
                         content: Some(part.content.clone()),
                         content_text_delta: None,
                         summary: part.summary.clone(),
-                        rendered_markdown: part.rendered_markdown.clone(),
                         provider_state: part.provider_state.clone(),
                         finished_at_ms: part.finished_at_ms,
                     },

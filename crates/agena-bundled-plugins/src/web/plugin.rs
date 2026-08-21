@@ -852,11 +852,7 @@ struct CrawlRunInput {
 #[serde(deny_unknown_fields)]
 struct CrawlWebSearchInput {
     query: String,
-    /// Maximum number of results to return. `limit` remains accepted as a
-    /// backwards-compatible input alias, but is deliberately omitted from
-    /// the advertised schema so callers see one unambiguous control.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[serde(alias = "limit")]
     max_results: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     engine: Option<WebSearchEngineSelection>,
@@ -902,12 +898,7 @@ struct BrowserClickInput {
     selector: Option<String>,
     /// Snapshot-local index returned by `browser_snapshot.elements[].ref`.
     /// It is valid only while the page DOM has not materially changed.
-    #[serde(
-        default,
-        rename = "ref",
-        alias = "element_ref",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(default, rename = "ref", skip_serializing_if = "Option::is_none")]
     #[schemars(range(min = 0, max = 199))]
     element_ref: Option<u16>,
 }
@@ -923,12 +914,7 @@ struct BrowserTypeInput {
     session_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     selector: Option<String>,
-    #[serde(
-        default,
-        rename = "ref",
-        alias = "element_ref",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(default, rename = "ref", skip_serializing_if = "Option::is_none")]
     #[schemars(range(min = 0, max = 199))]
     element_ref: Option<u16>,
     text: String,
@@ -990,7 +976,7 @@ const fn default_browser_action_timeout_ms() -> u64 {
 enum WebSearchEngineSelection {
     Auto,
     Bing,
-    #[serde(rename = "duckduckgo", alias = "duck_duck_go", alias = "ddg")]
+    #[serde(rename = "duckduckgo")]
     DuckDuckGo,
     Baidu,
 }

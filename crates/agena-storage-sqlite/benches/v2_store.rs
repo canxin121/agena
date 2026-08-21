@@ -79,7 +79,6 @@ async fn seed_read_session(
             content: json!({"text": format!("seed part {index}")}),
             summary: None,
             visibility: PartVisibility::Both,
-            rendered_markdown: None,
             parent_part_id: None,
             state: PartState::Completed,
         })
@@ -198,7 +197,6 @@ async fn benchmark_streaming(
                     content: json!({"text": ""}),
                     summary: None,
                     visibility: PartVisibility::Both,
-                    rendered_markdown: None,
                     parent_part_id: None,
                     state: PartState::InProgress,
                 }],

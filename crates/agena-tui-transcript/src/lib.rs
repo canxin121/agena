@@ -6,12 +6,10 @@
 
 use std::ops::Range;
 
-pub use agena_api::part::{
-    FileChangeKindResource, HumanToolResultResource, OperationBlockResource, OperationPartResource,
-    PartExecutionStatusResource, RequestPartResource, TodoStatusResource, ToolInvocationResource,
-};
+pub use agena_api::part::PartExecutionStatusResource;
 use ratatui::layout::Rect;
 
+mod activity_presentation;
 pub mod interaction_view;
 pub mod markdown;
 pub mod math;
@@ -20,9 +18,9 @@ pub mod parts;
 pub mod render_model;
 pub mod renderer;
 pub mod selection;
-pub mod snapshot;
 pub mod text;
 
+pub use activity_presentation::pending_user_entry;
 pub use interaction_view::*;
 pub use markdown::*;
 pub use math::*;
@@ -36,10 +34,9 @@ pub use renderer::{
     COLLAPSED_ACTIVITY_VISIBLE_COUNT, render_entry_detailed,
     render_entry_detailed_with_interactions, render_entry_detailed_with_progressive_expansion,
     render_entry_export, render_markdown_document, render_parts_export_markdown,
-    render_transcript_snapshot_export_markdown, rewind_message_preview,
+    rewind_message_preview,
 };
 pub use selection::{normalize_transcript_text_selection, transcript_text_selection_text};
-pub use snapshot::{pending_user_entry, transcript_entries};
 pub use text as ui_text;
 
 #[cfg(test)]
@@ -51,7 +48,7 @@ mod test_fixtures {
     use chrono::{DateTime, Utc};
 
     use super::{
-        OperationPartResource, TranscriptActivityContent, TranscriptContentId, TranscriptEntryPart,
+        ToolCallView, TranscriptActivityContent, TranscriptContentId, TranscriptEntryPart,
         TranscriptPartContent,
     };
 
@@ -113,7 +110,7 @@ mod test_fixtures {
             message_id: i64,
             created_at: DateTime<Utc>,
             status: ExecutionStatus,
-            operation: OperationPartResource,
+            operation: ToolCallView,
         ) -> TranscriptEntryPart<'static> {
             let _ = (message_id, created_at);
             TranscriptEntryPart {

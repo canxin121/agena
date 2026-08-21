@@ -3737,7 +3737,7 @@ Filesystem command tools for read/search and explicit edits.
 **Examples**:
 ```json
 {
-  "path": "Cargo.toml"
+  "file_path": "Cargo.toml"
 }
 ```
 
@@ -3770,9 +3770,6 @@ Filesystem command tools for read/search and explicit edits.
       "description": "File or directory path to read. Relative paths are resolved from the\nworkspace root.",
       "minLength": 1,
       "type": "string",
-      "x-agena-aliases": [
-        "path"
-      ],
       "x-agena-order": "000000",
       "x-agena-path": "read"
     },
@@ -7505,9 +7502,6 @@ Shell command execution and background process tools.
     "run_in_background": {
       "default": false,
       "type": "boolean",
-      "x-agena-aliases": [
-        "background"
-      ],
       "x-agena-order": "000002"
     },
     "shell": {
@@ -8375,9 +8369,6 @@ Delegated subtask orchestration tools.
       "default": false,
       "description": "Run the subtask in the background (default false). When false (default)\nthe subtask runs inline and this call returns its final result before\nthe tool call returns. When true, the tool returns immediately with a\ntask id and the result is delivered as a `system_notification` when the\nsubtask settles — do not poll tasks.get/tasks.output waiting for it.",
       "type": "boolean",
-      "x-agena-aliases": [
-        "background"
-      ],
       "x-agena-order": "000003"
     },
     "selection": {
@@ -9069,9 +9060,6 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
         "integer",
         "null"
       ],
-      "x-agena-aliases": [
-        "element_ref"
-      ],
       "x-agena-order": "000002"
     },
     "selector": {
@@ -9363,9 +9351,6 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
         "integer",
         "null"
       ],
-      "x-agena-aliases": [
-        "element_ref"
-      ],
       "x-agena-order": "000002"
     },
     "selector": {
@@ -9625,7 +9610,7 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
 | `allowed_domains` | `array<string>` | — | — |  |
 | `blocked_domains` | `array<string>` | — | — |  |
 | `engine` | `WebSearchEngineSelection / null` | — | — |  |
-| `max_results` | `integer / null` | — | — | Maximum number of results to return. `limit` remains accepted as a<br>backwards-compatible input alias, but is deliberately omitted from<br>the advertised schema so callers see one unambiguous control. |
+| `max_results` | `integer / null` | — | — |  |
 | `query` | `string` | ✓ | — |  |
 
 **Input schema**:
@@ -9670,15 +9655,11 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
       "x-agena-order": "000002"
     },
     "max_results": {
-      "description": "Maximum number of results to return. `limit` remains accepted as a\nbackwards-compatible input alias, but is deliberately omitted from\nthe advertised schema so callers see one unambiguous control.",
       "format": "uint32",
       "minimum": 0,
       "type": [
         "integer",
         "null"
-      ],
-      "x-agena-aliases": [
-        "limit"
       ],
       "x-agena-order": "000001"
     },

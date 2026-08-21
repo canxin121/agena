@@ -35,14 +35,11 @@ export type Settings = {
   // Chat message UX
   showChatTimestamps?: boolean
   showReasoningTraces?: boolean
-  showTextJustificationActivity?: boolean
   chatActivityAutoCollapseOnIdle?: boolean
   chatActivitySummaryFilters?: string[]
   chatToolActivitySummaryFilters?: string[]
   chatActivityKindDefaultExpanded?: string[]
-  // Legacy OpenCode activity keys; read only for preference migration.
-  chatActivityDefaultExpanded?: string[]
-  chatActivityDefaultExpandedToolFilters?: string[]
+  chatToolActivityDefaultExpandedCategories?: string[]
   chatToolActivityDefaultExpandedOverrides?: Record<string, boolean>
   diffLayoutPreference?: 'dynamic' | 'inline' | 'side-by-side'
   diffViewMode?: 'single' | 'stacked'

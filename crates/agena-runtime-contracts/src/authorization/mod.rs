@@ -193,10 +193,7 @@ fn apply_tool_permission_rules(
             Ok(base)
         }
         ToolPermissionRules::Ordered(entries) => {
-            if matches!(
-                tool_name,
-                "bash" | "shell" | "agena.shell.run" | "agena.process.run"
-            ) {
+            if matches!(tool_name, "agena.shell.run") {
                 for (pattern, mode) in sorted_rule_entries(entries) {
                     let trimmed = pattern.trim();
                     if trimmed.is_empty() {

@@ -5,7 +5,6 @@ use serde::{Deserialize, Serialize};
 use crate::attachment::AttachmentItem;
 use crate::identity::{PluginKey, ToolKey};
 use crate::manifest::ToolTag;
-pub use agena_domain::ToolPresentationSection;
 
 // ── tool.execute.before ────────────────────────────────────────────────────
 
@@ -250,8 +249,6 @@ pub struct ToolInvokeOutput {
     pub title: String,
     pub summary: String,
     pub output_text: String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub sections: Vec<ToolPresentationSection>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub payload: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -267,7 +264,6 @@ impl ToolInvokeOutput {
             title: String::new(),
             summary: agena_plugin_contracts::normalize_tool_summary(&s),
             output_text: s,
-            sections: Vec::new(),
             payload: None,
             metadata: BTreeMap::new(),
             attachments: Vec::new(),
@@ -286,19 +282,10 @@ impl ToolInvokeOutput {
             title: agena_plugin_contracts::normalize_tool_title(title.into()),
             summary: agena_plugin_contracts::normalize_tool_summary(summary.into()),
             output_text: output_text.into(),
-            sections: Vec::new(),
             payload,
             metadata,
             attachments,
         }
-    }
-
-    pub fn with_section(mut self, title: impl Into<String>, text: impl Into<String>) -> Self {
-        self.sections.push(ToolPresentationSection {
-            title: title.into(),
-            text: text.into(),
-        });
-        self
     }
 }
 
@@ -389,8 +376,6 @@ pub struct ToolStreamEnd {
     pub title: String,
     pub summary: String,
     pub output_text: String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub sections: Vec<ToolPresentationSection>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub payload: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -407,7 +392,6 @@ impl ToolStreamEnd {
             title: String::new(),
             summary: agena_plugin_contracts::normalize_tool_summary(&output_text),
             output_text,
-            sections: Vec::new(),
             payload: None,
             metadata: BTreeMap::new(),
             attachments: Vec::new(),
@@ -420,7 +404,6 @@ impl ToolStreamEnd {
             title: output.title,
             summary: output.summary,
             output_text: output.output_text,
-            sections: output.sections,
             payload: output.payload,
             metadata: output.metadata,
             attachments: output.attachments,
@@ -441,7 +424,6 @@ impl ToolStreamEnd {
             title: agena_plugin_contracts::normalize_tool_title(title.into()),
             summary: agena_plugin_contracts::normalize_tool_summary(summary.into()),
             output_text: output_text.into(),
-            sections: Vec::new(),
             payload,
             metadata,
             attachments,

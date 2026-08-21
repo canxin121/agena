@@ -46,7 +46,7 @@ type SessionStateResponse = {
 }
 type ToolCatalogResponse = { permission_tools?: Array<{ name?: string; summary?: string }> }
 
-const SHELL_CAPABLE_TOOLS = ['shell', 'bash', 'agena.shell.run', 'agena.process.run'] as const
+const SHELL_CAPABLE_TOOLS = ['agena.shell.run'] as const
 
 const { t } = useI18n()
 const chat = useChatStore()

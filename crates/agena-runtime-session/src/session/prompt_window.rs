@@ -111,7 +111,7 @@ pub(crate) struct PromptTokenEstimate {
 }
 
 /// One provider-visible prompt window item. Run-projected items carry the
-/// durable run marker part id (the v2 message identity, design 4.1) so the
+/// durable run marker part id so the
 /// continuation / estimate paths can locate an anchor by id; synthetic
 /// checkpoint and recent-suffix messages injected from a local-summary
 /// compaction carry `None`.
@@ -302,7 +302,7 @@ fn uses_provider_round_delivery(part: &Part) -> bool {
             .content
             .get("delivery_protocol")
             .and_then(serde_json::Value::as_str)
-            == Some("provider_round_v1")
+            == Some("provider_round")
 }
 
 /// Notification ids represented in the exact prompt built for the next
@@ -436,9 +436,9 @@ fn window_items_from_parts(parts: &[Part]) -> Vec<WindowItem> {
                     run: projected,
                 });
             }
-            // Any content parts not claimed by a round record (interaction
-            // parts appended between rounds, legacy parts) attach to the last
-            // wire message so nothing is silently dropped from the prompt.
+            // Any content parts not claimed by a round record (for example
+            // parts appended between rounds) attach to the last wire message
+            // so nothing is silently dropped from the prompt.
             let unclaimed = content_parts
                 .iter()
                 .filter(|part| !claimed.contains(&part.part_id))
@@ -1205,7 +1205,6 @@ mod tool_result_render_tests {
             content: content.clone(),
             summary: None,
             visibility: PartVisibility::Both,
-            rendered_markdown: None,
             parent_part_id: None,
             run_id: Some(1),
             origin_session_id: 1,
@@ -1241,7 +1240,6 @@ mod tool_result_render_tests {
         assert_eq!(output_json, "plugin-only model projection");
         assert_eq!(durable.content, content);
         assert!(durable.summary.is_none());
-        assert!(durable.rendered_markdown.is_none());
     }
 }
 
@@ -1556,7 +1554,7 @@ mod compaction_tests {
     use chrono::{DateTime, Utc};
 
     /// Build one run marker part (`part_id` = the durable message id) plus its
-    /// text content part, the v2 parts shape the prompt path projects onto
+    /// text content part, the parts shape the prompt path projects onto
     /// provider input messages via `project_completion_input`.
     fn run_parts(
         id: i64,
@@ -1576,7 +1574,6 @@ mod compaction_tests {
                 content,
                 summary: None,
                 visibility: PartVisibility::Both,
-                rendered_markdown: None,
                 parent_part_id: None,
                 run_id: None,
                 origin_session_id: 7,
@@ -1596,7 +1593,6 @@ mod compaction_tests {
                     .expect("text content is always serializable"),
                 summary: None,
                 visibility: PartVisibility::Both,
-                rendered_markdown: None,
                 parent_part_id: None,
                 run_id: Some(id),
                 origin_session_id: 7,
@@ -1624,7 +1620,6 @@ mod compaction_tests {
                 content,
                 summary: None,
                 visibility: PartVisibility::Both,
-                rendered_markdown: None,
                 parent_part_id: None,
                 run_id: None,
                 origin_session_id: 7,
@@ -1653,7 +1648,6 @@ mod compaction_tests {
                 .expect("hook content is always serializable"),
                 summary: None,
                 visibility: PartVisibility::Both,
-                rendered_markdown: None,
                 parent_part_id: None,
                 run_id: Some(id),
                 origin_session_id: 7,
@@ -1681,7 +1675,6 @@ mod compaction_tests {
             }),
             summary: None,
             visibility: PartVisibility::Both,
-            rendered_markdown: None,
             parent_part_id: None,
             run_id: None,
             origin_session_id: 7,
@@ -1816,7 +1809,6 @@ mod compaction_tests {
             content: marker,
             summary: None,
             visibility: PartVisibility::Both,
-            rendered_markdown: None,
             parent_part_id: None,
             run_id: None,
             origin_session_id: 7,
@@ -1836,7 +1828,6 @@ mod compaction_tests {
                 .expect("hook content is always serializable"),
             summary: None,
             visibility: PartVisibility::Both,
-            rendered_markdown: None,
             parent_part_id: None,
             run_id: Some(99),
             origin_session_id: 7,
@@ -2028,11 +2019,10 @@ mod compaction_tests {
                 "status": "completed",
                 "summary": "completed after compaction",
                 "body": "completed after compaction",
-                "delivery_protocol": "provider_round_v1"
+                "delivery_protocol": "provider_round"
             }),
             summary: None,
             visibility: PartVisibility::Both,
-            rendered_markdown: None,
             parent_part_id: None,
             run_id: Some(1),
             origin_session_id: 7,
@@ -2077,7 +2067,6 @@ mod compaction_tests {
             content: handled_marker,
             summary: None,
             visibility: PartVisibility::Both,
-            rendered_markdown: None,
             parent_part_id: None,
             run_id: None,
             origin_session_id: 7,
@@ -2099,7 +2088,6 @@ mod compaction_tests {
             .expect("response text serializes"),
             summary: None,
             visibility: PartVisibility::Both,
-            rendered_markdown: None,
             parent_part_id: None,
             run_id: Some(71),
             origin_session_id: 7,
@@ -2149,7 +2137,6 @@ mod compaction_tests {
             content: marker,
             summary: None,
             visibility: PartVisibility::Both,
-            rendered_markdown: None,
             parent_part_id: None,
             run_id: None,
             origin_session_id: 7,
@@ -2169,7 +2156,6 @@ mod compaction_tests {
                 .expect("text content is always serializable"),
             summary: None,
             visibility: PartVisibility::Both,
-            rendered_markdown: None,
             parent_part_id: None,
             run_id: Some(999),
             origin_session_id: 7,
@@ -2198,7 +2184,6 @@ mod compaction_tests {
             .expect("notification content is always serializable"),
             summary: None,
             visibility: PartVisibility::Both,
-            rendered_markdown: None,
             parent_part_id: None,
             run_id: Some(999),
             origin_session_id: 7,
@@ -2277,10 +2262,10 @@ mod compaction_tests {
         );
     }
 
-    /// A run marker without `rounds` (single-round turns, legacy rows, user /
-    /// hook / execution runs) projects as one item exactly as before.
+    /// A run marker without `rounds` (single-round turns, user / hook /
+    /// execution runs) projects as one item.
     #[test]
-    fn single_round_or_legacy_run_projects_one_item_without_round_splitting() {
+    fn single_round_run_projects_one_item_without_round_splitting() {
         let now = Utc::now();
         let parts = run_parts(7, PartRole::Assistant, "tool", "plain assistant", now);
         let items = window_items_from_parts(&parts);

@@ -550,9 +550,9 @@
         {
           "canonical_name": "agena.fs.read",
           "conditional": null,
-          "definition_identity": "b0d9ae17d0bb652f58466c8e0644efca1113869ac72535eafe16ad7a1615e4b1",
+          "definition_identity": "f4386942036710762bd9dd3fc7b4aed33f34e8bb72c0ec0b584129991befe650",
           "gateway": false,
-          "input_schema_sha256": "fa2d4647d41839889b236c79d9d2bf9c72c5c7820c92b3541016432c5ede1dac",
+          "input_schema_sha256": "7740a9c238c59053c10692dd0205e4b077a3bd17872c6c4f3bc7ca1b8f7c94f8",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
@@ -1456,9 +1456,9 @@
         {
           "canonical_name": "agena.shell.run",
           "conditional": null,
-          "definition_identity": "c24e2b86a5184a98416646173d3708b809ab8eb1d436fa142063a3fec36dd019",
+          "definition_identity": "02e4aaa73557b57d6ff6599f30a26487d46bf1d3ec2448fde07142c8439e1bd6",
           "gateway": false,
-          "input_schema_sha256": "332908e4df7ad384fd204e8731b416c97a71518e0889bf02e8b54f6314517c54",
+          "input_schema_sha256": "d25c72c2a810dd5b6d15eef70247aea741685337dc424105bc231f5aa6b6cb0b",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "execute"
@@ -1707,9 +1707,9 @@
         {
           "canonical_name": "agena.tasks.run",
           "conditional": null,
-          "definition_identity": "b8a950171227701624830d042692ddc33a20af535df845812092eb6187b79d7f",
+          "definition_identity": "912d0fa4b496e904b45cdd1faaa5d369b21a7ca889e70554522ccd62c4000cd1",
           "gateway": false,
-          "input_schema_sha256": "00aca83f4774acdf3a375776de031ff01663dc736ce8628fb1d967806f25924e",
+          "input_schema_sha256": "ae7fdb5983e324dd5d2efb8de1159e81a1dbf71e47db71478caf3b875234268a",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "subtask",
@@ -1826,9 +1826,9 @@
         {
           "canonical_name": "agena.web.browser_click",
           "conditional": null,
-          "definition_identity": "4168b11396c202060469e601048b88fd4ae5128c69c808ea27b53bed712c1566",
+          "definition_identity": "85f5802f90aa2488cdbf50adc995aea31d79c5dacb6f05feca8a2a86905231ec",
           "gateway": false,
-          "input_schema_sha256": "d3b2b07daedf329a189459a53822c7f4960124113d288d74f87ae1042c8b329b",
+          "input_schema_sha256": "7b43532bc7fc1799c3c08d94fc9db820ab80786aaf12df6865057e5a206d77b0",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "network",
@@ -1933,9 +1933,9 @@
         {
           "canonical_name": "agena.web.browser_type",
           "conditional": null,
-          "definition_identity": "3f5862766dd34502f963a32d3b363a922f0524e7750cab093f00520c7d79f64a",
+          "definition_identity": "c4b5157e8c7fb227a8efcf768122566341d641cb8044b0b212656eb5549f163f",
           "gateway": false,
-          "input_schema_sha256": "1c6d406a169970b88ffb2fe29b6ffa1407d394952af80ad758061535618b7b95",
+          "input_schema_sha256": "25bfff4f04e10bb8c814f27abbb02ccaa5d58ae86044c227d076162afab75ab6",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "network",
@@ -1979,9 +1979,9 @@
         {
           "canonical_name": "agena.web.search",
           "conditional": null,
-          "definition_identity": "03830056f42f54e13f6635a4725ecc22c1d1dfbeffd71b303070d051b54d7fda",
+          "definition_identity": "03b5dedc737c3e8cee35a649ebea9c0e44dc712700fb1e05341f778489d9fd75",
           "gateway": false,
-          "input_schema_sha256": "0118e9d182159c4643824f31e5004880939ffbc24a792b7d5dfa4791f3edb577",
+          "input_schema_sha256": "d60d475beec4cce3c67abc483081393611f33043c3675d4af5c078aa7069f4ac",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "discovery"

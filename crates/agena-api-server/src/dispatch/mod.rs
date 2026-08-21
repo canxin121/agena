@@ -16,13 +16,11 @@ use agena_api::{
         UpdateSessionSelectionParams, UpdateWorkspaceParams, UpsertPermissionRuleParams,
     },
     queries::{
-        ActivityLogsParams, GetActivityParams, GetOperationDetailParams, GetPermissionRuleParams,
-        GetSessionParams, GetWorkspaceParams, ListPermissionRulesParams,
-        ListProviderAdapterModelsParams, ListProviderModelsParams,
-        ListSavedProviderAdapterModelsParams, ListSessionsParams, ListWorkspacesParams, Query,
-        QueryResult,
+        ActivityLogsParams, GetActivityParams, GetPermissionRuleParams, GetSessionParams,
+        GetWorkspaceParams, ListPermissionRulesParams, ListProviderAdapterModelsParams,
+        ListProviderModelsParams, ListSavedProviderAdapterModelsParams, ListSessionsParams,
+        ListWorkspacesParams, Query, QueryResult,
     },
-    resource::OperationDetailResource,
 };
 use agena_application::{
     Application, ApplicationError,

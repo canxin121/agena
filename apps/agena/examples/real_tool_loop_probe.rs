@@ -90,7 +90,7 @@ async fn main() -> anyhow::Result<()> {
             // durable watermark, plus the raw facade view. Report how the
             // run-marker set and streaming deltas evolve over the run.
             let t0 = tokio::time::Instant::now();
-            if let Ok(projected) = queries.list_projected_runs(session_id, true).await {
+            if let Ok(projected) = queries.list_projected_runs(session_id).await {
                 let elapsed_ms = t0.elapsed().as_millis();
                 let runs = projected
                     .iter()

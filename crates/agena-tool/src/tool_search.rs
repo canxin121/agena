@@ -563,7 +563,7 @@ mod tests {
             doc("shell.logs", "Read process logs", &["shell"]),
         ];
 
-        let results = search_tools(&docs, "process.run", 3);
+        let results = search_tools(&docs, "shell.run", 3);
 
         assert_eq!(
             results.first().map(|doc| doc.name.as_str()),

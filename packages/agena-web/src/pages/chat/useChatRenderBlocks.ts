@@ -39,11 +39,10 @@ export function useChatRenderBlocks(opts: {
   chat: ChatLike
   settings: SettingsLike
   showThinking: ComputedRef<boolean>
-  showJustification: ComputedRef<boolean>
   revertState: ComputedRef<RevertStateLike | null>
   formatTime: (ms?: number) => string
 }) {
-  const { chat, showThinking, showJustification, revertState } = opts
+  const { chat, showThinking, revertState } = opts
   // Deliberately reference settings/formatTime so the composable's public
   // contract remains stable while presentation filtering moves to TUI parity.
   void opts.settings
@@ -52,7 +51,6 @@ export function useChatRenderBlocks(opts: {
   const renderBlocks = computed<RenderBlock[]>(() =>
     projectTranscriptBlocks(chat.messages || [], {
       showReasoning: showThinking.value,
-      showJustification: showJustification.value,
       revert: normalizeRevertState(revertState.value),
     }),
   )
@@ -68,13 +66,6 @@ export function useChatRenderBlocks(opts: {
 
   function isReasoningPart(part: MessagePartLike): boolean {
     return durablePartKind(part) === 'think'
-  }
-
-  function isJustificationPart(part: MessagePartLike): boolean {
-    return String(part?.type || '')
-      .trim()
-      .toLowerCase()
-      .includes('justification')
   }
 
   function isMetaPart(part: MessagePartLike): boolean {
@@ -108,7 +99,6 @@ export function useChatRenderBlocks(opts: {
     renderBlocks,
     getTextParts,
     isReasoningPart,
-    isJustificationPart,
     isMetaPart,
     MAX_VISIBLE_ACTIVITY_COLLAPSED,
     activityExpandedByBlockKey,

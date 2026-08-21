@@ -15,10 +15,9 @@ mod ui;
 
 /// Shared v2 parts fixtures for app tests. The wire transcript is an ordered
 /// part list (database-design-v2.md §4.1.1); these helpers build the small
-/// `run`/`text`/`error`/`think` shapes the rendering tests exercise. Content
-/// Most legacy fixtures carry no `run_id`; the projection retains a narrow
-/// adjacency fallback for those rows. Production v2 rows and ownership tests
-/// use `run_id`, which is always authoritative even for late Hook parts.
+/// `run`/`text`/`error`/`think` shapes the rendering tests exercise. Every
+/// content fixture receives its owning run marker explicitly, matching the
+/// durable v2 ownership contract.
 #[cfg(test)]
 mod parts_fixtures {
     use agena_api::part::ErrorPartResource;
@@ -35,11 +34,11 @@ mod parts_fixtures {
             summary: None,
             created_at_ms: part_id * 10,
             parent_part_id: None,
-            run_id: Some(part_id),
+            run_id: None,
         }
     }
 
-    pub(super) fn text(part_id: i64, role: &str, text: &str) -> SessionTranscriptPart {
+    pub(super) fn text(run_id: i64, part_id: i64, role: &str, text: &str) -> SessionTranscriptPart {
         SessionTranscriptPart {
             part_id,
             kind: "text".to_owned(),
@@ -50,11 +49,12 @@ mod parts_fixtures {
             summary: None,
             created_at_ms: part_id * 10,
             parent_part_id: None,
-            run_id: None,
+            run_id: Some(run_id),
         }
     }
 
     pub(super) fn error(
+        run_id: i64,
         part_id: i64,
         role: &str,
         problem: agena_failure::UserProblem,
@@ -70,11 +70,16 @@ mod parts_fixtures {
             summary: None,
             created_at_ms: part_id * 10,
             parent_part_id: None,
-            run_id: None,
+            run_id: Some(run_id),
         }
     }
 
-    pub(super) fn think(part_id: i64, role: &str, summary: Vec<String>) -> SessionTranscriptPart {
+    pub(super) fn think(
+        run_id: i64,
+        part_id: i64,
+        role: &str,
+        summary: Vec<String>,
+    ) -> SessionTranscriptPart {
         SessionTranscriptPart {
             part_id,
             kind: "think".to_owned(),
@@ -85,11 +90,12 @@ mod parts_fixtures {
             summary: None,
             created_at_ms: part_id * 10,
             parent_part_id: None,
-            run_id: None,
+            run_id: Some(run_id),
         }
     }
 
     pub(super) fn hook(
+        run_id: i64,
         part_id: i64,
         role: &str,
         summary: &str,
@@ -109,11 +115,16 @@ mod parts_fixtures {
             summary: None,
             created_at_ms: part_id * 10,
             parent_part_id: None,
-            run_id: None,
+            run_id: Some(run_id),
         }
     }
 
-    pub(super) fn paste(part_id: i64, role: &str, text: &str) -> SessionTranscriptPart {
+    pub(super) fn paste(
+        run_id: i64,
+        part_id: i64,
+        role: &str,
+        text: &str,
+    ) -> SessionTranscriptPart {
         SessionTranscriptPart {
             part_id,
             kind: "paste_ref".to_owned(),
@@ -124,11 +135,16 @@ mod parts_fixtures {
             summary: None,
             created_at_ms: part_id * 10,
             parent_part_id: None,
-            run_id: None,
+            run_id: Some(run_id),
         }
     }
 
-    pub(super) fn file_ref(part_id: i64, role: &str, path: &str) -> SessionTranscriptPart {
+    pub(super) fn file_ref(
+        run_id: i64,
+        part_id: i64,
+        role: &str,
+        path: &str,
+    ) -> SessionTranscriptPart {
         SessionTranscriptPart {
             part_id,
             kind: "file_ref".to_owned(),
@@ -139,7 +155,7 @@ mod parts_fixtures {
             summary: None,
             created_at_ms: part_id * 10,
             parent_part_id: None,
-            run_id: None,
+            run_id: Some(run_id),
         }
     }
 }
@@ -553,14 +569,11 @@ macro_rules! api_message_part {
 /// and the reply handler's cleanup.
 #[cfg(test)]
 mod interaction_part_routing_tests {
-    use agena_api::{
-        part::RequestPartResource,
-        resource::{
-            ExecutionAccess, PendingInteractiveRequest, PendingInteractiveRequestResource,
-            SessionExecutionContextResource, SessionExecutionResource, SessionLifecycleState,
-            SessionRelationKind, SessionResource, SessionState, SessionTranscriptPart,
-            SessionUsageResource,
-        },
+    use agena_api::resource::{
+        ExecutionAccess, PendingInteractiveRequest, PendingInteractiveRequestResource,
+        SessionExecutionContextResource, SessionExecutionResource, SessionLifecycleState,
+        SessionRelationKind, SessionResource, SessionState, SessionTranscriptPart,
+        SessionUsageResource,
     };
     use agena_domain::{UserInputKind, UserInputQuestion, UserInputSource};
     use chrono::Utc;
@@ -662,34 +675,17 @@ mod interaction_part_routing_tests {
             summary: None,
             created_at_ms: 30,
             parent_part_id: None,
-            run_id: Some(3),
-        }
-    }
-
-    fn interaction_part() -> SessionTranscriptPart {
-        SessionTranscriptPart {
-            part_id: 5,
-            kind: "interaction".to_owned(),
-            role: "assistant".to_owned(),
-            state: "in_progress".to_owned(),
-            content: serde_json::to_value(RequestPartResource::UserInput {
-                request: wire_request(),
-                reply: None,
-            })
-            .expect("request part serializes"),
-            presentation: None,
-            summary: None,
-            created_at_ms: 50,
-            parent_part_id: None,
-            run_id: Some(3),
+            run_id: None,
         }
     }
 
     /// The canonical single-activity shape: a `tool_call` operation carrying an
-    /// awaiting `user_input` record IS the pending interaction part (there is no
-    /// separate `interaction` part anymore).
-    fn operation_tool_call_part() -> SessionTranscriptPart {
-        let request = serde_json::to_value(domain_request()).expect("request serializes");
+    /// awaiting `user_input` record is the pending user interaction (there
+    /// is no separate durable interaction part).
+    fn operation_tool_call_part_with_request(
+        request: agena_domain::UserInputRequest,
+    ) -> SessionTranscriptPart {
+        let request = serde_json::to_value(request).expect("request serializes");
         SessionTranscriptPart {
             part_id: 5,
             kind: "tool_call".to_owned(),
@@ -718,8 +714,12 @@ mod interaction_part_routing_tests {
         }
     }
 
+    fn operation_tool_call_part() -> SessionTranscriptPart {
+        operation_tool_call_part_with_request(domain_request())
+    }
+
     fn parts() -> Vec<SessionTranscriptPart> {
-        vec![run_marker(), interaction_part()]
+        vec![run_marker(), operation_tool_call_part()]
     }
 
     fn node_key() -> TranscriptNodeKey {
@@ -839,8 +839,8 @@ mod interaction_part_routing_tests {
         app
     }
 
-    /// Seed the pending review part (parts + execution + live interaction
-    /// view + expanded node + the request in the interaction map).
+    /// Seed the pending review part (canonical tool_call + execution + live
+    /// user-input view + expanded node + the request in the interaction map).
     fn seed_pending_review(app: &mut App) {
         seed_pending_review_with_plan(app, "## Proposed Plan");
     }
@@ -1012,22 +1012,7 @@ mod interaction_part_routing_tests {
             }],
             vec![
                 run_marker(),
-                SessionTranscriptPart {
-                    part_id: 5,
-                    kind: "interaction".to_owned(),
-                    role: "assistant".to_owned(),
-                    state: "in_progress".to_owned(),
-                    content: serde_json::to_value(RequestPartResource::UserInput {
-                        request: wire,
-                        reply: None,
-                    })
-                    .expect("request part serializes"),
-                    presentation: None,
-                    summary: None,
-                    created_at_ms: 50,
-                    parent_part_id: None,
-                    run_id: Some(3),
-                },
+                operation_tool_call_part_with_request(domain.clone()),
             ],
         ));
         app.user_input_interactions.insert(
@@ -2918,9 +2903,9 @@ mod transcript_character_cursor_tests {
             session_id: Some(7),
             parts: vec![
                 parts_fixtures::run(1, "user", "completed"),
-                parts_fixtures::text(2, "user", "please answer"),
+                parts_fixtures::text(1, 2, "user", "please answer"),
                 parts_fixtures::run(3, "assistant", "cancelled"),
-                parts_fixtures::text(4, "assistant", "partial assistant reply"),
+                parts_fixtures::text(3, 4, "assistant", "partial assistant reply"),
             ],
             ..TranscriptState::default()
         };
@@ -2977,12 +2962,12 @@ mod transcript_character_cursor_tests {
             session_id: Some(7),
             parts: vec![
                 parts_fixtures::run(1, "user", "completed"),
-                parts_fixtures::text(2, "user", "cancel this turn"),
+                parts_fixtures::text(1, 2, "user", "cancel this turn"),
                 parts_fixtures::run(3, "assistant", "cancelled"),
                 parts_fixtures::run(4, "user", "completed"),
-                parts_fixtures::text(5, "user", "the next turn"),
+                parts_fixtures::text(4, 5, "user", "the next turn"),
                 parts_fixtures::run(6, "assistant", "completed"),
-                parts_fixtures::text(7, "assistant", "next answer"),
+                parts_fixtures::text(6, 7, "assistant", "next answer"),
             ],
             ..TranscriptState::default()
         };
@@ -3018,10 +3003,10 @@ mod transcript_character_cursor_tests {
             session_id: Some(7),
             parts: vec![
                 parts_fixtures::run(1, "user", "completed"),
-                parts_fixtures::text(2, "user", "first turn"),
+                parts_fixtures::text(1, 2, "user", "first turn"),
                 parts_fixtures::run(3, "assistant", "cancelled"),
                 parts_fixtures::run(4, "user", "completed"),
-                parts_fixtures::text(5, "user", "second turn"),
+                parts_fixtures::text(4, 5, "user", "second turn"),
                 parts_fixtures::run(6, "assistant", "cancelled"),
             ],
             ..TranscriptState::default()
@@ -3216,7 +3201,7 @@ mod pending_message_tests {
 
         transcript.merge_parts(vec![
             parts_fixtures::run(1, "user", "completed"),
-            parts_fixtures::text(2, "user", "send this now"),
+            parts_fixtures::text(1, 2, "user", "send this now"),
             parts_fixtures::run(3, "assistant", "in_progress"),
         ]);
 
@@ -3248,7 +3233,7 @@ mod pending_message_tests {
 
         transcript.merge_parts(vec![
             parts_fixtures::run(1, "assistant", "completed"),
-            parts_fixtures::text(2, "assistant", "continued after permission"),
+            parts_fixtures::text(1, 2, "assistant", "continued after permission"),
         ]);
 
         assert_eq!(transcript.pending_user_messages.len(), 1);
@@ -3283,13 +3268,13 @@ mod pending_message_tests {
 
         let empty_parts = vec![
             parts_fixtures::run(1, "assistant", "in_progress"),
-            parts_fixtures::text(2, "assistant", "assistant reply"),
+            parts_fixtures::text(1, 2, "assistant", "assistant reply"),
         ];
         let materialized_parts = vec![
             parts_fixtures::run(1, "user", "completed"),
-            parts_fixtures::text(2, "user", "materialized once"),
+            parts_fixtures::text(1, 2, "user", "materialized once"),
             parts_fixtures::run(3, "assistant", "in_progress"),
-            parts_fixtures::text(4, "assistant", "assistant reply"),
+            parts_fixtures::text(3, 4, "assistant", "assistant reply"),
         ];
 
         transcript.merge_parts(empty_parts);
@@ -4205,6 +4190,7 @@ mod transcript_expansion_tests {
         // its body state even if a later count-based run fold temporarily
         // hides the whole old prefix.
         let hook = parts_fixtures::hook(
+            3,
             4,
             "assistant",
             "Run background scan",
@@ -4214,7 +4200,7 @@ mod transcript_expansion_tests {
             session_id: Some(7),
             parts: vec![
                 parts_fixtures::run(1, "user", "completed"),
-                parts_fixtures::text(2, "user", "list tools"),
+                parts_fixtures::text(1, 2, "user", "list tools"),
                 parts_fixtures::run(3, "assistant", "completed"),
                 hook.clone(),
             ],
@@ -4270,16 +4256,16 @@ mod transcript_expansion_tests {
         // state, but opening the run fold must restore that body state.
         transcript.merge_parts(vec![
             parts_fixtures::run(1, "user", "completed"),
-            parts_fixtures::text(2, "user", "list tools"),
+            parts_fixtures::text(1, 2, "user", "list tools"),
             parts_fixtures::run(3, "assistant", "completed"),
             hook.clone(),
-            parts_fixtures::hook(5, "assistant", "Run index", "indexed 1 file"),
-            parts_fixtures::hook(6, "assistant", "Run lint", "linted 2 files"),
-            parts_fixtures::hook(7, "assistant", "Run test", "ran 3 tests"),
-            parts_fixtures::hook(8, "assistant", "Run build", "built 4 targets"),
-            parts_fixtures::hook(9, "assistant", "Run deploy", "deployed 5 units"),
-            parts_fixtures::hook(10, "assistant", "Run verify", "verified 6 steps"),
-            parts_fixtures::hook(11, "assistant", "Run audit", "audited 7 modules"),
+            parts_fixtures::hook(3, 5, "assistant", "Run index", "indexed 1 file"),
+            parts_fixtures::hook(3, 6, "assistant", "Run lint", "linted 2 files"),
+            parts_fixtures::hook(3, 7, "assistant", "Run test", "ran 3 tests"),
+            parts_fixtures::hook(3, 8, "assistant", "Run build", "built 4 targets"),
+            parts_fixtures::hook(3, 9, "assistant", "Run deploy", "deployed 5 units"),
+            parts_fixtures::hook(3, 10, "assistant", "Run verify", "verified 6 steps"),
+            parts_fixtures::hook(3, 11, "assistant", "Run audit", "audited 7 modules"),
         ]);
 
         assert!(
@@ -5378,10 +5364,7 @@ mod transcript_expansion_tests {
 #[cfg(test)]
 mod live_transcript_tests {
     use agena_api::resource::SessionTranscriptPart;
-    use agena_domain::{
-        ActivityId, ActivityOwner, ActivityState, AssistantReplyId, ComposerDocument, ComposerNode,
-        ContentNode, TextSegmentId, TranscriptPatch,
-    };
+    use agena_domain::{ActivityId, ActivityState, ComposerDocument, ComposerNode};
     use agena_runtime::{
         RuntimePresentationEvent, RuntimePresentationEventKind, RuntimePresentationEventMeta,
     };
@@ -5409,26 +5392,6 @@ mod live_transcript_tests {
         }
     }
 
-    fn text_patch(
-        response_id: AssistantReplyId,
-        segment_id: TextSegmentId,
-        text: &str,
-        seq: i64,
-    ) -> RuntimePresentationEvent {
-        event(
-            RuntimePresentationEventKind::TranscriptPatch(Box::new(
-                TranscriptPatch::ContentUpserted {
-                    seq_session: seq,
-                    owner: ActivityOwner::AssistantReply {
-                        reply_id: response_id,
-                    },
-                    node: ContentNode::text_at(segment_id, text, 0, seq),
-                },
-            )),
-            seq,
-        )
-    }
-
     /// A completed assistant run carrying a tall multi-line body, used to
     /// exercise viewport follow/recovery across full parts refreshes. Each
     /// line is its own markdown paragraph so the v2 renderer keeps them as
@@ -5440,79 +5403,21 @@ mod live_transcript_tests {
             .join("\n\n");
         vec![
             parts_fixtures::run(run_id, "assistant", "completed"),
-            parts_fixtures::text(text_id, "assistant", &body),
+            parts_fixtures::text(run_id, text_id, "assistant", &body),
         ]
     }
 
     #[test]
-    fn transcript_patch_triggers_a_parts_reload() {
-        let response_id = AssistantReplyId::new();
-        let segment_id = TextSegmentId::new();
+    fn activity_v2_events_do_not_advance_the_durable_watermark() {
         let mut transcript = TranscriptState {
             session_id: Some(7),
             parts: vec![
                 parts_fixtures::run(1, "user", "completed"),
-                parts_fixtures::text(2, "user", "question"),
+                parts_fixtures::text(1, 2, "user", "question"),
                 parts_fixtures::run(3, "assistant", "in_progress"),
             ],
             ..TranscriptState::default()
         };
-
-        // v2 has no incremental transcript patch surface: a live patch only
-        // signals that the terminal must reload the full part list, and the
-        // reloaded projection carries the streamed text.
-        assert!(
-            transcript.apply_presentation_event(
-                &text_patch(response_id, segment_id, "I'm Grok", 2),
-                80,
-                20,
-            ),
-            "a transcript patch must request a full parts reload"
-        );
-        transcript.merge_parts(vec![
-            parts_fixtures::run(1, "user", "completed"),
-            parts_fixtures::text(2, "user", "question"),
-            parts_fixtures::run(3, "assistant", "completed"),
-            parts_fixtures::text(4, "assistant", "I'm Grok"),
-        ]);
-
-        let rendered = transcript
-            .rendered(80)
-            .lines
-            .iter()
-            .map(|line| line.text.as_str())
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert!(
-            rendered.contains("Grok"),
-            "rendered transcript: {rendered:?}"
-        );
-    }
-
-    #[test]
-    fn live_only_events_do_not_advance_the_durable_watermark() {
-        let response_id = AssistantReplyId::new();
-        let segment_id = TextSegmentId::new();
-        let mut transcript = TranscriptState {
-            session_id: Some(7),
-            parts: vec![
-                parts_fixtures::run(1, "user", "completed"),
-                parts_fixtures::text(2, "user", "question"),
-                parts_fixtures::run(3, "assistant", "in_progress"),
-            ],
-            ..TranscriptState::default()
-        };
-
-        // A refresh-triggering transcript patch does not carry the durable
-        // sequence: the terminal reloads the full part list and the next
-        // execution updates the watermark. Counting it here would make every
-        // later refresh look stale.
-        assert!(transcript.apply_presentation_event(
-            &text_patch(response_id, segment_id, "hello", 2),
-            80,
-            20,
-        ));
-        assert_eq!(transcript.last_event_seq, None);
 
         // A live-only ActivityV2 event at a HIGHER seq must not advance it:
         // the server's durable `latest_event_seq` never includes live-only
@@ -5552,9 +5457,9 @@ mod live_transcript_tests {
             session_id: Some(7),
             parts: vec![
                 parts_fixtures::run(1, "user", "completed"),
-                parts_fixtures::text(2, "user", "question"),
+                parts_fixtures::text(1, 2, "user", "question"),
                 parts_fixtures::run(3, "assistant", "in_progress"),
-                parts_fixtures::text(4, "assistant", "first"),
+                parts_fixtures::text(3, 4, "assistant", "first"),
             ],
             ..TranscriptState::default()
         };
@@ -5563,9 +5468,9 @@ mod live_transcript_tests {
         // projection must end up with exactly one assistant text segment.
         transcript.merge_parts(vec![
             parts_fixtures::run(1, "user", "completed"),
-            parts_fixtures::text(2, "user", "question"),
+            parts_fixtures::text(1, 2, "user", "question"),
             parts_fixtures::run(3, "assistant", "completed"),
-            parts_fixtures::text(4, "assistant", "first second"),
+            parts_fixtures::text(3, 4, "assistant", "first second"),
         ]);
         assert_eq!(
             transcript
@@ -5594,7 +5499,7 @@ mod live_transcript_tests {
             session_id: Some(7),
             parts: vec![
                 parts_fixtures::run(1, "assistant", "completed"),
-                parts_fixtures::text(2, "assistant", "a reply"),
+                parts_fixtures::text(1, 2, "assistant", "a reply"),
             ],
             ..TranscriptState::default()
         };
@@ -5611,9 +5516,9 @@ mod live_transcript_tests {
         // optimistic entry is reconciled away.
         transcript.merge_parts(vec![
             parts_fixtures::run(1, "user", "completed"),
-            parts_fixtures::text(2, "user", "one live message"),
+            parts_fixtures::text(1, 2, "user", "one live message"),
             parts_fixtures::run(3, "assistant", "completed"),
-            parts_fixtures::text(4, "assistant", "a reply"),
+            parts_fixtures::text(3, 4, "assistant", "a reply"),
         ]);
         assert!(transcript.pending_user_messages.is_empty());
         let rendered = transcript
@@ -5720,8 +5625,9 @@ mod live_transcript_tests {
             session_id: Some(7),
             parts: vec![
                 parts_fixtures::run(1, "assistant", "failed"),
-                parts_fixtures::error(2, "assistant", problem.clone()),
+                parts_fixtures::error(1, 2, "assistant", problem.clone()),
                 parts_fixtures::text(
+                    1,
                     3,
                     "assistant",
                     "partial assistant output before the failure",
@@ -5739,11 +5645,12 @@ mod live_transcript_tests {
         transcript.merge_parts(vec![
             parts_fixtures::run(1, "assistant", "completed"),
             parts_fixtures::text(
+                1,
                 3,
                 "assistant",
                 "partial assistant output before the failure",
             ),
-            parts_fixtures::text(4, "assistant", "recovered output"),
+            parts_fixtures::text(1, 4, "assistant", "recovered output"),
         ]);
         assert!(
             !transcript.parts.iter().any(|part| part.kind == "error"),
@@ -5793,11 +5700,12 @@ mod live_transcript_tests {
             parts: vec![
                 parts_fixtures::run(1, "assistant", "failed"),
                 parts_fixtures::text(
+                    1,
                     2,
                     "assistant",
                     "partial assistant output before the failure",
                 ),
-                parts_fixtures::error(3, "assistant", problem.clone()),
+                parts_fixtures::error(1, 3, "assistant", problem.clone()),
             ],
             ..TranscriptState::default()
         };
@@ -5813,11 +5721,12 @@ mod live_transcript_tests {
         transcript.merge_parts(vec![
             parts_fixtures::run(1, "assistant", "completed"),
             parts_fixtures::text(
+                1,
                 2,
                 "assistant",
                 "partial assistant output before the failure",
             ),
-            parts_fixtures::text(4, "assistant", "recovered output"),
+            parts_fixtures::text(1, 4, "assistant", "recovered output"),
         ]);
         assert!(
             !transcript.parts.iter().any(|part| part.kind == "error"),
@@ -5850,7 +5759,7 @@ mod live_transcript_tests {
             session_id: Some(7),
             parts: vec![
                 parts_fixtures::run(1, "assistant", "completed"),
-                parts_fixtures::think(2, "assistant", body.clone()),
+                parts_fixtures::think(1, 2, "assistant", body.clone()),
             ],
             ..TranscriptState::default()
         };
@@ -5889,11 +5798,11 @@ mod live_transcript_tests {
             session_id: Some(7),
             parts: vec![
                 parts_fixtures::run(1, "user", "completed"),
-                parts_fixtures::paste(2, "user", &pasted),
-                parts_fixtures::file_ref(3, "user", "notes.txt"),
-                parts_fixtures::text(4, "user", "review this paste"),
+                parts_fixtures::paste(1, 2, "user", &pasted),
+                parts_fixtures::file_ref(1, 3, "user", "notes.txt"),
+                parts_fixtures::text(1, 4, "user", "review this paste"),
                 parts_fixtures::run(5, "assistant", "completed"),
-                parts_fixtures::text(6, "assistant", "ok"),
+                parts_fixtures::text(5, 6, "assistant", "ok"),
             ],
             ..TranscriptState::default()
         };

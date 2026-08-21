@@ -177,7 +177,7 @@ mod permission_overlay_presentation_tests {
     fn details_are_available_only_when_explicitly_requested() {
         let i18n = I18n::default();
         let request = request(PermissionAction::Tool {
-            tool_name: "shell".to_string(),
+            tool_name: "agena.shell.run".to_string(),
             qualifier: None,
         });
         let mut presentation =

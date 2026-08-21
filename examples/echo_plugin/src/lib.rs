@@ -50,7 +50,6 @@ impl EchoPlugin {
             title: "Echo".to_string(),
             summary: rendered.clone(),
             output_text: rendered.clone(),
-            sections: Vec::new(),
             payload: Some(json!({ "rendered": rendered })),
             metadata: BTreeMap::from([("plugin".to_string(), "echo".to_string())]),
             attachments: Vec::new(),

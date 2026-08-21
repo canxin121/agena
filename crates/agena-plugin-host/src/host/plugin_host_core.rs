@@ -892,7 +892,6 @@ impl PluginHost {
             title: result.title,
             summary: result.summary,
             output_text: result.output_text,
-            sections: result.sections,
             payload: result.payload,
             metadata: result.metadata,
             attachments: result.attachments,

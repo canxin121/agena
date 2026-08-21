@@ -11,7 +11,6 @@ export type PartStatusPresentation = {
   terminal: boolean
 }
 
-export type OperationDisplaySection = { title: string; text: string }
 export type OperationPermissionPresentation = {
   requestId: string
   status: string
@@ -29,11 +28,8 @@ export type OperationPresentation = {
   input: JsonValue | null
   inputMarkdown: string
   error: string
-  humanMarkdown: string
-  modelOutput: string
   stdout: string
   structured: JsonValue | null
-  displaySections: OperationDisplaySection[]
   blocks: JsonRecord[]
   attachments: AttachmentPresentation[]
   metadata: JsonRecord
@@ -285,6 +281,11 @@ function operationStdout(blockStdout: string[]): { text: string; normalized: Set
   return { text, normalized }
 }
 
+function isTextOnlyStructured(value: JsonValue): boolean {
+  if (!isJsonRecord(value)) return typeof value === 'string'
+  return Object.keys(value).length === 1 && typeof value.text === 'string'
+}
+
 function attachmentFromRecord(value: JsonValue, index: number): AttachmentPresentation | null {
   const item = jsonRecord(value)
   if (!Object.keys(item).length) return null
@@ -305,23 +306,17 @@ function attachmentFromRecord(value: JsonValue, index: number): AttachmentPresen
   }
 }
 
-function flatOperationView(content: JsonRecord, presentationValue: JsonValue): JsonRecord {
+function toolCallView(content: JsonRecord, presentationValue: JsonValue): JsonRecord {
   const presentation = jsonRecord(presentationValue)
   const title = firstString(presentation, ['title'])
   const summary = firstString(presentation, ['summary'])
-  const state = firstString(content, ['state'])
   const invocation = {
-    name: firstString(content, ['name', 'tool']) || 'unknown',
+    name: firstString(content, ['name']) || 'unknown',
     plugin_name: content.plugin,
     input: jsonRecord(content.input),
     tool_api_call: jsonRecord(content.tool_api_call),
   }
   const blocks = jsonArray(presentation.blocks)
-  const result = {
-    state,
-    content: blocks,
-    display: { title, summary, sections: [] },
-  }
   return {
     call_id: content.call_id ?? 0,
     invocation,
@@ -333,23 +328,22 @@ function flatOperationView(content: JsonRecord, presentationValue: JsonValue): J
     metadata: jsonRecord(content.metadata),
     error: content.error ?? null,
     lifecycle: jsonRecord(content.lifecycle),
-    result,
+    output: content.output ?? null,
   }
 }
 
 export function operationPresentation(part: TranscriptDisplayPart): OperationPresentation {
   const content = jsonRecord(part.source.agenaContent)
-  const operation = flatOperationView(content, part.source.agenaPresentation ?? null)
+  const operation = toolCallView(content, part.source.agenaPresentation ?? null)
   const invocation = jsonRecord(operation.invocation)
-  const result = jsonRecord(operation.result)
-  const display = jsonRecord(result.display)
+  const output = jsonRecord(operation.output)
   const canonicalInput = jsonRecord(content.input)
   const encodedInput = Object.keys(canonicalInput).length ? canonicalInput : jsonRecord(invocation.input)
   const input = Object.keys(encodedInput).length ? decodeStructuredValue(encodedInput) : null
   const toolName =
-    firstString(content, ['name', 'tool']) || firstString(invocation, ['name']) || stringValue(part.source.tool)
-  const structured = null
-  const projectedBlocks = [...jsonArray(operation.blocks), ...jsonArray(result.content)]
+    firstString(content, ['name']) || firstString(invocation, ['name']) || stringValue(part.source.tool)
+  const rawStructured = output.payload ?? null
+  const projectedBlocks = jsonArray(operation.blocks)
     .map(jsonRecord)
     .filter((item) => Object.keys(item).length > 0)
     .filter(
@@ -358,19 +352,13 @@ export function operationPresentation(part: TranscriptDisplayPart): OperationPre
   const splitBlocks = splitOperationStdout(projectedBlocks)
   const blocks = splitBlocks.blocks
   const stdout = operationStdout(splitBlocks.stdout)
-  const humanMarkdown = ''
-  const modelOutputText = ''
+  // A stdout ViewBlock is the human projection of a text-only raw payload.
+  // Keep the durable payload intact, but do not render the same text again in
+  // the separate structured Output section.
+  const structured =
+    rawStructured !== null && !(stdout.text && isTextOnlyStructured(rawStructured)) ? rawStructured : null
 
-  const displaySections = jsonArray(display.sections)
-    .map((item) => {
-      const section = jsonRecord(item)
-      const title = firstString(section, ['title'])
-      const text = firstString(section, ['text'])
-      return title && text ? { title, text } : null
-    })
-    .filter((item): item is OperationDisplaySection => Boolean(item))
-
-  const attachments = [...jsonArray(operation.attachments), ...jsonArray(result.attachments)]
+  const attachments = jsonArray(output.attachments)
     .map(attachmentFromRecord)
     .filter((item): item is AttachmentPresentation => Boolean(item))
     .filter((item, index, list) => list.findIndex((candidate) => candidate.key === item.key) === index)
@@ -383,7 +371,7 @@ export function operationPresentation(part: TranscriptDisplayPart): OperationPre
       const record = jsonRecord(raw)
       const request = jsonRecord(record.request)
       if (!Object.keys(request).length) return null
-      return interactionFromRequest(request, record.reply ?? null, part.title)
+      return userInputPresentationFromRequest(request, record.reply ?? null, part.title)
     })
     .filter((item): item is InteractionPresentation => Boolean(item))
   const authorization = jsonRecord(operation.authorization)
@@ -426,22 +414,19 @@ export function operationPresentation(part: TranscriptDisplayPart): OperationPre
   })
 
   return {
-    title: firstString(operation, ['title']) || firstString(display, ['title']) || part.title,
-    summary: firstString(operation, ['summary']) || firstString(display, ['summary']) || part.summary,
+    title: firstString(operation, ['title']) || part.title,
+    summary: firstString(operation, ['summary']) || part.summary,
     toolName,
     input,
     inputMarkdown: input === null ? '' : structuredValueMarkdown(input),
-    error: operationFailureMessage(result.error ?? null) || operationFailureMessage(operation.error ?? null),
-    humanMarkdown,
-    modelOutput: modelOutputText,
+    error: operationFailureMessage(operation.error ?? null),
     stdout: stdout.text,
     structured,
-    displaySections,
     blocks,
     attachments,
     metadata: {
       ...jsonRecord(operation.metadata),
-      ...jsonRecord(result.metadata),
+      ...jsonRecord(output.metadata),
       ...jsonRecord(content.metadata),
     },
     durationMs: startMs !== null && endMs !== null && endMs >= startMs ? endMs - startMs : null,
@@ -451,10 +436,6 @@ export function operationPresentation(part: TranscriptDisplayPart): OperationPre
 }
 
 export function partInteractionRequestIds(part: TranscriptDisplayPart): string[] {
-  if (part.kind === 'interaction') {
-    const id = interactionPresentation(part).requestId
-    return id ? [id] : []
-  }
   if (part.kind !== 'operation') return []
   const operation = operationPresentation(part)
   return [...operation.userInputs.map((item) => item.requestId), ...operation.permissions.map((item) => item.requestId)]
@@ -517,7 +498,7 @@ function interactionQuestion(value: JsonValue): InteractionQuestionPresentation 
   }
 }
 
-function interactionFromRequest(
+function userInputPresentationFromRequest(
   request: JsonRecord,
   reply: JsonValue | null,
   fallbackTitle: string,
@@ -530,27 +511,6 @@ function interactionFromRequest(
     pending: reply === null,
     reply,
     questions: jsonArray(request.questions)
-      .map(interactionQuestion)
-      .filter((item): item is InteractionQuestionPresentation => Boolean(item)),
-  }
-}
-
-export function interactionPresentation(part: TranscriptDisplayPart): InteractionPresentation {
-  const content = jsonRecord(part.source.agenaContent)
-  const request = jsonRecord(content.request)
-  const extra = jsonRecord(content.extra)
-  const extraRequest = jsonRecord(extra.request)
-  const resolvedRequest = Object.keys(request).length ? request : extraRequest
-  const reply = content.reply ?? content.response ?? extra.reply ?? null
-  const questionValues = jsonArray(resolvedRequest.questions).length
-    ? jsonArray(resolvedRequest.questions)
-    : jsonArray(content.options)
-  const projected = interactionFromRequest(resolvedRequest, reply, firstString(content, ['prompt']) || part.title)
-  return {
-    ...projected,
-    requestId: projected.requestId || firstString(content, ['request_id']),
-    kind: projected.kind || firstString(content, ['kind', 'type']),
-    questions: questionValues
       .map(interactionQuestion)
       .filter((item): item is InteractionQuestionPresentation => Boolean(item)),
   }

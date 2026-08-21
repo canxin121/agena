@@ -71,7 +71,7 @@ pub fn project_session_transcript(
             summary: None,
             created_at_ms: run.created_at.timestamp_millis(),
             parent_part_id: None,
-            run_id: Some(run_id),
+            run_id: None,
         });
         for part in &run.parts {
             parts.push(agena_api::resource::SessionTranscriptPart {

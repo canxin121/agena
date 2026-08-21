@@ -154,32 +154,6 @@ pub async fn dispatch_query(
         Query::GetSessionState(GetSessionParams { session_id }) => Ok(QueryResult::SessionState(
             state.session_execution_resource(session_id).await?,
         )),
-        Query::GetOperationDetail(GetOperationDetailParams {
-            session_id,
-            activity_id,
-        }) => {
-            let session_services = state.session_execution_services()?;
-            let detail = session_services
-                .queries
-                .as_ref()
-                .operation_detail(session_id, activity_id)
-                .await
-                .map_err(|error| {
-                    ApplicationError::internal(format!("operation detail query failed: {error}"))
-                })?;
-            let resource = detail
-                .map(|detail| OperationDetailResource {
-                    activity_id: detail.activity_id,
-                    markdown: detail.markdown,
-                    streaming: detail.streaming,
-                })
-                .unwrap_or(OperationDetailResource {
-                    activity_id,
-                    markdown: String::new(),
-                    streaming: false,
-                });
-            Ok(QueryResult::OperationDetail(resource))
-        }
         Query::ListPermissionRules(ListPermissionRulesParams {
             cursor,
             limit,
@@ -204,11 +178,11 @@ pub async fn dispatch_query(
 }
 use super::{
     ActivityLogsParams, ApplicationError, CursorPaginationQuery, GetActivityParams,
-    GetOperationDetailParams, GetPermissionRuleParams, GetSessionParams, GetWorkspaceParams,
-    ListPermissionRulesParams, ListProviderAdapterModelsParams, ListProviderModelsParams,
-    ListSavedProviderAdapterModelsParams, ListSessionsParams, ListWorkspacesParams,
-    OperationDetailResource, Query, QueryResult, SearchPaginationQuery, SessionListQuery,
-    WorkspaceListQuery, http_optional_result, http_page_result,
+    GetPermissionRuleParams, GetSessionParams, GetWorkspaceParams, ListPermissionRulesParams,
+    ListProviderAdapterModelsParams, ListProviderModelsParams,
+    ListSavedProviderAdapterModelsParams, ListSessionsParams, ListWorkspacesParams, Query,
+    QueryResult, SearchPaginationQuery, SessionListQuery, WorkspaceListQuery, http_optional_result,
+    http_page_result,
 };
 
 fn activity_control_error(error: agena_runtime::ActivityControlError) -> ApplicationError {

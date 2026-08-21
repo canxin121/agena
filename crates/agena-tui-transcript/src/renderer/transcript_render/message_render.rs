@@ -4,22 +4,20 @@ use super::super::{
     SessionExecutionResource, Style, TOOL_CARD_PREVIEW_CHARS, TOOL_CARD_PREVIEW_LINES,
     ToolOutputPreview, TranscriptDetailDefaults, TranscriptEntry, TranscriptNodeKey,
     TranscriptNodeKind, UnicodeWidthStr, concise_text, format_occurred_time, format_timestamp,
-    json_value_to_markdown, markdown_blocks, push_activity_headline, push_expanded_markdown,
-    push_expanded_tool_text, push_label_value, push_markdown_document, push_markdown_rule,
-    push_section_heading, push_single_line, push_wrapped_line, render_entry_detailed,
-    render_expanded_tool_text_block, render_markdown_block, should_suppress_markdown_block,
-    strip_terminal_ansi_sequences, style_for_role, tool_output_copy_text, transcript_message_parts,
-    transcript_part_content, transcript_spinner_placeholder, trim_empty_line_edges,
-    truncate_display_width,
+    markdown_blocks, push_activity_headline, push_expanded_markdown, push_expanded_tool_text,
+    push_label_value, push_markdown_document, push_markdown_rule, push_section_heading,
+    push_single_line, push_wrapped_line, render_entry_detailed, render_expanded_tool_text_block,
+    render_markdown_block, should_suppress_markdown_block, strip_terminal_ansi_sequences,
+    style_for_role, tool_output_copy_text, transcript_message_parts, transcript_part_content,
+    transcript_spinner_placeholder, trim_empty_line_edges, truncate_display_width,
 };
 use super::operation_render::render_tool_execution_with_sections;
-use super::request_render::{preview_for_part, render_user_input_request};
-use crate::snapshot::activity_presentation;
+use super::request_render::preview_for_part;
+use crate::activity_presentation::activity_presentation;
 use crate::ui_text;
 use crate::{
-    OperationPartResource, RequestPartResource, TranscriptActivityContent,
-    TranscriptActivitySection, TranscriptAssistantReplyLifecycle, TranscriptEntryPart,
-    TranscriptPartContent,
+    ToolCallView, TranscriptActivityContent, TranscriptActivitySection,
+    TranscriptAssistantReplyLifecycle, TranscriptEntryPart, TranscriptPartContent,
 };
 use agena_api::resource::{PartAttachment, PartAttachmentKind, PartAttachmentSource, RunResource};
 use ratatui::text::{Line, Span};
@@ -36,10 +34,8 @@ pub fn render_entry_export(
     i18n: &I18n,
     defaults: &TranscriptDetailDefaults,
 ) -> Vec<RenderedLine> {
-    // UI sections default to folded, but exports are durable documents rather
-    // than viewport state. Preserve the previous export projection: legacy
-    // Operations include both input and output, while canonical Operations
-    // include their result body (canonical input was already folded).
+    // Exported documents expand the same canonical input/result sections as
+    // the interactive transcript.
     let mut expansions = std::collections::BTreeMap::new();
     for part in transcript_message_parts(message) {
         let sections = match transcript_part_content(part) {
@@ -47,9 +43,6 @@ pub fn render_entry_export(
                 TranscriptActivitySection::Input,
                 TranscriptActivitySection::Result,
             ][..],
-            TranscriptPartContent::Activity(TranscriptActivityContent::Canonical(
-                agena_domain::ActivityPayload::Operation(_),
-            )) => &[TranscriptActivitySection::Result][..],
             _ => &[],
         };
         for section in sections {
@@ -180,7 +173,6 @@ fn activity_kind_id_for_payload(payload: &agena_domain::ActivityPayload) -> Opti
         agena_domain::ActivityPayload::TextArtifact(_) => Some(agena_domain::ACTIVITY_KIND_TEXT),
         agena_domain::ActivityPayload::Reasoning(_) => Some(agena_domain::ACTIVITY_KIND_REASONING),
         agena_domain::ActivityPayload::TextSegment(_) => Some(agena_domain::ACTIVITY_KIND_TEXT),
-        agena_domain::ActivityPayload::Operation(_) => Some(agena_domain::ACTIVITY_KIND_OPERATION),
         agena_domain::ActivityPayload::Interaction(_) => {
             Some(agena_domain::ACTIVITY_KIND_INTERACTION)
         }
@@ -256,7 +248,6 @@ struct CanonicalActivityDetail {
     title: Option<String>,
     body: String,
     format: CanonicalActivityDetailFormat,
-    stable_section: Option<TranscriptActivitySection>,
     default_expanded: Option<bool>,
 }
 
@@ -270,24 +261,7 @@ impl CanonicalActivityDetail {
             title: Some(title.into()),
             body: body.into(),
             format,
-            stable_section: None,
             default_expanded: Some(true),
-        }
-    }
-
-    fn identified_section(
-        stable_section: TranscriptActivitySection,
-        title: impl Into<String>,
-        body: impl Into<String>,
-        format: CanonicalActivityDetailFormat,
-        default_expanded: bool,
-    ) -> Self {
-        Self {
-            title: Some(title.into()),
-            body: body.into(),
-            format,
-            stable_section: Some(stable_section),
-            default_expanded: Some(default_expanded),
         }
     }
 
@@ -299,9 +273,6 @@ impl CanonicalActivityDetail {
     }
 
     fn navigation_section(&self, detail_index: &mut usize) -> TranscriptActivitySection {
-        if let Some(section) = self.stable_section {
-            return section;
-        }
         let section = TranscriptActivitySection::Detail(*detail_index);
         *detail_index = detail_index.saturating_add(1);
         section
@@ -311,164 +282,9 @@ impl CanonicalActivityDetail {
 fn canonical_activity_details(
     i18n: &I18n,
     payload: &agena_domain::ActivityPayload,
-    summary: &str,
-    error_equivalence_text: Option<&str>,
+    _summary: &str,
 ) -> Vec<CanonicalActivityDetail> {
     match payload {
-        agena_domain::ActivityPayload::Operation(operation) => {
-            let mut details = Vec::new();
-            let mut has_result_presentation = false;
-            if !operation.authorization.permissions.is_empty() {
-                let permissions = operation
-                    .authorization
-                    .permissions
-                    .iter()
-                    .map(|permission| {
-                        let status = match permission.reply.as_ref().map(|reply| reply.kind) {
-                            None => "Awaiting user approval",
-                            Some(agena_domain::PermissionReplyKind::AllowOnce) => "Allowed once",
-                            Some(agena_domain::PermissionReplyKind::AllowAlways) => {
-                                "Allowed persistently"
-                            }
-                            Some(agena_domain::PermissionReplyKind::DenyOnce) => "Denied once",
-                            Some(agena_domain::PermissionReplyKind::DenyAlways) => {
-                                "Denied persistently"
-                            }
-                            // AutoApprove is downgraded before being recorded, so
-                            // it cannot appear on a stored reply; keep a fallback.
-                            Some(agena_domain::PermissionReplyKind::AutoApprove) => {
-                                "Auto-approval requested"
-                            }
-                        };
-                        let action = match &permission.request.action {
-                            agena_domain::PermissionAction::Tool {
-                                tool_name,
-                                qualifier,
-                            } => qualifier.as_deref().map_or_else(
-                                || tool_name.clone(),
-                                |qualifier| format!("{tool_name} · {qualifier}"),
-                            ),
-                            agena_domain::PermissionAction::PathAccess {
-                                access_kind,
-                                target_path,
-                                ..
-                            } => format!("{access_kind} {target_path}"),
-                            agena_domain::PermissionAction::NetworkAccess { target, .. } => {
-                                format!("network {target}")
-                            }
-                        };
-                        let mut lines = vec![format!("{status} · {action}")];
-                        if !permission.request.reason.trim().is_empty() {
-                            lines.push(format!("Request: {}", permission.request.reason));
-                        }
-                        if !permission.request.explanation.trim().is_empty()
-                            && permission.request.explanation.trim()
-                                != permission.request.reason.trim()
-                        {
-                            lines.push(format!("Policy: {}", permission.request.explanation));
-                        }
-                        if let Some(reason) = permission
-                            .reply
-                            .as_ref()
-                            .and_then(|reply| reply.reason.as_deref())
-                            .filter(|reason| !reason.trim().is_empty())
-                            && reason.trim() != permission.request.reason.trim()
-                        {
-                            lines.push(format!("Reply: {reason}"));
-                        }
-                        let provenance = [
-                            permission.request.source.clone(),
-                            permission.request.scope.map(|scope| format!("{scope}")),
-                        ]
-                        .into_iter()
-                        .flatten()
-                        .filter(|value| !value.trim().is_empty())
-                        .collect::<Vec<_>>()
-                        .join(" · ");
-                        if !provenance.is_empty() {
-                            lines.push(provenance);
-                        }
-                        lines.join("\n")
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n\n");
-                details.push(CanonicalActivityDetail::identified_section(
-                    TranscriptActivitySection::Permissions,
-                    "Permissions",
-                    permissions,
-                    CanonicalActivityDetailFormat::Plain,
-                    false,
-                ));
-            }
-            if !operation.invocation.input.is_empty() {
-                // Tool arguments as nested Markdown bullets (matching the
-                // single-activity `render_tool_execution` input section)
-                // instead of a raw JSON fence.
-                let input = json_value_to_markdown(&serde_json::Value::from(
-                    operation.invocation.input.clone(),
-                ));
-                details.push(CanonicalActivityDetail::identified_section(
-                    TranscriptActivitySection::Input,
-                    "Input",
-                    input,
-                    CanonicalActivityDetailFormat::Markdown,
-                    false,
-                ));
-            }
-            // The human-facing detail is derived from the compact tool result
-            // by the runtime. The durable record carries only compact `data`;
-            // the runtime attaches the derived `markdown` to the snapshot
-            // projection, and clients may also fetch it lazily on expansion.
-            // Structured data is the fallback when no derived Markdown exists.
-            // Avoid duplicating the failure text as a separate Result when the
-            // tool's detail is just the error message itself.
-            let detail_equals_error = error_equivalence_text
-                .is_some_and(|error| canonical_text_equivalent(operation.markdown.as_str(), error));
-            if !detail_equals_error {
-                if !operation.markdown.trim().is_empty() {
-                    details.push(CanonicalActivityDetail::identified_section(
-                        TranscriptActivitySection::Result,
-                        "Output",
-                        operation.markdown.clone(),
-                        CanonicalActivityDetailFormat::Markdown,
-                        false,
-                    ));
-                    has_result_presentation = true;
-                } else if !operation.data.is_null()
-                    && let Ok(output) = serde_json::to_string_pretty(&operation.data)
-                {
-                    details.push(CanonicalActivityDetail::identified_section(
-                        TranscriptActivitySection::Result,
-                        "Output",
-                        output,
-                        CanonicalActivityDetailFormat::Json,
-                        false,
-                    ));
-                    has_result_presentation = true;
-                }
-            }
-            // `summary` is the compact collapsed projection. Expanded
-            // Operations render the actual output/sections instead. It is
-            // only a fallback result when the producer supplied no detailed
-            // result at all; failures are rendered exclusively from `error`.
-            // An approval/authorization-phase summary ("Awaiting approval",
-            // "Permission allowed once", …) is transcript prose about the
-            // permission gate and must not masquerade as tool output.
-            if operation.error.is_none()
-                && !has_result_presentation
-                && !summary.trim().is_empty()
-                && !crate::snapshot::is_authorization_phase_summary(summary)
-            {
-                details.push(CanonicalActivityDetail::identified_section(
-                    TranscriptActivitySection::Result,
-                    "Output",
-                    summary,
-                    CanonicalActivityDetailFormat::Auto,
-                    false,
-                ));
-            }
-            details
-        }
         agena_domain::ActivityPayload::SkillReference(skill) => {
             let mut details = Vec::new();
             if !skill.instructions.trim().is_empty() {
@@ -813,15 +629,6 @@ fn render_canonical_activity_detail(
 }
 
 fn canonical_activity_detail_preview(detail: &CanonicalActivityDetail) -> Option<String> {
-    if detail.stable_section == Some(TranscriptActivitySection::Permissions) {
-        let count = detail
-            .body
-            .split("\n\n")
-            .filter(|permission| !permission.trim().is_empty())
-            .count();
-        return (count > 0)
-            .then(|| format!("{count} permission{}", if count == 1 { "" } else { "s" }));
-    }
     match detail.format {
         CanonicalActivityDetailFormat::Json => {
             serde_json::from_str::<serde_json::Value>(detail.body.as_str())
@@ -1114,26 +921,8 @@ pub fn rewind_message_preview(message: &RunResource, i18n: &I18n) -> String {
     entry_preview(&TranscriptEntry::from(message), i18n)
 }
 
-pub fn render_transcript_snapshot_export_markdown(
-    i18n: &I18n,
-    session_id: Option<i64>,
-    session_title: &str,
-    execution: Option<&SessionExecutionResource>,
-    snapshot: &agena_domain::TranscriptSnapshot,
-) -> String {
-    let entries = crate::transcript_entries(snapshot);
-    render_transcript_entries_export_markdown(
-        i18n,
-        session_id,
-        session_title,
-        execution,
-        entries.as_slice(),
-    )
-}
-
-/// Export markdown from the v2 parts projection (the live wire transcript).
-/// Mirrors [`render_transcript_snapshot_export_markdown`] but renders the
-/// ordered part list, projecting it through [`crate::parts_entries`].
+/// Export markdown from the canonical parts projection (the live wire
+/// transcript), projecting it through [`crate::parts_entries`].
 pub fn render_parts_export_markdown(
     i18n: &I18n,
     session_id: Option<i64>,
@@ -1472,8 +1261,8 @@ pub(crate) fn render_part_node(
             let expanded = expansions.get(&key).copied().unwrap_or_else(|| {
                 operation_default_expanded(
                     defaults,
-                    tool.invocation.name.as_str(),
-                    tool.invocation.plugin_name.as_deref(),
+                    tool.operation.invocation.name.as_str(),
+                    tool.operation.invocation.plugin_name.as_deref(),
                 )
             });
             // Canonical single-activity shape: a tool operation carrying a
@@ -1784,66 +1573,6 @@ pub(crate) fn render_part_node(
                 children: Vec::new(),
             }
         }
-        TranscriptPartContent::Activity(TranscriptActivityContent::Request(request)) => {
-            match request.as_ref() {
-                RequestPartResource::UserInput { request, reply } => {
-                    let key = TranscriptNodeKey::Activity {
-                        entry_id: message.id,
-                        content_id: part.id,
-                    };
-                    // Answered user-input requests render as a foldable
-                    // Activity, so the full "用户输入已答复" dump does not read
-                    // like AI reply prose. Resolve the interaction kind
-                    // directly so the per-kind transcript setting applies.
-                    let expanded = expansions.get(&key).copied().unwrap_or_else(|| {
-                        defaults.default_expanded(Some(agena_domain::ACTIVITY_KIND_INTERACTION))
-                    });
-                    let title = if request.kind == "review" {
-                        "Plan review"
-                    } else {
-                        "User input"
-                    };
-                    let summary = request
-                        .questions
-                        .first()
-                        .map(|question| question.question.as_str())
-                        .filter(|text| !text.trim().is_empty())
-                        .unwrap_or(request.title.as_str());
-                    push_activity_headline(out, part.status, expanded, true, title, summary, width);
-                    if expanded {
-                        // A pending part with a live interaction view renders
-                        // its plan body and decision rows natively (the part IS
-                        // the interaction surface, "everything is a part").
-                        // Answered parts keep the plain replied/awaiting body.
-                        if reply.is_none()
-                            && let Some(view) = interactions.get(&request.request_id)
-                        {
-                            render_pending_interaction_body(out, request, view, width, i18n);
-                        } else {
-                            render_user_input_request(request, reply.as_ref(), out, width, i18n);
-                        }
-                    }
-                    RenderedNodeDraft {
-                        key,
-                        kind: TranscriptNodeKind::Activity,
-                        copy_text: if expanded {
-                            request
-                                .questions
-                                .iter()
-                                .map(|question| question.question.clone())
-                                .collect::<Vec<_>>()
-                                .join("\n")
-                        } else {
-                            String::new()
-                        },
-                        toggleable: true,
-                        expanded,
-                        end_line: None,
-                        children: Vec::new(),
-                    }
-                }
-            }
-        }
     }
 }
 
@@ -1893,7 +1622,7 @@ fn render_pending_interaction_body(
 #[allow(clippy::too_many_arguments)]
 fn render_operation_user_input(
     part: &TranscriptEntryPart,
-    tool: &OperationPartResource,
+    tool: &ToolCallView,
     out: &mut Vec<RenderedLine>,
     width: u16,
     i18n: &I18n,
@@ -1903,7 +1632,7 @@ fn render_operation_user_input(
         crate::interaction_view::PendingInteractionView,
     >,
 ) -> bool {
-    let Some(record) = tool.user_input.requests.first() else {
+    let Some(record) = tool.operation.user_input.requests.first() else {
         return false;
     };
     let request = crate::parts::user_input_request_resource(record.request.clone());
@@ -1911,9 +1640,9 @@ fn render_operation_user_input(
     // "interaction.ask" — not an invented label: the interaction IS this
     // operation, so its title should be the tool the model invoked. The
     // question text follows as the summary.
-    let title = tool.invocation.name.trim();
+    let title = tool.operation.invocation.name.trim();
     let title = if title.is_empty() {
-        // Malformed/legacy operation without an invocation name.
+        // Malformed operation without an invocation name.
         if request.kind == "review" {
             "Plan review"
         } else {
@@ -2361,7 +2090,7 @@ fn ask_user_answer_summary(
 
 /// Shared renderer for canonical Activity payloads. Tool-call operations,
 /// resources, reasoning and errors all flow through this single path so the
-/// transcript keeps one headline/expandable-section contract. The legacy
+/// transcript keeps one headline/expandable-section contract. The canonical
 /// `Error` part and a failed reply lifecycle both project into
 /// `ActivityPayload::Error` here instead of owning separate renderers.
 #[allow(clippy::too_many_arguments)]
@@ -2387,11 +2116,6 @@ fn render_activity_canonical(
     let is_text_segment = matches!(payload, agena_domain::ActivityPayload::TextSegment(_));
     let default_expanded = match payload {
         agena_domain::ActivityPayload::TextSegment(_) => false,
-        agena_domain::ActivityPayload::Operation(operation) => operation_default_expanded(
-            defaults,
-            operation.invocation.name.as_str(),
-            operation.invocation.plugin_name.as_deref(),
-        ),
         _ => defaults.default_expanded(activity_kind_id_for_payload(payload)),
     };
     let expanded = expansions.get(&key).copied().unwrap_or(default_expanded);
@@ -2407,9 +2131,7 @@ fn render_activity_canonical(
         _ => summary.clone(),
     };
     let error_text = error.as_ref().map(|e| e.user.fallback.clone());
-    let error_equivalence_text = error.as_ref().map(|error| error.user.fallback.as_str());
-    let details =
-        canonical_activity_details(i18n, payload, summary.as_str(), error_equivalence_text);
+    let details = canonical_activity_details(i18n, payload, summary.as_str());
     let toggleable = !summary.trim().is_empty() || error.is_some() || !details.is_empty();
     push_activity_headline(
         out,
@@ -2424,8 +2146,7 @@ fn render_activity_canonical(
     let mut children = Vec::new();
     let mut copy_sections = Vec::<String>::new();
     let mut detail_index = 0_usize;
-    let is_operation = matches!(payload, agena_domain::ActivityPayload::Operation(_));
-    let render_summary = expanded && !is_operation && error.is_none() && !summary.trim().is_empty();
+    let render_summary = expanded && error.is_none() && !summary.trim().is_empty();
     if render_summary {
         let summary_start = out.len();
         render_expanded_tool_text_block(out, "    ", summary.as_str(), width);

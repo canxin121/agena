@@ -20,12 +20,11 @@ pub struct InFlightRun {
     pub created_at_ms: i64,
 }
 
-/// A pending interaction part.
+/// A pending user-input request carried by a canonical `tool_call` part.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PendingInteraction {
     pub part_id: i64,
     pub created_at_ms: i64,
-    pub part_kind: String,
     pub content: serde_json::Value,
 }
 
@@ -36,8 +35,7 @@ pub struct StateInputs {
     pub meta: Option<SessionMeta>,
     /// In-flight run markers (state pending | in_progress), newest first.
     pub in_flight_runs: Vec<InFlightRun>,
-    /// Pending interaction parts (kind = `interaction`, state = pending),
-    /// newest first.
+    /// In-flight tool-call parts awaiting user input, newest first.
     pub pending_interactions: Vec<PendingInteraction>,
     /// The most recent error part content, if any (for `last_failure`).
     pub last_error: Option<serde_json::Value>,
@@ -60,24 +58,20 @@ pub(crate) fn tool_call_first_awaiting_user_input(
 
 impl StateInputs {
     /// Assemble from a loaded session view. Non-gating parts are ignored;
-    /// run markers and interaction parts drive the state (17.3). Pending
-    /// interactions cover legacy in-flight `interaction` parts and, in the
-    /// canonical single-activity shape, in-flight `tool_call` parts whose
-    /// operation is awaiting a user-input reply.
+    /// run markers and in-flight `tool_call` parts whose operation is awaiting
+    /// a user-input reply drive the state (17.3).
     pub fn from_view(view: &super::SessionView) -> Self {
         let mut pending_interactions = Vec::new();
         for part in &view.parts {
             if !part.state.is_in_flight() {
                 continue;
             }
-            let gates_user_input = part.kind == "interaction"
-                || (part.kind == "tool_call"
-                    && tool_call_first_awaiting_user_input(&part.content).is_some());
-            if gates_user_input {
+            if part.kind == "tool_call"
+                && tool_call_first_awaiting_user_input(&part.content).is_some()
+            {
                 pending_interactions.push(PendingInteraction {
                     part_id: part.part_id,
                     created_at_ms: part.created_at_ms,
-                    part_kind: part.kind.clone(),
                     content: part.content.clone(),
                 });
             }
@@ -166,30 +160,9 @@ pub fn presentation(
         last_failure: last_error.cloned(),
     };
     if let Some(interaction) = pending_interactions.first() {
-        // Canonical shape: the ask rides on flat `tool_call.user_input`;
-        // display kind/prompt come from the still-awaiting request. A separate
-        // `interaction` part names its kind and prompt directly.
-        let (kind, prompt) = if interaction.part_kind == "tool_call" {
-            tool_call_first_awaiting_user_input(&interaction.content)
-                .map(|request| (request.kind.as_str().to_owned(), request.title))
-                .unwrap_or_else(|| ("ask_user".to_owned(), String::new()))
-        } else {
-            (
-                interaction
-                    .content
-                    .get("type")
-                    .or_else(|| interaction.content.get("kind"))
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or("ask_user")
-                    .to_owned(),
-                interaction
-                    .content
-                    .get("prompt")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or_default()
-                    .to_owned(),
-            )
-        };
+        let (kind, prompt) = tool_call_first_awaiting_user_input(&interaction.content)
+            .map(|request| (request.kind.as_str().to_owned(), request.title))
+            .unwrap_or_else(|| ("ask_user".to_owned(), String::new()));
         presentation.pending_interaction = Some(InteractionRef {
             part_id: interaction.part_id,
             kind,
@@ -255,7 +228,6 @@ mod tests {
         let pending = PendingInteraction {
             part_id: 7,
             created_at_ms: 1,
-            part_kind: "tool_call".to_owned(),
             content: serde_json::json!({
                 "user_input": {
                     "requests": [{

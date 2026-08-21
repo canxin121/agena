@@ -355,6 +355,7 @@ dependencies = [
  "agena-mcp-client",
  "agena-mcp-server",
  "agena-runtime",
+ "agena-runtime-contracts",
  "agena-storage",
  "anyhow",
  "async-trait",

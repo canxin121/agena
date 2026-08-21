@@ -598,13 +598,7 @@ impl SessionManager {
     pub async fn list_projected_runs(
         &self,
         session_id: i64,
-        include_full_parts: bool,
     ) -> Result<Vec<crate::session_query_service::SessionProjectedRun>, AppError> {
-        // v2 has no separate "projected" transcript: the canonical read is
-        // the aggregate rebuilt from parts (`load_session`). `include_full_parts`
-        // is retained for callers that historically fetched headers only; the
-        // aggregate always carries full parts.
-        let _ = include_full_parts;
         let session = self.store.load_session(session_id).await?;
         super::history::projected_runs_from_parts(session.parts())
     }
@@ -676,18 +670,6 @@ impl agena_runtime::SessionExecutionControl for SessionManager {
         SessionManager::active_execution(self, session_id).await
     }
 
-    async fn cancel_execution(
-        &self,
-        session_id: i64,
-        execution_id: agena_domain::ExecutionId,
-    ) -> Result<agena_domain::CancellationResult, agena_runtime::SessionExecutionControlError> {
-        SessionManager::cancel_execution(self, session_id, execution_id)
-            .await
-            .map_err(|error| {
-                agena_runtime::SessionExecutionControlError::internal(error.to_string())
-            })
-    }
-
     async fn cancel_execution_with_outcome(
         &self,
         session_id: i64,
@@ -695,17 +677,6 @@ impl agena_runtime::SessionExecutionControl for SessionManager {
     ) -> Result<agena_domain::CancellationOutcome, agena_runtime::SessionExecutionControlError>
     {
         SessionManager::cancel_execution_with_outcome(self, session_id, execution_id)
-            .await
-            .map_err(|error| {
-                agena_runtime::SessionExecutionControlError::internal(error.to_string())
-            })
-    }
-
-    async fn cancel_session(
-        &self,
-        session_id: i64,
-    ) -> Result<(), agena_runtime::SessionExecutionControlError> {
-        SessionManager::cancel_active_execution(self, session_id)
             .await
             .map_err(|error| {
                 agena_runtime::SessionExecutionControlError::internal(error.to_string())

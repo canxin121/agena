@@ -13,7 +13,6 @@ pub(super) fn tool_execution_to_invoke_output(
         title: summary.title,
         summary: summary.summary,
         output_text: summary.output_text,
-        sections: summary.sections,
         payload: summary.payload,
         metadata: summary.metadata.into_iter().collect(),
         attachments: execution.view.attachments,

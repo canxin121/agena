@@ -310,7 +310,7 @@ export function renderMarkdown(content: string, labels?: Partial<MarkdownUiLabel
   }
 }
 
-// Convert markdown into plain text (used for thinking/justification parts).
+// Convert markdown into plain text for reasoning parts.
 // We intentionally drop fenced/code blocks and images to avoid noisy UI.
 export function stripMarkdownToText(content: string): string {
   const src = String(content ?? '')

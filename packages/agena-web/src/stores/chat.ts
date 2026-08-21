@@ -1450,11 +1450,6 @@ const useChatStoreDefinition = defineStore('chat', () => {
     }
   }
 
-  /** Agena has no lazy part-detail endpoint; parts ship complete. No-op kept for UI compat. */
-  async function ensureMessagePartDetail(_part: JsonValue): Promise<void> {
-    return undefined
-  }
-
   function cacheSessions(entries: Array<(Partial<Session> & { id: string }) | null | undefined>) {
     for (const entry of entries) {
       upsertSessionCache(entry)
@@ -1684,7 +1679,6 @@ const useChatStoreDefinition = defineStore('chat', () => {
     getSessionRunConfig,
     getSessionUsage,
     cacheSessions,
-    ensureMessagePartDetail,
     consumePendingComposer,
     getComposerDraft,
     setComposerDraft,

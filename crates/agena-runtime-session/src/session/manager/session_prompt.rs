@@ -105,12 +105,7 @@ fn wants_background_section(tool_names: &[String]) -> bool {
     let has_tasks = tool_names.iter().any(|name| name == "tasks.run");
     let has_monitor = tool_names.iter().any(|name| name == "monitor.start");
     let has_cron = tool_names.iter().any(|name| name == "cron.create");
-    let has_shell = tool_names.iter().any(|name| {
-        matches!(
-            name.as_str(),
-            "shell.run" | "powershell.run" | "process.run"
-        )
-    });
+    let has_shell = tool_names.iter().any(|name| name == "shell.run");
     has_shell || has_tasks || has_monitor || has_cron
 }
 
@@ -160,8 +155,7 @@ impl SessionManager {
     }
 
     /// Async catalog path used by model turns and other Tokio request flows.
-    /// Definition hooks are awaited directly instead of entering the legacy
-    /// synchronous plugin-host bridge.
+    /// Definition hooks are awaited directly through the current plugin host.
     pub(crate) async fn assemble_session_system_prompt_async(
         &self,
         session: &Session,

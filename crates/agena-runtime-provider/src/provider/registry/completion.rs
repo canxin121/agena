@@ -2067,7 +2067,6 @@ mod tool_api_function_validation_tests {
             content,
             summary: None,
             visibility: PartVisibility::Both,
-            rendered_markdown: None,
             parent_part_id: None,
             run_id: Some(1),
             origin_session_id: 1,
@@ -2089,7 +2088,6 @@ mod tool_api_function_validation_tests {
             content: serde_json::json!({ "text": text }),
             summary: None,
             visibility: PartVisibility::Both,
-            rendered_markdown: None,
             parent_part_id: None,
             run_id: Some(2),
             origin_session_id: 1,
@@ -2576,10 +2574,10 @@ mod tool_api_function_validation_tests {
 
     #[test]
     fn tolerant_parse_repairs_invalid_escape_arguments() {
-        let json = r#"{"tool":"fs.read","input":{"path":"C:\temp\new"}}"#;
+        let json = r#"{"tool":"fs.read","input":{"file_path":"C:\temp\new"}}"#;
         let parsed = parse_tool_api_arguments_tolerant(json).expect("invalid escape repaired");
         let input = parsed["input"].as_object().expect("input object");
-        assert_eq!(input["path"].as_str(), Some("C:\temp\new"));
+        assert_eq!(input["file_path"].as_str(), Some("C:\temp\new"));
     }
 
     #[test]
@@ -2752,7 +2750,6 @@ mod replay_tests {
                 content: serde_json::json!({ "text": "hi" }),
                 summary: None,
                 visibility: PartVisibility::Both,
-                rendered_markdown: None,
                 parent_part_id: None,
                 run_id: Some(1),
                 origin_session_id: 1,

@@ -1,12 +1,11 @@
-//! Built-in human renderer for activity v2 (design 07 \u00a74.3 / 08 \u00a72).
+//! Built-in human renderer for tool results.
 //!
 //! Every built-in tool renders its human-facing `ViewBlock` stream through
 //! this one renderer: it maps the structured [`ToolPayloadOutput`] variant to
 //! first-class blocks (command card, file changes, diff, search results,
 //! path lists) and falls back to the raw output (`Json` payload + `Log` text)
-//! for tools without a structured presentation. This is the v2 counterpart of
-//! the legacy `operation_blocks_from_tool_output` projection, owned by the
-//! tools crate so renderers live next to the tools that produce the output.
+//! for tools without a structured presentation. It lives next to the tools
+//! that produce the output so each result uses the same current renderer.
 
 use agena_domain::{CommandOutputStream, RawOutput, ToolOutput, ViewBlock};
 use agena_tool::{RenderContext, RenderError, ToolHumanRenderer};
@@ -16,7 +15,7 @@ use agena_domain::WebSearchResult;
 
 /// A renderer for one built-in tool result. `tool_name` follows the same
 /// resolution rules as [`ToolPayloadOutput::from_tool_output`]; `command` and
-/// `cwd` let shell/process executions render a `$ command` card instead of a
+/// `cwd` let shell executions render a `$ command` card instead of a
 /// bare output card.
 #[derive(Debug, Clone)]
 pub struct BuiltinHumanRenderer {
@@ -274,7 +273,7 @@ mod tests {
 
     #[test]
     fn apply_patch_renders_file_changes_and_diff() {
-        let renderer = BuiltinHumanRenderer::new("apply_patch");
+        let renderer = BuiltinHumanRenderer::new("fs.apply_patch");
         let raw = RawOutput {
             payload: Some(json!({
                 "operation_id": "op-1",
@@ -330,7 +329,7 @@ mod tests {
 
     #[test]
     fn glob_renders_path_list_and_fallback_is_used_for_opaque_payloads() {
-        let renderer = BuiltinHumanRenderer::new("glob");
+        let renderer = BuiltinHumanRenderer::new("fs.glob");
         let raw = RawOutput {
             payload: Some(json!({ "paths": ["a.rs", "b.rs"], "count": 2 })),
             text: String::new(),

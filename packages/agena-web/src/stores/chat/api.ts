@@ -215,11 +215,24 @@ function toSession(s: unknown): Session | null {
   }
 }
 
-function entriesFromParts(sessionId: string, parts: JsonValue[], folds: MessageFold[] = []): MessageEntry[] {
+function entriesFromParts(
+  sessionId: string,
+  parts: JsonValue[],
+  folds: MessageFold[] = [],
+  contextRunIds: readonly number[] = [],
+): MessageEntry[] {
   const list: MessageEntry[] = []
   const map = new Map<string, MessageEntry>()
   const order: string[] = []
   const now = Date.now()
+
+  const runMarkers = new Set<string>()
+  for (const raw of parts) {
+    const part = asRecord(raw)
+    if (str(part.kind) !== 'run' || typeof part.part_id !== 'number') continue
+    runMarkers.add(String(part.part_id))
+  }
+  const contextualRuns = new Set(contextRunIds.filter((runId) => Number.isFinite(runId)).map(String))
 
   const ensure = (key: string, info: MessageInfo): MessageEntry => {
     let entry = map.get(key)
@@ -269,18 +282,21 @@ function entriesFromParts(sessionId: string, parts: JsonValue[], folds: MessageF
       continue
     }
 
-    // Content part: attach to its run message (or an orphan message).
-    const key = runIdRaw != null ? String(runIdRaw) : partIdStr
+    // Every content part must point at a materialized run marker. A missing
+    // or unknown owner is malformed current data, not a message that can be
+    // reconstructed by the client.
+    if (runIdRaw == null) continue
+    const key = String(runIdRaw)
+    if (!runMarkers.has(key) && !contextualRuns.has(key)) continue
     let entry = map.get(key)
     if (!entry) {
-      const info: MessageInfo = {
+      entry = ensure(key, {
         id: key,
         sessionID: sessionId,
         role,
         runId: runIdRaw,
         time: { created: createdMs },
-      }
-      entry = ensure(key, info)
+      })
     }
     if (!entry.parts) entry.parts = []
     const messageError = messageErrorFromAgenaPart(raw)
@@ -309,23 +325,17 @@ function asObject(value: JsonValue): JsonObject {
   return isRecord(value) ? value : {}
 }
 
-function flatOperationView(content: JsonObject, presentationValue: JsonValue): JsonObject {
+function toolCallView(content: JsonObject, presentationValue: JsonValue): JsonObject {
   const presentation = asObject(presentationValue)
   const title = stringField(presentation, ['title'])
   const summary = stringField(presentation, ['summary'])
-  const state = stringField(content, ['state'])
   const invocation = {
-    name: stringField(content, ['name', 'tool']) || 'unknown',
+    name: stringField(content, ['name']) || 'unknown',
     plugin_name: content.plugin,
     input: asObject(content.input),
     tool_api_call: asObject(content.tool_api_call),
   }
   const blocks = Array.isArray(presentation.blocks) ? presentation.blocks : []
-  const result = {
-    state,
-    content: blocks,
-    display: { title, summary, sections: [] },
-  }
   return {
     call_id: content.call_id ?? 0,
     invocation,
@@ -337,7 +347,7 @@ function flatOperationView(content: JsonObject, presentationValue: JsonValue): J
     metadata: asObject(content.metadata),
     error: content.error ?? null,
     lifecycle: asObject(content.lifecycle),
-    result,
+    output: content.output ?? null,
   }
 }
 
@@ -467,24 +477,27 @@ export function normalizeAgenaPart(
       return { ...base, type: 'reasoning', text }
     }
     case 'tool_call': {
-      const operation = flatOperationView(asObject(content), agenaPresentation)
+      const operation = toolCallView(asObject(content), agenaPresentation)
       const invocation = asObject(operation.invocation)
-      const result = asObject(operation.result)
-      const display = asObject(result.display)
-      const resultState = stringField(result, ['state'])
-      const toolName = stringField(content, ['name', 'tool']) || stringField(invocation, ['name']) || 'unknown'
+      const toolName = stringField(content, ['name']) || stringField(invocation, ['name']) || 'unknown'
       const canonicalInput = asObject(asObject(content).input)
       const operationInput = asObject(invocation.input)
       const input = Object.keys(canonicalInput).length > 0 ? canonicalInput : operationInput
-      const output = stringField(display, ['summary']) || stringField(operation, ['summary'])
-      const error = operationFailureMessage(result.error) || operationFailureMessage(operation.error)
+      const outputRecord = asObject(operation.output)
+      const payloadRecord = asObject(outputRecord.payload)
+      const output =
+        stringField(agenaPresentation, ['summary']) ||
+        stringField(outputRecord, ['text']) ||
+        stringField(payloadRecord, ['text']) ||
+        stringField(operation, ['summary'])
+      const error = operationFailureMessage(operation.error)
       const metaCandidate = {
         ...asObject(operation.metadata),
-        ...asObject(result.metadata),
+        ...asObject(outputRecord.metadata),
         ...asObject(asObject(content).metadata),
       }
-      const title = stringField(operation, ['title']) || stringField(display, ['title'])
-      const status = toStatus(resultState || state)
+      const title = stringField(operation, ['title'])
+      const status = toStatus(stringField(content, ['state']) || state)
       const toolState: JsonObject = {
         ...(status ? { status } : {}),
         input,
@@ -576,30 +589,6 @@ export function normalizeAgenaPart(
     case 'error': {
       const message = messageErrorFromAgenaPart(raw)?.message || 'The run failed.'
       return { ...base, type: 'text', text: message, synthetic: true }
-    }
-    case 'interaction': {
-      const interaction = asObject(content)
-      const request = asObject(interaction.request)
-      const prompt =
-        stringField(interaction, ['prompt']) ||
-        stringField(request, ['title', 'body_markdown']) ||
-        str(part.summary) ||
-        'User input requested'
-      const reply = interaction.reply ?? interaction.response
-      return {
-        ...base,
-        type: 'tool',
-        tool: 'question',
-        state: {
-          ...(toStatus(state) ? { status: toStatus(state) } : {}),
-          input: {
-            prompt,
-            ...(interaction.options !== undefined ? { options: interaction.options } : {}),
-            ...(request.questions !== undefined ? { questions: request.questions } : {}),
-          },
-          ...(reply !== undefined && reply !== null ? { output: reply } : {}),
-        },
-      }
     }
     case 'system_notification': {
       const opKind = stringField(content, ['operation_kind']) || 'background'
@@ -901,7 +890,7 @@ export async function listTranscriptRunParts(
     `/api/v1/sessions/${encodeURIComponent(sid)}/transcript/runs/${encodeURIComponent(String(runId))}?${params.toString()}`,
   )
   return {
-    entries: entriesFromParts(sid, parts.parts as unknown as JsonValue[]),
+    entries: entriesFromParts(sid, parts.parts as unknown as JsonValue[], [], [runId]),
     hasMore: Boolean(parts.page?.has_more),
     nextCursor: parts.page?.next_cursor ?? null,
   }
@@ -924,7 +913,7 @@ export async function listTranscriptFoldParts(
     `/api/v1/sessions/${encodeURIComponent(sid)}/transcript/folds?${params.toString()}`,
   )
   return {
-    entries: entriesFromParts(sid, parts.parts as unknown as JsonValue[]),
+    entries: entriesFromParts(sid, parts.parts as unknown as JsonValue[], [], ids),
     hasMore: Boolean(parts.page?.has_more),
     nextCursor: parts.page?.next_cursor ?? null,
   }

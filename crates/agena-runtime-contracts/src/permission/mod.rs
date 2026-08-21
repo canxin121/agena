@@ -380,8 +380,8 @@ impl ToolPermissionPolicy {
     }
 }
 
-fn is_shell_tool(names: &[&str], contract: &ToolPermissionContract) -> bool {
-    names.contains(&"bash") || contract.shell
+fn is_shell_tool(_names: &[&str], contract: &ToolPermissionContract) -> bool {
+    contract.shell
 }
 
 pub fn combine_permission_modes(left: PermissionMode, right: PermissionMode) -> PermissionMode {

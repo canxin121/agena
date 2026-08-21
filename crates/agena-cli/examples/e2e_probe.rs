@@ -116,7 +116,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut observed_execution = false;
     let mut last_snapshot = None;
     loop {
-        let runs = queries.list_projected_runs(session_id, true).await?;
+        let runs = queries.list_projected_runs(session_id).await?;
         let assistant_seen = runs
             .iter()
             .any(|run| run.role == agena_domain::Role::Assistant);
@@ -170,7 +170,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Dump the projected transcript: every run, its parts, and the tool
     // names + payloads for tool calls.
-    let runs = queries.list_projected_runs(session_id, true).await?;
+    let runs = queries.list_projected_runs(session_id).await?;
     println!();
     println!("==== TRANSCRIPT (session {session_id}) ====");
     for run in &runs {

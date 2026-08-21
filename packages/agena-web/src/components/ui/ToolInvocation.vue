@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import {
   RiPencilLine,
@@ -27,7 +27,6 @@ import IconButton from '@/components/ui/IconButton.vue'
 import MonacoDiffEditor from '@/components/MonacoDiffEditor.vue'
 import { buildVirtualMonacoDiffModel } from '@/features/git/diff/unifiedDiff'
 import type { GitDiffMeta } from '@/types/git'
-import { useChatStore } from '@/stores/chat'
 import { formatTimeHM } from '@/i18n/intl'
 import { normalizeChatToolActivityId } from '@/lib/chatActivity'
 import { resolveToolInputDisplay } from './toolInvocationInput'
@@ -37,7 +36,6 @@ type UnknownRecord = Record<string, ToolValue>
 type ToolPartLike = {
   tool?: string
   state?: ToolValue
-  ocLazy?: boolean
   metadata?: ToolValue
   time?: ToolValue
   [k: string]: ToolValue
@@ -136,32 +134,12 @@ const { t } = useI18n()
 const isOpen = ref(Boolean(props.initiallyExpanded))
 const activityDiffWrap = ref(true)
 
-const chat = useChatStore()
-const detailLoading = ref(false)
-
 const partRecord = computed(() => asRecord(props.part))
-const isLazy = computed(() => partRecord.value.ocLazy === true)
-
-async function ensureDetail() {
-  if (detailLoading.value) return
-  if (!isLazy.value) return
-  detailLoading.value = true
-  try {
-    await chat.ensureMessagePartDetail(props.part)
-  } finally {
-    detailLoading.value = false
-  }
-}
 
 function toggleOpen() {
   const next = !isOpen.value
   isOpen.value = next
-  if (next) void ensureDetail()
 }
-
-onMounted(() => {
-  if (isOpen.value) void ensureDetail()
-})
 
 watch(
   () => props.collapseSignal,
@@ -189,8 +167,6 @@ const metadata = computed(() => {
   if (stateMeta) return stateMeta
   const partMeta = nonEmptyRecord(asRecord(partRecord.value.metadata))
   if (partMeta) return partMeta
-  const resultMeta = nonEmptyRecord(asRecord(asRecord(state.value.result).metadata))
-  if (resultMeta) return resultMeta
   return {}
 })
 
@@ -278,8 +254,15 @@ const summary = computed(() => {
     return firstLine.substring(0, 60)
   }
 
-  if (['edit', 'multiedit', 'read', 'write'].includes(tool)) {
-    const path = inp.filePath || inp.file_path || inp.path
+  if (['edit', 'multiedit', 'write'].includes(tool)) {
+    const path = inp.path
+    if (typeof path === 'string') {
+      return path.split('/').pop() || path
+    }
+  }
+
+  if (tool === 'read') {
+    const path = inp.file_path
     if (typeof path === 'string') {
       return path.split('/').pop() || path
     }
@@ -317,7 +300,6 @@ const summary = computed(() => {
     'query',
     'pattern',
     'path',
-    'filePath',
     'file_path',
     'url',
     'name',
@@ -390,7 +372,7 @@ const disclosureStatus = computed(() => {
 const outputLang = computed(() => {
   const t = toolKind.value
   if (t === 'read') {
-    const rawPath = input.value.filePath ?? input.value.file_path
+    const rawPath = input.value.file_path
     const path = typeof rawPath === 'string' ? rawPath : ''
     if (path.endsWith('.ts') || path.endsWith('.tsx')) return 'typescript'
     if (path.endsWith('.js') || path.endsWith('.jsx')) return 'javascript'
@@ -543,10 +525,6 @@ const shouldShowInput = computed(() => {
     <Transition name="toolreveal">
       <div v-show="isOpen" class="pl-6 pt-0.5 pb-1">
         <div class="space-y-2">
-          <div v-if="detailLoading" class="text-[11px] text-muted-foreground/70 italic">
-            {{ t('chat.messages.activity.toolInvocation.status.loadingDetails') }}
-          </div>
-
           <div v-if="shouldShowInput" class="text-xs">
             <div class="text-muted-foreground/80 mb-1 font-medium flex justify-between items-center">
               <span>{{ t('chat.messages.activity.toolInvocation.sections.input') }}</span>
@@ -621,7 +599,7 @@ const shouldShowInput = computed(() => {
           </div>
 
           <div
-            v-else-if="!detailLoading && !isLazy && !shouldShowInput && !isRunning && isSuccess"
+            v-else-if="!shouldShowInput && !isRunning && isSuccess"
             class="text-[11px] text-muted-foreground/70 italic"
           >
             {{ t('chat.messages.activity.toolInvocation.status.completedWithoutOutput') }}

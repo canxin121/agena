@@ -54,9 +54,9 @@ import type { MessageEntry, MessageFold } from '@/types/chat'
 import type { JsonObject, JsonValue } from '@/types/json'
 import type { PluginOperationResult } from '@/lib/pluginOperations'
 import {
-  DEFAULT_CHAT_ACTIVITY_EXPANDED_TOOL_FILTERS,
+  DEFAULT_CHAT_TOOL_EXPANDED_CATEGORIES,
   chatActivityKindIdForTranscriptPart,
-  normalizeChatToolActivityFilters,
+  normalizeChatToolActivityCategories,
   normalizeChatToolExpansionOverrides,
   resolveChatActivityKindDefaultExpanded,
   resolveChatToolDefaultExpanded,
@@ -953,10 +953,10 @@ const activityKindDefaultExpanded = computed<string[]>(() => resolveChatActivity
 
 const activityDefaultExpandedToolSet = computed<Set<string>>(() => {
   const s = settingsData.value
-  if (s && Object.prototype.hasOwnProperty.call(s, 'chatActivityDefaultExpandedToolFilters')) {
-    return new Set(normalizeChatToolActivityFilters(s.chatActivityDefaultExpandedToolFilters))
+  if (s && Object.prototype.hasOwnProperty.call(s, 'chatToolActivityDefaultExpandedCategories')) {
+    return new Set(normalizeChatToolActivityCategories(s.chatToolActivityDefaultExpandedCategories))
   }
-  return new Set(DEFAULT_CHAT_ACTIVITY_EXPANDED_TOOL_FILTERS)
+  return new Set(DEFAULT_CHAT_TOOL_EXPANDED_CATEGORIES)
 })
 
 const activityDefaultExpandedToolOverrides = computed<ChatToolExpansionOverrides>(() =>
@@ -978,14 +978,12 @@ function activityInitiallyExpandedForPart(part: TranscriptDisplayPart): boolean 
 }
 
 const showThinking = computed(() => settingsData.value.showReasoningTraces !== false)
-const showJustification = computed(() => settingsData.value.showTextJustificationActivity !== false)
 const showTimestamps = computed(() => settingsData.value.showChatTimestamps !== false)
 
 const renderBlocksApi = useChatRenderBlocks({
   chat,
   settings,
   showThinking,
-  showJustification,
   revertState,
   formatTime,
 })
@@ -994,7 +992,6 @@ const {
   renderBlocks,
   getTextParts,
   isReasoningPart,
-  isJustificationPart,
   isMetaPart,
   MAX_VISIBLE_ACTIVITY_COLLAPSED,
   activityExpandedByBlockKey,
@@ -1050,7 +1047,6 @@ const sessionActions = useChatSessionActions({
   toasts,
   sessionTitle,
   showThinking,
-  showJustification,
   copyToClipboard,
   onSessionForked: (newId) => {
     void router.push('/chat')
@@ -2418,7 +2414,6 @@ const viewCtx = {
   isActivityExpanded,
   setActivityExpanded,
   isReasoningPart,
-  isJustificationPart,
   isMetaPart,
   transcriptPartExpanded,
   setTranscriptPartExpanded,

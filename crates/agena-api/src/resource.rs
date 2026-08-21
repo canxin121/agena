@@ -1369,7 +1369,6 @@ pub struct SessionTranscriptPart {
 pub struct SessionExecutionResource {
     pub session: SessionResource,
     /// The session's v2 parts (ordered parts, including `run` markers).
-    /// Replaces the v1 `TranscriptSnapshot` aggregate.
     pub parts: Vec<SessionTranscriptPart>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub latest_event_seq: Option<i64>,
@@ -1382,18 +1381,6 @@ pub struct SessionExecutionResource {
     pub background_activities: Vec<BackgroundActivityResource>,
     pub execution: SessionExecutionContextResource,
     pub usage: SessionUsageResource,
-}
-
-/// The lazily-derived human detail of one tool Activity. Returned by the
-/// `GetOperationDetail` query when a client expands an Operation; the runtime
-/// derives the Markdown from the compact tool data, so nothing large is
-/// persisted or transferred while the Activity stays collapsed.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OperationDetailResource {
-    pub activity_id: agena_domain::ActivityId,
-    pub markdown: String,
-    #[serde(default)]
-    pub streaming: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1973,11 +1960,7 @@ pub enum UserInputReplyKind {
 pub struct UserInputReply {
     pub request_id: String,
     pub kind: UserInputReplyKind,
-    #[serde(
-        default,
-        deserialize_with = "deserialize_user_input_answers",
-        skip_serializing_if = "user_input_answers_is_empty"
-    )]
+    #[serde(default, skip_serializing_if = "user_input_answers_is_empty")]
     pub answers: std::collections::BTreeMap<String, Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,

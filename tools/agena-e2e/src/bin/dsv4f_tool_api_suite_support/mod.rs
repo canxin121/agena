@@ -35,11 +35,11 @@ pub(super) struct SuiteTranscript {
 pub(super) struct SuiteOperation {
     pub(super) operation_id: Option<String>,
     pub(super) status: ExecutionStatus,
-    pub(super) value: agena_runtime::SessionProjectedOperationPart,
+    pub(super) value: agena_runtime_contracts::part_content::ToolCallContent,
 }
 
 impl std::ops::Deref for SuiteOperation {
-    type Target = agena_runtime::SessionProjectedOperationPart;
+    type Target = agena_runtime_contracts::part_content::ToolCallContent;
     fn deref(&self) -> &Self::Target {
         &self.value
     }
@@ -56,7 +56,16 @@ impl SuiteOperation {
             .map(|error| error.failure.user.fallback.as_str())
     }
     pub(super) fn output_text(&self) -> Option<&str> {
-        (!self.value.model_output.text.is_empty()).then_some(self.value.model_output.text.as_str())
+        let output = self.value.output.as_ref()?;
+        if !output.text.is_empty() {
+            return Some(output.text.as_str());
+        }
+        output.payload.as_ref().and_then(|payload| {
+            payload
+                .as_str()
+                .or_else(|| payload.get("text").and_then(Value::as_str))
+                .filter(|text| !text.is_empty())
+        })
     }
 }
 
@@ -172,7 +181,7 @@ impl Harness {
         for attempt in 1..=MAX_EXACT_INVOCATION_ATTEMPTS {
             let start_message_count = self
                 .session_queries
-                .list_projected_runs(session_id, true)
+                .list_projected_runs(session_id)
                 .await?
                 .len();
             let retry_notice = (attempt > 1).then_some(
@@ -228,7 +237,7 @@ impl Harness {
         for attempt in 1..=MAX_EXACT_INVOCATION_ATTEMPTS {
             let start_message_count = self
                 .session_queries
-                .list_projected_runs(session_id, true)
+                .list_projected_runs(session_id)
                 .await?
                 .len();
             let retry_notice = (attempt > 1).then_some(
@@ -412,7 +421,7 @@ impl Harness {
             .context("load completed model session")?;
         let messages = self
             .session_queries
-            .list_projected_runs(session_id, true)
+            .list_projected_runs(session_id)
             .await
             .context("load completed model transcript")?;
         Ok(SuiteTranscript {
@@ -471,11 +480,11 @@ pub(super) fn operations_since(
         .skip(start_message_count)
         .flat_map(|message| message.parts.iter())
         .filter_map(|part| match part.detail.as_ref() {
-            Some(agena_runtime::SessionProjectedPartDetail::Operation(operation)) => {
+            Some(agena_runtime::SessionProjectedPartDetail::ToolCall(operation)) => {
                 Some(SuiteOperation {
                     operation_id: part.operation_id.clone(),
                     status: part.status,
-                    value: *operation.clone(),
+                    value: operation.clone(),
                 })
             }
             _ => None,
@@ -493,8 +502,18 @@ pub(super) fn transcript_since(session: &SuiteTranscript, start_message_count: u
             Some(agena_runtime::SessionProjectedPartDetail::Text { text, .. }) => {
                 Some(text.as_str())
             }
-            Some(agena_runtime::SessionProjectedPartDetail::Operation(value)) => {
-                Some(value.model_output.text.as_str())
+            Some(agena_runtime::SessionProjectedPartDetail::ToolCall(value)) => {
+                value.output.as_ref().and_then(|output| {
+                    if !output.text.is_empty() {
+                        Some(output.text.as_str())
+                    } else {
+                        output.payload.as_ref().and_then(|payload| {
+                            payload
+                                .as_str()
+                                .or_else(|| payload.get("text").and_then(Value::as_str))
+                        })
+                    }
+                })
             }
             _ => None,
         })
@@ -518,11 +537,11 @@ pub(super) fn can_retry_missing_tool_api_call(
     let expected = json!({"tool": tool_name, "input": input});
     let calls = operations_since(session, start_message_count)
         .into_iter()
-        .filter(|operation| operation.invocation.name == TOOLS_CALL_HANDLER_KEY)
+        .filter(|operation| operation.name == TOOLS_CALL_HANDLER_KEY)
         .collect::<Vec<_>>();
     !calls
         .iter()
-        .any(|call| Value::from(call.invocation.input.clone()) == expected)
+        .any(|call| Value::from(call.input.clone()) == expected)
         && calls.iter().all(operation_failed_or_incomplete)
 }
 
@@ -538,11 +557,11 @@ pub(super) fn can_retry_missing_native_invocation(
     }
     let calls = operations_since(session, start_message_count)
         .into_iter()
-        .filter(|operation| operation.invocation.name == canonical_function)
+        .filter(|operation| operation.name == canonical_function)
         .collect::<Vec<_>>();
     !calls
         .iter()
-        .any(|call| Value::from(call.invocation.input.clone()) == *input)
+        .any(|call| Value::from(call.input.clone()) == *input)
         && calls.iter().all(operation_failed_or_incomplete)
 }
 
@@ -565,7 +584,7 @@ pub(super) fn extract_tool_api_outcome(
     let operations = operations_since(session, start_message_count);
     let helped = operations
         .iter()
-        .filter(|operation| operation.invocation.name == TOOLS_HELP_HANDLER_KEY)
+        .filter(|operation| operation.name == TOOLS_HELP_HANDLER_KEY)
         .collect::<Vec<_>>();
     ensure!(
         !helped.is_empty(),
@@ -574,7 +593,7 @@ pub(super) fn extract_tool_api_outcome(
     );
     ensure!(
         helped.iter().all(|help| {
-            serde_json::Value::from(help.invocation.input.clone()) == json!({"tool": tool_name})
+            serde_json::Value::from(help.input.clone()) == json!({"tool": tool_name})
         }),
         "tools.help input did not identify execution tool {tool_name}; operations: {}",
         operation_trace_with_ids(session, start_message_count)
@@ -591,7 +610,7 @@ pub(super) fn extract_tool_api_outcome(
     );
     let calls = operations
         .iter()
-        .filter(|operation| operation.invocation.name == TOOLS_CALL_HANDLER_KEY)
+        .filter(|operation| operation.name == TOOLS_CALL_HANDLER_KEY)
         .collect::<Vec<_>>();
     ensure!(
         !calls.is_empty(),
@@ -600,7 +619,7 @@ pub(super) fn extract_tool_api_outcome(
     );
     ensure!(
         calls.iter().all(|call| {
-            Value::from(call.invocation.input.clone())
+            Value::from(call.input.clone())
                 .get("tool")
                 .and_then(Value::as_str)
                 == Some(tool_name)
@@ -611,7 +630,7 @@ pub(super) fn extract_tool_api_outcome(
     let expected_call_input = json!({"tool": tool_name, "input": input});
     let matching_calls = calls
         .into_iter()
-        .filter(|call| Value::from(call.invocation.input.clone()) == expected_call_input)
+        .filter(|call| Value::from(call.input.clone()) == expected_call_input)
         .collect::<Vec<_>>();
     ensure!(
         matching_calls.len() == 1,
@@ -621,7 +640,7 @@ pub(super) fn extract_tool_api_outcome(
     );
     let call = matching_calls[0].clone();
     ensure!(
-        serde_json::Value::from(call.invocation.input.clone()) == expected_call_input,
+        serde_json::Value::from(call.input.clone()) == expected_call_input,
         "tools.call input was not the supplied exact execution tool/input"
     );
     if expect_success {
@@ -660,7 +679,7 @@ pub(super) fn extract_native_outcome(
     );
     let matching = operations_since(session, start_message_count)
         .into_iter()
-        .filter(|operation| operation.invocation.name == canonical_function)
+        .filter(|operation| operation.name == canonical_function)
         .collect::<Vec<_>>();
     ensure!(
         matching.len() == 1,
@@ -670,7 +689,7 @@ pub(super) fn extract_native_outcome(
     );
     let call = matching[0].clone();
     ensure!(
-        serde_json::Value::from(call.invocation.input.clone()) == *input,
+        serde_json::Value::from(call.input.clone()) == *input,
         "{canonical_function} input differed from the supplied exact input"
     );
     ensure!(
@@ -701,10 +720,10 @@ pub(super) fn operation_trace_with_ids(
     operations_since(session, start_message_count)
         .into_iter()
         .map(|operation| {
-            let input = Value::from(operation.invocation.input.clone());
+            let input = Value::from(operation.input.clone());
             format!(
                 "{}({input}) operation_id={} status={:?} error={}",
-                operation.invocation.name,
+                operation.name,
                 operation.operation_id.as_deref().unwrap_or("<none>"),
                 operation.status(),
                 operation.error_message().unwrap_or("<none>")
@@ -764,40 +783,40 @@ pub(super) async fn assert_outer_tool_api_stream_update(
                     continue;
                 }
                 let content = &part.content;
-                let Some(operation) = content.get("payload").filter(|_| {
-                    content.get("type") == Some(&Value::String("activity".to_string()))
-                        && content.get("activity_type")
-                            == Some(&Value::String("operation".to_string()))
-                }) else {
+                let Ok(operation) = serde_json::from_value::<
+                    agena_runtime_contracts::part_content::ToolCallContent,
+                >(content.clone()) else {
                     continue;
                 };
-                let name = operation
-                    .get("invocation")
-                    .and_then(|invocation| invocation.get("name"))
-                    .and_then(Value::as_str)
-                    .unwrap_or("<missing>");
-                let invocation_input = operation
-                    .get("invocation")
-                    .and_then(|invocation| invocation.get("input"))
-                    .cloned()
-                    .unwrap_or(Value::Null);
+                let name = operation.name.as_str();
+                let invocation_input = operation.input.clone();
                 let output = operation
-                    .get("model_output")
-                    .and_then(|output| output.get("text"))
-                    .and_then(Value::as_str)
+                    .output
+                    .as_ref()
+                    .map(|output| {
+                        if !output.text.is_empty() {
+                            output.text.as_str()
+                        } else {
+                            output
+                                .payload
+                                .as_ref()
+                                .and_then(|payload| {
+                                    payload
+                                        .as_str()
+                                        .or_else(|| payload.get("text").and_then(Value::as_str))
+                                })
+                                .unwrap_or_default()
+                        }
+                    })
                     .unwrap_or_default();
                 if observed_operations.len() < 12 {
                     observed_operations.push(format!(
                         "name={} input={} status={:?} output={}",
-                        name,
-                        invocation_input,
-                        operation.get("status"),
-                        output
+                        name, invocation_input, operation.state, output
                     ));
                 }
                 if part.state != PartState::InProgress
-                    || operation.get("status")
-                        != Some(&serde_json::to_value(ExecutionStatus::InProgress)?)
+                    || operation.state != agena_domain::ToolResultState::Running
                 {
                     continue;
                 }

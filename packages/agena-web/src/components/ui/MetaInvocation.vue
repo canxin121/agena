@@ -1,16 +1,14 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { RiFileList2Line, RiMagicLine, RiRefreshLine, RiScissorsLine, RiStackLine } from '@remixicon/vue'
 import { useI18n } from 'vue-i18n'
 
 import ActivityDisclosureButton from '@/components/ui/ActivityDisclosureButton.vue'
 import CodeBlock from './CodeBlock.vue'
-import { useChatStore } from '@/stores/chat'
 import type { JsonObject as MetaRecord, JsonValue as MetaValue } from '@/types/json'
 
 type MetaPart = {
   type?: string
-  ocLazy?: boolean
   [k: string]: MetaValue
 }
 
@@ -29,25 +27,9 @@ const { t } = useI18n()
 
 const isOpen = ref(Boolean(props.initiallyExpanded))
 
-const chat = useChatStore()
-const detailLoading = ref(false)
-const isLazy = computed(() => props.part?.ocLazy === true)
-
-async function ensureDetail() {
-  if (detailLoading.value) return
-  if (!isLazy.value) return
-  detailLoading.value = true
-  try {
-    await chat.ensureMessagePartDetail(props.part)
-  } finally {
-    detailLoading.value = false
-  }
-}
-
 function toggleOpen() {
   const next = !isOpen.value
   isOpen.value = next
-  if (next) void ensureDetail()
 }
 
 const kind = computed(() => String(props.part?.type || '').toLowerCase())
@@ -129,12 +111,6 @@ const details = computed(() => {
   }
 })
 
-onMounted(() => {
-  // Auto-expand retries/errors by default.
-  void kind.value
-  if (isOpen.value) void ensureDetail()
-})
-
 watch(
   () => props.collapseSignal,
   () => {
@@ -157,9 +133,6 @@ watch(
 
     <Transition name="toolreveal">
       <div v-show="isOpen" class="pl-6 pt-0.5 pb-1">
-        <div v-if="detailLoading" class="text-[11px] text-muted-foreground/70 italic mb-1">
-          {{ t('chat.messages.activity.metaInvocation.loadingDetails') }}
-        </div>
         <CodeBlock :code="details" lang="json" :compact="true" class="my-0" />
       </div>
     </Transition>

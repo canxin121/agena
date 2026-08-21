@@ -60,7 +60,7 @@ pub(super) async fn prepare_command_async(
         }
         Ok(CommandBeforeOutcome::Abort(reason)) => {
             let action = agena_domain::PermissionAction::Tool {
-                tool_name: "shell".to_string(),
+                tool_name: "agena.shell.run".to_string(),
                 qualifier: Some(input.command.clone()),
             };
             Err(ToolError::PolicyDenied(Box::new(

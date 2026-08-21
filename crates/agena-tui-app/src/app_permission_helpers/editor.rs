@@ -249,12 +249,7 @@ pub(crate) fn permission_studio_sections(
                 .as_ref()
                 .map(|tools| tools.rules.keys().cloned().collect::<Vec<_>>())
                 .unwrap_or_default();
-            keys.retain(|tool_name| {
-                matches!(
-                    tool_name.as_str(),
-                    "shell" | "bash" | "agena.shell.run" | "agena.process.run"
-                )
-            });
+            keys.retain(|tool_name| matches!(tool_name.as_str(), "agena.shell.run"));
             keys.sort();
             let mut tool_rule_items = keys
                 .into_iter()

@@ -5,15 +5,15 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use agena_domain::{
-    ExecutionStatus, FilesystemEffects, InteractionNotificationLevel, NetworkEffect,
-    OperationAuthorization, OperationError, OperationUserInput, ProcessShell, RawOutput,
-    ToolInvocation, ToolResultState, UserInputQuestion,
+    ExecutionStatus, FilesystemEffects, InteractionNotificationLevel, OperationAuthorization,
+    OperationError, OperationUserInput, ProcessShell, RawOutput, ToolInvocation, ToolResultState,
+    UserInputQuestion,
 };
 use agena_tool::{ReadMode, TaskModelSelection};
 
-use agena_domain::{StructuredValue, TimeRange};
+use agena_domain::TimeRange;
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq, JsonSchema, ToolInput)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
 #[input(
     trim(
         "command",
@@ -25,6 +25,7 @@ use agena_domain::{StructuredValue, TimeRange};
     ),
     non_empty("command")
 )]
+#[serde(deny_unknown_fields)]
 /// Input of a shell command execution.
 pub struct ShellCommandInput {
     pub command: String,
@@ -80,56 +81,6 @@ fn example_writes() -> Vec<String> {
 
 fn example_network() -> Vec<String> {
     vec!["<target>".to_string()]
-}
-
-impl<'de> Deserialize<'de> for ShellCommandInput {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        struct Wire {
-            command: String,
-            #[serde(default)]
-            description: String,
-            #[serde(default)]
-            timeout_ms: Option<u64>,
-            #[serde(default)]
-            workdir: Option<String>,
-            #[serde(default)]
-            reads: Vec<String>,
-            #[serde(default)]
-            writes: Vec<String>,
-            #[serde(default)]
-            network: Vec<String>,
-            #[serde(default)]
-            filesystem_effects: Option<FilesystemEffects>,
-            #[serde(default)]
-            network_effects: Option<Vec<NetworkEffect>>,
-        }
-        let wire = Wire::deserialize(deserializer)?;
-        let mut reads = wire.reads;
-        let mut writes = wire.writes;
-        if let Some(effects) = wire.filesystem_effects {
-            reads.extend(effects.read);
-            writes.extend(effects.write);
-        }
-        let mut network = wire.network;
-        if network.is_empty()
-            && let Some(legacy) = wire.network_effects
-        {
-            network = legacy.into_iter().map(|effect| effect.target).collect();
-        }
-        Ok(Self {
-            command: wire.command,
-            description: wire.description,
-            timeout_ms: wire.timeout_ms,
-            workdir: wire.workdir,
-            reads,
-            writes,
-            network,
-        })
-    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default)]
@@ -190,7 +141,6 @@ pub struct ShellMonitorInput {
 pub struct ReadToolInput {
     /// File or directory path to read. Relative paths are resolved from the
     /// workspace root.
-    #[serde(alias = "path")]
     #[arg(trim, non_empty, path.read)]
     pub file_path: String,
     /// 1-based offset for file lines or directory entries.
@@ -280,7 +230,7 @@ pub struct TaskToolInput {
     /// the tool call returns. When true, the tool returns immediately with a
     /// task id and the result is delivered as a `system_notification` when the
     /// subtask settles — do not poll tasks.get/tasks.output waiting for it.
-    #[serde(default, rename = "run_in_background", alias = "background")]
+    #[serde(default)]
     pub run_in_background: bool,
     /// Optional Skill names or aliases to attach to the delegated subtask's
     /// first user message as immutable Skill references. The child session
@@ -348,7 +298,7 @@ pub enum ShellToolInput {
         #[serde(flatten)]
         command: Box<ShellCommandInput>,
         /// If true, keep the process attached to the session and return a process id.
-        #[serde(default, rename = "run_in_background", alias = "background")]
+        #[serde(default, rename = "run_in_background")]
         run_in_background: bool,
         /// Optional monitor conditions. When present, the invocation is always
         /// managed as a background process regardless of `run_in_background`.
@@ -733,223 +683,6 @@ pub struct LspDiagnosticsToolInput {
     pub file_path: String,
 }
 
-/// Interpret an output payload's optional message-presentation blocks as
-/// unified v2 [`agena_domain::ViewBlock`]s. The output value itself belongs to
-/// `agena-domain`; this adapter parses the legacy `content_blocks` JSON shape
-/// (text/markdown/json/table/log/command/diff/file_changes/search_results/
-/// media/custom) into the single ViewBlock render contract.
-pub fn tool_output_content_blocks(
-    output: &agena_domain::ToolOutput,
-) -> Vec<agena_domain::ViewBlock> {
-    let Some(blocks) = output
-        .payload
-        .get("content_blocks")
-        .and_then(StructuredValue::as_array)
-    else {
-        return Vec::new();
-    };
-
-    blocks
-        .iter()
-        .filter_map(|block| json_block_to_view_block(block).ok())
-        .collect()
-}
-
-fn json_block_to_view_block(value: &StructuredValue) -> Result<agena_domain::ViewBlock, String> {
-    let json = serde_json::Value::from(value.clone());
-    let object = json
-        .as_object()
-        .ok_or_else(|| "block must be an object".to_owned())?;
-    let kind = object
-        .get("type")
-        .and_then(|value| value.as_str())
-        .unwrap_or("text");
-    let text = |key: &str| {
-        object
-            .get(key)
-            .and_then(|value| value.as_str())
-            .unwrap_or_default()
-            .to_owned()
-    };
-    Ok(match kind {
-        "markdown" => agena_domain::ViewBlock::Markdown {
-            id: None,
-            text: text("text"),
-        },
-        "json" => agena_domain::ViewBlock::Json {
-            id: None,
-            value: object
-                .get("value")
-                .cloned()
-                .unwrap_or(serde_json::Value::Null),
-        },
-        "log" => agena_domain::ViewBlock::Log {
-            id: None,
-            stream: match object.get("stream").and_then(|value| value.as_str()) {
-                Some("stderr") => agena_domain::CommandOutputStream::Stderr,
-                _ => agena_domain::CommandOutputStream::Stdout,
-            },
-            text: text("text"),
-        },
-        "command" => agena_domain::ViewBlock::Command {
-            id: None,
-            command: text("command"),
-            cwd: object
-                .get("cwd")
-                .and_then(|value| value.as_str())
-                .map(str::to_owned),
-            exit_code: object
-                .get("exit_code")
-                .and_then(|value| value.as_i64())
-                .map(|code| code as i32),
-            stdout: object
-                .get("stdout")
-                .and_then(|value| value.as_str())
-                .unwrap_or_default()
-                .to_owned(),
-            stderr: object
-                .get("stderr")
-                .and_then(|value| value.as_str())
-                .unwrap_or_default()
-                .to_owned(),
-        },
-        "diff" => agena_domain::ViewBlock::Diff {
-            id: None,
-            diff: text("diff"),
-            language: object
-                .get("language")
-                .and_then(|value| value.as_str())
-                .map(str::to_owned),
-        },
-        "file_changes" => agena_domain::ViewBlock::FileChanges {
-            id: None,
-            changes: object
-                .get("changes")
-                .and_then(|value| serde_json::from_value(value.clone()).ok())
-                .unwrap_or_default(),
-        },
-        "table" => agena_domain::ViewBlock::Table {
-            id: None,
-            columns: object
-                .get("columns")
-                .and_then(|value| value.as_array())
-                .map(|columns| {
-                    columns
-                        .iter()
-                        .filter_map(|column| {
-                            column.as_str().map(str::to_owned).or_else(|| {
-                                column
-                                    .get("label")
-                                    .and_then(|label| label.as_str())
-                                    .map(str::to_owned)
-                            })
-                        })
-                        .collect()
-                })
-                .unwrap_or_default(),
-            rows: object
-                .get("rows")
-                .and_then(|value| serde_json::from_value(value.clone()).ok())
-                .unwrap_or_default(),
-        },
-        "search_results" => {
-            let items = object
-                .get("results")
-                .and_then(|value| value.as_array())
-                .map(|results| {
-                    results
-                        .iter()
-                        .filter_map(|item| {
-                            let title = item
-                                .get("title")
-                                .and_then(|value| value.as_str())
-                                .unwrap_or_default()
-                                .to_owned();
-                            let url = item
-                                .get("url")
-                                .and_then(|value| value.as_str())
-                                .or_else(|| item.get("uri").and_then(|value| value.as_str()))
-                                .unwrap_or_default()
-                                .to_owned();
-                            let snippet = item
-                                .get("snippet")
-                                .and_then(|value| value.as_str())
-                                .map(str::to_owned);
-                            (!title.is_empty() || !url.is_empty()).then_some({
-                                agena_domain::WebSearchResult {
-                                    title,
-                                    url,
-                                    snippet,
-                                }
-                            })
-                        })
-                        .collect()
-                })
-                .unwrap_or_default();
-            agena_domain::ViewBlock::SearchResults {
-                id: None,
-                items,
-                total: None,
-            }
-        }
-        "media" | "image" | "audio" | "resource_link" | "embedded_resource" | "file" => {
-            let uri = object
-                .get("uri")
-                .and_then(|value| value.as_str())
-                .or_else(|| object.get("url").and_then(|value| value.as_str()))
-                .unwrap_or_default()
-                .to_owned();
-            let mime = object
-                .get("mime")
-                .and_then(|value| value.as_str())
-                .or_else(|| object.get("mime_type").and_then(|value| value.as_str()))
-                .unwrap_or_default()
-                .to_owned();
-            let name = object
-                .get("filename")
-                .and_then(|value| value.as_str())
-                .or_else(|| object.get("title").and_then(|value| value.as_str()))
-                .map(str::to_owned);
-            agena_domain::ViewBlock::Media {
-                id: None,
-                artifact: agena_domain::ArtifactRef {
-                    uri,
-                    mime,
-                    name,
-                    size_bytes: None,
-                    sha256: None,
-                },
-            }
-        }
-        "citation" => agena_domain::ViewBlock::Markdown {
-            id: None,
-            text: {
-                let title = object
-                    .get("title")
-                    .and_then(|value| value.as_str())
-                    .unwrap_or_default();
-                let snippet = object
-                    .get("snippet")
-                    .and_then(|value| value.as_str())
-                    .unwrap_or_default();
-                let uri = object
-                    .get("uri")
-                    .and_then(|value| value.as_str())
-                    .unwrap_or_default();
-                format!("{title}\n\n{snippet}\n\n{uri}").trim().to_owned()
-            },
-        },
-        // Legacy checklist/nested_task/progress and arbitrary custom blocks keep
-        // their identity as a Custom ViewBlock.
-        other => agena_domain::ViewBlock::Custom {
-            id: None,
-            kind: other.to_owned(),
-            schema: serde_json::Value::Null,
-            presentation: std::collections::BTreeMap::new(),
-        },
-    })
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 /// A message part representing a tool operation.
 ///
@@ -978,7 +711,6 @@ pub struct OperationPart {
 }
 
 const PROVIDER_ONLY_METADATA_KEY: &str = "provider_only";
-const LEGACY_PROVIDER_NATIVE_ONLY_METADATA_KEY: &str = "provider_native_only";
 const ADVERTISED_TOOL_IDENTITY_METADATA_KEY: &str = "advertised_tool_identity";
 const PROVIDER_RAW_METADATA_KEY: &str = "agena.provider_raw";
 /// Marker that an operation was launched into the background (a monitored
@@ -1144,19 +876,14 @@ impl OperationPart {
                 PROVIDER_ONLY_METADATA_KEY.to_string(),
                 serde_json::Value::Bool(true),
             );
-            self.metadata
-                .remove(LEGACY_PROVIDER_NATIVE_ONLY_METADATA_KEY);
         } else {
             self.metadata.remove(PROVIDER_ONLY_METADATA_KEY);
-            self.metadata
-                .remove(LEGACY_PROVIDER_NATIVE_ONLY_METADATA_KEY);
         }
     }
 
     pub fn is_provider_only(&self) -> bool {
         self.metadata
             .get(PROVIDER_ONLY_METADATA_KEY)
-            .or_else(|| self.metadata.get(LEGACY_PROVIDER_NATIVE_ONLY_METADATA_KEY))
             .and_then(serde_json::Value::as_bool)
             .unwrap_or(false)
     }
@@ -1396,5 +1123,58 @@ mod operation_part_tests {
             op.provider_raw().and_then(|raw| raw["id"].as_str()),
             Some("provider-1")
         );
+    }
+}
+
+#[cfg(test)]
+mod current_input_contract_tests {
+    use super::{ReadToolInput, ShellCommandInput, TaskToolInput};
+    use serde_json::json;
+
+    #[test]
+    fn shell_input_rejects_removed_result_and_background_fields() {
+        for removed in [
+            json!({"filesystem_effects": {"read": [], "write": []}}),
+            json!({"background": true}),
+        ] {
+            let mut input = json!({
+                "command": "ls",
+                "reads": [],
+                "writes": [],
+                "network": []
+            });
+            input
+                .as_object_mut()
+                .expect("shell input is an object")
+                .extend(
+                    removed
+                        .as_object()
+                        .expect("removed fields are an object")
+                        .clone(),
+                );
+            assert!(
+                serde_json::from_value::<ShellCommandInput>(input).is_err(),
+                "removed shell input fields must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn task_input_rejects_removed_background_field() {
+        let input = json!({
+            "description": "inspect",
+            "prompt": "inspect the repository",
+            "background": true
+        });
+        assert!(serde_json::from_value::<TaskToolInput>(input).is_err());
+    }
+
+    #[test]
+    fn read_input_accepts_only_the_canonical_file_path_field() {
+        let canonical = json!({"file_path": "README.md"});
+        assert!(serde_json::from_value::<ReadToolInput>(canonical).is_ok());
+
+        let removed_alias = json!({"path": "README.md"});
+        assert!(serde_json::from_value::<ReadToolInput>(removed_alias).is_err());
     }
 }

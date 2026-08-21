@@ -2415,7 +2415,6 @@ export default {
           },
           status: {
             failed: '失败',
-            loadingDetails: '正在加载详情...',
             completedWithoutOutput: '（已完成，无输出）',
             stoppedSessionEnded: '（已停止：会话结束）',
             running: '运行中...',
@@ -2435,14 +2434,11 @@ export default {
             auto: '自动',
             manual: '手动',
           },
-          loadingDetails: '正在加载详情...',
         },
         reasoningInvocation: {
           types: {
             thinking: '思考',
-            justification: '依据',
           },
-          loadingDetails: '正在加载详情...',
         },
       },
       optimistic: {

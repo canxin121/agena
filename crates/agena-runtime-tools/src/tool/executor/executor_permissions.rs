@@ -313,23 +313,7 @@ impl ToolExecutor {
         if let Some(effects) = filesystem_effects_from_input(input)? {
             let command = input
                 .pointer("/args/command")
-                .or_else(|| {
-                    input.get("command").filter(|value| {
-                        !matches!(
-                            value.as_str(),
-                            Some(
-                                "bash"
-                                    | "powershell"
-                                    | "exec"
-                                    | "monitor"
-                                    | "monitor_start"
-                                    | "monitor_list"
-                                    | "monitor_read"
-                                    | "monitor_stop"
-                            )
-                        )
-                    })
-                })
+                .or_else(|| input.get("command"))
                 .and_then(serde_json::Value::as_str)
                 .unwrap_or_default();
             if !command.is_empty() {

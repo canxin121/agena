@@ -24,11 +24,6 @@ export const BUILTIN_CHAT_ACTIVITY_KINDS: ChatActivityKindCatalogItem[] = [
 
 export const DEFAULT_CHAT_ACTIVITY_KIND_EXPANDED = ['reasoning']
 
-const LEGACY_ACTIVITY_KIND_ALIASES: Record<string, string> = {
-  thinking: 'reasoning',
-  compaction: 'notice',
-}
-
 function normalizedStringList(value: unknown): string[] {
   if (!Array.isArray(value)) return []
   const out: string[] = []
@@ -66,29 +61,14 @@ export function normalizeChatActivityKindDefaultExpanded(value: unknown): string
   return normalizedStringList(value)
 }
 
-export function migrateLegacyChatActivityDefaultExpanded(value: unknown): string[] {
-  const expanded = new Set(DEFAULT_CHAT_ACTIVITY_KIND_EXPANDED)
-  const builtinIds = new Set(BUILTIN_CHAT_ACTIVITY_KINDS.map((item) => item.id))
-  for (const legacyId of normalizedStringList(value)) {
-    const normalizedLegacyId = legacyId.toLowerCase()
-    const id = LEGACY_ACTIVITY_KIND_ALIASES[normalizedLegacyId] || normalizedLegacyId
-    if (builtinIds.has(id)) expanded.add(id)
-  }
-  return [...expanded]
-}
-
 export function resolveChatActivityKindDefaultExpanded(settings: unknown): string[] {
   if (!settings || typeof settings !== 'object' || Array.isArray(settings)) {
     return DEFAULT_CHAT_ACTIVITY_KIND_EXPANDED.slice()
   }
   const record = settings as Record<string, unknown>
-  if (Object.prototype.hasOwnProperty.call(record, 'chatActivityKindDefaultExpanded')) {
-    return normalizeChatActivityKindDefaultExpanded(record.chatActivityKindDefaultExpanded)
-  }
-  if (Object.prototype.hasOwnProperty.call(record, 'chatActivityDefaultExpanded')) {
-    return migrateLegacyChatActivityDefaultExpanded(record.chatActivityDefaultExpanded)
-  }
-  return DEFAULT_CHAT_ACTIVITY_KIND_EXPANDED.slice()
+  return Object.prototype.hasOwnProperty.call(record, 'chatActivityKindDefaultExpanded')
+    ? normalizeChatActivityKindDefaultExpanded(record.chatActivityKindDefaultExpanded)
+    : DEFAULT_CHAT_ACTIVITY_KIND_EXPANDED.slice()
 }
 
 export function chatActivityKindIdForTranscriptPart(partKind: unknown, durablePartKind: unknown): string {
@@ -132,10 +112,9 @@ export type KnownChatToolActivityType =
   | 'plan_exit'
   | 'unknown'
 
-export type ChatToolActivityType = KnownChatToolActivityType | (string & {})
 export type ChatToolExpansionOverrides = Record<string, boolean>
 
-export const DEFAULT_CHAT_TOOL_ACTIVITY_FILTERS: ChatToolActivityType[] = [
+const KNOWN_CHAT_TOOL_ACTIVITY_TYPES: KnownChatToolActivityType[] = [
   'read',
   'list',
   'glob',
@@ -160,14 +139,14 @@ export const DEFAULT_CHAT_TOOL_ACTIVITY_FILTERS: ChatToolActivityType[] = [
   'unknown',
 ]
 
-export const DEFAULT_CHAT_ACTIVITY_EXPANDED_TOOL_FILTERS: ChatToolActivityType[] = [
+export const DEFAULT_CHAT_TOOL_EXPANDED_CATEGORIES = [
   'edit',
   'write',
   'apply_patch',
   'multiedit',
 ]
 
-const CHAT_TOOL_ACTIVITY_SET = new Set(DEFAULT_CHAT_TOOL_ACTIVITY_FILTERS)
+const CHAT_TOOL_ACTIVITY_SET = new Set(KNOWN_CHAT_TOOL_ACTIVITY_TYPES)
 
 export function isKnownChatToolActivityType(value: string): value is KnownChatToolActivityType {
   return CHAT_TOOL_ACTIVITY_SET.has(value as KnownChatToolActivityType)
@@ -235,7 +214,7 @@ export function normalizeChatToolExpansionOverrides(value: unknown): ChatToolExp
 export function resolveChatToolDefaultExpanded(
   toolName: unknown,
   overrides: ChatToolExpansionOverrides,
-  legacyExpandedCategories: ReadonlySet<string>,
+  defaultExpandedCategories: ReadonlySet<string>,
   operationDefaultExpanded = false,
 ): boolean {
   const exactTool = normalizeChatToolPreferenceId(toolName)
@@ -244,21 +223,19 @@ export function resolveChatToolDefaultExpanded(
   }
 
   const category = normalizeChatToolActivityId(exactTool)
-  if (!category) return legacyExpandedCategories.has('unknown')
-  if (legacyExpandedCategories.has(category)) return true
+  if (!category) return defaultExpandedCategories.has('unknown')
+  if (defaultExpandedCategories.has(category)) return true
   if (isKnownChatToolActivityType(category)) return operationDefaultExpanded
-  return legacyExpandedCategories.has('unknown') || operationDefaultExpanded
+  return defaultExpandedCategories.has('unknown') || operationDefaultExpanded
 }
 
-export function normalizeChatToolActivityFilters(value: JsonValue): ChatToolActivityType[] {
-  const out: ChatToolActivityType[] = []
+export function normalizeChatToolActivityCategories(value: JsonValue): string[] {
+  const out: string[] = []
   const seen = new Set<string>()
   if (Array.isArray(value)) {
     for (const item of value) {
       if (typeof item !== 'string') continue
-      let key = normalizeChatToolActivityId(item)
-      // Backward compatibility with older builds.
-      if (key === 'invalid') key = 'unknown'
+      const key = normalizeChatToolActivityId(item)
       if (!key) continue
       if (seen.has(key)) continue
       seen.add(key)

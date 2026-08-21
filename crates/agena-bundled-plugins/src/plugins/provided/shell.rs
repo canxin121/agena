@@ -25,7 +25,7 @@ pub(crate) struct ShellRunInput {
     #[serde(flatten)]
     #[input(flatten_shape)]
     command: ShellCommandInput,
-    #[serde(default, rename = "run_in_background", alias = "background")]
+    #[serde(default)]
     run_in_background: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     monitor: Option<ShellMonitorInput>,

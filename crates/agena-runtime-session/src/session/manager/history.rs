@@ -11,17 +11,16 @@ use crate::{
     },
 };
 use agena_domain::{
-    CancellationOutcome, CancellationResult, ComposerDocument, ExecutionStatus, RawOutput, Role,
-    SessionSummary, TurnId,
+    CancellationOutcome, CancellationResult, ComposerDocument, ExecutionStatus, SessionSummary,
+    TurnId,
 };
 use agena_plugin_host::AgentCancelInput;
 use agena_runtime::{SessionForkRequest, SessionRewindRequest};
 use agena_runtime_contracts::part_content::{
-    TypedContent, attachment_from_file_ref, interaction_from_content, operation_from_tool_call,
+    TypedContent, attachment_from_file_ref, operation_from_tool_call,
     skill_reference_from_skill_ref, user_problem_from_error,
 };
 use agena_storage::store::{Part, PartRole};
-use agena_tool::{RenderContext as ToolRenderContext, ToolHumanRenderer};
 
 impl SessionManager {
     pub async fn fork_session(&self, request: SessionForkRequest) -> Result<Session, AppError> {
@@ -55,19 +54,6 @@ impl SessionManager {
             .unwrap_or_else(|| format!("Fork of {}", source.title));
         let child_id = self.store.fork(source.id, at_part_id, title).await?;
         self.store.load_session(child_id).await
-    }
-
-    /// External entry: cancel the active execution for `session_id` and every
-    /// active descendant. Descendants are cancelled deepest-first so a parent
-    /// waiting on a delegated tool cannot keep its child alive.
-    ///
-    /// Cancellation is idempotent: a task can complete between the UI
-    /// deciding to cancel and this call reaching the manager, so the absence
-    /// of a control is a successful no-op rather than an error.
-    pub async fn cancel_active_execution(&self, session_id: i64) -> Result<(), AppError> {
-        self.cancel_active_execution_with_outcome(session_id)
-            .await
-            .map(|_| ())
     }
 
     /// Session-scoped cancellation with optional recovery of the original
@@ -193,18 +179,6 @@ impl SessionManager {
             outcome.restored_user_run_id = run_id;
         }
         Ok(outcome)
-    }
-
-    /// Exact external cancellation. Only after the observed root execution is
-    /// matched do we cascade to its active descendants.
-    pub async fn cancel_execution(
-        &self,
-        session_id: i64,
-        execution_id: agena_domain::ExecutionId,
-    ) -> Result<agena_domain::CancellationResult, AppError> {
-        self.cancel_execution_with_outcome(session_id, execution_id)
-            .await
-            .map(|outcome| outcome.result)
     }
 
     /// Exact external cancellation with optional recovery of the matching
@@ -501,23 +475,6 @@ impl SessionManager {
             .map(crate::session::store::domain_summary_from_storage)
             .collect()
     }
-
-    /// Snapshot the session transcript in canonical turn order.
-    ///
-    /// v2 has no separate event log or content-node projection: the canonical
-    /// transcript is derived from the session aggregate rebuilt from parts.
-    /// A turn is one completed (or in-flight) user message followed by every
-    /// run-marker message that carries the turn's conversation id; the
-    /// assistant content document is composed from the run's parts.
-    pub async fn transcript_snapshot(
-        &self,
-        session_id: i64,
-    ) -> Result<agena_domain::TranscriptSnapshot, AppError> {
-        let session = self.store.load_session(session_id).await?;
-        let mut snapshot = transcript_snapshot_from_session(&session)?;
-        render_snapshot_tool_presentations(&mut snapshot, &self.tool_executor()).await;
-        Ok(snapshot)
-    }
 }
 
 /// Inclusive storage cutoff for a projected message named by its run-marker
@@ -651,529 +608,10 @@ fn user_message_id_for_turn(
         })
 }
 
-/// Derive the full [`agena_domain::TranscriptSnapshot`] from the session
-/// aggregate. A canonical turn is one user message (its created time anchors
-/// the turn) followed by the assistant messages of the same canonical
-/// conversation; one user turn can yield several assistant markers when the
-/// reply is continued across multiple model runs.
-fn transcript_snapshot_from_session(
-    session: &Session,
-) -> Result<agena_domain::TranscriptSnapshot, AppError> {
-    let seq_session = session.version;
-    let mut turns = Vec::new();
-    let mut sequence = 0i64;
-    let runs = parts_into_runs(session.parts());
-    for (index, run) in runs.iter().enumerate() {
-        let marker = run.first().expect("run group has a marker");
-        if marker.role != PartRole::User {
-            continue;
-        }
-        let user_document = content_document_from_run(session, run)?;
-        let reply = assistant_reply_snapshot(session, index)?;
-        let created_at_ms = marker.created_at_ms;
-        let turn_id = reply_turn_id(marker, &reply);
-        turns.push(agena_domain::TurnSnapshot {
-            id: turn_id,
-            session_id: session.id,
-            sequence,
-            input: user_document,
-            reply,
-            created_at_ms,
-        });
-        sequence += 1;
-    }
-    Ok(agena_domain::TranscriptSnapshot {
-        session_id: session.id,
-        seq_session,
-        turns,
-        // v2 has no session-scoped content nodes; the session aggregate
-        // carries all activity content within its turn documents.
-        session_activities: Vec::new(),
-    })
-}
-
-/// The canonical turn id of a turn: the user marker's own persisted turn id
-/// when present, otherwise the reply's turn id (recovered from the assistant
-/// run marker).
-fn reply_turn_id(
-    user_marker: &Part,
-    reply: &agena_domain::AssistantReplySnapshot,
-) -> agena_domain::TurnId {
-    user_marker
-        .content
-        .get("turn_id")
-        .and_then(serde_json::Value::as_str)
-        .and_then(|value| uuid::Uuid::parse_str(value).ok())
-        .map(agena_domain::TurnId)
-        .unwrap_or(reply.turn_id)
-}
-
-/// Compose the assistant reply snapshot for the canonical turn beginning at
-/// run `user_index`. The turn's assistant content is the concatenation of every
-/// non-user run that follows the user run (a canonical reply can span several
-/// continuation runs), in run order.
-fn assistant_reply_snapshot(
-    session: &Session,
-    user_index: usize,
-) -> Result<agena_domain::AssistantReplySnapshot, AppError> {
-    let runs = parts_into_runs(session.parts());
-    let user_marker = runs[user_index].first().expect("run group has a marker");
-    let turn_id = user_marker
-        .content
-        .get("turn_id")
-        .and_then(serde_json::Value::as_str)
-        .and_then(|value| uuid::Uuid::parse_str(value).ok())
-        .map(agena_domain::TurnId)
-        .unwrap_or_else(|| {
-            // Reloaded user markers do not persist the UUID pair; recover the
-            // canonical turn id from the first following non-user run marker.
-            runs[user_index + 1..]
-                .iter()
-                .find(|run| run.first().map(|marker| marker.role) != Some(PartRole::User))
-                .and_then(|run| run.first())
-                .and_then(|marker| {
-                    marker
-                        .content
-                        .get("turn_id")
-                        .and_then(serde_json::Value::as_str)
-                        .and_then(|value| uuid::Uuid::parse_str(value).ok())
-                })
-                .map(agena_domain::TurnId)
-                .unwrap_or_else(agena_domain::TurnId::new)
-        });
-    let turn_span = canonical_turn_span(session, user_index);
-    let (reply_id, status, transcript_nodes, created_at_ms, finished_at_ms, failure) =
-        assistant_reply_fields(session, &turn_span)?;
-    Ok(agena_domain::AssistantReplySnapshot {
-        id: reply_id,
-        turn_id,
-        status,
-        content: agena_domain::ContentDocument::new(transcript_nodes),
-        revision_seq: session.version,
-        created_at_ms,
-        finished_at_ms,
-        failure,
-    })
-}
-
-/// Return the run-index span `[start, end)` that belongs to the canonical
-/// turn beginning at run `user_index`: the user run and every following
-/// non-user run until the next user run. Reloaded user markers do not persist
-/// the conversation UUID pair, so adjacency is the reliable grouping.
-fn canonical_turn_span(session: &Session, user_index: usize) -> std::ops::Range<usize> {
-    let runs = parts_into_runs(session.parts());
-    let mut end = user_index + 1;
-    while end < runs.len() && runs[end].first().map(|marker| marker.role) != Some(PartRole::User) {
-        end += 1;
-    }
-    user_index..end
-}
-
-/// Compute the reply identity fields by scanning the runs of one canonical
-/// turn.
-fn assistant_reply_fields(
-    session: &Session,
-    turn_span: &std::ops::Range<usize>,
-) -> Result<
-    (
-        agena_domain::AssistantReplyId,
-        agena_domain::AssistantReplyStatus,
-        Vec<agena_domain::ContentNode>,
-        i64,
-        Option<i64>,
-        Option<agena_failure::UserProblem>,
-    ),
-    AppError,
-> {
-    let mut reply_id: Option<agena_domain::AssistantReplyId> = None;
-    let mut status = agena_domain::AssistantReplyStatus::Pending;
-    let mut nodes = Vec::new();
-    let mut created_at_ms = i64::MAX;
-    let mut finished_at_ms: Option<i64> = None;
-    let mut failure: Option<agena_failure::UserProblem> = None;
-    let runs = parts_into_runs(session.parts());
-    for run in &runs[turn_span.clone()] {
-        let marker = run.first().expect("run group has a marker");
-        if marker.role == PartRole::User {
-            continue;
-        }
-        reply_id = reply_id.or(marker
-            .content
-            .get("reply_id")
-            .and_then(serde_json::Value::as_str)
-            .and_then(|value| uuid::Uuid::parse_str(value).ok())
-            .map(agena_domain::AssistantReplyId));
-        let role = role_from_part_role(marker.role);
-        for (index, part) in run.iter().enumerate().skip(1) {
-            let decoded = decode_part(part, index as i32)?;
-            if let Some(node) =
-                transcript_node_from_part(session.version, &decoded, role, reply_id)?
-            {
-                nodes.push(node);
-            }
-            status = more_terminal_status(status, assistant_status_from_execution(decoded.status));
-            created_at_ms = created_at_ms.min(decoded.created_at.timestamp_millis());
-            if decoded.status.is_terminal() {
-                finished_at_ms = Some(
-                    finished_at_ms
-                        .unwrap_or(decoded.created_at.timestamp_millis())
-                        .max(decoded.created_at.timestamp_millis()),
-                );
-            }
-            if let Some(problem) = part_failure(&decoded) {
-                failure = Some(problem);
-            }
-        }
-    }
-    let reply_id = reply_id.unwrap_or_default();
-    let created_at_ms = if created_at_ms == i64::MAX {
-        0
-    } else {
-        created_at_ms
-    };
-    Ok((
-        reply_id,
-        status,
-        nodes,
-        created_at_ms,
-        finished_at_ms,
-        failure,
-    ))
-}
-
-/// Fold two reply statuses, promoting toward the most terminal state.
-fn more_terminal_status(
-    current: agena_domain::AssistantReplyStatus,
-    next: agena_domain::AssistantReplyStatus,
-) -> agena_domain::AssistantReplyStatus {
-    use agena_domain::AssistantReplyStatus as Status;
-    match (current, next) {
-        (Status::Failed, _) | (_, Status::Failed) => Status::Failed,
-        (Status::Cancelled, _) | (_, Status::Cancelled) => Status::Cancelled,
-        (Status::Completed, _) | (_, Status::Completed) => Status::Completed,
-        (Status::InProgress, _) | (_, Status::InProgress) => Status::InProgress,
-        _ => Status::Pending,
-    }
-}
-
-/// The failure of a canonical turn, when any part reports one.
-fn part_failure(part: &DecodedPart) -> Option<agena_failure::UserProblem> {
-    match part.content.as_ref()? {
-        TypedContent::ToolCall(tool_call) => operation_from_tool_call(tool_call)
-            .error
-            .as_ref()
-            .map(|error| (&error.failure).into()),
-        TypedContent::Error(error) => Some(user_problem_from_error(error)),
-        _ => None,
-    }
-}
-
-/// Compose the user input [`agena_domain::ContentDocument`] for one canonical
-/// turn. The user run's content parts render as text/activity nodes; when the
-/// run carries no content parts (the persisted user marker holds only its run
-/// metadata), the document is empty.
-fn content_document_from_run(
-    session: &Session,
-    run: &[Part],
-) -> Result<agena_domain::ContentDocument, AppError> {
-    let marker = run.first().expect("run group has a marker");
-    let role = role_from_part_role(marker.role);
-    let mut nodes = Vec::new();
-    for (index, part) in run.iter().enumerate().skip(1) {
-        let decoded = decode_part(part, index as i32)?;
-        if let Some(node) = transcript_node_from_part(session.version, &decoded, role, None)? {
-            nodes.push(node);
-        }
-    }
-    Ok(agena_domain::ContentDocument::new(nodes))
-}
-
-/// Project one decoded content part into a transcript [`agena_domain::ContentNode`].
-///
-/// Mirrors the live patch mapping: text parts become text segments, activity
-/// parts become activity nodes carrying the durable payload with the
-/// human-facing operation detail derived on load.
-fn transcript_node_from_part(
-    revision_seq: i64,
-    part: &DecodedPart,
-    role: Role,
-    reply_id: Option<agena_domain::AssistantReplyId>,
-) -> Result<Option<agena_domain::ContentNode>, AppError> {
-    let position = u32::try_from(part.part_index).unwrap_or_default();
-    if let Some(activity_id) = part.activity_id {
-        let Some(payload) = activity_payload_from_part(part, role)? else {
-            return Ok(None);
-        };
-        let state = activity_state_from_execution(part.status);
-        let finished_at_ms = state
-            .is_terminal()
-            .then_some(part.created_at.timestamp_millis());
-        Ok(Some(agena_domain::ContentNode::activity(
-            agena_domain::ActivityNode {
-                id: activity_id,
-                owner: agena_domain::ActivityOwner::AssistantReply {
-                    reply_id: reply_id.unwrap_or_default(),
-                },
-                actor: activity_actor_from_role(role),
-                payload,
-                state,
-                position: agena_domain::ContentPosition { index: position },
-                revision_seq,
-                lifecycle: agena_domain::ActivityLifecycle {
-                    started_at_ms: part.created_at.timestamp_millis(),
-                    finished_at_ms,
-                },
-                provenance: Default::default(),
-            },
-        )))
-    } else if let Some(segment_id) = part.segment_id {
-        let Some(content) = part.content.as_ref() else {
-            return Ok(None);
-        };
-        let TypedContent::Text(text) = content else {
-            return Ok(None);
-        };
-        Ok(Some(agena_domain::ContentNode::text_at(
-            segment_id,
-            text.text.clone(),
-            position,
-            revision_seq,
-        )))
-    } else {
-        Ok(None)
-    }
-}
-
-/// The coarse transcript activity state for a part execution status.
-fn activity_state_from_execution(status: ExecutionStatus) -> agena_domain::ActivityState {
-    match status {
-        ExecutionStatus::Pending => agena_domain::ActivityState::Pending,
-        ExecutionStatus::InProgress => agena_domain::ActivityState::InProgress,
-        ExecutionStatus::Completed => agena_domain::ActivityState::Completed,
-        // ActivityState is intentionally coarse; the transcript part and
-        // tool-result envelope preserve the precise non-execution reason.
-        ExecutionStatus::PolicyDenied
-        | ExecutionStatus::UserDeclined
-        | ExecutionStatus::CapabilityUnavailable
-        | ExecutionStatus::ToolUnavailable => agena_domain::ActivityState::Completed,
-        ExecutionStatus::Failed => agena_domain::ActivityState::Failed,
-        ExecutionStatus::Cancelled => agena_domain::ActivityState::Cancelled,
-    }
-}
-
-/// The coarse reply status for a part execution status (terminal wins).
-fn assistant_status_from_execution(status: ExecutionStatus) -> agena_domain::AssistantReplyStatus {
-    match status {
-        ExecutionStatus::Pending => agena_domain::AssistantReplyStatus::Pending,
-        ExecutionStatus::InProgress => agena_domain::AssistantReplyStatus::InProgress,
-        ExecutionStatus::Completed
-        | ExecutionStatus::PolicyDenied
-        | ExecutionStatus::UserDeclined
-        | ExecutionStatus::CapabilityUnavailable
-        | ExecutionStatus::ToolUnavailable => agena_domain::AssistantReplyStatus::Completed,
-        ExecutionStatus::Failed => agena_domain::AssistantReplyStatus::Failed,
-        ExecutionStatus::Cancelled => agena_domain::AssistantReplyStatus::Cancelled,
-    }
-}
-
-/// The transcript actor for a message role.
-fn activity_actor_from_role(role: Role) -> agena_domain::ActivityActor {
-    match role {
-        Role::User => agena_domain::ActivityActor::User,
-        Role::Assistant => agena_domain::ActivityActor::Assistant,
-        Role::Tool => agena_domain::ActivityActor::Tool,
-        Role::System => agena_domain::ActivityActor::Runtime,
-    }
-}
-
-/// Map a message part's content into the transcript [`agena_domain::ActivityPayload`].
-///
-/// v2 persists parts in their rich typed form (there is no separate
-/// content-node projection), so the durable payload is recovered directly from
-/// the part. Operation parts carry their compact tool data; the human-facing
-/// detail Markdown is derived here, at snapshot load, and never persisted.
-fn activity_payload_from_part(
-    part: &DecodedPart,
-    role: Role,
-) -> Result<Option<agena_domain::ActivityPayload>, AppError> {
-    use agena_domain::{
-        ActivityPayload, ErrorActivity, InteractionActivity, NoticeActivity, OperationActivity,
-        OperationActivityError, ReasoningActivity, ResourceActivity, ResourceKind,
-        ResourceReference, SkillReferenceActivity, TextArtifactActivity, TextSegmentActivity,
-        ToolCallId,
-    };
-    let content = part.content.as_ref();
-    let Some(payload) = (match content {
-        // Assistant text parts that carry an ActivityId are interstitial body
-        // segments (produced between tool calls); they render as their own
-        // collapsible block. User text activities stay TextArtifact.
-        Some(TypedContent::Text(text)) => match role {
-            Role::Assistant => Some(ActivityPayload::TextSegment(TextSegmentActivity {
-                text: text.text.clone(),
-            })),
-            _ => Some(ActivityPayload::TextArtifact(TextArtifactActivity {
-                text: text.text.clone(),
-                language: None,
-                label: part.summary.clone(),
-            })),
-        },
-        Some(TypedContent::Think(think)) => Some(ActivityPayload::Reasoning(ReasoningActivity {
-            content: crate::session::store::reasoning_from_think(think),
-        })),
-        Some(TypedContent::ToolCall(tool_call)) => {
-            let operation = operation_from_tool_call(tool_call);
-            // The compact `ToolResult` payload is the only durable tool data.
-            // The human-facing detail Markdown is derived from it at render
-            // time and is never persisted.
-            let data = operation
-                .raw_output()
-                .and_then(|output| serde_json::to_value(output).ok())
-                .unwrap_or(serde_json::Value::Null);
-            let model_text = model_text_from_payload(&operation);
-            Some(ActivityPayload::Operation(OperationActivity {
-                call_id: ToolCallId::new(
-                    part.operation_id
-                        .clone()
-                        .unwrap_or_else(|| operation.call_id.to_string()),
-                ),
-                invocation: operation.invocation.clone(),
-                title: operation.invocation.name.clone(),
-                summary: agena_tool::normalize_tool_summary(model_text),
-                data,
-                // The derived projection carries no detail Markdown; it is
-                // derived at snapshot load / lazy detail fetch time.
-                markdown: String::new(),
-                authorization: operation.authorization.clone(),
-                error: operation
-                    .error
-                    .as_ref()
-                    .map(|error| OperationActivityError {
-                        problem: (&error.failure).into(),
-                    }),
-            }))
-        }
-        Some(TypedContent::FileRef(file_ref)) => {
-            let attachment = attachment_from_file_ref(file_ref);
-            let Some(item) = attachment.attachments.first() else {
-                return Ok(None);
-            };
-            let kind = match item.kind {
-                crate::part::AttachmentKind::Image => ResourceKind::Image,
-                crate::part::AttachmentKind::Audio => ResourceKind::Audio,
-                crate::part::AttachmentKind::Video => ResourceKind::Video,
-                crate::part::AttachmentKind::Pdf => ResourceKind::Pdf,
-                crate::part::AttachmentKind::File if item.mime == "inode/directory" => {
-                    ResourceKind::Directory
-                }
-                crate::part::AttachmentKind::File => ResourceKind::File,
-            };
-            let reference = match &item.source {
-                crate::part::AttachmentSource::Url { url } => {
-                    Some(ResourceReference::Url { url: url.clone() })
-                }
-                crate::part::AttachmentSource::FileId { file_id } => {
-                    Some(ResourceReference::ProviderFile {
-                        provider_id: "provider".to_owned(),
-                        file_id: file_id.clone(),
-                    })
-                }
-                crate::part::AttachmentSource::LocalPath { path } => {
-                    Some(ResourceReference::WorkspacePath { path: path.clone() })
-                }
-                crate::part::AttachmentSource::DataUrl { .. }
-                | crate::part::AttachmentSource::Base64 { .. } => None,
-            };
-            let Some(reference) = reference else {
-                return Ok(None);
-            };
-            Some(ActivityPayload::Resource(ResourceActivity {
-                kind,
-                reference,
-                name: item.summary_label(),
-                media_type: (!item.mime.is_empty()).then(|| item.mime.clone()),
-                size_bytes: item.size_bytes,
-                width: item.width,
-                height: item.height,
-                duration_ms: item.duration_ms,
-                page_count: item.page_count,
-            }))
-        }
-        Some(TypedContent::SkillRef(skill_ref)) => {
-            let skills = skill_reference_from_skill_ref(skill_ref);
-            let Some(skill) = skills.skills.first() else {
-                return Ok(None);
-            };
-            Some(ActivityPayload::SkillReference(SkillReferenceActivity {
-                name: skill.name.clone(),
-                description: skill.description.clone(),
-                instructions: skill.instructions.clone(),
-                content_hash: skill.content_hash.clone(),
-                source: skill.source.clone(),
-                aliases: skill.aliases.clone(),
-            }))
-        }
-        Some(TypedContent::Interaction(interaction)) => Some(ActivityPayload::Interaction(
-            match interaction_from_content(interaction) {
-                crate::part::RequestPart::UserInput(value) => InteractionActivity::UserInput {
-                    request: value.request.clone(),
-                    reply: value.reply.clone(),
-                },
-            },
-        )),
-        Some(TypedContent::Error(error)) => Some(ActivityPayload::Error(ErrorActivity {
-            problem: user_problem_from_error(error),
-        })),
-        Some(TypedContent::Hook(hook)) => Some(ActivityPayload::Notice(NoticeActivity {
-            kind: "hook".to_owned(),
-            summary: hook.summary.clone(),
-            detail: hook
-                .message
-                .as_deref()
-                .filter(|text| !text.trim().is_empty())
-                .map(str::to_owned)
-                .or_else(|| hook.detail.clone()),
-            occurred_at_ms: None,
-            title: None,
-        })),
-        Some(TypedContent::Notice(notice)) => Some(ActivityPayload::Notice(NoticeActivity {
-            kind: notice.kind.clone(),
-            summary: notice.summary.clone(),
-            detail: notice.detail.clone(),
-            occurred_at_ms: None,
-            title: notice.title.clone(),
-        })),
-        // A background-operation notification surfaces in the activities
-        // panel as a notice, exactly like a hook/notice row.
-        Some(TypedContent::SystemNotification(notification)) => {
-            Some(ActivityPayload::Notice(NoticeActivity {
-                kind: "system_notification".to_owned(),
-                summary: notification.summary.clone(),
-                detail: notification
-                    .detail
-                    .clone()
-                    .or_else(|| (!notification.body.is_empty()).then(|| notification.body.clone())),
-                occurred_at_ms: None,
-                title: Some(format!(
-                    "{} {}",
-                    notification.operation_kind, notification.operation_id
-                )),
-            }))
-        }
-        Some(TypedContent::Run(_) | TypedContent::PasteRef(_) | TypedContent::Compaction(_)) => {
-            None
-        }
-        None => None,
-    }) else {
-        return Ok(None);
-    };
-    Ok(Some(payload))
-}
-
 /// Recover every interactive request currently awaiting a reply in `session`,
-/// from the parts projection (v2 equivalent of the removed
-/// `Session::pending_interactive_requests`): unanswered permissions recorded on
-/// in-flight `tool_call` parts, plus unanswered user-input `interaction` parts.
-/// Requests are de-duplicated by `(kind, request_id)` as the v1 projection did.
+/// from the parts projection: unanswered permissions and
+/// unanswered user-input requests recorded on in-flight `tool_call` parts.
+/// Requests are de-duplicated by `(kind, request_id)`.
 fn pending_interactive_requests_from_session(
     session: &Session,
 ) -> Vec<agena_domain::PendingInteractiveRequest> {
@@ -1196,8 +634,7 @@ fn pending_interactive_requests_from_session(
         }
     }
     // Pending user-input requests live on the in-flight tool-call part's
-    // operation user-input records (`operation.user_input.awaiting()`), and,
-    // for legacy data, as separate in-flight `interaction` parts.
+    // `user_input` records (`operation.user_input.awaiting()`).
     for part in session.pending_interactions() {
         if part.kind == "tool_call" {
             let Some(operation) = super::replies::operation_from_part(part) else {
@@ -1209,18 +646,6 @@ fn pending_interactive_requests_from_session(
                     requests.push(request);
                 }
             }
-            continue;
-        }
-        let Some(request) =
-            agena_runtime_contracts::part_content::InteractionContent::try_from(&part.content)
-                .ok()
-                .and_then(|interaction| interaction.request())
-        else {
-            continue;
-        };
-        let request = agena_domain::PendingInteractiveRequest::from(request);
-        if seen.insert(format!("{:?}:{}", request.kind(), request.request_id())) {
-            requests.push(request);
         }
     }
     requests
@@ -1263,71 +688,14 @@ impl agena_runtime::SessionQueryService for SessionManager {
         })
     }
 
-    async fn transcript_snapshot(
-        &self,
-        session_id: i64,
-    ) -> Result<agena_domain::TranscriptSnapshot, agena_runtime::SessionQueryError> {
-        SessionManager::transcript_snapshot(self, session_id)
-            .await
-            .map_err(|error| agena_runtime::SessionQueryError::internal(error.to_string()))
-    }
-
-    async fn operation_detail(
-        &self,
-        session_id: i64,
-        activity_id: agena_domain::ActivityId,
-    ) -> Result<Option<agena_runtime::OperationDetail>, agena_runtime::SessionQueryError> {
-        // Load the snapshot (which derives detail Markdown into Operation
-        // Activities on load) and locate the requested Activity.
-        let snapshot = SessionManager::transcript_snapshot(self, session_id)
-            .await
-            .map_err(|error| agena_runtime::SessionQueryError::internal(error.to_string()))?;
-        let mut found: Option<agena_domain::ActivityNode> = None;
-        for turn in &snapshot.turns {
-            for node in turn.input.nodes() {
-                if let agena_domain::ContentNode::Activity { activity } = node
-                    && activity.id == activity_id
-                {
-                    found = Some(activity.as_ref().clone());
-                }
-            }
-            for node in turn.reply.content.nodes() {
-                if let agena_domain::ContentNode::Activity { activity } = node
-                    && activity.id == activity_id
-                {
-                    found = Some(activity.as_ref().clone());
-                }
-            }
-        }
-        for activity in &snapshot.session_activities {
-            if activity.id == activity_id {
-                found = Some(activity.clone());
-            }
-        }
-        let activity = match found {
-            Some(activity) => activity,
-            None => return Ok(None),
-        };
-        let agena_domain::ActivityPayload::Operation(operation) = &activity.payload else {
-            return Ok(None);
-        };
-        let streaming = activity.state == agena_domain::ActivityState::InProgress;
-        Ok(Some(agena_runtime::OperationDetail {
-            activity_id,
-            markdown: operation.markdown.clone(),
-            streaming,
-        }))
-    }
-
     async fn list_projected_runs(
         &self,
         session_id: i64,
-        include_content: bool,
     ) -> Result<Vec<agena_runtime::SessionProjectedRun>, agena_runtime::SessionQueryError> {
         // Parts-native: `SessionManager::list_projected_runs` already
         // builds the stable `SessionProjectedRun` values directly from the
         // session's parts; only the error type needs adapting here.
-        SessionManager::list_projected_runs(self, session_id, include_content)
+        SessionManager::list_projected_runs(self, session_id)
             .await
             .map_err(|error| agena_runtime::SessionQueryError::internal(error.to_string()))
     }
@@ -1354,7 +722,7 @@ impl agena_runtime::SessionQueryService for SessionManager {
         &self,
         session_id: i64,
     ) -> Result<Option<i64>, agena_runtime::SessionQueryError> {
-        // v2 has no event log: the session's optimistic-lock version is the
+        // The session has no event log: its optimistic-lock version is the
         // monotonic per-session change sequence that consumers treat as the
         // durable high-water mark.
         let session = SessionManager::get_session(self, session_id)
@@ -1535,8 +903,7 @@ impl agena_runtime::SessionQueryService for SessionManager {
 ///
 /// Each run marker becomes a `SessionProjectedRun` whose parts are the
 /// run's content parts, decoded from the canonical store payload. This is the
-/// parts-native replacement for the removed v1 message bridge,
-/// preserving the exact wire shape `agena-application` / `agena-cli` consume.
+/// preserving the wire shape consumed by `agena-application` and `agena-cli`.
 pub(crate) fn projected_runs_from_parts(
     parts: &[Part],
 ) -> Result<Vec<crate::session_query_service::SessionProjectedRun>, AppError> {
@@ -1555,10 +922,8 @@ pub(crate) fn projected_runs_from_parts(
                 role: role_from_part_role(marker.role),
                 state: execution_status_from_part_state(marker.state),
                 created_at: timestamp_millis_to_utc(marker.created_at_ms)?,
-                // The run marker's content is the durable header payload; the
-                // v1 bridge surfaced a derived `MessageMetadata` projection of
-                // the same fields, and consumers pass it through as the run
-                // part's content.
+                // The run marker's content is the durable header payload and
+                // is exposed directly as the projected run metadata.
                 metadata: marker.content.clone(),
                 usage: None,
                 parts: projected_parts,
@@ -1568,9 +933,8 @@ pub(crate) fn projected_runs_from_parts(
     Ok(projected)
 }
 
-/// A decoded content part: the parts-native projection of one storage [`Part`]
-/// into the fields the transcript and query surfaces need, mirroring the v1
-/// `MessagePart` reconstruction without materializing v1 messages.
+/// A decoded content part: the projection of one storage [`Part`] into the
+/// fields the transcript and query surfaces need.
 struct DecodedPart {
     id: i64,
     part_index: i32,
@@ -1587,18 +951,14 @@ struct DecodedPart {
 }
 
 /// Decode one persisted content part (its `kind` column plus canonical JSON
-/// payload) into the [`DecodedPart`] view. Mirrors the removed
-/// `store::part_to_message_part` exactly so the transcript and projected-message
-/// surfaces keep the same shape without the v1 message bridge.
+/// payload) into the [`DecodedPart`] view used by transcript and query
+/// projections.
 fn decode_part(part: &Part, part_index: i32) -> Result<DecodedPart, AppError> {
     let content = typed_content_from_value(&part.kind, &part.content)?;
     // The coarse state column carries the lifecycle; the fine-grained status
     // (including denial outcomes) is reconstructed from the rich content.
     let status = match &content {
         TypedContent::ToolCall(tool_call) => operation_from_tool_call(tool_call).status(),
-        TypedContent::Interaction(interaction) => match interaction_from_content(interaction) {
-            crate::part::RequestPart::UserInput(request) => request.status(),
-        },
         _ => execution_status_from_part_state(part.state),
     };
     // Recover the provider operation id stashed by the tool-call serialization
@@ -1622,15 +982,13 @@ fn decode_part(part: &Part, part_index: i32) -> Result<DecodedPart, AppError> {
             | TypedContent::Notice(_)
             | TypedContent::Hook(_)
             | TypedContent::Error(_)
-            | TypedContent::Interaction(_)
     );
     Ok(DecodedPart {
         id: part.part_id,
         part_index,
         status,
-        // Carry the precise storage kind through to the transcript surfaces
-        // (the v1 `PartKind` binary collapsed every non-text part to
-        // "activity", breaking `think`/`tool_call`/... rendering dispatch).
+        // Carry the precise storage kind through to the transcript surfaces so
+        // each typed part has its own rendering dispatch.
         kind: part.kind.clone(),
         name: part_name_from_content(&content),
         summary: part.summary.clone(),
@@ -1644,9 +1002,8 @@ fn decode_part(part: &Part, part_index: i32) -> Result<DecodedPart, AppError> {
     })
 }
 
-/// The `MessagePart::name` derivation from decoded content: text/reasoning
-/// are plain labels, operations use their header title (falling back to the
-/// invocation name), and failures use their problem code.
+/// Derive the projected part name: text/reasoning use plain labels, tool calls
+/// use their invocation name, and failures use their problem code.
 fn part_name_from_content(content: &TypedContent) -> Option<String> {
     match content {
         TypedContent::Text(_) => Some("text".to_string()),
@@ -1658,9 +1015,6 @@ fn part_name_from_content(content: &TypedContent) -> Option<String> {
         TypedContent::SkillRef(_) => Some("skill_reference".to_string()),
         TypedContent::Error(error) => Some(user_problem_from_error(error).code.to_string()),
         TypedContent::FileRef(_) => Some("resource".to_string()),
-        TypedContent::Interaction(interaction) => match interaction_from_content(interaction) {
-            crate::part::RequestPart::UserInput(_) => Some("user_input".to_string()),
-        },
         TypedContent::Hook(hook) => Some(format!("hook:{}", hook.hook)),
         TypedContent::Notice(_) => Some("notice".to_string()),
         TypedContent::SystemNotification(notification) => Some(format!(
@@ -1671,8 +1025,7 @@ fn part_name_from_content(content: &TypedContent) -> Option<String> {
     }
 }
 
-/// Project one persisted content part into the stable transcript part value,
-/// preserving the wire shape the v1 bridge produced for `MessagePart`.
+/// Project one persisted content part into the stable transcript part value.
 fn project_storage_part(
     part: &Part,
     run_id: i64,
@@ -1724,17 +1077,9 @@ fn project_part_detail(content: &TypedContent) -> agena_runtime::SessionProjecte
         TypedContent::SkillRef(value) => agena_runtime::SessionProjectedPartDetail::SkillReference(
             skill_reference_from_skill_ref(value),
         ),
-        TypedContent::Interaction(value) => match interaction_from_content(value) {
-            crate::part::RequestPart::UserInput(request) => {
-                agena_runtime::SessionProjectedPartDetail::UserInputRequest {
-                    request: request.request.clone(),
-                    reply: request.reply.clone(),
-                }
-            }
-        },
-        TypedContent::ToolCall(value) => agena_runtime::SessionProjectedPartDetail::Operation(
-            Box::new(project_operation_part(&operation_from_tool_call(value))),
-        ),
+        TypedContent::ToolCall(value) => {
+            agena_runtime::SessionProjectedPartDetail::ToolCall((**value).clone())
+        }
         TypedContent::Hook(value) => agena_runtime::SessionProjectedPartDetail::Hook(Box::new(
             agena_runtime::SessionProjectedHookPart {
                 hook: value.hook.clone(),
@@ -1759,9 +1104,8 @@ fn project_part_detail(content: &TypedContent) -> agena_runtime::SessionProjecte
                 event_seq: value.event_seq,
             }
         }
-        // These kinds have no v1 rich projection; degrade to a text detail
-        // exactly as the v1 typed fold did (Run → empty, PasteRef/ToolResult/
-        // Compaction → their text).
+        // These kinds have no dedicated transcript detail: run markers render
+        // as empty text, while paste and compaction expose their text.
         TypedContent::Run(_) => agena_runtime::SessionProjectedPartDetail::Text {
             text: String::new(),
             synthetic: false,
@@ -1774,274 +1118,6 @@ fn project_part_detail(content: &TypedContent) -> agena_runtime::SessionProjecte
             text: value.summary.clone().unwrap_or_default(),
             synthetic: false,
         },
-    }
-}
-
-/// Project the durable single-source operation into the read-time view.
-///
-/// The stored record holds only the flat invocation identity and one
-/// tool-defined `payload`; the model-visible text and the human-facing blocks
-/// are derived here, at read time, and are never persisted redundantly.
-fn project_operation_part(
-    value: &crate::part::OperationPart,
-) -> agena_runtime::SessionProjectedOperationPart {
-    let model_text = model_text_from_payload(value);
-    let blocks = human_blocks_for_operation(value);
-    let projected_blocks: Vec<_> = blocks.iter().map(project_operation_block).collect();
-    let details = tool_output_view(value);
-    let raw = value.raw_output().cloned().unwrap_or_default();
-    let title = value.invocation.name.clone();
-    let summary = agena_tool::normalize_tool_summary(&model_text);
-    agena_runtime::SessionProjectedOperationPart {
-        call_id: value.call_id,
-        invocation: value.invocation.clone(),
-        authorization: value.authorization.clone(),
-        user_input: value.user_input.clone(),
-        title: title.clone(),
-        summary: summary.clone(),
-        model_output: project_model_visible_output(&model_text, raw.truncated, &raw.attachments),
-        blocks: projected_blocks.clone(),
-        artifacts: Vec::new(),
-        attachments: raw.attachments.clone(),
-        details,
-        result: agena_runtime::SessionProjectedToolResult {
-            state: value.state,
-            structured: raw.payload.clone(),
-            content: projected_blocks.clone(),
-            model_preview: project_model_visible_output(
-                &model_text,
-                raw.truncated,
-                &raw.attachments,
-            ),
-            managed_outputs: raw.managed_outputs.clone(),
-            display: agena_domain::ToolResultDisplay {
-                title,
-                summary,
-                sections: Vec::new(),
-            },
-            attachments: raw.attachments.clone(),
-            error: value.error.clone(),
-            metadata: raw.metadata.clone(),
-            raw: value.provider_raw().cloned(),
-        },
-        structured: raw.payload.clone(),
-        metadata: value.metadata.clone(),
-        error: value.error.clone(),
-        raw: value.provider_raw().cloned(),
-        lifecycle: value.lifecycle.clone(),
-    }
-}
-
-/// Best-effort model-visible text projected from the single payload: the
-/// payload's own `text` field when present, otherwise its JSON rendering.
-fn model_text_from_payload(value: &crate::part::OperationPart) -> String {
-    value
-        .raw_output()
-        .map(crate::activity::projection::for_model)
-        .unwrap_or_default()
-}
-
-/// Human-facing blocks derived at read time through the tool's own renderer
-/// (falling back to rendering the payload directly). The renderer is a pure
-/// function of the stored payload, so nothing about the view is persisted.
-fn human_blocks_for_operation(value: &crate::part::OperationPart) -> Vec<agena_domain::ViewBlock> {
-    let raw = value.raw_output().cloned().unwrap_or_default();
-    let command = value
-        .invocation
-        .input
-        .get("command")
-        .and_then(|value| value.as_text())
-        .map(ToOwned::to_owned);
-    let mut renderer =
-        crate::tool::human_view::BuiltinHumanRenderer::new(value.invocation.name.as_str());
-    if let Some(command) = command {
-        renderer = renderer.with_command(command);
-    }
-    let ctx = ToolRenderContext {
-        workspace_root: std::path::PathBuf::new(),
-        command: None,
-    };
-    renderer
-        .render_human(&ctx, &raw)
-        .unwrap_or_else(|_| crate::activity::projection::fallback_human_view(&raw))
-}
-
-/// Rebuild the structured `ToolOutput` view from the single payload.
-fn tool_output_view(value: &crate::part::OperationPart) -> agena_domain::ToolOutput {
-    let raw = value.raw_output().cloned().unwrap_or_default();
-    let mut details =
-        agena_domain::ToolOutput::from_json_payload(raw.payload.as_ref()).unwrap_or_default();
-    details.managed_outputs = raw.managed_outputs;
-    details.truncated = raw.truncated;
-    details
-}
-
-fn project_model_visible_output(
-    text: &str,
-    truncated: bool,
-    attachments: &[crate::part::AttachmentItem],
-) -> agena_runtime::SessionProjectedModelVisibleOutput {
-    agena_runtime::SessionProjectedModelVisibleOutput {
-        text: text.to_owned(),
-        attachments: attachments.to_vec(),
-        truncated,
-    }
-}
-
-fn project_operation_block(
-    value: &agena_domain::ViewBlock,
-) -> agena_runtime::SessionProjectedOperationBlock {
-    use agena_runtime::SessionProjectedOperationBlock as Projected;
-    match value {
-        agena_domain::ViewBlock::Text { text, .. } => Projected::Text { text: text.clone() },
-        agena_domain::ViewBlock::Markdown { text, .. } => {
-            Projected::Markdown { text: text.clone() }
-        }
-        agena_domain::ViewBlock::Json { value, .. } => Projected::Json {
-            value: value.clone(),
-        },
-        agena_domain::ViewBlock::Table { columns, rows, .. } => Projected::Table {
-            columns: columns
-                .iter()
-                .map(|label| agena_domain::TableColumn {
-                    key: label.clone(),
-                    label: Some(label.clone()),
-                })
-                .collect(),
-            rows: rows.clone(),
-        },
-        agena_domain::ViewBlock::Log { stream, text, .. } => Projected::Log {
-            stream: Some(match stream {
-                agena_domain::CommandOutputStream::Stdout => "stdout".to_string(),
-                agena_domain::CommandOutputStream::Stderr => "stderr".to_string(),
-            }),
-            text: text.clone(),
-        },
-        agena_domain::ViewBlock::Command {
-            command,
-            cwd,
-            exit_code,
-            stdout,
-            stderr,
-            ..
-        } => Projected::Command {
-            command: command.clone(),
-            cwd: cwd.clone(),
-            exit_code: *exit_code,
-            stdout: Some(stdout.clone()),
-            stderr: Some(stderr.clone()),
-        },
-        agena_domain::ViewBlock::Diff { diff, language, .. } => Projected::Diff {
-            diff: diff.clone(),
-            language: language.clone(),
-        },
-        agena_domain::ViewBlock::FileChanges { changes, .. } => Projected::FileChanges {
-            changes: changes.clone(),
-        },
-        agena_domain::ViewBlock::SearchResults { items, .. } => Projected::SearchResults {
-            query: None,
-            results: items
-                .iter()
-                .map(|item| agena_domain::SearchResultItem {
-                    title: item.title.clone(),
-                    uri: item.url.clone(),
-                    snippet: item.snippet.clone(),
-                    score: None,
-                })
-                .collect(),
-        },
-        agena_domain::ViewBlock::Media { artifact, .. } => Projected::Media {
-            mime_type: artifact.mime.clone(),
-            artifact: artifact.clone(),
-        },
-        agena_domain::ViewBlock::Custom {
-            kind,
-            schema,
-            presentation,
-            ..
-        } => Projected::Custom {
-            schema: if schema.is_null() {
-                None
-            } else {
-                Some(schema.to_string())
-            },
-            value: serde_json::json!({ "kind": kind, "presentation": presentation }),
-        },
-    }
-}
-
-/// Fill the legacy activity snapshot's ephemeral presentation by invoking the
-/// same owning-plugin-first renderer as the current parts/live APIs. The
-/// snapshot itself is an in-memory response projection and is never written
-/// back to storage.
-async fn render_snapshot_tool_presentations(
-    snapshot: &mut agena_domain::TranscriptSnapshot,
-    executor: &crate::tool::ToolExecutor,
-) {
-    for turn in &mut snapshot.turns {
-        for node in &mut turn.input.0 {
-            render_snapshot_node_tool_presentation(node, executor).await;
-        }
-        for node in &mut turn.reply.content.0 {
-            render_snapshot_node_tool_presentation(node, executor).await;
-        }
-    }
-    for activity in &mut snapshot.session_activities {
-        render_snapshot_activity_tool_presentation(activity, executor).await;
-    }
-}
-
-async fn render_snapshot_node_tool_presentation(
-    node: &mut agena_domain::ContentNode,
-    executor: &crate::tool::ToolExecutor,
-) {
-    let agena_domain::ContentNode::Activity { activity } = node else {
-        return;
-    };
-    render_snapshot_activity_tool_presentation(activity, executor).await;
-}
-
-async fn render_snapshot_activity_tool_presentation(
-    activity: &mut agena_domain::ActivityNode,
-    executor: &crate::tool::ToolExecutor,
-) {
-    let agena_domain::ActivityPayload::Operation(operation) = &mut activity.payload else {
-        return;
-    };
-    let Ok(output) = serde_json::from_value::<RawOutput>(operation.data.clone()) else {
-        return;
-    };
-    let rendered = executor
-        .render_tool_result(&operation.invocation, &output)
-        .await;
-    let model = rendered.model.unwrap_or_default();
-    let human = rendered.human.unwrap_or_default();
-    operation.title = human.title;
-    operation.summary = human.summary;
-    operation.markdown = view_blocks_as_markdown(&human.blocks, &model);
-}
-
-fn view_blocks_as_markdown(blocks: &[agena_domain::ViewBlock], fallback: &str) -> String {
-    let rendered = blocks
-        .iter()
-        .filter_map(|block| match block {
-            agena_domain::ViewBlock::Text { text, .. }
-            | agena_domain::ViewBlock::Markdown { text, .. } => Some(text.clone()),
-            agena_domain::ViewBlock::Json { value, .. } => Some(format!(
-                "```json\n{}\n```",
-                serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string())
-            )),
-            other => serde_json::to_string_pretty(other)
-                .ok()
-                .map(|value| format!("```json\n{value}\n```")),
-        })
-        .filter(|value| !value.trim().is_empty())
-        .collect::<Vec<_>>()
-        .join("\n\n");
-    if rendered.is_empty() {
-        fallback.to_owned()
-    } else {
-        rendered
     }
 }
 
@@ -2117,7 +1193,6 @@ mod tests {
             content: serde_json::json!({}),
             summary: None,
             visibility: PartVisibility::Both,
-            rendered_markdown: None,
             parent_part_id: None,
             run_id: None,
             origin_session_id: 1,

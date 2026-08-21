@@ -425,8 +425,6 @@ mod stats;
 mod tests;
 
 use self::helpers::*;
-use self::replies::operation_from_part;
-
 impl SessionManagerState {
     fn new(
         provider_registry: Arc<ProviderRegistry>,
@@ -1785,12 +1783,6 @@ impl SessionManager {
             )));
     }
 
-    /// The v2 facade's [`MemoryLayer`](agena_storage::store::MemoryLayer) is
-    /// LRU-bounded by `max_sessions` and self-evicts on insert (15.3), so
-    /// there is nothing for the manager to prune. Kept for API compatibility
-    /// with the runtime's maintenance loop.
-    pub fn prune_cache(&self) {}
-
     /// Cache statistics are hidden inside the sealed facade (14.1): the
     /// manager only configured `max_sessions`. Report the stable default so
     /// the runtime surface stays unchanged.
@@ -1967,102 +1959,37 @@ impl SessionManager {
         unreachable!("bounded launch-handoff retry returns from the loop")
     }
 
-    /// Resolve a completion signal through the durable unique index. The
-    /// legacy marker adoption arm is only for v8 rows created before the
-    /// operation ledger existed; all new launches create the aggregate before
-    /// executing their external side effect.
+    /// Resolve a completion signal through the durable unique index. Every
+    /// background launch creates its aggregate before starting the external
+    /// side effect, so a missing row is an invalid callback.
     async fn background_operation_for_signal(
         &self,
         session_id: i64,
         kind: BackgroundOperationKind,
         external_id: &str,
     ) -> Result<agena_storage::store::BackgroundOperation, AppError> {
-        if let Some(operation) = self
+        let operation = self
             .store
             .background_operation_by_external_id(kind, external_id)
             .await?
-        {
-            if operation.session_id != session_id {
-                return Err(AppError::Internal(format!(
-                    "background signal {}:{} belongs to session {}, not {}",
-                    kind.as_str(),
-                    external_id,
-                    operation.session_id,
-                    session_id
-                )));
-            }
-            return Ok(operation);
-        }
-
-        let session = self.store.load_session(session_id).await?;
-        let part = session
-            .parts()
-            .iter()
-            .find(|part| {
-                part.kind == "tool_call"
-                    && operation_from_part(part).is_some_and(|operation| {
-                        operation.background_operation().is_some_and(|marker| {
-                            marker.kind == kind.as_str() && marker.id == external_id
-                        })
-                    })
-            })
             .ok_or_else(|| {
                 AppError::Internal(format!(
-                    "background {}:{} has neither an aggregate nor a legacy marker in session {}",
+                    "background signal {}:{} has no durable operation for session {}",
                     kind.as_str(),
                     external_id,
                     session_id
                 ))
             })?;
-        let run_id = part.run_id.ok_or_else(|| {
-            AppError::Internal(format!(
-                "legacy background tool {} has no run",
-                part.part_id
-            ))
-        })?;
-        let operation_id = background_operation_id(session_id, part.part_id);
-        let created = self
-            .store
-            .create_background_operation(NewBackgroundOperation {
-                operation_id: operation_id.clone(),
-                session_id,
-                launch_run_id: Some(run_id),
-                launch_tool_part_id: Some(part.part_id),
-                kind,
-            })
-            .await?;
-        let launching = if created.phase == BackgroundOperationPhase::LaunchRequested {
-            self.store
-                .transition_background_operation(BackgroundOperationTransition {
-                    operation_id: operation_id.clone(),
-                    expected_revision: created.revision,
-                    next_phase: BackgroundOperationPhase::Launching,
-                    external_id: None,
-                    outcome: None,
-                    failure: None,
-                    owner_id: Some("legacy-adoption".to_owned()),
-                    lease_until_ms: Some(Utc::now().timestamp_millis() + 30_000),
-                })
-                .await?
-        } else {
-            created
-        };
-        if launching.phase == BackgroundOperationPhase::Launching {
-            self.store
-                .transition_background_operation(BackgroundOperationTransition {
-                    operation_id,
-                    expected_revision: launching.revision,
-                    next_phase: BackgroundOperationPhase::Running,
-                    external_id: Some(external_id.to_owned()),
-                    outcome: None,
-                    failure: None,
-                    owner_id: None,
-                    lease_until_ms: None,
-                })
-                .await
-        } else {
-            Ok(launching)
+        if operation.session_id != session_id {
+            return Err(AppError::Internal(format!(
+                "background signal {}:{} belongs to session {}, not {}",
+                kind.as_str(),
+                external_id,
+                operation.session_id,
+                session_id
+            )));
         }
+        Ok(operation)
     }
 
     /// Record one sequenced monitor event on the same durable aggregate. The
@@ -2374,10 +2301,9 @@ impl SessionManager {
     /// Each successful provider round durably lists the notification part ids
     /// present in its actual prompt. This exact input receipt avoids the race
     /// where an older provider request emits output after a notification was
-    /// appended but never saw that notification. Legacy Runtime ingress rows
-    /// retain the monotonic-id fallback used before round input receipts were
-    /// introduced. Delivery progress remains derived from the canonical
-    /// transcript instead of adding another mutable `notified` flag.
+    /// appended but never saw that notification. Delivery progress remains
+    /// derived from the canonical transcript instead of adding another mutable
+    /// `notified` flag.
     async fn notification_has_completed_assistant_response(
         &self,
         session_id: i64,
@@ -2427,23 +2353,7 @@ impl SessionManager {
         if exact_round_receipt {
             return Ok(true);
         }
-        // Backward compatibility for v9 Runtime ingress deliveries committed
-        // before exact provider-round input receipts existed. New
-        // Assistant-owned notifications never take this fallback because a
-        // pre-existing in-flight assistant round can have a lower marker id
-        // while emitting output after the notification without seeing it.
-        Ok(notification.role == PartRole::Runtime
-            && session.parts().iter().any(|part| {
-                part.part_id > notification_part_id
-                    && part.is_run_marker()
-                    && part.role == PartRole::Assistant
-                    && part.state == PartState::Completed
-                    && part
-                        .content
-                        .get("run_kind")
-                        .and_then(serde_json::Value::as_str)
-                        == Some("continue")
-            }))
+        Ok(false)
     }
 
     /// Restart-safe dispatcher backstop. The live bus only lowers latency;

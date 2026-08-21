@@ -63,12 +63,15 @@ typedef struct git_str git_str;
 #include <sys/types.h>
 #include <sys/stat.h>
 
-/* Some libc headers do not expose SSIZE_MAX even though they provide the
- * POSIX ssize_t type. Derive the ABI's largest non-negative byte count from
- * the corresponding unsigned size type instead of weakening the process I/O
- * bounds check or inventing a target-specific constant. */
-#ifndef SSIZE_MAX
-# define SSIZE_MAX ((ssize_t)(((size_t)-1) >> 1))
+/* Some POSIX libc headers do not expose SSIZE_MAX even though they provide
+ * the ssize_t type. Derive the ABI's largest non-negative byte count from the
+ * corresponding unsigned size type instead of weakening the process I/O
+ * bounds check or inventing a target-specific constant. MSVC has a different
+ * CRT type surface and does not use this Unix process implementation. */
+#ifndef GIT_WIN32
+# ifndef SSIZE_MAX
+#  define SSIZE_MAX ((ssize_t)(((size_t)-1) >> 1))
+# endif
 #endif
 
 #ifdef GIT_WIN32

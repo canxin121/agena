@@ -17,7 +17,15 @@ if [[ "$TARGET" == loongarch64-unknown-linux-ohos ]]; then
   # OpenHarmony third_party_musl source below; the Rust target remains the
   # OpenHarmony target triple so rustc uses the correct std PAL.
   ZIG="$(bash scripts/ci/fetch-zig.sh)"
-  SYSROOT="$(bash scripts/ci/build-ohos-loongarch-sysroot.sh "$ZIG")"
+  # The source-built musl/zlib bootstrap is intentionally verbose.  Capture
+  # only its final machine-readable sysroot path while teeing the complete
+  # build log to stderr.  Capturing raw stdout would turn the compiler log
+  # into the value of AGENA_ZIG_SYSROOT and inject it into every C command.
+  SYSROOT="$(
+    bash scripts/ci/build-ohos-loongarch-sysroot.sh "$ZIG" 2>&1 |
+      tee /dev/stderr |
+      tail -n 1
+  )"
   export AGENA_ZIG="$ZIG"
   export AGENA_ZIG_SYSROOT="$SYSROOT"
   # libz-sys intentionally links the platform zlib without emitting include

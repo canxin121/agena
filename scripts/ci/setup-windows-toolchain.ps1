@@ -12,16 +12,21 @@ function Install-VsComponents {
     [Parameter(Mandatory = $true)][string[]]$Components
   )
 
+  # Invoke the native installer directly so PowerShell passes the installation
+  # path as one argv element.  Start-Process flattens an ArgumentList array
+  # into a command line before launching setup.exe; on hosted runners that
+  # turns `C:\Program Files\...` into the truncated `C:\Program` path.
   $InstallerArgs = @("modify", "--installPath", $InstallPath)
   foreach ($Component in $Components) {
     $InstallerArgs += @("--add", $Component)
   }
-  # The current Visual Studio Installer does not accept the old --wait option.
-  # Start-Process -Wait provides the required synchronous boundary instead.
+  # A direct native invocation is synchronous, so no unsupported --wait flag
+  # or lossy Start-Process quoting is involved.
   $InstallerArgs += @("--quiet", "--norestart", "--noUpdateInstaller")
-  $Process = Start-Process -FilePath $Installer -ArgumentList $InstallerArgs -Wait -PassThru -NoNewWindow
-  if ($Process.ExitCode -notin @(0, 3010)) {
-    throw "Visual Studio component installation failed with exit code $($Process.ExitCode): $($Components -join ', ')"
+  & $Installer @InstallerArgs
+  $ExitCode = $LASTEXITCODE
+  if ($ExitCode -notin @(0, 3010)) {
+    throw "Visual Studio component installation failed with exit code $ExitCode`: $($Components -join ', ')"
   }
 }
 

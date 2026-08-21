@@ -163,15 +163,31 @@ if ! valid_sysroot; then
 
   rm -rf "$SYSROOT"
   mkdir -p "$SYSROOT/usr"
-  fs_list="$ROOT/filesystems.txt"
-  guestfish --ro -a "$IMAGE" <<'EOF' >"$fs_list"
+  # `list-filesystems` asks libguestfs to recursively inspect the image.  The
+  # FreeBSD ARM images contain a GPT partition that embeds a BSD disklabel;
+  # current Ubuntu sfdisk rejects that nested label while probing its fifth
+  # partition, even though the UFS root is perfectly readable.  Enumerate the
+  # real read-only device candidates and verify the Agena sysroot marker by
+  # mounting each one instead.  This keeps the extraction tied to the official
+  # image and never formats, repairs, or writes to it.
+  rootdev=""
+  for partition in {1..8}; do
+    for suffix in "" a b c d e f g h; do
+      candidate="/dev/sda${partition}${suffix}"
+      probe=""
+      if probe="$(guestfish --ro -a "$IMAGE" <<EOF 2>/dev/null
 run
-list-filesystems
+mount-ro $candidate /mnt
+exists /mnt/usr/include/stdio.h
 EOF
-  rootdev="$(awk -F: '$2 ~ /ufs/ {gsub(/[[:space:]]/, "", $1); print $1; exit}' "$fs_list")"
+)" && [[ "$probe" == *true* ]]; then
+        rootdev="$candidate"
+        break 2
+      fi
+    done
+  done
   [[ -n "$rootdev" ]] || {
-    echo "ERROR: no UFS root filesystem found in $FILE" >&2
-    cat "$fs_list" >&2
+    echo "ERROR: no FreeBSD UFS root device containing /usr/include/stdio.h found in $FILE" >&2
     exit 1
   }
 

@@ -1031,44 +1031,9 @@
       "artifact_kind": "backend"
     },
     {
-      "target": "aarch64-unknown-managarm-mlibc",
-      "os": "managarm",
-      "builder": "managarm",
-      "build_std": true,
-      "artifact_kind": "backend"
-    },
-    {
       "target": "aarch64-unknown-netbsd",
       "os": "netbsd",
       "builder": "zig-netbsd",
-      "build_std": true,
-      "artifact_kind": "backend"
-    },
-    {
-      "target": "aarch64-unknown-nto-qnx700",
-      "os": "nto",
-      "builder": "nto",
-      "build_std": true,
-      "artifact_kind": "backend"
-    },
-    {
-      "target": "aarch64-unknown-nto-qnx710",
-      "os": "nto",
-      "builder": "nto",
-      "build_std": true,
-      "artifact_kind": "backend"
-    },
-    {
-      "target": "aarch64-unknown-nto-qnx710_iosock",
-      "os": "nto",
-      "builder": "nto",
-      "build_std": true,
-      "artifact_kind": "backend"
-    },
-    {
-      "target": "aarch64-unknown-nto-qnx800",
-      "os": "nto",
-      "builder": "nto",
       "build_std": true,
       "artifact_kind": "backend"
     },
@@ -1083,13 +1048,6 @@
       "target": "aarch64-unknown-redox",
       "os": "redox",
       "builder": "redox",
-      "build_std": true,
-      "artifact_kind": "backend"
-    },
-    {
-      "target": "aarch64-wrs-vxworks",
-      "os": "vxworks",
-      "builder": "vxworks",
       "build_std": true,
       "artifact_kind": "backend"
     },
@@ -1129,13 +1087,6 @@
       "artifact_kind": "backend"
     },
     {
-      "target": "armv7-wrs-vxworks-eabihf",
-      "os": "vxworks",
-      "builder": "vxworks",
-      "build_std": true,
-      "artifact_kind": "backend"
-    },
-    {
       "target": "i586-unknown-netbsd",
       "os": "netbsd",
       "builder": "zig-netbsd",
@@ -1146,13 +1097,6 @@
       "target": "i586-unknown-redox",
       "os": "redox",
       "builder": "redox",
-      "build_std": true,
-      "artifact_kind": "backend"
-    },
-    {
-      "target": "i686-pc-nto-qnx700",
-      "os": "nto",
-      "builder": "nto",
       "build_std": true,
       "artifact_kind": "backend"
     },
@@ -1185,13 +1129,6 @@
       "artifact_kind": "backend"
     },
     {
-      "target": "i686-wrs-vxworks",
-      "os": "vxworks",
-      "builder": "vxworks",
-      "build_std": true,
-      "artifact_kind": "backend"
-    },
-    {
       "target": "mipsel-unknown-netbsd",
       "os": "netbsd",
       "builder": "zig-netbsd",
@@ -1220,27 +1157,6 @@
       "artifact_kind": "backend"
     },
     {
-      "target": "powerpc-wrs-vxworks",
-      "os": "vxworks",
-      "builder": "vxworks",
-      "build_std": true,
-      "artifact_kind": "backend"
-    },
-    {
-      "target": "powerpc-wrs-vxworks-spe",
-      "os": "vxworks",
-      "builder": "vxworks",
-      "build_std": true,
-      "artifact_kind": "backend"
-    },
-    {
-      "target": "powerpc64-ibm-aix",
-      "os": "aix",
-      "builder": "aix",
-      "build_std": true,
-      "artifact_kind": "backend"
-    },
-    {
       "target": "powerpc64-unknown-freebsd",
       "os": "freebsd",
       "builder": "freebsd-sysroot",
@@ -1255,13 +1171,6 @@
       "artifact_kind": "backend"
     },
     {
-      "target": "powerpc64-wrs-vxworks",
-      "os": "vxworks",
-      "builder": "vxworks",
-      "build_std": true,
-      "artifact_kind": "backend"
-    },
-    {
       "target": "powerpc64le-unknown-freebsd",
       "os": "freebsd",
       "builder": "freebsd-sysroot",
@@ -1269,23 +1178,9 @@
       "artifact_kind": "backend"
     },
     {
-      "target": "riscv32-wrs-vxworks",
-      "os": "vxworks",
-      "builder": "vxworks",
-      "build_std": true,
-      "artifact_kind": "backend"
-    },
-    {
       "target": "riscv64-linux-android",
       "os": "android",
       "builder": "android-ndk",
-      "build_std": true,
-      "artifact_kind": "backend"
-    },
-    {
-      "target": "riscv64-wrs-vxworks",
-      "os": "vxworks",
-      "builder": "vxworks",
       "build_std": true,
       "artifact_kind": "backend"
     },
@@ -1300,13 +1195,6 @@
       "target": "riscv64gc-unknown-fuchsia",
       "os": "fuchsia",
       "builder": "fuchsia",
-      "build_std": true,
-      "artifact_kind": "backend"
-    },
-    {
-      "target": "riscv64gc-unknown-managarm-mlibc",
-      "os": "managarm",
-      "builder": "managarm",
       "build_std": true,
       "artifact_kind": "backend"
     },
@@ -1346,37 +1234,9 @@
       "artifact_kind": "backend"
     },
     {
-      "target": "x86_64-lynx-lynxos178",
-      "os": "lynxos178",
-      "builder": "lynxos178",
-      "build_std": true,
-      "artifact_kind": "backend"
-    },
-    {
       "target": "x86_64-pc-cygwin",
       "os": "cygwin",
       "builder": "cygwin",
-      "build_std": true,
-      "artifact_kind": "backend"
-    },
-    {
-      "target": "x86_64-pc-nto-qnx710",
-      "os": "nto",
-      "builder": "nto",
-      "build_std": true,
-      "artifact_kind": "backend"
-    },
-    {
-      "target": "x86_64-pc-nto-qnx710_iosock",
-      "os": "nto",
-      "builder": "nto",
-      "build_std": true,
-      "artifact_kind": "backend"
-    },
-    {
-      "target": "x86_64-pc-nto-qnx800",
-      "os": "nto",
-      "builder": "nto",
       "build_std": true,
       "artifact_kind": "backend"
     },
@@ -1402,13 +1262,6 @@
       "artifact_kind": "backend"
     },
     {
-      "target": "x86_64-unknown-managarm-mlibc",
-      "os": "managarm",
-      "builder": "managarm",
-      "build_std": true,
-      "artifact_kind": "backend"
-    },
-    {
       "target": "x86_64-unknown-openbsd",
       "os": "openbsd",
       "builder": "openbsd",
@@ -1421,16 +1274,229 @@
       "builder": "redox",
       "build_std": false,
       "artifact_kind": "backend"
-    },
-    {
-      "target": "x86_64-wrs-vxworks",
-      "os": "vxworks",
-      "builder": "vxworks",
-      "build_std": true,
-      "artifact_kind": "backend"
     }
   ],
   "excluded": [
+    {
+      "target": "aarch64-unknown-managarm-mlibc",
+      "target_os": "managarm",
+      "reason": "agena-runtime-integration-unavailable",
+      "runtime": "Managarm mlibc",
+      "official_basis": "https://github.com/managarm/mlibc",
+      "required_toolchain": "A pinned Managarm/mlibc source-built sysroot with crt objects, libc, linker/runtime libraries, and a matching Rust libc ABI module",
+      "missing_ci_credential": "No reproducible Managarm sysroot/toolchain artifact or configured builder is available in GitHub Actions",
+      "description": "The current Rust libc release has no Managarm module and the existing CI path invokes generic build-std without a real Managarm sysroot; retaining this row would only validate an incomplete compile-time integration rather than a full Agena runtime"
+    },
+    {
+      "target": "riscv64gc-unknown-managarm-mlibc",
+      "target_os": "managarm",
+      "reason": "agena-runtime-integration-unavailable",
+      "runtime": "Managarm mlibc",
+      "official_basis": "https://github.com/managarm/mlibc",
+      "required_toolchain": "A pinned Managarm/mlibc source-built sysroot with crt objects, libc, linker/runtime libraries, and a matching Rust libc ABI module",
+      "missing_ci_credential": "No reproducible Managarm sysroot/toolchain artifact or configured builder is available in GitHub Actions",
+      "description": "The current Rust libc release has no Managarm module and the existing CI path invokes generic build-std without a real Managarm sysroot; retaining this row would only validate an incomplete compile-time integration rather than a full Agena runtime"
+    },
+    {
+      "target": "x86_64-unknown-managarm-mlibc",
+      "target_os": "managarm",
+      "reason": "agena-runtime-integration-unavailable",
+      "runtime": "Managarm mlibc",
+      "official_basis": "https://github.com/managarm/mlibc",
+      "required_toolchain": "A pinned Managarm/mlibc source-built sysroot with crt objects, libc, linker/runtime libraries, and a matching Rust libc ABI module",
+      "missing_ci_credential": "No reproducible Managarm sysroot/toolchain artifact or configured builder is available in GitHub Actions",
+      "description": "The current Rust libc release has no Managarm module and the existing CI path invokes generic build-std without a real Managarm sysroot; retaining this row would only validate an incomplete compile-time integration rather than a full Agena runtime"
+    },
+    {
+      "target": "aarch64-unknown-nto-qnx700",
+      "target_os": "nto",
+      "reason": "external-sdk-unavailable",
+      "sdk": "QNX Software Development Platform 7.0",
+      "official_basis": "https://www.qnx.com/developers/docs/7.0.0/",
+      "required_toolchain": "QNX SDP 7.0 qcc, NTO 7.0 sysroot, linker/runtime libraries, and the applicable QNX license",
+      "missing_ci_credential": "No QNX SDP 7.0 archive, qcc toolchain, sysroot, or QNX license credential is configured in GitHub Actions",
+      "description": "Rust target requires the vendor QNX NTO 7.0 toolchain; a hosted Linux compiler cannot provide the QNX child-process, PTY, networking, and runtime ABI"
+    },
+    {
+      "target": "aarch64-unknown-nto-qnx710",
+      "target_os": "nto",
+      "reason": "external-sdk-unavailable",
+      "sdk": "QNX Software Development Platform 7.1",
+      "official_basis": "https://www.qnx.com/developers/docs/7.1/index.html",
+      "required_toolchain": "QNX SDP 7.1 qcc, NTO 7.1 sysroot, linker/runtime libraries, and the applicable QNX license",
+      "missing_ci_credential": "No QNX SDP 7.1 archive, qcc toolchain, sysroot, or QNX license credential is configured in GitHub Actions",
+      "description": "Rust target requires the vendor QNX NTO 7.1 toolchain; the diagnostic fails to find qcc and cannot substitute a host compiler for the QNX runtime ABI"
+    },
+    {
+      "target": "aarch64-unknown-nto-qnx710_iosock",
+      "target_os": "nto",
+      "reason": "external-sdk-unavailable",
+      "sdk": "QNX Software Development Platform 7.1 with io-sock",
+      "official_basis": "https://www.qnx.com/developers/docs/7.1/index.html",
+      "required_toolchain": "QNX SDP 7.1 qcc, NTO 7.1 io-sock sysroot/runtime libraries, and the applicable QNX license",
+      "missing_ci_credential": "No QNX SDP 7.1/io-sock archive, qcc toolchain, sysroot, or QNX license credential is configured in GitHub Actions",
+      "description": "The io-sock variant additionally requires the vendor io-sock SDK/runtime; the diagnostic fails to find qcc and cannot substitute a host compiler"
+    },
+    {
+      "target": "aarch64-unknown-nto-qnx800",
+      "target_os": "nto",
+      "reason": "external-sdk-unavailable",
+      "sdk": "QNX Software Development Platform 8.0",
+      "official_basis": "https://www.qnx.com/developers/docs/8.0/",
+      "required_toolchain": "QNX SDP 8.0 qcc, NTO 8.0 sysroot, linker/runtime libraries, and the applicable QNX license",
+      "missing_ci_credential": "No QNX SDP 8.0 archive, qcc toolchain, sysroot, or QNX license credential is configured in GitHub Actions",
+      "description": "Rust target requires the vendor QNX NTO 8.0 toolchain; a hosted Linux compiler cannot provide the QNX runtime ABI"
+    },
+    {
+      "target": "i686-pc-nto-qnx700",
+      "target_os": "nto",
+      "reason": "external-sdk-unavailable",
+      "sdk": "QNX Software Development Platform 7.0",
+      "official_basis": "https://www.qnx.com/developers/docs/7.0.0/",
+      "required_toolchain": "QNX SDP 7.0 qcc, i686 NTO 7.0 sysroot, linker/runtime libraries, and the applicable QNX license",
+      "missing_ci_credential": "No QNX SDP 7.0 archive, qcc toolchain, sysroot, or QNX license credential is configured in GitHub Actions",
+      "description": "Rust target requires the vendor QNX NTO 7.0 toolchain; the diagnostic fails to find qcc and cannot substitute a host compiler"
+    },
+    {
+      "target": "x86_64-pc-nto-qnx710",
+      "target_os": "nto",
+      "reason": "external-sdk-unavailable",
+      "sdk": "QNX Software Development Platform 7.1",
+      "official_basis": "https://www.qnx.com/developers/docs/7.1/index.html",
+      "required_toolchain": "QNX SDP 7.1 qcc, x86_64 NTO 7.1 sysroot, linker/runtime libraries, and the applicable QNX license",
+      "missing_ci_credential": "No QNX SDP 7.1 archive, qcc toolchain, sysroot, or QNX license credential is configured in GitHub Actions",
+      "description": "Rust target requires the vendor QNX NTO 7.1 toolchain; the diagnostic fails to find qcc and cannot substitute a host compiler"
+    },
+    {
+      "target": "x86_64-pc-nto-qnx710_iosock",
+      "target_os": "nto",
+      "reason": "external-sdk-unavailable",
+      "sdk": "QNX Software Development Platform 7.1 with io-sock",
+      "official_basis": "https://www.qnx.com/developers/docs/7.1/index.html",
+      "required_toolchain": "QNX SDP 7.1 qcc, x86_64 NTO 7.1 io-sock sysroot/runtime libraries, and the applicable QNX license",
+      "missing_ci_credential": "No QNX SDP 7.1/io-sock archive, qcc toolchain, sysroot, or QNX license credential is configured in GitHub Actions",
+      "description": "The io-sock variant additionally requires the vendor io-sock SDK/runtime; the diagnostic fails to find qcc and cannot substitute a host compiler"
+    },
+    {
+      "target": "x86_64-pc-nto-qnx800",
+      "target_os": "nto",
+      "reason": "external-sdk-unavailable",
+      "sdk": "QNX Software Development Platform 8.0",
+      "official_basis": "https://www.qnx.com/developers/docs/8.0/",
+      "required_toolchain": "QNX SDP 8.0 qcc, x86_64 NTO 8.0 sysroot, linker/runtime libraries, and the applicable QNX license",
+      "missing_ci_credential": "No QNX SDP 8.0 archive, qcc toolchain, sysroot, or QNX license credential is configured in GitHub Actions",
+      "description": "Rust target requires the vendor QNX NTO 8.0 toolchain; a hosted Linux compiler cannot provide the QNX runtime ABI"
+    },
+    {
+      "target": "aarch64-wrs-vxworks",
+      "target_os": "vxworks",
+      "reason": "external-sdk-unavailable",
+      "sdk": "Wind River VxWorks SDK",
+      "official_basis": "https://www.windriver.com/products/vxworks",
+      "required_toolchain": "Wind River VxWorks SDK wr-cc, target sysroot/linker/runtime libraries, and the applicable Wind River license",
+      "missing_ci_credential": "No VxWorks SDK archive, wr-cc toolchain, target sysroot, or Wind River license credential is configured in GitHub Actions",
+      "description": "Rust target requires the vendor VxWorks toolchain; the diagnostic fails to find wr-cc and cannot substitute a hosted Linux compiler"
+    },
+    {
+      "target": "armv7-wrs-vxworks-eabihf",
+      "target_os": "vxworks",
+      "reason": "external-sdk-unavailable",
+      "sdk": "Wind River VxWorks SDK",
+      "official_basis": "https://www.windriver.com/products/vxworks",
+      "required_toolchain": "Wind River VxWorks SDK wr-cc, ARMv7 hard-float target sysroot/linker/runtime libraries, and the applicable Wind River license",
+      "missing_ci_credential": "No VxWorks SDK archive, wr-cc toolchain, target sysroot, or Wind River license credential is configured in GitHub Actions",
+      "description": "Rust target requires the vendor VxWorks toolchain; the diagnostic fails to find wr-cc and cannot substitute a hosted Linux compiler"
+    },
+    {
+      "target": "i686-wrs-vxworks",
+      "target_os": "vxworks",
+      "reason": "external-sdk-unavailable",
+      "sdk": "Wind River VxWorks SDK",
+      "official_basis": "https://www.windriver.com/products/vxworks",
+      "required_toolchain": "Wind River VxWorks SDK wr-cc, i686 target sysroot/linker/runtime libraries, and the applicable Wind River license",
+      "missing_ci_credential": "No VxWorks SDK archive, wr-cc toolchain, target sysroot, or Wind River license credential is configured in GitHub Actions",
+      "description": "Rust target requires the vendor VxWorks toolchain; the diagnostic fails to find wr-cc and cannot substitute a hosted Linux compiler"
+    },
+    {
+      "target": "powerpc-wrs-vxworks",
+      "target_os": "vxworks",
+      "reason": "external-sdk-unavailable",
+      "sdk": "Wind River VxWorks SDK",
+      "official_basis": "https://www.windriver.com/products/vxworks",
+      "required_toolchain": "Wind River VxWorks SDK wr-cc, PowerPC target sysroot/linker/runtime libraries, and the applicable Wind River license",
+      "missing_ci_credential": "No VxWorks SDK archive, wr-cc toolchain, target sysroot, or Wind River license credential is configured in GitHub Actions",
+      "description": "Rust target requires the vendor VxWorks toolchain; the diagnostic fails to find wr-cc and cannot substitute a hosted Linux compiler"
+    },
+    {
+      "target": "powerpc-wrs-vxworks-spe",
+      "target_os": "vxworks",
+      "reason": "external-sdk-unavailable",
+      "sdk": "Wind River VxWorks SDK",
+      "official_basis": "https://www.windriver.com/products/vxworks",
+      "required_toolchain": "Wind River VxWorks SDK wr-cc, PowerPC SPE target sysroot/linker/runtime libraries, and the applicable Wind River license",
+      "missing_ci_credential": "No VxWorks SDK archive, wr-cc toolchain, target sysroot, or Wind River license credential is configured in GitHub Actions",
+      "description": "The SPE target requires the vendor VxWorks SPE ABI toolchain; the diagnostic fails to find wr-cc and cannot substitute a different PowerPC ABI"
+    },
+    {
+      "target": "powerpc64-wrs-vxworks",
+      "target_os": "vxworks",
+      "reason": "external-sdk-unavailable",
+      "sdk": "Wind River VxWorks SDK",
+      "official_basis": "https://www.windriver.com/products/vxworks",
+      "required_toolchain": "Wind River VxWorks SDK wr-cc, PowerPC64 target sysroot/linker/runtime libraries, and the applicable Wind River license",
+      "missing_ci_credential": "No VxWorks SDK archive, wr-cc toolchain, target sysroot, or Wind River license credential is configured in GitHub Actions",
+      "description": "Rust target requires the vendor VxWorks toolchain; the diagnostic fails to find wr-cc and cannot substitute a hosted Linux compiler"
+    },
+    {
+      "target": "riscv32-wrs-vxworks",
+      "target_os": "vxworks",
+      "reason": "external-sdk-unavailable",
+      "sdk": "Wind River VxWorks SDK",
+      "official_basis": "https://www.windriver.com/products/vxworks",
+      "required_toolchain": "Wind River VxWorks SDK wr-cc, RISC-V 32-bit target sysroot/linker/runtime libraries, and the applicable Wind River license",
+      "missing_ci_credential": "No VxWorks SDK archive, wr-cc toolchain, target sysroot, or Wind River license credential is configured in GitHub Actions",
+      "description": "Rust target requires the vendor VxWorks toolchain; the diagnostic fails to find wr-cc and cannot substitute a hosted Linux compiler"
+    },
+    {
+      "target": "riscv64-wrs-vxworks",
+      "target_os": "vxworks",
+      "reason": "external-sdk-unavailable",
+      "sdk": "Wind River VxWorks SDK",
+      "official_basis": "https://www.windriver.com/products/vxworks",
+      "required_toolchain": "Wind River VxWorks SDK wr-cc, RISC-V 64-bit target sysroot/linker/runtime libraries, and the applicable Wind River license",
+      "missing_ci_credential": "No VxWorks SDK archive, wr-cc toolchain, target sysroot, or Wind River license credential is configured in GitHub Actions",
+      "description": "Rust target requires the vendor VxWorks toolchain; the diagnostic fails to find wr-cc and cannot substitute a hosted Linux compiler"
+    },
+    {
+      "target": "x86_64-wrs-vxworks",
+      "target_os": "vxworks",
+      "reason": "external-sdk-unavailable",
+      "sdk": "Wind River VxWorks SDK",
+      "official_basis": "https://www.windriver.com/products/vxworks",
+      "required_toolchain": "Wind River VxWorks SDK wr-cc, x86_64 target sysroot/linker/runtime libraries, and the applicable Wind River license",
+      "missing_ci_credential": "No VxWorks SDK archive, wr-cc toolchain, target sysroot, or Wind River license credential is configured in GitHub Actions",
+      "description": "Rust target requires the vendor VxWorks toolchain; the diagnostic fails to find wr-cc and cannot substitute a hosted Linux compiler"
+    },
+    {
+      "target": "powerpc64-ibm-aix",
+      "target_os": "aix",
+      "reason": "external-sdk-unavailable",
+      "sdk": "IBM AIX development environment",
+      "official_basis": "https://www.ibm.com/docs/en/aix",
+      "required_toolchain": "IBM AIX host/compiler (XL C/C++ or Open XL C/C++), AIX sysroot, linker/runtime libraries, and the applicable IBM entitlement",
+      "missing_ci_credential": "No AIX host, IBM compiler/sysroot, or IBM entitlement credential is configured in GitHub Actions; the hosted Linux cc rejects AIX ABI flags",
+      "description": "Rust target requires an AIX compiler and AIX runtime ABI; a Linux compiler accepting or ignoring the flags would not produce a valid Agena executable"
+    },
+    {
+      "target": "x86_64-lynx-lynxos178",
+      "target_os": "lynxos178",
+      "reason": "external-sdk-unavailable",
+      "sdk": "LynxOS 178 SDK",
+      "official_basis": "https://www.lynx.com/",
+      "required_toolchain": "LynxOS 178 vendor compiler, target sysroot/linker/runtime libraries, and the applicable Lynx Software Technologies license",
+      "missing_ci_credential": "No LynxOS 178 SDK archive, compiler, sysroot, or license credential is configured in GitHub Actions",
+      "description": "Rust target requires the vendor LynxOS 178 toolchain and runtime ABI; no public redistributable builder or configured SDK is present"
+    },
     {
       "target": "aarch64-kmc-solid_asp3",
       "target_os": "solid_asp3",

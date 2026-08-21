@@ -5,6 +5,69 @@ use std::os::unix::io::AsRawFd;
 use std::path::Path;
 use std::time::Duration;
 
+// The libc crate does not expose every terminal ioctl for the non-Linux Unix
+// targets below, even though their shipped libc headers and kernels do.  Keep
+// the real ABI values here instead of dropping the operation or returning a
+// synthetic success.
+#[cfg(target_os = "fuchsia")]
+const TIOCMGET_IOCTL: libc::c_ulong = 0x5415;
+#[cfg(target_os = "fuchsia")]
+const TIOCMBIS_IOCTL: libc::c_ulong = 0x5416;
+#[cfg(target_os = "fuchsia")]
+const TIOCMBIC_IOCTL: libc::c_ulong = 0x5417;
+#[cfg(target_os = "fuchsia")]
+const TIOCSBRK_IOCTL: libc::c_ulong = 0x5427;
+#[cfg(target_os = "fuchsia")]
+const TIOCCBRK_IOCTL: libc::c_ulong = 0x5428;
+
+#[cfg(target_os = "hurd")]
+const TIOCMGET_IOCTL: libc::c_ulong = 0x6008_076a;
+#[cfg(target_os = "hurd")]
+const TIOCMBIS_IOCTL: libc::c_ulong = 0xa008_076c;
+#[cfg(target_os = "hurd")]
+const TIOCMBIC_IOCTL: libc::c_ulong = 0xa008_076b;
+#[cfg(target_os = "hurd")]
+const TIOCSBRK_IOCTL: libc::c_ulong = 0x077b;
+#[cfg(target_os = "hurd")]
+const TIOCCBRK_IOCTL: libc::c_ulong = 0x077a;
+
+#[cfg(not(any(target_os = "fuchsia", target_os = "hurd")))]
+const TIOCMGET_IOCTL: libc::c_ulong = libc::TIOCMGET as libc::c_ulong;
+#[cfg(not(any(target_os = "fuchsia", target_os = "hurd")))]
+const TIOCMBIS_IOCTL: libc::c_ulong = libc::TIOCMBIS as libc::c_ulong;
+#[cfg(not(any(target_os = "fuchsia", target_os = "hurd")))]
+const TIOCMBIC_IOCTL: libc::c_ulong = libc::TIOCMBIC as libc::c_ulong;
+#[cfg(not(any(target_os = "fuchsia", target_os = "hurd")))]
+const TIOCSBRK_IOCTL: libc::c_ulong = libc::TIOCSBRK as libc::c_ulong;
+#[cfg(not(any(target_os = "fuchsia", target_os = "hurd")))]
+const TIOCCBRK_IOCTL: libc::c_ulong = libc::TIOCCBRK as libc::c_ulong;
+
+#[cfg(any(target_os = "fuchsia", target_os = "hurd"))]
+const TIOCM_RTS_VALUE: c_int = 0x004;
+#[cfg(any(target_os = "fuchsia", target_os = "hurd"))]
+const TIOCM_CTS_VALUE: c_int = 0x020;
+#[cfg(any(target_os = "fuchsia", target_os = "hurd"))]
+const TIOCM_DTR_VALUE: c_int = 0x002;
+#[cfg(any(target_os = "fuchsia", target_os = "hurd"))]
+const TIOCM_DSR_VALUE: c_int = 0x100;
+#[cfg(any(target_os = "fuchsia", target_os = "hurd"))]
+const TIOCM_RI_VALUE: c_int = 0x080;
+#[cfg(any(target_os = "fuchsia", target_os = "hurd"))]
+const TIOCM_CD_VALUE: c_int = 0x040;
+
+#[cfg(not(any(target_os = "fuchsia", target_os = "hurd")))]
+const TIOCM_RTS_VALUE: c_int = libc::TIOCM_RTS as c_int;
+#[cfg(not(any(target_os = "fuchsia", target_os = "hurd")))]
+const TIOCM_CTS_VALUE: c_int = libc::TIOCM_CTS as c_int;
+#[cfg(not(any(target_os = "fuchsia", target_os = "hurd")))]
+const TIOCM_DTR_VALUE: c_int = libc::TIOCM_DTR as c_int;
+#[cfg(not(any(target_os = "fuchsia", target_os = "hurd")))]
+const TIOCM_DSR_VALUE: c_int = libc::TIOCM_DSR as c_int;
+#[cfg(not(any(target_os = "fuchsia", target_os = "hurd")))]
+const TIOCM_RI_VALUE: c_int = libc::TIOCM_RI as c_int;
+#[cfg(not(any(target_os = "fuchsia", target_os = "hurd")))]
+const TIOCM_CD_VALUE: c_int = libc::TIOCM_CD as c_int;
+
 pub struct SerialPort {
 	pub file: std::fs::File,
 	pub read_timeout_ms: u32,
@@ -327,35 +390,35 @@ impl SerialPort {
 	}
 
 	pub fn set_rts(&self, state: bool) -> std::io::Result<()> {
-		set_pin(&self.file, libc::TIOCM_RTS, state)
+		set_pin(&self.file, TIOCM_RTS_VALUE, state)
 	}
 
 	pub fn read_cts(&self) -> std::io::Result<bool> {
-		read_pin(&self.file, libc::TIOCM_CTS)
+		read_pin(&self.file, TIOCM_CTS_VALUE)
 	}
 
 	pub fn set_dtr(&self, state: bool) -> std::io::Result<()> {
-		set_pin(&self.file, libc::TIOCM_DTR, state)
+		set_pin(&self.file, TIOCM_DTR_VALUE, state)
 	}
 
 	pub fn read_dsr(&self) -> std::io::Result<bool> {
-		read_pin(&self.file, libc::TIOCM_DSR)
+		read_pin(&self.file, TIOCM_DSR_VALUE)
 	}
 
 	pub fn read_ri(&self) -> std::io::Result<bool> {
-		read_pin(&self.file, libc::TIOCM_RI)
+		read_pin(&self.file, TIOCM_RI_VALUE)
 	}
 
 	pub fn read_cd(&self) -> std::io::Result<bool> {
-		read_pin(&self.file, libc::TIOCM_CD)
+		read_pin(&self.file, TIOCM_CD_VALUE)
 	}
 
 	pub fn set_break(&self, enable: bool) -> std::io::Result<()> {
 		unsafe {
 			if enable {
-				check(libc::ioctl(self.file.as_raw_fd(), libc::TIOCSBRK as _))?;
+				check(libc::ioctl(self.file.as_raw_fd(), TIOCSBRK_IOCTL))?;
 			} else {
-				check(libc::ioctl(self.file.as_raw_fd(), libc::TIOCCBRK as _))?;
+				check(libc::ioctl(self.file.as_raw_fd(), TIOCCBRK_IOCTL))?;
 			}
 			Ok(())
 		}
@@ -378,9 +441,9 @@ fn poll(file: &std::fs::File, events: std::os::raw::c_short, timeout_ms: u32) ->
 fn set_pin(file: &std::fs::File, pin: c_int, state: bool) -> std::io::Result<()> {
 	unsafe {
 		if state {
-			check(libc::ioctl(file.as_raw_fd(), libc::TIOCMBIS as _, &pin))?;
+			check(libc::ioctl(file.as_raw_fd(), TIOCMBIS_IOCTL, &pin))?;
 		} else {
-			check(libc::ioctl(file.as_raw_fd(), libc::TIOCMBIC as _, &pin))?;
+			check(libc::ioctl(file.as_raw_fd(), TIOCMBIC_IOCTL, &pin))?;
 		}
 		Ok(())
 	}
@@ -389,7 +452,7 @@ fn set_pin(file: &std::fs::File, pin: c_int, state: bool) -> std::io::Result<()>
 fn read_pin(file: &std::fs::File, pin: c_int) -> std::io::Result<bool> {
 	unsafe {
 		let mut bits: c_int = 0;
-		check(libc::ioctl(file.as_raw_fd(), libc::TIOCMGET as _, &mut bits))?;
+		check(libc::ioctl(file.as_raw_fd(), TIOCMGET_IOCTL, &mut bits))?;
 		Ok(bits & pin != 0)
 	}
 }

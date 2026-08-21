@@ -42,6 +42,26 @@ AGENA_TERMINAL_RUNTIME_UNSUPPORTED_OS = {
     "motor",
 }
 
+# These target specifications are for vendor operating systems whose real
+# compiler/sysroot/licensing inputs are not redistributable in this repository
+# or available to the configured GitHub Actions runners.  A host compiler is
+# not an ABI substitute, so these rows must remain explicit exclusions until
+# the corresponding vendor SDK and credentials are provisioned.
+EXTERNAL_SDK_TARGET_OS = {
+    "aix",
+    "lynxos178",
+    "nto",
+    "vxworks",
+}
+
+# Managarm has public mlibc sources, but this worktree has neither a pinned
+# source-built sysroot nor a Rust libc ABI module for the target.  Its current
+# generic build-std path therefore cannot prove the required child-process,
+# PTY, filesystem, network, and TLS runtime semantics.
+AGENA_RUNTIME_INTEGRATION_UNAVAILABLE_OS = {
+    "managarm",
+}
+
 
 def rust_std_process_supported(spec: dict) -> bool:
     """Mirror Rust 1.97 std::sys::process PAL selection.
@@ -207,6 +227,34 @@ def main() -> None:
             valid = target_os in AGENA_SUBPROCESS_UNSUPPORTED_OS
         elif reason == "agena-terminal-runtime-unsupported":
             valid = target_os in AGENA_TERMINAL_RUNTIME_UNSUPPORTED_OS
+        elif reason == "external-sdk-unavailable":
+            valid = (
+                target_os in EXTERNAL_SDK_TARGET_OS
+                and all(
+                    isinstance(row.get(field), str) and row[field].strip()
+                    for field in (
+                        "sdk",
+                        "official_basis",
+                        "required_toolchain",
+                        "missing_ci_credential",
+                        "description",
+                    )
+                )
+            )
+        elif reason == "agena-runtime-integration-unavailable":
+            valid = (
+                target_os in AGENA_RUNTIME_INTEGRATION_UNAVAILABLE_OS
+                and all(
+                    isinstance(row.get(field), str) and row[field].strip()
+                    for field in (
+                        "runtime",
+                        "official_basis",
+                        "required_toolchain",
+                        "missing_ci_credential",
+                        "description",
+                    )
+                )
+            )
         else:
             valid = False
         if not valid:

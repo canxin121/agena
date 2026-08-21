@@ -5,6 +5,26 @@ Param(
 
 $ErrorActionPreference = "Stop"
 
+function Install-VsComponents {
+  param(
+    [Parameter(Mandatory = $true)][string]$Installer,
+    [Parameter(Mandatory = $true)][string]$InstallPath,
+    [Parameter(Mandatory = $true)][string[]]$Components
+  )
+
+  $InstallerArgs = @("modify", "--installPath", $InstallPath)
+  foreach ($Component in $Components) {
+    $InstallerArgs += @("--add", $Component)
+  }
+  # The current Visual Studio Installer does not accept the old --wait option.
+  # Start-Process -Wait provides the required synchronous boundary instead.
+  $InstallerArgs += @("--quiet", "--norestart", "--noUpdateInstaller")
+  $Process = Start-Process -FilePath $Installer -ArgumentList $InstallerArgs -Wait -PassThru -NoNewWindow
+  if ($Process.ExitCode -notin @(0, 3010)) {
+    throw "Visual Studio component installation failed with exit code $($Process.ExitCode): $($Components -join ', ')"
+  }
+}
+
 function Set-EnvFromVsDevCmd {
   param(
     [Parameter(Mandatory = $true)][string]$Arch,
@@ -50,7 +70,7 @@ function Set-EnvFromVsDevCmd {
   # would silently compile with the wrong ABI and, in the ARM case, commonly
   # leaves the target C headers unavailable to cc-rs.
   $ToolsRoot = Join-Path $Install "VC\Tools\MSVC"
-  $ToolsVersion = $env:VCToolsVersion
+  $ToolsVersion = if ($env:VCToolsVersion) { $env:VCToolsVersion.TrimEnd('\') } else { $null }
   if (-not $ToolsVersion) {
     $ToolsVersion = (Get-ChildItem -Path $ToolsRoot -Directory |
       Sort-Object Name -Descending | Select-Object -First 1).Name
@@ -59,7 +79,17 @@ function Set-EnvFromVsDevCmd {
     throw "MSVC tools version not found under $ToolsRoot"
   }
   $VCToolsRoot = Join-Path $ToolsRoot $ToolsVersion
+  if (-not (Test-Path $VCToolsRoot)) {
+    $ToolsVersion = (Get-ChildItem -Path $ToolsRoot -Directory |
+      Sort-Object Name -Descending | Select-Object -First 1).Name
+    $VCToolsRoot = Join-Path $ToolsRoot $ToolsVersion
+  }
   $HostToolArch = if ($HostArch -eq "arm64") { "HostARM64" } else { "HostX64" }
+
+  $VsInstaller = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\setup.exe"
+  if (-not (Test-Path $VsInstaller)) {
+    throw "Visual Studio installer not found at $VsInstaller"
+  }
 
   if ($Arch -eq "arm") {
     $ArmCompilerPath = Join-Path $VCToolsRoot "bin\$HostToolArch\arm\cl.exe"
@@ -68,15 +98,10 @@ function Set-EnvFromVsDevCmd {
       # Windows hosted images do not always carry the ARM32 MSVC component in
       # the preinstalled VS instance. Install the official component through
       # the VS installer instead of substituting host or ARM64 libraries.
-      $VsInstaller = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\setup.exe"
-      if (-not (Test-Path $VsInstaller)) {
-        throw "Visual Studio installer not found at $VsInstaller; cannot install the ARM32 MSVC component"
-      }
       Write-Host "Installing official Visual Studio ARM32 MSVC component: Microsoft.VisualStudio.Component.VC.Tools.ARM"
-      & $VsInstaller modify --installPath $Install --add Microsoft.VisualStudio.Component.VC.Tools.ARM --quiet --wait --norestart
-      if ($LASTEXITCODE -notin @(0, 3010)) {
-        throw "Visual Studio ARM32 MSVC component installation failed with exit code $LASTEXITCODE"
-      }
+      Install-VsComponents -Installer $VsInstaller -InstallPath $Install -Components @(
+        "Microsoft.VisualStudio.Component.VC.Tools.ARM"
+      )
 
       # The installer can add a side-by-side MSVC tools version. Select the
       # newest installed version that actually contains the ARM32 ABI rather
@@ -159,12 +184,23 @@ function Set-EnvFromVsDevCmd {
     # select the newest installed official MSVC include tree that contains the
     # required standard header while retaining the target-specific compiler
     # and libraries selected above.
-    $HeaderToolsRoot = Get-ChildItem -Path $ToolsRoot -Directory |
+    $HeaderToolsRoot = Get-ChildItem -Path $ToolsRoot -Directory -ErrorAction SilentlyContinue |
       Sort-Object Name -Descending |
       Where-Object { Test-Path (Join-Path $_.FullName "include\stddef.h") } |
       Select-Object -First 1
     if (-not $HeaderToolsRoot) {
-      throw "MSVC C headers missing: no installed toolset contains include\stddef.h"
+      Write-Host "Installing official Visual Studio C++ build tools to obtain MSVC headers"
+      Install-VsComponents -Installer $VsInstaller -InstallPath $Install -Components @(
+        "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
+        "Microsoft.VisualStudio.Component.VC.CoreBuildTools"
+      )
+      $HeaderToolsRoot = Get-ChildItem -Path $ToolsRoot -Directory -ErrorAction SilentlyContinue |
+        Sort-Object Name -Descending |
+        Where-Object { Test-Path (Join-Path $_.FullName "include\stddef.h") } |
+        Select-Object -First 1
+    }
+    if (-not $HeaderToolsRoot) {
+      throw "MSVC C headers missing: no installed toolset contains include\stddef.h after installing official C++ build tools"
     }
     $VCToolsInclude = Join-Path $HeaderToolsRoot.FullName "include"
   }

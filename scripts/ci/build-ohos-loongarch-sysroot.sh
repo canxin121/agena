@@ -15,11 +15,16 @@ MUSL_COMMIT="1f559e1b84d6784e1ea4a91d67381565bef492cd"
 MUSL_URL="https://github.com/openharmony/third_party_musl/archive/${MUSL_COMMIT}.tar.gz"
 MUSL_SHA256="fc483693f9081930d5986192ab90582154c43039d92ea6d18d2dedcb18faf67b"
 BUILDER_REV="zig-2"
+ZLIB_VERSION="1.3.2"
+ZLIB_URL="https://zlib.net/zlib-${ZLIB_VERSION}.tar.gz"
+ZLIB_SHA256="bb329a0a2cd0274d05519d61c667c062e06990d72e125ee2dfa8de64f0119d16"
 ROOT="${RUNNER_TEMP:-/tmp}/agena-ohos-loongarch-musl/${MUSL_COMMIT}-${BUILDER_REV}"
 ARCHIVE="$ROOT/third_party_musl.tar.gz"
 QUEUE_HEADER="$ROOT/freebsd-queue.h"
 SOURCE="$ROOT/source"
 SYSROOT="$ROOT/sysroot"
+ZLIB_ARCHIVE="$ROOT/zlib-${ZLIB_VERSION}.tar.gz"
+ZLIB_SOURCE="$ROOT/zlib-${ZLIB_VERSION}"
 
 FREEBSD_QUEUE_URL="https://raw.githubusercontent.com/freebsd/freebsd-src/542e14a59bcaf97d7faed9f8d3fc5fed20625e3a/sys/sys/queue.h"
 FREEBSD_QUEUE_SHA256="f4895e3567c8a78b06a5a81f9361572597ceab257e750ba95cbbb8cb4b3a1452"
@@ -30,6 +35,9 @@ valid_sysroot() {
     && [[ -f "$SYSROOT/usr/lib/crt1.o" ]] \
     && [[ -f "$SYSROOT/usr/lib/libc.a" ]] \
     && [[ -f "$SYSROOT/usr/lib/libc.so" ]] \
+    && [[ -f "$SYSROOT/usr/include/zlib.h" ]] \
+    && [[ -f "$SYSROOT/usr/include/zconf.h" ]] \
+    && [[ -f "$SYSROOT/usr/lib/libz.a" ]] \
     && [[ -f "$SYSROOT/lib/ld-musl-loongarch64.so.1" ]]
 }
 
@@ -230,6 +238,28 @@ if ! valid_sysroot; then
     exit 1
   }
   install -m 0755 "$SOURCE/lib/libc.so" "$SYSROOT/lib/ld-musl-loongarch64.so.1"
+
+  echo "OpenHarmony LoongArch sysroot: building zlib ${ZLIB_VERSION}" >&2
+  download_verified "$ZLIB_URL" "$ZLIB_SHA256" "$ZLIB_ARCHIVE"
+  rm -rf "$ZLIB_SOURCE"
+  mkdir -p "$ZLIB_SOURCE"
+  tar -xzf "$ZLIB_ARCHIVE" --strip-components=1 -C "$ZLIB_SOURCE"
+  ZLIB_CC="$ZIG cc -target loongarch64-linux-musl --sysroot=$SYSROOT"
+  ZLIB_AR="$ZIG ar"
+  ZLIB_RANLIB="$ZIG ranlib"
+  (
+    cd "$ZLIB_SOURCE"
+    CHOST=loongarch64-linux-musl \
+    CC="$ZLIB_CC" \
+    AR="$ZLIB_AR" \
+    RANLIB="$ZLIB_RANLIB" \
+      ./configure --static --prefix="$SYSROOT/usr"
+    make -j"$(getconf _NPROCESSORS_ONLN)" \
+      CC="$ZLIB_CC" \
+      AR="$ZLIB_AR" \
+      RANLIB="$ZLIB_RANLIB"
+    make install
+  )
 
   valid_sysroot || {
     echo "ERROR: incomplete OpenHarmony LoongArch musl sysroot" >&2

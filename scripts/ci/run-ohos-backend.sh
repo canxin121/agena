@@ -20,6 +20,10 @@ if [[ "$TARGET" == loongarch64-unknown-linux-ohos ]]; then
   SYSROOT="$(bash scripts/ci/build-ohos-loongarch-sysroot.sh "$ZIG")"
   export AGENA_ZIG="$ZIG"
   export AGENA_ZIG_SYSROOT="$SYSROOT"
+  # libz-sys intentionally links the platform zlib without emitting include
+  # metadata for *-ohos targets.  libgit2-sys still needs the matching public
+  # header while compiling its real Git implementation.
+  export DEP_Z_INCLUDE="$SYSROOT/usr/include"
   exec bash scripts/ci/run-zig-backend.sh "$TARGET" loongarch64-linux-musl -- "$@"
 else
   SDK_RELEASE=5.0.0-Release

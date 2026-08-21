@@ -146,7 +146,14 @@ for arg in "\$@"; do
     *) filtered+=("\$arg") ;;
   esac
 done
+# Debian Ports' Hurd glibc headers use __clang_major__/__clang_minor__ to
+# enable x86 __float128 and then require the GCC-only __TC__ machine mode.
+# Clang's Hurd target does not implement that mode, even though it defines
+# the usual Clang compatibility macros.  Hide only those feature-version
+# macros while parsing this fixed target sysroot; Clang still remains the
+# actual compiler and all ordinary C ABI macros are preserved.
 exec "$compiler" --target="$clang_target" --sysroot="$SYSROOT" --gcc-toolchain="$SYSROOT/usr" \
+  -U__clang__ -U__clang_major__ -U__clang_minor__ -U__clang_patchlevel__ \
   -isystem "$SYSROOT/usr/include/$multiarch" \
   -L"$SYSROOT/usr/lib/$multiarch" -L"$SYSROOT/lib/$multiarch" \
   -fuse-ld="$LLD" -rtlib=libgcc "\${filtered[@]}"

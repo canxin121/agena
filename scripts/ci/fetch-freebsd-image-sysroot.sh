@@ -87,8 +87,7 @@ if ! valid_sysroot; then
   find_supermin_kernel() {
     local skip_azure="${1:-true}"
     local candidate_kernel candidate_version candidate_modules
-    for candidate_kernel in /boot/vmlinuz-* /lib/modules/*/vmlinuz /usr/lib/modules/*/vmlinuz; do
-      [[ -r "$candidate_kernel" ]] || continue
+    while IFS= read -r candidate_kernel; do
       case "$candidate_kernel" in
         /boot/vmlinuz-*)
           candidate_version="${candidate_kernel##*/}"
@@ -106,14 +105,18 @@ if ! valid_sysroot; then
           continue
           ;;
       esac
-      [[ -d "$candidate_modules" ]] || continue
+      sudo test -r "$candidate_kernel" || continue
+      sudo test -d "$candidate_modules" || continue
       if [[ "$skip_azure" == true && "$candidate_version" == *-azure ]]; then
         continue
       fi
       supermin_kernel="$candidate_kernel"
       supermin_modules="$candidate_modules"
       return 0
-    done
+    done < <(
+      sudo find /boot /lib/modules /usr/lib/modules -maxdepth 3 -type f \
+        \( -name 'vmlinuz-*' -o -name vmlinuz \) -print 2>/dev/null | sort -V
+    )
     return 1
   }
 
@@ -135,6 +138,19 @@ if ! valid_sysroot; then
     echo "ERROR: libguestfs supermin has no readable kernel with matching modules" >&2
     exit 1
   }
+
+  # A hosted runner may expose a matching kernel only through root-readable
+  # paths.  Stage that real kernel and its matching real modules in the job's
+  # temporary directory so the unprivileged libguestfs process can read them.
+  if [[ ! -r "$supermin_kernel" || ! -r "$supermin_modules" ]]; then
+    supermin_stage="$ROOT/supermin-kernel"
+    mkdir -p "$supermin_stage"
+    sudo cp "$supermin_kernel" "$supermin_stage/vmlinuz"
+    sudo cp -a "$supermin_modules" "$supermin_stage/modules"
+    sudo chown -R "$(id -u):$(id -g)" "$supermin_stage"
+    supermin_kernel="$supermin_stage/vmlinuz"
+    supermin_modules="$supermin_stage/modules"
+  fi
 
   # Keep the appliance launch diagnostics in the job log.  This makes a
   # future hosted-image regression actionable without changing the read-only

@@ -21,7 +21,14 @@ redoxer toolchain
 NIGHTLY_TOOLCHAIN="${AGENA_NIGHTLY_TOOLCHAIN:-nightly-2026-08-18}"
 export AGENA_CARGO_DRIVER="$(rustup which --toolchain "$NIGHTLY_TOOLCHAIN" cargo)"
 
-# redoxer env exports the target GCC/binutils/relibc sysroot variables that
-# native C build scripts need. We still invoke the repository's normal Cargo
-# command so Rust 1.97 and build-std policy remain under our control.
-exec redoxer env "$@"
+# redoxer env exports both target-specific variables (which native C build
+# scripts need) and global CC/CXX/AR variables.  The latter are inherited by
+# Cargo build scripts that compile for the Linux host, so a host build-script
+# executable can accidentally be linked from Redox objects.  Keep the
+# target-specific CC_<triple>/AR_<triple>/CARGO_TARGET_* variables while
+# removing only the global target-tool selections and flags.
+exec redoxer env env \
+  -u CC -u CXX -u AR -u AS -u LD -u NM -u OBJCOPY -u OBJDUMP \
+  -u RANLIB -u READELF -u STRIP -u PKG_CONFIG \
+  -u CPPFLAGS -u CFLAGS -u CXXFLAGS -u LDFLAGS -u RUSTFLAGS \
+  -- "$@"

@@ -94,7 +94,8 @@ libc_bitflags!(
         #[cfg(not(any(
             solarish,
             target_os = "aix",
-            target_os = "haiku"
+            target_os = "haiku",
+            target_os = "cygwin"
         )))]
         O_ASYNC;
         /// Closes the file descriptor once an `execve` call is made.

@@ -241,12 +241,15 @@ if [[ ! -f "$SLICE_IMAGE" ]] || [[ "$(stat -c '%s' "$SLICE_IMAGE")" != "$SLICE_B
     iflag=fullblock conv=sparse status=none
 fi
 
-probe="$(guestfish --ro --format=raw -a "$SLICE_IMAGE" <<EOF 2>/dev/null
+if ! probe="$(guestfish --ro --format=raw -a "$SLICE_IMAGE" <<EOF
 run
 mount-options ro,ufstype=ufs2 /dev/sda /mnt
 exists /mnt/usr/include/stdio.h
 EOF
-)"
+ )"; then
+  echo "ERROR: guestfish could not mount the parsed FreeBSD UFS2 root slice from $FILE" >&2
+  exit 1
+fi
 [[ "$probe" == *true* ]] || {
   echo "ERROR: parsed FreeBSD UFS root slice does not contain /usr/include/stdio.h in $FILE" >&2
   exit 1

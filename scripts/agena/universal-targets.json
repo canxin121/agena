@@ -479,7 +479,7 @@
     },
     {
       "target": "aarch64-pc-windows-gnullvm",
-      "runner": "windows-latest",
+      "runner": "windows-2025",
       "shell": "pwsh",
       "build_std": false,
       "platform_family": "windows",
@@ -487,7 +487,7 @@
     },
     {
       "target": "aarch64-pc-windows-msvc",
-      "runner": "windows-11-arm",
+      "runner": "windows-2025",
       "shell": "pwsh",
       "artifact_kind": "backend",
       "build_std": false,
@@ -527,7 +527,7 @@
     },
     {
       "target": "arm64ec-pc-windows-msvc",
-      "runner": "windows-latest",
+      "runner": "windows-2025",
       "shell": "pwsh",
       "build_std": false,
       "platform_family": "windows",
@@ -567,7 +567,7 @@
     },
     {
       "target": "i686-pc-windows-gnullvm",
-      "runner": "windows-latest",
+      "runner": "windows-2025",
       "shell": "pwsh",
       "build_std": false,
       "platform_family": "windows",
@@ -575,7 +575,7 @@
     },
     {
       "target": "i686-pc-windows-msvc",
-      "runner": "windows-latest",
+      "runner": "windows-2025",
       "shell": "pwsh",
       "artifact_kind": "backend",
       "build_std": false,
@@ -583,7 +583,7 @@
     },
     {
       "target": "i686-win7-windows-gnu",
-      "runner": "windows-latest",
+      "runner": "windows-2025",
       "shell": "pwsh",
       "build_std": true,
       "platform_family": "windows",
@@ -591,7 +591,7 @@
     },
     {
       "target": "i686-win7-windows-msvc",
-      "runner": "windows-latest",
+      "runner": "windows-2025",
       "shell": "pwsh",
       "build_std": true,
       "platform_family": "windows",
@@ -599,7 +599,7 @@
     },
     {
       "target": "thumbv7a-pc-windows-msvc",
-      "runner": "windows-latest",
+      "runner": "windows-2025",
       "shell": "pwsh",
       "build_std": true,
       "platform_family": "windows",
@@ -647,7 +647,7 @@
     },
     {
       "target": "x86_64-pc-windows-gnullvm",
-      "runner": "windows-latest",
+      "runner": "windows-2025",
       "shell": "pwsh",
       "build_std": false,
       "platform_family": "windows",
@@ -655,7 +655,7 @@
     },
     {
       "target": "x86_64-pc-windows-msvc",
-      "runner": "windows-latest",
+      "runner": "windows-2025",
       "shell": "pwsh",
       "artifact_kind": "backend",
       "build_std": false,
@@ -663,7 +663,7 @@
     },
     {
       "target": "x86_64-win7-windows-gnu",
-      "runner": "windows-latest",
+      "runner": "windows-2025",
       "shell": "pwsh",
       "build_std": true,
       "platform_family": "windows",
@@ -671,7 +671,7 @@
     },
     {
       "target": "x86_64-win7-windows-msvc",
-      "runner": "windows-latest",
+      "runner": "windows-2025",
       "shell": "pwsh",
       "build_std": true,
       "platform_family": "windows",

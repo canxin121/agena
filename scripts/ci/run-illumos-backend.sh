@@ -161,7 +161,11 @@ def needed(package: str, path: str) -> bool:
             or path.startswith("usr/xpg4/lib/")
         )
     if package == "system-library-math":
-        return path.startswith("lib/") or path.startswith("usr/lib/")
+        return (
+            path.startswith("lib/")
+            or path.startswith("usr/lib/")
+            or path.startswith("usr/include/")
+        )
     return path.startswith("usr/")
 
 
@@ -273,6 +277,7 @@ for action in actions:
 
 required = [
     sysroot / "usr/include/stdio.h",
+    sysroot / "usr/include/math.h",
     sysroot / "usr/platform/armv8/include/sys/clock.h",
     sysroot / "usr/lib/crt1.o",
     sysroot / "usr/lib/crti.o",

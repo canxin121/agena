@@ -7,10 +7,13 @@ set -euo pipefail
 # SHA512 are published by NetBSD's CDN.
 NETBSD_SOURCE_URL="https://cdn.netbsd.org/pub/NetBSD/NetBSD-10.1/source/sets/src.tgz"
 NETBSD_SOURCE_SHA512="6ae2053b4b75821238c0757d4f7258daece425de72524c616e07d3adee7c48d87422dd47d852a137918cec3dd3c0d339e372f4504dfe9f1bc5520011775bdb86"
+NETBSD_SHARE_SOURCE_URL="https://cdn.netbsd.org/pub/NetBSD/NetBSD-10.1/source/sets/sharesrc.tgz"
+NETBSD_SHARE_SOURCE_SHA512="703eeb306fc0328cad7e6f0e100d2e7af194f82e613338f4611a7bcd5f6d773d8789e7ce03ec25268ec2b95ccdb97c3b4289a838a629716498b4d7c3184cb1ef"
 NETBSD_SOURCE_ID="NetBSD-10.1"
 
 ROOT="${RUNNER_TEMP:-/tmp}/agena-netbsd-riscv64/${NETBSD_SOURCE_ID}"
 ARCHIVE="$ROOT/src.tgz"
+SHARE_ARCHIVE="$ROOT/sharesrc.tgz"
 SOURCE="$ROOT/src"
 OBJ="$ROOT/obj"
 TOOLDIR="$ROOT/tools"
@@ -48,14 +51,16 @@ download_verified() {
 if ! valid_sysroot; then
   mkdir -p "$ROOT"
   download_verified "$NETBSD_SOURCE_URL" "$NETBSD_SOURCE_SHA512" "$ARCHIVE"
+  download_verified "$NETBSD_SHARE_SOURCE_URL" "$NETBSD_SHARE_SOURCE_SHA512" "$SHARE_ARCHIVE"
 
-  if [[ ! -x "$SOURCE/build.sh" ]]; then
+  if [[ ! -x "$SOURCE/build.sh" || ! -f "$SOURCE/share/mk/bsd.own.mk" ]]; then
     rm -rf "$SOURCE"
     mkdir -p "$SOURCE"
-    # src.tgz has the fixed archive prefix usr/src (not just src).  Strip
-    # both packaging components so build.sh lands at $SOURCE/build.sh and the
-    # source builder cannot accidentally invoke a missing path.
+    # NetBSD's fixed 10.1 source set splits the tree into src.tgz and
+    # sharesrc.tgz. Both archives use the usr/src prefix; extract both into
+    # the same source root so build.sh sees the real share/mk tree.
     tar -xzf "$ARCHIVE" --strip-components=2 -C "$SOURCE"
+    tar -xzf "$SHARE_ARCHIVE" --strip-components=2 -C "$SOURCE"
   fi
 
   common_env=(

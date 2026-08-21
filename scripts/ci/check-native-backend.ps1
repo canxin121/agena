@@ -98,11 +98,16 @@ fn main() {
             .expect("AGENA_BUILD_STD_ROOT is required by the build-std rustc wrapper"),
     );
     let args: Vec<String> = env::args().skip(1).collect();
-    let target = target_argument(&args);
+    // Cargo build scripts such as autocfg invoke RUSTC directly without a
+    // --target argument. Cargo still exports TARGET for those probes, so use
+    // it to keep the same target-specific build-std search path in effect.
+    let target = target_argument(&args)
+        .map(str::to_owned)
+        .or_else(|| env::var("TARGET").ok());
     let mut command = Command::new(real_rustc);
     command.args(&args);
 
-    let is_win7 = target.is_some_and(|value| {
+    let is_win7 = target.as_deref().is_some_and(|value| {
         value.ends_with("-win7-windows-msvc") || value.ends_with("-win7-windows-gnu")
     });
     if is_win7 {

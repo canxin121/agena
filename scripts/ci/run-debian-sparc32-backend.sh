@@ -99,7 +99,16 @@ grep -q '^\[GNUPG:\] VALIDSIG ' "$GPGV_STATUS" || {
   exit 1
 }
 
-PACKAGES_SHA256="$(awk '$3 == "main/binary-amd64/Packages.xz" { print $1; exit }' "$INRELEASE")"
+PACKAGES_SHA256="$(
+  awk '
+    /^SHA256:/ { in_sha256 = 1; next }
+    /^SHA512:/ { in_sha256 = 0 }
+    in_sha256 && $3 == "main/binary-amd64/Packages.xz" {
+      print $1
+      exit
+    }
+  ' "$INRELEASE"
+)"
 [[ "$PACKAGES_SHA256" =~ ^[[:xdigit:]]{64}$ ]] || {
   echo "ERROR: signed Debian InRelease does not contain main amd64 Packages.xz" >&2
   exit 1

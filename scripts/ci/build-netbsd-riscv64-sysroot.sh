@@ -92,7 +92,7 @@ if ! valid_sysroot; then
   (
     cd "$SOURCE"
     env "${common_env[@]}" \
-      bash ./build.sh -U -O "$OBJ" -T "$TOOLDIR" -j"$JOBS" \
+      bash ./build.sh -U -N 2 -O "$OBJ" -T "$TOOLDIR" -j"$JOBS" \
         -m riscv -a riscv64 tools
   )
 
@@ -100,7 +100,7 @@ if ! valid_sysroot; then
   (
     cd "$SOURCE"
     env "${common_env[@]}" \
-      bash ./build.sh -U -u -O "$OBJ" -T "$TOOLDIR" -D "$DESTDIR" \
+      bash ./build.sh -U -u -N 2 -O "$OBJ" -T "$TOOLDIR" -D "$DESTDIR" \
         -j"$JOBS" -m riscv -a riscv64 distribution
   )
 

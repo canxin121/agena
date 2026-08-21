@@ -111,7 +111,8 @@ function Set-EnvFromVsDevCmd {
       Install-VsComponents -Installer $VsInstaller -InstallPath $Install -Components @(
         "Microsoft.VisualStudio.Workload.NativeDesktop",
         "Microsoft.VisualStudio.Component.VC.Tools.ARM64EC",
-        "Microsoft.VisualStudio.Component.VC.14.44.17.14.x86.x64"
+        "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
+        "Microsoft.VisualStudio.Component.VC.CoreBuildTools"
       )
 
       # The installer may add a side-by-side toolset and returns before the
@@ -149,14 +150,12 @@ function Set-EnvFromVsDevCmd {
       # Windows hosted images do not always carry the ARM32 MSVC component in
       # the preinstalled VS instance. Install the official component through
       # the VS installer instead of substituting host or ARM64 libraries.
-      # VS 2026 exposes the redistributable ARM32 toolset under its versioned
-      # 14.29 component ID; the old unversioned VC.Tools.ARM ID is not present
-      # on that image.
-      Write-Host "Installing official Visual Studio ARM32 MSVC component: Microsoft.VisualStudio.Component.VC.14.29.16.11.ARM"
+      Write-Host "Installing official Visual Studio ARM32 MSVC component: Microsoft.VisualStudio.Component.VC.Tools.ARM"
       Install-VsComponents -Installer $VsInstaller -InstallPath $Install -Components @(
         "Microsoft.VisualStudio.Workload.NativeDesktop",
-        "Microsoft.VisualStudio.Component.VC.14.29.16.11.ARM",
-        "Microsoft.VisualStudio.Component.VC.14.44.17.14.x86.x64"
+        "Microsoft.VisualStudio.Component.VC.Tools.ARM",
+        "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
+        "Microsoft.VisualStudio.Component.VC.CoreBuildTools"
       )
 
       # The installer can add a side-by-side MSVC tools version. Select the
@@ -272,7 +271,7 @@ function Set-EnvFromVsDevCmd {
       Install-VsComponents -Installer $VsInstaller -InstallPath $Install -Components @(
         "Microsoft.VisualStudio.Workload.NativeDesktop",
         "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
-        "Microsoft.VisualStudio.Component.VC.14.44.17.14.x86.x64"
+        "Microsoft.VisualStudio.Component.VC.CoreBuildTools"
       )
 
       # setup.exe delegates modify operations to the Visual Studio installer

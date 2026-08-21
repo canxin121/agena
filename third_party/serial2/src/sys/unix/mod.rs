@@ -17,6 +17,7 @@ use std::time::Duration;
     target_env = "musl",
     target_env = "ohos",
     target_os = "android",
+    target_os = "cygwin",
     target_os = "fuchsia",
     target_os = "illumos",
     target_os = "solaris"
@@ -26,6 +27,7 @@ type IoctlRequest = libc::c_int;
     target_env = "musl",
     target_env = "ohos",
     target_os = "android",
+    target_os = "cygwin",
     target_os = "fuchsia",
     target_os = "illumos",
     target_os = "solaris"

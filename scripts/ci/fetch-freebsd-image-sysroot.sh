@@ -64,7 +64,14 @@ fi
 valid_sysroot() {
   [[ -f "$SYSROOT/usr/include/stdio.h" ]] \
     && [[ -f "$SYSROOT/usr/lib/crt1.o" ]] \
-    && compgen -G "$SYSROOT/usr/lib/libc.so.*" >/dev/null
+    && {
+      # FreeBSD keeps the versioned libc runtime in /lib; some release
+      # layouts also expose a versioned linker name under /usr/lib.  The
+      # image extraction preserves both real directories, so accept either
+      # official layout without inventing a linker or copying host files.
+      compgen -G "$SYSROOT/lib/libc.so.*" >/dev/null \
+        || compgen -G "$SYSROOT/usr/lib/libc.so.*" >/dev/null
+    }
 }
 
 if ! valid_sysroot; then

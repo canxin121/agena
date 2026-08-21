@@ -16,21 +16,25 @@ case "$TARGET" in
     TOOLCHAIN=mips-linux-muslsf-cross
     PREFIX=mips-linux-muslsf
     SHA256=572476c458730f41c86e4db8ccd341ed1e66585897b214f282f2f05a445f47d3
+    CFLAGS_EXTRA=-O2
     ;;
   mipsel-unknown-linux-musl)
     TOOLCHAIN=mipsel-linux-muslsf-cross
     PREFIX=mipsel-linux-muslsf
     SHA256=a61c3bbf9fbb0be80fe2abdb4ea8b6f5afdf664b5b4104a3784a326270905216
+    CFLAGS_EXTRA=-O2
     ;;
   mips64-unknown-linux-muslabi64)
     TOOLCHAIN=mips64-linux-musl-cross
     PREFIX=mips64-linux-musl
     SHA256=a0e62bf38f33664e825987ab8c191c75032f5189c6103a25a8adc0361e63a1cf
+    CFLAGS_EXTRA=
     ;;
   mips64el-unknown-linux-muslabi64)
     TOOLCHAIN=mips64el-linux-musl-cross
     PREFIX=mips64el-linux-musl
     SHA256=fdb3c2ae76f80d7145132a1ec3303362f310b8c6349cce151f3035d0515c35b0
+    CFLAGS_EXTRA=
     ;;
   *) echo "ERROR: unsupported MIPS musl target: $TARGET" >&2; exit 2 ;;
 esac
@@ -138,6 +142,10 @@ key_upper="$(printf '%s' "$key" | tr '[:lower:]' '[:upper:]')"
 export "CC_${key}=$PARSER_WRAPPER_ROOT/cc"
 export "CXX_${key}=$PARSER_WRAPPER_ROOT/cxx"
 export "AR_${key}=$AR"
+if [[ -n "$CFLAGS_EXTRA" ]]; then
+  export "CFLAGS_${key}=$CFLAGS_EXTRA"
+  export "CXXFLAGS_${key}=$CFLAGS_EXTRA"
+fi
 export "CARGO_TARGET_${key_upper}_LINKER=$CC"
 export RUSTFLAGS="${RUSTFLAGS:-} -C linker=$CC"
 

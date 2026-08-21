@@ -94,7 +94,7 @@ if ! valid_toolchain; then
     mkdir -p "$OUTPUT/build"
     printf '%s\n' "$HAIKU_COMMIT" > "$OUTPUT/build/haiku-revision"
     printf '%s\n' "$HAIKU_COMMIT" > "$OUTPUT/build/last-built-revision"
-    jam -q -j2 haiku.hpkg haiku_devel.hpkg '<build>package'
+    jam -q -j2 haiku.hpkg haiku_devel.hpkg
   )
 
   PACKAGE_TOOL="$(find "$OUTPUT/objects/linux" -type f -path '*/release/tools/package/package' -perm -111 -print -quit)"

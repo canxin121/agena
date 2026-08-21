@@ -94,7 +94,11 @@ if ! valid_toolchain; then
     mkdir -p "$OUTPUT/build"
     printf '%s\n' "$HAIKU_COMMIT" > "$OUTPUT/build/haiku-revision"
     printf '%s\n' "$HAIKU_COMMIT" > "$OUTPUT/build/last-built-revision"
-    jam -q -j2 haiku.hpkg haiku_devel.hpkg
+    # The regular profile consults the moving HaikuPorts repository cache.
+    # Bootstrap uses the pinned source-tree HaikuPortsCross definitions and
+    # still builds the real Haiku runtime/development packages requested
+    # below, so the sysroot never depends on an unpinned external repository.
+    jam -sHAIKU_BUILD_PROFILE=bootstrap-raw -q -j2 haiku.hpkg haiku_devel.hpkg
   )
 
   PACKAGE_TOOL="$(find "$OUTPUT/objects/linux" -type f -path '*/release/tools/package/package' -perm -111 -print -quit)"

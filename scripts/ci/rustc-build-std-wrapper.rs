@@ -69,6 +69,48 @@ fn has_extern(args: &[OsString], crate_name: &str) -> bool {
     false
 }
 
+fn has_cfg_feature(args: &[OsString], feature: &str) -> bool {
+    let expected = format!("feature=\"{feature}\"");
+    args.iter().any(|arg| {
+        arg.to_str().is_some_and(|value| {
+            value == expected
+                || value == format!("--cfg={expected}")
+                || value == format!("--cfg {expected}")
+        })
+    })
+}
+
+fn source_path(args: &[OsString]) -> Option<&Path> {
+    args.iter().find_map(|arg| {
+        let path = Path::new(arg);
+        path.extension()
+            .is_some_and(|extension| extension == "rs")
+            .then_some(path)
+    })
+}
+
+fn is_no_std_crate(args: &[OsString]) -> bool {
+    let Some(source_path) = source_path(args) else {
+        return false;
+    };
+    let Ok(source) = fs::read_to_string(source_path) else {
+        return false;
+    };
+    if source.contains("#![no_std]") {
+        return true;
+    }
+
+    // A number of crates used by build-std spell this as
+    // `cfg_attr(not(feature = "std"), no_std)`.  Rustc receives the feature
+    // cfgs in the same invocation, so this remains correct when the crate is
+    // built with its optional `std` feature enabled.
+    let conditional_no_std = source.contains("no_std")
+        && (source.contains("not(feature = \"std\")")
+            || source.contains("not(feature=\"std\")")
+            || source.contains("not (feature = \"std\")"));
+    conditional_no_std && !has_cfg_feature(args, "std")
+}
+
 fn is_rust_sysroot_build() -> bool {
     // build-std compiles several Rust sysroot crates through the same RUSTC
     // wrapper.  Their build scripts have crate-name `build_script_build`, so
@@ -182,8 +224,7 @@ fn main() {
         // artifacts, and never try to bootstrap core/std while they are being
         // built (their output does not exist yet).
         let building_rust_sysroot =
-            matches!(crate_name(&args), Some("core" | "std" | "alloc"))
-                || is_rust_sysroot_build();
+            matches!(crate_name(&args), Some("core" | "std" | "alloc")) || is_rust_sysroot_build();
         let is_print_query = args.iter().any(|arg| {
             arg.to_str()
                 .is_some_and(|value| value == "--print" || value.starts_with("--print="))
@@ -192,6 +233,9 @@ fn main() {
         if !building_rust_sysroot && !is_print_query {
             let mut standard_artifacts = Vec::new();
             for standard_crate in ["core", "std"] {
+                if standard_crate == "std" && is_no_std_crate(&args) {
+                    continue;
+                }
                 if has_extern(&args, standard_crate) {
                     continue;
                 }

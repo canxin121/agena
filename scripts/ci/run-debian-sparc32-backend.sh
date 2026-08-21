@@ -277,7 +277,7 @@ if [[ -x "$READELF" ]]; then
     echo "ERROR: Debian SPARC probe is not ELF32" >&2
     exit 1
   }
-  "$READELF" -h "$PROBE_BIN" | grep -Eq 'Machine:[[:space:]]+SPARC' || {
+  "$READELF" -h "$PROBE_BIN" | grep -Eiq 'Machine:[[:space:]]+sparc' || {
     echo "ERROR: Debian SPARC probe is not SPARC" >&2
     exit 1
   }

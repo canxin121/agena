@@ -412,6 +412,10 @@ function Set-EnvFromVsDevCmd {
   # header trees as target-scoped /I flags so C build scripts cannot lose the
   # MSVC runtime or UCRT headers when they replace the environment.
   $HeaderIncludes = @($VCToolsInclude, $UcrtInclude)
+  # cc-rs normally splits *FLAGS on whitespace. Enable its documented shell
+  # parser so the quoted official Windows paths remain one compiler argument
+  # even when Visual Studio or the SDK is installed below Program Files.
+  $env:CC_SHELL_ESCAPED_FLAGS = "1"
   $TargetEnvKey = $TargetTriple.Replace("-", "_")
   $HeaderFlags = @($HeaderIncludes | ForEach-Object { "/I`"$_`"" })
   $AbiFlags = @($HeaderFlags)

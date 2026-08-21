@@ -280,6 +280,8 @@ required = [
     sysroot / "lib/ld.so.1",
     sysroot / "lib/libc.so.1",
     sysroot / "lib/libm.so.0",
+    sysroot / "lib/libsocket.so.1",
+    sysroot / "lib/libnsl.so.1",
     sysroot / "usr/lib/libgcc_s.so.1",
     sysroot / "usr/lib/libssp.so",
 ]
@@ -344,7 +346,12 @@ for ((index = 0; index < \${#args[@]}; index++)); do
   esac
   filtered+=("\$arg")
 done
-exec "$LLD" "\${filtered[@]}"
+# illumos keeps the socket and name-service entry points in the real target
+# libraries libsocket/libnsl rather than libc.  Rust's generic illumos target
+# spec only supplies -lc/-lssp, so add the platform libraries to every final
+# link.  This is required by std networking and prevents a compile-only pass
+# from producing an executable that cannot construct sockets at runtime.
+exec "$LLD" "\${filtered[@]}" -lsocket -lnsl
 EOF
 chmod +x "$LINKER_WRAPPER"
 write_compiler_wrapper() {

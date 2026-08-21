@@ -243,9 +243,8 @@ fi
 
 if ! probe="$(guestfish --ro --format=raw -a "$SLICE_IMAGE" <<EOF
 run
-mkdir /mnt
-mount-options ro,ufstype=ufs2 /dev/sda /mnt
-exists /mnt/usr/include/stdio.h
+mount-options ro,ufstype=ufs2 /dev/sda /
+exists /usr/include/stdio.h
 EOF
  )"; then
   echo "ERROR: guestfish could not mount the parsed FreeBSD UFS2 root slice from $FILE" >&2

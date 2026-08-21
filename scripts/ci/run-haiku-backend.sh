@@ -80,7 +80,13 @@ if ! valid_toolchain; then
     cd "$OUTPUT"
     "$HAIKU/configure" \
       --cross-tools-source "$BUILDTOOLS" \
-      --build-cross-tools "$HAIKU_ARCH"
+      --build-cross-tools "$HAIKU_ARCH" \
+      --no-downloads
+    # The source checkout is the complete, fixed Haiku source revision.  Build
+    # the two packages needed for the sysroot entirely from that checkout so
+    # the build does not depend on the moving HaikuPorts repository metadata.
+    # This still produces Haiku's real runtime/development packages; it does
+    # not replace missing files with a synthetic sysroot.
     # The fixed source commit is intentionally fetched shallowly and has no
     # hrev tags. Seed the deterministic metadata that Haiku's revision helper
     # consumes so it does not fall back to git-describe. The last-built value

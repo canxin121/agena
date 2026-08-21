@@ -111,10 +111,32 @@ AR="$BIN/$PREFIX-ar"
   exit 1
 }
 
+PARSER_WRAPPER="$PWD/scripts/ci/csky-cc-wrapper.py"
+PARSER_WRAPPER_ROOT="$ROOT/parser-wrappers"
+mkdir -p "$PARSER_WRAPPER_ROOT"
+python3 - "$PARSER_WRAPPER_ROOT/cc" "$PARSER_WRAPPER_ROOT/cxx" \
+  "$PARSER_WRAPPER" "$CC" "$CXX" <<'PY'
+import pathlib
+import shlex
+import sys
+
+cc_path, cxx_path, wrapper, cc, cxx = sys.argv[1:]
+for path, compiler in ((cc_path, cc), (cxx_path, cxx)):
+    pathlib.Path(path).write_text(
+        "#!/bin/sh\nexec python3 "
+        + shlex.quote(wrapper)
+        + " "
+        + shlex.quote(compiler)
+        + ' "$@"\n',
+        encoding="utf-8",
+    )
+PY
+chmod +x "$PARSER_WRAPPER_ROOT/cc" "$PARSER_WRAPPER_ROOT/cxx"
+
 key="${TARGET//-/_}"
 key_upper="$(printf '%s' "$key" | tr '[:lower:]' '[:upper:]')"
-export "CC_${key}=$CC"
-export "CXX_${key}=$CXX"
+export "CC_${key}=$PARSER_WRAPPER_ROOT/cc"
+export "CXX_${key}=$PARSER_WRAPPER_ROOT/cxx"
 export "AR_${key}=$AR"
 export "CARGO_TARGET_${key_upper}_LINKER=$CC"
 export RUSTFLAGS="${RUSTFLAGS:-} -C linker=$CC"

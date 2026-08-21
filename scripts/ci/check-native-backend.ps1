@@ -58,6 +58,81 @@ if ($BuildStd) {
       # standard library instead of falling back to the host sysroot.
       $BuildStdDeps = Join-Path $BuildTargetDir "$TargetTriple\debug\deps"
       $RustFlags += @("-L", "dependency=$BuildStdDeps")
+
+      # Build-std emits core/std into hashed build-script output directories,
+      # not only into debug\deps.  Cargo knows those paths for ordinary
+      # target rustc invocations, but build scripts such as autocfg invoke the
+      # RUSTC executable directly and only inherit CARGO_ENCODED_RUSTFLAGS.
+      # Compile a tiny native wrapper with the already-installed official
+      # Rust toolchain. It adds the real core/std output directories at the
+      # moment each target probe runs; it never supplies host or synthetic
+      # standard-library artifacts.
+      $RustcWrapperDir = Join-Path $env:RUNNER_TEMP "agena-rustc-build-std\$TargetTriple"
+      New-Item -ItemType Directory -Force -Path $RustcWrapperDir | Out-Null
+      $RustcWrapperSource = Join-Path $RustcWrapperDir "rustc-build-std-wrapper.rs"
+      $RustcWrapper = Join-Path $RustcWrapperDir "rustc-build-std-wrapper.exe"
+      $OldAgenaRealRustc = $env:AGENA_REAL_RUSTC
+      $OldAgenaBuildStdRoot = $env:AGENA_BUILD_STD_ROOT
+      $RustcWrapperText = @'
+use std::env;
+use std::path::PathBuf;
+use std::process::Command;
+
+fn target_argument(args: &[String]) -> Option<&str> {
+    for (index, arg) in args.iter().enumerate() {
+        if arg == "--target" {
+            return args.get(index + 1).map(String::as_str);
+        }
+        if let Some(target) = arg.strip_prefix("--target=") {
+            return Some(target);
+        }
+    }
+    None
+}
+
+fn main() {
+    let real_rustc = env::var_os("AGENA_REAL_RUSTC")
+        .expect("AGENA_REAL_RUSTC is required by the build-std rustc wrapper");
+    let build_root = PathBuf::from(
+        env::var_os("AGENA_BUILD_STD_ROOT")
+            .expect("AGENA_BUILD_STD_ROOT is required by the build-std rustc wrapper"),
+    );
+    let args: Vec<String> = env::args().skip(1).collect();
+    let target = target_argument(&args);
+    let mut command = Command::new(real_rustc);
+    command.args(&args);
+
+    let is_win7 = target.is_some_and(|value| {
+        value.ends_with("-win7-windows-msvc") || value.ends_with("-win7-windows-gnu")
+    });
+    if is_win7 {
+        for crate_name in ["core", "std"] {
+            let crate_root = build_root.join(crate_name);
+            if let Ok(entries) = std::fs::read_dir(crate_root) {
+                for entry in entries.flatten() {
+                    let output = entry.path().join("out");
+                    if output.is_dir() {
+                        command.arg("-L").arg(format!("dependency={}", output.display()));
+                    }
+                }
+            }
+        }
+    }
+
+    let status = command
+        .status()
+        .expect("failed to execute the real Rust compiler");
+    std::process::exit(status.code().unwrap_or(1));
+}
+'@
+      [IO.File]::WriteAllText($RustcWrapperSource, $RustcWrapperText, [Text.Encoding]::UTF8)
+      & $StableRustc $RustcWrapperSource -o $RustcWrapper
+      if ($LASTEXITCODE -ne 0 -or -not (Test-Path $RustcWrapper)) {
+        throw "failed to compile the build-std rustc wrapper"
+      }
+      $env:AGENA_REAL_RUSTC = $StableRustc
+      $env:AGENA_BUILD_STD_ROOT = Join-Path $BuildTargetDir "$TargetTriple\debug\build"
+      $env:RUSTC = $RustcWrapper
     }
     $env:RUSTFLAGS = ($RustFlags | Join-String -Separator " ")
     Write-Host "Using build-std driver: cargo=$NightlyCargo rustc=$StableRustc rustdoc=$StableRustdoc target-dir=$BuildTargetDir"
@@ -77,6 +152,16 @@ if ($BuildStd) {
     $env:RUSTC_BOOTSTRAP = $OldBootstrap
     $env:RUSTFLAGS = $OldRustFlags
     $env:CARGO_TARGET_DIR = $OldTargetDir
+    if ($null -eq $OldAgenaRealRustc) {
+      Remove-Item Env:AGENA_REAL_RUSTC -ErrorAction SilentlyContinue
+    } else {
+      $env:AGENA_REAL_RUSTC = $OldAgenaRealRustc
+    }
+    if ($null -eq $OldAgenaBuildStdRoot) {
+      Remove-Item Env:AGENA_BUILD_STD_ROOT -ErrorAction SilentlyContinue
+    } else {
+      $env:AGENA_BUILD_STD_ROOT = $OldAgenaBuildStdRoot
+    }
   }
 }
 else {

@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Split Tree-sitter's generated lexer for the legacy C-SKY assembler.
+"""Split Tree-sitter's generated lexer for legacy short-branch assemblers.
 
-The generated ``ts_lex`` function is a state machine.  Older C-SKY GNU
-assemblers cannot encode branches between labels more than 64 KiB apart and
-do not provide a usable linker relaxation for those branches.  This helper
-keeps the generated state machine and lexer macros intact, but partitions the
-state switch into small functions.  A small outer loop carries the lexer
-state across partitions, so this is a code-layout change rather than a
-grammar or parser substitute.
+The generated ``ts_lex`` function is a state machine.  The legacy C-SKY and
+MIPS assemblers used by the pinned full-runtime toolchains cannot encode some
+branches between labels more than 64 KiB apart and do not provide a usable
+linker relaxation for those branches.  This helper keeps the generated state
+machine and lexer macros intact, but partitions the state switch into small
+functions.  A small outer loop carries the lexer state across partitions, so
+this is a code-layout change rather than a grammar or parser substitute.
 """
 
 from __future__ import annotations
@@ -18,12 +18,12 @@ from pathlib import Path
 
 
 MAX_CHUNK_BYTES = 48_000
-MARKER = "/* AGENA_CSKY_SPLIT_LEXER */"
+MARKER = "/* AGENA_SPLIT_TREE_SITTER_LEXER */"
 LEXER_SIGNATURE = "static bool ts_lex(TSLexer *lexer, TSStateId state) {"
 
 
 def _step(done: str, result: str, state: str, skip: str, resume: str) -> str:
-    return f"(AgenaCskyLexStep){{{done}, {result}, {state}, {skip}, {resume}}}"
+    return f"(AgenaTreeSitterLexStep){{{done}, {result}, {state}, {skip}, {resume}}}"
 
 
 def transform(text: str) -> str | None:
@@ -79,7 +79,7 @@ def transform(text: str) -> str | None:
         "  TSStateId state;",
         "  bool skip;",
         "  bool resume;",
-        "} AgenaCskyLexStep;",
+        "} AgenaTreeSitterLexStep;",
         "",
     ]
 
@@ -92,7 +92,7 @@ def transform(text: str) -> str | None:
         )
         generated.extend(
             [
-                f"static AgenaCskyLexStep ts_lex_csky_chunk_{index}(",
+                f"static AgenaTreeSitterLexStep ts_lex_split_chunk_{index}(",
                 "    TSLexer *lexer, TSStateId state, bool result, bool skip,",
                 "    bool eof, bool resume) {",
                 "  int32_t lookahead;",
@@ -127,7 +127,7 @@ def transform(text: str) -> str | None:
             "  bool resume = false;",
             "",
             "  for (;;) {",
-            "    AgenaCskyLexStep step;",
+            "    AgenaTreeSitterLexStep step;",
             "    switch (state) {",
         ]
     )
@@ -136,7 +136,7 @@ def transform(text: str) -> str | None:
             generated.append(f"      case {state}:")
         generated.extend(
             [
-                f"        step = ts_lex_csky_chunk_{index}(lexer, state, result, skip, eof, resume);",
+                f"        step = ts_lex_split_chunk_{index}(lexer, state, result, skip, eof, resume);",
                 "        break;",
             ]
         )
@@ -169,8 +169,8 @@ def main(argv: list[str]) -> int:
     output.write_text(transformed if transformed is not None else original, encoding="utf-8")
     if transformed is not None:
         states = len(re.findall(r"^    case (\d+):$", transformed, re.MULTILINE))
-        chunks = len(re.findall(r"^static AgenaCskyLexStep ts_lex_csky_chunk_", transformed, re.MULTILINE))
-        print(f"Split Tree-sitter ts_lex: {states} states into {chunks} C-SKY-safe chunks", file=sys.stderr)
+        chunks = len(re.findall(r"^static AgenaTreeSitterLexStep ts_lex_split_chunk_", transformed, re.MULTILINE))
+        print(f"Split Tree-sitter ts_lex: {states} states into {chunks} assembler-safe chunks", file=sys.stderr)
     return 0
 
 

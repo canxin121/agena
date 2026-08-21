@@ -899,10 +899,10 @@ fn desc(errno: Errno) -> &'static str {
         #[cfg(freebsdlike)]
         EDOOFUS => "Programming error",
 
-        #[cfg(any(freebsdlike, target_os = "hurd", target_os = "redox", target_os = "cygwin"))]
+        #[cfg(any(freebsdlike, target_os = "hurd", target_os = "redox"))]
         EMULTIHOP => "Multihop attempted",
 
-        #[cfg(any(freebsdlike, target_os = "hurd", target_os = "redox", target_os = "cygwin"))]
+        #[cfg(any(freebsdlike, target_os = "hurd", target_os = "redox"))]
         ENOLINK => "Link has been severed",
 
         #[cfg(target_os = "freebsd")]
@@ -923,8 +923,7 @@ fn desc(errno: Errno) -> &'static str {
             target_os = "netbsd",
             target_os = "redox",
             target_os = "haiku",
-            target_os = "hurd",
-            target_os = "cygwin"
+            target_os = "hurd"
         ))]
         EILSEQ => "Illegal byte sequence",
 
@@ -943,8 +942,7 @@ fn desc(errno: Errno) -> &'static str {
             bsd,
             target_os = "haiku",
             target_os = "hurd",
-            target_os = "redox",
-            target_os = "cygwin"
+            target_os = "redox"
         ))]
         EPROTO => "Protocol error",
 
@@ -952,8 +950,7 @@ fn desc(errno: Errno) -> &'static str {
             freebsdlike,
             apple_targets,
             target_os = "openbsd",
-            target_os = "hurd",
-            target_os = "cygwin"
+            target_os = "hurd"
         ))]
         ENOTRECOVERABLE => "State not recoverable",
 
@@ -977,8 +974,7 @@ fn desc(errno: Errno) -> &'static str {
             bsd,
             target_os = "aix",
             target_os = "hurd",
-            target_os = "redox",
-            target_os = "cygwin"
+            target_os = "redox"
         ))]
         EUSERS => "Too many users",
 
@@ -1029,8 +1025,7 @@ fn desc(errno: Errno) -> &'static str {
             bsd,
             target_os = "aix",
             target_os = "hurd",
-            target_os = "redox",
-            target_os = "cygwin"
+            target_os = "redox"
         ))]
         ECANCELED => "Operation canceled",
 

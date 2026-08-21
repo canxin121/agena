@@ -248,6 +248,15 @@ url="${2:?source URL is required}"
 
 declare -a candidates=("$url")
 case "$url" in
+  https://musl.libc.org/releases/*)
+    # musl's primary release host has intermittently returned connection
+    # failures from GitHub-hosted runners. Buildroot mirrors the exact
+    # upstream musl release tarball; musl-cross-make still verifies its
+    # pinned SHA1 after this wrapper returns, so this cannot substitute a
+    # different source archive.
+    filename="$(basename "$url")"
+    candidates+=("https://sources.buildroot.net/musl/$filename")
+    ;;
   https://ftpmirror.gnu.org/gnu/*)
     candidates+=("${url/https:\/\/ftpmirror.gnu.org/https:\/\/ftp.gnu.org}")
     candidates+=("${url/https:\/\/ftpmirror.gnu.org/https:\/\/mirrors.kernel.org}")

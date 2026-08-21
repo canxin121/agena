@@ -22,8 +22,8 @@ esac
 # select the host linker.
 DEBIAN_MIRROR="https://deb.debian.org/debian"
 DEBIAN_SUITE="bookworm"
-DEBIAN_KEY_URL="https://ftp-master.debian.org/keys/release-12.asc"
-DEBIAN_KEY_SHA256="521e9f6a9f9b92ee8d5ce74345e8cfd04028dae9db6f571259d584b293549824"
+DEBIAN_KEY_URL="https://ftp-master.debian.org/keys/archive-key-12.asc"
+DEBIAN_KEY_SHA256="c2a9a16fde95e037bafd0fa6b7e31f41b4ff1e85851de5558f19a2a2f0e955e2"
 ROOT="${RUNNER_TEMP:-/tmp}/agena-debian-sparc32"
 DEB_DIR="$ROOT/debs"
 TOOLCHAIN_ROOT="$ROOT/toolchain"
@@ -32,6 +32,8 @@ GCC_LIB="$TOOLCHAIN_ROOT/usr/lib/gcc-cross/sparc64-linux-gnu/12"
 KEY_FILE="$ROOT/debian-release-12.asc"
 KEYRING="$ROOT/debian-release-12.gpg"
 INRELEASE="$ROOT/InRelease"
+GPGV_STATUS="$ROOT/InRelease.gpgv-status"
+GPGV_ERRORS="$ROOT/InRelease.gpgv-errors"
 PACKAGES_XZ="$ROOT/Packages.xz"
 PACKAGES="$ROOT/Packages"
 mkdir -p "$ROOT" "$DEB_DIR" "$TOOLCHAIN_ROOT"
@@ -77,7 +79,25 @@ command -v gpgv >/dev/null 2>&1 || { echo "ERROR: gpgv is required" >&2; exit 1;
 download_verified "$DEBIAN_KEY_URL" "$DEBIAN_KEY_SHA256" "$KEY_FILE"
 gpg --batch --yes --dearmor --output "$KEYRING" "$KEY_FILE"
 download "$DEBIAN_MIRROR/dists/$DEBIAN_SUITE/InRelease" "$INRELEASE"
-gpgv --keyring "$KEYRING" "$INRELEASE" >/dev/null
+# Debian can publish an InRelease with more than one current signing key
+# during key rotation.  Require at least one valid signature from the pinned
+# official archive keyring, while permitting an additional rotation signature
+# that is not present in this fixed key file.  A metadata file with no valid
+# official signature is still a hard failure; this is not a blanket gpgv
+# error suppression.
+if ! gpgv --status-fd 1 --keyring "$KEYRING" "$INRELEASE" \
+    >"$GPGV_STATUS" 2>"$GPGV_ERRORS"; then
+  if ! grep -q '^\[GNUPG:\] VALIDSIG ' "$GPGV_STATUS"; then
+    cat "$GPGV_ERRORS" >&2
+    echo "ERROR: Debian InRelease has no valid signature from the pinned archive keyring" >&2
+    exit 1
+  fi
+fi
+grep -q '^\[GNUPG:\] VALIDSIG ' "$GPGV_STATUS" || {
+  cat "$GPGV_ERRORS" >&2
+  echo "ERROR: Debian InRelease has no valid signature from the pinned archive keyring" >&2
+  exit 1
+}
 
 PACKAGES_SHA256="$(awk '$3 == "main/binary-amd64/Packages.xz" { print $1; exit }' "$INRELEASE")"
 [[ "$PACKAGES_SHA256" =~ ^[[:xdigit:]]{64}$ ]] || {

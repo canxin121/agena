@@ -134,7 +134,10 @@ fn main() {
         // artifacts, and never try to bootstrap core/std while they are being
         // built (their output does not exist yet).
         let building_std = matches!(crate_name(&args), Some("core" | "std" | "alloc"));
-        let is_print_query = args.iter().any(|arg| arg == "--print");
+        let is_print_query = args.iter().any(|arg| {
+            arg.to_str()
+                .is_some_and(|value| value == "--print" || value.starts_with("--print="))
+        });
         if !building_std && !is_print_query {
             for standard_crate in ["core", "std"] {
                 if has_extern(&args, standard_crate) {

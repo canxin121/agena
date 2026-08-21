@@ -23,6 +23,10 @@ VERSION="$(read_version)"
   exit 1
 }
 command -v cross >/dev/null 2>&1 || { echo "ERROR: cross is required" >&2; exit 1; }
+[[ "$ARTIFACT_KIND" == "backend" ]] || {
+  echo "ERROR: only full Agena backend artifacts are supported: $ARTIFACT_KIND" >&2
+  exit 2
+}
 
 case "$TARGET_TRIPLE" in
   i586-unknown-linux-*)
@@ -54,11 +58,6 @@ esac
 PACKAGE="agena"
 BINARY_BASENAME="agena"
 ARCHIVE_PREFIX="agena-backend"
-if [[ "$ARTIFACT_KIND" == "web-runtime" ]]; then
-  PACKAGE="agena-web-runtime"
-  BINARY_BASENAME="agena-web-runtime"
-  ARCHIVE_PREFIX="agena-web-runtime"
-fi
 
 build_args=(
   build
@@ -87,18 +86,6 @@ case "$TARGET_TRIPLE" in
     [[ -f "$OUTPUT_DIR/${BINARY_BASENAME}.exe" ]] || { echo "ERROR: missing $OUTPUT_DIR/${BINARY_BASENAME}.exe" >&2; exit 1; }
     cp "$OUTPUT_DIR/${BINARY_BASENAME}.exe" "$STAGE_DIR/bin/${BINARY_BASENAME}.exe"
     archive_ext="zip"
-    ;;
-  wasm32-unknown-emscripten)
-    found=0
-    for suffix in js wasm data worker.js; do
-      candidate="$OUTPUT_DIR/${BINARY_BASENAME}.$suffix"
-      if [[ -f "$candidate" ]]; then
-        cp "$candidate" "$STAGE_DIR/bin/"
-        found=1
-      fi
-    done
-    [[ "$found" == 1 ]] || { echo "ERROR: no Emscripten Agena outputs found in $OUTPUT_DIR" >&2; exit 1; }
-    archive_ext="tar.gz"
     ;;
   *)
     [[ -f "$OUTPUT_DIR/$BINARY_BASENAME" ]] || { echo "ERROR: missing $OUTPUT_DIR/$BINARY_BASENAME" >&2; exit 1; }

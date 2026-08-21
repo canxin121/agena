@@ -10,80 +10,29 @@ from pathlib import Path
 
 MANIFEST = Path(__file__).with_name("universal-targets.json")
 
-NON_OS_ENVIRONMENTS = {
-    "amdhsa",
-    "cuda",
-    "emscripten",
-    "none",
-    "psx",
-    "uefi",
-    "unknown",
-    "wasi",
-    "zkvm",
-}
-
-# These targets may advertise a Unix-family libc surface, but their OS/runtime
-# does not provide the child-process model Agena actually requires:
-# * RTEMS 6.1 documents fork/exec/waitpid as ENOSYS.
-# * QuRT exposes user programs and threads rather than POSIX child processes.
-# * L4Re starts tasks through its Loader/Ned service; its userland has no
-#   fork()/execve() compatibility layer suitable for Rust's generic Unix PAL.
-AGENA_SUBPROCESS_UNSUPPORTED_OS = {
-    "l4re",
-    "qurt",
-    "rtems",
-}
-
-# Motor has a real native spawn/wait and socket/poll surface, but the pinned
-# Motor mlibc/runtime has no PTY service or terminal ioctl sysdeps. Agena's
-# subprocess backend uses real PTYs for interactive tools, so a compile-only
-# Motor backend would violate the full-runtime release policy.
-AGENA_TERMINAL_RUNTIME_UNSUPPORTED_OS = {
-    "motor",
-}
-
-def rust_std_process_supported(spec: dict) -> bool:
-    """Mirror Rust 1.97 std::sys::process PAL selection.
-
-    Rust's top-level process PAL is implemented for Unix-family targets,
-    Windows, UEFI, and Motor. The Unix selector then explicitly routes a
-    handful of embedded OSes to its unsupported implementation.
-    """
-
-    target_os = spec.get("os") or "none"
-    target_families = set(spec.get("target-family") or [])
-    if target_os in AGENA_SUBPROCESS_UNSUPPORTED_OS:
-        return False
-    if target_os == "windows" and spec.get("vendor") == "uwp":
-        # UWP apps run in an AppContainer and cannot create arbitrary child
-        # processes. Agena relies on std::process for git/GPG/PTY/tooling.
-        return False
-    if "unix" in target_families:
-        return target_os not in RUST_STD_PROCESS_UNSUPPORTED_OS
-    return target_os in {"windows", "uefi", "motor"}
-
-# Agena's full backend requires working process/PTY semantics at runtime. Rust
-# 1.97 explicitly routes these OS targets to std::sys::process::unsupported,
-# so accepting them would merely move a build-time portability gap into a
-# runtime `Unsupported` error.
-RUST_STD_PROCESS_UNSUPPORTED_OS = {
-    "espidf",
-    "horizon",
-    "nuttx",
-    "vita",
-}
-
-FREESTANDING_OS_TARGETS = {
-    # Rust models these with an OS-flavoured target_os, but the actual target
-    # ABI is deliberately freestanding and has no userspace std/libc surface.
-    "aarch64-nintendo-switch-freestanding",
-    "x86_64-unknown-linux-none",
-}
-
-NON_OS_TARGETS = {
-    # WALI reuses Linux target_os for ABI compatibility, but execution is
-    # WebAssembly rather than a native OS process target.
-    "wasm32-wali-linux-musl",
+# Keep this as a positive list of OS families for which the release matrix has
+# an Agena full backend. Targets outside this set have no matrix rows, builders,
+# or artifact policy to maintain.
+FULL_RUNTIME_OS = {
+    "android",
+    "cygwin",
+    "dragonfly",
+    "freebsd",
+    "fuchsia",
+    "haiku",
+    "hurd",
+    "illumos",
+    "ios",
+    "linux",
+    "macos",
+    "netbsd",
+    "openbsd",
+    "redox",
+    "solaris",
+    "tvos",
+    "visionos",
+    "watchos",
+    "windows",
 }
 
 
@@ -151,14 +100,12 @@ def main() -> None:
         spec = specs[target]
         metadata = spec.get("metadata") or {}
         std = metadata.get("std") if isinstance(metadata, dict) else None
-        target_os = spec.get("os") or "none"
+        target_os = spec.get("os")
+        target_families = set(spec.get("target-family") or [])
         executables = spec.get("executables")
         if (
-            target_os in NON_OS_ENVIRONMENTS
-            or target in FREESTANDING_OS_TARGETS
-            or target in NON_OS_TARGETS
-            or not rust_std_process_supported(spec)
-            or target_os in AGENA_TERMINAL_RUNTIME_UNSUPPORTED_OS
+            target_os not in FULL_RUNTIME_OS
+            or not target_families.intersection({"unix", "windows"})
             or executables is False
         ):
             invalid_backends.append(

@@ -17,14 +17,18 @@ use std::time::Duration;
     target_env = "musl",
     target_env = "ohos",
     target_os = "android",
-    target_os = "fuchsia"
+    target_os = "fuchsia",
+    target_os = "illumos",
+    target_os = "solaris"
 ))]
 type IoctlRequest = libc::c_int;
 #[cfg(not(any(
     target_env = "musl",
     target_env = "ohos",
     target_os = "android",
-    target_os = "fuchsia"
+    target_os = "fuchsia",
+    target_os = "illumos",
+    target_os = "solaris"
 )))]
 type IoctlRequest = libc::c_ulong;
 

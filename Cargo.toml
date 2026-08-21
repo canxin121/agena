@@ -2,7 +2,6 @@
 resolver = "3"
 members = [
     "apps/agena",
-    "apps/agena-web-runtime",
     "crates/agena-tui-components",
     "crates/agena-tui",
     "crates/agena-tui-media",

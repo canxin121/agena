@@ -78,14 +78,20 @@ if ! valid_sysroot; then
   )
 
   echo "Building NetBSD ${NETBSD_SOURCE_ID} riscv64 tools" >&2
-  env "${common_env[@]}" \
-    bash "$SOURCE/build.sh" -U -O "$OBJ" -T "$TOOLDIR" -j"$JOBS" \
-      -m riscv -a riscv64 tools
+  (
+    cd "$SOURCE"
+    env "${common_env[@]}" \
+      bash ./build.sh -U -O "$OBJ" -T "$TOOLDIR" -j"$JOBS" \
+        -m riscv -a riscv64 tools
+  )
 
   echo "Building NetBSD ${NETBSD_SOURCE_ID} riscv64 distribution" >&2
-  env "${common_env[@]}" \
-    bash "$SOURCE/build.sh" -U -u -O "$OBJ" -T "$TOOLDIR" -D "$DESTDIR" \
-      -j"$JOBS" -m riscv -a riscv64 distribution
+  (
+    cd "$SOURCE"
+    env "${common_env[@]}" \
+      bash ./build.sh -U -u -O "$OBJ" -T "$TOOLDIR" -D "$DESTDIR" \
+        -j"$JOBS" -m riscv -a riscv64 distribution
+  )
 
   # NetBSD's build.sh names the C++ driver c++ when MKGCCCMDS=no.  cc-rs and
   # the Rust target linker convention use g++, so provide an alias to the

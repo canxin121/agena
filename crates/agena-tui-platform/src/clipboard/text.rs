@@ -1,6 +1,5 @@
 #[cfg(not(any(
     target_os = "android",
-    target_os = "emscripten",
     target_os = "ios",
     target_os = "tvos",
     target_os = "watchos",
@@ -10,7 +9,6 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 
 #[cfg(not(any(
     target_os = "android",
-    target_os = "emscripten",
     target_os = "ios",
     target_os = "tvos",
     target_os = "watchos",
@@ -46,7 +44,6 @@ impl ClipboardCopyMethod {
 
 #[cfg(not(any(
     target_os = "android",
-    target_os = "emscripten",
     target_os = "ios",
     target_os = "tvos",
     target_os = "watchos",
@@ -62,7 +59,6 @@ pub fn set_clipboard_text(
 
 #[cfg(not(any(
     target_os = "android",
-    target_os = "emscripten",
     target_os = "ios",
     target_os = "tvos",
     target_os = "watchos",
@@ -74,7 +70,6 @@ struct ClipboardService<'a> {
 
 #[cfg(not(any(
     target_os = "android",
-    target_os = "emscripten",
     target_os = "ios",
     target_os = "tvos",
     target_os = "watchos",
@@ -138,7 +133,6 @@ impl<'a> ClipboardService<'a> {
 
 #[cfg(not(any(
     target_os = "android",
-    target_os = "emscripten",
     target_os = "ios",
     target_os = "tvos",
     target_os = "watchos",
@@ -154,7 +148,6 @@ fn set_clipboard_text_native(text: &str) -> Result<(), ClipboardTextError> {
 
 #[cfg(not(any(
     target_os = "android",
-    target_os = "emscripten",
     target_os = "ios",
     target_os = "tvos",
     target_os = "watchos",
@@ -183,7 +176,6 @@ fn set_clipboard_text_via_tmux(text: &str) -> Result<(), ClipboardTextError> {
 
 #[cfg(not(any(
     target_os = "android",
-    target_os = "emscripten",
     target_os = "ios",
     target_os = "tvos",
     target_os = "watchos",
@@ -195,7 +187,6 @@ fn osc52_copy_sequence(text: &str) -> Vec<u8> {
 
 #[cfg(any(
     target_os = "android",
-    target_os = "emscripten",
     target_os = "ios",
     target_os = "tvos",
     target_os = "watchos",
@@ -215,7 +206,6 @@ pub fn set_clipboard_text(
     test,
     not(any(
         target_os = "android",
-        target_os = "emscripten",
         target_os = "ios",
         target_os = "tvos",
         target_os = "watchos",

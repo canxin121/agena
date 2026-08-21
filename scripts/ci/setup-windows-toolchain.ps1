@@ -34,8 +34,7 @@ function Set-EnvFromVsDevCmd {
   param(
     [Parameter(Mandatory = $true)][string]$Arch,
     [Parameter(Mandatory = $true)][string]$HostArch,
-    [Parameter(Mandatory = $true)][string]$TargetTriple,
-    [switch]$Uwp
+    [Parameter(Mandatory = $true)][string]$TargetTriple
   )
 
   $VsWhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
@@ -52,13 +51,10 @@ function Set-EnvFromVsDevCmd {
   }
 
   $Args = @("-no_logo", "-arch=$Arch", "-host_arch=$HostArch")
-  if ($Uwp) {
-    $Args += "-app_platform=UWP"
-  }
   $ArgLine = ($Args -join " ")
   $Output = & cmd.exe /s /c "`"$VsDevCmd`" $ArgLine >nul && set"
   if ($LASTEXITCODE -ne 0) {
-    throw "VsDevCmd failed for target arch=$Arch host=$HostArch UWP=$Uwp"
+    throw "VsDevCmd failed for target arch=$Arch host=$HostArch"
   }
   foreach ($Line in $Output) {
     $Index = $Line.IndexOf("=")
@@ -406,7 +402,7 @@ function Install-LlvmMingw {
   [Environment]::SetEnvironmentVariable("CARGO_TARGET_${Upper}_LINKER", $CC, "Process")
 }
 
-if ($TargetTriple -match "-windows-(gnu|gnullvm)$" -or $TargetTriple -match "-(uwp|win7)-windows-gnu$") {
+if ($TargetTriple -match "-windows-(gnu|gnullvm)$" -or $TargetTriple -match "-win7-windows-gnu$") {
   Install-LlvmMingw -Target $TargetTriple
   return
 }
@@ -426,5 +422,4 @@ $TargetArch = if ($TargetTriple.StartsWith("thumbv7a-")) {
 }
 
 $HostArch = if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { "arm64" } else { "x64" }
-$IsUwp = $TargetTriple -match "-uwp-windows-msvc$"
-Set-EnvFromVsDevCmd -Arch $TargetArch -HostArch $HostArch -TargetTriple $TargetTriple -Uwp:$IsUwp
+Set-EnvFromVsDevCmd -Arch $TargetArch -HostArch $HostArch -TargetTriple $TargetTriple

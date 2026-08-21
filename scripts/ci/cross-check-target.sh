@@ -38,11 +38,12 @@ esac
 
 printf 'Checking Agena for %s (build_std=%s, artifact_kind=%s)\n' "$target" "$build_std" "$artifact_kind"
 cross --version || true
+[[ "$artifact_kind" == "backend" ]] || {
+  echo "ERROR: only full Agena backend artifacts are supported: $artifact_kind" >&2
+  exit 2
+}
 
 package="agena"
-if [[ "$artifact_kind" == "web-runtime" ]]; then
-  package="agena-web-runtime"
-fi
 args=(check --manifest-path Cargo.toml -p "$package" --target "$target" --locked)
 if [[ "$build_std" == true ]]; then
   cross +nightly-2026-08-18 "${args[@]}" -Z build-std=std,panic_abort,proc_macro

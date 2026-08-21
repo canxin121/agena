@@ -63,14 +63,14 @@ printf 'deb [arch=amd64 signed-by=/etc/apt/keyrings/agena-llvm-snapshot.asc] htt
   "$VERSION_CODENAME" "$VERSION_CODENAME" |
   sudo tee /etc/apt/sources.list.d/agena-llvm-22.list >/dev/null
 
-sudo apt-get update -o Acquire::Retries=5
+sudo apt-get update -o Acquire::Retries=5 >&2
 sudo apt-get install -y --no-install-recommends \
   "clang-22=$LLVM_VERSION" \
   "llvm-22=$LLVM_VERSION" \
   "llvm-22-runtime=$LLVM_VERSION" \
   "llvm-22-linker-tools=$LLVM_VERSION" \
   "llvm-22-tools=$LLVM_VERSION" \
-  "lld-22=$LLVM_VERSION"
+  "lld-22=$LLVM_VERSION" >&2
 
 for tool in clang clang++ llvm-ar; do
   [[ -x "$LLVM_ROOT/bin/$tool" ]] || {

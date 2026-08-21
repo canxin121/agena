@@ -231,7 +231,7 @@ impl From<std::process::ExitStatus> for ExitStatus {
     }
 }
 
-#[cfg(not(target_os = "fuchsia"))]
+#[cfg(all(unix, not(target_os = "fuchsia")))]
 fn signal_name(signal: i32) -> String {
     let signame = unsafe { libc::strsignal(signal) };
     if signame.is_null() {

@@ -48,11 +48,11 @@ case "$BUILDER" in
       bash scripts/agena/package-backend.sh "$TARGET" "$BUILD_STD" "$TARGET_RUSTFLAGS"
     ;;
   sparc-gcc)
-    # Keep C/C++ dependencies on the 32-bit SPARC ABI.  Rust's target spec
-    # supplies -m32 for the final linker invocation, while cc-rs needs the
-    # explicit flag through the checksum-verified Bootlin toolchain wrapper.
-    exec bash scripts/ci/run-bootlin-backend.sh \
-      "$TARGET" sparc64 sparc64--glibc--stable-2025.08-1 '-m32' -- \
+    # Use Debian's checksum-verified sparc64 cross compiler with its real
+    # 32-bit multilib glibc.  This is the same ABI/sysroot builder used by the
+    # diagnostic path, so Release cannot silently fall back to a 64-bit-only
+    # toolchain that lacks gnu/stubs-32.h.
+    exec bash scripts/ci/run-debian-sparc32-backend.sh "$TARGET" -- \
       bash scripts/agena/package-backend.sh "$TARGET" "$BUILD_STD" "$TARGET_RUSTFLAGS"
     ;;
   powerpc-spe-sysroot)

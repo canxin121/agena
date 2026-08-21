@@ -18,8 +18,6 @@ pub use aws_credential_types::Credentials as AwsCredentials;
 #[derive(Debug, thiserror::Error)]
 /// Error resolving Amazon Bedrock credentials.
 pub enum BedrockCredentialError {
-    #[error("AWS credential provider chain is unavailable")]
-    ProviderUnavailable,
     #[error("resolving AWS credentials from the provider chain: {0}")]
     Resolve(String),
 }
@@ -92,9 +90,11 @@ async fn resolve_provider_chain(
         loader = loader.profile_name(profile.to_owned());
     }
     let sdk_config = loader.load().await;
-    let provider = sdk_config
-        .credentials_provider()
-        .ok_or(BedrockCredentialError::ProviderUnavailable)?;
+    let provider = sdk_config.credentials_provider().ok_or_else(|| {
+        BedrockCredentialError::Resolve(
+            "AWS credential provider chain returned no provider".to_owned(),
+        )
+    })?;
     provider
         .provide_credentials()
         .await

@@ -50,7 +50,15 @@ if ($BuildStd) {
     $env:CARGO_TARGET_DIR = $BuildTargetDir
     $env:RUSTFLAGS = (($OldRustFlags, $TargetRustFlags) | Where-Object { $_ } | Join-String -Separator " ")
     Write-Host "Using build-std driver: cargo=$NightlyCargo rustc=$StableRustc rustdoc=$StableRustdoc target-dir=$BuildTargetDir"
-    & $NightlyCargo @Args -Z "build-std=std,panic_abort,proc_macro"
+    $CargoExtraArgs = @()
+    if ($TargetTriple -match "-win7-windows-(msvc|gnu)$") {
+      # Win7 custom target builds have historically failed only after the
+      # dependency graph is built. Keep the target real, but expose the exact
+      # rustc --extern/search-path command so a dependency-sysroot regression
+      # cannot be diagnosed from E0463 names alone.
+      $CargoExtraArgs += "-vv"
+    }
+    & $NightlyCargo @Args @CargoExtraArgs -Z "build-std=std,panic_abort,proc_macro"
   }
   finally {
     $env:RUSTC = $OldRustc

@@ -83,18 +83,41 @@ if ! valid_sysroot; then
   # Prefer a readable non-Azure kernel with matching modules, and install the
   # real generic kernel package when the hosted image does not provide one.
   supermin_kernel=""
-  supermin_kernel_version=""
-  for candidate_kernel in /boot/vmlinuz-* /lib/modules/*/vmlinuz; do
-    [[ -r "$candidate_kernel" ]] || continue
-    candidate_version="${candidate_kernel##*/}"
-    candidate_version="${candidate_version#vmlinuz-}"
-    [[ -d "/lib/modules/$candidate_version" ]] || continue
-    if [[ "$candidate_version" != *-azure ]]; then
+  supermin_modules=""
+  find_supermin_kernel() {
+    local skip_azure="${1:-true}"
+    local candidate_kernel candidate_version candidate_modules
+    for candidate_kernel in /boot/vmlinuz-* /lib/modules/*/vmlinuz /usr/lib/modules/*/vmlinuz; do
+      [[ -r "$candidate_kernel" ]] || continue
+      case "$candidate_kernel" in
+        /boot/vmlinuz-*)
+          candidate_version="${candidate_kernel##*/}"
+          candidate_version="${candidate_version#vmlinuz-}"
+          candidate_modules="/lib/modules/$candidate_version"
+          ;;
+        */modules/*/vmlinuz)
+          candidate_modules="${candidate_kernel%/vmlinuz}"
+          candidate_version="${candidate_modules##*/}"
+          if [[ ! -d "$candidate_modules" && -d "/lib/modules/$candidate_version" ]]; then
+            candidate_modules="/lib/modules/$candidate_version"
+          fi
+          ;;
+        *)
+          continue
+          ;;
+      esac
+      [[ -d "$candidate_modules" ]] || continue
+      if [[ "$skip_azure" == true && "$candidate_version" == *-azure ]]; then
+        continue
+      fi
       supermin_kernel="$candidate_kernel"
-      supermin_kernel_version="$candidate_version"
-      break
-    fi
-  done
+      supermin_modules="$candidate_modules"
+      return 0
+    done
+    return 1
+  }
+
+  find_supermin_kernel true || true
 
   if [[ -z "$supermin_kernel" ]]; then
     if ! command -v sudo >/dev/null 2>&1; then
@@ -106,17 +129,9 @@ if ! valid_sysroot; then
   fi
 
   if [[ -z "$supermin_kernel" ]]; then
-    for candidate_kernel in /boot/vmlinuz-* /lib/modules/*/vmlinuz; do
-      [[ -r "$candidate_kernel" ]] || continue
-      candidate_version="${candidate_kernel##*/}"
-      candidate_version="${candidate_version#vmlinuz-}"
-      [[ -d "/lib/modules/$candidate_version" ]] || continue
-      supermin_kernel="$candidate_kernel"
-      supermin_kernel_version="$candidate_version"
-      break
-    done
+    find_supermin_kernel true || find_supermin_kernel false || true
   fi
-  [[ -n "$supermin_kernel" ]] || {
+  [[ -n "$supermin_kernel" && -n "$supermin_modules" ]] || {
     echo "ERROR: libguestfs supermin has no readable kernel with matching modules" >&2
     exit 1
   }
@@ -128,7 +143,7 @@ if ! valid_sysroot; then
   export LIBGUESTFS_DEBUG="1"
   export LIBGUESTFS_TRACE="1"
   export SUPERMIN_KERNEL="$supermin_kernel"
-  export SUPERMIN_MODULES="/lib/modules/$supermin_kernel_version"
+  export SUPERMIN_MODULES="$supermin_modules"
 
   rm -rf "$SYSROOT"
   mkdir -p "$SYSROOT/usr"

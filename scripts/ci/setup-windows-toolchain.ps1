@@ -153,6 +153,32 @@ function Set-EnvFromVsDevCmd {
   # headers and libraries unambiguous for build scripts that invoke cl.exe
   # through cc-rs rather than through devenv/msbuild.
   $VCToolsInclude = Join-Path $VCToolsRoot "include"
+  if (-not (Test-Path (Join-Path $VCToolsInclude "stddef.h"))) {
+    # The legacy ARM compiler can be installed beside a newer MSVC host toolset
+    # without carrying its C headers.  Headers are architecture-independent;
+    # select the newest installed official MSVC include tree that contains the
+    # required standard header while retaining the target-specific compiler
+    # and libraries selected above.
+    $HeaderToolsRoot = Get-ChildItem -Path $ToolsRoot -Directory |
+      Sort-Object Name -Descending |
+      Where-Object { Test-Path (Join-Path $_.FullName "include\stddef.h") } |
+      Select-Object -First 1
+    if (-not $HeaderToolsRoot) {
+      throw "MSVC C headers missing: no installed toolset contains include\stddef.h"
+    }
+    $VCToolsInclude = Join-Path $HeaderToolsRoot.FullName "include"
+  }
+  # cc-rs invokes cl.exe directly and does not print or normalize inherited
+  # INCLUDE values in its command diagnostics. Add the verified official
+  # header tree as a target-scoped /I flag as well, so C build scripts cannot
+  # accidentally lose stddef.h when they replace the environment.
+  $TargetEnvKey = $TargetTriple.Replace("-", "_")
+  $HeaderFlag = "/I`"$VCToolsInclude`""
+  foreach ($FlagName in @("CFLAGS_$TargetEnvKey", "CXXFLAGS_$TargetEnvKey")) {
+    $ExistingFlags = [Environment]::GetEnvironmentVariable($FlagName, "Process")
+    $CombinedFlags = if ($ExistingFlags) { "$HeaderFlag $ExistingFlags" } else { $HeaderFlag }
+    [Environment]::SetEnvironmentVariable($FlagName, $CombinedFlags, "Process")
+  }
   $VCToolsLib = Join-Path $VCToolsRoot "lib\$Arch"
   if ($env:INCLUDE) {
     $env:INCLUDE = "$VCToolsInclude;$env:INCLUDE"

@@ -21,12 +21,22 @@ macro_rules! check_result {
     }};
 }
 
+// Cygwin exposes fork/exec/waitpid and SIGCHLD, but its libc crate does not
+// expose the Linux-style waitid constants used by waitid.rs.  Select the
+// POSIX signal/waitpid implementation explicitly so attr-alias expansion can
+// never accidentally compile the unavailable waitid path for this target.
+#[cfg(target_os = "cygwin")]
+#[path = "common.rs"]
+mod imp;
+
+#[cfg(not(target_os = "cygwin"))]
 attr_alias::eval_block! {
     #[attr_alias(unix_waitid, cfg_attr(*, path = "waitid.rs"))]
     #[attr_alias(unix_waitid, cfg_attr(not(*), path = "common.rs"))]
     mod imp;
-    pub(super) use imp::wait;
 }
+
+pub(super) use imp::wait;
 
 fn run_with_time_limit<F, R>(
     run_fn: F,

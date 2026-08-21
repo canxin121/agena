@@ -50,6 +50,8 @@ export "CXX_${target_key}=$WRAPPER_ROOT/cxx"
 export "AR_${target_key}=$WRAPPER_ROOT/ar"
 export "RANLIB_${target_key}=$WRAPPER_ROOT/ranlib"
 export "CARGO_TARGET_${target_key_upper}_LINKER=$WRAPPER_ROOT/cc"
-export RUSTFLAGS="${RUSTFLAGS:-} -C linker=$WRAPPER_ROOT/cc"
+if [[ -n "${RUSTFLAGS:-}" ]]; then
+  export "CARGO_TARGET_${target_key_upper}_RUSTFLAGS=${RUSTFLAGS}"
+fi
 
 exec "$@"

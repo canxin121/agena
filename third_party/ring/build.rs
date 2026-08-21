@@ -305,14 +305,20 @@ fn ring_build_rs_main(c_root_dir: &Path, core_name_and_version: &str) {
     let out_dir = PathBuf::from(out_dir);
 
     println!("cargo:rerun-if-env-changed=AGENA_TARGET_TRIPLE");
-    // redoxer wraps Cargo and exports TARGET for its own toolchain. That
-    // value can describe the host-width Redox environment rather than the
-    // matrix target Cargo is compiling. The backend wrapper passes the
-    // selected target explicitly so native build scripts cannot select an
-    // incompatible ring ABI.
-    let target_triple = std::env::var("AGENA_TARGET_TRIPLE")
-        .or_else(|_| std::env::var("TARGET"))
-        .unwrap();
+    // redoxer wraps Cargo and exports AGENA_TARGET_TRIPLE for the target
+    // build. Cargo also passes that environment variable to host build
+    // scripts (for example spider_fingerprint's host-side reqwest/ring
+    // dependency), so never let it override a non-Redox host build. The
+    // target's own TARGET/CARGO_CFG_TARGET_OS values identify when the
+    // explicit Redox matrix triple is appropriate.
+    let cargo_target = std::env::var("TARGET").unwrap();
+    let cargo_target_os = env::var("CARGO_CFG_TARGET_OS").unwrap();
+    let is_redox_target = cargo_target_os == "redox" || cargo_target.ends_with("-redox");
+    let target_triple = if is_redox_target {
+        std::env::var("AGENA_TARGET_TRIPLE").unwrap_or(cargo_target)
+    } else {
+        cargo_target
+    };
     let mut arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap();
     // redoxer supplies custom target specifications for several ABIs.  Those
     // specs can expose the host-width architecture (and, depending on the

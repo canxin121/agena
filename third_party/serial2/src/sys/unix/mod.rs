@@ -9,38 +9,51 @@ use std::time::Duration;
 // targets below, even though their shipped libc headers and kernels do.  Keep
 // the real ABI values here instead of dropping the operation or returning a
 // synthetic success.
+// musl, Android, and Fuchsia's ioctl declarations use an int request
+// argument, while glibc and the other Unix libc ABIs exposed by this module
+// use unsigned long.  The command values are the same kernel ABI values; only
+// the Rust FFI argument width differs.
+#[cfg(any(target_env = "musl", target_os = "android", target_os = "fuchsia"))]
+type IoctlRequest = libc::c_int;
+#[cfg(not(any(
+    target_env = "musl",
+    target_os = "android",
+    target_os = "fuchsia"
+)))]
+type IoctlRequest = libc::c_ulong;
+
 #[cfg(target_os = "fuchsia")]
-const TIOCMGET_IOCTL: libc::c_ulong = 0x5415;
+const TIOCMGET_IOCTL: IoctlRequest = 0x5415;
 #[cfg(target_os = "fuchsia")]
-const TIOCMBIS_IOCTL: libc::c_ulong = 0x5416;
+const TIOCMBIS_IOCTL: IoctlRequest = 0x5416;
 #[cfg(target_os = "fuchsia")]
-const TIOCMBIC_IOCTL: libc::c_ulong = 0x5417;
+const TIOCMBIC_IOCTL: IoctlRequest = 0x5417;
 #[cfg(target_os = "fuchsia")]
-const TIOCSBRK_IOCTL: libc::c_ulong = 0x5427;
+const TIOCSBRK_IOCTL: IoctlRequest = 0x5427;
 #[cfg(target_os = "fuchsia")]
-const TIOCCBRK_IOCTL: libc::c_ulong = 0x5428;
+const TIOCCBRK_IOCTL: IoctlRequest = 0x5428;
 
 #[cfg(target_os = "hurd")]
-const TIOCMGET_IOCTL: libc::c_ulong = 0x6008_076a;
+const TIOCMGET_IOCTL: IoctlRequest = 0x6008_076a;
 #[cfg(target_os = "hurd")]
-const TIOCMBIS_IOCTL: libc::c_ulong = 0xa008_076c;
+const TIOCMBIS_IOCTL: IoctlRequest = 0xa008_076c;
 #[cfg(target_os = "hurd")]
-const TIOCMBIC_IOCTL: libc::c_ulong = 0xa008_076b;
+const TIOCMBIC_IOCTL: IoctlRequest = 0xa008_076b;
 #[cfg(target_os = "hurd")]
-const TIOCSBRK_IOCTL: libc::c_ulong = 0x077b;
+const TIOCSBRK_IOCTL: IoctlRequest = 0x077b;
 #[cfg(target_os = "hurd")]
-const TIOCCBRK_IOCTL: libc::c_ulong = 0x077a;
+const TIOCCBRK_IOCTL: IoctlRequest = 0x077a;
 
 #[cfg(not(any(target_os = "fuchsia", target_os = "hurd")))]
-const TIOCMGET_IOCTL: libc::c_ulong = libc::TIOCMGET as libc::c_ulong;
+const TIOCMGET_IOCTL: IoctlRequest = libc::TIOCMGET as IoctlRequest;
 #[cfg(not(any(target_os = "fuchsia", target_os = "hurd")))]
-const TIOCMBIS_IOCTL: libc::c_ulong = libc::TIOCMBIS as libc::c_ulong;
+const TIOCMBIS_IOCTL: IoctlRequest = libc::TIOCMBIS as IoctlRequest;
 #[cfg(not(any(target_os = "fuchsia", target_os = "hurd")))]
-const TIOCMBIC_IOCTL: libc::c_ulong = libc::TIOCMBIC as libc::c_ulong;
+const TIOCMBIC_IOCTL: IoctlRequest = libc::TIOCMBIC as IoctlRequest;
 #[cfg(not(any(target_os = "fuchsia", target_os = "hurd")))]
-const TIOCSBRK_IOCTL: libc::c_ulong = libc::TIOCSBRK as libc::c_ulong;
+const TIOCSBRK_IOCTL: IoctlRequest = libc::TIOCSBRK as IoctlRequest;
 #[cfg(not(any(target_os = "fuchsia", target_os = "hurd")))]
-const TIOCCBRK_IOCTL: libc::c_ulong = libc::TIOCCBRK as libc::c_ulong;
+const TIOCCBRK_IOCTL: IoctlRequest = libc::TIOCCBRK as IoctlRequest;
 
 #[cfg(any(target_os = "fuchsia", target_os = "hurd"))]
 const TIOCM_RTS_VALUE: c_int = 0x004;

@@ -102,6 +102,10 @@ case "$BUILDER" in
     exec bash scripts/ci/run-netbsd-backend.sh "$TARGET" -- \
       bash "$0" "$TARGET" "$TARGET_OS" "$BUILD_STD" direct
     ;;
+  illumos)
+    exec bash scripts/ci/run-illumos-backend.sh "$TARGET" -- \
+      bash "$0" "$TARGET" "$TARGET_OS" "$BUILD_STD" direct
+    ;;
   freebsd-sysroot)
     zig_target="$(freebsd_zig_target)"
     AGENA_ZIG_SYSROOT="$(bash scripts/ci/fetch-freebsd-sysroot.sh "$TARGET")" \

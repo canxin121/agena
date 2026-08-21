@@ -66,6 +66,62 @@ pub(crate) const ETH_P_MCTP: c_int = linux_raw_sys::if_ether::ETH_P_MCTP as _;
 #[cfg(all(linux_raw_dep, feature = "mount"))]
 pub(crate) const MS_NOSYMFOLLOW: c_ulong = linux_raw_sys::general::MS_NOSYMFOLLOW as _;
 
+// OpenHarmony's musl headers use the Linux statx ABI but do not expose the
+// statx request and attribute constants through libc. Keep these values in
+// the libc backend so rustix can provide the same statx API on OHOS without
+// disabling the real syscall or inventing a target-specific fallback.
+#[cfg(all(target_os = "linux", target_env = "ohos"))]
+pub(crate) const STATX_TYPE: u32 = 0x0000_0001;
+#[cfg(all(target_os = "linux", target_env = "ohos"))]
+pub(crate) const STATX_MODE: u32 = 0x0000_0002;
+#[cfg(all(target_os = "linux", target_env = "ohos"))]
+pub(crate) const STATX_NLINK: u32 = 0x0000_0004;
+#[cfg(all(target_os = "linux", target_env = "ohos"))]
+pub(crate) const STATX_UID: u32 = 0x0000_0008;
+#[cfg(all(target_os = "linux", target_env = "ohos"))]
+pub(crate) const STATX_GID: u32 = 0x0000_0010;
+#[cfg(all(target_os = "linux", target_env = "ohos"))]
+pub(crate) const STATX_ATIME: u32 = 0x0000_0020;
+#[cfg(all(target_os = "linux", target_env = "ohos"))]
+pub(crate) const STATX_MTIME: u32 = 0x0000_0040;
+#[cfg(all(target_os = "linux", target_env = "ohos"))]
+pub(crate) const STATX_CTIME: u32 = 0x0000_0080;
+#[cfg(all(target_os = "linux", target_env = "ohos"))]
+pub(crate) const STATX_INO: u32 = 0x0000_0100;
+#[cfg(all(target_os = "linux", target_env = "ohos"))]
+pub(crate) const STATX_SIZE: u32 = 0x0000_0200;
+#[cfg(all(target_os = "linux", target_env = "ohos"))]
+pub(crate) const STATX_BLOCKS: u32 = 0x0000_0400;
+#[cfg(all(target_os = "linux", target_env = "ohos"))]
+pub(crate) const STATX_BASIC_STATS: u32 = 0x0000_07ff;
+#[cfg(all(target_os = "linux", target_env = "ohos"))]
+pub(crate) const STATX_BTIME: u32 = 0x0000_0800;
+#[cfg(all(target_os = "linux", target_env = "ohos"))]
+pub(crate) const STATX_MNT_ID: u32 = 0x0000_1000;
+#[cfg(all(target_os = "linux", target_env = "ohos"))]
+pub(crate) const STATX_DIOALIGN: u32 = 0x0000_2000;
+#[cfg(all(target_os = "linux", target_env = "ohos"))]
+pub(crate) const STATX_ALL: u32 = 0x0000_0fff;
+
+#[cfg(all(target_os = "linux", target_env = "ohos"))]
+pub(crate) const STATX_ATTR_COMPRESSED: u64 = 0x0000_0004;
+#[cfg(all(target_os = "linux", target_env = "ohos"))]
+pub(crate) const STATX_ATTR_IMMUTABLE: u64 = 0x0000_0010;
+#[cfg(all(target_os = "linux", target_env = "ohos"))]
+pub(crate) const STATX_ATTR_APPEND: u64 = 0x0000_0020;
+#[cfg(all(target_os = "linux", target_env = "ohos"))]
+pub(crate) const STATX_ATTR_NODUMP: u64 = 0x0000_0040;
+#[cfg(all(target_os = "linux", target_env = "ohos"))]
+pub(crate) const STATX_ATTR_ENCRYPTED: u64 = 0x0000_0800;
+#[cfg(all(target_os = "linux", target_env = "ohos"))]
+pub(crate) const STATX_ATTR_AUTOMOUNT: u64 = 0x0000_1000;
+#[cfg(all(target_os = "linux", target_env = "ohos"))]
+pub(crate) const STATX_ATTR_MOUNT_ROOT: u64 = 0x0000_2000;
+#[cfg(all(target_os = "linux", target_env = "ohos"))]
+pub(crate) const STATX_ATTR_VERITY: u64 = 0x0010_0000;
+#[cfg(all(target_os = "linux", target_env = "ohos"))]
+pub(crate) const STATX_ATTR_DAX: u64 = 0x0020_0000;
+
 // TODO: Upstream these.
 #[cfg(all(linux_raw_dep, feature = "termios"))]
 pub(crate) const IUCLC: tcflag_t = linux_raw_sys::general::IUCLC as _;

@@ -337,6 +337,18 @@ fn ring_build_rs_main(c_root_dir: &Path, core_name_and_version: &str) {
         }
     }
     let pointer_width = env::var("CARGO_CFG_TARGET_POINTER_WIDTH").unwrap();
+    if (target_triple.ends_with("-redox") || env::var("CARGO_CFG_TARGET_OS").as_deref() == Some("redox"))
+        && pointer_width == "32"
+        && arch == X86_64
+    {
+        // Some redoxer target specs retain the host x86_64 cfg even for the
+        // 32-bit i586 ABI. The pointer width is part of the selected target
+        // specification and is sufficient to disambiguate this case from a
+        // real x86_64 Redox build; never feed x86_64 assembly or -m64 to the
+        // 32-bit compiler.
+        arch = X86.to_owned();
+        unsafe { std::env::set_var("CARGO_CFG_TARGET_ARCH", X86) };
+    }
     // arm64_32-apple-watchos is architecturally AArch64 but uses 32-bit
     // pointers. ring's AArch64 assembly and Rust fast paths assume LP64, so
     // use the architecture-neutral C implementation for this ABI.

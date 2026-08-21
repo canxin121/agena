@@ -221,35 +221,67 @@ function Set-EnvFromVsDevCmd {
   $TargetBin = Join-Path $VCToolsRoot "bin\$HostToolArch\$CompilerArch"
   $Compiler = Join-Path $TargetBin "cl.exe"
   $UsingClangCl = $false
-  if (-not (Test-Path $Compiler)) {
-    if ($Arch -ne "arm") {
-      throw "MSVC target compiler missing for host=$HostArch target=${Arch}: $Compiler"
-    }
-
-    # Recent hosted VS images can ship the ARM MSVC libraries and Windows SDK
-    # without the legacy ARM cl.exe.  Clang-cl is the supported MSVC-compatible
-    # compiler for this case: force the ARMv7 Windows MSVC target so an x64
-    # host compiler can never silently produce x64 objects for this target.
-    $ClangCandidates = @(
-      (Join-Path $Install "VC\Tools\Llvm\x64\bin\clang-cl.exe"),
-      (Join-Path $Install "VC\Tools\Llvm\bin\clang-cl.exe"),
-      (Join-Path ${env:ProgramFiles} "LLVM\bin\clang-cl.exe")
-    )
-    $ClangCl = $null
-    foreach ($Candidate in $ClangCandidates) {
-      if (Test-Path $Candidate) {
-        $ClangCl = $Candidate
-        break
+  if ($Arch -eq "arm") {
+    # ring contains ARM assembly sources with a .S suffix. MSVC's legacy ARM
+    # cl.exe does not assemble that suffix: it warns and ignores the source,
+    # then the linker fails because the expected .o file was never produced.
+    # Always use the official LLVM clang-cl driver for the ARM32 target, even
+    # when the legacy ARM cl.exe is installed. This is a real ARMv7 MSVC
+    # compiler invocation, not a stub or a host-ABI fallback.
+    function Find-ClangCl {
+      $ClangCandidates = @(
+        (Join-Path $Install "VC\Tools\Llvm\x64\bin\clang-cl.exe"),
+        (Join-Path $Install "VC\Tools\Llvm\bin\clang-cl.exe"),
+        (Join-Path ${env:ProgramFiles} "LLVM\bin\clang-cl.exe")
+      )
+      $AllInstalls = @($Install)
+      if (Test-Path $VsWhere) {
+        $AllInstalls += & $VsWhere -all -products * -property installationPath |
+          ForEach-Object { $_.Trim() } |
+          Where-Object { $_ }
       }
-    }
-    if (-not $ClangCl) {
+      foreach ($InstallPath in @($AllInstalls | Sort-Object -Unique)) {
+        $ClangCandidates += @(
+          (Join-Path $InstallPath "VC\Tools\Llvm\x64\bin\clang-cl.exe"),
+          (Join-Path $InstallPath "VC\Tools\Llvm\bin\clang-cl.exe")
+        )
+      }
+      $ClangCandidates = @($ClangCandidates | Sort-Object -Unique)
+      foreach ($Candidate in $ClangCandidates) {
+        if (Test-Path -LiteralPath $Candidate -PathType Leaf) {
+          return $Candidate
+        }
+      }
       $PathClang = Get-Command clang-cl.exe -ErrorAction SilentlyContinue
       if ($PathClang) {
-        $ClangCl = $PathClang.Source
+        return $PathClang.Source
       }
+      return $null
+    }
+
+    $ClangCl = Find-ClangCl
+    if (-not $ClangCl) {
+      # The hosted image's component manifest is not proof that the payload is
+      # present on this runner. Install Microsoft's documented LLVM component
+      # and wait for the actual compiler file to appear.
+      Write-Host "Installing official Visual Studio LLVM/Clang component: Microsoft.VisualStudio.Component.VC.Llvm.Clang"
+      Install-VsComponents -Installer $VsInstaller -InstallPath $Install -Components @(
+        "Microsoft.VisualStudio.Workload.NativeDesktop",
+        "Microsoft.VisualStudio.Component.VC.Llvm.Clang",
+        "Microsoft.VisualStudio.Component.VC.Llvm.ClangToolset",
+        "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
+        "Microsoft.VisualStudio.Component.VC.CoreBuildTools"
+      )
+
+      $Deadline = (Get-Date).AddMinutes(5)
+      do {
+        $ClangCl = Find-ClangCl
+        if ($ClangCl) { break }
+        Start-Sleep -Seconds 2
+      } while ((Get-Date) -lt $Deadline)
     }
     if (-not $ClangCl) {
-      throw "MSVC ARM target compiler missing ($Compiler) and no clang-cl.exe was found in VS/LLVM paths"
+      throw "official ARM32 clang-cl missing after installing Microsoft.VisualStudio.Component.VC.Llvm.Clang"
     }
 
     $WrapperRoot = Join-Path $env:RUNNER_TEMP "agena-msvc-clang\$TargetTriple"
@@ -258,7 +290,9 @@ function Set-EnvFromVsDevCmd {
     $WrapperText = "@echo off`r`n`"$ClangCl`" --target=thumbv7a-pc-windows-msvc %*`r`nexit /b %ERRORLEVEL%`r`n"
     [IO.File]::WriteAllText($Compiler, $WrapperText, [Text.Encoding]::ASCII)
     $UsingClangCl = $true
-    Write-Host "Using clang-cl ARMv7 MSVC fallback: $ClangCl --target=thumbv7a-pc-windows-msvc"
+    Write-Host "Using official clang-cl ARMv7 MSVC compiler: $ClangCl --target=thumbv7a-pc-windows-msvc"
+  } elseif (-not (Test-Path $Compiler)) {
+    throw "MSVC target compiler missing for host=$HostArch target=${Arch}: $Compiler"
   }
   if (Test-Path $TargetBin) {
     $env:PATH = "$TargetBin;$env:PATH"
@@ -409,15 +443,19 @@ function Set-EnvFromVsDevCmd {
 
   # cc-rs invokes cl.exe directly and does not print or normalize inherited
   # INCLUDE values in its command diagnostics. Add both verified official
-  # header trees as target-scoped /I flags so C build scripts cannot lose the
-  # MSVC runtime or UCRT headers when they replace the environment.
+  # header trees as target-scoped compiler flags so C build scripts cannot lose
+  # the MSVC runtime or UCRT headers when they replace the environment.
   $HeaderIncludes = @($VCToolsInclude, $UcrtInclude)
   # cc-rs normally splits *FLAGS on whitespace. Enable its documented shell
   # parser so the quoted official Windows paths remain one compiler argument
   # even when Visual Studio or the SDK is installed below Program Files.
   $env:CC_SHELL_ESCAPED_FLAGS = "1"
   $TargetEnvKey = $TargetTriple.Replace("-", "_")
-  $HeaderFlags = @($HeaderIncludes | ForEach-Object { "/I`"$_`"" })
+  # Use the compiler-neutral spelling. clang/clang-cl both accept -I, and
+  # MSVC cl.exe accepts '-' as an option prefix; unlike /I this prevents
+  # clang's GNU driver from treating /I"C:\Program Files\..." as a filename
+  # when cc-rs forwards target-scoped flags.
+  $HeaderFlags = @($HeaderIncludes | ForEach-Object { "-I`"$_`"" })
   $AbiFlags = @($HeaderFlags)
   if ($Arch -eq "arm64ec") {
     # cl.exe is shared with the ARM64 toolset on current VS releases. This

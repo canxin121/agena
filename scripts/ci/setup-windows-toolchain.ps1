@@ -275,12 +275,11 @@ function Set-EnvFromVsDevCmd {
   # headers and libraries unambiguous for build scripts that invoke cl.exe
   # through cc-rs rather than through devenv/msbuild.
   $VCToolsInclude = Join-Path $VCToolsRoot "include"
-  if (-not (Test-Path (Join-Path $VCToolsInclude "stddef.h"))) {
+  if (-not (Test-Path (Join-Path $VCToolsInclude "vcruntime.h"))) {
     # The legacy ARM compiler can be installed beside a newer MSVC host toolset
-    # without carrying its C headers.  Headers are architecture-independent;
-    # select the newest installed official MSVC include tree that contains the
-    # required standard header while retaining the target-specific compiler
-    # and libraries selected above.
+    # without carrying the MSVC runtime headers. MSVC's vcruntime.h is the
+    # stable marker for a complete official VC include tree; stddef.h itself is
+    # supplied by the Windows SDK UCRT include tree below.
     function Find-MsvcHeaderToolsRoot {
       # The compiler and headers can be split across official side-by-side VS
       # installations on hosted images. Search the actual header path directly
@@ -327,7 +326,7 @@ function Set-EnvFromVsDevCmd {
         $Candidates = @(Get-ChildItem -LiteralPath $CandidateToolsRoot -Directory -ErrorAction SilentlyContinue | Sort-Object Name -Descending)
         Write-Host "Inspecting MSVC toolsets under ${InstallPath}: $($Candidates.Name -join ', ')"
         foreach ($Candidate in $Candidates) {
-          $HeaderPath = Join-Path $Candidate.FullName "include\stddef.h"
+          $HeaderPath = Join-Path $Candidate.FullName "include\vcruntime.h"
           if (Test-Path -LiteralPath $HeaderPath -PathType Leaf) {
             Write-Host "Using official MSVC headers: $HeaderPath"
             return $Candidate
@@ -360,17 +359,62 @@ function Set-EnvFromVsDevCmd {
       } while ((Get-Date) -lt $Deadline)
     }
     if (-not $HeaderToolsRoot) {
-      throw "MSVC C headers missing: no installed toolset contains include\stddef.h after installing official C++ build tools"
+      throw "MSVC runtime headers missing: no installed toolset contains include\vcruntime.h after installing official C++ build tools"
     }
     $VCToolsInclude = Join-Path $HeaderToolsRoot.FullName "include"
   }
+  # stddef.h is an official Windows SDK UCRT header rather than an MSVC
+  # toolset header. Verify the real SDK path selected by VsDevCmd and add it
+  # beside the MSVC include tree; do not rely on an inherited INCLUDE value
+  # that a C build script may replace.
+  $UcrtInclude = $null
+  foreach ($SdkRootValue in @($env:UniversalCRTSdkDir, $env:WindowsSdkDir)) {
+    if (-not $SdkRootValue) {
+      continue
+    }
+    $SdkRoot = $SdkRootValue.TrimEnd('\')
+    $SdkIncludeRoot = Join-Path $SdkRoot "Include"
+    if (-not (Test-Path -LiteralPath $SdkIncludeRoot -PathType Container)) {
+      continue
+    }
+    $SdkVersions = @()
+    foreach ($VersionValue in @($env:UCRTVersion, $env:WindowsSDKVersion)) {
+      if ($VersionValue) {
+        $SdkVersions += $VersionValue.TrimEnd('\')
+      }
+    }
+    $SdkVersions += Get-ChildItem -LiteralPath $SdkIncludeRoot -Directory -ErrorAction SilentlyContinue |
+      Sort-Object Name -Descending |
+      Select-Object -ExpandProperty Name
+    $SdkVersions = @($SdkVersions |
+      ForEach-Object { $_.ToString().TrimEnd('\') } |
+      Where-Object { $_ } |
+      Sort-Object -Unique)
+    foreach ($SdkVersion in $SdkVersions) {
+      $CandidateUcrtInclude = Join-Path (Join-Path $SdkIncludeRoot $SdkVersion) "ucrt"
+      $UcrtHeaderPath = Join-Path $CandidateUcrtInclude "stddef.h"
+      if (Test-Path -LiteralPath $UcrtHeaderPath -PathType Leaf) {
+        $UcrtInclude = $CandidateUcrtInclude
+        break
+      }
+    }
+    if ($UcrtInclude) {
+      break
+    }
+  }
+  if (-not $UcrtInclude) {
+    throw "Windows SDK UCRT headers missing: no official SDK include tree contains ucrt\stddef.h"
+  }
+  Write-Host "Using official Windows SDK UCRT headers: $(Join-Path $UcrtInclude 'stddef.h')"
+
   # cc-rs invokes cl.exe directly and does not print or normalize inherited
-  # INCLUDE values in its command diagnostics. Add the verified official
-  # header tree as a target-scoped /I flag as well, so C build scripts cannot
-  # accidentally lose stddef.h when they replace the environment.
+  # INCLUDE values in its command diagnostics. Add both verified official
+  # header trees as target-scoped /I flags so C build scripts cannot lose the
+  # MSVC runtime or UCRT headers when they replace the environment.
+  $HeaderIncludes = @($VCToolsInclude, $UcrtInclude)
   $TargetEnvKey = $TargetTriple.Replace("-", "_")
-  $HeaderFlag = "/I`"$VCToolsInclude`""
-  $AbiFlags = @($HeaderFlag)
+  $HeaderFlags = @($HeaderIncludes | ForEach-Object { "/I`"$_`"" })
+  $AbiFlags = @($HeaderFlags)
   if ($Arch -eq "arm64ec") {
     # cl.exe is shared with the ARM64 toolset on current VS releases. This
     # switch is what makes cc-rs C/C++ objects use the real ARM64EC ABI.
@@ -386,10 +430,11 @@ function Set-EnvFromVsDevCmd {
     [Environment]::SetEnvironmentVariable($FlagName, $CombinedFlags, "Process")
   }
   $VCToolsLib = Join-Path $VCToolsRoot "lib\$Arch"
+  $HeaderPrefix = $HeaderIncludes -join ";"
   if ($env:INCLUDE) {
-    $env:INCLUDE = "$VCToolsInclude;$env:INCLUDE"
+    $env:INCLUDE = "$HeaderPrefix;$env:INCLUDE"
   } else {
-    $env:INCLUDE = $VCToolsInclude
+    $env:INCLUDE = $HeaderPrefix
   }
 
   $TargetLibDirs = @()

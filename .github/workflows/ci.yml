@@ -179,7 +179,7 @@ jobs:
   custom-targets:
     name: check ${{ matrix.target }}
     needs: targets
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner || 'ubuntu-latest' }}
     timeout-minutes: 90
     strategy:
       fail-fast: false
@@ -196,10 +196,20 @@ jobs:
       - name: Install nightly Cargo driver
         if: matrix.build_std
         run: rustup toolchain install nightly-2026-08-18 --profile minimal
-      - name: Check full OS backend
+      - name: Set up official Cygwin toolchain
+        if: matrix.builder == 'cygwin'
+        shell: pwsh
+        run: ./scripts/ci/setup-cygwin-toolchain.ps1
+      - name: Check full OS backend (Unix)
+        if: matrix.builder != 'cygwin'
+        shell: bash
         run: >-
           bash scripts/ci/check-custom-backend-target.sh
           '${{ matrix.target }}'
           '${{ matrix.os }}'
           '${{ matrix.build_std }}'
           '${{ matrix.builder }}'
+      - name: Check full OS backend (Cygwin)
+        if: matrix.builder == 'cygwin'
+        shell: pwsh
+        run: ./scripts/ci/check-cygwin-backend.ps1

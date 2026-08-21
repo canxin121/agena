@@ -1230,6 +1230,8 @@
       "target": "x86_64-pc-cygwin",
       "os": "cygwin",
       "builder": "cygwin",
+      "runner": "windows-2025",
+      "shell": "pwsh",
       "build_std": true,
       "artifact_kind": "backend"
     },

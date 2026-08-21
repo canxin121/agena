@@ -66,6 +66,10 @@ netbsd_zig_target() {
 }
 
 case "$BUILDER" in
+  cygwin)
+    echo "ERROR: Cygwin requires the official Windows Cygwin toolchain and PowerShell check path" >&2
+    exit 2
+    ;;
   zig-netbsd)
     zig_target="$(netbsd_zig_target)"
     exec bash scripts/ci/run-zig-backend.sh "$TARGET" "$zig_target" -- bash "$0" "$TARGET" "$TARGET_OS" "$BUILD_STD" direct

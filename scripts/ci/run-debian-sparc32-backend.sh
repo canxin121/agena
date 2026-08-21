@@ -207,6 +207,9 @@ READELF="$TOOLCHAIN_ROOT/usr/bin/sparc64-linux-gnu-readelf"
 
 # The compiler binaries run on the Ubuntu host, but all target headers,
 # startup objects, libgcc, and binutils are resolved from the extracted tree.
+# Debian's cross-GCC specs spell the multilib paths as /usr/sparc64-linux-gnu,
+# so the sysroot root must be TOOLCHAIN_ROOT (not SYSROOT, which would make
+# those paths resolve below a duplicated /usr/sparc64-linux-gnu prefix).
 # Host shared libraries remain host-runtime dependencies and cannot affect the
 # SPARC ABI; the exact Debian libbinutils is preferred when present.
 export PATH="$TOOLCHAIN_ROOT/usr/bin:$PATH"
@@ -219,7 +222,7 @@ mkdir -p "$WRAPPER_ROOT"
 cat > "$WRAPPER_ROOT/cc" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
-exec "$GCC" -m32 -no-canonical-prefixes --sysroot="$SYSROOT" \
+exec "$GCC" -m32 -no-canonical-prefixes --sysroot="$TOOLCHAIN_ROOT" \
   -B"$TOOLCHAIN_ROOT/usr/bin/" \
   -B"$GCC_LIB/" \
   -B"$SYSROOT/bin/" "\$@"
@@ -227,7 +230,7 @@ EOF
 cat > "$WRAPPER_ROOT/cxx" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
-exec "$GXX" -m32 -no-canonical-prefixes --sysroot="$SYSROOT" \
+exec "$GXX" -m32 -no-canonical-prefixes --sysroot="$TOOLCHAIN_ROOT" \
   -B"$TOOLCHAIN_ROOT/usr/bin/" \
   -B"$GCC_LIB/" \
   -B"$SYSROOT/bin/" "\$@"

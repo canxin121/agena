@@ -34,7 +34,9 @@ if (-not $TargetTriple) {
   $TargetTriple = Get-HostTriple
 }
 
-if ($TargetTriple -match "windows") {
+$IsWindowsTarget = $TargetTriple -match "windows"
+$IsCygwinTarget = $TargetTriple -match "-pc-cygwin$"
+if ($IsWindowsTarget) {
   & (Join-Path $RepoRoot "scripts/ci/setup-windows-toolchain.ps1") -TargetTriple $TargetTriple
 }
 
@@ -55,10 +57,22 @@ if (-not (Test-Path -LiteralPath (Join-Path $WebDistDir "index.html"))) {
 
 $Ext = ""
 $ArchiveExt = ".tar.gz"
-if ($TargetTriple -match 'windows') {
+if ($IsWindowsTarget -or $IsCygwinTarget) {
   $Ext = ".exe"
   $ArchiveExt = ".zip"
 }
+
+if ($IsCygwinTarget) {
+  $CygwinRuntime = if ($env:AGENA_CYGWIN_ROOT) {
+    Join-Path $env:AGENA_CYGWIN_ROOT "bin/cygwin1.dll"
+  } else {
+    $null
+  }
+  if (-not $CygwinRuntime -or -not (Test-Path -LiteralPath $CygwinRuntime -PathType Leaf)) {
+    throw "Official Cygwin runtime cygwin1.dll is required at AGENA_CYGWIN_ROOT\\bin\\cygwin1.dll"
+  }
+}
+$RuntimeReadmeLine = if ($IsCygwinTarget) { "- bin/cygwin1.dll (Cygwin runtime)" } else { "" }
 
 Write-Host "Building agena for $TargetTriple..."
 $BuildArgs = @(
@@ -95,12 +109,12 @@ if ($BuildStd) {
     $env:RUSTC_BOOTSTRAP = "1"
     $env:CARGO_TARGET_DIR = $BuildTargetDir
     $RustFlags = @($OldRustFlags, $TargetRustFlags) | Where-Object { $_ }
-    if ($TargetTriple -match "-windows-(msvc|gnu)$") {
+    if ($TargetTriple -match "-windows-(msvc|gnu)$" -or $IsCygwinTarget) {
       # Build scripts such as autocfg invoke rustc directly with --target.
       # Cargo's internal build-std dependency paths are not included in those
       # commands, so expose the actual target deps directory through the same
       # RUSTFLAGS that Cargo encodes for build-script probes. This applies to
-      # every Windows build-std target, including thumbv7a.
+      # every Windows/Cygwin build-std target, including thumbv7a.
       $BuildStdProfile = Join-Path $BuildTargetDir "$TargetTriple\release"
       $BuildStdDeps = Join-Path $BuildStdProfile "deps"
       $RustFlags += @("-L", "dependency=$BuildStdDeps")
@@ -171,6 +185,9 @@ New-Item -ItemType Directory -Force -Path $StageBinDir | Out-Null
 New-Item -ItemType Directory -Force -Path $StageWebDir | Out-Null
 
 Copy-Item -LiteralPath $BinPath -Destination (Join-Path $StageBinDir "agena$Ext") -Force
+if ($IsCygwinTarget) {
+  Copy-Item -LiteralPath $CygwinRuntime -Destination (Join-Path $StageBinDir "cygwin1.dll") -Force
+}
 Copy-Item -Path (Join-Path $WebDistDir "*") -Destination $StageWebDir -Recurse -Force
 
 $Readme = @"
@@ -180,6 +197,7 @@ Target: $TargetTriple
 
 Contents:
 - bin/agena$Ext
+$RuntimeReadmeLine
 - web-dist/ (served by the Agena server on the same host and port)
 "@
 Set-Content -LiteralPath (Join-Path $StageDir "README.txt") -Value $Readme

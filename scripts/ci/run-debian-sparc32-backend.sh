@@ -142,6 +142,18 @@ package_specs=(
   'libubsan1-sparc64-cross|12.2.0-13cross1|a6c88550a21109b4eeb1ec450a7e79714a6abde88b983f94febfe888077ae5d6|pool/main/g/gcc-12-cross-ports/libubsan1-sparc64-cross_12.2.0-13cross1_all.deb'
   'libitm1-sparc64-cross|12.2.0-13cross1|1b51721189d807a9863c09a5f5f72f94bfcd4af5547516ab3bfa58199511677b|pool/main/g/gcc-12-cross-ports/libitm1-sparc64-cross_12.2.0-13cross1_all.deb'
   'libgcc-12-dev-sparc64-cross|12.2.0-13cross1|96e4830708f93c85c5a3590ec3d5aefe33169b5084959990ba9c1d8a3fd56f0e|pool/main/g/gcc-12-cross-ports/libgcc-12-dev-sparc64-cross_12.2.0-13cross1_all.deb'
+  # The 32-bit SPARC multilib has a separate GCC runtime.  The sparc64
+  # packages above deliberately remain present for the compiler's native
+  # multilib; these packages provide the actual -m32 libgcc/libstdc++ files.
+  'lib32gcc-s1-sparc64-cross|12.2.0-13cross1|d483ca79af6da7c7a818f43369362748b9eea89b1731b8c60fb03e2207dab472|pool/main/g/gcc-12-cross-ports/lib32gcc-s1-sparc64-cross_12.2.0-13cross1_all.deb'
+  'lib32gomp1-sparc64-cross|12.2.0-13cross1|d75fad119c26180db415f90f1700b993e4fee76434008f2f426587da20b7a69c|pool/main/g/gcc-12-cross-ports/lib32gomp1-sparc64-cross_12.2.0-13cross1_all.deb'
+  'lib32itm1-sparc64-cross|12.2.0-13cross1|953c66f50574d3131a64ed52d3f15014db22caab4fd45a215b718071d31559e6|pool/main/g/gcc-12-cross-ports/lib32itm1-sparc64-cross_12.2.0-13cross1_all.deb'
+  'lib32atomic1-sparc64-cross|12.2.0-13cross1|28b6568ccef3088a6d44069a68b7a8edb79b63b4bc4220079ac5e2968806f9be|pool/main/g/gcc-12-cross-ports/lib32atomic1-sparc64-cross_12.2.0-13cross1_all.deb'
+  'lib32asan8-sparc64-cross|12.2.0-13cross1|d6868969fc982437520607e9f27f35e71fd7a28dabf3d4c3afff590b27a3f0fc|pool/main/g/gcc-12-cross-ports/lib32asan8-sparc64-cross_12.2.0-13cross1_all.deb'
+  'lib32ubsan1-sparc64-cross|12.2.0-13cross1|f3e11fbc26ef4423d215efb90ce4e5a116f7fd73c088077ae04dff3de9e02c55|pool/main/g/gcc-12-cross-ports/lib32ubsan1-sparc64-cross_12.2.0-13cross1_all.deb'
+  'lib32gcc-12-dev-sparc64-cross|12.2.0-13cross1|1e34816be3c90007d74539e6f0fd0d0945e579156bd105f559fc3f941b9c823a|pool/main/g/gcc-12-cross-ports/lib32gcc-12-dev-sparc64-cross_12.2.0-13cross1_all.deb'
+  'lib32stdc++6-sparc64-cross|12.2.0-13cross1|61299b104b6261627c1e9c873c7a52f814d8caac69d503795a1aac7bc532c8ee|pool/main/g/gcc-12-cross-ports/lib32stdc++6-sparc64-cross_12.2.0-13cross1_all.deb'
+  'lib32stdc++-12-dev-sparc64-cross|12.2.0-13cross1|7be0ab66ae223504627e57d44ac9103768a3bffb8f029649879d61e8140e0eae|pool/main/g/gcc-12-cross-ports/lib32stdc++-12-dev-sparc64-cross_12.2.0-13cross1_all.deb'
   'libstdc++6-sparc64-cross|12.2.0-13cross1|68c6df9637215f0586f64d898b2b46e1fec3e3d7446f63de5729b72ba4596d4f|pool/main/g/gcc-12-cross-ports/libstdc++6-sparc64-cross_12.2.0-13cross1_all.deb'
   'libstdc++-12-dev-sparc64-cross|12.2.0-13cross1|be7524dfe743e4fd40244705017eee6c1892186c7984240a7677763ffcd8fd49|pool/main/g/gcc-12-cross-ports/libstdc++-12-dev-sparc64-cross_12.2.0-13cross1_all.deb'
 )
@@ -178,6 +190,14 @@ READELF="$TOOLCHAIN_ROOT/usr/bin/sparc64-linux-gnu-readelf"
 }
 [[ -x "$GCC_LIB/cc1" && -x "$GCC_LIB/cc1plus" ]] || {
   echo "ERROR: extracted Debian GCC is missing cc1/cc1plus" >&2
+  exit 1
+}
+[[ -f "$GCC_LIB/32/libgcc.a" && -f "$GCC_LIB/32/libgcc_s.so" ]] || {
+  echo "ERROR: extracted Debian SPARC multilib is missing 32-bit GCC runtime files" >&2
+  exit 1
+}
+[[ -f "$TOOLCHAIN_ROOT/usr/sparc64-linux-gnu/lib32/libgcc_s.so.1" ]] || {
+  echo "ERROR: extracted Debian SPARC multilib is missing libgcc_s.so.1" >&2
   exit 1
 }
 [[ -f "$SYSROOT/include/gnu/stubs-32.h" ]] || {

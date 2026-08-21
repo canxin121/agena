@@ -69,6 +69,23 @@ fn has_extern(args: &[OsString], crate_name: &str) -> bool {
     false
 }
 
+fn is_rust_sysroot_build() -> bool {
+    // build-std compiles several Rust sysroot crates through the same RUSTC
+    // wrapper.  Their build scripts have crate-name `build_script_build`, so
+    // checking only the rustc crate name cannot distinguish the std build
+    // script from an ordinary dependency build script.  The manifest path is
+    // supplied by Cargo and is a stable, target-independent way to identify
+    // the real Rust source tree.  Let all of those sysroot invocations pass
+    // through; Cargo owns their exact dependency paths and extern arguments.
+    let Some(manifest_dir) = env::var_os("CARGO_MANIFEST_DIR") else {
+        return false;
+    };
+    let manifest_dir = manifest_dir.to_string_lossy().to_ascii_lowercase();
+    manifest_dir.contains("rustlib")
+        && manifest_dir.contains("src")
+        && manifest_dir.contains("library")
+}
+
 fn collect_artifacts(root: &Path, directories: &mut Vec<PathBuf>, artifacts: &mut Vec<PathBuf>) {
     let Ok(entries) = fs::read_dir(root) else {
         return;
@@ -162,13 +179,15 @@ fn main() {
         // these additions. Never inject host or synthetic standard-library
         // artifacts, and never try to bootstrap core/std while they are being
         // built (their output does not exist yet).
-        let building_std = matches!(crate_name(&args), Some("core" | "std" | "alloc"));
+        let building_rust_sysroot =
+            matches!(crate_name(&args), Some("core" | "std" | "alloc"))
+                || is_rust_sysroot_build();
         let is_print_query = args.iter().any(|arg| {
             arg.to_str()
                 .is_some_and(|value| value == "--print" || value.starts_with("--print="))
         });
         let (mut directories, artifacts) = discover_artifacts(&build_root);
-        if !building_std && !is_print_query {
+        if !building_rust_sysroot && !is_print_query {
             let mut standard_artifacts = Vec::new();
             for standard_crate in ["core", "std"] {
                 if has_extern(&args, standard_crate) {

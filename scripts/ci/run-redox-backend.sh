@@ -16,6 +16,7 @@ if ! command -v redoxer >/dev/null 2>&1; then
 fi
 
 export TARGET
+export AGENA_TARGET_TRIPLE="$TARGET"
 redoxer toolchain
 NIGHTLY_TOOLCHAIN="${AGENA_NIGHTLY_TOOLCHAIN:-nightly-2026-08-18}"
 export AGENA_CARGO_DRIVER="$(rustup which --toolchain "$NIGHTLY_TOOLCHAIN" cargo)"

@@ -304,7 +304,15 @@ fn ring_build_rs_main(c_root_dir: &Path, core_name_and_version: &str) {
     let out_dir = env::var_os("OUT_DIR").unwrap();
     let out_dir = PathBuf::from(out_dir);
 
-    let target_triple = env::var("TARGET").unwrap();
+    println!("cargo:rerun-if-env-changed=AGENA_TARGET_TRIPLE");
+    // redoxer wraps Cargo and exports TARGET for its own toolchain. That
+    // value can describe the host-width Redox environment rather than the
+    // matrix target Cargo is compiling. The backend wrapper passes the
+    // selected target explicitly so native build scripts cannot select an
+    // incompatible ring ABI.
+    let target_triple = std::env::var("AGENA_TARGET_TRIPLE")
+        .or_else(|_| std::env::var("TARGET"))
+        .unwrap();
     let mut arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap();
     // redoxer supplies custom target specifications for several ABIs.  Those
     // specs can expose the host-width architecture (and, depending on the
@@ -319,14 +327,28 @@ fn ring_build_rs_main(c_root_dir: &Path, core_name_and_version: &str) {
         // scripts even though TARGET still identifies the real Redox ABI.
         // Use the triple's first component for ring's assembly selection and
         // for cc-rs' automatic -m32/-m64 decision.
-        arch = match target_triple.split('-').next().unwrap_or_default() {
-            "i386" | "i486" | "i586" | "i686" => X86.to_owned(),
-            "x86_64" => X86_64.to_owned(),
-            "aarch64" => AARCH64.to_owned(),
-            "arm" | "armv7" | "armv7a" => ARM.to_owned(),
-            "riscv64" | "riscv64gc" => "riscv64".to_owned(),
-            _ => arch,
+        let (explicit_arch, explicit_pointer_width) = match target_triple.split('-').next() {
+            Some("i386" | "i486" | "i586" | "i686") => (Some(X86), Some("32")),
+            Some("x86_64") => (Some(X86_64), Some("64")),
+            Some("aarch64") => (Some(AARCH64), Some("64")),
+            Some("arm" | "armv7" | "armv7a") => (Some(ARM), Some("32")),
+            Some("riscv64" | "riscv64gc") => (Some("riscv64"), Some("64")),
+            _ => (None, None),
         };
+        if let Some(explicit_arch) = explicit_arch {
+            arch = explicit_arch.to_owned();
+            // cc-rs consults TARGET and the Cargo cfg environment in the
+            // build-script process. Keep both aligned with the explicit
+            // Redox target; otherwise it may add -m64 or select x86_64 .S
+            // files for an i586 build.
+            unsafe {
+                std::env::set_var("TARGET", &target_triple);
+                std::env::set_var("CARGO_CFG_TARGET_ARCH", explicit_arch);
+            }
+        }
+        if let Some(explicit_pointer_width) = explicit_pointer_width {
+            unsafe { std::env::set_var("CARGO_CFG_TARGET_POINTER_WIDTH", explicit_pointer_width) };
+        }
         // cc-rs reads this build-script cfg to select its ABI flags. Keep it
         // aligned with the explicit target canonicalization above; otherwise
         // it can pass -m64 to an i586 compiler or to an AArch64 compiler.

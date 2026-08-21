@@ -77,12 +77,26 @@ if ! valid_sysroot; then
     sudo apt-get install -y --no-install-recommends libguestfs-tools
   fi
 
-  # Ubuntu hosted runners can have libguestfs-tools installed while omitting
-  # the distribution kernel image that supermin uses for its appliance.  In
-  # that state guestfish fails before it ever opens the supplied image.  Add a
-  # real generic kernel/modules package when the runner has no bootable kernel
-  # image, then fail explicitly if the prerequisite is still absent.
-  if ! compgen -G "/boot/vmlinuz-*" >/dev/null 2>&1; then
+  # Ubuntu hosted runners can have libguestfs-tools installed while exposing
+  # only an unreadable Azure kernel to the unprivileged runner user. Supermin
+  # will choose that kernel before it ever opens the supplied FreeBSD image.
+  # Prefer a readable non-Azure kernel with matching modules, and install the
+  # real generic kernel package when the hosted image does not provide one.
+  supermin_kernel=""
+  supermin_kernel_version=""
+  for candidate_kernel in /boot/vmlinuz-* /lib/modules/*/vmlinuz; do
+    [[ -r "$candidate_kernel" ]] || continue
+    candidate_version="${candidate_kernel##*/}"
+    candidate_version="${candidate_version#vmlinuz-}"
+    [[ -d "/lib/modules/$candidate_version" ]] || continue
+    if [[ "$candidate_version" != *-azure ]]; then
+      supermin_kernel="$candidate_kernel"
+      supermin_kernel_version="$candidate_version"
+      break
+    fi
+  done
+
+  if [[ -z "$supermin_kernel" ]]; then
     if ! command -v sudo >/dev/null 2>&1; then
       echo "ERROR: a bootable Linux kernel is required by libguestfs supermin" >&2
       exit 1
@@ -90,8 +104,20 @@ if ! valid_sysroot; then
     sudo apt-get update -y
     sudo apt-get install -y --no-install-recommends linux-image-generic
   fi
-  compgen -G "/boot/vmlinuz-*" >/dev/null 2>&1 || {
-    echo "ERROR: libguestfs supermin still has no /boot/vmlinuz-* kernel image" >&2
+
+  if [[ -z "$supermin_kernel" ]]; then
+    for candidate_kernel in /boot/vmlinuz-* /lib/modules/*/vmlinuz; do
+      [[ -r "$candidate_kernel" ]] || continue
+      candidate_version="${candidate_kernel##*/}"
+      candidate_version="${candidate_version#vmlinuz-}"
+      [[ -d "/lib/modules/$candidate_version" ]] || continue
+      supermin_kernel="$candidate_kernel"
+      supermin_kernel_version="$candidate_version"
+      break
+    done
+  fi
+  [[ -n "$supermin_kernel" ]] || {
+    echo "ERROR: libguestfs supermin has no readable kernel with matching modules" >&2
     exit 1
   }
 
@@ -101,6 +127,8 @@ if ! valid_sysroot; then
   export LIBGUESTFS_BACKEND="direct"
   export LIBGUESTFS_DEBUG="1"
   export LIBGUESTFS_TRACE="1"
+  export SUPERMIN_KERNEL="$supermin_kernel"
+  export SUPERMIN_MODULES="/lib/modules/$supermin_kernel_version"
 
   rm -rf "$SYSROOT"
   mkdir -p "$SYSROOT/usr"

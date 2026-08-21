@@ -60,6 +60,42 @@ function Set-EnvFromVsDevCmd {
   }
   $VCToolsRoot = Join-Path $ToolsRoot $ToolsVersion
   $HostToolArch = if ($HostArch -eq "arm64") { "HostARM64" } else { "HostX64" }
+
+  if ($Arch -eq "arm") {
+    $ArmCompilerPath = Join-Path $VCToolsRoot "bin\$HostToolArch\arm\cl.exe"
+    $ArmLibraryPath = Join-Path $VCToolsRoot "lib\arm"
+    if (-not (Test-Path $ArmCompilerPath) -or -not (Test-Path $ArmLibraryPath)) {
+      # Windows hosted images do not always carry the ARM32 MSVC component in
+      # the preinstalled VS instance. Install the official component through
+      # the VS installer instead of substituting host or ARM64 libraries.
+      $VsInstaller = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\setup.exe"
+      if (-not (Test-Path $VsInstaller)) {
+        throw "Visual Studio installer not found at $VsInstaller; cannot install the ARM32 MSVC component"
+      }
+      Write-Host "Installing official Visual Studio ARM32 MSVC component: Microsoft.VisualStudio.Component.VC.Tools.ARM"
+      & $VsInstaller modify --installPath $Install --add Microsoft.VisualStudio.Component.VC.Tools.ARM --quiet --wait --norestart
+      if ($LASTEXITCODE -notin @(0, 3010)) {
+        throw "Visual Studio ARM32 MSVC component installation failed with exit code $LASTEXITCODE"
+      }
+
+      # The installer can add a side-by-side MSVC tools version. Select the
+      # newest installed version that actually contains the ARM32 ABI rather
+      # than retaining a stale VCToolsVersion from VsDevCmd.
+      $ArmToolsVersion = Get-ChildItem -Path $ToolsRoot -Directory |
+        Sort-Object Name -Descending |
+        Where-Object {
+          (Test-Path (Join-Path $_.FullName "lib\arm")) -and
+          (Test-Path (Join-Path $_.FullName "bin\$HostToolArch\arm\cl.exe"))
+        } |
+        Select-Object -First 1 -ExpandProperty Name
+      if ($ArmToolsVersion) {
+        $ToolsVersion = $ArmToolsVersion
+        $VCToolsRoot = Join-Path $ToolsRoot $ToolsVersion
+        $env:VCToolsVersion = $ToolsVersion
+      }
+    }
+  }
+
   $TargetBin = Join-Path $VCToolsRoot "bin\$HostToolArch\$Arch"
   $Compiler = Join-Path $TargetBin "cl.exe"
   $UsingClangCl = $false

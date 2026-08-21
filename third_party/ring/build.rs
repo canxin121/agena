@@ -306,7 +306,14 @@ fn ring_build_rs_main(c_root_dir: &Path, core_name_and_version: &str) {
 
     let target_triple = env::var("TARGET").unwrap();
     let mut arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap();
-    if env::var("CARGO_CFG_TARGET_OS").unwrap() == "redox" {
+    // redoxer supplies custom target specifications for several ABIs.  Those
+    // specs can expose the host-width architecture (and, depending on the
+    // redoxer/Cargo combination, even an otherwise generic target OS) to
+    // build scripts.  For Redox, TARGET is the stable source of truth: it is
+    // the triple selected by the matrix and the compiler redoxer configured.
+    if target_triple.ends_with("-redox")
+        || env::var("CARGO_CFG_TARGET_OS").as_deref() == Some("redox")
+    {
         // redoxer supplies custom target specifications for several ABIs. A
         // stale/custom spec can expose the host-width architecture to build
         // scripts even though TARGET still identifies the real Redox ABI.
@@ -317,6 +324,7 @@ fn ring_build_rs_main(c_root_dir: &Path, core_name_and_version: &str) {
             "x86_64" => X86_64.to_owned(),
             "aarch64" => AARCH64.to_owned(),
             "arm" | "armv7" | "armv7a" => ARM.to_owned(),
+            "riscv64" | "riscv64gc" => "riscv64".to_owned(),
             _ => arch,
         };
         // cc-rs reads this build-script cfg to select its ABI flags. Keep it

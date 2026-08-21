@@ -114,13 +114,10 @@ impl RawPid {
 pub(super) struct Process<'a> {
     #[cfg(any(
         target_os = "cygwin",
-        target_os = "espidf",
         target_os = "fuchsia",
-        target_os = "horizon",
         target_os = "openbsd",
         target_os = "redox",
         target_os = "tvos",
-        target_os = "vxworks",
     ))]
     inner: &'a mut Child,
     #[attr_alias(raw_pid)]
@@ -136,13 +133,10 @@ impl<'a> Process<'a> {
             pid: RawPid::new(process),
             #[cfg(any(
                 target_os = "cygwin",
-                target_os = "espidf",
                 target_os = "fuchsia",
-                target_os = "horizon",
                 target_os = "openbsd",
                 target_os = "redox",
                 target_os = "tvos",
-                target_os = "vxworks",
             ))]
             inner: process,
             _marker: PhantomData,

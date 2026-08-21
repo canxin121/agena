@@ -6,12 +6,9 @@
 )
 *unix_waitid=not(any(
     target_os = "cygwin",
-    target_os = "espidf",
     target_os = "fuchsia",
-    target_os = "horizon",
     target_os = "openbsd",
     target_os = "redox",
     target_os = "tvos",
-    target_os = "vxworks",
 ))
 *raw_pid=attr_alias(memory_limit, attr_alias(unix_waitid, any(*, *)))

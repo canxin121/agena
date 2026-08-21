@@ -14,6 +14,7 @@ use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::{Duration, Instant};
 
 fn target_argument(args: &[OsString]) -> Option<String> {
     for (index, arg) in args.iter().enumerate() {
@@ -96,6 +97,14 @@ fn collect_artifacts(root: &Path, directories: &mut Vec<PathBuf>, artifacts: &mu
     }
 }
 
+fn discover_artifacts(root: &Path) -> (Vec<PathBuf>, Vec<PathBuf>) {
+    let mut directories = Vec::new();
+    let mut artifacts = Vec::new();
+    collect_artifacts(root, &mut directories, &mut artifacts);
+    directories.sort();
+    (directories, artifacts)
+}
+
 fn find_artifact(artifacts: &[PathBuf], crate_name: &str, extension: &str) -> Option<PathBuf> {
     artifacts
         .iter()
@@ -110,6 +119,25 @@ fn find_artifact(artifacts: &[PathBuf], crate_name: &str, extension: &str) -> Op
         })
         .min_by(|left, right| left.as_os_str().cmp(right.as_os_str()))
         .cloned()
+}
+
+fn wait_for_artifact(root: &Path, crate_name: &str) -> Option<(Vec<PathBuf>, PathBuf)> {
+    // Cargo can start a build-script probe while build-std is still compiling
+    // core/std in a sibling job. Wait for the real artifact to be published,
+    // but keep a hard bound so a broken build-std invocation still fails.
+    let deadline = Instant::now() + Duration::from_secs(300);
+    loop {
+        let (directories, artifacts) = discover_artifacts(root);
+        if let Some(artifact) = find_artifact(&artifacts, crate_name, ".rlib")
+            .or_else(|| find_artifact(&artifacts, crate_name, ".rmeta"))
+        {
+            return Some((directories, artifact));
+        }
+        if Instant::now() >= deadline {
+            return None;
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    }
 }
 
 fn main() {
@@ -129,16 +157,6 @@ fn main() {
     command.args(&args);
 
     if is_win7 {
-        let mut directories = Vec::new();
-        let mut artifacts = Vec::new();
-        collect_artifacts(&build_root, &mut directories, &mut artifacts);
-        directories.sort();
-        for directory in directories {
-            command
-                .arg("-L")
-                .arg(format!("dependency={}", directory.display()));
-        }
-
         // Cargo's own build-std compilation already has its exact externs, and
         // normal target compilation does too. Only direct probe crates need
         // these additions. Never inject host or synthetic standard-library
@@ -149,22 +167,47 @@ fn main() {
             arg.to_str()
                 .is_some_and(|value| value == "--print" || value.starts_with("--print="))
         });
+        let (mut directories, artifacts) = discover_artifacts(&build_root);
         if !building_std && !is_print_query {
+            let mut standard_artifacts = Vec::new();
             for standard_crate in ["core", "std"] {
                 if has_extern(&args, standard_crate) {
                     continue;
                 }
-                let artifact = find_artifact(&artifacts, standard_crate, ".rlib")
+                let found = find_artifact(&artifacts, standard_crate, ".rlib")
                     .or_else(|| find_artifact(&artifacts, standard_crate, ".rmeta"))
-                    .unwrap_or_else(|| {
-                        panic!(
-                            "target build-std artifact for {standard_crate} was not found below {}",
-                            build_root.display()
-                        )
-                    });
+                    .map(|artifact| (Vec::new(), artifact))
+                    .or_else(|| wait_for_artifact(&build_root, standard_crate));
+                let Some((found_directories, artifact)) = found else {
+                    panic!(
+                        "target build-std artifact for {standard_crate} was not found below {} after waiting 300 seconds",
+                        build_root.display()
+                    );
+                };
+                for directory in found_directories {
+                    if !directories.iter().any(|candidate| candidate == &directory) {
+                        directories.push(directory);
+                    }
+                }
+                standard_artifacts.push((standard_crate, artifact));
+            }
+            directories.sort();
+            for directory in &directories {
+                command
+                    .arg("-L")
+                    .arg(format!("dependency={}", directory.display()));
+            }
+            for (standard_crate, artifact) in standard_artifacts {
                 command
                     .arg("--extern")
                     .arg(format!("{standard_crate}={}", artifact.display()));
+            }
+        } else {
+            directories.sort();
+            for directory in &directories {
+                command
+                    .arg("-L")
+                    .arg(format!("dependency={}", directory.display()));
             }
         }
     }

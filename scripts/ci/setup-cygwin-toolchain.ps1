@@ -50,9 +50,22 @@ $SetupArgs = @(
   "--site", $Mirror,
   "--packages", $Packages
 )
-& $Setup @SetupArgs
-if ($LASTEXITCODE -ne 0) {
-  throw "Cygwin setup failed with exit code $LASTEXITCODE"
+# setup-x86_64.exe is a GUI-subsystem process. PowerShell's native `&` does not
+# wait for GUI processes, so it can report a null exit code while the installer
+# is still running and the required files do not exist yet. Start-Process with
+# -Wait is required here; quote arguments explicitly because Start-Process joins
+# its argument list into one Windows command line.
+$QuotedSetupArgs = ($SetupArgs | ForEach-Object {
+  $Value = [string]$_
+  if ($Value -match '[\s"]') {
+    '"' + $Value.Replace('"', '\\"') + '"'
+  } else {
+    $Value
+  }
+}) -join " "
+$SetupProcess = Start-Process -FilePath $Setup -ArgumentList $QuotedSetupArgs -Wait -PassThru
+if ($SetupProcess.ExitCode -ne 0) {
+  throw "Cygwin setup failed with exit code $($SetupProcess.ExitCode)"
 }
 
 $Bin = Join-Path $Root "bin"

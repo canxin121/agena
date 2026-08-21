@@ -292,16 +292,44 @@ function Set-EnvFromVsDevCmd {
       $InstallPaths += & $VsWhere -all -products * -property installationPath |
         ForEach-Object { $_.Trim() } |
         Where-Object { $_ }
-      $InstallPaths = @($InstallPaths | Sort-Object -Unique)
+      # vswhere normally reports every instance, but the hosted image can
+      # expose a VS installation through the standard filesystem layout before
+      # its component catalog is visible to vswhere. Enumerate only the fixed
+      # vendor-owned year/edition levels as a deterministic fallback; do not
+      # recursively walk or infer arbitrary directories.
+      foreach ($VisualStudioRoot in @(
+          (Join-Path ${env:ProgramFiles} "Microsoft Visual Studio"),
+          (Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio")
+        )) {
+        if (-not (Test-Path -LiteralPath $VisualStudioRoot -PathType Container)) {
+          continue
+        }
+        foreach ($YearRoot in (Get-ChildItem -LiteralPath $VisualStudioRoot -Directory -ErrorAction SilentlyContinue)) {
+          foreach ($EditionRoot in (Get-ChildItem -LiteralPath $YearRoot.FullName -Directory -ErrorAction SilentlyContinue)) {
+            $CandidateToolsRoot = Join-Path $EditionRoot.FullName "VC\Tools\MSVC"
+            if (Test-Path -LiteralPath $CandidateToolsRoot -PathType Container) {
+              $InstallPaths += $EditionRoot.FullName
+            }
+          }
+        }
+      }
+      $InstallPaths = @($InstallPaths |
+        ForEach-Object { $_.ToString().Trim() } |
+        Where-Object { $_ } |
+        Sort-Object -Unique)
+      Write-Host "Inspecting official MSVC installations: $($InstallPaths -join '; ')"
 
       foreach ($InstallPath in $InstallPaths) {
         $CandidateToolsRoot = Join-Path $InstallPath "VC\Tools\MSVC"
         if (-not (Test-Path -LiteralPath $CandidateToolsRoot -PathType Container)) {
           continue
         }
-        foreach ($Candidate in (Get-ChildItem -LiteralPath $CandidateToolsRoot -Directory -ErrorAction SilentlyContinue | Sort-Object Name -Descending)) {
+        $Candidates = @(Get-ChildItem -LiteralPath $CandidateToolsRoot -Directory -ErrorAction SilentlyContinue | Sort-Object Name -Descending)
+        Write-Host "Inspecting MSVC toolsets under ${InstallPath}: $($Candidates.Name -join ', ')"
+        foreach ($Candidate in $Candidates) {
           $HeaderPath = Join-Path $Candidate.FullName "include\stddef.h"
           if (Test-Path -LiteralPath $HeaderPath -PathType Leaf) {
+            Write-Host "Using official MSVC headers: $HeaderPath"
             return $Candidate
           }
         }

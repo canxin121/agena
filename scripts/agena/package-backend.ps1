@@ -95,11 +95,12 @@ if ($BuildStd) {
     $env:RUSTC_BOOTSTRAP = "1"
     $env:CARGO_TARGET_DIR = $BuildTargetDir
     $RustFlags = @($OldRustFlags, $TargetRustFlags) | Where-Object { $_ }
-    if ($TargetTriple -match "-win7-windows-(msvc|gnu)$") {
+    if ($TargetTriple -match "-windows-(msvc|gnu)$") {
       # Build scripts such as autocfg invoke rustc directly with --target.
       # Cargo's internal build-std dependency paths are not included in those
       # commands, so expose the actual target deps directory through the same
-      # RUSTFLAGS that Cargo encodes for build-script probes.
+      # RUSTFLAGS that Cargo encodes for build-script probes. This applies to
+      # every Windows build-std target, including thumbv7a.
       $BuildStdProfile = Join-Path $BuildTargetDir "$TargetTriple\release"
       $BuildStdDeps = Join-Path $BuildStdProfile "deps"
       $RustFlags += @("-L", "dependency=$BuildStdDeps")

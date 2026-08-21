@@ -49,7 +49,7 @@ def main() -> None:
         "test",
         "-p",
         "agena-provider-bedrock-auth",
-        "portable_",
+        "runtime_",
         "--locked",
     ]
     subprocess.check_call(

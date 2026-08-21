@@ -87,6 +87,8 @@ if ($BuildStd) {
   $OldBootstrap = $env:RUSTC_BOOTSTRAP
   $OldRustFlags = $env:RUSTFLAGS
   $OldTargetDir = $env:CARGO_TARGET_DIR
+  $OldAgenaRealRustc = $env:AGENA_REAL_RUSTC
+  $OldAgenaBuildStdRoot = $env:AGENA_BUILD_STD_ROOT
   try {
     $env:RUSTC = $StableRustc
     $env:RUSTDOC = $StableRustdoc
@@ -98,8 +100,23 @@ if ($BuildStd) {
       # Cargo's internal build-std dependency paths are not included in those
       # commands, so expose the actual target deps directory through the same
       # RUSTFLAGS that Cargo encodes for build-script probes.
-      $BuildStdDeps = Join-Path $BuildTargetDir "$TargetTriple\release\deps"
+      $BuildStdProfile = Join-Path $BuildTargetDir "$TargetTriple\release"
+      $BuildStdDeps = Join-Path $BuildStdProfile "deps"
       $RustFlags += @("-L", "dependency=$BuildStdDeps")
+      $RustcWrapperDir = Join-Path $env:RUNNER_TEMP "agena-rustc-build-std\$TargetTriple"
+      New-Item -ItemType Directory -Force -Path $RustcWrapperDir | Out-Null
+      $RustcWrapperSource = Join-Path $RepoRoot "scripts\ci\rustc-build-std-wrapper.rs"
+      $RustcWrapper = Join-Path $RustcWrapperDir "rustc-build-std-wrapper.exe"
+      if (-not (Test-Path -LiteralPath $RustcWrapperSource)) {
+        throw "shared build-std rustc wrapper missing at $RustcWrapperSource"
+      }
+      & $StableRustc $RustcWrapperSource -o $RustcWrapper
+      if ($LASTEXITCODE -ne 0 -or -not (Test-Path $RustcWrapper)) {
+        throw "failed to compile the build-std rustc wrapper"
+      }
+      $env:AGENA_REAL_RUSTC = $StableRustc
+      $env:AGENA_BUILD_STD_ROOT = $BuildStdProfile
+      $env:RUSTC = $RustcWrapper
     }
     $env:RUSTFLAGS = ($RustFlags | Join-String -Separator " ")
     & cargo "+$NightlyToolchain" @BuildArgs -Z "build-std=std,panic_abort,proc_macro"
@@ -110,6 +127,16 @@ if ($BuildStd) {
     $env:RUSTC_BOOTSTRAP = $OldBootstrap
     $env:RUSTFLAGS = $OldRustFlags
     $env:CARGO_TARGET_DIR = $OldTargetDir
+    if ($null -eq $OldAgenaRealRustc) {
+      Remove-Item Env:AGENA_REAL_RUSTC -ErrorAction SilentlyContinue
+    } else {
+      $env:AGENA_REAL_RUSTC = $OldAgenaRealRustc
+    }
+    if ($null -eq $OldAgenaBuildStdRoot) {
+      Remove-Item Env:AGENA_BUILD_STD_ROOT -ErrorAction SilentlyContinue
+    } else {
+      $env:AGENA_BUILD_STD_ROOT = $OldAgenaBuildStdRoot
+    }
   }
 }
 else {

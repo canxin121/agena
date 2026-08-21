@@ -63,6 +63,7 @@ fi
 
 valid_sysroot() {
   [[ -f "$SYSROOT/usr/include/stdio.h" ]] \
+    && [[ -f "$SYSROOT/usr/include/assert.h" ]] \
     && [[ -f "$SYSROOT/usr/lib/crt1.o" ]] \
     && {
       # FreeBSD keeps the versioned libc runtime in /lib; some release
@@ -252,13 +253,14 @@ if ! probe="$(guestfish --ro --format=raw -a "$SLICE_IMAGE" <<EOF
 run
 mount-options ro,ufstype=ufs2 /dev/sda /
 exists /usr/include/stdio.h
+exists /usr/include/assert.h
 EOF
  )"; then
   echo "ERROR: guestfish could not mount the parsed FreeBSD UFS2 root slice from $FILE" >&2
   exit 1
 fi
-[[ "$probe" == *true* ]] || {
-  echo "ERROR: parsed FreeBSD UFS root slice does not contain /usr/include/stdio.h in $FILE" >&2
+[[ "$probe" == *true*true* ]] || {
+  echo "ERROR: parsed FreeBSD UFS root slice does not contain required C headers in $FILE" >&2
   exit 1
 }
 

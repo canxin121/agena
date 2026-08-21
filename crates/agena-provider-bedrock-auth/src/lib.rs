@@ -106,13 +106,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn portable_aws_https_client_constructs() {
+    fn runtime_aws_https_client_constructs() {
         assert!(!webpki_root_certs::TLS_SERVER_ROOT_CERTS.is_empty());
         let _client = aws_http_client();
     }
 
     #[test]
-    fn portable_reqwest_https_client_constructs() {
+    fn runtime_reqwest_https_client_constructs() {
         let _client = reqwest::Client::builder()
             .tls_backend_rustls()
             .build()

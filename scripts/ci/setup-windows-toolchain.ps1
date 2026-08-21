@@ -241,12 +241,20 @@ function Set-EnvFromVsDevCmd {
     # and libraries selected above.
     function Find-MsvcHeaderToolsRoot {
       # The compiler and headers can be split across official side-by-side VS
-      # installations on hosted images.  Search every installed MSVC toolset,
-      # not only the installation selected by `vswhere -latest`; never create
-      # or copy a synthetic header tree.
-      $ToolRoots = @()
-      if (Test-Path $ToolsRoot) {
-        $ToolRoots += Get-ChildItem -Path $ToolsRoot -Directory -ErrorAction SilentlyContinue
+      # installations on hosted images. Search the actual header path directly
+      # in every known installation; this avoids relying on VCToolsVersion or
+      # on wildcard enumeration of the parent VC\Tools\MSVC directory. Never
+      # create or copy a synthetic header tree.
+      $InstallPaths = @($Install)
+      $InstallPaths += & $VsWhere -all -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath |
+        ForEach-Object { $_.Trim() } |
+        Where-Object { $_ }
+      $InstallPaths = @($InstallPaths | Sort-Object -Unique)
+
+      $HeaderToolsRoots = @()
+      foreach ($InstallPath in $InstallPaths) {
+        $HeaderToolsRoots += Get-ChildItem -Path (Join-Path $InstallPath "VC\Tools\MSVC\*\include\stddef.h") -File -ErrorAction SilentlyContinue |
+          ForEach-Object { $_.Directory.Parent }
       }
       $VisualStudioRoots = @(
         (Join-Path ${env:ProgramFiles} "Microsoft Visual Studio"),
@@ -254,13 +262,10 @@ function Set-EnvFromVsDevCmd {
       )
       foreach ($VisualStudioRoot in $VisualStudioRoots) {
         if (-not (Test-Path $VisualStudioRoot)) { continue }
-        $ToolRoots += Get-ChildItem -Path (Join-Path $VisualStudioRoot "*\*\VC\Tools\MSVC") -Directory -ErrorAction SilentlyContinue |
-          ForEach-Object {
-            Get-ChildItem -Path $_.FullName -Directory -ErrorAction SilentlyContinue
-          }
+        $HeaderToolsRoots += Get-ChildItem -Path (Join-Path $VisualStudioRoot "*\*\VC\Tools\MSVC\*\include\stddef.h") -File -ErrorAction SilentlyContinue |
+          ForEach-Object { $_.Directory.Parent }
       }
-      $ToolRoots |
-        Where-Object { Test-Path (Join-Path $_.FullName "include\stddef.h") } |
+      $HeaderToolsRoots |
         Sort-Object FullName -Descending |
         Select-Object -First 1
     }

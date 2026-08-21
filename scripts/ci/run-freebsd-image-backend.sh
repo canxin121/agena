@@ -60,7 +60,9 @@ esac
   exit 2
 }
 exec "$compiler" --target="$AGENA_FREEBSD_CLANG_TARGET" \
-  --sysroot="$AGENA_FREEBSD_SYSROOT" -fuse-ld="$AGENA_FREEBSD_LLD" \
+  --sysroot="$AGENA_FREEBSD_SYSROOT" \
+  -isystem "$AGENA_FREEBSD_SYSROOT/usr/include" \
+  -fuse-ld="$AGENA_FREEBSD_LLD" \
   "${filtered[@]}"
 EOF
   chmod +x "$path"

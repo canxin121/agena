@@ -1409,13 +1409,6 @@
       "artifact_kind": "backend"
     },
     {
-      "target": "x86_64-unknown-motor",
-      "os": "motor",
-      "builder": "motor",
-      "build_std": true,
-      "artifact_kind": "backend"
-    },
-    {
       "target": "x86_64-unknown-openbsd",
       "os": "openbsd",
       "builder": "openbsd",
@@ -2169,6 +2162,12 @@
       "target_os": "l4re",
       "reason": "agena-subprocess-runtime-unsupported",
       "description": "Rust l4re target; OS runtime does not provide Agena-required child process semantics"
+    },
+    {
+      "target": "x86_64-unknown-motor",
+      "target_os": "motor",
+      "reason": "agena-terminal-runtime-unsupported",
+      "description": "Motor has native spawn/wait and socket/poll APIs, but its pinned mlibc/runtime has no real PTY, pty device, or terminal ioctl sysdeps required by Agena"
     },
     {
       "target": "x86_64-unknown-linux-none",

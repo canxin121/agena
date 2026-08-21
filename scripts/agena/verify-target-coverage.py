@@ -34,6 +34,14 @@ AGENA_SUBPROCESS_UNSUPPORTED_OS = {
     "rtems",
 }
 
+# Motor has a real native spawn/wait and socket/poll surface, but the pinned
+# Motor mlibc/runtime has no PTY service or terminal ioctl sysdeps. Agena's
+# subprocess backend uses real PTYs for interactive tools, so a compile-only
+# Motor backend would violate the full-runtime release policy.
+AGENA_TERMINAL_RUNTIME_UNSUPPORTED_OS = {
+    "motor",
+}
+
 
 def rust_std_process_supported(spec: dict) -> bool:
     """Mirror Rust 1.97 std::sys::process PAL selection.
@@ -160,6 +168,7 @@ def main() -> None:
             or target in FREESTANDING_OS_TARGETS
             or target in NON_OS_TARGETS
             or not rust_std_process_supported(spec)
+            or target_os in AGENA_TERMINAL_RUNTIME_UNSUPPORTED_OS
             or executables is False
         ):
             invalid_backends.append(
@@ -196,6 +205,8 @@ def main() -> None:
             )
         elif reason == "agena-subprocess-runtime-unsupported":
             valid = target_os in AGENA_SUBPROCESS_UNSUPPORTED_OS
+        elif reason == "agena-terminal-runtime-unsupported":
+            valid = target_os in AGENA_TERMINAL_RUNTIME_UNSUPPORTED_OS
         else:
             valid = False
         if not valid:

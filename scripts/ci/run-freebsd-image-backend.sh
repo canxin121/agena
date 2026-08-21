@@ -33,26 +33,47 @@ LLD="$rust_sysroot/lib/rustlib/$host/bin/gcc-ld/ld.lld"
 WRAP="${RUNNER_TEMP:-/tmp}/agena-freebsd-arm-wrappers/$TARGET"
 mkdir -p "$WRAP"
 write_wrapper() {
-  local path="$1" compiler="$2"
-  cat >"$path" <<EOF
+  local path="$1"
+  cat >"$path" <<'EOF'
 #!/usr/bin/env bash
 set -eo pipefail
 filtered=()
 skip_next=false
-for arg in "\$@"; do
-  if [[ "\$skip_next" == true ]]; then skip_next=false; continue; fi
-  case "\$arg" in
+for arg in "$@"; do
+  if [[ "$skip_next" == true ]]; then skip_next=false; continue; fi
+  case "$arg" in
     --target=*) continue ;;
     --target|-target) skip_next=true; continue ;;
-    *) filtered+=("\$arg") ;;
+    *) filtered+=("$arg") ;;
   esac
 done
-exec "$compiler" --target="$clang_target" --sysroot="$SYSROOT" -fuse-ld="$LLD" "\${filtered[@]}"
+case "${0##*/}" in
+  cc) compiler="${AGENA_FREEBSD_CLANG:-}" ;;
+  cxx) compiler="${AGENA_FREEBSD_CLANGXX:-}" ;;
+  *)
+    echo "ERROR: unknown FreeBSD ARM compiler wrapper: ${0##*/}" >&2
+    exit 2
+    ;;
+esac
+[[ -n "$compiler" ]] || {
+  echo "ERROR: FreeBSD ARM compiler wrapper has no compiler configured" >&2
+  exit 2
+}
+exec "$compiler" --target="$AGENA_FREEBSD_CLANG_TARGET" \
+  --sysroot="$AGENA_FREEBSD_SYSROOT" -fuse-ld="$AGENA_FREEBSD_LLD" \
+  "${filtered[@]}"
 EOF
   chmod +x "$path"
 }
-write_wrapper "$WRAP/cc" "$CLANG"
-write_wrapper "$WRAP/cxx" "$CLANGXX"
+export AGENA_FREEBSD_CLANG="$CLANG"
+export AGENA_FREEBSD_CLANGXX="$CLANGXX"
+export AGENA_FREEBSD_CLANG_TARGET="$clang_target"
+export AGENA_FREEBSD_SYSROOT="$SYSROOT"
+export AGENA_FREEBSD_LLD="$LLD"
+write_wrapper "$WRAP/cc"
+write_wrapper "$WRAP/cxx"
+bash -n "$WRAP/cc"
+bash -n "$WRAP/cxx"
 
 key="${TARGET//-/_}"
 key_upper="$(printf '%s' "$key" | tr '[:lower:]' '[:upper:]')"

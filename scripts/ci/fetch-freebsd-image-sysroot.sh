@@ -81,8 +81,8 @@ if ! valid_sysroot; then
       echo "ERROR: libguestfs-tools is required to extract FreeBSD UFS images" >&2
       exit 1
     fi
-    sudo apt-get update -y
-    sudo apt-get install -y --no-install-recommends libguestfs-tools
+    sudo apt-get update -y >&2
+    sudo apt-get install -y --no-install-recommends libguestfs-tools >&2
   fi
 
   # Ubuntu hosted runners can have libguestfs-tools installed while exposing
@@ -135,8 +135,8 @@ if ! valid_sysroot; then
       echo "ERROR: a bootable Linux kernel is required by libguestfs supermin" >&2
       exit 1
     fi
-    sudo apt-get update -y
-    sudo apt-get install -y --no-install-recommends linux-image-generic
+    sudo apt-get update -y >&2
+    sudo apt-get install -y --no-install-recommends linux-image-generic >&2
   fi
 
   if [[ -z "$supermin_kernel" ]]; then

@@ -18,6 +18,14 @@ case "$(uname -s)-$(uname -m)" in
 esac
 
 SYSROOT="$(bash scripts/ci/fetch-freebsd-image-sysroot.sh "$TARGET")"
+[[ -d "$SYSROOT" ]] || {
+  echo "ERROR: FreeBSD image sysroot builder returned an invalid path: $SYSROOT" >&2
+  exit 1
+}
+[[ -f "$SYSROOT/usr/include/assert.h" ]] || {
+  echo "ERROR: FreeBSD image sysroot is missing the official assert.h: $SYSROOT/usr/include/assert.h" >&2
+  exit 1
+}
 PINNED_CLANG="$(bash scripts/ci/fetch-pinned-clang.sh)"
 CLANG="$PINNED_CLANG/bin/clang"
 CLANGXX="$PINNED_CLANG/bin/clang++"
@@ -76,6 +84,13 @@ write_wrapper "$WRAP/cc"
 write_wrapper "$WRAP/cxx"
 bash -n "$WRAP/cc"
 bash -n "$WRAP/cxx"
+
+# Exercise the exact compiler/sysroot wrapper before Cargo invokes any C
+# build script. This proves the target compiler can see the real FreeBSD
+# headers and prevents a later ring error from hiding a wrapper/environment
+# regression.
+printf '#include <assert.h>\nint main(void) { return 0; }\n' |
+  "$WRAP/cc" -x c -fsyntax-only - >/dev/null
 
 key="${TARGET//-/_}"
 key_upper="$(printf '%s' "$key" | tr '[:lower:]' '[:upper:]')"

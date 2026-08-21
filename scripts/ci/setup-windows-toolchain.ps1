@@ -101,9 +101,39 @@ function Set-EnvFromVsDevCmd {
   }
 
   if ($Arch -eq "arm64ec") {
-    $Arm64EcCompilerPath = Join-Path $VCToolsRoot "bin\$HostToolArch\arm64ec\cl.exe"
-    $Arm64EcLibraryPath = Join-Path $VCToolsRoot "lib\arm64ec"
-    if (-not (Test-Path $Arm64EcCompilerPath) -or -not (Test-Path $Arm64EcLibraryPath)) {
+    function Find-Arm64EcToolRoot {
+      # ARM64EC is an official Visual Studio ABI, but hosted Windows images
+      # can expose it in a side-by-side VS installation/toolset different from
+      # the one selected by VsDevCmd. Search every real VS installation and
+      # every installed MSVC toolset for the matching compiler and libraries.
+      # Never fall back to ARM64 or x64 paths: that would produce the wrong ABI.
+      $VsWherePath = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+      $InstallPaths = @($Install)
+      if (Test-Path $VsWherePath) {
+        $InstallPaths += & $VsWherePath -all -products * -property installationPath |
+          ForEach-Object { $_.Trim() } |
+          Where-Object { $_ }
+      }
+      $InstallPaths = @($InstallPaths | Sort-Object -Unique)
+      foreach ($InstallPath in $InstallPaths) {
+        $CandidateToolsRoot = Join-Path $InstallPath "VC\Tools\MSVC"
+        if (-not (Test-Path $CandidateToolsRoot)) { continue }
+        foreach ($Candidate in (Get-ChildItem -Path $CandidateToolsRoot -Directory -ErrorAction SilentlyContinue | Sort-Object Name -Descending)) {
+          $CompilerPath = Join-Path $Candidate.FullName "bin\$HostToolArch\arm64ec\cl.exe"
+          $LibraryPath = Join-Path $Candidate.FullName "lib\arm64ec"
+          if ((Test-Path $CompilerPath) -and (Test-Path $LibraryPath)) {
+            return [pscustomobject]@{
+              InstallPath = $InstallPath
+              ToolsRoot = $Candidate.FullName
+            }
+          }
+        }
+      }
+      return $null
+    }
+
+    $Arm64EcTool = Find-Arm64EcToolRoot
+    if (-not $Arm64EcTool) {
       # ARM64EC is an optional, distinct MSVC ABI component.  Do not point an
       # ARM64EC build at the ARM64 compiler or libraries: install Microsoft's
       # official component when the hosted image omitted it.
@@ -116,31 +146,26 @@ function Set-EnvFromVsDevCmd {
       )
 
       # The installer may add a side-by-side toolset and returns before the
-      # files are visible. Wait for a complete compiler/library pair instead
-      # of falling through to another architecture.
-      $Arm64EcToolsRoot = $null
+      # files are visible. Wait for a complete compiler/library pair across
+      # all official VS installations instead of falling through to another
+      # architecture.
       $Deadline = (Get-Date).AddMinutes(5)
       do {
-        $Arm64EcToolsRoot = Get-ChildItem -Path $ToolsRoot -Directory -ErrorAction SilentlyContinue |
-          Sort-Object Name -Descending |
-          Where-Object {
-            (Test-Path (Join-Path $_.FullName "bin\$HostToolArch\arm64ec\cl.exe")) -and
-            (Test-Path (Join-Path $_.FullName "lib\arm64ec"))
-          } |
-          Select-Object -First 1
-        if ($Arm64EcToolsRoot) {
-          $ToolsVersion = $Arm64EcToolsRoot.Name
-          $VCToolsRoot = $Arm64EcToolsRoot.FullName
-          $env:VCToolsVersion = $ToolsVersion
+        $Arm64EcTool = Find-Arm64EcToolRoot
+        if ($Arm64EcTool) {
           break
         }
         Start-Sleep -Seconds 2
       } while ((Get-Date) -lt $Deadline)
     }
-    if (-not (Test-Path (Join-Path $VCToolsRoot "bin\$HostToolArch\arm64ec\cl.exe")) -or
-        -not (Test-Path (Join-Path $VCToolsRoot "lib\arm64ec"))) {
-      throw "MSVC ARM64EC component missing after official installation: expected bin\$HostToolArch\arm64ec\cl.exe and lib\arm64ec under $VCToolsRoot"
+    if (-not $Arm64EcTool) {
+      throw "MSVC ARM64EC component missing after official installation: no official VS installation contains bin\$HostToolArch\arm64ec\cl.exe and lib\arm64ec"
     }
+    $Install = $Arm64EcTool.InstallPath
+    $ToolsRoot = Join-Path $Install "VC\Tools\MSVC"
+    $VCToolsRoot = $Arm64EcTool.ToolsRoot
+    $ToolsVersion = Split-Path $VCToolsRoot -Leaf
+    $env:VCToolsVersion = $ToolsVersion
   }
 
   if ($Arch -eq "arm") {
@@ -253,7 +278,8 @@ function Set-EnvFromVsDevCmd {
 
       $HeaderToolsRoots = @()
       foreach ($InstallPath in $InstallPaths) {
-        $HeaderToolsRoots += Get-ChildItem -Path (Join-Path $InstallPath "VC\Tools\MSVC\*\include\stddef.h") -File -ErrorAction SilentlyContinue |
+        $HeaderToolsRoots += Get-ChildItem -Path (Join-Path $InstallPath "VC\Tools\MSVC") -Filter "stddef.h" -File -Recurse -ErrorAction SilentlyContinue |
+          Where-Object { $_.FullName -match "[\\/]VC[\\/]Tools[\\/]MSVC[\\/][^\\/]+[\\/]include[\\/]stddef\.h$" } |
           ForEach-Object { $_.Directory.Parent }
       }
       $VisualStudioRoots = @(
@@ -262,7 +288,8 @@ function Set-EnvFromVsDevCmd {
       )
       foreach ($VisualStudioRoot in $VisualStudioRoots) {
         if (-not (Test-Path $VisualStudioRoot)) { continue }
-        $HeaderToolsRoots += Get-ChildItem -Path (Join-Path $VisualStudioRoot "*\*\VC\Tools\MSVC\*\include\stddef.h") -File -ErrorAction SilentlyContinue |
+        $HeaderToolsRoots += Get-ChildItem -Path $VisualStudioRoot -Filter "stddef.h" -File -Recurse -ErrorAction SilentlyContinue |
+          Where-Object { $_.FullName -match "[\\/]VC[\\/]Tools[\\/]MSVC[\\/][^\\/]+[\\/]include[\\/]stddef\.h$" } |
           ForEach-Object { $_.Directory.Parent }
       }
       $HeaderToolsRoots |

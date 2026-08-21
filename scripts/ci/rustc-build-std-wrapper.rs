@@ -23,7 +23,10 @@ fn target_argument(args: &[OsString]) -> Option<String> {
                 .and_then(|value| value.to_str())
                 .map(str::to_owned);
         }
-        if let Some(value) = arg.to_str().and_then(|value| value.strip_prefix("--target=")) {
+        if let Some(value) = arg
+            .to_str()
+            .and_then(|value| value.strip_prefix("--target="))
+        {
             return Some(value.to_owned());
         }
     }
@@ -35,7 +38,10 @@ fn crate_name(args: &[OsString]) -> Option<&str> {
         if arg == "--crate-name" {
             return args.get(index + 1).and_then(|value| value.to_str());
         }
-        if let Some(value) = arg.to_str().and_then(|value| value.strip_prefix("--crate-name=")) {
+        if let Some(value) = arg
+            .to_str()
+            .and_then(|value| value.strip_prefix("--crate-name="))
+        {
             return Some(value);
         }
     }
@@ -76,9 +82,10 @@ fn collect_artifacts(root: &Path, directories: &mut Vec<PathBuf>, artifacts: &mu
         let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
             continue;
         };
-        if (name.ends_with(".rlib") || name.ends_with(".rmeta"))
-            && (name.starts_with("libcore-") || name.starts_with("libstd-"))
-        {
+        let standard_library_name = ["core-", "libcore-", "std-", "libstd-"]
+            .iter()
+            .any(|prefix| name.starts_with(prefix));
+        if (name.ends_with(".rlib") || name.ends_with(".rmeta")) && standard_library_name {
             if let Some(parent) = path.parent() {
                 if !directories.iter().any(|candidate| candidate == parent) {
                     directories.push(parent.to_owned());
@@ -96,7 +103,9 @@ fn find_artifact(artifacts: &[PathBuf], crate_name: &str, extension: &str) -> Op
             path.file_name()
                 .and_then(|value| value.to_str())
                 .is_some_and(|name| {
-                    name.starts_with(&format!("lib{crate_name}-")) && name.ends_with(extension)
+                    (name.starts_with(&format!("{crate_name}-"))
+                        || name.starts_with(&format!("lib{crate_name}-")))
+                        && name.ends_with(extension)
                 })
         })
         .min_by(|left, right| left.as_os_str().cmp(right.as_os_str()))
@@ -125,7 +134,9 @@ fn main() {
         collect_artifacts(&build_root, &mut directories, &mut artifacts);
         directories.sort();
         for directory in directories {
-            command.arg("-L").arg(format!("dependency={}", directory.display()));
+            command
+                .arg("-L")
+                .arg(format!("dependency={}", directory.display()));
         }
 
         // Cargo's own build-std compilation already has its exact externs, and

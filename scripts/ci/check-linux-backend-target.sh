@@ -52,12 +52,10 @@ case "$BUILDER" in
       bash scripts/ci/check-native-backend.sh "$TARGET" "$BUILD_STD" "$TARGET_RUSTFLAGS"
     ;;
   sparc-gcc)
-    # The Rust 32-bit SPARC target adds -m32 to its linker arguments, but
-    # cc-rs does not infer that ABI for C/C++ dependencies.  Bootlin's
-    # sparc64 glibc toolchain has the matching multilib and must be invoked
-    # explicitly in 32-bit mode so the generated objects use the same ABI.
-    exec bash scripts/ci/run-bootlin-backend.sh \
-      "$TARGET" sparc64 sparc64--glibc--stable-2025.08-1 '-m32' -- \
+    # Debian's official sparc64 cross compiler is shipped with a real glibc
+    # 32-bit multilib.  Use its explicit builder so cc-rs receives the exact
+    # sparc-unknown-linux-gnu ABI and never guesses a 64-bit compiler/sysroot.
+    exec bash scripts/ci/run-debian-sparc32-backend.sh "$TARGET" -- \
       bash scripts/ci/check-native-backend.sh "$TARGET" "$BUILD_STD" "$TARGET_RUSTFLAGS"
     ;;
   powerpc-spe-sysroot)

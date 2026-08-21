@@ -163,40 +163,98 @@ if ! valid_sysroot; then
 
   rm -rf "$SYSROOT"
   mkdir -p "$SYSROOT/usr"
-  # `list-filesystems` asks libguestfs to recursively inspect the image.  The
-  # FreeBSD ARM images contain a GPT partition that embeds a BSD disklabel;
-  # current Ubuntu sfdisk rejects that nested label while probing its fifth
-  # partition, even though the UFS root is perfectly readable.  Enumerate the
-  # real read-only device candidates and verify the Agena sysroot marker by
-  # mounting each one instead.  This keeps the extraction tied to the official
-  # image and never formats, repairs, or writes to it.
-  rootdev=""
-  for partition in {1..8}; do
-    for suffix in "" a b c d e f g h; do
-      candidate="/dev/sda${partition}${suffix}"
-      probe=""
-      if probe="$(guestfish --ro --format=raw -a "$IMAGE" <<EOF 2>/dev/null
+  # These ARM images use an MBR FreeBSD slice containing a BSD disklabel and
+  # a UFS2 root partition. Linux/libguestfs exposes the outer MBR partition but
+  # does not enumerate the nested BSD slices, so probing /dev/sda2 (or guessed
+  # /dev/sda2a) cannot reach the real filesystem. Parse the official on-disk
+  # labels, copy only the read-only root slice into a temporary sparse image,
+  # and mount that exact UFS2 slice in libguestfs.
+  readarray -t ROOT_GEOMETRY < <(python3 - "$IMAGE" <<'PY'
+import os
+import struct
+import sys
+
+image = sys.argv[1]
+sector_size = 512
+disk_magic = 0x82564557
+
+with open(image, "rb") as source:
+    mbr = source.read(sector_size)
+    if len(mbr) != sector_size or mbr[510:512] != b"\x55\xaa":
+        raise SystemExit("FreeBSD image does not contain a valid MBR")
+
+    for index in range(4):
+        entry = mbr[446 + index * 16 : 446 + (index + 1) * 16]
+        partition_type = entry[4]
+        partition_start, partition_size = struct.unpack_from("<II", entry, 8)
+        if partition_type != 0xA5 or partition_size == 0:
+            continue
+
+        for label_relative_offset in (sector_size, 0):
+            label_offset = (partition_start * sector_size) + label_relative_offset
+            source.seek(label_offset)
+            label = source.read(sector_size)
+            if len(label) < 148:
+                continue
+            if struct.unpack_from("<I", label, 0)[0] != disk_magic:
+                continue
+            if struct.unpack_from("<I", label, 132)[0] != disk_magic:
+                continue
+            partition_count = struct.unpack_from("<H", label, 138)[0]
+            if not 1 <= partition_count <= 22:
+                continue
+
+            for slice_index in (0, 2, 1, 3, 4, 5, 6, 7):
+                if slice_index >= partition_count:
+                    continue
+                offset = 148 + slice_index * 16
+                if offset + 16 > len(label):
+                    continue
+                slice_size, slice_start, _fragment_size = struct.unpack_from("<III", label, offset)
+                filesystem_type = label[offset + 12]
+                if filesystem_type not in (7, 8) or slice_size == 0:
+                    continue
+                if slice_start + slice_size > partition_size:
+                    continue
+                absolute_start = partition_start + slice_start
+                absolute_end = absolute_start + slice_size
+                if absolute_end * sector_size > os.path.getsize(image):
+                    continue
+                print(absolute_start)
+                print(slice_size)
+                raise SystemExit(0)
+
+raise SystemExit("FreeBSD image has no bounded BSD disklabel UFS root slice")
+PY
+)
+[[ "${#ROOT_GEOMETRY[@]}" -eq 2 ]] || {
+  echo "ERROR: failed to parse the FreeBSD BSD disklabel in $FILE" >&2
+  exit 1
+}
+ROOT_SKIP="${ROOT_GEOMETRY[0]}"
+ROOT_COUNT="${ROOT_GEOMETRY[1]}"
+SLICE_IMAGE="$ROOT/freebsd-ufs-root.img"
+SLICE_BYTES=$((ROOT_COUNT * 512))
+if [[ ! -f "$SLICE_IMAGE" ]] || [[ "$(stat -c '%s' "$SLICE_IMAGE")" != "$SLICE_BYTES" ]]; then
+  rm -f "$SLICE_IMAGE"
+  dd if="$IMAGE" of="$SLICE_IMAGE" bs=512 skip="$ROOT_SKIP" count="$ROOT_COUNT" \
+    iflag=fullblock conv=sparse status=none
+fi
+
+probe="$(guestfish --ro --format=raw -a "$SLICE_IMAGE" <<EOF 2>/dev/null
 run
-# FreeBSD's UFS2 variant is not self-identifying to the Linux UFS driver.
-# Tell the real read-only guestfish mount operation which ABI is present;
-# mount-ro's auto-detection otherwise rejects the official BSD root slice.
-mount-options ro,ufstype=ufs2 $candidate /mnt
+mount-options ro,ufstype=ufs2 /dev/sda /mnt
 exists /mnt/usr/include/stdio.h
 EOF
-)" && [[ "$probe" == *true* ]]; then
-        rootdev="$candidate"
-        break 2
-      fi
-    done
-  done
-  [[ -n "$rootdev" ]] || {
-    echo "ERROR: no FreeBSD UFS root device containing /usr/include/stdio.h found in $FILE" >&2
-    exit 1
-  }
+)"
+[[ "$probe" == *true* ]] || {
+  echo "ERROR: parsed FreeBSD UFS root slice does not contain /usr/include/stdio.h in $FILE" >&2
+  exit 1
+}
 
-  guestfish --ro --format=raw -a "$IMAGE" <<EOF
+guestfish --ro --format=raw -a "$SLICE_IMAGE" <<EOF
 run
-mount-options ro,ufstype=ufs2 $rootdev /
+mount-options ro,ufstype=ufs2 /dev/sda /
 copy-out /usr/include $SYSROOT/usr
 copy-out /usr/lib $SYSROOT/usr
 copy-out /lib $SYSROOT

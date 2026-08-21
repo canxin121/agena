@@ -40,6 +40,7 @@ ARCHIVE="$ROOT/$TOOLCHAIN.tgz"
 EXTRACTED="$ROOT/root"
 URL="https://musl.cc/$TOOLCHAIN.tgz"
 FALLBACK_URL="http://musl.cc/$TOOLCHAIN.tgz"
+MIRROR_URL="https://github.com/tsl0922/musl-toolchains/releases/download/2021-11-23/$TOOLCHAIN.tgz"
 mkdir -p "$ROOT"
 
 if [[ ! -x "$EXTRACTED/$TOOLCHAIN/bin/$PREFIX-gcc" ]]; then
@@ -62,7 +63,10 @@ if [[ ! -x "$EXTRACTED/$TOOLCHAIN/bin/$PREFIX-gcc" ]]; then
       --user-agent agena-musl-cross
       --output "$tmp"
     )
-    if ! curl "${download_args[@]}" "$URL"; then
+    downloaded=0
+    if curl "${download_args[@]}" "$URL"; then
+      downloaded=1
+    else
       # musl.cc is the pinned upstream distribution for these exact ABI
       # archives.  GitHub-hosted runners have intermittently been unable to
       # establish TLS to its 443 endpoint even while the same immutable file
@@ -70,7 +74,20 @@ if [[ ! -x "$EXTRACTED/$TOOLCHAIN/bin/$PREFIX-gcc" ]]; then
       # before the archive can be used.
       echo "musl.cc HTTPS download failed; retrying the same checksum-pinned archive over HTTP" >&2
       rm -f "$tmp"
-      curl "${download_args[@]}" "$FALLBACK_URL"
+      if curl "${download_args[@]}" "$FALLBACK_URL"; then
+        downloaded=1
+      else
+        echo "musl.cc HTTP download failed; retrying the exact archive from the pinned GitHub mirror" >&2
+        rm -f "$tmp"
+        if curl "${download_args[@]}" "$MIRROR_URL"; then
+          downloaded=1
+        fi
+      fi
+    fi
+    if [[ "$downloaded" != 1 ]]; then
+      rm -f "$tmp"
+      echo "ERROR: unable to download checksum-pinned MIPS musl toolchain $TOOLCHAIN" >&2
+      exit 1
     fi
     actual="$(sha256sum "$tmp" | awk '{print $1}')"
     if [[ "$actual" != "$SHA256" ]]; then

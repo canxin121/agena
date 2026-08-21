@@ -81,6 +81,13 @@ if ! valid_toolchain; then
     "$HAIKU/configure" \
       --cross-tools-source "$BUILDTOOLS" \
       --build-cross-tools "$HAIKU_ARCH"
+    # The fixed source commit is intentionally fetched shallowly and has no
+    # hrev tags. Seed the deterministic metadata that Haiku's revision helper
+    # consumes so it does not fall back to git-describe. The last-built value
+    # matches the checked-out commit, so this exact source revision is kept.
+    mkdir -p "$OUTPUT/build"
+    printf '%s\n' "$HAIKU_COMMIT" > "$OUTPUT/build/haiku-revision"
+    printf '%s\n' "$HAIKU_COMMIT" > "$OUTPUT/build/last-built-revision"
     jam -q -j2 haiku.hpkg haiku_devel.hpkg '<build>package'
   )
 

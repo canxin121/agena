@@ -50,7 +50,10 @@ function Set-EnvFromVsDevCmd {
     throw "VsDevCmd.bat not found at $VsDevCmd"
   }
 
-  $Args = @("-no_logo", "-arch=$Arch", "-host_arch=$HostArch")
+  # VsDevCmd selects the ARM64 environment for ARM64EC; the actual MSVC
+  # compiler/library directories remain the distinct arm64ec ABI below.
+  $VsDevArch = if ($Arch -eq "arm64ec") { "arm64" } else { $Arch }
+  $Args = @("-no_logo", "-arch=$VsDevArch", "-host_arch=$HostArch")
   $ArgLine = ($Args -join " ")
   $Output = & cmd.exe /s /c "`"$VsDevCmd`" $ArgLine >nul && set"
   if ($LASTEXITCODE -ne 0) {
@@ -186,9 +189,28 @@ function Set-EnvFromVsDevCmd {
     # required standard header while retaining the target-specific compiler
     # and libraries selected above.
     function Find-MsvcHeaderToolsRoot {
-      Get-ChildItem -Path $ToolsRoot -Directory -ErrorAction SilentlyContinue |
-        Sort-Object Name -Descending |
+      # The compiler and headers can be split across official side-by-side VS
+      # installations on hosted images.  Search every installed MSVC toolset,
+      # not only the installation selected by `vswhere -latest`; never create
+      # or copy a synthetic header tree.
+      $ToolRoots = @()
+      if (Test-Path $ToolsRoot) {
+        $ToolRoots += Get-ChildItem -Path $ToolsRoot -Directory -ErrorAction SilentlyContinue
+      }
+      $VisualStudioRoots = @(
+        (Join-Path ${env:ProgramFiles} "Microsoft Visual Studio"),
+        (Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio")
+      )
+      foreach ($VisualStudioRoot in $VisualStudioRoots) {
+        if (-not (Test-Path $VisualStudioRoot)) { continue }
+        $ToolRoots += Get-ChildItem -Path (Join-Path $VisualStudioRoot "*\*\VC\Tools\MSVC") -Directory -ErrorAction SilentlyContinue |
+          ForEach-Object {
+            Get-ChildItem -Path $_.FullName -Directory -ErrorAction SilentlyContinue
+          }
+      }
+      $ToolRoots |
         Where-Object { Test-Path (Join-Path $_.FullName "include\stddef.h") } |
+        Sort-Object FullName -Descending |
         Select-Object -First 1
     }
 
@@ -413,7 +435,9 @@ if ($TargetTriple -notmatch "windows-msvc$") {
 
 $TargetArch = if ($TargetTriple.StartsWith("thumbv7a-")) {
   "arm"
-} elseif ($TargetTriple.StartsWith("aarch64-") -or $TargetTriple.StartsWith("arm64ec-")) {
+} elseif ($TargetTriple.StartsWith("arm64ec-")) {
+  "arm64ec"
+} elseif ($TargetTriple.StartsWith("aarch64-")) {
   "arm64"
 } elseif ($TargetTriple.StartsWith("i686-")) {
   "x86"

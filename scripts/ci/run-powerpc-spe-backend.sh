@@ -238,6 +238,41 @@ else
       echo "ERROR: musl-cross-make source directory was not extracted" >&2
       exit 1
     }
+    DOWNLOAD_WRAPPER="$ROOT/download-source"
+    cat > "$DOWNLOAD_WRAPPER" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+destination="${1:?destination is required}"
+url="${2:?source URL is required}"
+
+declare -a candidates=("$url")
+case "$url" in
+  https://ftpmirror.gnu.org/gnu/*)
+    candidates+=("${url/https:\/\/ftpmirror.gnu.org/https:\/\/ftp.gnu.org}")
+    candidates+=("${url/https:\/\/ftpmirror.gnu.org/https:\/\/mirrors.kernel.org}")
+    ;;
+  https://downloads.sourceforge.net/project/libisl/*)
+    filename="${url##*/}"
+    candidates+=("https://master.dl.sourceforge.net/project/libisl/$filename")
+    candidates+=("https://netcologne.dl.sourceforge.net/project/libisl/$filename")
+    ;;
+esac
+
+for candidate in "${candidates[@]}"; do
+  rm -f "$destination"
+  if curl --fail --location --retry 12 --retry-all-errors --retry-delay 5 \
+    --connect-timeout 30 --max-time 1800 \
+    --user-agent agena-powerpc-spe-builder -o "$destination" "$candidate"; then
+    exit 0
+  fi
+  echo "PowerPC SPE source download failed: $candidate" >&2
+done
+
+echo "ERROR: all source mirrors failed for $url" >&2
+exit 1
+EOF
+    chmod +x "$DOWNLOAD_WRAPPER"
     cat > "$MCM_DIR/config.mak" <<EOF
 TARGET = $PREFIX
 OUTPUT = $OUTPUT
@@ -248,7 +283,7 @@ GMP_VER = 6.1.2
 MPC_VER = 1.1.0
 MPFR_VER = 4.0.2
 LINUX_VER = headers-4.19.88-2
-DL_CMD = curl --fail --location --retry 12 --retry-all-errors --retry-delay 5 --connect-timeout 30 --max-time 1800 -o
+DL_CMD = $DOWNLOAD_WRAPPER
 SHA1_CMD = sha1sum -c
 COMMON_CONFIG += --disable-nls
 # GCC 8 still contains the exact powerpcspe backend, but marks this target

@@ -141,39 +141,80 @@ function Set-EnvFromVsDevCmd {
     if (-not $WindowsSdkDir) {
       throw "WindowsSdkDir is not set; cannot locate ARM Windows SDK libraries for $TargetTriple"
     }
-    $WindowsSdkVersion = if ($env:WindowsSDKVersion) {
+    $RequestedWindowsSdkVersion = if ($env:WindowsSDKVersion) {
       $env:WindowsSDKVersion.TrimEnd('\')
     } else {
       $null
     }
     $WindowsSdkLibRoot = Join-Path $WindowsSdkDir "Lib"
-    if (-not $WindowsSdkVersion -or -not (Test-Path (Join-Path $WindowsSdkLibRoot $WindowsSdkVersion))) {
-      $WindowsSdkVersion = (Get-ChildItem -Path $WindowsSdkLibRoot -Directory -ErrorAction SilentlyContinue |
-        Sort-Object Name -Descending | Select-Object -First 1).Name
+    $InstalledWindowsSdkVersions = @(Get-ChildItem -Path $WindowsSdkLibRoot -Directory -ErrorAction SilentlyContinue |
+      Sort-Object Name -Descending | Select-Object -ExpandProperty Name)
+    if ($RequestedWindowsSdkVersion -and ($InstalledWindowsSdkVersions -notcontains $RequestedWindowsSdkVersion)) {
+      $InstalledWindowsSdkVersions += $RequestedWindowsSdkVersion
     }
-    if (-not $WindowsSdkVersion) {
+    if ($InstalledWindowsSdkVersions.Count -eq 0) {
       throw "Windows SDK library version not found under $WindowsSdkLibRoot"
     }
 
     $UniversalCrtDir = if ($env:UniversalCRTSdkDir) {
-      $env:UniversalCRTSdkDir
+      $env:UniversalCRTSdkDir.TrimEnd('\')
     } else {
-      $WindowsSdkDir
+      $WindowsSdkDir.TrimEnd('\')
     }
-    $UniversalCrtVersion = if ($env:UCRTVersion) {
+    $RequestedUniversalCrtVersion = if ($env:UCRTVersion) {
       $env:UCRTVersion.TrimEnd('\')
     } else {
-      $WindowsSdkVersion
+      $null
     }
-    $SdkUmArm = Join-Path (Join-Path $WindowsSdkLibRoot $WindowsSdkVersion) "um\arm"
-    $SdkUcrtArm = Join-Path (Join-Path (Join-Path $UniversalCrtDir "Lib") $UniversalCrtVersion) "ucrt\arm"
-    $MissingSdkArmDirs = @($SdkUmArm, $SdkUcrtArm) | Where-Object { -not (Test-Path $_) }
-    if ($MissingSdkArmDirs.Count -gt 0) {
-      throw "ARM Windows SDK library directories missing for ${TargetTriple}: $($MissingSdkArmDirs -join ', ') (WindowsSdkDir=$WindowsSdkDir, WindowsSDKVersion=$WindowsSdkVersion, UniversalCRTSdkDir=$UniversalCrtDir, UCRTVersion=$UniversalCrtVersion)"
+    $InstalledUniversalCrtVersions = @(Get-ChildItem -Path (Join-Path $UniversalCrtDir "Lib") -Directory -ErrorAction SilentlyContinue |
+      Sort-Object Name -Descending | Select-Object -ExpandProperty Name)
+    if ($RequestedUniversalCrtVersion -and ($InstalledUniversalCrtVersions -notcontains $RequestedUniversalCrtVersion)) {
+      $InstalledUniversalCrtVersions += $RequestedUniversalCrtVersion
     }
+
+    # The newest Windows SDK on a hosted image is not guaranteed to retain
+    # ARM32 import libraries.  Search the installed SDKs for a matching pair
+    # of real ARM32 libraries instead of failing on the first (or newest)
+    # version.  The UCRT version is searched independently because VS images
+    # can expose it through a different SDK root/version than um\arm.
+    $SelectedWindowsSdkVersion = $null
+    $SelectedUniversalCrtVersion = $null
+    $SdkUmArm = $null
+    $SdkUcrtArm = $null
+    foreach ($CandidateWindowsSdkVersion in $InstalledWindowsSdkVersions) {
+      $CandidateSdkUmArm = Join-Path (Join-Path $WindowsSdkLibRoot $CandidateWindowsSdkVersion) "um\arm"
+      if (-not (Test-Path $CandidateSdkUmArm)) {
+        continue
+      }
+      foreach ($CandidateUniversalCrtVersion in $InstalledUniversalCrtVersions) {
+        $CandidateSdkUcrtArm = Join-Path (Join-Path (Join-Path $UniversalCrtDir "Lib") $CandidateUniversalCrtVersion) "ucrt\arm"
+        if (Test-Path $CandidateSdkUcrtArm) {
+          $SelectedWindowsSdkVersion = $CandidateWindowsSdkVersion
+          $SelectedUniversalCrtVersion = $CandidateUniversalCrtVersion
+          $SdkUmArm = $CandidateSdkUmArm
+          $SdkUcrtArm = $CandidateSdkUcrtArm
+          break
+        }
+      }
+      if ($SelectedWindowsSdkVersion) {
+        break
+      }
+    }
+    if (-not $SelectedWindowsSdkVersion) {
+      $KnownUmArm = $InstalledWindowsSdkVersions | ForEach-Object {
+        Join-Path (Join-Path $WindowsSdkLibRoot $_) "um\arm"
+      }
+      $KnownUcrtArm = $InstalledUniversalCrtVersions | ForEach-Object {
+        Join-Path (Join-Path (Join-Path $UniversalCrtDir "Lib") $_) "ucrt\arm"
+      }
+      throw "ARM Windows SDK library directories missing for ${TargetTriple}: no matching um\arm and ucrt\arm pair (um candidates: $($KnownUmArm -join ', '); ucrt candidates: $($KnownUcrtArm -join ', '); WindowsSdkDir=$WindowsSdkDir, UniversalCRTSdkDir=$UniversalCrtDir)"
+    }
+    $env:WindowsSDKVersion = "$SelectedWindowsSdkVersion\"
+    $env:UCRTVersion = "$SelectedUniversalCrtVersion\"
+    $env:UniversalCRTSdkDir = "$UniversalCrtDir\"
     $TargetLibDirs += $SdkUmArm
     $TargetLibDirs += $SdkUcrtArm
-    Write-Host "Using ARM Windows SDK libraries: $SdkUmArm; $SdkUcrtArm"
+    Write-Host "Using ARM Windows SDK libraries: $SdkUmArm; $SdkUcrtArm (WindowsSDKVersion=$SelectedWindowsSdkVersion, UCRTVersion=$SelectedUniversalCrtVersion)"
   }
   if ($PreserveExistingLib -and $env:LIB) {
     $env:LIB = (($TargetLibDirs + @($env:LIB)) -join ";")

@@ -90,18 +90,22 @@ if ($BuildStd) {
   $NightlyToolchain = if ($env:AGENA_NIGHTLY_TOOLCHAIN) { $env:AGENA_NIGHTLY_TOOLCHAIN } else { "nightly-2026-08-18" }
   $StableRustc = (& rustup which --toolchain $StableToolchain rustc).Trim()
   $StableRustdoc = (& rustup which --toolchain $StableToolchain rustdoc).Trim()
+  $NightlyCargo = (& rustup which --toolchain $NightlyToolchain cargo).Trim()
+  $NightlyCargoExit = $LASTEXITCODE
   if ($LASTEXITCODE -ne 0 -or -not $StableRustc) {
     throw "Failed to locate rustc for $StableToolchain"
   }
   if (-not $StableRustdoc) {
     throw "Failed to locate rustdoc for $StableToolchain"
   }
+  if ($NightlyCargoExit -ne 0 -or -not $NightlyCargo) {
+    throw "Failed to locate Cargo for $NightlyToolchain"
+  }
   $OldRustc = $env:RUSTC
   $OldRustdoc = $env:RUSTDOC
   $OldBootstrap = $env:RUSTC_BOOTSTRAP
   $OldRustFlags = $env:RUSTFLAGS
   $OldTargetDir = $env:CARGO_TARGET_DIR
-  $OldCargoBuildJobs = $env:CARGO_BUILD_JOBS
   $OldAgenaRealRustc = $env:AGENA_REAL_RUSTC
   $OldAgenaBuildStdRoot = $env:AGENA_BUILD_STD_ROOT
   try {
@@ -130,13 +134,14 @@ if ($BuildStd) {
       if ($LASTEXITCODE -ne 0 -or -not (Test-Path $RustcWrapper)) {
         throw "failed to compile the build-std rustc wrapper"
       }
+      $PrebuildScript = Join-Path $RepoRoot "scripts\ci\prebuild-build-std.ps1"
+      & $PrebuildScript -TargetTriple $TargetTriple -NightlyCargo $NightlyCargo -TargetDir $BuildTargetDir -Release
+      if ($LASTEXITCODE -ne 0) {
+        throw "failed to prebuild the real build-std sysroot for $TargetTriple"
+      }
       $env:AGENA_REAL_RUSTC = $StableRustc
       $env:AGENA_BUILD_STD_ROOT = $BuildStdProfile
       $env:RUSTC = $RustcWrapper
-      # Serialize Windows/Cygwin build-std so direct build-script probes cannot
-      # occupy every Cargo jobserver slot while real target std is compiling.
-      # The wrapper still injects only artifacts produced for this target.
-      $env:CARGO_BUILD_JOBS = "1"
     }
     $env:RUSTFLAGS = ($RustFlags | Join-String -Separator " ")
     & cargo "+$NightlyToolchain" @BuildArgs -Z "build-std=std,panic_abort,proc_macro"
@@ -147,11 +152,6 @@ if ($BuildStd) {
     $env:RUSTC_BOOTSTRAP = $OldBootstrap
     $env:RUSTFLAGS = $OldRustFlags
     $env:CARGO_TARGET_DIR = $OldTargetDir
-    if ($null -eq $OldCargoBuildJobs) {
-      Remove-Item Env:CARGO_BUILD_JOBS -ErrorAction SilentlyContinue
-    } else {
-      $env:CARGO_BUILD_JOBS = $OldCargoBuildJobs
-    }
     if ($null -eq $OldAgenaRealRustc) {
       Remove-Item Env:AGENA_REAL_RUSTC -ErrorAction SilentlyContinue
     } else {

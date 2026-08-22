@@ -75,22 +75,24 @@ $OldRustdoc = $env:RUSTDOC
 $OldBootstrap = $env:RUSTC_BOOTSTRAP
 $OldRustFlags = $env:RUSTFLAGS
 $OldTargetDir = $env:CARGO_TARGET_DIR
-$OldCargoBuildJobs = $env:CARGO_BUILD_JOBS
 $OldAgenaRealRustc = $env:AGENA_REAL_RUSTC
 $OldAgenaBuildStdRoot = $env:AGENA_BUILD_STD_ROOT
 $CargoExitCode = 1
 try {
-  $env:RUSTC = $RustcWrapper
+  $env:RUSTC = $StableRustc
   $env:RUSTDOC = $StableRustdoc
   $env:RUSTC_BOOTSTRAP = "1"
   $env:CARGO_TARGET_DIR = $BuildTargetDir
   $RustFlags = @($OldRustFlags, "-L", "dependency=$BuildStdDeps") | Where-Object { $_ }
   $env:RUSTFLAGS = ($RustFlags | Join-String -Separator " ")
+  $PrebuildScript = Join-Path $RepoRoot "scripts\ci\prebuild-build-std.ps1"
+  & $PrebuildScript -TargetTriple $TargetTriple -NightlyCargo $NightlyCargo -TargetDir $BuildTargetDir
+  if ($LASTEXITCODE -ne 0) {
+    throw "failed to prebuild the real build-std sysroot for $TargetTriple"
+  }
   $env:AGENA_REAL_RUSTC = $StableRustc
   $env:AGENA_BUILD_STD_ROOT = $BuildStdProfile
-  # Direct build-script probes wait for real target std artifacts. Serialize
-  # this build so they cannot starve build-std's core/alloc/std compilation.
-  $env:CARGO_BUILD_JOBS = "1"
+  $env:RUSTC = $RustcWrapper
   Write-Host "Using official Cygwin compiler: $Linker"
   Write-Host "Using build-std driver: cargo=$NightlyCargo rustc=$StableRustc target-dir=$BuildTargetDir"
   & $NightlyCargo @Args
@@ -102,11 +104,6 @@ finally {
   $env:RUSTC_BOOTSTRAP = $OldBootstrap
   $env:RUSTFLAGS = $OldRustFlags
   $env:CARGO_TARGET_DIR = $OldTargetDir
-  if ($null -eq $OldCargoBuildJobs) {
-    Remove-Item Env:CARGO_BUILD_JOBS -ErrorAction SilentlyContinue
-  } else {
-    $env:CARGO_BUILD_JOBS = $OldCargoBuildJobs
-  }
   if ($null -eq $OldAgenaRealRustc) {
     Remove-Item Env:AGENA_REAL_RUSTC -ErrorAction SilentlyContinue
   } else {

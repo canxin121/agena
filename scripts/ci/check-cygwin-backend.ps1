@@ -59,6 +59,41 @@ if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $RustcWrapper -PathType
   throw "failed to compile the build-std rustc wrapper"
 }
 
+# zstd-sys builds its C sources with paths relative to the package directory.
+# That is reliable with a native Windows compiler, but the official Cygwin GCC
+# receives those paths through a Windows process boundary and does not resolve
+# them relative to zstd-sys. Supply the real package include directories in
+# Cygwin form; this keeps the complete zstd implementation enabled and makes
+# the compiler consume the headers belonging to the locked zstd-sys release.
+$CargoHome = if ($env:CARGO_HOME) { $env:CARGO_HOME } else { Join-Path $env:USERPROFILE ".cargo" }
+& $NightlyCargo fetch --manifest-path (Join-Path $RepoRoot "Cargo.toml") --locked
+if ($LASTEXITCODE -ne 0) {
+  throw "failed to fetch the locked dependency sources before locating zstd-sys"
+}
+$ZstdRoot = Get-ChildItem -LiteralPath (Join-Path $CargoHome "registry\src") -Directory -Recurse -ErrorAction SilentlyContinue |
+  Where-Object { $_.Name -eq "zstd-sys-2.0.16+zstd.1.5.7" } |
+  Select-Object -First 1
+if ($null -eq $ZstdRoot) {
+  throw "locked zstd-sys source tree was not found below $(Join-Path $CargoHome 'registry\src')"
+}
+$Cygpath = Join-Path $CygwinRoot "bin\cygpath.exe"
+if (-not (Test-Path -LiteralPath $Cygpath -PathType Leaf)) {
+  throw "official Cygwin cygpath is missing: $Cygpath"
+}
+$ZstdRootUnix = (& $Cygpath -u $ZstdRoot.FullName).Trim()
+if ($LASTEXITCODE -ne 0 -or -not $ZstdRootUnix) {
+  throw "failed to convert the zstd-sys source path to Cygwin form"
+}
+$OldCflags = $env:CFLAGS_X86_64_PC_CYGWIN
+$env:CFLAGS_X86_64_PC_CYGWIN = @(
+  "-I$ZstdRootUnix/zstd/lib"
+  "-I$ZstdRootUnix/zstd/lib/common"
+  "-I$ZstdRootUnix/zstd/lib/compress"
+  "-I$ZstdRootUnix/zstd/lib/decompress"
+  "-I$ZstdRootUnix/zstd/lib/dictBuilder"
+  "-I$ZstdRootUnix/zstd/lib/legacy"
+) -join " "
+
 $Args = @(
   "check",
   "--manifest-path", (Join-Path $RepoRoot "Cargo.toml"),
@@ -105,6 +140,11 @@ finally {
   $env:RUSTDOC = $OldRustdoc
   $env:RUSTC_BOOTSTRAP = $OldBootstrap
   $env:RUSTFLAGS = $OldRustFlags
+  if ($null -eq $OldCflags) {
+    Remove-Item Env:CFLAGS_X86_64_PC_CYGWIN -ErrorAction SilentlyContinue
+  } else {
+    $env:CFLAGS_X86_64_PC_CYGWIN = $OldCflags
+  }
   $env:CARGO_TARGET_DIR = $OldTargetDir
   if ($null -eq $OldAgenaRealRustc) {
     Remove-Item Env:AGENA_REAL_RUSTC -ErrorAction SilentlyContinue

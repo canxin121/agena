@@ -78,12 +78,15 @@ if ($StdArtifacts.Count -eq 0) {
 # (notably multiple hashbrown versions) later in the build.
 $BuildStdCrates = @(
   "addr2line",
+  "adler2",
   "alloc",
   "cfg_if",
   "compiler_builtins",
   "core",
+  "gimli",
   "hashbrown",
   "libc",
+  "memchr",
   "miniz_oxide",
   "object",
   "panic_abort",

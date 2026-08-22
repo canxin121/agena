@@ -115,14 +115,11 @@ if ($BuildStd) {
     $env:CARGO_TARGET_DIR = $BuildTargetDir
     $RustFlags = @($OldRustFlags, $TargetRustFlags) | Where-Object { $_ }
     if ($TargetTriple -match "-windows-(msvc|gnu)$" -or $IsCygwinTarget) {
-      # Build scripts such as autocfg invoke rustc directly with --target.
-      # Cargo's internal build-std dependency paths are not included in those
-      # commands, so expose the actual target deps directory through the same
-      # RUSTFLAGS that Cargo encodes for build-script probes. This applies to
-      # every Windows/Cygwin build-std target, including thumbv7a.
+      # Build scripts such as autocfg invoke rustc directly with --target. The
+      # shared wrapper below supplies the real target standard-library artifacts
+      # for those probes. Keep target-only search paths out of global RUSTFLAGS
+      # so host build scripts use the host sysroot.
       $BuildStdProfile = Join-Path $BuildTargetDir "$TargetTriple\release"
-      $BuildStdDeps = Join-Path $BuildStdProfile "deps"
-      $RustFlags += @("-L", "dependency=$BuildStdDeps")
       $RustcWrapperDir = Join-Path $env:RUNNER_TEMP "agena-rustc-build-std\$TargetTriple"
       New-Item -ItemType Directory -Force -Path $RustcWrapperDir | Out-Null
       $RustcWrapperSource = Join-Path $RepoRoot "scripts\ci\rustc-build-std-wrapper.rs"

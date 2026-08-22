@@ -50,15 +50,12 @@ if ($BuildStd) {
     $env:CARGO_TARGET_DIR = $BuildTargetDir
     $RustFlags = @($OldRustFlags, $TargetRustFlags) | Where-Object { $_ }
     if ($TargetTriple -match "-windows-(msvc|gnu)$") {
-      # Windows build-std places the target's real libcore/libstd artifacts
-      # under the target-specific debug deps directory. Cargo passes that path
-      # to normal target rustc invocations, but direct rustc probes launched by
-      # build scripts (notably autocfg) only see CARGO_ENCODED_RUSTFLAGS. Add
-      # the actual build-std search path so those probes use the same target
-      # standard library instead of falling back to the host sysroot.
+      # Build-std emits core/std into hashed build-script output directories.
+      # Cargo knows those paths for ordinary target rustc invocations, while
+      # direct target probes launched by build scripts are handled by the
+      # shared wrapper below. Do not put target-only search paths in global
+      # RUSTFLAGS: host build scripts must continue using the host sysroot.
       $BuildStdProfile = Join-Path $BuildTargetDir "$TargetTriple\debug"
-      $BuildStdDeps = Join-Path $BuildStdProfile "deps"
-      $RustFlags += @("-L", "dependency=$BuildStdDeps")
 
       # Build-std emits core/std into hashed build-script output directories,
       # not only into debug\deps. Cargo knows those paths for ordinary target

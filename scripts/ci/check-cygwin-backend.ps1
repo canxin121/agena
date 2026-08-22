@@ -47,7 +47,6 @@ if ($NightlyCargoExit -ne 0 -or -not $NightlyCargo) {
 $RepoRoot = Resolve-Path (Join-Path $PSScriptRoot "../..")
 $BuildTargetDir = Join-Path $env:RUNNER_TEMP "agena-check-target\$TargetTriple"
 $BuildStdProfile = Join-Path $BuildTargetDir "$TargetTriple\debug"
-$BuildStdDeps = Join-Path $BuildStdProfile "deps"
 $RustcWrapperDir = Join-Path $env:RUNNER_TEMP "agena-rustc-build-std\$TargetTriple"
 $RustcWrapperSource = Join-Path $RepoRoot "scripts\ci\rustc-build-std-wrapper.rs"
 $RustcWrapper = Join-Path $RustcWrapperDir "rustc-build-std-wrapper.exe"
@@ -83,7 +82,10 @@ try {
   $env:RUSTDOC = $StableRustdoc
   $env:RUSTC_BOOTSTRAP = "1"
   $env:CARGO_TARGET_DIR = $BuildTargetDir
-  $RustFlags = @($OldRustFlags, "-L", "dependency=$BuildStdDeps") | Where-Object { $_ }
+  # The shared wrapper supplies the real target standard-library artifacts to
+  # direct target probes. Keep target-only search paths out of global RUSTFLAGS
+  # so host build scripts use the host sysroot.
+  $RustFlags = @($OldRustFlags) | Where-Object { $_ }
   $env:RUSTFLAGS = ($RustFlags | Join-String -Separator " ")
   $PrebuildScript = Join-Path $RepoRoot "scripts\ci\prebuild-build-std.ps1"
   & $PrebuildScript -TargetTriple $TargetTriple -NightlyCargo $NightlyCargo -TargetDir $BuildTargetDir

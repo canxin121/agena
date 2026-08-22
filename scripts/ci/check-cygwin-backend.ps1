@@ -50,7 +50,10 @@ $RunnerWorkspace = if ($env:GITHUB_WORKSPACE) {
 } else {
   Split-Path -Parent $env:RUNNER_TEMP
 }
-$BuildTargetDir = Join-Path $RunnerWorkspace ".agena-target\$TargetTriple"
+# Cargo creates the target-specific subdirectory below this short root. Do
+# not embed the triple here as well: every Windows/Cygwin rustc path would then
+# carry the target name twice and can exceed the native command-line limit.
+$BuildTargetDir = Join-Path $RunnerWorkspace ".agena-target"
 $BuildStdProfile = Join-Path $BuildTargetDir "$TargetTriple\debug"
 $RustcWrapperDir = Join-Path $env:RUNNER_TEMP "agena-rustc-build-std\$TargetTriple"
 $RustcWrapperSource = Join-Path $RepoRoot "scripts\ci\rustc-build-std-wrapper.rs"

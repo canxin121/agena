@@ -17,7 +17,10 @@ $RunnerWorkspace = if ($env:GITHUB_WORKSPACE) {
 } else {
   Split-Path -Parent $env:RUNNER_TEMP
 }
-$BuildTargetDir = Join-Path $RunnerWorkspace ".agena-target\$TargetTriple"
+# Keep Cargo's target directory rooted at one short workspace path. Cargo
+# creates the target-specific subdirectory itself; embedding the triple here
+# would repeat it in every --extern and -L path emitted by rustc.
+$BuildTargetDir = Join-Path $RunnerWorkspace ".agena-target"
 
 $Args = @(
   "check",

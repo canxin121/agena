@@ -8,10 +8,11 @@
 
 use agena_domain::{DoomLoopHit, DoomLoopPolicy, ToolInvocation};
 use agena_storage::store::{Part, PartRole};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::Ordering;
 
 use crate::session::store::typed_content_from_value;
 use agena_runtime_contracts::part_content::{TypedContent, operation_from_tool_call};
+use portable_atomic::AtomicU64;
 
 static SIGNATURE_SERIALIZATION_FAILURE_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 

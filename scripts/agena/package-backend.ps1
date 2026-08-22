@@ -78,7 +78,10 @@ if ($IsCygwinTarget) {
   }
 }
 $RuntimeReadmeLine = if ($IsCygwinTarget) { "- bin/cygwin1.dll (Cygwin runtime)" } else { "" }
-$BuildTargetDir = Join-Path $RunnerWorkspace ".agena-target\$TargetTriple"
+# Cargo creates the target-specific subdirectory below this short root. Keep
+# the triple out of the root so release rustc commands do not repeat it in
+# every dependency path.
+$BuildTargetDir = Join-Path $RunnerWorkspace ".agena-target"
 
 Write-Host "Building agena for $TargetTriple..."
 $BuildArgs = @(

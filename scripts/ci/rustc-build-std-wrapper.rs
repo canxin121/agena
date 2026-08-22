@@ -69,6 +69,10 @@ fn has_extern(args: &[OsString], crate_name: &str) -> bool {
     false
 }
 
+fn has_stdin_source(args: &[OsString]) -> bool {
+    args.iter().any(|arg| arg == "-")
+}
+
 fn has_cfg_feature(args: &[OsString], feature: &str) -> bool {
     let expected = format!("feature=\"{feature}\"");
     args.iter().any(|arg| {
@@ -142,9 +146,24 @@ fn collect_artifacts(root: &Path, directories: &mut Vec<PathBuf>, artifacts: &mu
         let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
             continue;
         };
-        let standard_library_name = ["core-", "libcore-", "std-", "libstd-"]
-            .iter()
-            .any(|prefix| name.starts_with(prefix));
+        let standard_library_name = [
+            "alloc",
+            "compiler_builtins",
+            "core",
+            "panic_abort",
+            "panic_unwind",
+            "proc_macro",
+            "rustc_std_workspace_alloc",
+            "rustc_std_workspace_core",
+            "std",
+            "std_detect",
+            "unwind",
+        ]
+        .iter()
+        .any(|crate_name| {
+            name.starts_with(&format!("{crate_name}-"))
+                || name.starts_with(&format!("lib{crate_name}-"))
+        });
         if (name.ends_with(".rlib") || name.ends_with(".rmeta")) && standard_library_name {
             if let Some(parent) = path.parent() {
                 if !directories.iter().any(|candidate| candidate == parent) {
@@ -229,15 +248,19 @@ fn main() {
             arg.to_str()
                 .is_some_and(|value| value == "--print" || value.starts_with("--print="))
         });
-        let (_, artifacts) = discover_artifacts(&build_root);
-        let cargo_supplied_standard_library =
-            has_extern(&args, "core") || has_extern(&args, "std") || has_extern(&args, "alloc");
-        if !building_rust_sysroot && !is_print_query && !cargo_supplied_standard_library {
-            // Cargo target invocations already carry the exact build-std --extern paths. Adding
+        let is_direct_probe = has_stdin_source(&args);
+        if !building_rust_sysroot && !is_print_query && is_direct_probe {
+            // Cargo target invocations already carry the exact build-std dependency paths. Adding
             // the probe output directories to those commands makes rustc discover a second copy
             // of core and reports duplicate inherent methods (for example in hashbrown). A
-            // direct build-script probe is identifiable by the absence of all standard-library
-            // externs, so augment only that narrow case.
+            // direct build-script probe is identifiable by its stdin source (`rustc ... -`), so
+            // augment only that narrow case.
+            let (directories, artifacts) = discover_artifacts(&build_root);
+            for directory in directories {
+                command
+                    .arg("-L")
+                    .arg(format!("dependency={}", directory.display()));
+            }
             let mut standard_artifacts = Vec::new();
             for standard_crate in ["core", "std"] {
                 if standard_crate == "std" && is_no_std_crate(&args) {

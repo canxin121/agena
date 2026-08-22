@@ -1,4 +1,8 @@
 <script setup lang="ts">
+// This dialog is a plan state inspector. It may refresh the persisted
+// autorun setting, but it never owns a pending permission or user-input
+// request. Plan approval decisions (including approve-with-autorun choices)
+// are operation-owned user_input records rendered by AgenaInteractionPart.
 import { computed, ref, watch } from 'vue'
 import { RiLoader4Line, RiRefreshLine } from '@remixicon/vue'
 import { useI18n } from 'vue-i18n'
@@ -122,7 +126,13 @@ watch(
     mobile-fullscreen
     @update:open="$emit('update:open', $event)"
   >
-    <div class="flex min-h-0 flex-col" data-transcript-chrome="true" tabindex="-1" @keydown="handleKeydown">
+    <div
+      class="flex min-h-0 flex-col"
+      data-transcript-chrome="true"
+      data-plan-state-viewer="true"
+      tabindex="-1"
+      @keydown="handleKeydown"
+    >
       <div class="flex shrink-0 items-center justify-between gap-3 border-y border-border/60 py-2">
         <label v-if="autorun !== null" class="inline-flex items-center gap-2 text-xs">
           <input type="checkbox" :checked="autorun" :disabled="toggling" class="h-4 w-4" @change="toggleAutorun" />

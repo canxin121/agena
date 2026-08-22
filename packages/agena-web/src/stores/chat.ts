@@ -792,19 +792,26 @@ const useChatStoreDefinition = defineStore('chat', () => {
     if (!sid || !Array.isArray(requests) || requests.length === 0) return null
     for (const raw of requests) {
       const rec = asRecord(raw)
-      const kind = readString(rec.kind as JsonValue)
+      const outerKind = readString(rec.kind as JsonValue)
+      const inputKind = readString(rec.input_kind as JsonValue)
       const requestId = readString(rec.request_id as JsonValue)
       if (!requestId) continue
-      if (kind === 'user_input') {
+      // PendingInteractiveRequest serializes its envelope as
+      // { kind: "user_input", input_kind: "review" | "ask_user", ... }.
+      // Keep both values distinct: the outer kind selects the reply family,
+      // while input_kind controls the inline transcript layout.
+      const isUserInput = outerKind === 'user_input' || Boolean(inputKind)
+      if (isUserInput) {
         const title = readString(rec.title as JsonValue) || 'Question'
         const body = readString(rec.body_markdown as JsonValue)
         const rawQuestions = rec.questions
         const questions = Array.isArray(rawQuestions)
           ? rawQuestions
-              .map((q) => {
+              .map((q, index) => {
                 const qr = asRecord(q)
-                const header = readString(qr.header as JsonValue) || title
-                const question = readString(qr.question as JsonValue) || body
+                const header = readString(qr.header as JsonValue) || title || `Question ${index + 1}`
+                const question =
+                  readString(qr.question as JsonValue) || readString(qr.title as JsonValue) || `Question ${index + 1}`
                 const options = Array.isArray(qr.options)
                   ? qr.options
                       .map((o) => {
@@ -818,9 +825,16 @@ const useChatStoreDefinition = defineStore('chat', () => {
                   : []
                 const multiple = qr.multiple === true
                 const custom = qr.allow_custom === true
-                return { header, question, options, multiple, custom }
+                return {
+                  question_id: readString(qr.question_id as JsonValue) || String(index),
+                  header,
+                  question,
+                  options,
+                  multiple,
+                  custom,
+                }
               })
-              .filter((q) => Boolean(q.question && q.header))
+              .filter((q) => Boolean(q.question))
           : []
         if (questions.length === 0) continue
         return {
@@ -830,7 +844,14 @@ const useChatStoreDefinition = defineStore('chat', () => {
             type: 'question.asked',
             properties: {
               id: requestId,
+              title,
+              body_markdown: body,
+              input_kind: inputKind || (outerKind === 'user_input' ? 'ask_user' : outerKind),
               questions,
+              // Keep the canonical request available to any status/debug
+              // consumer. The transcript itself reads the operation-owned
+              // request, but attention projection must not discard fields.
+              request: rec,
             },
           },
         }
@@ -1346,10 +1367,12 @@ const useChatStoreDefinition = defineStore('chat', () => {
     })
     const rawQuestions = request ? asRecord(request).questions : null
     if (Array.isArray(rawQuestions)) {
-      rawQuestions.forEach((q, index) => {
-        const qr = asRecord(q)
-        const qid = readString(qr.question_id as JsonValue) || String(index)
-        answersMap[qid] = Array.isArray(answers[index]) ? answers[index] : []
+      rawQuestions.forEach((_, index) => {
+        // The user-input reply contract is indexed by question ordinal. A
+        // question_id may be present in a future/legacy presentation payload,
+        // but it is not a valid wire key for this endpoint: the runtime
+        // validator accepts only "0", "1", ... and rejects unknown keys.
+        answersMap[String(index)] = Array.isArray(answers[index]) ? answers[index] : []
       })
     } else {
       answers.forEach((a, index) => {

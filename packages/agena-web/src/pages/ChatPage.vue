@@ -1448,25 +1448,7 @@ const composerStatusExtra = computed(() => {
   const parts: string[] = []
   if (chat.messagesLoading) parts.push(String(t('chat.composer.status.loading')))
   if (commandOpen.value) parts.push(`${String(t('chat.composer.status.slash'))} /${commandQuery.value}`)
-  const state = chat.selectedSessionState
-  const requestCount =
-    (state.kind === 'running' || state.kind === 'awaiting_interaction') && Array.isArray(state.data.requests)
-      ? state.data.requests.length
-      : 0
-  if (requestCount > 0 && chat.selectedAttention?.kind === 'question') {
-    parts.push(String(t('chat.composer.status.pendingInput', { count: requestCount })))
-  }
   return parts.join('  |  ')
-})
-
-const composerTopRightStatus = computed(() => {
-  if (chat.selectedAttention?.kind !== 'permission') return ''
-  const state = chat.selectedSessionState
-  const count =
-    (state.kind === 'running' || state.kind === 'awaiting_interaction') && Array.isArray(state.data.requests)
-      ? Math.max(1, state.data.requests.length)
-      : 1
-  return String(t('chat.composer.status.pendingApproval', { count }))
 })
 
 const composerBottomLeftStatus = computed(() => {
@@ -2455,7 +2437,6 @@ const viewCtx = {
   handleComposerPickerSelect,
   ...modelSelection,
   composerStatusExtra,
-  composerTopRightStatus,
   composerBottomLeftStatus,
   composerBottomRightStatus,
 

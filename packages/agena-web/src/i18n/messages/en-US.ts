@@ -2151,6 +2151,7 @@ export default {
         rejectQuestion: 'Reject question',
         sendAnswers: 'Send answers',
         permissionLabel: 'Permission',
+        replyReasonLabel: 'Reply reason',
         patternsLabel: 'Patterns',
         rememberedForLabel: 'Will be remembered for',
         previousQuestion: 'Previous question',
@@ -2160,6 +2161,9 @@ export default {
         single: 'single',
         custom: 'Custom',
         typeYourOwnAnswer: 'Type your own answer',
+        answerLabel: 'Answer',
+        answered: 'Answered',
+        awaitingUserInput: 'Awaiting user input',
         customOnlySentHint: 'Only sent when the custom option is selected.',
         noQuestionsAvailable: 'No questions available.',
       },
@@ -2223,8 +2227,6 @@ export default {
       status: {
         loading: 'loading',
         slash: 'slash',
-        pendingInput: 'input {count} pending (Ctrl+R)',
-        pendingApproval: 'approval {count} pending (Ctrl+L)',
       },
     },
 

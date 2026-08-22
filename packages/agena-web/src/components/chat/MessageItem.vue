@@ -5,7 +5,7 @@ import { RiArrowGoBackLine, RiCheckLine, RiClipboardLine, RiGitBranchLine, RiLoa
 import AgenaTranscriptPart from '@/components/chat/AgenaTranscriptPart.vue'
 import ConfirmPopover from '@/components/ui/ConfirmPopover.vue'
 import IconButton from '@/components/ui/IconButton.vue'
-import type { AttentionLike, MessageLike, TranscriptDisplayPart } from '@/components/chat/messageList.types'
+import type { MessageLike, TranscriptDisplayPart } from '@/components/chat/messageList.types'
 import type { MessageFold } from '@/types/chat'
 import { getAssistantErrorInfo } from '@/pages/chat/assistantError'
 import { foldTranscriptActivityRun } from '@/pages/chat/transcriptActivityFolding'
@@ -27,7 +27,6 @@ const props = defineProps<{
   isNodeSelected?: (key: string) => boolean
   isNodeSearchMatch?: (key: string) => boolean
   sessionId?: string | null
-  attention?: AttentionLike
 }>()
 
 const emit = defineEmits<{
@@ -328,7 +327,6 @@ function partNavigationText(part: TranscriptDisplayPart): string {
           :streaming="isStreaming && row.part.kind === 'answer'"
           :source-path="sourcePath"
           :session-id="sessionId"
-          :attention="attention"
           @toggle="togglePart(row.part)"
           @select="$emit('nodeSelect', row.part.key)"
         />

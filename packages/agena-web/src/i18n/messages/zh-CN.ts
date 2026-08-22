@@ -2146,6 +2146,7 @@ export default {
         rejectQuestion: '拒绝问题',
         sendAnswers: '发送答案',
         permissionLabel: '权限',
+        replyReasonLabel: '回复原因',
         patternsLabel: '匹配模式',
         rememberedForLabel: '将为以下项记住',
         previousQuestion: '上一个问题',
@@ -2155,6 +2156,9 @@ export default {
         single: '单选',
         custom: '自定义',
         typeYourOwnAnswer: '输入你自己的答案',
+        answerLabel: '答案',
+        answered: '已回答',
+        awaitingUserInput: '等待用户输入',
         customOnlySentHint: '仅在选择自定义选项时发送。',
         noQuestionsAvailable: '没有可用的问题。',
       },
@@ -2218,8 +2222,6 @@ export default {
       status: {
         loading: '加载中',
         slash: '命令',
-        pendingInput: '{count} 个用户输入待处理 (Ctrl+R)',
-        pendingApproval: '{count} 个权限待处理 (Ctrl+L)',
       },
     },
 

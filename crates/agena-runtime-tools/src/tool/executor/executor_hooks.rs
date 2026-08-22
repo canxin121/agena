@@ -191,7 +191,15 @@ impl ToolExecutor {
                 .as_ref()
                 .map(|tool| &tool.definition.runtime.result_policy),
         );
-        if rendered.human.is_none() {
+        let plugin_human = rendered.human.take();
+        let needs_runtime_human_fallback = plugin_human.as_ref().is_none_or(|human| {
+            human.blocks.is_empty()
+                || human
+                    .blocks
+                    .iter()
+                    .all(|block| matches!(block, agena_domain::ViewBlock::Json { .. }))
+        });
+        if needs_runtime_human_fallback {
             let command = invocation
                 .input
                 .get("command")
@@ -217,17 +225,29 @@ impl ToolExecutor {
             let blocks = agena_tool::ToolHumanRenderer::render_human(&renderer, &context, output)
                 .unwrap_or_default();
             rendered.human = Some(agena_plugin_host::sdk::ToolHumanPresentation {
-                title: invocation.name.clone(),
-                summary: agena_tool::normalize_tool_summary(model.as_str()),
+                title: plugin_human
+                    .as_ref()
+                    .map(|human| human.title.clone())
+                    .filter(|title| !title.trim().is_empty())
+                    .unwrap_or_else(|| invocation.name.clone()),
+                summary: plugin_human
+                    .as_ref()
+                    .map(|human| human.summary.clone())
+                    .filter(|summary| !summary.trim().is_empty())
+                    .unwrap_or_else(|| {
+                        crate::tool::human_view::BuiltinHumanRenderer::human_summary(output)
+                    }),
                 blocks,
             });
-        } else if let Some(human) = rendered.human.as_mut() {
+        } else if let Some(mut human) = plugin_human {
             if human.title.trim().is_empty() {
                 human.title = invocation.name.clone();
             }
             if human.summary.trim().is_empty() {
-                human.summary = agena_tool::normalize_tool_summary(model.as_str());
+                human.summary =
+                    crate::tool::human_view::BuiltinHumanRenderer::human_summary(output);
             }
+            rendered.human = Some(human);
         }
         rendered
     }

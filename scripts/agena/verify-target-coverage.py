@@ -36,28 +36,28 @@ FULL_RUNTIME_OS = {
 }
 
 
-def command_targets(command: list[str]) -> set[str]:
-    output = subprocess.check_output(command, text=True)
-    return {line.split()[0] for line in output.splitlines() if line.strip()}
-
-
 def target_spec(target: str) -> dict[str, object]:
     env = dict(os.environ)
     env["RUSTC_BOOTSTRAP"] = "1"
-    output = subprocess.check_output(
-        [
-            "rustc",
-            "-Z",
-            "unstable-options",
-            "--print",
-            "target-spec-json",
-            "--target",
-            target,
-        ],
-        text=True,
-        env=env,
-        stderr=subprocess.DEVNULL,
-    )
+    try:
+        output = subprocess.check_output(
+            [
+                "rustc",
+                "-Z",
+                "unstable-options",
+                "--print",
+                "target-spec-json",
+                "--target",
+                target,
+            ],
+            text=True,
+            env=env,
+            stderr=subprocess.DEVNULL,
+        )
+    except subprocess.CalledProcessError as error:
+        raise SystemExit(
+            f"full-backend manifest contains a target unknown to rustc: {target}"
+        ) from error
     return json.loads(output)
 
 
@@ -75,14 +75,9 @@ def main() -> None:
     if duplicates:
         raise SystemExit(f"universal target manifest contains duplicate targets: {duplicates}")
 
-    rustc_targets = command_targets(["rustc", "--print", "target-list"])
-    rustup_targets = command_targets(["rustup", "target", "list"])
-    classified = set(counts)
-
-    unknown = sorted(classified - rustc_targets)
-    if unknown:
-        raise SystemExit(f"target policy contains targets unknown to rustc: {unknown}")
-
+    # The manifest is the complete Agena release surface. Validate only these
+    # full-backend rows; Rust's other built-in targets are intentionally not a
+    # second policy surface here.
     backend_targets = {row["target"] for row in backend_rows}
 
     bad_artifacts = sorted(
@@ -94,6 +89,13 @@ def main() -> None:
         raise SystemExit(f"all release targets must be full backend artifacts: {bad_artifacts}")
 
     specs = {target: target_spec(target) for target in backend_targets}
+    rustup_targets = {
+        line.split()[0]
+        for line in subprocess.check_output(
+            ["rustup", "target", "list"], text=True
+        ).splitlines()
+        if line.strip()
+    }
 
     invalid_backends: list[str] = []
     for target in sorted(backend_targets):
@@ -125,13 +127,11 @@ def main() -> None:
         if (specs[target].get("metadata") or {}).get("std") is None
     )
 
-    print(f"Rust built-in targets available: {len(rustc_targets)}")
-    print(f"Rust distributed targets: {len(rustup_targets)}")
+    print(f"Rust distributed full-backend targets: {len(distributed_backends)}")
     print(f"Cross backend targets: {len(groups['cross_backend'])}")
     print(f"Native/SDK backend targets: {len(groups['native_backend'])}")
     print(f"Linux Zig backend targets: {len(groups['linux_zig_backend'])}")
     print(f"Custom OS backend targets: {len(groups['custom_backend'])}")
-    print(f"Distributed full backend targets: {len(distributed_backends)}")
     print(f"Build-std full backend targets: {len(build_std_backends)}")
     print(f"Full backend release target triples: {len(backend_targets)}")
     print(f"Std status unknown/WIP backend targets: {len(std_unknown)}")

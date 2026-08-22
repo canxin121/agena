@@ -25,18 +25,14 @@ case "$TARGET" in
   *) echo "ERROR: unsupported Haiku target: $TARGET" >&2; exit 2 ;;
 esac
 
-# The pinned Haiku repository's minimum-raw source list predates the current
-# official HaikuPorts dependency closure.  Keep the bootstrap small, but add
-# the real source packages needed by the pinned recipes: netpbm provides the
-# pnmcrop tools and libjpeg provider, while the x86_64 bash recipe also needs
-# gettext/libintl and groff.  Haiku's build rules expose this variable
-# specifically for extending the source-package list.
+# The pinned Haiku repository's minimum-raw source lists predate the current
+# official HaikuPorts dependency closure.  Seed the real source recipes needed
+# by the pinned bootstrap recipes on both architectures; HaikuPorter resolves
+# their transitive dependencies from the pinned HaikuPorts checkout.  Haiku's
+# build rules expose this variable specifically for extending the source list.
 case "$HAIKU_ARCH" in
-  x86)
-    HAIKU_BOOTSTRAP_ADDITIONAL_SOURCES="netpbm"
-    ;;
-  x86_64)
-    HAIKU_BOOTSTRAP_ADDITIONAL_SOURCES="gettext groff netpbm"
+  x86|x86_64)
+    HAIKU_BOOTSTRAP_ADDITIONAL_SOURCES="bash gettext groff libjpeg_turbo nasm netpbm"
     ;;
 esac
 

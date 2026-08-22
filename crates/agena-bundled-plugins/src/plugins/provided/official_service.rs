@@ -341,7 +341,7 @@ pub(crate) async fn provider_output(
 
     let (receipt_path, receipt_sha256) =
         persist_response_receipt(host, workspace_root, provider, tool, &response.value).await?;
-    let payload = serde_json::json!({
+    let mut payload = serde_json::json!({
         "provider": provider,
         "tool": tool,
         "model": model,
@@ -358,6 +358,14 @@ pub(crate) async fn provider_output(
         },
         "continuation_required": continuation_required,
     });
+    if let Some(object) = payload.as_object_mut() {
+        object.extend(compact_operation_facts(
+            tool,
+            &response.value,
+            sources.len(),
+            attachments.len(),
+        ));
+    }
     let usage_metadata = serde_json::to_string(&attributed).map_err(|error| {
         PluginError::internal(format!("cannot serialize provider tool usage: {error}"))
     })?;
@@ -385,6 +393,206 @@ pub(crate) async fn provider_output(
         ]),
         attachments,
     ))
+}
+
+/// Preserve small, presentation-neutral facts from provider responses that
+/// are otherwise intentionally omitted from the durable envelope. The full
+/// response remains in the redacted receipt; these scalars let the shared
+/// title/presentation projection say what happened without exposing a second
+/// provider JSON dump to the transcript.
+fn compact_operation_facts(
+    tool: &str,
+    response: &serde_json::Value,
+    source_count: usize,
+    attachment_count: usize,
+) -> serde_json::Map<String, serde_json::Value> {
+    let mut facts = serde_json::Map::new();
+    let array_count = |keys: &[&str]| {
+        find_provider_value(response, keys)
+            .and_then(serde_json::Value::as_array)
+            .map(Vec::len)
+    };
+    let number = |keys: &[&str]| {
+        find_provider_value(response, keys).and_then(|value| {
+            value
+                .as_u64()
+                .or_else(|| value.as_i64().and_then(|value| u64::try_from(value).ok()))
+                .or_else(|| value.as_str().and_then(|value| value.trim().parse().ok()))
+        })
+    };
+    let string = |keys: &[&str]| {
+        find_provider_value(response, keys)
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+    };
+
+    match tool {
+        "file_search" => {
+            if let Some(count) = array_count(&[
+                "file_results",
+                "file_search_results",
+                "files",
+                "documents",
+                "matches",
+                "results",
+            ]) {
+                facts.insert("file_count".into(), serde_json::json!(count));
+            } else if source_count > 0 {
+                facts.insert("file_count".into(), serde_json::json!(source_count));
+            }
+        }
+        "tool_search"
+        | "tool_search_bm25"
+        | "tool_search_regex"
+        | "tool_search_tool_bm25"
+        | "tool_search_tool_regex" => {
+            if let Some(count) = array_count(&["tool_references", "tools", "matches", "results"]) {
+                facts.insert("tool_count".into(), serde_json::json!(count));
+            }
+        }
+        "google_maps" => {
+            if let Some(count) = array_count(&[
+                "places",
+                "map_results",
+                "locations",
+                "results",
+                "groundingChunks",
+            ]) {
+                facts.insert("place_count".into(), serde_json::json!(count));
+            } else if source_count > 0 {
+                facts.insert("place_count".into(), serde_json::json!(source_count));
+            }
+        }
+        "retrieval" => {
+            if let Some(count) = array_count(&[
+                "retrieved",
+                "matches",
+                "chunks",
+                "documents",
+                "results",
+                "groundingChunks",
+            ]) {
+                facts.insert("retrieved_count".into(), serde_json::json!(count));
+            } else if source_count > 0 {
+                facts.insert("retrieved_count".into(), serde_json::json!(source_count));
+            }
+        }
+        "url_context" | "web_fetch" => {
+            if let Some(count) =
+                array_count(&["fetched_urls", "loaded_urls", "pages", "documents", "urls"])
+            {
+                facts.insert("fetched_count".into(), serde_json::json!(count));
+            } else if source_count > 0 {
+                facts.insert("fetched_count".into(), serde_json::json!(source_count));
+            }
+            if let Some(status) = number(&["status", "http_status", "status_code"]) {
+                facts.insert("status".into(), serde_json::json!(status));
+            }
+        }
+        "code_execution" | "code_interpreter" => {
+            if let Some(exit_code) = number(&["exit_code", "exitCode"]) {
+                facts.insert("exit_code".into(), serde_json::json!(exit_code));
+            }
+            if let Some(outcome) = string(&["outcome", "result_status", "status"]) {
+                facts.insert("outcome".into(), serde_json::json!(outcome));
+            }
+            if let Some(count) = array_count(&["outputs", "results"]) {
+                facts.insert("output_count".into(), serde_json::json!(count));
+            }
+        }
+        "local_shell" | "shell" | "bash" => {
+            if let Some(exit_code) = number(&["exit_code", "exitCode"]) {
+                facts.insert("exit_code".into(), serde_json::json!(exit_code));
+            }
+            if let Some(outcome) = string(&["outcome", "result_status", "status"]) {
+                facts.insert("outcome".into(), serde_json::json!(outcome));
+            }
+            if let Some(count) = array_count(&["outputs", "results"]) {
+                facts.insert("output_count".into(), serde_json::json!(count));
+            }
+        }
+        "computer" | "computer_use_preview" | "computer_use" => {
+            if let Some(action) = find_provider_value(response, &["action"])
+                .and_then(|value| value.as_object())
+                .and_then(|object| {
+                    object
+                        .get("type")
+                        .or_else(|| object.get("action"))
+                        .and_then(serde_json::Value::as_str)
+                })
+            {
+                facts.insert("action".into(), serde_json::json!(action));
+            }
+            if let Some(title) = string(&["page_title", "title"]) {
+                facts.insert("page_title".into(), serde_json::json!(title));
+            }
+        }
+        "mcp" | "mcp_server" | "mcp_toolset" => {
+            if let Some(connected) =
+                find_provider_value(response, &["connected"]).and_then(serde_json::Value::as_bool)
+            {
+                facts.insert("connected".into(), serde_json::json!(connected));
+            }
+        }
+        "memory" => {
+            if let Some(operation) = string(&["operation", "action", "command"]) {
+                facts.insert("operation".into(), serde_json::json!(operation));
+            }
+            for key in ["loaded", "saved", "removed", "deleted"] {
+                if let Some(value) =
+                    find_provider_value(response, &[key]).and_then(serde_json::Value::as_bool)
+                {
+                    facts.insert(key.into(), serde_json::json!(value));
+                }
+            }
+        }
+        _ => {}
+    }
+    if attachment_count > 0 {
+        facts.insert("image_count".into(), serde_json::json!(attachment_count));
+    }
+    facts
+}
+
+fn find_provider_value<'a>(
+    value: &'a serde_json::Value,
+    keys: &[&str],
+) -> Option<&'a serde_json::Value> {
+    fn visit<'a>(
+        value: &'a serde_json::Value,
+        keys: &[&str],
+        depth: usize,
+    ) -> Option<&'a serde_json::Value> {
+        if depth > 12 {
+            return None;
+        }
+        match value {
+            serde_json::Value::Object(object) => {
+                for key in keys {
+                    if let Some(value) = object.get(*key) {
+                        return Some(value);
+                    }
+                }
+                for child in object.values() {
+                    if let Some(value) = visit(child, keys, depth + 1) {
+                        return Some(value);
+                    }
+                }
+            }
+            serde_json::Value::Array(values) => {
+                for child in values {
+                    if let Some(value) = visit(child, keys, depth + 1) {
+                        return Some(value);
+                    }
+                }
+            }
+            _ => {}
+        }
+        None
+    }
+    visit(value, keys, 0)
 }
 
 pub(crate) fn append_prompt_to_items(
@@ -1373,7 +1581,10 @@ fn extension_for_mime(mime: &str) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::{MAX_PROVIDER_IMAGE_INPUT_BYTES, read_image_input_bounded};
+    use super::{
+        MAX_PROVIDER_IMAGE_INPUT_BYTES, compact_operation_facts, read_image_input_bounded,
+    };
+    use serde_json::json;
 
     #[tokio::test]
     async fn oversized_sparse_image_input_is_rejected_before_full_read() {
@@ -1408,5 +1619,44 @@ mod tests {
             .await
             .expect_err("combined request budget must be enforced");
         assert!(error.to_string().contains("50 MiB"));
+    }
+
+    #[test]
+    fn compact_provider_facts_keep_operation_counts_and_outcomes() {
+        let facts = compact_operation_facts(
+            "file_search",
+            &json!({
+                "output": [{"type": "file_search_call", "results": [{"file_name": "a.md"}, {"file_name": "b.md"}]}]
+            }),
+            0,
+            0,
+        );
+        assert_eq!(facts.get("file_count"), Some(&json!(2)));
+
+        let facts = compact_operation_facts(
+            "code_execution",
+            &json!({"status": "completed", "exit_code": 0}),
+            0,
+            0,
+        );
+        assert_eq!(facts.get("exit_code"), Some(&json!(0)));
+        assert_eq!(facts.get("outcome"), Some(&json!("completed")));
+
+        let facts = compact_operation_facts(
+            "google_maps",
+            &json!({"groundingChunks": [{"maps": {}}, {"maps": {}}]}),
+            0,
+            0,
+        );
+        assert_eq!(facts.get("place_count"), Some(&json!(2)));
+
+        let facts = compact_operation_facts(
+            "shell",
+            &json!({"status": "completed", "exit_code": 0}),
+            0,
+            0,
+        );
+        assert_eq!(facts.get("exit_code"), Some(&json!(0)));
+        assert_eq!(facts.get("outcome"), Some(&json!("completed")));
     }
 }

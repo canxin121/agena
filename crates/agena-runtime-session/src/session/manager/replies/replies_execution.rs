@@ -3144,13 +3144,16 @@ impl SessionManager {
         // the unified wire events from the same text deltas that drive the
         // streamed tool part. Events are broadcast live (a no-op bridge in v2;
         // P5 re-homes onto the facade notification bus).
-        let initial_title = session
+        let activity_invocation = session
             .part(&pending_tool.part)
             .and_then(operation_from_part)
-            .and_then(|operation| {
-                (!operation.invocation.name.is_empty()).then_some(operation.invocation.name)
-            })
+            .map(|operation| operation.invocation);
+        let initial_title = activity_invocation
+            .as_ref()
+            .filter(|invocation| !invocation.name.is_empty())
+            .map(agena_tool::initial_tool_title)
             .unwrap_or_else(|| "tool".to_owned());
+        let activity_action_title = initial_title.clone();
         let mut activity_handler = streaming_activity_id.map(|activity_id| {
             crate::activity::ActivityHandler::begin(
                 activity_id,
@@ -3308,8 +3311,36 @@ impl SessionManager {
         // streamed output the tool part checkpoint carries — the v1
         // The former duplicate transcript write path is deleted.
         if let Some(mut handler) = activity_handler.take() {
+            let terminal_raw_output = agena_domain::RawOutput::from_parts(
+                execution.output.to_json_payload(),
+                execution.view.output_text.clone(),
+                execution.view.attachments.clone(),
+                execution.output.managed_outputs.clone(),
+                execution
+                    .view
+                    .metadata
+                    .iter()
+                    .map(|(key, value)| (key.clone(), serde_json::Value::String(value.clone())))
+                    .collect(),
+                execution.output.truncated,
+            );
+            let final_title = activity_invocation
+                .as_ref()
+                .map(|invocation| {
+                    agena_tool::completed_tool_title(invocation, &terminal_raw_output)
+                })
+                .unwrap_or_else(|| {
+                    agena_tool::completed_tool_title_with_action(
+                        activity_action_title.as_str(),
+                        &terminal_raw_output,
+                    )
+                });
             let node = handler.finish(
-                agena_tool::ToolActivityResult::raw(agena_domain::RawOutput::text(streamed_output)),
+                agena_tool::ToolActivityResult {
+                    title: Some(final_title),
+                    summary: Some(execution.view.summary.clone()),
+                    raw_output: terminal_raw_output,
+                },
                 agena_domain::ActivityState::Completed,
             );
             self.broadcast_activity_v2(
@@ -3519,6 +3550,9 @@ impl SessionManager {
                 inherit_operation_context(&mut operation, existing);
             }
             tool_part.content = operation_content_value(&operation)?;
+            if !execution.view.summary.trim().is_empty() {
+                tool_part.summary = Some(execution.view.summary.clone());
+            }
             tool_part.state = PartState::Completed;
             Ok(())
         })?;

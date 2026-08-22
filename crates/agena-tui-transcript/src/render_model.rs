@@ -99,10 +99,25 @@ impl ToolCallView {
         operation: OperationPart,
         presentation: Option<ToolHumanPresentationResource>,
     ) -> Self {
-        let presentation = presentation.unwrap_or_else(|| ToolHumanPresentationResource {
-            title: operation.invocation.name.clone(),
-            summary: String::new(),
-            blocks: Vec::new(),
+        let presentation = presentation.unwrap_or_else(|| {
+            let title = operation
+                .output
+                .as_ref()
+                .map(|output| {
+                    agena_tool::completed_tool_title_for_state(
+                        &operation.invocation,
+                        operation.state,
+                        output,
+                    )
+                })
+                .unwrap_or_else(|| {
+                    agena_tool::tool_title_for_state(&operation.invocation, operation.state)
+                });
+            ToolHumanPresentationResource {
+                title,
+                summary: String::new(),
+                blocks: Vec::new(),
+            }
         });
         Self {
             operation,

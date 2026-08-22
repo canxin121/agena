@@ -32,9 +32,13 @@ test('workspace route sync opens durable tabs and restores complete locations', 
   // which route should seed a first tab.
   assert.ok(!uiStoreSource.includes('return [createWorkspaceWindowTab(defaultMainTab)]'))
   assert.ok(mainLayoutSource.includes('if (!ui.workspaceWindows.length)'))
+  assert.ok(mainLayoutSource.includes("await router.replace({ path: '/' }).catch(() => {})"))
+  assert.ok(uiStoreSource.includes("activeMainTabFallback.value = 'chat'"))
   assert.ok(mainLayoutSource.includes("if (route.path !== '/' && (tab !== 'chat' || sessionId))"))
   assert.ok(mainLayoutSource.includes('<WorkspacePrimaryPaneView :window-id="activePrimaryWindowId" />'))
-  assert.ok(uiStoreSource.includes("if (mainTab === 'chat' && !readMatchQueryValue(routeQuery, 'sessionId')) return null"))
+  assert.ok(
+    uiStoreSource.includes("if (mainTab === 'chat' && !readMatchQueryValue(routeQuery, 'sessionId')) return null"),
+  )
   assert.ok(uiStoreSource.includes("if (tab === 'chat' && !readMatchQueryValue(query, 'sessionId')) return ''"))
 
   const setRouteQueryFn = extractFunctionSource(

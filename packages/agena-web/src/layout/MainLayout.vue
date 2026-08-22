@@ -25,7 +25,7 @@ import {
   type WorkspaceWindowTemplateDragData,
 } from '@/layout/workspaceWindowDrag'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 
 import { useUiStore } from '@/stores/ui'
@@ -36,6 +36,7 @@ import { useDesktopSidebarResize } from '@/composables/useDesktopSidebarResize'
 const ui = useUiStore()
 const toasts = useToastsStore()
 const route = useRoute()
+const router = useRouter()
 const workspaceNavigation = useWorkspaceNavigation()
 const { t } = useI18n()
 const { startDesktopSidebarResize } = useDesktopSidebarResize()
@@ -603,6 +604,25 @@ async function syncRouteToActiveWorkspaceWindow() {
 
   await workspaceNavigation.navigateToWorkspaceWindow(target.id, true)
 }
+
+async function syncEmptyWorkspaceRoute() {
+  if (!useWorkspaceWindowLayout.value) return
+  if (isEmbeddedWorkspacePane.value || hasEmbeddedWorkspacePaneQuery(route.query)) return
+  if (ui.workspaceWindows.length) return
+
+  const hasQuery = Object.keys(route.query || {}).length > 0
+  if (route.path === '/' && !hasQuery && !route.hash) return
+
+  await router.replace({ path: '/' }).catch(() => {})
+}
+
+watch(
+  () => ui.workspaceWindows.length,
+  (count, previous) => {
+    if (count !== 0 || previous === 0) return
+    void syncEmptyWorkspaceRoute()
+  },
+)
 
 watch(
   () => String(ui.activeWorkspaceWindowId || '').trim(),

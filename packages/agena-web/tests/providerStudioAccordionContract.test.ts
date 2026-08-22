@@ -28,6 +28,10 @@ test('adapter row headers own enable and destructive actions', () => {
 test('provider studio uses one dirty-aware save boundary for provider, adapter, and model edits', () => {
   assert.ok(providerSource.includes('<SettingsSaveBar'))
   assert.ok(providerSource.includes(':dirty="providerDirty"'))
+  assert.ok(providerSource.includes('const editorDirty = ref(false)'))
+  assert.ok(
+    !providerSource.includes('(savedEditorState.value && providerEditorStateFingerprint() !== savedEditorState.value)'),
+  )
   assert.ok(providerSource.includes('pendingDeletedAdapterIds'))
   assert.ok(providerSource.includes('pendingDeletedModelKeys'))
   assert.ok(providerSource.includes('stageCurrentModelValue'))
@@ -41,8 +45,22 @@ test('model edit action stops propagation from the adapter disclosure row', () =
   assert.ok(providerSource.includes('@click.stop="openModelEditor(adapter.adapter_id, model)"'))
 })
 
+test('provider studio uses the Input component model-value contract for editable fields', () => {
+  const inputTags = [...providerSource.matchAll(/<Input\b[\s\S]*?\/>/g)].map((match) => match[0])
+
+  assert.ok(inputTags.length >= 6)
+  assert.ok(inputTags.every((tag) => !tag.includes(':value=')))
+  assert.ok(inputTags.every((tag) => !tag.includes('@input=')))
+  assert.ok(inputTags.some((tag) => tag.includes(':model-value="draft.provider_id"')))
+  assert.ok(inputTags.some((tag) => tag.includes('@update:model-value="setFieldValue(field.path, $event)"')))
+  assert.ok(providerSource.includes('function cloneModelPath'))
+  assert.ok(providerSource.includes('function scheduleModelJsonSync'))
+  assert.ok(providerSource.includes('const modelJsonDirty = ref(false)'))
+  assert.ok(providerSource.includes('@input="markModelJsonDirty"'))
+})
+
 test('model editor is rendered inside the matching model row', () => {
-  const modelLoop = providerSource.indexOf('<template\n                  v-for="model in adapter.models"')
+  const modelLoop = providerSource.indexOf('v-for="model in adapter.models"')
   const editor = providerSource.indexOf(
     'v-if="editingModel?.adapterId === adapter.adapter_id && editingModel?.modelId === model.id"',
   )

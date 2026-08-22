@@ -21,4 +21,8 @@ test('Harness settings expose every runtime field and explicit Global/Workspace 
   }
   assert.ok(source.includes('setRuntimeSetting('))
   assert.ok(source.includes('targetLayer.value'))
+  assert.ok(source.includes('function cloneEditableObject'))
+  assert.ok(source.includes('function scheduleRawHarnessJsonSync'))
+  assert.ok(source.includes('const rawHarnessJsonDirty = ref(false)'))
+  assert.ok(!source.includes('const current = clone((selectedConfig.value || {}) as JsonObject)'))
 })

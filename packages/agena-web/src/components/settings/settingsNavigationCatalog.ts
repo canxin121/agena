@@ -22,6 +22,12 @@ const SETTINGS_SUBPAGE_SOURCES: Record<SettingsTab, readonly SettingsSubpageSour
       keywords: ['catalog', 'metadata', 'pricing', 'capabilities', 'context window'],
     },
     {
+      id: 'defaults',
+      label: () => st('Model defaults'),
+      description: () => st('Choose the one runtime-wide default model and its optional execution modes.'),
+      keywords: ['default', 'model', 'thinking', 'speed', 'verbosity'],
+    },
+    {
       id: 'inventory',
       label: () => st('Configured inventory'),
       description: () => st('Review every configured provider, adapter, endpoint, and model.'),

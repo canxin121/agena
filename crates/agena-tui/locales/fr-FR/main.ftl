@@ -634,6 +634,10 @@ settings-provider-workbench-label = Liste des fournisseurs
 
 settings-provider-workbench-value = {$count} fournisseur(s)
 
+settings-global-default-model-label = Modèle par défaut
+
+settings-global-default-model-description = Modèle utilisé lorsqu'une session n'en spécifie aucun ; un modèle de session explicite est toujours prioritaire.
+
 settings-model-default-mode-inherit-detail = Utilisez le mode natif par défaut du modèle sélectionné.
 
 settings-provider-new-label = + Nouveau fournisseur
@@ -1408,6 +1412,7 @@ flash-command-requires-session = cette action nécessite une session ouverte
 flash-session-busy = la séance est occupée
 flash-provider-not-found = fournisseur introuvable : { $provider }
 flash-permission-approval-model-updated = modèle d'approbation automatique mis à jour : { $provider }/{ $model }
+flash-global-default-model-updated = modèle global par défaut mis à jour : { $provider }/{ $model }
 flash-provider-studio-adapter-required = sélectionnez d'abord un adaptateur
 flash-provider-studio-adapter-not-enabled = vérifiez l'adaptateur sélectionné avant d'ajouter un modèle
 flash-provider-studio-adapter-unavailable = le mode d'authentification actuel ne permet pas de sélectionner cet adaptateur

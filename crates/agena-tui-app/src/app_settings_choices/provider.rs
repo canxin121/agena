@@ -1,4 +1,35 @@
 impl App {
+    pub(crate) fn current_global_default_model_ref(&self) -> Option<ModelRef> {
+        if let Some(selection) = self
+            .application
+            .runtime_status()
+            .and_then(|status| status.default_selection)
+            && let (Some(provider_id), Some(model_id)) =
+                (selection.provider.as_deref(), selection.model.as_deref())
+        {
+            return match selection.adapter.as_deref() {
+                Some(adapter_id) => {
+                    ModelRef::try_new_with_adapter(provider_id, adapter_id, model_id).ok()
+                }
+                None => ModelRef::try_new(provider_id, model_id).ok(),
+            };
+        }
+
+        let sources = crate::app_backend::config::config_json_sources(&self.application).ok()?;
+        let selection = get_json_path(&sources.effective, Some("providers.default_selection"))
+            .ok()
+            .and_then(|value| {
+                serde_json::from_value::<agena_domain::ModelSelectionConfig>(value).ok()
+            })?;
+        let (provider_id, model_id) = (selection.provider?, selection.model?);
+        match selection.adapter.as_deref() {
+            Some(adapter_id) => {
+                ModelRef::try_new_with_adapter(provider_id, adapter_id, model_id).ok()
+            }
+            None => ModelRef::try_new(provider_id, model_id).ok(),
+        }
+    }
+
     pub(crate) fn finish_model_selection(
         &mut self,
         purpose: agena_tui::model_chooser::SessionModelChooserPurpose,
@@ -7,7 +38,26 @@ impl App {
         speed_mode: Option<String>,
         verbosity: Option<String>,
     ) -> bool {
+        let selection = model_selection_value(
+            &model,
+            thinking_mode.clone(),
+            speed_mode.clone(),
+            verbosity.clone(),
+        );
         match purpose {
+            agena_tui::model_chooser::SessionModelChooserPurpose::GlobalDefault => {
+                self.dispatch_backend_operation(
+                    move |application| async move {
+                        application
+                            .set_config_setting("providers.default_selection", selection)
+                            .await
+                    },
+                    move |app, result| {
+                        app.finish_model_selection_persisted(purpose, model, result.map(|_| ()))
+                    },
+                );
+                false
+            }
             agena_tui::model_chooser::SessionModelChooserPurpose::PermissionApproval => {
                 let mut approval = serde_json::Map::new();
                 approval.insert(
@@ -58,12 +108,16 @@ impl App {
         match result {
             Ok(()) => {
                 self.flash_success(self.i18n.text_args(
-                    if purpose
-                        == agena_tui::model_chooser::SessionModelChooserPurpose::PermissionApproval
-                    {
-                        "flash-permission-approval-model-updated"
-                    } else {
-                        "flash-session-model-updated"
+                    match purpose {
+                        agena_tui::model_chooser::SessionModelChooserPurpose::PermissionApproval => {
+                            "flash-permission-approval-model-updated"
+                        }
+                        agena_tui::model_chooser::SessionModelChooserPurpose::GlobalDefault => {
+                            "flash-global-default-model-updated"
+                        }
+                        agena_tui::model_chooser::SessionModelChooserPurpose::RuntimeOverride => {
+                            "flash-model-selected"
+                        }
                     },
                     &agena_tui::fl_args!(
                         "provider" => model.provider_id.to_string(),
@@ -138,6 +192,33 @@ impl App {
             }
         }
     }
+}
+
+fn model_selection_value(
+    model: &ModelRef,
+    thinking_mode: Option<String>,
+    speed_mode: Option<String>,
+    verbosity: Option<String>,
+) -> JsonValue {
+    let mut selection = serde_json::Map::new();
+    selection.insert(
+        "provider".to_owned(),
+        JsonValue::String(model.provider_id.to_string()),
+    );
+    if let Some(adapter_id) = model.adapter_id.as_ref() {
+        selection.insert(
+            "adapter".to_owned(),
+            JsonValue::String(adapter_id.to_string()),
+        );
+    }
+    selection.insert(
+        "model".to_owned(),
+        JsonValue::String(model.model_id.to_string()),
+    );
+    insert_optional_selection_value(&mut selection, "thinking_mode", thinking_mode);
+    insert_optional_selection_value(&mut selection, "speed_mode", speed_mode);
+    insert_optional_selection_value(&mut selection, "verbosity", verbosity);
+    JsonValue::Object(selection)
 }
 
 fn insert_optional_selection_value(

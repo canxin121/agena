@@ -179,6 +179,18 @@ impl agena_provider::ProviderCatalog for AgenaRuntime {
             .map_err(|error| agena_provider::ProviderCatalogError::operation_error(&error))
     }
 
+    fn default_model(
+        &self,
+    ) -> Result<Option<agena_domain::ModelRef>, agena_provider::ProviderCatalogError> {
+        self.current_snapshot()
+            .resolve_default_model()
+            .map_err(|error| agena_provider::ProviderCatalogError::operation_error(&error))
+    }
+
+    fn default_selection(&self) -> agena_domain::ExecutionSelection {
+        self.current_snapshot().default_selection()
+    }
+
     fn resolve_model_target(
         &self,
         target: &str,

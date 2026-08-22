@@ -4,9 +4,37 @@ import test from 'node:test'
 import {
   approvalModelFromSettingsResponse,
   buildApprovalModelSettingsPatch,
+  buildDefaultModelSettingsPatch,
   normalizeServerModelIdentity,
   sameServerModelIdentity,
 } from '../src/lib/serverModelSettings'
+
+test('global default model patch writes only providers.default_selection', () => {
+  assert.deepEqual(
+    buildDefaultModelSettingsPatch(
+      { provider: 'openai', adapter: 'responses', model: 'gpt-5' },
+      { thinkingMode: 'high', speedMode: 'fast', verbosity: 'compact', parallelToolCalls: true },
+    ),
+    {
+      path: 'providers',
+      changes: {
+        default_selection: {
+          provider: 'openai',
+          adapter: 'responses',
+          model: 'gpt-5',
+          thinking_mode: 'high',
+          speed_mode: 'fast',
+          verbosity: 'compact',
+          parallel_tool_calls: true,
+        },
+      },
+      dry_run: false,
+      validate: true,
+      reload: true,
+    },
+  )
+  assert.equal('default' in buildDefaultModelSettingsPatch({ provider: 'openai', model: 'gpt-5' }).changes, false)
+})
 
 test('approval model patch uses the permission-specific identity field names', () => {
   assert.deepEqual(

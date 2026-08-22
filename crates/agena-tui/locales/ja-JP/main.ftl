@@ -634,6 +634,10 @@ settings-provider-workbench-label = プロバイダーリスト
 
 settings-provider-workbench-value = {$count} プロバイダー
 
+settings-global-default-model-label = デフォルトモデル
+
+settings-global-default-model-description = セッションでモデルが指定されていない場合に使用するモデル。明示的なセッションモデルが常に優先されます。
+
 settings-model-default-mode-inherit-detail = 選択したモデルのネイティブなデフォルトモードを使用します。
 
 settings-provider-new-label = + 新しいプロバイダー
@@ -1408,6 +1412,7 @@ flash-command-requires-session = このアクションには開いたセッシ�
 flash-session-busy = セッションがビジーです
 flash-provider-not-found = プロバイダーが見つかりません: { $provider }
 flash-permission-approval-model-updated = 自動承認モデルが更新されました: { $provider }/{ $model }
+flash-global-default-model-updated = グローバルデフォルトモデルを更新しました: { $provider }/{ $model }
 flash-provider-studio-adapter-required = 最初にアダプターを選択してください
 flash-provider-studio-adapter-not-enabled = モデルを追加する前に、選択したアダプターを確認してください
 flash-provider-studio-adapter-unavailable = 現在の認証モードでは、このアダプターを選択できません

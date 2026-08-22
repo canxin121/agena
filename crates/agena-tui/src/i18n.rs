@@ -164,6 +164,7 @@ mod tests {
         "overlay-settings-section-ui-label",
         "overlay-settings-section-runtime-session-label",
         "settings-field-permission-approval-model-label",
+        "settings-global-default-model-label",
         "settings-field-ui-locale-label",
         "settings-field-tui-color-scheme-label",
         "settings-field-tui-theme-label",

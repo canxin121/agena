@@ -391,7 +391,22 @@ const composerPickerEmptyText = computed(() => {
 
 const composerPickerGroups = computed<OptionMenuGroup[]>(() => {
   if (composerPickerOpen.value === 'model') {
-    const groups: OptionMenuGroup[] = []
+    const groups: OptionMenuGroup[] = [
+      {
+        id: 'model-default',
+        title: String(t('common.default')),
+        collapsible: false,
+        items: [
+          {
+            id: 'model:default',
+            label: String(t('chat.composer.model.autoDefault')),
+            description: String(t('chat.composer.model.autoDefaultDescription')),
+            checked: modelSelection.modelSource.value === 'default',
+            keywords: 'default runtime model',
+          },
+        ],
+      },
+    ]
 
     const byProvider = new Map<string, OptionMenuItem[]>()
     for (const opt of modelSelection.filteredModelSlugOptions.value as ModelSlugPickerOption[]) {
@@ -643,6 +658,10 @@ function setComposerPickerOpen(next: boolean) {
 
 function handleComposerPickerSelect(item: OptionMenuItem) {
   const id = String(item.id || '')
+  if (id === 'model:default') {
+    void modelSelection.chooseModelDefault()
+    return
+  }
   if (id === 'thinking:default') {
     void modelSelection.chooseThinkingModeDefault()
     return

@@ -158,7 +158,11 @@ impl SessionManager {
         session: &Session,
         options: &mut SessionRunOptions,
     ) -> Result<(), AppError> {
-        let effective_selection = session.runtime.execution.selection.clone();
+        let state = self.execution_state();
+        let effective_selection = state
+            .config
+            .default_selection
+            .overlay_with_cascade(&session.runtime.execution.selection);
         let selection_model = effective_selection.model_ref().map_err(|error| {
             AppError::Internal(format!(
                 "session {} contains invalid execution model selection: {error}",
@@ -320,16 +324,27 @@ impl SessionManager {
     pub(in crate::session::manager) fn model_from_session_or_error(
         &self,
         session: &Session,
-        _state: &SessionManagerState,
+        state: &SessionManagerState,
     ) -> Result<ModelRef, AppError> {
         self.model_from_session_selection(session)?
             .map(Ok)
             .unwrap_or_else(|| {
-                Err(AppError::Internal(format!(
-                    "model is required for session {}; select a model before running",
-                    session.id
-                )))
+                self.default_model_from_config(state)?.ok_or_else(|| {
+                    AppError::Internal(format!(
+                        "model is required for session {}; set a session model or global default model",
+                        session.id
+                    ))
+                })
             })
+    }
+
+    pub(in crate::session::manager) fn default_model_from_config(
+        &self,
+        state: &SessionManagerState,
+    ) -> Result<Option<ModelRef>, AppError> {
+        Ok(state
+            .provider_registry
+            .resolve_default_model_selection(&state.config.default_selection)?)
     }
 
     pub(in crate::session::manager) async fn run_options_from_session_async(
@@ -448,18 +463,24 @@ impl SessionManager {
         state: &SessionManagerState,
         requested_selection: &agena_domain::ModelSelectionConfig,
     ) -> Result<SessionRunOptions, AppError> {
-        let parent_model = self.model_from_session_selection(parent)?.ok_or_else(|| {
-            AppError::Internal(
-                "subtask requires the parent session to have a selected model before it can run"
-                    .to_string(),
-            )
-        })?;
+        let parent_model = match self.model_from_session_selection(parent)? {
+            Some(model) => model,
+            None => self.default_model_from_config(state)?.ok_or_else(|| {
+                AppError::Internal(
+                    "subtask requires a parent or global default model before it can run"
+                        .to_string(),
+                )
+            })?,
+        };
         let model = self.resolve_model_selection_override(
             &state.provider_registry,
             &parent_model,
             requested_selection,
         )?;
-        let parent_selection = parent.runtime.execution.selection.clone();
+        let parent_selection = state
+            .config
+            .default_selection
+            .overlay_with_cascade(&parent.runtime.execution.selection);
         let inherit_parent_modes = parent_selection
             .model_ref()
             .map_err(|error| {

@@ -2206,6 +2206,8 @@ export default {
         availableCount: '{count} available',
       },
       model: {
+        autoDefault: 'Agena runtime default',
+        autoDefaultDescription: 'Use the default model configured on the Agena server',
         defaultThinkingDescription: 'Use the thinking mode configured for this model',
         defaultSpeedDescription: 'Use the speed mode configured for this model',
       },

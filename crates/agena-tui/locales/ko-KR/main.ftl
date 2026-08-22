@@ -634,6 +634,10 @@ settings-provider-workbench-label = 공급자 명부
 
 settings-provider-workbench-value = {$count} 공급자 (s)
 
+settings-global-default-model-label = 기본 모델
+
+settings-global-default-model-description = 세션에서 모델을 지정하지 않았을 때 사용하는 모델입니다. 명시적인 세션 모델이 항상 우선합니다.
+
 settings-model-default-mode-inherit-detail = 선택한 모델의 네이티브 기본 모드를 사용합니다.
 
 settings-provider-new-label = + 새로운 공급자
@@ -1408,6 +1412,7 @@ flash-command-requires-session = 이 작업을 수행하려면 공개 세션이 
 flash-session-busy = 세션이 바빠요
 flash-provider-not-found = 공급자를 찾을 수 없습니다: { $provider }
 flash-permission-approval-model-updated = 자동 승인 모델 업데이트됨: { $provider }/{ $model }
+flash-global-default-model-updated = 전역 기본 모델이 업데이트되었습니다: { $provider }/{ $model }
 flash-provider-studio-adapter-required = 먼저 어댑터를 선택하세요
 flash-provider-studio-adapter-not-enabled = 모델을 추가하기 전에 선택한 어댑터를 확인하세요
 flash-provider-studio-adapter-unavailable = 현재 인증 모드에서는 이 어댑터를 선택할 수 없습니다.

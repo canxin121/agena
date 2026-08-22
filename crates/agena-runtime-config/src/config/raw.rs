@@ -181,12 +181,6 @@ fn reject_unsupported_fields_value(value: &Value) -> Result<(), ConfigError> {
                 "`providers.default` is no longer supported; select a model explicitly".to_string(),
             ));
         }
-        if providers.contains_key("default_selection") {
-            return Err(ConfigError::Validation(
-                "`providers.default_selection` is no longer supported; select a model explicitly"
-                    .to_string(),
-            ));
-        }
         for (provider_id, provider) in providers {
             let Some(provider) = provider.as_object() else {
                 continue;
@@ -238,8 +232,10 @@ fn reject_unsupported_fields_value(value: &Value) -> Result<(), ConfigError> {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
 #[serde(default)]
-/// Raw provider configuration with per-provider overlays.
+/// Raw provider configuration with one global model selection and per-provider overlays.
 pub struct RawProvidersConfig {
+    #[merge(strategy = option_override)]
+    pub default_selection: Option<agena_domain::ModelSelectionConfig>,
     #[serde(flatten)]
     #[merge(strategy = map_extend)]
     pub providers: BTreeMap<String, ProviderOverlay>,
@@ -247,10 +243,11 @@ pub struct RawProvidersConfig {
 
 impl RawProvidersConfig {
     fn is_empty(&self) -> bool {
-        self.providers.is_empty()
+        self.default_selection.is_none() && self.providers.is_empty()
     }
 
     fn merge_project_from(&mut self, overlay: Self) {
+        merge_option(&mut self.default_selection, overlay.default_selection);
         for (provider_id, provider) in overlay.providers {
             match self.providers.get_mut(&provider_id) {
                 Some(existing) => existing.merge_project_from(provider),
@@ -264,6 +261,7 @@ impl RawProvidersConfig {
 
 impl Merge for RawProvidersConfig {
     fn merge_from(&mut self, overlay: Self) {
+        merge_option(&mut self.default_selection, overlay.default_selection);
         merge_map(&mut self.providers, overlay.providers);
     }
 }
@@ -480,15 +478,19 @@ impl RawConfig {
         let harnesses: HarnessesConfig = self.harnesses.unwrap_or_default();
         validate_harnesses(&harnesses)?;
 
+        let explicit_default_selection = self.providers.default_selection.clone();
         let providers = self
             .providers
             .providers
             .into_iter()
             .map(|(provider_id, raw)| raw.resolve(provider_id, env, &harnesses, &mcp))
             .collect::<Result<BTreeMap<_, _>, _>>()?;
+        let default_selection =
+            resolve_default_selection(explicit_default_selection.as_ref(), &providers)?;
         validate_permission_config("permission", &permission)?;
 
         Ok(ResolvedConfig {
+            default_selection,
             tracing,
             ui,
             runtime,
@@ -499,6 +501,80 @@ impl RawConfig {
             providers,
         })
     }
+}
+
+fn resolve_default_selection(
+    explicit_selection: Option<&agena_domain::ModelSelectionConfig>,
+    providers: &BTreeMap<String, ResolvedProviderConfig>,
+) -> Result<agena_domain::ExecutionSelection, ConfigError> {
+    let Some(selection) = explicit_selection else {
+        return Ok(agena_domain::ExecutionSelection::default());
+    };
+
+    if selection.is_empty() {
+        return Ok(agena_domain::ExecutionSelection::default());
+    }
+
+    let provider_id = selection
+        .provider
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            ConfigError::Validation(
+                "`providers.default_selection` must specify a provider and model".to_owned(),
+            )
+        })?;
+    let provider = providers.get(provider_id).ok_or_else(|| {
+        ConfigError::Validation(format!(
+            "providers.default_selection `{provider_id}` references unknown provider"
+        ))
+    })?;
+    if !provider.enabled {
+        return Err(ConfigError::Validation(format!(
+            "providers.default_selection `{provider_id}` references disabled provider"
+        )));
+    }
+
+    if let Some(adapter_id) = selection
+        .adapter
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        let adapter = provider.adapters.get(adapter_id).ok_or_else(|| {
+            ConfigError::Validation(format!(
+                "providers.default_selection adapter `{adapter_id}` references unknown adapter for provider `{provider_id}`"
+            ))
+        })?;
+        if !adapter.enabled {
+            return Err(ConfigError::Validation(format!(
+                "providers.default_selection adapter `{adapter_id}` references disabled adapter for provider `{provider_id}`"
+            )));
+        }
+    }
+
+    let model = selection
+        .model
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            ConfigError::Validation(
+                "`providers.default_selection` must specify a provider and model".to_owned(),
+            )
+        })?;
+
+    Ok(agena_domain::ExecutionSelection {
+        provider: Some(provider_id.to_owned()),
+        adapter: selection.adapter.clone(),
+        model: Some(model.to_owned()),
+        thinking_mode: selection.thinking_mode.clone(),
+        speed_mode: selection.speed_mode.clone(),
+        verbosity: selection.verbosity.clone(),
+        parallel_tool_calls: selection.parallel_tool_calls,
+        ..Default::default()
+    })
 }
 
 impl Merge for PluginConfig {
@@ -1467,10 +1543,9 @@ mod openai_protocol_adapter_tests {
     }
 
     #[test]
-    fn provider_default_selection_is_rejected() {
-        let value = serde_json::json!({
+    fn global_default_selection_is_accepted_and_provider_default_is_rejected() {
+        let mut value = serde_json::json!({
             "providers": {
-                "default": "test",
                 "default_selection": {
                     "provider": "test",
                     "adapter": "openai_responses",
@@ -1481,7 +1556,6 @@ mod openai_protocol_adapter_tests {
                     "parallel_tool_calls": false
                 },
                 "test": {
-                    "defaults": { "adapter": "openai_responses" },
                     "auth": {
                         "mode": "api",
                         "subtype": "custom",
@@ -1497,8 +1571,16 @@ mod openai_protocol_adapter_tests {
                 }
             }
         });
+        validate_config_text(
+            Path::new("agena.json"),
+            &value.to_string(),
+            &ProcessEnvironment,
+        )
+        .expect("global default selection should be accepted");
+
+        value["providers"]["default"] = serde_json::json!("test");
         let error = reject_unsupported_fields_value(&value)
-            .expect_err("provider default selection must not be accepted");
+            .expect_err("providers.default must remain rejected");
         assert!(error.to_string().contains("providers.default"));
     }
 
@@ -1522,12 +1604,9 @@ mod openai_protocol_adapter_tests {
     }
 
     #[test]
-    fn legacy_provider_default_selection_with_disabled_adapter_is_rejected() {
-        // Keep rejecting the removed provider-level selection shape even when
-        // its nested adapter would otherwise be invalid.
+    fn global_default_selection_with_disabled_adapter_is_rejected() {
         let value = serde_json::json!({
             "providers": {
-                "default": "test",
                 "default_selection": {
                     "provider": "test",
                     "adapter": "openai_chat_completions",
@@ -1535,7 +1614,6 @@ mod openai_protocol_adapter_tests {
                     "thinking_mode": "max"
                 },
                 "test": {
-                    "defaults": { "adapter": "openai_responses" },
                     "auth": {
                         "mode": "api",
                         "subtype": "custom",
@@ -1549,23 +1627,25 @@ mod openai_protocol_adapter_tests {
                 }
             }
         });
-        let error = reject_unsupported_fields_value(&value)
-            .expect_err("provider default selection must be rejected");
-        assert!(error.to_string().contains("providers.default"));
+        let error = validate_config_text(
+            Path::new("agena.json"),
+            &value.to_string(),
+            &ProcessEnvironment,
+        )
+        .expect_err("disabled global default adapter must be rejected");
+        assert!(error.to_string().contains("disabled adapter"));
     }
 
     #[test]
-    fn legacy_provider_default_selection_with_unknown_adapter_is_rejected() {
+    fn global_default_selection_with_unknown_adapter_is_rejected() {
         let value = serde_json::json!({
             "providers": {
-                "default": "test",
                 "default_selection": {
                     "provider": "test",
                     "adapter": "does_not_exist",
                     "model": "deepseek-v4-flash"
                 },
                 "test": {
-                    "defaults": { "adapter": "openai_responses" },
                     "auth": {
                         "mode": "api",
                         "subtype": "custom",
@@ -1578,18 +1658,19 @@ mod openai_protocol_adapter_tests {
                 }
             }
         });
-        let error = reject_unsupported_fields_value(&value)
-            .expect_err("provider default selection must be rejected");
-        assert!(error.to_string().contains("providers.default"));
+        let error = validate_config_text(
+            Path::new("agena.json"),
+            &value.to_string(),
+            &ProcessEnvironment,
+        )
+        .expect_err("unknown global default adapter must be rejected");
+        assert!(error.to_string().contains("unknown adapter"));
     }
 
     #[test]
-    fn legacy_provider_default_selection_for_removed_provider_is_rejected() {
-        // A removed provider must not leave the deleted global selection
-        // schema behind in the settings document.
+    fn global_default_selection_for_unknown_provider_is_rejected() {
         let value = serde_json::json!({
             "providers": {
-                "default": "opencode",
                 "default_selection": {
                     "provider": "opencode",
                     "adapter": "openai_responses",
@@ -1597,7 +1678,6 @@ mod openai_protocol_adapter_tests {
                     "thinking_mode": "max"
                 },
                 "chatgpt": {
-                    "defaults": { "adapter": "openai_responses" },
                     "auth": {
                         "mode": "credential",
                         "issuer": "openai_chatgpt"
@@ -1612,9 +1692,13 @@ mod openai_protocol_adapter_tests {
                 }
             }
         });
-        let error = reject_unsupported_fields_value(&value)
-            .expect_err("provider default selection must be rejected");
-        assert!(error.to_string().contains("providers.default"));
+        let error = validate_config_text(
+            Path::new("agena.json"),
+            &value.to_string(),
+            &ProcessEnvironment,
+        )
+        .expect_err("unknown global default provider must be rejected");
+        assert!(error.to_string().contains("unknown provider"));
     }
 
     #[test]

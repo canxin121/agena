@@ -1,6 +1,22 @@
 use super::{AdapterId, ModelId, ModelRef, ProviderError, ProviderId, ProviderRegistry};
 
 impl ProviderRegistry {
+    pub fn resolve_default_model_selection(
+        &self,
+        selection: &agena_domain::ExecutionSelection,
+    ) -> Result<Option<ModelRef>, ProviderError> {
+        let Some(provider_id) = selection.provider.as_deref() else {
+            return Ok(None);
+        };
+
+        self.resolve_model_selection(
+            provider_id,
+            selection.adapter.as_deref(),
+            selection.model.as_deref(),
+        )
+        .map(Some)
+    }
+
     pub fn supports_prompt_continuation(&self, model: &ModelRef) -> Result<bool, ProviderError> {
         self.use_model_ref_provider(model, |provider, adapter_id, model_id| {
             provider.supports_prompt_continuation_for_adapter(adapter_id, model_id)

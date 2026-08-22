@@ -847,15 +847,25 @@ impl Application {
     /// instead of assembling the record themselves.
     pub async fn runtime_status_response(&self) -> agena_api::resource::RuntimeStatusResponse {
         use agena_api::resource::{
-            ModelCatalogResponse, RuntimeAutomationResource, RuntimeLspResource,
-            RuntimeLspServerResource, RuntimeMcpResource, RuntimeMcpServerResource,
-            RuntimeOperatorResource, RuntimePluginSurfaceResource, RuntimeSessionCacheResource,
-            RuntimeSkillResource, RuntimeSkillsResource, RuntimeStatusResponse,
-            RuntimeTaskResource,
+            DefaultSelectionResource, ModelCatalogResponse, RuntimeAutomationResource,
+            RuntimeLspResource, RuntimeLspServerResource, RuntimeMcpResource,
+            RuntimeMcpServerResource, RuntimeOperatorResource, RuntimePluginSurfaceResource,
+            RuntimeSessionCacheResource, RuntimeSkillResource, RuntimeSkillsResource,
+            RuntimeStatusResponse, RuntimeTaskResource,
         };
 
         let status = self.runtime_status().runtime_status().await;
         let catalog = status.model_catalog;
+        let selection = self.provider_catalog().default_selection();
+        let default_selection = (!selection.is_empty()).then(|| DefaultSelectionResource {
+            provider: selection.provider,
+            adapter: selection.adapter,
+            model: selection.model,
+            thinking_mode: selection.thinking_mode,
+            speed_mode: selection.speed_mode,
+            verbosity: selection.verbosity,
+            parallel_tool_calls: selection.parallel_tool_calls,
+        });
         let model_catalog = ModelCatalogResponse {
             refreshing: status.model_catalog_refreshing,
             last_refresh_at: catalog.last_refresh_at,
@@ -979,6 +989,7 @@ impl Application {
             },
             session_cache,
             model_catalog: Some(model_catalog),
+            default_selection,
             background_tasks,
             automation,
             operator: RuntimeOperatorResource {

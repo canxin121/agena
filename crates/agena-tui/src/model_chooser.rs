@@ -54,6 +54,7 @@ impl SessionModelIdentity {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SessionModelChooserPurpose {
     RuntimeOverride,
+    GlobalDefault,
     PermissionApproval,
 }
 

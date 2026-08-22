@@ -23,6 +23,6 @@ const pages = buildSettingsSubpages('models-providers')
   >
     <ProviderStudioPanel v-if="activePage === 'provider-studio'" />
     <ModelCatalogPanel v-else-if="activePage === 'model-catalog'" />
-    <ProvidersPanel v-else />
+    <ProvidersPanel v-else :view="activePage === 'defaults' ? 'defaults' : 'inventory'" />
   </SettingsSectionWorkbench>
 </template>

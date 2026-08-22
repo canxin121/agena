@@ -1,9 +1,11 @@
 //! Server-side transcript presentation paging.
 //!
-//! The raw `/parts` surface is intentionally lossless and remains useful for
-//! reconnect/debugging. The chat timeline uses this module instead: it walks
-//! raw pages inside the server, folds assistant activity there, and sends only
-//! the visible tail plus an opaque fold expansion cursor to clients.
+//! The server reads durable raw parts internally, but public transcript
+//! responses use the same presentation-safe tool projection as `/parts`:
+//! collapsed input/metadata/output sections stay server-side until a client
+//! explicitly requests one. The chat timeline walks raw pages inside the
+//! server, folds assistant activity there, and sends only the visible tail
+//! plus an opaque fold expansion cursor to clients.
 
 use std::collections::HashMap;
 

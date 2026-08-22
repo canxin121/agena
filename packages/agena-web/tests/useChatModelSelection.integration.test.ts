@@ -5,6 +5,27 @@ import { nextTick } from 'vue'
 
 import { createTestHarness } from './testRuntime'
 
+test('useChatModelSelection: uses the runtime-wide default when the session has no model', async () => {
+  const { selection } = await createTestHarness({ selectedSessionId: 'session-global-default' })
+
+  selection.runtimeDefaultSelection.value = {
+    provider: 'default-provider',
+    adapter: 'default-adapter',
+    model: 'default-model',
+    thinkingMode: 'high',
+    speedMode: 'fast',
+    verbosity: 'compact',
+  }
+  selection.applySessionSelection()
+
+  assert.equal(selection.selectedProviderId.value, 'default-provider')
+  assert.equal(selection.selectedAdapterId.value, 'default-adapter')
+  assert.equal(selection.selectedModelId.value, 'default-model')
+  assert.equal(selection.modelSource.value, 'default')
+  assert.equal(selection.selectedThinkingMode.value, 'high')
+  assert.equal(selection.selectedSpeedMode.value, 'fast')
+})
+
 test('useChatModelSelection: restores per-session manual model after session switch', async () => {
   const { chat, selection } = await createTestHarness({ selectedSessionId: 'session-1' })
 

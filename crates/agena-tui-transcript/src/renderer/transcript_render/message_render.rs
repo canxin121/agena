@@ -11,7 +11,9 @@ use super::super::{
     style_for_role, tool_output_copy_text, transcript_message_parts, transcript_part_content,
     transcript_spinner_placeholder, trim_empty_line_edges, truncate_display_width,
 };
-use super::operation_render::render_tool_execution_with_sections;
+use super::operation_render::{
+    render_tool_detail_sections_with_sections, render_tool_execution_with_sections,
+};
 use super::request_render::preview_for_part;
 use crate::activity_presentation::activity_presentation;
 use crate::ui_text;
@@ -34,14 +36,17 @@ pub fn render_entry_export(
     i18n: &I18n,
     defaults: &TranscriptDetailDefaults,
 ) -> Vec<RenderedLine> {
-    // Exported documents expand the same canonical input/result sections as
+    // Exported documents expand the same canonical tool detail sections as
     // the interactive transcript.
     let mut expansions = std::collections::BTreeMap::new();
     for part in transcript_message_parts(message) {
         let sections = match transcript_part_content(part) {
             TranscriptPartContent::Activity(TranscriptActivityContent::Operation(_)) => &[
+                TranscriptActivitySection::Metadata,
                 TranscriptActivitySection::Input,
-                TranscriptActivitySection::Result,
+                TranscriptActivitySection::Output,
+                TranscriptActivitySection::OutputMetadata,
+                TranscriptActivitySection::Presentation,
             ][..],
             _ => &[],
         };
@@ -1273,22 +1278,12 @@ pub(crate) fn render_part_node(
             // user input.
             let user_input_rendered =
                 render_operation_user_input(part, tool, out, width, i18n, expanded, interactions);
-            if user_input_rendered {
-                return RenderedNodeDraft {
-                    key,
-                    kind: TranscriptNodeKind::Activity,
-                    copy_text: if expanded {
-                        tool_output_copy_text(part, tool, i18n)
-                    } else {
-                        String::new()
-                    },
-                    toggleable: true,
-                    expanded,
-                    end_line: None,
-                    children: Vec::new(),
-                };
-            }
 
+            let metadata_key = TranscriptNodeKey::ActivitySection {
+                entry_id: message.id,
+                content_id: part.id,
+                section: TranscriptActivitySection::Metadata,
+            };
             let input_key = TranscriptNodeKey::ActivitySection {
                 entry_id: message.id,
                 content_id: part.id,
@@ -1297,21 +1292,69 @@ pub(crate) fn render_part_node(
             let output_key = TranscriptNodeKey::ActivitySection {
                 entry_id: message.id,
                 content_id: part.id,
-                section: TranscriptActivitySection::Result,
+                section: TranscriptActivitySection::Output,
             };
+            let output_metadata_key = TranscriptNodeKey::ActivitySection {
+                entry_id: message.id,
+                content_id: part.id,
+                section: TranscriptActivitySection::OutputMetadata,
+            };
+            let presentation_key = TranscriptNodeKey::ActivitySection {
+                entry_id: message.id,
+                content_id: part.id,
+                section: TranscriptActivitySection::Presentation,
+            };
+            let metadata_expanded = expansions.get(&metadata_key).copied().unwrap_or(false);
             let input_expanded = expansions.get(&input_key).copied().unwrap_or(false);
             let output_expanded = expansions.get(&output_key).copied().unwrap_or(false);
-            let execution = render_tool_execution_with_sections(
-                part,
-                input_expanded,
-                output_expanded,
-                tool,
-                out,
-                width,
-                i18n,
-                expanded,
-            );
+            let output_metadata_expanded = expansions
+                .get(&output_metadata_key)
+                .copied()
+                .unwrap_or(false);
+            let presentation_expanded = expansions.get(&presentation_key).copied().unwrap_or(true);
+            let execution = if user_input_rendered {
+                render_tool_detail_sections_with_sections(
+                    part,
+                    metadata_expanded,
+                    input_expanded,
+                    output_expanded,
+                    output_metadata_expanded,
+                    presentation_expanded,
+                    tool,
+                    out,
+                    width,
+                    i18n,
+                    expanded,
+                )
+            } else {
+                render_tool_execution_with_sections(
+                    part,
+                    metadata_expanded,
+                    input_expanded,
+                    output_expanded,
+                    output_metadata_expanded,
+                    presentation_expanded,
+                    tool,
+                    out,
+                    width,
+                    i18n,
+                    expanded,
+                )
+            };
             let mut children = Vec::new();
+            if let Some(section) = execution.metadata
+                && let Some(child) = rendered_activity_section_node(
+                    metadata_key,
+                    section.start_line,
+                    section.end_line,
+                    section.copy_text,
+                    true,
+                    section.expanded,
+                    out,
+                )
+            {
+                children.push(child);
+            }
             if let Some(section) = execution.input
                 && let Some(child) = rendered_activity_section_node(
                     input_key,
@@ -1338,10 +1381,44 @@ pub(crate) fn render_part_node(
             {
                 children.push(child);
             }
+            if let Some(section) = execution.output_metadata
+                && let Some(child) = rendered_activity_section_node(
+                    output_metadata_key,
+                    section.start_line,
+                    section.end_line,
+                    section.copy_text,
+                    true,
+                    section.expanded,
+                    out,
+                )
+            {
+                children.push(child);
+            }
+            if let Some(section) = execution.presentation
+                && let Some(child) = rendered_activity_section_node(
+                    presentation_key,
+                    section.start_line,
+                    section.end_line,
+                    section.copy_text,
+                    true,
+                    section.expanded,
+                    out,
+                )
+            {
+                children.push(child);
+            }
             RenderedNodeDraft {
                 key,
                 kind: TranscriptNodeKind::Activity,
-                copy_text: execution.visible_copy_text,
+                copy_text: if user_input_rendered {
+                    if expanded {
+                        tool_output_copy_text(part, tool, i18n)
+                    } else {
+                        String::new()
+                    }
+                } else {
+                    execution.visible_copy_text
+                },
                 toggleable: true,
                 expanded,
                 end_line: Some(execution.headline_end),

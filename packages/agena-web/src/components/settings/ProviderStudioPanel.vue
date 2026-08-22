@@ -100,6 +100,7 @@ const authMessage = ref('')
 const editingModel = ref<{ adapterId: string; modelId: string } | null>(null)
 const modelValue = ref<LooseRecord | null>(null)
 const modelJson = ref('')
+const modelJsonDirty = ref(false)
 const modelLoading = ref(false)
 const modelError = ref('')
 const modelConfigValues = ref<Record<string, LooseRecord>>({})
@@ -111,10 +112,12 @@ const authRequestInFlight = ref(false)
 const expandedProviderKey = ref('')
 const expandedAdapterIds = ref<Set<string>>(new Set())
 const savedEditorState = ref('')
+const editorDirty = ref(false)
 const pendingDeletedAdapterIds = ref<Set<string>>(new Set())
 const pendingDeletedModelKeys = ref<Set<string>>(new Set())
 const NEW_PROVIDER_ROW_KEY = '__new_provider__'
 let authPollTimer: ReturnType<typeof setTimeout> | null = null
+let modelJsonSyncTimer: ReturnType<typeof setTimeout> | null = null
 let draftRequestGeneration = 0
 let modelListingGeneration = 0
 let authRequestGeneration = 0
@@ -465,12 +468,12 @@ const providerRows = computed<ProviderRow[]>(() => {
 const providerDirty = computed(() => {
   if (!draft.value) return false
   if (!String(draft.value.source_provider_id || '').trim()) return true
-  return Boolean(
-    pendingDeletedAdapterIds.value.size ||
-    pendingDeletedModelKeys.value.size ||
-    (savedEditorState.value && providerEditorStateFingerprint() !== savedEditorState.value),
-  )
+  return Boolean(editorDirty.value || pendingDeletedAdapterIds.value.size || pendingDeletedModelKeys.value.size)
 })
+
+function markEditorDirty() {
+  editorDirty.value = true
+}
 
 const adapterRows = computed<AdapterModels[]>(() => {
   const byId = new Map(adapterModels.value.map((adapter) => [adapter.adapter_id, adapter]))
@@ -557,13 +560,42 @@ function selectedAdaptersAreSupported(): boolean {
 
 function syncManualModelAdapter() {
   if (manualModelAdapterId.value && selectedAdapterIds.value.has(manualModelAdapterId.value)) return
-  manualModelAdapterId.value =
-    [...selectedAdapterIds.value].sort((left, right) => left.localeCompare(right))[0] || ''
+  manualModelAdapterId.value = [...selectedAdapterIds.value].sort((left, right) => left.localeCompare(right))[0] || ''
+}
+
+function clearModelJsonSyncTimer() {
+  if (modelJsonSyncTimer !== null) {
+    clearTimeout(modelJsonSyncTimer)
+    modelJsonSyncTimer = null
+  }
+}
+
+function setModelJsonText(value: string) {
+  clearModelJsonSyncTimer()
+  modelJson.value = value
+  modelJsonDirty.value = false
+}
+
+function scheduleModelJsonSync() {
+  if (modelJsonDirty.value) return
+  clearModelJsonSyncTimer()
+  modelJsonSyncTimer = setTimeout(() => {
+    modelJsonSyncTimer = null
+    if (!modelJsonDirty.value && modelValue.value) {
+      modelJson.value = JSON.stringify(modelValue.value, null, 2)
+    }
+  }, 150)
+}
+
+function markModelJsonDirty() {
+  modelJsonDirty.value = true
+  clearModelJsonSyncTimer()
 }
 
 function clearModelStudioState() {
   ++modelListingGeneration
   ++modelEditorGeneration
+  clearModelJsonSyncTimer()
   listingModels.value = false
   adapterModels.value = []
   selectedModelKeys.value = new Set()
@@ -572,7 +604,7 @@ function clearModelStudioState() {
   editingModel.value = null
   modelLoading.value = false
   modelValue.value = null
-  modelJson.value = ''
+  setModelJsonText('')
   modelError.value = ''
   configuredAdapterIds.value = new Set()
   configuredModelKeys.value = new Set()
@@ -643,20 +675,39 @@ function normalizeDraftShape(value: ProviderConfigDraft): ProviderConfigDraft {
   return next
 }
 
-function fieldValue(path: string): string {
+function fieldValueFrom(source: unknown, path: string): string {
   const parts = path.split('.')
-  let current: any = draft.value
+  let current: any = source
   for (const part of parts) current = current?.[part]
   if (current === undefined || current === null) return ''
   if (path === 'auth.secret_source_kind' && current === 'Unset') return ''
   return String(current)
 }
 
+function fieldValue(path: string): string {
+  return fieldValueFrom(draft.value, path)
+}
+
+function cloneDraftPath(value: ProviderConfigDraft, parts: string[]): ProviderConfigDraft {
+  const next = { ...value } as ProviderConfigDraft
+  let source: any = value
+  let target: LooseRecord = next
+  for (const part of parts.slice(0, -1)) {
+    const sourceChild = source?.[part]
+    const targetChild =
+      sourceChild && typeof sourceChild === 'object' && !Array.isArray(sourceChild) ? { ...sourceChild } : {}
+    target[part] = targetChild
+    source = sourceChild
+    target = targetChild
+  }
+  return next
+}
+
 function setFieldValue(path: string, value: string | number) {
   if (!draft.value) return
-  const next = clone(draft.value)
   const previousValue = fieldValue(path)
   const parts = path.split('.')
+  const next = cloneDraftPath(draft.value, parts)
   let target: LooseRecord = next
   for (const part of parts.slice(0, -1)) {
     if (!target[part] || typeof target[part] !== 'object') target[part] = {}
@@ -677,10 +728,16 @@ function setFieldValue(path: string, value: string | number) {
     next.credential_drafts.openai_chatgpt = openai
     resetAuthUiState()
   }
-  const normalized = normalizeDraftShape(next)
-  const changed = JSON.stringify(normalized) !== JSON.stringify(draft.value)
+  // The draft is normalized when it is loaded and when its auth mode/subtype
+  // changes. Re-normalizing and deep-comparing the complete provider draft on
+  // every character makes ordinary text editing scale with the size of the
+  // credentials object. Only a login-method change needs the full cleanup.
+  const normalized = path === 'credential_drafts.openai_chatgpt.login_kind' ? normalizeDraftShape(next) : next
+  const changed = previousValue !== fieldValueFrom(normalized, path)
+  if (!changed) return
   draft.value = normalized
-  if (changed) invalidateModelListing()
+  markEditorDirty()
+  invalidateModelListing()
 }
 
 function authDetailFields(): DraftField[] {
@@ -988,6 +1045,7 @@ async function loadDraft(providerId?: string) {
     pendingDeletedAdapterIds.value = new Set()
     pendingDeletedModelKeys.value = new Set()
     savedEditorState.value = providerEditorStateFingerprint()
+    editorDirty.value = false
     expandedProviderKey.value = providerId || NEW_PROVIDER_ROW_KEY
     if (configuredModelsError) error.value = configuredModelsError
   } catch (reason) {
@@ -995,6 +1053,7 @@ async function loadDraft(providerId?: string) {
     error.value = reason instanceof Error ? reason.message : String(reason)
     draft.value = null
     savedEditorState.value = ''
+    editorDirty.value = false
   } finally {
     if (requestGeneration === draftRequestGeneration) loading.value = false
   }
@@ -1064,6 +1123,7 @@ async function listDraftModels() {
       }
     }
     selectedModelKeys.value = nextKeys
+    markEditorDirty()
   } catch (reason) {
     if (requestGeneration !== modelListingGeneration) return
     error.value = reason instanceof Error ? reason.message : String(reason)
@@ -1084,6 +1144,7 @@ function toggleAdapter(adapterId: string) {
     pendingDeletedAdapterIds.value = deleted
   }
   selectedAdapterIds.value = next
+  markEditorDirty()
   syncManualModelAdapter()
   // Adapter selection is a local draft edit. Model discovery is an explicit
   // action, matching the TUI and avoiding a provider request for every click.
@@ -1099,6 +1160,7 @@ function toggleModel(adapterId: string, modelId: string) {
   if (next.has(key)) next.delete(key)
   else next.add(key)
   selectedModelKeys.value = next
+  markEditorDirty()
 }
 
 function setAuthMode(value: string) {
@@ -1114,6 +1176,7 @@ function setAuthMode(value: string) {
   clearModelStudioState()
   const supported = adapterIdsForAuthKind(draft.value.auth_kind)
   selectedAdapterIds.value = new Set([...previouslySelected].filter((adapterId) => supported.has(adapterId)))
+  markEditorDirty()
   syncManualModelAdapter()
 }
 
@@ -1131,6 +1194,7 @@ function setAuthSubtype(value: string) {
   clearModelStudioState()
   const supported = adapterIdsForAuthKind(draft.value.auth_kind)
   selectedAdapterIds.value = new Set([...previouslySelected].filter((adapterId) => supported.has(adapterId)))
+  markEditorDirty()
   syncManualModelAdapter()
 }
 
@@ -1252,6 +1316,7 @@ async function deleteProvider() {
         draft.value = null
         expandedProviderKey.value = ''
         savedEditorState.value = ''
+        editorDirty.value = false
       }
     }
   } catch (reason) {
@@ -1299,7 +1364,10 @@ async function startAuth(action: 'start' | 'continue', silent = false) {
       body: JSON.stringify({ draft: draftSnapshot }),
     })
     if (requestGeneration !== authRequestGeneration) return
-    if (response?.draft) draft.value = normalizeDraftShape(response.draft)
+    if (response?.draft) {
+      draft.value = normalizeDraftShape(response.draft)
+      markEditorDirty()
+    }
     authMessage.value = response?.message ? authMessageText(response.message) : ''
     if (response?.clipboard_text && navigator.clipboard) {
       try {
@@ -1356,6 +1424,7 @@ function addManualModel() {
   const deleted = new Set(pendingDeletedModelKeys.value)
   deleted.delete(key)
   pendingDeletedModelKeys.value = deleted
+  markEditorDirty()
   newModelId.value = ''
 }
 
@@ -1366,11 +1435,11 @@ async function openModelEditor(adapterId: string, model: ProviderModel) {
   modelLoading.value = true
   modelError.value = ''
   modelValue.value = null
-  modelJson.value = ''
+  setModelJsonText('')
   const staged = modelConfigValues.value[modelKey(adapterId, model.id)]
   if (staged) {
     modelValue.value = canonicalizeModelConfig(staged)
-    modelJson.value = JSON.stringify(modelValue.value, null, 2)
+    setModelJsonText(JSON.stringify(modelValue.value, null, 2))
     modelLoading.value = false
     return
   }
@@ -1382,12 +1451,12 @@ async function openModelEditor(adapterId: string, model: ProviderModel) {
     })
     if (requestGeneration !== modelEditorGeneration) return
     modelValue.value = canonicalizeModelConfig(response?.value ?? {})
-    modelJson.value = JSON.stringify(modelValue.value, null, 2)
+    setModelJsonText(JSON.stringify(modelValue.value, null, 2))
   } catch (reason) {
     if (requestGeneration !== modelEditorGeneration) return
     modelError.value = reason instanceof Error ? reason.message : String(reason)
     modelValue.value = null
-    modelJson.value = ''
+    setModelJsonText('')
   } finally {
     if (requestGeneration === modelEditorGeneration) modelLoading.value = false
   }
@@ -1398,7 +1467,7 @@ function closeModelEditor() {
   editingModel.value = null
   modelLoading.value = false
   modelValue.value = null
-  modelJson.value = ''
+  setModelJsonText('')
   modelError.value = ''
 }
 
@@ -1476,18 +1545,36 @@ function setModelPath(target: LooseRecord, key: string, value: unknown) {
   cursor[parts[parts.length - 1]] = value
 }
 
+function cloneModelPath(value: LooseRecord, key: string): LooseRecord {
+  const next = { ...value }
+  let source: any = value
+  let target: LooseRecord = next
+  for (const part of key.split('.').slice(0, -1)) {
+    const sourceChild = source?.[part]
+    const targetChild = Array.isArray(sourceChild)
+      ? [...sourceChild]
+      : sourceChild && typeof sourceChild === 'object'
+        ? { ...sourceChild }
+        : {}
+    target[part] = targetChild
+    source = sourceChild
+    target = targetChild
+  }
+  return next
+}
+
 function setModelFieldValue(key: string, value: string | number | boolean) {
   if (!modelValue.value || key === 'model_id' || key === 'thinking_modes' || key === 'speed_modes') return
   const field = modelFields.find((item) => item.key === key)
   if (!field) return
   let base: LooseRecord
   try {
-    base = syncModelValueFromJson()
+    base = modelJsonDirty.value ? syncModelValueFromJson() : modelValue.value
   } catch (reason) {
     modelError.value = reason instanceof Error ? reason.message : String(reason)
     return
   }
-  const next = clone(base)
+  const next = cloneModelPath(base, key)
   if (field.kind === 'boolean') {
     setModelPath(next, key, Boolean(value))
   } else if (field.kind === 'number') {
@@ -1522,7 +1609,10 @@ function setModelFieldValue(key: string, value: string | number | boolean) {
       }
       // The configured model schema keeps these fields at the top level. A
       // legacy capabilities wrapper is accepted on read, but never emitted.
-      if (next.capabilities && typeof next.capabilities === 'object') delete next.capabilities[key]
+      if (next.capabilities && typeof next.capabilities === 'object') {
+        next.capabilities = { ...next.capabilities }
+        delete next.capabilities[key]
+      }
     } else if (tokens.length) {
       setModelPath(next, key, tokens)
     } else {
@@ -1535,8 +1625,9 @@ function setModelFieldValue(key: string, value: string | number | boolean) {
     else setModelPath(next, key, text)
   }
   modelValue.value = next
-  modelJson.value = JSON.stringify(next, null, 2)
-  stageCurrentModelValue(next)
+  modelJsonDirty.value = false
+  scheduleModelJsonSync()
+  stageCurrentModelValue(next, key === 'display_name' || key === 'native_compaction')
   modelError.value = ''
 }
 
@@ -1552,20 +1643,21 @@ function syncModelValueFromJson(): LooseRecord {
 function applyModelJson() {
   try {
     const next = syncModelValueFromJson()
-    modelJson.value = JSON.stringify(next, null, 2)
-    stageCurrentModelValue(next)
+    setModelJsonText(JSON.stringify(next, null, 2))
+    stageCurrentModelValue(next, true)
     modelError.value = ''
   } catch (reason) {
     modelError.value = reason instanceof Error ? reason.message : String(reason)
   }
 }
 
-function stageCurrentModelValue(value: LooseRecord) {
+function stageCurrentModelValue(value: LooseRecord, updateSummary = true) {
   const editing = editingModel.value
   if (!editing) return
   const key = modelKey(editing.adapterId, editing.modelId)
   modelConfigValues.value = { ...modelConfigValues.value, [key]: clone(value) }
-  updateModelRowFromValue(editing.adapterId, editing.modelId, value)
+  if (updateSummary) updateModelRowFromValue(editing.adapterId, editing.modelId, value)
+  markEditorDirty()
 }
 
 function updateModelRowFromValue(adapterId: string, modelId: string, value: LooseRecord) {
@@ -1608,6 +1700,7 @@ async function deleteModel(adapterId: string, modelId: string) {
   const next = new Set(selectedModelKeys.value)
   next.delete(key)
   selectedModelKeys.value = next
+  markEditorDirty()
   toasts.push('success', st('Model removal staged; save the Provider to apply it'))
 }
 async function deleteAdapter(adapterId: string) {
@@ -1628,6 +1721,7 @@ async function deleteAdapter(adapterId: string) {
   for (const key of Object.keys(nextValues)) if (key.startsWith(`${adapterId}\u001f`)) delete nextValues[key]
   modelConfigValues.value = nextValues
   selectedModelKeys.value = new Set([...selectedModelKeys.value].filter((key) => !key.startsWith(`${adapterId}\u001f`)))
+  markEditorDirty()
   const nextExpanded = new Set(expandedAdapterIds.value)
   nextExpanded.delete(adapterId)
   expandedAdapterIds.value = nextExpanded
@@ -1662,6 +1756,7 @@ async function discardProviderChanges() {
     draft.value = null
     expandedProviderKey.value = ''
     savedEditorState.value = ''
+    editorDirty.value = false
   }
 }
 
@@ -1712,6 +1807,7 @@ async function createProvider() {
     expandedProviderKey.value = NEW_PROVIDER_ROW_KEY
     expandedAdapterIds.value = new Set()
     savedEditorState.value = ''
+    editorDirty.value = true
   }
 }
 
@@ -1727,6 +1823,7 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   resetAuthUiState()
+  clearModelJsonSyncTimer()
   ++draftRequestGeneration
   ++modelListingGeneration
   ++modelEditorGeneration
@@ -1811,21 +1908,17 @@ onBeforeUnmount(() => {
             <div>
               <div class="text-sm font-medium">{{ $st('Provider configuration') }}</div>
               <div class="mt-1 text-xs text-muted-foreground">
-                {{
-                  $st(
-                    'Edit provider identity, authentication, adapters, and models, then save them together.',
-                  )
-                }}
+                {{ $st('Edit provider identity, authentication, adapters, and models, then save them together.') }}
               </div>
             </div>
             <div class="grid gap-3 sm:grid-cols-2">
               <label class="grid gap-1.5">
                 <span class="text-xs text-muted-foreground">{{ $st('Provider ID') }}</span>
                 <Input
-                  :value="draft.provider_id"
+                  :model-value="draft.provider_id"
                   class="font-mono"
                   placeholder="openai"
-                  @input="setFieldValue('provider_id', ($event.target as HTMLInputElement).value)"
+                  @update:model-value="setFieldValue('provider_id', $event)"
                 />
               </label>
               <label class="grid gap-1.5">
@@ -1851,17 +1944,17 @@ onBeforeUnmount(() => {
               <label class="grid gap-1.5">
                 <span class="text-xs text-muted-foreground">{{ $st('Request timeout (seconds)') }}</span>
                 <Input
-                  :value="draft.request_timeout_secs"
+                  :model-value="draft.request_timeout_secs"
                   type="number"
-                  @input="setFieldValue('request_timeout_secs', Number(($event.target as HTMLInputElement).value))"
+                  @update:model-value="setFieldValue('request_timeout_secs', Number($event))"
                 />
               </label>
               <label class="grid gap-1.5">
                 <span class="text-xs text-muted-foreground">{{ $st('Connect timeout (seconds)') }}</span>
                 <Input
-                  :value="draft.connect_timeout_secs"
+                  :model-value="draft.connect_timeout_secs"
                   type="number"
-                  @input="setFieldValue('connect_timeout_secs', Number(($event.target as HTMLInputElement).value))"
+                  @update:model-value="setFieldValue('connect_timeout_secs', Number($event))"
                 />
               </label>
             </div>
@@ -1974,11 +2067,11 @@ onBeforeUnmount(() => {
                 />
                 <Input
                   v-else
-                  :value="fieldValue(field.path)"
+                  :model-value="fieldValue(field.path)"
                   :type="field.secret ? 'password' : field.type || 'text'"
                   :placeholder="field.placeholder"
                   :class="field.secret || field.path.includes('url') || field.path.includes('token') ? 'font-mono' : ''"
-                  @input="setFieldValue(field.path, ($event.target as HTMLInputElement).value)"
+                  @update:model-value="setFieldValue(field.path, $event)"
                 />
               </label>
             </div>
@@ -2061,10 +2154,7 @@ onBeforeUnmount(() => {
                 {{ adapterFailure(adapter) }}
               </div>
               <div class="grid gap-1">
-                <template
-                  v-for="model in adapter.models"
-                  :key="model.id"
-                >
+                <template v-for="model in adapter.models" :key="model.id">
                   <div class="flex min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-xs hover:bg-muted/40">
                     <input
                       type="checkbox"
@@ -2114,7 +2204,11 @@ onBeforeUnmount(() => {
                           {{ $st('Model ·') }} {{ editingModel.adapterId }}/{{ editingModel.modelId }}
                         </div>
                         <div class="mt-1 text-xs text-muted-foreground">
-                          {{ $st('The TUI exposes these 15 model configuration fields through its persisted JSON editor.') }}
+                          {{
+                            $st(
+                              'The TUI exposes these 15 model configuration fields through its persisted JSON editor.',
+                            )
+                          }}
                         </div>
                       </div>
                       <Button variant="ghost" size="sm" @click.stop="closeModelEditor">{{ $st('Close') }}</Button>
@@ -2178,14 +2272,12 @@ onBeforeUnmount(() => {
                             <Input
                               v-else
                               :id="`provider-model-${field.key.replaceAll('.', '-')}`"
-                              :value="modelFieldValue(field.key)"
+                              :model-value="modelFieldValue(field.key)"
                               :type="field.kind === 'number' ? 'number' : 'text'"
                               :placeholder="field.placeholder"
                               :class="field.kind === 'csv' || field.kind === 'number' ? 'font-mono' : ''"
-                              @input="
-                                field.kind === 'csv'
-                                  ? undefined
-                                  : setModelFieldValue(field.key, ($event.target as HTMLInputElement).value)
+                              @update:model-value="
+                                field.kind === 'csv' ? undefined : setModelFieldValue(field.key, $event)
                               "
                               @change="
                                 field.kind === 'csv'
@@ -2204,6 +2296,7 @@ onBeforeUnmount(() => {
                           rows="16"
                           spellcheck="false"
                           class="w-full rounded-md border border-input bg-transparent p-3 font-mono text-xs outline-none focus:border-ring"
+                          @input="markModelJsonDirty"
                         />
                       </label>
                       <div v-if="modelError" class="text-xs text-destructive">{{ modelError }}</div>

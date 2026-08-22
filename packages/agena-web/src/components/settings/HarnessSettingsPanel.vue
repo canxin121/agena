@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RiAddLine, RiDeleteBinLine, RiFileCopyLine, RiRefreshLine, RiSave3Line } from '@remixicon/vue'
 
 import Button from '@/components/ui/Button.vue'
@@ -45,6 +45,7 @@ const saving = ref(false)
 const error = ref('')
 const jsonError = ref('')
 const rawHarnessJson = ref('{}')
+const rawHarnessJsonDirty = ref(false)
 
 const kindOptions = [
   {
@@ -93,9 +94,19 @@ const selectedLayerSummary = computed(() =>
       }),
 )
 const busy = computed(() => loading.value || saving.value)
+let rawHarnessJsonSyncTimer: ReturnType<typeof setTimeout> | null = null
 
 function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T
+}
+
+function cloneEditableObject(value: JsonObject): JsonObject {
+  return Object.fromEntries(
+    Object.entries(value).map(([key, item]) => [
+      key,
+      Array.isArray(item) ? [...item] : item && typeof item === 'object' ? { ...(item as JsonObject) } : item,
+    ]),
+  ) as JsonObject
 }
 
 function asRecord(value: unknown): HarnessMap {
@@ -147,9 +158,32 @@ function sourceValue(bundle: RuntimeSettingsReadBundle, layer: RuntimeSettingsLa
   return layer === 'workspace' ? bundle.workspace.value : bundle.global.value
 }
 
+function clearRawHarnessJsonSyncTimer() {
+  if (rawHarnessJsonSyncTimer !== null) {
+    clearTimeout(rawHarnessJsonSyncTimer)
+    rawHarnessJsonSyncTimer = null
+  }
+}
+
 function syncRawHarnessJson() {
+  clearRawHarnessJsonSyncTimer()
   rawHarnessJson.value = selectedConfig.value ? JSON.stringify(selectedConfig.value, null, 2) : '{}'
+  rawHarnessJsonDirty.value = false
   jsonError.value = ''
+}
+
+function scheduleRawHarnessJsonSync() {
+  if (rawHarnessJsonDirty.value) return
+  clearRawHarnessJsonSyncTimer()
+  rawHarnessJsonSyncTimer = setTimeout(() => {
+    rawHarnessJsonSyncTimer = null
+    if (!rawHarnessJsonDirty.value) syncRawHarnessJson()
+  }, 150)
+}
+
+function markRawHarnessJsonDirty() {
+  rawHarnessJsonDirty.value = true
+  clearRawHarnessJsonSyncTimer()
 }
 
 function selectName(name: string) {
@@ -214,10 +248,15 @@ function renameHarness(event: Event) {
 
 function updateSelected(mutator: (value: JsonObject) => void) {
   if (!selectedName.value) return
-  const current = clone((selectedConfig.value || {}) as JsonObject)
+  // Structured harness edits only replace top-level fields (or the one-level
+  // viewport/env objects). Avoid JSON cloning the complete harness, which can
+  // include arbitrary launch options, for every character typed into a field.
+  const current = cloneEditableObject((selectedConfig.value || {}) as JsonObject)
   mutator(current)
   maps.value[selectedKind.value] = { ...maps.value[selectedKind.value], [selectedName.value]: current as HarnessConfig }
-  syncRawHarnessJson()
+  // Keep the raw escape hatch in sync without serializing a potentially large
+  // launch_options/env object for every character typed into a structured field.
+  scheduleRawHarnessJsonSync()
 }
 
 function setBrowserField(key: string, value: string | boolean | number) {
@@ -377,6 +416,7 @@ watch(selectedKind, () => {
   syncRawHarnessJson()
 })
 watch(selectedName, () => syncRawHarnessJson())
+onBeforeUnmount(clearRawHarnessJsonSyncTimer)
 </script>
 
 <template>
@@ -497,9 +537,9 @@ watch(selectedName, () => syncRawHarnessJson())
           <label class="grid gap-1.5">
             <span class="text-xs text-muted-foreground">{{ $st('Driver') }}</span>
             <Input
-              :value="browserConfig?.driver || ''"
+              :model-value="browserConfig?.driver || ''"
               :disabled="busy"
-              @input="setBrowserField('driver', ($event.target as HTMLInputElement).value)"
+              @update:model-value="setBrowserField('driver', $event)"
             />
           </label>
           <label class="inline-flex items-center gap-2 text-sm">
@@ -515,27 +555,27 @@ watch(selectedName, () => syncRawHarnessJson())
             <span class="text-xs text-muted-foreground">{{ $st('Viewport width') }}</span>
             <Input
               type="number"
-              :value="browserConfig?.viewport?.width || 0"
+              :model-value="browserConfig?.viewport?.width || 0"
               :disabled="busy"
-              @input="setBrowserField('width', Number(($event.target as HTMLInputElement).value))"
+              @update:model-value="setBrowserField('width', Number($event))"
             />
           </label>
           <label class="grid gap-1.5">
             <span class="text-xs text-muted-foreground">{{ $st('Viewport height') }}</span>
             <Input
               type="number"
-              :value="browserConfig?.viewport?.height || 0"
+              :model-value="browserConfig?.viewport?.height || 0"
               :disabled="busy"
-              @input="setBrowserField('height', Number(($event.target as HTMLInputElement).value))"
+              @update:model-value="setBrowserField('height', Number($event))"
             />
           </label>
           <label class="grid gap-1.5 sm:col-span-2">
             <span class="text-xs text-muted-foreground">{{ $st('Allowed domains (comma-separated)') }}</span>
             <Input
-              :value="arrayText(browserConfig?.allowed_domains)"
+              :model-value="arrayText(browserConfig?.allowed_domains)"
               class="font-mono"
               :disabled="busy"
-              @input="setBrowserField('allowed_domains', ($event.target as HTMLInputElement).value)"
+              @update:model-value="setBrowserField('allowed_domains', $event)"
             />
           </label>
           <label class="grid gap-1.5 sm:col-span-2">
@@ -565,19 +605,19 @@ watch(selectedName, () => syncRawHarnessJson())
           <label class="grid gap-1.5">
             <span class="text-xs text-muted-foreground">{{ $st('Allowed commands (comma-separated)') }}</span>
             <Input
-              :value="arrayText(shellConfig?.allow_commands)"
+              :model-value="arrayText(shellConfig?.allow_commands)"
               class="font-mono"
               :disabled="busy"
-              @input="setShellField('allow_commands', ($event.target as HTMLInputElement).value)"
+              @update:model-value="setShellField('allow_commands', $event)"
             />
           </label>
           <label class="grid gap-1.5">
             <span class="text-xs text-muted-foreground">{{ $st('Denied commands (comma-separated)') }}</span>
             <Input
-              :value="arrayText(shellConfig?.deny_commands)"
+              :model-value="arrayText(shellConfig?.deny_commands)"
               class="font-mono"
               :disabled="busy"
-              @input="setShellField('deny_commands', ($event.target as HTMLInputElement).value)"
+              @update:model-value="setShellField('deny_commands', $event)"
             />
           </label>
           <label class="grid gap-1.5 sm:col-span-2">
@@ -607,18 +647,18 @@ watch(selectedName, () => syncRawHarnessJson())
             <span class="text-xs text-muted-foreground">{{ $st('Max file bytes') }}</span>
             <Input
               type="number"
-              :value="editorConfig?.max_file_bytes || ''"
+              :model-value="editorConfig?.max_file_bytes || ''"
               :disabled="busy"
-              @input="setEditorField('max_file_bytes', ($event.target as HTMLInputElement).value)"
+              @update:model-value="setEditorField('max_file_bytes', $event)"
             />
           </label>
           <label class="grid gap-1.5 sm:col-span-2">
             <span class="text-xs text-muted-foreground">{{ $st('Allowed extensions (comma-separated)') }}</span>
             <Input
-              :value="arrayText(editorConfig?.allowed_extensions)"
+              :model-value="arrayText(editorConfig?.allowed_extensions)"
               class="font-mono"
               :disabled="busy"
-              @input="setEditorField('allowed_extensions', ($event.target as HTMLInputElement).value)"
+              @update:model-value="setEditorField('allowed_extensions', $event)"
             />
           </label>
         </div>
@@ -639,6 +679,7 @@ watch(selectedName, () => syncRawHarnessJson())
             spellcheck="false"
             :disabled="busy"
             class="w-full rounded-md border border-input bg-transparent p-3 font-mono text-xs"
+            @input="markRawHarnessJsonDirty"
           />
           <div v-if="jsonError" class="text-xs text-destructive">{{ jsonError }}</div>
         </div>

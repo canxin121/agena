@@ -792,7 +792,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
     if (!sid || !Array.isArray(requests) || requests.length === 0) return null
     for (const raw of requests) {
       const rec = asRecord(raw)
-      const outerKind = readString(rec.kind as JsonValue)
+      const outerKind = readString(rec.kind as JsonValue).toLowerCase()
       const inputKind = readString(rec.input_kind as JsonValue)
       const requestId = readString(rec.request_id as JsonValue)
       if (!requestId) continue
@@ -800,7 +800,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
       // { kind: "user_input", input_kind: "review" | "ask_user", ... }.
       // Keep both values distinct: the outer kind selects the reply family,
       // while input_kind controls the inline transcript layout.
-      const isUserInput = outerKind === 'user_input' || Boolean(inputKind)
+      const isUserInput = outerKind === 'user_input' || Boolean(inputKind) || Array.isArray(rec.questions)
       if (isUserInput) {
         const title = readString(rec.title as JsonValue) || 'Question'
         const body = readString(rec.body_markdown as JsonValue)
@@ -824,14 +824,14 @@ const useChatStoreDefinition = defineStore('chat', () => {
                       .filter((o) => Boolean(o.label))
                   : []
                 const multiple = qr.multiple === true
-                const custom = qr.allow_custom === true
+                const allowCustom = qr.allow_custom === true || qr.allowCustom === true || qr.custom === true
                 return {
                   question_id: readString(qr.question_id as JsonValue) || String(index),
                   header,
                   question,
                   options,
                   multiple,
-                  custom,
+                  allow_custom: allowCustom,
                 }
               })
               .filter((q) => Boolean(q.question))
@@ -877,6 +877,11 @@ const useChatStoreDefinition = defineStore('chat', () => {
             permission,
             patterns,
             always: [],
+            // Keep the full state request available to the transcript
+            // fallback. The compact legacy fields above remain for sidebar
+            // and command consumers, while the inline UI needs reason,
+            // explanation, source, scope, and the structured action.
+            request: rec,
           },
         },
       }

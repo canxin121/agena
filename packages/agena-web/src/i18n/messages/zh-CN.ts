@@ -2201,6 +2201,8 @@ export default {
         availableCount: '共 {count} 项',
       },
       model: {
+        autoDefault: 'Agena 运行时默认值',
+        autoDefaultDescription: '使用 Agena 服务端配置的默认模型',
         defaultThinkingDescription: '使用当前模型配置的默认思考模式',
         defaultSpeedDescription: '使用当前模型配置的默认速度模式',
       },
@@ -2236,8 +2238,6 @@ export default {
         commands: '打开命令面板',
         new: '创建新会话',
         sessions: '打开会话切换器',
-        hub: '打开会话中心',
-        lineage: '浏览当前会话谱系',
         rewind: '将会话回退到更早的消息',
         rename: '重命名当前会话',
         timeline: '打开运行活动历史',

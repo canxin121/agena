@@ -365,12 +365,97 @@ pub(crate) fn settings_studio_provider_items(
     providers: &[ProviderSummaryResource],
 ) -> Vec<SettingsStudioItem<SettingsPickerAction>> {
     let mut items = vec![settings_studio_provider_workbench_item(i18n, providers)];
+    items.push(settings_studio_global_default_model_item(i18n, sources));
     items.extend(
         settings_studio_field_items(i18n, sources, SettingsStudioSectionId::ModelsProviders)
             .into_iter()
             .collect::<Vec<_>>(),
     );
     items
+}
+
+pub(crate) fn settings_studio_global_default_model_item(
+    i18n: &I18n,
+    sources: &ConfigJsonSources,
+) -> SettingsStudioItem<SettingsPickerAction> {
+    let file_value = get_json_path(&sources.file, Some("providers.default_selection"))
+        .unwrap_or(JsonValue::Null);
+    let effective_value = get_json_path(&sources.effective, Some("providers.default_selection"))
+        .unwrap_or(JsonValue::Null);
+    let effective_summary = global_default_selection_summary(i18n, &effective_value);
+    let current_summary = if file_value.is_null() {
+        ui_text::t(i18n, "settings-source-unset")
+    } else {
+        global_default_selection_summary(i18n, &file_value)
+    };
+    let source_rows = settings_source_rows_for_config_path(
+        i18n,
+        sources,
+        "providers.default_selection",
+        current_summary.clone(),
+        effective_summary.clone(),
+    );
+    SettingsStudioItem::from_parts(
+        ui_text::t(i18n, "settings-global-default-model-label"),
+        effective_summary.clone(),
+        ui_text::t(i18n, "settings-global-default-model-description"),
+        Some("providers.default_selection".to_owned()),
+        Some(current_summary),
+        Some(effective_summary),
+        source_rows,
+        SettingsPickerAction::OpenGlobalDefaultModelChooser,
+    )
+}
+
+fn global_default_selection_summary(i18n: &I18n, value: &JsonValue) -> String {
+    let Ok(selection) = serde_json::from_value::<agena_domain::ModelSelectionConfig>(value.clone())
+    else {
+        return format_setting_value_inline(value);
+    };
+    let Some(provider) = selection
+        .provider
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    else {
+        return if value.is_null() {
+            ui_text::t(i18n, "value-unset")
+        } else {
+            format_setting_value_inline(value)
+        };
+    };
+    let Some(model) = selection
+        .model
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    else {
+        return format_setting_value_inline(value);
+    };
+    let mut route = vec![provider.trim().to_owned()];
+    if let Some(adapter) = selection
+        .adapter
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        route.push(adapter.trim().to_owned());
+    }
+    route.push(model.trim().to_owned());
+    let mut variants = Vec::new();
+    if let Some(value) = selection.thinking_mode.as_deref() {
+        variants.push(format!("think={value}"));
+    }
+    if let Some(value) = selection.speed_mode.as_deref() {
+        variants.push(format!("speed={value}"));
+    }
+    if let Some(value) = selection.verbosity.as_deref() {
+        variants.push(format!("verbosity={value}"));
+    }
+    if let Some(value) = selection.parallel_tool_calls {
+        variants.push(format!("parallel={value}"));
+    }
+    if !variants.is_empty() {
+        route.push(variants.join(", "));
+    }
+    route.join(" / ")
 }
 
 pub(crate) fn settings_studio_provider_approval_model_item(

@@ -74,6 +74,19 @@ function modelSelectionValue(identity: ServerModelIdentity, modes?: ServerModelM
   }
 }
 
+export function buildDefaultModelSettingsPatch(identity: ServerModelIdentity, modes?: ServerModelModes): JsonObject {
+  const selection = modelSelectionValue(identity, modes)
+  return {
+    path: 'providers',
+    changes: {
+      default_selection: selection,
+    },
+    dry_run: false,
+    validate: true,
+    reload: true,
+  }
+}
+
 export function buildApprovalModelSettingsPatch(
   identity: ServerModelIdentity | null,
   modes?: ServerModelModes,

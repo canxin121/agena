@@ -1,4 +1,4 @@
-use std::{env, net::SocketAddr, path::Path, sync::Arc};
+use std::{env, net::SocketAddr, path::Path, sync::Arc, time::Duration};
 
 use agena_api_server::AppState as ApiV2State;
 use agena_application::Application;
@@ -628,23 +628,54 @@ pub(crate) async fn run(args: crate::server::ServerArgs) -> Result<()> {
 
     tracing::info!(server_id = %server_identity.id, "Agena listening on {endpoint_url}");
     let (shutdown_error_tx, mut shutdown_error_rx) = tokio::sync::mpsc::channel(1);
-    let result = axum::serve(listener, app)
-        .with_graceful_shutdown(async move {
-            if let Err(error) = tokio::signal::ctrl_c().await {
-                // The serve future cannot return an error from its shutdown
-                // signal future, so carry it through a side channel and check
-                // it immediately after the server exits.
-                if let Err(send_error) = shutdown_error_tx.send(error).await {
-                    tracing::error!(
-                        diagnostic = %agena_failure::diagnostic::format_error_chain(&send_error.0),
-                        "failed to deliver the server shutdown-signal registration error to the serve boundary"
+    // Keep shutdown bounded. Hyper's graceful shutdown waits for every live
+    // connection, but the WebSocket/SSE endpoints are intentionally
+    // long-lived and can otherwise make Ctrl-C appear to do nothing forever.
+    const SHUTDOWN_GRACE_PERIOD: Duration = Duration::from_secs(5);
+    let (shutdown_started_tx, mut shutdown_started_rx) = tokio::sync::oneshot::channel();
+    let mut server_task = tokio::spawn(async move {
+        axum::serve(listener, app)
+            .with_graceful_shutdown(async move {
+                if let Err(error) = tokio::signal::ctrl_c().await {
+                    // The serve future cannot return an error from its shutdown
+                    // signal future, so carry it through a side channel and check
+                    // it immediately after the server exits.
+                    if let Err(send_error) = shutdown_error_tx.send(error).await {
+                        tracing::error!(
+                            diagnostic = %agena_failure::diagnostic::format_error_chain(&send_error.0),
+                            "failed to deliver the server shutdown-signal registration error to the serve boundary"
+                        );
+                    }
+                }
+                let _ = shutdown_started_tx.send(());
+                runtime.shutdown();
+            })
+            .await
+    });
+    let finish_server_task =
+        |task_result: Result<std::result::Result<(), std::io::Error>, tokio::task::JoinError>| {
+            match task_result {
+                Ok(result) => result.context("server exited unexpectedly"),
+                Err(error) => Err(anyhow!("server task terminated unexpectedly: {error}")),
+            }
+        };
+    let result = tokio::select! {
+        task_result = &mut server_task => finish_server_task(task_result),
+        _ = &mut shutdown_started_rx => {
+            match tokio::time::timeout(SHUTDOWN_GRACE_PERIOD, &mut server_task).await {
+                Ok(task_result) => finish_server_task(task_result),
+                Err(_) => {
+                    tracing::warn!(
+                        timeout_secs = SHUTDOWN_GRACE_PERIOD.as_secs(),
+                        "server graceful shutdown timed out; closing long-lived connections"
                     );
+                    server_task.abort();
+                    let _ = server_task.await;
+                    Ok(())
                 }
             }
-            runtime.shutdown();
-        })
-        .await
-        .context("server exited unexpectedly");
+        }
+    };
     drop(server_record);
     result?;
     if let Ok(error) = shutdown_error_rx.try_recv() {

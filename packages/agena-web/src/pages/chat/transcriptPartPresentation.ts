@@ -1,4 +1,5 @@
 import type { TranscriptDisplayPart } from '@/components/chat/messageList.types'
+import type { ToolDetailSection } from '@/stores/chat/api'
 import type { JsonValue } from '@/types/json'
 
 export type JsonRecord = Record<string, JsonValue>
@@ -31,13 +32,21 @@ export type OperationPresentation = {
   error: string
   stdout: string
   structured: JsonValue | null
+  rawOutput: JsonValue | null
+  outputText: string
+  managedOutputs: JsonValue | null
+  truncated: boolean
   blocks: JsonRecord[]
+  presentationBlocks: JsonRecord[]
   attachments: AttachmentPresentation[]
   metadata: JsonRecord
+  outputMetadata: JsonRecord
   durationMs: number | null
   userInputs: InteractionPresentation[]
   permissions: OperationPermissionPresentation[]
 }
+
+export type OperationSectionValues = Partial<Record<ToolDetailSection, JsonValue>>
 
 export type AttachmentPresentation = {
   key: string
@@ -117,15 +126,26 @@ export function firstString(source: JsonRecord, keys: readonly string[]): string
   return ''
 }
 
+function booleanValue(source: JsonRecord, keys: readonly string[]): boolean {
+  return keys.some((key) => source[key] === true)
+}
+
 export function attentionRequestId(payload: JsonValue | null | undefined): string {
   const root = jsonRecord(payload)
   const properties = jsonRecord(root.properties)
+  const propertyRequest = jsonRecord(properties.request)
   const request = jsonRecord(root.request)
   return (
     firstString(properties, ['id', 'request_id']) ||
+    firstString(propertyRequest, ['request_id', 'id']) ||
     firstString(root, ['request_id', 'id']) ||
     firstString(request, ['request_id', 'id'])
   )
+}
+
+export type AttentionPresentationSource = {
+  kind: 'permission' | 'question'
+  payload: JsonValue
 }
 
 function numericValue(value: unknown): number | null {
@@ -348,9 +368,25 @@ function toolCallView(content: JsonRecord, presentationValue: JsonValue): JsonRe
   }
 }
 
-export function operationPresentation(part: TranscriptDisplayPart): OperationPresentation {
-  const content = jsonRecord(part.source.agenaContent)
-  const operation = toolCallView(content, part.source.agenaPresentation ?? null)
+export function operationPresentation(
+  part: TranscriptDisplayPart,
+  sectionValues: OperationSectionValues = {},
+): OperationPresentation {
+  const sourceContent = jsonRecord(part.source.agenaContent)
+  const content: JsonRecord = { ...sourceContent }
+  const hasSection = (section: ToolDetailSection): boolean =>
+    Object.prototype.hasOwnProperty.call(sectionValues, section) && sectionValues[section] !== undefined
+  if (hasSection('metadata')) content.metadata = sectionValues.metadata as JsonValue
+  if (hasSection('input')) content.input = sectionValues.input as JsonValue
+  if (hasSection('output')) content.output = sectionValues.output as JsonValue
+  if (hasSection('output_metadata')) {
+    const output = jsonRecord(content.output)
+    content.output = { ...output, metadata: sectionValues.output_metadata as JsonValue }
+  }
+  const presentationValue = hasSection('presentation')
+    ? (sectionValues.presentation as JsonValue)
+    : (part.source.agenaPresentation ?? null)
+  const operation = toolCallView(content, presentationValue)
   const invocation = jsonRecord(operation.invocation)
   const output = jsonRecord(operation.output)
   const canonicalInput = jsonRecord(content.input)
@@ -358,6 +394,8 @@ export function operationPresentation(part: TranscriptDisplayPart): OperationPre
   const input = Object.keys(encodedInput).length ? decodeStructuredValue(encodedInput) : null
   const toolName = firstString(content, ['name']) || firstString(invocation, ['name']) || stringValue(part.source.tool)
   const rawStructured = output.payload ?? null
+  const rawOutput: JsonValue | null = operation.output === null ? null : { ...output }
+  if (isJsonRecord(rawOutput)) delete rawOutput.metadata
   const projectedBlocks = jsonArray(operation.blocks)
     .map(jsonRecord)
     .filter((item) => Object.keys(item).length > 0)
@@ -367,6 +405,7 @@ export function operationPresentation(part: TranscriptDisplayPart): OperationPre
   const splitBlocks = splitOperationStdout(projectedBlocks)
   const blocks = splitBlocks.blocks
   const stdout = operationStdout(splitBlocks.stdout)
+  const outputText = firstString(output, ['text'])
   // A stdout ViewBlock is the human projection of a text-only raw payload.
   // Keep the durable payload intact, but do not render the same text again in
   // the separate structured Output section.
@@ -396,17 +435,6 @@ export function operationPresentation(part: TranscriptDisplayPart): OperationPre
     const hasReply = permission.reply !== null && permission.reply !== undefined
     const reply = jsonRecord(permission.reply)
     const action = jsonRecord(request.action)
-    const actionKind = firstString(action, ['kind'])
-    const actionLabel =
-      actionKind === 'path_access'
-        ? [firstString(action, ['access_kind']), firstString(action, ['target_path'])].filter(Boolean).join(' ')
-        : actionKind === 'network_access'
-          ? `network ${firstString(action, ['target', 'host'])}`.trim()
-          : [firstString(action, ['tool_name', 'name']), firstString(action, ['qualifier'])]
-              .filter(Boolean)
-              .join(' · ') ||
-            actionKind ||
-            'permission'
     const replyKind = firstString(reply, ['kind'])
     const status =
       replyKind === 'allow_once'
@@ -426,7 +454,7 @@ export function operationPresentation(part: TranscriptDisplayPart): OperationPre
       requestId: firstString(request, ['request_id']),
       pending: !hasReply,
       status,
-      action: actionLabel,
+      action: permissionActionLabel(action),
       reason: firstString(request, ['reason']),
       explanation: firstString(request, ['explanation']),
       replyReason: firstString(reply, ['reason']),
@@ -443,13 +471,15 @@ export function operationPresentation(part: TranscriptDisplayPart): OperationPre
     error: operationFailureMessage(operation.error ?? null),
     stdout: stdout.text,
     structured,
+    rawOutput,
+    outputText,
+    managedOutputs: output.managed_outputs ?? null,
+    truncated: output.truncated === true,
     blocks,
+    presentationBlocks: blocks,
     attachments,
-    metadata: {
-      ...jsonRecord(operation.metadata),
-      ...jsonRecord(output.metadata),
-      ...jsonRecord(content.metadata),
-    },
+    metadata: jsonRecord(content.metadata),
+    outputMetadata: jsonRecord(output.metadata),
     durationMs: startMs !== null && endMs !== null && endMs >= startMs ? endMs - startMs : null,
     userInputs,
     permissions,
@@ -519,11 +549,14 @@ function interactionQuestion(value: JsonValue, index: number): InteractionQuesti
   const label = firstString(question, ['question', 'title'])
   if (!label) return null
   return {
-    questionId: firstString(question, ['question_id', 'id']) || String(index),
+    questionId: firstString(question, ['question_id', 'questionId', 'id']) || String(index),
     header: firstString(question, ['header']),
     question: label,
-    multiple: question.multiple === true,
-    allowCustom: question.allow_custom === true,
+    multiple: booleanValue(question, ['multiple']),
+    // `allow_custom` is the wire spelling. `allowCustom` and the legacy
+    // `custom` spelling are accepted here because the live attention
+    // projection has existed in both forms across server versions.
+    allowCustom: booleanValue(question, ['allow_custom', 'allowCustom', 'custom']),
     options: jsonArray(question.options)
       .map((raw) => {
         const option = jsonRecord(raw)
@@ -543,13 +576,96 @@ function userInputPresentationFromRequest(
     requestId: firstString(request, ['request_id']),
     title: firstString(request, ['title']) || fallbackTitle,
     bodyMarkdown: firstString(request, ['body_markdown']),
-    kind: firstString(request, ['kind', 'input_kind']),
-    pending: reply === null,
+    kind: firstString(request, ['input_kind', 'kind']),
+    pending: reply === null || reply === undefined,
     reply,
     questions: jsonArray(request.questions)
       .map((value, index) => interactionQuestion(value, index))
       .filter((item): item is InteractionQuestionPresentation => Boolean(item)),
   }
+}
+
+function permissionActionLabel(action: JsonRecord): string {
+  const actionKind = firstString(action, ['kind'])
+  if (actionKind === 'path_access') {
+    return [firstString(action, ['access_kind']), firstString(action, ['target_path'])].filter(Boolean).join(' ')
+  }
+  if (actionKind === 'network_access') {
+    return `network ${firstString(action, ['target', 'host'])}`.trim()
+  }
+  return (
+    [firstString(action, ['tool_name', 'name']), firstString(action, ['qualifier'])].filter(Boolean).join(' · ') ||
+    actionKind ||
+    'permission'
+  )
+}
+
+function attentionProperties(attention: AttentionPresentationSource): JsonRecord {
+  return jsonRecord(jsonRecord(attention.payload).properties)
+}
+
+function attentionRequest(attention: AttentionPresentationSource): JsonRecord {
+  const properties = attentionProperties(attention)
+  const nested = jsonRecord(properties.request)
+  return Object.keys(nested).length ? { ...properties, ...nested } : properties
+}
+
+/** Convert the state-driven question attention into the same presentation used by durable parts. */
+export function interactionPresentationFromAttention(
+  attention: AttentionPresentationSource | null | undefined,
+): InteractionPresentation | null {
+  if (!attention || attention.kind !== 'question') return null
+  const request = attentionRequest(attention)
+  const requestId = attentionRequestId(attention.payload) || firstString(request, ['request_id', 'id'])
+  if (!requestId) return null
+  const presentation = userInputPresentationFromRequest(
+    { ...request, request_id: requestId },
+    null,
+    firstString(request, ['title']) || 'Question',
+  )
+  return presentation.questions.length ? presentation : null
+}
+
+/** Convert the state-driven permission attention into the durable permission presentation. */
+export function permissionPresentationFromAttention(
+  attention: AttentionPresentationSource | null | undefined,
+): OperationPermissionPresentation | null {
+  if (!attention || attention.kind !== 'permission') return null
+  const request = attentionRequest(attention)
+  const requestId = attentionRequestId(attention.payload) || firstString(request, ['request_id', 'id'])
+  if (!requestId) return null
+  const action = jsonRecord(request.action)
+  return {
+    requestId,
+    pending: true,
+    status: 'Awaiting user approval',
+    action: permissionActionLabel(action),
+    reason: firstString(request, ['reason']),
+    explanation: firstString(request, ['explanation']),
+    replyReason: '',
+    provenance: [firstString(request, ['source']), firstString(request, ['scope'])].filter(Boolean).join(' · '),
+  }
+}
+
+/**
+ * Return the temporary transcript projection for a pending request. Durable
+ * operation parts own the same request once they arrive; the id set prevents
+ * the state-driven fallback from rendering a second copy during that handoff.
+ */
+export function pendingInteractionPresentationFromAttention(
+  attention: AttentionPresentationSource | null | undefined,
+  durableRequestIds: ReadonlySet<string>,
+): {
+  requestId: string
+  interaction: InteractionPresentation | null
+  permission: OperationPermissionPresentation | null
+} | null {
+  if (!attention) return null
+  const requestId = attentionRequestId(attention.payload)
+  if (!requestId || durableRequestIds.has(requestId)) return null
+  const interaction = interactionPresentationFromAttention(attention)
+  const permission = permissionPresentationFromAttention(attention)
+  return interaction || permission ? { requestId, interaction, permission } : null
 }
 
 export function errorPresentation(part: TranscriptDisplayPart): ErrorPresentation {

@@ -633,6 +633,14 @@ impl TuiBackend {
             .and_then(|guard| guard.clone())
     }
 
+    pub(crate) fn runtime_status(&self) -> Option<agena_api::resource::RuntimeStatusResponse> {
+        self.inner
+            .runtime_status
+            .try_read()
+            .ok()
+            .and_then(|guard| guard.clone())
+    }
+
     pub(crate) async fn refresh_runtime_status_cache(
         &self,
     ) -> Result<agena_api::resource::RuntimeStatusResponse> {
@@ -1970,6 +1978,18 @@ impl TuiBackend {
             .await?)
     }
 
+    pub(crate) async fn get_tool_detail(
+        &self,
+        session_id: i64,
+        part_id: i64,
+        section: agena_api::live::ToolDetailSection,
+    ) -> Result<agena_api::live::ToolDetailResource> {
+        Ok(self
+            .client()
+            .session_tool_detail(session_id, part_id, section)
+            .await?)
+    }
+
     pub async fn refresh_session(
         &self,
         session_id: i64,
@@ -2246,8 +2266,24 @@ impl TuiBackend {
                 ))
             });
         }
+        if let Some(selection) = self.global_default_selection()
+            && let (Some(provider_id), Some(model_id)) =
+                (selection.provider.as_deref(), selection.model.as_deref())
+        {
+            return match selection.adapter.as_deref() {
+                Some(adapter_id) => {
+                    agena_domain::ModelRef::try_new_with_adapter(provider_id, adapter_id, model_id)
+                }
+                None => agena_domain::ModelRef::try_new(provider_id, model_id),
+            }
+            .map_err(|error| {
+                agena_application::ApplicationError::internal(format!(
+                    "global default model reference is invalid: {error}"
+                ))
+            });
+        }
         Err(agena_application::ApplicationError::bad_request(
-            "model is required; select a model before running",
+            "model is required; select a model or configure the global default model before running",
         ))
     }
 
@@ -2261,6 +2297,19 @@ impl TuiBackend {
         let Some(model) = self.configured_model(&model_ref) else {
             return (None, None);
         };
+        let configured_modes = if request.model.is_none() {
+            self.global_default_selection().filter(|selection| {
+                selection.provider.as_deref() == Some(model_ref.provider_id.as_ref())
+                    && selection.model.as_deref() == Some(model_ref.model_id.as_ref())
+                    && selection.adapter.as_deref()
+                        == model_ref
+                            .adapter_id
+                            .as_ref()
+                            .map(|adapter| adapter.as_ref())
+            })
+        } else {
+            None
+        };
         let thinking = model
             .thinking_modes
             .iter()
@@ -2272,7 +2321,42 @@ impl TuiBackend {
             .iter()
             .find(|(_, mode)| mode.is_default)
             .map(|(name, _)| name.clone());
-        (thinking, speed)
+        (
+            configured_modes
+                .as_ref()
+                .and_then(|selection| selection.thinking_mode.clone())
+                .or(thinking),
+            configured_modes
+                .as_ref()
+                .and_then(|selection| selection.speed_mode.clone())
+                .or(speed),
+        )
+    }
+
+    fn global_default_selection(&self) -> Option<agena_domain::ModelSelectionConfig> {
+        if let Some(selection) = self
+            .runtime_status()
+            .and_then(|status| status.default_selection)
+        {
+            return Some(agena_domain::ModelSelectionConfig {
+                provider: selection.provider,
+                adapter: selection.adapter,
+                model: selection.model,
+                thinking_mode: selection.thinking_mode,
+                speed_mode: selection.speed_mode,
+                verbosity: selection.verbosity,
+                parallel_tool_calls: selection.parallel_tool_calls,
+            });
+        }
+        self.config_sources().and_then(|sources| {
+            sources
+                .effective
+                .get("providers")
+                .and_then(|providers| providers.get("default_selection"))
+                .and_then(|value| {
+                    serde_json::from_value::<agena_domain::ModelSelectionConfig>(value.clone()).ok()
+                })
+        })
     }
 
     /// Start a session-scoped invalidation stream. Establishing the remote SSE
@@ -2803,7 +2887,11 @@ mod tests {
         let (config, layers) = config_and_layers_from_resolved_response(serde_json::json!({
             "config": {
                 "providers": {
-                    "selected": {}
+                    "selected": {},
+                    "default_selection": {
+                        "provider": "selected",
+                        "model": "model-2"
+                    }
                 }
             },
             "meta": {
@@ -2816,7 +2904,10 @@ mod tests {
         .expect("decode resolved config response");
 
         assert!(config.pointer("/providers/default").is_none());
-        assert!(config.pointer("/providers/default_selection").is_none());
+        assert_eq!(
+            config.pointer("/providers/default_selection/model"),
+            Some(&serde_json::json!("model-2"))
+        );
         assert_eq!(layers, vec!["built-in defaults", "file:/config/agena.json"]);
     }
 

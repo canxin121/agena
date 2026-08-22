@@ -65,6 +65,10 @@ impl App {
         self.open_model_chooser(SessionModelChooserPurpose::RuntimeOverride);
     }
 
+    pub(crate) fn open_global_default_model_chooser(&mut self) {
+        self.open_model_chooser(SessionModelChooserPurpose::GlobalDefault);
+    }
+
     pub(crate) fn open_permission_approval_model_chooser(&mut self) {
         self.open_model_chooser(SessionModelChooserPurpose::PermissionApproval);
     }
@@ -88,6 +92,9 @@ impl App {
             Ok(mut items) => {
                 let current_model = match purpose {
                     SessionModelChooserPurpose::RuntimeOverride => self.current_session_model_ref(),
+                    SessionModelChooserPurpose::GlobalDefault => {
+                        self.current_global_default_model_ref()
+                    }
                     SessionModelChooserPurpose::PermissionApproval => {
                         self.current_permission_approval_model_ref()
                     }

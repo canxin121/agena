@@ -348,6 +348,39 @@ impl App {
         });
     }
 
+    pub(crate) fn request_tool_detail(
+        &mut self,
+        part_id: i64,
+        section: agena_api::live::ToolDetailSection,
+    ) {
+        let Some(session_id) = self.transcript.session_id else {
+            return;
+        };
+        if !self.transcript.begin_tool_detail_load(part_id, section) {
+            return;
+        }
+        let application = self.application.clone();
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            let result = crate::app_backend::operations::get_tool_detail(
+                &application,
+                session_id,
+                part_id,
+                section,
+            )
+            .await
+            .map_err(crate::UiFailure::from_backend);
+            let _ = tx
+                .send(AppMessage::ToolDetailLoaded {
+                    session_id,
+                    part_id,
+                    section,
+                    result,
+                })
+                .await;
+        });
+    }
+
     /// Park a forced refresh for the periodic tick to consume. `on_tick`
     /// runs one refresh per `REFRESH_INTERVAL_MS`, so a burst of streaming
     /// `PartUpdated` events collapses into a bounded refresh rate; the tick

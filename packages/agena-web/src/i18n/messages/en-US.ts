@@ -2206,6 +2206,8 @@ export default {
         availableCount: '{count} available',
       },
       model: {
+        autoDefault: 'Agena runtime default',
+        autoDefaultDescription: 'Use the default model configured on the Agena server',
         defaultThinkingDescription: 'Use the thinking mode configured for this model',
         defaultSpeedDescription: 'Use the speed mode configured for this model',
       },
@@ -2241,8 +2243,6 @@ export default {
         commands: 'Open the command palette',
         new: 'Create a new session',
         sessions: 'Open the session switcher',
-        hub: 'Open the session hub',
-        lineage: 'Browse this session lineage',
         rewind: 'Rewind the session to an earlier message',
         rename: 'Rename the current session',
         timeline: 'Open runtime activity history',

@@ -712,6 +712,10 @@ settings-provider-workbench-value = {$count} 個服務商
 
 settings-provider-workbench-detail = 先打開可搜索的服務商列表，再配置認證、adapter、模型路由或新建服務商。
 
+settings-global-default-model-label = 預設模型
+
+settings-global-default-model-description = 工作階段未指定模型時使用的模型；明確指定的工作階段模型永遠優先。
+
 settings-model-default-mode-inherit-detail = 使用所選 model 的原生預設模式。
 
 settings-provider-new-label = + 新建 provider
@@ -1467,6 +1471,7 @@ flash-command-requires-session = 此操作需要一個開放的會話
 flash-session-busy = 會話正忙
 flash-provider-not-found = 找不到提供者：{ $provider }
 flash-permission-approval-model-updated = 自動核准模型更新：{ $provider }/{ $model }
+flash-global-default-model-updated = 已更新全域預設模型：{ $provider }/{ $model }
 flash-provider-studio-adapter-required = 首先選擇一個適配器
 flash-provider-studio-adapter-not-enabled = 新增型號之前檢查所選適配器
 flash-provider-studio-adapter-unavailable = 目前的身份驗證模式不允許選擇此適配器

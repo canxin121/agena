@@ -12,14 +12,12 @@ import {
 } from '../src/pages/chat/chatCommandsCatalog'
 
 describe('web command catalog', () => {
-  test('contains the same built-in names as the TUI catalog', () => {
+  test('contains the supported built-in names', () => {
     expect(BUILT_IN_COMMANDS.map((command) => command.name)).toEqual([
       'help',
       'commands',
       'new',
       'sessions',
-      'hub',
-      'lineage',
       'rewind',
       'rename',
       'timeline',

@@ -288,6 +288,21 @@ impl App {
                 identity,
             } => self.apply_model_override(model_ref_from_session_model_identity(identity)),
             agena_tui::model_chooser::SessionModelChooserReducerEffect::Select {
+                purpose: SessionModelChooserPurpose::GlobalDefault,
+                identity,
+            } => {
+                let model = model_ref_from_session_model_identity(identity);
+                self.open_model_selection_mode_step_or_finish(
+                    SessionModelChooserPurpose::GlobalDefault,
+                    model,
+                    None,
+                    None,
+                    None,
+                    SessionModelModeStep::ThinkingMode,
+                );
+                false
+            }
+            agena_tui::model_chooser::SessionModelChooserReducerEffect::Select {
                 purpose: SessionModelChooserPurpose::PermissionApproval,
                 identity,
             } => {

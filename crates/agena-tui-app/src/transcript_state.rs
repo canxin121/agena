@@ -16,6 +16,150 @@ pub(crate) enum TranscriptViewportRow {
     Bottom,
 }
 
+fn tool_detail_section_loaded(
+    part: &agena_api::resource::SessionTranscriptPart,
+    section: agena_api::live::ToolDetailSection,
+) -> bool {
+    if part.kind != "tool_call" {
+        return false;
+    }
+    let Some(content) = part.content.as_object() else {
+        return false;
+    };
+    match section {
+        agena_api::live::ToolDetailSection::Metadata => content.contains_key("metadata"),
+        agena_api::live::ToolDetailSection::Input => content.contains_key("input"),
+        agena_api::live::ToolDetailSection::Output => {
+            content.get("output").is_some_and(|value| match value {
+                serde_json::Value::Null => true,
+                serde_json::Value::Object(output) => output.keys().any(|key| key != "metadata"),
+                _ => true,
+            })
+        }
+        agena_api::live::ToolDetailSection::OutputMetadata => content
+            .get("output")
+            .and_then(serde_json::Value::as_object)
+            .is_some_and(|output| output.contains_key("metadata")),
+        agena_api::live::ToolDetailSection::Presentation => part.presentation.is_some(),
+    }
+}
+
+fn preserve_loaded_tool_sections(
+    previous: &agena_api::resource::SessionTranscriptPart,
+    incoming: &mut agena_api::resource::SessionTranscriptPart,
+) {
+    if previous.kind != "tool_call" || incoming.kind != "tool_call" {
+        return;
+    }
+    let Some(previous_content) = previous.content.as_object() else {
+        return;
+    };
+    let Some(incoming_content) = incoming.content.as_object_mut() else {
+        return;
+    };
+    for section in [
+        agena_api::live::ToolDetailSection::Metadata,
+        agena_api::live::ToolDetailSection::Input,
+        agena_api::live::ToolDetailSection::Output,
+        agena_api::live::ToolDetailSection::OutputMetadata,
+    ] {
+        if tool_detail_section_loaded(previous, section) {
+            match section {
+                agena_api::live::ToolDetailSection::Metadata
+                | agena_api::live::ToolDetailSection::Input => {
+                    if let Some(value) = previous_content.get(section.as_str()) {
+                        incoming_content.insert(section.as_str().to_owned(), value.clone());
+                    }
+                }
+                agena_api::live::ToolDetailSection::Output => {
+                    if let Some(value) = previous_content.get("output") {
+                        incoming_content.insert("output".to_owned(), value.clone());
+                    }
+                }
+                agena_api::live::ToolDetailSection::OutputMetadata => {
+                    if let Some(value) = previous_content
+                        .get("output")
+                        .and_then(serde_json::Value::as_object)
+                        .and_then(|output| output.get("metadata"))
+                    {
+                        let output = incoming_content
+                            .entry("output".to_owned())
+                            .or_insert_with(|| serde_json::json!({}));
+                        if output.is_null() {
+                            *output = serde_json::json!({});
+                        }
+                        if let Some(output) = output.as_object_mut() {
+                            output.insert("metadata".to_owned(), value.clone());
+                        }
+                    }
+                }
+                agena_api::live::ToolDetailSection::Presentation => {}
+            }
+        }
+    }
+}
+
+fn apply_tool_detail_value(
+    part: &mut agena_api::resource::SessionTranscriptPart,
+    section: agena_api::live::ToolDetailSection,
+    value: serde_json::Value,
+) -> bool {
+    if part.kind != "tool_call" {
+        return false;
+    }
+    match section {
+        agena_api::live::ToolDetailSection::Metadata => {
+            let Some(content) = part.content.as_object_mut() else {
+                return false;
+            };
+            content.insert("metadata".to_owned(), value);
+        }
+        agena_api::live::ToolDetailSection::Input => {
+            let Some(content) = part.content.as_object_mut() else {
+                return false;
+            };
+            content.insert("input".to_owned(), value);
+        }
+        agena_api::live::ToolDetailSection::Output => {
+            let Some(content) = part.content.as_object_mut() else {
+                return false;
+            };
+            let loaded_metadata = content
+                .get("output")
+                .and_then(serde_json::Value::as_object)
+                .and_then(|output| output.get("metadata"))
+                .cloned();
+            content.insert("output".to_owned(), value);
+            if let Some(metadata) = loaded_metadata
+                && let Some(output) = content
+                    .get_mut("output")
+                    .and_then(serde_json::Value::as_object_mut)
+            {
+                output.insert("metadata".to_owned(), metadata);
+            }
+        }
+        agena_api::live::ToolDetailSection::OutputMetadata => {
+            let Some(content) = part.content.as_object_mut() else {
+                return false;
+            };
+            let output = content
+                .entry("output".to_owned())
+                .or_insert_with(|| serde_json::json!({}));
+            if output.is_null() {
+                *output = serde_json::json!({});
+            }
+            let Some(output) = output.as_object_mut() else {
+                return false;
+            };
+            output.insert("metadata".to_owned(), value);
+        }
+        agena_api::live::ToolDetailSection::Presentation => {
+            part.presentation = serde_json::from_value(value).ok();
+        }
+    }
+    true
+}
+
 impl Default for TranscriptState {
     fn default() -> Self {
         Self::new(
@@ -199,8 +343,51 @@ impl TranscriptState {
     }
 
     pub(crate) fn merge_parts(&mut self, parts: Vec<agena_api::resource::SessionTranscriptPart>) {
+        let mut parts = parts;
+        let previous = self
+            .parts
+            .iter()
+            .map(|part| (part.part_id, part))
+            .collect::<BTreeMap<_, _>>();
+        for part in &mut parts {
+            if let Some(previous) = previous.get(&part.part_id) {
+                preserve_loaded_tool_sections(previous, part);
+            }
+        }
         self.apply_parts_change(|current| *current = parts);
         self.invalidate_render();
+    }
+
+    /// Reserve one lazy section request. The loaded state is inferred from the
+    /// merged canonical part so refreshes can preserve it without maintaining
+    /// a second transcript cache.
+    pub(crate) fn begin_tool_detail_load(
+        &self,
+        part_id: i64,
+        section: agena_api::live::ToolDetailSection,
+    ) -> bool {
+        self.parts
+            .iter()
+            .find(|part| part.part_id == part_id)
+            .is_none_or(|part| !tool_detail_section_loaded(part, section))
+    }
+
+    pub(crate) fn finish_tool_detail_load(
+        &mut self,
+        resource: agena_api::live::ToolDetailResource,
+    ) -> bool {
+        let Some(part) = self
+            .parts
+            .iter_mut()
+            .find(|part| part.part_id == resource.part_id)
+        else {
+            return false;
+        };
+        let changed = apply_tool_detail_value(part, resource.section, resource.value);
+        if changed {
+            self.invalidate_render();
+        }
+        changed
     }
 
     /// Update the newest snapshot while preserving pages the user has already

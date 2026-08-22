@@ -44,6 +44,16 @@ export type Provider = {
   models: ProviderModel[]
 }
 
+export type RuntimeDefaultSelection = {
+  provider: string
+  adapter: string
+  model: string
+  thinkingMode: string
+  speedMode: string
+  verbosity: string
+  parallelToolCalls?: boolean
+}
+
 export type ModelMetaRecord = ProviderModel
 
 export type ModelModeOption = {
@@ -56,6 +66,18 @@ export type ModelModeOption = {
 type ProviderSummary = {
   provider_id?: string
   adapters?: Array<{ adapter_id?: string; enabled?: boolean; configured_model_count?: number }>
+}
+
+type RuntimeStatus = {
+  default_selection?: {
+    provider?: string | null
+    adapter?: string | null
+    model?: string | null
+    thinking_mode?: string | null
+    speed_mode?: string | null
+    verbosity?: string | null
+    parallel_tool_calls?: boolean | null
+  } | null
 }
 
 type ProviderAdapterModels = {
@@ -180,6 +202,14 @@ export function modeOptionDisplayLabel(options: ModelModeOption[], value: string
 
 export function useModelSelectionCatalog() {
   const providers = ref<Provider[]>([])
+  const runtimeDefaultSelection = ref<RuntimeDefaultSelection>({
+    provider: '',
+    adapter: '',
+    model: '',
+    thinkingMode: '',
+    speedMode: '',
+    verbosity: '',
+  })
   const catalogLoading = ref(false)
   const catalogError = ref('')
   let loadPromise: Promise<void> | null = null
@@ -204,7 +234,23 @@ export function useModelSelectionCatalog() {
       catalogLoading.value = true
       catalogError.value = ''
       try {
-        const summaries = await apiJson<ProviderSummary[]>('/api/v1/providers')
+        const [runtime, summaries] = await Promise.all([
+          apiJson<RuntimeStatus>('/api/v1/runtime'),
+          apiJson<ProviderSummary[]>('/api/v1/providers'),
+        ])
+
+        const selection = runtime?.default_selection || null
+        runtimeDefaultSelection.value = {
+          provider: readString(selection?.provider),
+          adapter: readString(selection?.adapter),
+          model: readString(selection?.model),
+          thinkingMode: readString(selection?.thinking_mode),
+          speedMode: readString(selection?.speed_mode),
+          verbosity: readString(selection?.verbosity),
+          ...(typeof selection?.parallel_tool_calls === 'boolean'
+            ? { parallelToolCalls: selection.parallel_tool_calls }
+            : {}),
+        }
 
         const summaryList = Array.isArray(summaries) ? summaries : []
         const results = await Promise.allSettled(
@@ -249,6 +295,33 @@ export function useModelSelectionCatalog() {
           }
         }
 
+        const configuredDefault = runtimeDefaultSelection.value
+        if (configuredDefault.provider && configuredDefault.model) {
+          let provider = next.find((item) => item.id === configuredDefault.provider)
+          if (!provider) {
+            provider = {
+              id: configuredDefault.provider,
+              name: configuredDefault.provider,
+              models: [],
+            }
+            next.push(provider)
+          }
+          const exists = provider.models.some(
+            (model) =>
+              model.id === configuredDefault.model &&
+              (!configuredDefault.adapter || readString(model.adapter_id) === configuredDefault.adapter),
+          )
+          if (!exists) {
+            provider.models.push({
+              provider_id: configuredDefault.provider,
+              adapter_id: configuredDefault.adapter || undefined,
+              id: configuredDefault.model,
+              thinking_modes: [],
+              speed_modes: {},
+            })
+          }
+        }
+
         providers.value = next.sort((a, b) => a.id.localeCompare(b.id))
       } catch (error) {
         catalogError.value = error instanceof Error ? error.message : String(error)
@@ -267,6 +340,7 @@ export function useModelSelectionCatalog() {
 
   return {
     providers,
+    runtimeDefaultSelection,
     catalogLoading,
     catalogError,
     modelMetaFor,

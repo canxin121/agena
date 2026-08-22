@@ -1,4 +1,6 @@
-use agena_domain::{PermissionConfig, SessionAutoCompactionConfig, SessionCacheLimits};
+use agena_domain::{
+    ExecutionSelection, PermissionConfig, SessionAutoCompactionConfig, SessionCacheLimits,
+};
 
 use crate::SessionCachePolicy;
 
@@ -6,6 +8,7 @@ use crate::SessionCachePolicy;
 #[derive(Debug, Clone)]
 /// Configuration of the runtime session manager.
 pub struct RuntimeSessionManagerConfig {
+    pub default_selection: ExecutionSelection,
     pub permission: PermissionConfig,
     pub auto_compaction: SessionAutoCompactionConfig,
     pub cache_limits: SessionCacheLimits,
@@ -18,6 +21,7 @@ pub struct RuntimeSessionManagerConfig {
 impl Default for RuntimeSessionManagerConfig {
     fn default() -> Self {
         Self {
+            default_selection: Default::default(),
             permission: Default::default(),
             auto_compaction: Default::default(),
             cache_limits: Default::default(),

@@ -1,5 +1,7 @@
 /**
- * The web command catalog mirrors crates/agena-tui-app/src/commands.rs.
+ * The web command catalog follows crates/agena-tui-app/src/commands.rs where
+ * the command is supported by the web client. The TUI-only session hub and
+ * lineage commands are intentionally not exposed here.
  *
  * Keep this file free of Vue and i18n state so command parsing and the
  * catalog can be tested without mounting a page.  Descriptions are resolved
@@ -11,8 +13,6 @@ export type BuiltInCommandId =
   | 'commands'
   | 'new'
   | 'sessions'
-  | 'hub'
-  | 'lineage'
   | 'rewind'
   | 'rename'
   | 'timeline'
@@ -88,8 +88,6 @@ const COMMAND_SEEDS: CommandSeed[] = [
   ['commands', ['palette'], ''],
   ['new', ['clear'], ''],
   ['sessions', [], ''],
-  ['hub', [], ''],
-  ['lineage', ['branch-history', 'branches'], ''],
   ['rewind', ['backtrack'], ''],
   ['rename', ['title'], ''],
   ['timeline', ['events'], ''],
@@ -138,7 +136,6 @@ export const BUILT_IN_COMMANDS: BuiltInCommandSpec[] = COMMAND_SEEDS.map(([name,
   descriptionKey: `chat.commandPalette.builtIns.${name}`,
   opensInteractiveSurface: [
     'sessions',
-    'hub',
     'background',
     'rename',
     'timeline',

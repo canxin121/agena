@@ -71,6 +71,12 @@ impl App {
                 expand_all,
                 result,
             ),
+            AppMessage::ToolDetailLoaded {
+                session_id,
+                part_id,
+                section,
+                result,
+            } => self.handle_tool_detail_loaded(session_id, part_id, section, result),
             AppMessage::SessionRefreshed { session_id, result } => {
                 self.handle_session_refreshed(session_id, result)
             }
@@ -459,6 +465,29 @@ impl App {
                 }
             }
             Err(error) => self.flash_error(error),
+        }
+    }
+
+    pub(crate) fn handle_tool_detail_loaded(
+        &mut self,
+        session_id: i64,
+        _part_id: i64,
+        _section: agena_api::live::ToolDetailSection,
+        result: UiResult<agena_api::live::ToolDetailResource>,
+    ) {
+        if self.transcript.session_id != Some(session_id) {
+            return;
+        }
+        match result {
+            Ok(resource) => {
+                self.transcript.finish_tool_detail_load(resource);
+                if let Some(execution) = self.transcript.execution.as_mut() {
+                    execution.parts = self.transcript.parts.clone();
+                }
+            }
+            Err(error) => {
+                self.flash_error(error);
+            }
         }
     }
 

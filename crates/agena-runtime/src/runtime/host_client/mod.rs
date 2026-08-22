@@ -432,7 +432,7 @@ impl HostClient for RuntimeHostClient {
         input: serde_json::Value,
     ) -> Result<ToolInvokeOutput, PluginError> {
         let host = self.plugin_manager();
-        let resolution = if let Some(resolution) = host.lookup_tool(&tool) {
+        let resolution = if let Some(resolution) = host.lookup_tool_for_name(&tool) {
             resolution
         } else {
             let mut candidates = host

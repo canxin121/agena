@@ -200,6 +200,7 @@ pub(crate) enum SettingsPickerAction {
     EditMcpOAuthIssuerUrl,
     EditMcpOAuthPassword,
     ClearMcpOAuthPassword,
+    OpenGlobalDefaultModelChooser,
     OpenPermissionApprovalModelChooser,
     OpenProviderList,
     OpenModelCatalogWorkbench,

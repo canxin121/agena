@@ -15,6 +15,7 @@ import {
   normalizeSessionManualModelStorageEntry,
   readSessionManualModelPair,
   readSessionRunConfigSelection,
+  removeSessionManualModelPair,
   writeSessionManualModelPair,
   type SessionSelection,
 } from './modelSelectionSession'
@@ -109,16 +110,16 @@ export function useChatModelSelection(opts: {
   } = opts
 
   const catalog = useModelSelectionCatalog()
-  const { providers, catalogLoading, catalogError, modelMetaFor } = catalog
+  const { providers, runtimeDefaultSelection, catalogLoading, catalogError, modelMetaFor } = catalog
 
   const selectedProviderId = ref('')
   const selectedAdapterId = ref('')
   const selectedModelId = ref('')
   const selectedThinkingMode = ref('')
   const selectedSpeedMode = ref('')
-  const modelSource = ref<'empty' | 'session' | 'manual'>('empty')
-  const thinkingModeSource = ref<'empty' | 'session' | 'model' | 'manual'>('empty')
-  const speedModeSource = ref<'empty' | 'session' | 'model' | 'manual'>('empty')
+  const modelSource = ref<'empty' | 'session' | 'default' | 'manual'>('empty')
+  const thinkingModeSource = ref<'empty' | 'session' | 'default' | 'model' | 'manual'>('empty')
+  const speedModeSource = ref<'empty' | 'session' | 'default' | 'model' | 'manual'>('empty')
 
   const sessionManualModelBySession = ref<Record<string, string>>(
     loadStringMapFromStorage(
@@ -244,6 +245,7 @@ export function useChatModelSelection(opts: {
   const modelHint = computed(() => {
     if (!selectedProviderId.value || !selectedModelId.value) return 'Select a model before sending'
     if (modelSource.value === 'manual') return ''
+    if (modelSource.value === 'default') return `Using runtime default: ${modelChipLabel.value}`
     return `Using session model: ${modelChipLabel.value}`
   })
   const thinkingModeHint = computed(() =>
@@ -308,6 +310,12 @@ export function useChatModelSelection(opts: {
       }
     }
 
+    const defaults = runtimeDefaultSelection.value
+    if (defaults.provider && defaults.model) {
+      setModelSelection(defaults, 'default')
+      return
+    }
+
     setModelSelection({ provider: '', adapter: '', model: '' }, 'empty')
   }
 
@@ -328,23 +336,37 @@ export function useChatModelSelection(opts: {
       model: selectedModelId.value,
     }
     const runMatches = includeSessionLayers && sameModel(run, current)
+    const defaults = runtimeDefaultSelection.value
+    const defaultsMatch = sameModel(defaults, current)
     const savedThinking = text(thinkingModeByModelKey.value[key])
     const runThinking = runMatches ? run.thinkingMode : ''
+    const configuredThinking = defaultsMatch ? defaults.thinkingMode : ''
     const modelThinking = defaultModeValue(thinkingModeOptionsForModel(selectedModelMeta.value))
-    selectedThinkingMode.value = savedThinking || runThinking || modelThinking
+    selectedThinkingMode.value = savedThinking || runThinking || configuredThinking || modelThinking
     thinkingModeSource.value = savedThinking
       ? 'manual'
       : runThinking
         ? 'session'
+        : configuredThinking
+          ? 'default'
         : selectedThinkingMode.value
           ? 'model'
           : 'empty'
 
     const savedSpeed = text(speedModeByModelKey.value[key])
     const runSpeed = runMatches ? run.speedMode : ''
+    const configuredSpeed = defaultsMatch ? defaults.speedMode : ''
     const modelSpeed = defaultModeValue(speedModeOptionsForModel(selectedModelMeta.value))
-    selectedSpeedMode.value = savedSpeed || runSpeed || modelSpeed
-    speedModeSource.value = savedSpeed ? 'manual' : runSpeed ? 'session' : selectedSpeedMode.value ? 'model' : 'empty'
+    selectedSpeedMode.value = savedSpeed || runSpeed || configuredSpeed || modelSpeed
+    speedModeSource.value = savedSpeed
+      ? 'manual'
+      : runSpeed
+        ? 'session'
+        : configuredSpeed
+          ? 'default'
+          : selectedSpeedMode.value
+            ? 'model'
+            : 'empty'
   }
 
   function applyResolvedSelection(includeSessionLayers: boolean) {
@@ -383,6 +405,16 @@ export function useChatModelSelection(opts: {
       sessionManualModelPersister.persistSoon()
     }
     resolveModes(false)
+    picker.closeComposerPicker()
+  }
+
+  function chooseModelDefault() {
+    const sessionId = activeSessionId()
+    if (sessionId) {
+      sessionManualModelBySession.value = removeSessionManualModelPair(sessionManualModelBySession.value, sessionId)
+      sessionManualModelPersister.persistSoon()
+    }
+    applyResolvedSelection(false)
     picker.closeComposerPicker()
   }
 
@@ -455,6 +487,7 @@ export function useChatModelSelection(opts: {
     providers,
     catalogLoading,
     catalogError,
+    runtimeDefaultSelection,
     selectedProviderId,
     selectedAdapterId,
     selectedModelId,
@@ -484,6 +517,7 @@ export function useChatModelSelection(opts: {
     modelPickerQuery,
     toggleComposerPicker: picker.toggleComposerPicker,
     chooseModelSlug,
+    chooseModelDefault,
     chooseThinkingMode,
     chooseThinkingModeDefault,
     chooseSpeedMode,

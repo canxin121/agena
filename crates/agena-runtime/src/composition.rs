@@ -64,6 +64,7 @@ pub(crate) const DEFAULT_MAX_CONCURRENT_TOOLS: usize = 32;
 /// manager, provider registry, and tool executor from it.
 #[derive(Debug, Clone)]
 pub(crate) struct RuntimeSessionBuildConfig {
+    pub(crate) default_selection: agena_domain::ExecutionSelection,
     pub(crate) permission: agena_domain::PermissionConfig,
     pub(crate) auto_compaction: agena_domain::SessionAutoCompactionConfig,
     pub(crate) cache_limits: agena_domain::SessionCacheLimits,
@@ -81,6 +82,7 @@ pub(crate) fn session_build_config_from_resolved(
     config: &crate::ResolvedConfig,
 ) -> RuntimeSessionBuildConfig {
     RuntimeSessionBuildConfig {
+        default_selection: config.default_selection.clone(),
         permission: config.permission.clone(),
         auto_compaction: agena_domain::SessionAutoCompactionConfig {
             enabled: config.session.compaction.auto,

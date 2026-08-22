@@ -429,6 +429,15 @@ pub trait ProviderCatalog: Send + Sync {
         provider_id: &ProviderId,
     ) -> Result<Vec<Model>, ProviderCatalogError>;
 
+    /// Resolve the one runtime-wide default model selection, if configured.
+    /// This is intentionally separate from provider entries: providers do not
+    /// carry their own default adapter or model anymore.
+    fn default_model(&self) -> Result<Option<ModelRef>, ProviderCatalogError>;
+
+    /// Return the runtime-wide default selection, including optional mode
+    /// overrides used when no session/request selection supersedes it.
+    fn default_selection(&self) -> agena_domain::ExecutionSelection;
+
     /// Resolve a CLI/application model target against the current configured
     /// provider catalog. `target` may be a provider or a fully qualified
     /// model target; implementations observe runtime reloads.

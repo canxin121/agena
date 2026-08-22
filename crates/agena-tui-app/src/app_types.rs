@@ -677,6 +677,12 @@ pub(super) enum AppMessage {
         expand_all: bool,
         result: UiResult<SessionTranscriptPage>,
     },
+    ToolDetailLoaded {
+        session_id: i64,
+        part_id: i64,
+        section: agena_api::live::ToolDetailSection,
+        result: UiResult<agena_api::live::ToolDetailResource>,
+    },
     SessionRefreshed {
         session_id: i64,
         result: UiResult<SessionRefresh>,

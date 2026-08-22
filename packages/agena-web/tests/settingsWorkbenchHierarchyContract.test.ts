@@ -25,10 +25,9 @@ test('the shared catalog exposes the high-value models and plugin subpages', () 
     resolve(import.meta.dir, '../src/components/settings/settingsNavigationCatalog.ts'),
     'utf8',
   )
-  for (const id of ['provider-studio', 'model-catalog', 'inventory']) {
+  for (const id of ['provider-studio', 'model-catalog', 'defaults', 'inventory']) {
     assert.ok(catalog.includes(`id: '${id}'`), `missing models subpage ${id}`)
   }
-  assert.equal(catalog.includes("id: 'defaults'"), false)
   for (const id of ['plugin-workbench', 'marketplace', 'mcp-server', 'harnesses']) {
     assert.ok(catalog.includes(`id: '${id}'`), `missing plugins subpage ${id}`)
   }

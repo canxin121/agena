@@ -64,6 +64,19 @@ export type AgenaPart = {
   [k: string]: JsonValue
 }
 
+export type ToolDetailSection =
+  | 'metadata'
+  | 'input'
+  | 'output'
+  | 'output_metadata'
+  | 'presentation'
+
+export type ToolDetailResource = {
+  part_id: number
+  section: ToolDetailSection
+  value: JsonValue
+}
+
 /** SessionPartsResource — GET /api/v1/sessions/{id}/parts. */
 export type AgenaSessionParts = {
   session_id: number
@@ -846,6 +859,20 @@ export async function getSessionParts(
   if (typeof cursor === 'string' && cursor.trim()) params.set('cursor', cursor.trim())
   const suffix = params.toString() ? `?${params.toString()}` : ''
   return await apiJson<AgenaSessionParts>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/parts${suffix}`)
+}
+
+/** GET one lazy tool-call detail section. */
+export async function getToolPartDetail(
+  sessionId: string,
+  partId: string,
+  section: ToolDetailSection,
+): Promise<ToolDetailResource> {
+  const sid = String(sessionId || '').trim()
+  const pid = String(partId || '').trim()
+  if (!sid || !pid) throw new Error('A session id and part id are required')
+  return await apiJson<ToolDetailResource>(
+    `/api/v1/sessions/${encodeURIComponent(sid)}/parts/${encodeURIComponent(pid)}/tool-sections/${section}`,
+  )
 }
 
 /**

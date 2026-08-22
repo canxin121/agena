@@ -16,6 +16,23 @@ fn parse_plugin_key_for_lookup(plugin_id: &str, operation: &str) -> Option<Plugi
     }
 }
 
+fn compact_tool_call_name(canonical_name: &str) -> String {
+    let mut parts = canonical_name.splitn(3, '.');
+    let _namespace = parts.next();
+    let plugin = parts.next();
+    let tool = parts.next();
+    match (plugin, tool) {
+        (Some(plugin), Some(tool)) if plugin == tool => plugin.to_string(),
+        (Some(plugin), Some(tool)) => format!("{plugin}.{tool}"),
+        _ => canonical_name.to_string(),
+    }
+}
+
+fn registered_tool_matches_name(tool: &RegisteredTool, name: &str) -> bool {
+    let canonical_name = tool.canonical_name();
+    canonical_name == name || compact_tool_call_name(canonical_name.as_str()) == name
+}
+
 fn plugin_tool_registry_read<'a>(
     registry: &'a RwLock<PluginToolRegistry>,
     operation: &str,
@@ -99,6 +116,35 @@ impl PluginHost {
             .and_then(|context| context.session_id)
             .map(PluginScopeKey::session);
         self.lookup_tool_for_scope(canonical_name, scope.as_ref())
+    }
+
+    /// Resolve a model-facing tool name. Canonical registry keys are checked
+    /// through the strict lookup path; compact `plugin.tool` aliases are
+    /// resolved only when exactly one visible tool owns the alias.
+    pub fn lookup_tool_for_name(&self, name: &str) -> Option<RegisteredTool> {
+        let scope = host_api::current_host_callback_context()
+            .and_then(|context| context.session_id)
+            .map(PluginScopeKey::session);
+        self.lookup_tool_for_name_scope(name, scope.as_ref())
+    }
+
+    pub fn lookup_tool_for_name_scope(
+        &self,
+        name: &str,
+        scope: Option<&PluginScopeKey>,
+    ) -> Option<RegisteredTool> {
+        if name.parse::<ToolKey>().is_ok()
+            && let Some(tool) = self.lookup_tool_for_scope(name, scope)
+        {
+            return Some(tool);
+        }
+
+        let mut matches = self
+            .registered_tools_for_scope(scope)
+            .into_iter()
+            .filter(|tool| registered_tool_matches_name(tool, name));
+        let first = matches.next()?;
+        matches.next().is_none().then_some(first)
     }
 
     pub fn lookup_tool_for_scope(
@@ -2495,6 +2541,68 @@ use super::{
 mod tests {
     use super::*;
     use crate::PluginManifest;
+
+    fn test_tool_definition(name: &str) -> crate::sdk::ToolDefinition {
+        crate::sdk::ToolDefinition {
+            name: name.to_owned(),
+            contract: Default::default(),
+            model: Default::default(),
+            docs: Default::default(),
+            runtime: Default::default(),
+            permissions: Default::default(),
+            tags: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn model_facing_tool_lookup_resolves_unique_compact_names() {
+        let host = PluginHost::new_empty();
+        let plugin: PluginKey = "agena.plan".parse().expect("plugin key");
+        {
+            let mut registry = host.tool_registry.write().expect("tool registry lock");
+            registry
+                .upsert_from_plugin(&plugin, test_tool_definition("edit"))
+                .expect("register edit");
+            registry
+                .upsert_from_plugin(&plugin, test_tool_definition("phase"))
+                .expect("register phase");
+        }
+
+        assert_eq!(
+            host.lookup_tool_for_name("plan.edit")
+                .expect("compact edit lookup")
+                .canonical_name(),
+            "agena.plan.edit"
+        );
+        assert_eq!(
+            host.lookup_tool_for_name("plan.phase")
+                .expect("compact phase lookup")
+                .canonical_name(),
+            "agena.plan.phase"
+        );
+        assert!(host.lookup_tool_for_name("tools_help").is_none());
+    }
+
+    #[test]
+    fn model_facing_tool_lookup_rejects_ambiguous_compact_names() {
+        let host = PluginHost::new_empty();
+        for plugin_name in ["agena.plan", "custom.plan"] {
+            let plugin: PluginKey = plugin_name.parse().expect("plugin key");
+            host.tool_registry
+                .write()
+                .expect("tool registry lock")
+                .upsert_from_plugin(&plugin, test_tool_definition("edit"))
+                .expect("register edit");
+        }
+
+        assert!(host.lookup_tool_for_name("plan.edit").is_none());
+        assert!(
+            host.lookup_tool_for_name("agena.plan.edit")
+                .expect("canonical lookup remains unambiguous")
+                .canonical_name()
+                == "agena.plan.edit"
+        );
+    }
 
     #[tokio::test]
     async fn scoped_operation_catalog_uses_the_same_nearest_visibility_resolver_as_lookup() {

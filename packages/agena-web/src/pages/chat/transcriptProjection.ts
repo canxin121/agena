@@ -197,7 +197,7 @@ function noticeSummary(part: MessagePartLike): string {
   return firstText(content, ['summary', 'body', 'message', 'detail']) || text(part.agenaSummary)
 }
 
-function operationHasPendingInteraction(part: MessagePartLike): boolean {
+export function partHasPendingInteraction(part: MessagePartLike): boolean {
   const operation = toolCallView(part)
   const userInput = record(operation.user_input)
   const userInputPending = (Array.isArray(userInput.requests) ? userInput.requests : []).some((value) => {
@@ -290,7 +290,7 @@ function projectPart(part: MessagePartLike, role: string, answerPartId: string |
   const kind = classifyPart(part, answerPartId, role === 'assistant')
   const fields = displayFields(part, kind)
   const toggleable = !['text', 'lifecycle'].includes(kind)
-  const pendingInteraction = kind === 'operation' && operationHasPendingInteraction(part)
+  const pendingInteraction = kind === 'operation' && partHasPendingInteraction(part)
   return {
     key: `part:${id || compactJson(part).slice(0, 48)}`,
     id,

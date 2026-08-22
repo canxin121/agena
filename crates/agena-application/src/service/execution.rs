@@ -39,6 +39,7 @@ impl ApplicationService {
     ) -> ApplicationResult<agena_runtime::SessionRunOptions> {
         self.ensure_session_exists(session_id).await?;
 
+        let mut uses_global_default = false;
         let model = match request.model {
             Some(model) => {
                 let model = model_ref_from_wire(model)?;
@@ -56,9 +57,17 @@ impl ApplicationService {
                         model
                     }
                     None => {
-                        return Err(ApplicationError::bad_request(
-                            "model is required when neither the request nor session specifies one",
-                        ));
+                        uses_global_default = true;
+                        let model = provider_catalog
+                            .default_model()
+                            .map_err(provider_catalog_error)?
+                            .ok_or_else(|| {
+                                ApplicationError::bad_request(
+                                    "model is required when neither the request, session, nor global default specifies one",
+                                )
+                            })?;
+                        ensure_provider_exists(provider_catalog, &model)?;
+                        model
                     }
                 }
             }
@@ -78,9 +87,14 @@ impl ApplicationService {
         }
         let mut thinking_mode = non_empty(request.thinking_mode.as_deref()).map(ToOwned::to_owned);
         let mut speed_mode = non_empty(request.speed_mode.as_deref()).map(ToOwned::to_owned);
-        let requested_verbosity =
+        let mut requested_verbosity =
             non_empty(request.verbosity.as_deref()).map(|value| value.trim().to_ascii_lowercase());
-        let requested_parallel_tool_calls = request.parallel_tool_calls;
+        let global_selection = provider_catalog.default_selection();
+        let requested_parallel_tool_calls = request.parallel_tool_calls.or_else(|| {
+            uses_global_default
+                .then_some(global_selection.parallel_tool_calls)
+                .flatten()
+        });
 
         let provider_options = provider_catalog
             .model_execution_options(&model)
@@ -89,11 +103,21 @@ impl ApplicationService {
 
         let thinking_modes = provider_options.thinking_modes;
         if thinking_mode.is_none() {
-            thinking_mode = thinking_modes.iter().find_map(|mode| {
-                mode.is_default
-                    .then(|| mode.selector().map(|selector| selector.into_owned()))
-                    .flatten()
-            });
+            thinking_mode = if uses_global_default {
+                global_selection.thinking_mode.clone().or_else(|| {
+                    thinking_modes.iter().find_map(|mode| {
+                        mode.is_default
+                            .then(|| mode.selector().map(|selector| selector.into_owned()))
+                            .flatten()
+                    })
+                })
+            } else {
+                thinking_modes.iter().find_map(|mode| {
+                    mode.is_default
+                        .then(|| mode.selector().map(|selector| selector.into_owned()))
+                        .flatten()
+                })
+            };
         }
         let (thinking, thinking_request_override) =
             if let Some(thinking_mode_name) = thinking_mode.as_deref() {
@@ -120,10 +144,19 @@ impl ApplicationService {
 
         let speed_modes = provider_options.speed_modes;
         if speed_mode.is_none() {
-            speed_mode = speed_modes
-                .iter()
-                .find(|(_, mode)| mode.is_default)
-                .map(|(name, _)| name.clone());
+            speed_mode = if uses_global_default {
+                global_selection.speed_mode.clone().or_else(|| {
+                    speed_modes
+                        .iter()
+                        .find(|(_, mode)| mode.is_default)
+                        .map(|(name, _)| name.clone())
+                })
+            } else {
+                speed_modes
+                    .iter()
+                    .find(|(_, mode)| mode.is_default)
+                    .map(|(name, _)| name.clone())
+            };
         }
         let speed_request_override = if let Some(speed_mode_name) = speed_mode.as_deref() {
             let speed_mode = speed_modes.get(speed_mode_name).ok_or_else(|| {
@@ -141,6 +174,14 @@ impl ApplicationService {
             ModelSpeedModeRequestOverride::default()
         };
 
+        if requested_verbosity.is_none() && uses_global_default {
+            requested_verbosity = global_selection
+                .verbosity
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_ascii_lowercase);
+        }
         let mut request_override = thinking_request_override.merged_with(&speed_request_override);
         request_override.set_parallel_tool_calls(requested_parallel_tool_calls);
         let metadata = provider_options.metadata;

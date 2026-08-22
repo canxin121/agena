@@ -694,7 +694,11 @@ export const useUiStore = defineStore('ui', () => {
     { immediate: true },
   )
 
-  const activeMainTabFallback = ref<MainTab>(defaultMainTab)
+  // When the workspace is intentionally empty, the shell still needs a
+  // concrete sidebar surface.  A persisted last tab such as files/settings
+  // would otherwise leave the stable sidebar panel host empty on the session
+  // empty workspace route.
+  const activeMainTabFallback = ref<MainTab>(workspaceWindows.value.length ? defaultMainTab : 'chat')
   const activeMainTab = computed<MainTab>(() => activeWorkspaceWindow.value?.mainTab || activeMainTabFallback.value)
   watch(
     activeWorkspaceWindow,
@@ -1437,7 +1441,7 @@ export const useUiStore = defineStore('ui', () => {
     const query = normalizeRouteQueryRecord(opts?.query)
     // Chat tabs must always point at a session, which is what gives them a
     // directory/workspace owner.  The unscoped chat surface is the session
-    // hub at `/`, not a workspace window.
+    // empty workspace at `/`, not a workspace window.
     if (tab === 'chat' && !readMatchQueryValue(query, 'sessionId')) return ''
     const path = normalizeMainTabPath(tab, opts?.path)
     const hashRaw = String(opts?.hash || '').trim()
@@ -1702,6 +1706,7 @@ export const useUiStore = defineStore('ui', () => {
     location?: { path?: string | null; hash?: string | null },
   ) {
     const routeWindowId = readWindowIdFromRouteQuery(rawQuery)
+    const rawRoutePath = String(location?.path || '').trim()
     const routePath = normalizeMainTabPath(tab, location?.path)
     const routeHash = String(location?.hash || '').trim()
     const normalizedQuery = normalizeRouteQueryRecord(rawQuery)
@@ -1714,6 +1719,20 @@ export const useUiStore = defineStore('ui', () => {
         setWorkspaceWindowRoutePath(routeWindowId, routePath)
         setWorkspaceWindowRouteQuery(routeWindowId, normalizedQuery)
         setWorkspaceWindowRouteHash(routeWindowId, routeHash)
+        return
+      }
+
+      // Closing the last desktop window deliberately leaves the workspace
+      // empty.  A navigation that was already in flight can still report the
+      // deleted windowId after the close; do not resurrect that window.
+      if (routeWindowId && isRouteWindowRestoreSuppressed(routeWindowId)) {
+        return
+      }
+
+      // `/` is the stable empty-workspace route.  It has no durable window to
+      // seed and must keep the shell/sidebar mounted without fabricating a
+      // blank chat tab.
+      if (!workspaceWindows.value.length && !routeWindowId && rawRoutePath === '/') {
         return
       }
 
@@ -1781,6 +1800,7 @@ export const useUiStore = defineStore('ui', () => {
       workspaceGroups.value = []
       activeWorkspaceGroupId.value = ''
       activeWorkspaceWindowId.value = ''
+      activeMainTabFallback.value = 'chat'
       syncWorkspaceSelectionState()
       return
     }
@@ -1853,6 +1873,7 @@ export const useUiStore = defineStore('ui', () => {
     workspaceGroups.value = []
     activeWorkspaceGroupId.value = ''
     activeWorkspaceWindowId.value = ''
+    activeMainTabFallback.value = 'chat'
     syncWorkspaceSelectionState()
   }
 

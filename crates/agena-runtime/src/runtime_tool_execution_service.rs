@@ -124,7 +124,24 @@ pub trait RuntimeToolExecutionService: Send + Sync {
             },
             None => output.text.clone(),
         };
-        let renderer = BuiltinHumanRenderer::new(invocation.name.as_str());
+        let mut renderer = BuiltinHumanRenderer::new(invocation.name.as_str());
+        if let Some(command) = invocation
+            .input
+            .get("command")
+            .and_then(|value| value.as_text())
+            .filter(|command| !command.trim().is_empty())
+        {
+            renderer = renderer.with_command(command);
+        }
+        if let Some(cwd) = invocation
+            .input
+            .get("workdir")
+            .or_else(|| invocation.input.get("cwd"))
+            .and_then(|value| value.as_text())
+            .filter(|cwd| !cwd.trim().is_empty())
+        {
+            renderer = renderer.with_cwd(cwd);
+        }
         let context = agena_tool::RenderContext {
             workspace_root: PathBuf::new(),
             command: None,
@@ -134,8 +151,11 @@ pub trait RuntimeToolExecutionService: Send + Sync {
             .unwrap_or_else(|_| Vec::new());
         RuntimeToolResultProjection {
             human: RuntimeToolHumanPresentation {
-                title: invocation.name.clone(),
-                summary: BuiltinHumanRenderer::human_summary(output),
+                title: agena_tool::completed_tool_title(invocation, output),
+                summary: BuiltinHumanRenderer::human_summary_for_tool(
+                    invocation.name.as_str(),
+                    output,
+                ),
                 blocks,
             },
             model,

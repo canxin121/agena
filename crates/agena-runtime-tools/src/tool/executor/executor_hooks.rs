@@ -38,6 +38,24 @@ impl ToolExecutor {
                 "tool `{model_tool_name}` returned an empty activity summary; every tool result must provide a concise outcome summary"
             )));
         }
+
+        // Complete the call-time action/input title with a compact fact from
+        // the full raw result so operator callers and session completion use
+        // the same final headline as the read-time transcript renderer.
+        let raw_output = agena_domain::RawOutput::from_parts(
+            execution.output.to_json_payload(),
+            execution.view.output_text.clone(),
+            execution.view.attachments.clone(),
+            execution.output.managed_outputs.clone(),
+            execution
+                .view
+                .metadata
+                .iter()
+                .map(|(key, value)| (key.clone(), serde_json::Value::String(value.clone())))
+                .collect(),
+            execution.output.truncated,
+        );
+        execution.view.title = agena_tool::completed_tool_title(invocation, &raw_output);
         Ok(execution)
     }
 
@@ -225,27 +243,27 @@ impl ToolExecutor {
             let blocks = agena_tool::ToolHumanRenderer::render_human(&renderer, &context, output)
                 .unwrap_or_default();
             rendered.human = Some(agena_plugin_host::sdk::ToolHumanPresentation {
-                title: plugin_human
-                    .as_ref()
-                    .map(|human| human.title.clone())
-                    .filter(|title| !title.trim().is_empty())
-                    .unwrap_or_else(|| invocation.name.clone()),
+                title: agena_tool::completed_tool_title(invocation, output),
                 summary: plugin_human
                     .as_ref()
                     .map(|human| human.summary.clone())
                     .filter(|summary| !summary.trim().is_empty())
                     .unwrap_or_else(|| {
-                        crate::tool::human_view::BuiltinHumanRenderer::human_summary(output)
+                        crate::tool::human_view::BuiltinHumanRenderer::human_summary_for_tool(
+                            invocation.name.as_str(),
+                            output,
+                        )
                     }),
                 blocks,
             });
         } else if let Some(mut human) = plugin_human {
-            if human.title.trim().is_empty() {
-                human.title = invocation.name.clone();
-            }
+            human.title = agena_tool::completed_tool_title(invocation, output);
             if human.summary.trim().is_empty() {
                 human.summary =
-                    crate::tool::human_view::BuiltinHumanRenderer::human_summary(output);
+                    crate::tool::human_view::BuiltinHumanRenderer::human_summary_for_tool(
+                        invocation.name.as_str(),
+                        output,
+                    );
             }
             rendered.human = Some(human);
         }

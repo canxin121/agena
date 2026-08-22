@@ -353,8 +353,8 @@ async fn project_tool_presentation(
     };
     let Some(output) = content.output else {
         return Some(ToolHumanPresentationResource {
-            title: invocation.name,
-            summary: String::new(),
+            title: agena_tool::tool_title_for_state(&invocation, content.state),
+            summary: part.summary.clone().unwrap_or_default(),
             blocks: Vec::new(),
         });
     };
@@ -362,8 +362,9 @@ async fn project_tool_presentation(
         .application()
         .render_tool_result(&invocation, &output)
         .await;
+    let title = agena_tool::completed_tool_title_for_state(&invocation, content.state, &output);
     Some(ToolHumanPresentationResource {
-        title: projection.human.title,
+        title,
         summary: projection.human.summary,
         blocks: projection.human.blocks,
     })

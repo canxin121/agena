@@ -29,7 +29,7 @@ pub const MAX_OPERATION_DIAGNOSTICS: usize = 32;
 pub const MAX_OPERATION_EFFECTS: usize = 8;
 pub const MAX_PLUGIN_SERVICES: usize = 128;
 
-/// Durable Operation titles are compact scan labels, not result previews.
+/// Tool presentation titles are compact scan labels, not result dumps.
 pub const TOOL_TITLE_MAX_DISPLAY_WIDTH: usize = 96;
 /// Durable Operation summaries are compact result statements.
 pub const TOOL_SUMMARY_MAX_DISPLAY_WIDTH: usize = 120;

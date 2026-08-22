@@ -181,6 +181,7 @@ dependencies = [
  "agena-runtime-notifications",
  "agena-runtime-tools",
  "agena-storage",
+ "agena-tool",
  "async-stream",
  "async-trait",
  "axum",

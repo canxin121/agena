@@ -36,6 +36,7 @@ enum RenderBehavior {
     Fail,
     EmptyHuman,
     JsonOnlyHuman,
+    EmptyTitle,
 }
 
 struct RenderingFixture {
@@ -89,6 +90,17 @@ impl agena_plugin_host::sdk::Plugin for RenderingFixture {
                     blocks: vec![agena_domain::ViewBlock::Json {
                         id: Some("opaque".to_owned()),
                         value: serde_json::json!({"machine_only": true}),
+                    }],
+                }),
+            })),
+            RenderBehavior::EmptyTitle => Ok(Some(agena_plugin_host::sdk::ToolRenderOutput {
+                model: None,
+                human: Some(agena_plugin_host::sdk::ToolHumanPresentation {
+                    title: String::new(),
+                    summary: String::new(),
+                    blocks: vec![agena_domain::ViewBlock::Markdown {
+                        id: Some("visible".to_owned()),
+                        text: "plugin human projection".to_owned(),
                     }],
                 }),
             })),
@@ -268,7 +280,7 @@ async fn owning_plugin_controls_both_runtime_tool_result_projections() {
 
     assert_eq!(projected.model.as_deref(), Some("plugin model projection"));
     let human = projected.human.expect("human projection");
-    assert_eq!(human.title, "Plugin title");
+    assert_eq!(human.title, "Render · raw result");
     assert_eq!(human.summary, "Plugin summary");
     assert_eq!(
         human.blocks,
@@ -293,7 +305,7 @@ async fn delegated_or_failed_plugin_render_uses_runtime_fallback() {
 
         assert_eq!(projected.model.as_deref(), Some("raw result"));
         let human = projected.human.expect("runtime human fallback");
-        assert_eq!(human.title, "test.renderer.render");
+        assert_eq!(human.title, "Render · raw result");
         assert_eq!(human.summary, "raw result");
     }
 }
@@ -303,12 +315,12 @@ async fn empty_or_json_only_plugin_human_render_uses_readable_fallback() {
     for (behavior, title, summary) in [
         (
             RenderBehavior::EmptyHuman,
-            "Plugin fallback title",
+            "Render · 1 result",
             "Plugin fallback summary",
         ),
         (
             RenderBehavior::JsonOnlyHuman,
-            "Plugin JSON title",
+            "Render · 1 result",
             "Plugin JSON summary",
         ),
     ] {
@@ -338,6 +350,22 @@ async fn empty_or_json_only_plugin_human_render_uses_readable_fallback() {
             human.blocks
         );
     }
+}
+
+#[tokio::test]
+async fn empty_plugin_title_uses_the_initial_action_before_appending_result() {
+    let executor = rendering_executor(RenderBehavior::EmptyTitle).await;
+    let projected = executor
+        .render_tool_result(
+            &rendering_invocation(),
+            &agena_domain::RawOutput::text("raw result"),
+        )
+        .await;
+
+    let human = projected.human.expect("human projection");
+    assert_eq!(human.title, "Render · raw result");
+    assert_eq!(human.summary, "raw result");
+    assert_eq!(human.blocks.len(), 1);
 }
 
 #[agena_plugin_host::sdk::agena_plugin(

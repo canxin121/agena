@@ -45,10 +45,14 @@ impl Application {
                 input,
             };
             let human = if let Some(output) = content.output {
-                self.render_tool_result(&invocation, &output).await.human
+                let mut human = self.render_tool_result(&invocation, &output).await.human;
+                human.title =
+                    agena_tool::completed_tool_title_for_state(&invocation, content.state, &output);
+                human
             } else {
                 agena_runtime::RuntimeToolHumanPresentation {
-                    title: invocation.name,
+                    title: agena_tool::tool_title_for_state(&invocation, content.state),
+                    summary: part.summary.clone().unwrap_or_default(),
                     ..Default::default()
                 }
             };

@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 
-use agena_domain::{RawOutput, ViewBlock};
+use agena_domain::{RawOutput, StructuredObject, ToolInvocation, ViewBlock};
 use agena_runtime_tools::tool::human_view::BuiltinHumanRenderer;
-use agena_tool::{RenderContext, ToolHumanRenderer};
+use agena_tool::{RenderContext, ToolHumanRenderer, completed_tool_title, initial_tool_title};
 use serde_json::{Value, json};
 
 fn render_context() -> RenderContext {
@@ -13,49 +13,681 @@ fn render_context() -> RenderContext {
 }
 
 fn sample_payload(tool: &str) -> Value {
-    let mut payload = json!({
-        "status": "completed",
-        "message": "The operation completed.",
-        "count": 1,
+    let job = json!({
+        "id": "job-1",
+        "kind": "cron",
+        "expression": "*/5 * * * *",
+        "timezone": "UTC",
+        "prompt": "check status",
+        "next_fire_at": "2026-08-22T12:05:00Z",
+        "paused": false,
+        "completed": false,
+        "misfire_policy": "skip",
+        "retry_max_attempts": 1,
+        "run_count": 2,
+        "last_run_status": "completed"
     });
-    let Some(object) = payload.as_object_mut() else {
-        return payload;
-    };
+    let task = json!({
+        "task_id": "task-1",
+        "description": "Example delegated task",
+        "status": "completed",
+        "access": "read",
+        "session_id": 42,
+        "model_id": "gpt-5",
+        "started_at_ms": 1,
+        "finished_at_ms": 2
+    });
 
-    if tool.contains("findings") {
-        object.insert(
-            "findings".to_owned(),
-            json!([{
-                "severity": "high",
-                "file": "src/lib.rs",
-                "line": 7,
-                "title": "Example finding",
-                "body": "Example finding body",
-                "confidence": 0.9,
-            }]),
-        );
-    } else if tool.contains("servers") {
-        object.insert(
-            "servers".to_owned(),
-            json!([{"name": "example", "connected": true, "tool_count": 2}]),
-        );
-    } else if tool.contains("tasks") || tool.contains("process") || tool.contains("sessions") {
-        object.insert(
-            "items".to_owned(),
-            json!([{"id": "item-1", "status": "completed", "title": "Example item"}]),
-        );
-    } else if tool.contains("tools") || tool.contains("resources") || tool.contains("prompts") {
-        object.insert(
-            "results".to_owned(),
-            json!([{"name": "example", "description": "Example result", "server": "demo"}]),
-        );
-    } else {
-        object.insert(
-            "details".to_owned(),
-            json!({"key": "example", "available": true}),
-        );
+    match tool {
+        "fs.read" => json!({
+            "preview": "fn main() {}",
+            "loaded_paths": ["src/main.rs"],
+            "truncated": false
+        }),
+        "fs.read_many" => json!({
+            "files": [{
+                "path": "src/lib.rs",
+                "bytes": 128,
+                "returned_bytes": 128,
+                "truncated": false,
+                "sha256": "abc123"
+            }],
+            "max_total_bytes": 1048576,
+            "remaining_bytes": 1048448,
+            "truncated": false
+        }),
+        "fs.write" => json!({
+            "path": "src/lib.rs",
+            "kind": "updated",
+            "bytes": 128,
+            "sha256": "abc123"
+        }),
+        "fs.replace" => json!({
+            "path": "src/lib.rs",
+            "replacements": 2,
+            "before_sha256": "before",
+            "after_sha256": "after"
+        }),
+        "fs.stat" => json!({
+            "path": "src/lib.rs",
+            "kind": "file",
+            "size": 128,
+            "modified_at_ms": 1000,
+            "readonly": false,
+            "sha256": "abc123",
+            "hash_skipped": false
+        }),
+        "fs.view_image" => json!({
+            "path": "assets/chart.png",
+            "detail": "high",
+            "mime": "image/png",
+            "size_bytes": 4096,
+            "sha256": "abc123"
+        }),
+        "fs.glob" => json!({
+            "count": 2,
+            "paths": ["src/lib.rs", "src/main.rs"],
+            "truncated": false
+        }),
+        "fs.grep" => json!({
+            "matches": 2,
+            "results": ["src/lib.rs:1: fn main", "src/main.rs:2: fn run"],
+            "truncated": false
+        }),
+        "fs.apply_patch" => json!({
+            "operation_id": "patch-1",
+            "inverse_patch": "*** Begin Patch\n*** End Patch",
+            "changes": [{"path": "src/lib.rs", "kind": "updated"}],
+            "diff": "@@ -1 +1 @@\n-old\n+new"
+        }),
+        "code.search_ast" => json!({
+            "language": "rust",
+            "pattern": "fn $NAME()",
+            "scanned_files": 4,
+            "matches": [{"path": "src/lib.rs", "line": 7, "text": "fn render()"}]
+        }),
+        "code.syntax_tree" => json!({
+            "path": "src/lib.rs",
+            "language": "rust",
+            "root_kind": "source_file",
+            "has_error": false,
+            "tree": {"kind": "source_file", "children": 3}
+        }),
+        "cron.create" => json!({"id": "job-1", "next_fire_at": "2026-08-22T12:05:00Z"}),
+        "cron.list" => json!({"jobs": [job.clone()]}),
+        "cron.delete" => json!({"id": "job-1", "removed": true}),
+        "cron.update" => json!({"job": job.clone()}),
+        "cron.pause" => json!({"job": {
+            "id": "job-1",
+            "kind": "cron",
+            "expression": "*/5 * * * *",
+            "timezone": "UTC",
+            "prompt": "check status",
+            "next_fire_at": "2026-08-22T12:05:00Z",
+            "paused": true,
+            "completed": false,
+            "misfire_policy": "skip",
+            "retry_max_attempts": 1,
+            "run_count": 2,
+            "last_run_status": "completed"
+        }}),
+        "cron.resume" => json!({"job": job.clone()}),
+        "cron.history" => json!({
+            "entries": [{
+                "job_id": "job-1",
+                "triggered_at": "2026-08-22T12:00:00Z",
+                "finished_at": "2026-08-22T12:00:01Z",
+                "status": "completed",
+                "scheduled_for": "2026-08-22T12:00:00Z",
+                "attempt": 1,
+                "session_id": 42
+            }]
+        }),
+        "interaction.ask" => json!({
+            "questions": [{"question": "Continue?"}],
+            "answers": {"0": ["yes"]},
+            "timed_out": false
+        }),
+        "interaction.notify" => json!({
+            "title": "Build",
+            "level": "success",
+            "body_markdown": "**Done**"
+        }),
+        "lsp.servers" => json!({
+            "servers": [{"name": "rust-analyzer", "command": "rust-analyzer", "args": [], "file_extensions": ["rs"]}]
+        }),
+        "lsp.definition" => json!({"locations": ["src/lib.rs:7:1"]}),
+        "lsp.references" => json!({"locations": ["src/main.rs:3:1"]}),
+        "lsp.hover" => json!({"contents": "**render**"}),
+        "lsp.diagnostics" => json!({"entries": ["src/lib.rs:1 warning"]}),
+        "mcp.resources.list" => json!({
+            "server": "demo",
+            "resources": [{"name": "README", "uri": "mcp://demo/readme", "mime_type": "text/markdown", "description": "Docs"}],
+            "next_cursor": "cursor-2"
+        }),
+        "mcp.resources.templates.list" => json!({
+            "server": "demo",
+            "resource_templates": [{"name": "User", "uri_template": "users://{id}", "mime_type": "application/json", "description": "Profile"}],
+            "next_cursor": "cursor-2"
+        }),
+        "mcp.resources.read" => json!({
+            "server": "demo",
+            "uri": "mcp://demo/readme",
+            "contents": [{"uri": "mcp://demo/readme", "mime_type": "text/markdown", "text": "# Hello"}]
+        }),
+        "mcp.prompts.list" => json!({
+            "server": "demo",
+            "prompts": [{"name": "review", "description": "Review code", "arguments": []}],
+            "next_cursor": "cursor-2"
+        }),
+        "mcp.prompts.get" => json!({
+            "server": "demo",
+            "prompt": "review",
+            "messages": [{"role": "user", "content": "Review this"}]
+        }),
+        "mcp.tools.call" => json!({
+            "server": "demo",
+            "tool": "search",
+            "content": [{"type": "text", "text": "3 matches"}],
+            "structured_content": {"matches": 3},
+            "mcp_meta": {"request_id": "mcp-1"}
+        }),
+        "mcp.tools.search" => json!({
+            "server": "demo",
+            "results": [{"name": "search", "description": "Search docs", "server": "demo"}]
+        }),
+        "mcp.servers.status" => json!({
+            "servers": [{"name": "demo", "connected": true, "tool_count": 3, "url": "https://mcp.test"}]
+        }),
+        "mcp.servers.reconnect" => json!({
+            "server": "demo", "connected": true, "tool_count": 3
+        }),
+        "memory.search" => json!({
+            "query": "release",
+            "results": [{"name": "release-notes", "score": 0.9, "snippet": "..."}]
+        }),
+        "memory.get" => json!({"name": "release-notes", "body": "Ship safely."}),
+        "memory.list" => json!({"memories": [{"name": "release-notes", "size": 128}]}),
+        "memory.write" => json!({"name": "release-notes", "saved": true, "bytes": 128}),
+        "memory.delete" => json!({"name": "release-notes", "deleted": true}),
+        "monitor.start" => json!({
+            "action": "start", "monitor_id": "mon-1", "status": "running", "processes": []
+        }),
+        "monitor.stop" => json!({
+            "action": "stop", "monitor_id": "mon-1", "status": "stopped", "processes": []
+        }),
+        "notebook.edit_cell" => json!({
+            "path": "demo.ipynb", "action": "replace", "cell_index": 0, "cell_count": 2,
+            "before_sha256": "before", "after_sha256": "after", "changed": true
+        }),
+        "plan.clear" => json!({"cleared": true}),
+        "plan.edit" | "plan.get" | "plan.phase" | "plan.review" | "plan.set" => json!({
+            "plan": {
+                "title": "Release",
+                "objective": "Ship safely",
+                "phase": "active",
+                "steps": [{"title": "Test", "status": "completed", "checkpoints": [{"text": "CI", "status": "passed"}]}]
+            },
+            "current_step": {"title": "Test", "status": "completed"},
+            "current_step_index": 0,
+            "decision": "approved"
+        }),
+        "report.findings" => json!({
+            "summary": "Review complete",
+            "findings": [{"severity": "high", "file": "src/lib.rs", "line": 7, "title": "Example finding", "body": "Fix this", "confidence": 0.9}],
+            "counts": {"high": 1}
+        }),
+        "session.environment" => json!({
+            "workspace_root": "/workspace", "git_branch": "main", "git_short_sha": "abc123", "git_dirty": true,
+            "shell": "/bin/zsh", "os": "macos", "arch": "aarch64"
+        }),
+        "session.get" | "session.rename" => json!({
+            "session": {"id": 42, "title": "Release", "parent_id": null, "root_id": 42, "is_subagent": false}
+        }),
+        "session.model" => json!({
+            "model_provider_id": "openai", "model_adapter_id": "responses", "model_id": "gpt-5",
+            "thinking_mode": "high", "model_context_window_tokens": 128000
+        }),
+        "session.tokens" => json!({
+            "current_tokens": 12000, "measured_prompt_tokens": 11000, "projected_tokens": 13000,
+            "limit_tokens": 16000, "remaining_tokens": 4000, "reserved_tokens": 1000, "usage_ratio": 0.75
+        }),
+        "settings.get" => {
+            json!({"path": "providers.openai.model", "layer": "workspace", "value": "gpt-5"})
+        }
+        "settings.list" => {
+            json!({"items": [{"path": "providers.openai.model", "value": "gpt-5"}], "count": 1})
+        }
+        "settings.inspect" => json!({
+            "path": "providers.openai", "global": {"defined": true}, "workspace": {"defined": false},
+            "layers": [{"name": "global", "active": true}]
+        }),
+        "settings.validate" => {
+            json!({"valid": true, "warnings": [{"path": "model", "message": "uses default"}]})
+        }
+        "settings.set" | "settings.patch" => json!({
+            "path": "providers.openai.model", "layer": "workspace", "changed": true, "validated": true,
+            "current": "gpt-5", "updated_paths": ["providers.openai.model"]
+        }),
+        "settings.delete" => {
+            json!({"path": "providers.openai.model", "deleted": true, "changed": true})
+        }
+        "shell.run" => json!({
+            "action": "run", "shell": "bash", "background": false, "status": "exited",
+            "output": "all tests passed", "exit_code": 0, "process_id": "p-1"
+        }),
+        "shell.list" => {
+            json!({"action": "list", "processes": [{
+                "process_id": "p-1",
+                "command": "cargo test",
+                "description": "Run the test suite",
+                "status": "running",
+                "background": true,
+                "monitored": false,
+                "started_at_ms": 1,
+                "ended_at_ms": null,
+                "buffered_lines": 2,
+                "last_seq": 2,
+                "dropped_lines": 0,
+                "exit_code": null,
+                "completion_reason": null
+            }]})
+        }
+        "shell.logs" => {
+            json!({"action": "logs", "process_id": "p-1", "events": [{"seq": 1, "stream": "stdout", "ts_ms": 1, "line": "ok"}], "last_seq": 1})
+        }
+        "shell.stop" => {
+            json!({"action": "stop", "process_id": "p-1", "status": "stopped", "exit_code": 143})
+        }
+        "skills.list" => {
+            json!({"tools": [{"name": "review", "kind": "skill", "summary": "Review changes", "source": "workspace", "editable": true}], "returned": 1, "total": 1, "offset": 0})
+        }
+        "skills.get" => {
+            json!({"name": "review", "kind": "skill", "source": "workspace", "body": "Review changes.", "content_hash": "hash-1", "editable": true})
+        }
+        "skills.create" | "skills.update" | "skills.delete" => {
+            json!({"operation": if tool.ends_with("delete") { "deleted" } else { "updated" }, "name": "review", "path": "skills/review.md", "catalog_generation": 3, "catalog_changed": true, "editable": true})
+        }
+        "skills.read_resource" => {
+            json!({"name": "review", "path": "references/checklist.md", "source": "workspace", "bytes": 42, "content_hash": "hash-2", "body": "Checklist"})
+        }
+        "skills.refresh" => {
+            json!({"changed": true, "generation": 3, "tools": [{"name": "review"}]})
+        }
+        "snapshot.enter" => {
+            json!({"path": "/tmp/snapshot", "branch": "snapshot/main", "backend": "git", "note": "before release"})
+        }
+        "snapshot.exit" => json!({"action": "restore", "path": "/tmp/snapshot"}),
+        "snapshot.status" => {
+            json!({"snapshots": [{"session_id": 42, "path": "/tmp/snapshot", "branch": "snapshot/main", "created_here": true}]})
+        }
+        "tasks.run" => json!({
+            "task_id": "task-1", "session_id": 42, "parent_session_id": 0, "access": "read", "status": "completed",
+            "resumed": false, "final_text": "Task completed.", "model_provider_id": "openai", "model_id": "gpt-5",
+            "input_tokens": 10, "output_tokens": 20, "reasoning_tokens": 5, "cache_write_tokens": 0, "cache_read_tokens": 0,
+            "total_cost_microusd": 12
+        }),
+        "tasks.list" => json!({"tasks": [task.clone()]}),
+        "tasks.get" | "tasks.cancel" | "tasks.followup" | "tasks.message" => {
+            json!({"task": task.clone()})
+        }
+        "tasks.output" => {
+            json!({"task": task.clone(), "chunks": [{"role": "assistant", "text": "done"}], "next_cursor": 1, "has_more": true})
+        }
+        "web.fetch" => {
+            json!({"url": "https://example.test", "status": 200, "cached": false, "truncated": false, "summary": "Example page", "markdown": "# Example"})
+        }
+        "web.search" => {
+            json!({"query": "Agena", "backend": "default", "results": [{"title": "Guide", "url": "https://example.test", "snippet": "Docs"}]})
+        }
+        "web.crawl" => json!({
+            "start_url": "https://example.test", "engine": "spider", "stored_count": 2, "cached_count": 1, "failure_count": 0,
+            "documents": [{"title": "Home", "url": "https://example.test", "depth": 0, "chunk_count": 3, "fetched_at": "2026-08-22T10:00:00Z"}]
+        }),
+        "web.browser_list" => {
+            json!({"sessions": [{"session_id": "s-1", "title": "Agena docs", "url": "https://example.test", "attached": true}], "browser_running": true})
+        }
+        "web.browser_open"
+        | "web.browser_snapshot"
+        | "web.browser_click"
+        | "web.browser_type"
+        | "web.browser_wait" => json!({
+            "session_id": "s-1", "condition": "ready", "elapsed_ms": 20,
+            "snapshot": {"title": "Agena docs", "url": "https://example.test/docs", "text": "Welcome", "elements": [{"ref": "e1", "role": "link", "name": "API", "selector": "#api"}]}
+        }),
+        "web.browser_close" => json!({"session_id": "s-1", "closed": true}),
+        "web.browser_shutdown" => json!({"closed": true}),
+        "web.browser_screenshot" => {
+            json!({"session_id": "s-1", "path": "/tmp/page.png", "size_bytes": 1024})
+        }
+        "web.browser_download" => {
+            json!({"session_id": "s-1", "url": "https://example.test/a.zip", "path": "/tmp/a.zip", "size_bytes": 2048})
+        }
+        _ if tool.starts_with("chatgpt.")
+            || tool.starts_with("claude.")
+            || tool.starts_with("gemini.")
+            || tool.starts_with("openai.") =>
+        {
+            provider_sample_payload(tool)
+        }
+        _ => {
+            json!({"status": "completed", "message": "The operation completed.", "count": 1, "details": {"available": true}})
+        }
+    }
+}
+
+fn sample_input(tool: &str) -> Value {
+    match tool {
+        "fs.read" => json!({"file_path": "src/main.rs"}),
+        "fs.read_many" => json!({"paths": ["src/lib.rs", "src/main.rs"]}),
+        "fs.write" | "fs.replace" | "fs.stat" | "fs.view_image" => {
+            json!({"path": "src/lib.rs"})
+        }
+        "fs.apply_patch" => {
+            json!({"patch": "*** Begin Patch\n*** Update File: src/lib.rs\n*** End Patch"})
+        }
+        "fs.glob" | "fs.grep" => json!({"pattern": "TODO", "path": "src"}),
+        "code.search_ast" => json!({"pattern": "fn $NAME()", "path": "src", "language": "rust"}),
+        "code.syntax_tree" => json!({"path": "src/lib.rs", "language": "rust"}),
+        "shell.run" => json!({"command": "cargo test"}),
+        "shell.logs" | "shell.stop" => json!({"process_id": "p-1"}),
+        "monitor.start" => json!({"command": "cargo watch"}),
+        "monitor.stop" => json!({"monitor_id": "mon-1"}),
+        "interaction.ask" => json!({"questions": [{"question": "Continue?"}]}),
+        "interaction.notify" => json!({"title": "Build", "body": "Done"}),
+        "lsp.definition" | "lsp.references" | "lsp.hover" | "lsp.diagnostics" => json!({
+            "position": {"file_path": "src/lib.rs", "line": 9, "character": 3}
+        }),
+        "mcp.tools.call" => json!({"server": "demo", "name": "search"}),
+        "mcp.tools.search" => json!({"server": "demo", "query": "search"}),
+        value if value.starts_with("mcp.") => json!({"server": "demo"}),
+        "memory.search" => json!({"query": "release"}),
+        "memory.get" | "memory.write" | "memory.delete" => {
+            json!({"name": "release-notes"})
+        }
+        "plan.set" | "plan.update" => json!({"title": "Release"}),
+        "plan.phase" => json!({"phase": "implementation"}),
+        "plan.review" => json!({"decision": "approve"}),
+        value if value.starts_with("plan.") => json!({}),
+        "tasks.run" => json!({"description": "Run release checks"}),
+        value if value.starts_with("tasks.") => json!({"task_id": "task-1"}),
+        "skills.create" | "skills.update" | "skills.delete" | "skills.get" => {
+            json!({"name": "review"})
+        }
+        "skills.read_resource" => json!({"name": "review", "path": "references/checklist.md"}),
+        value if value.starts_with("skills.") => json!({}),
+        value if value.starts_with("settings.") => json!({"path": "providers.openai.model"}),
+        "session.rename" => json!({"title": "Release"}),
+        value if value.starts_with("session.") => json!({}),
+        "snapshot.enter" => json!({"path": "/tmp/snapshot"}),
+        "snapshot.exit" => json!({"path": "/tmp/snapshot"}),
+        value if value.starts_with("snapshot.") => json!({}),
+        "notebook.edit_cell" => json!({"notebook_path": "demo.ipynb", "cell": 0}),
+        "report.findings" => json!({"summary": "Review release"}),
+        "web.search" => json!({"query": "Agena"}),
+        "web.fetch" | "web.crawl" => json!({"url": "https://example.test"}),
+        "web.browser_open" => json!({"url": "https://example.test/docs"}),
+        "web.browser_click" => json!({"selector": "#submit"}),
+        "web.browser_type" => json!({"selector": "#query"}),
+        "web.browser_wait" => json!({"condition": "ready"}),
+        "web.browser_screenshot" => json!({"session_id": "s-1"}),
+        "web.browser_download" => json!({"url": "https://example.test/a.zip"}),
+        "web.browser_close" => json!({"session_id": "s-1"}),
+        "web.browser_list" | "web.browser_shutdown" => json!({}),
+        value
+            if value.starts_with("tools.plugins_search") || value.starts_with("plugins.search") =>
+        {
+            json!({"query": "filesystem"})
+        }
+        value if value.starts_with("tools.plugins_tags") || value.starts_with("plugins.tags") => {
+            json!({"tag": "filesystem"})
+        }
+        value if value.starts_with("tools.search") || value.starts_with("tools_search") => {
+            json!({"query": "filesystem"})
+        }
+        value if value.starts_with("tools.") || value.starts_with("plugins.") => json!({}),
+        value
+            if value.starts_with("chatgpt.")
+                || value.starts_with("claude.")
+                || value.starts_with("gemini.")
+                || value.starts_with("openai.") =>
+        {
+            provider_sample_input(value)
+        }
+        _ => json!({}),
+    }
+}
+
+fn provider_sample_input(tool: &str) -> Value {
+    let operation = tool.rsplit('.').next().unwrap_or_default();
+    match operation {
+        "web_search"
+        | "web_search_preview"
+        | "google_search"
+        | "google_maps"
+        | "retrieval"
+        | "file_search"
+        | "tool_search"
+        | "tool_search_bm25"
+        | "tool_search_regex"
+        | "tool_search_tool_bm25"
+        | "tool_search_tool_regex" => {
+            json!({"query": "release policy"})
+        }
+        "web_fetch" | "url_context" => json!({"url": "https://example.test"}),
+        "code_interpreter" | "code_execution" => json!({"command": "cargo test"}),
+        "local_shell" | "shell" | "bash" => json!({"command": "cargo test"}),
+        "mcp" | "mcp_server" | "mcp_toolset" => json!({"server_label": "docs"}),
+        "memory" => json!({"operation": "save", "name": "release-notes"}),
+        "text_editor" | "str_replace_based_edit_tool" => {
+            json!({"path": "src/lib.rs", "operation": "replace"})
+        }
+        "apply_patch" => {
+            json!({"patch": "*** Begin Patch\n*** Update File: src/lib.rs\n*** End Patch"})
+        }
+        "image_generation" | "image_edit" => json!({"prompt": "A polished release diagram"}),
+        "computer" | "computer_use_preview" | "computer_use" => {
+            json!({"url": "https://example.test/docs"})
+        }
+        "function" | "custom" | "namespace" => json!({"name": "search"}),
+        "programmatic_tool_calling" => json!({"prompt": "Find the test tool"}),
+        "advisor" => json!({"prompt": "Review this change"}),
+        _ => json!({}),
+    }
+}
+
+fn provider_sample_payload(tool: &str) -> Value {
+    let provider = tool.split('.').next().unwrap_or("provider");
+    let operation = tool.rsplit('.').next().unwrap_or("operation");
+    let mut payload = json!({
+        "provider": provider,
+        "tool": operation,
+        "model": "example-model",
+        "response_id": "response-1"
+    });
+    let object = payload.as_object_mut().expect("provider payload object");
+    match operation {
+        "file_search" => {
+            object.insert("query".into(), json!("rendering"));
+            object.insert(
+                "results".into(),
+                json!([
+                    {"file_name": "README.md", "score": 0.9, "snippet": "Rendering guide"},
+                    {"file_name": "guide.md", "score": 0.8, "snippet": "Examples"}
+                ]),
+            );
+        }
+        "tool_search" | "tool_search_bm25" | "tool_search_regex" => {
+            object.insert("query".into(), json!("find a search tool"));
+            object.insert(
+                "results".into(),
+                json!([
+                    {"name": "web.search", "description": "Search web", "server": "builtin"}
+                ]),
+            );
+        }
+        "web_search" | "web_search_preview" | "google_search" => {
+            object.insert("sources".into(), json!([
+                {"title": "Agena guide", "url": "https://example.test/guide", "domain": "example.test", "snippet": "Guide"}
+            ]));
+            object.insert(
+                "assistant_content".into(),
+                json!([{"type": "text", "text": "A concise answer."}]),
+            );
+        }
+        "google_maps" => {
+            object.insert("query".into(), json!("cafes near me"));
+            object.insert("places".into(), json!([
+                {"name": "Cafe One", "address": "1 Main St", "rating": 4.8, "url": "https://example.test/cafe"}
+            ]));
+        }
+        "retrieval" => {
+            object.insert("query".into(), json!("release policy"));
+            object.insert(
+                "retrieved".into(),
+                json!([
+                    {"title": "Policy", "url": "https://example.test/policy", "snippet": "..."}
+                ]),
+            );
+        }
+        "url_context" | "web_fetch" => {
+            object.insert("url".into(), json!("https://example.test"));
+            object.insert("status".into(), json!(200));
+            object.insert("fetched_urls".into(), json!(["https://example.test"]));
+        }
+        "code_execution" | "code_interpreter" => {
+            object.insert("status".into(), json!("completed"));
+            object.insert("exit_code".into(), json!(0));
+            object.insert(
+                "outputs".into(),
+                json!([{"type": "text", "text": "passed"}]),
+            );
+        }
+        "computer" | "computer_use_preview" | "computer_use" => {
+            object.insert("action".into(), json!({"type": "click", "x": 20, "y": 30}));
+            object.insert("page_title".into(), json!("Agena docs"));
+            object.insert("url".into(), json!("https://example.test/docs"));
+        }
+        "local_shell" | "shell" | "bash" => {
+            object.insert(
+                "pending_calls".into(),
+                json!([{
+                    "type": format!("{operation}_call"),
+                    "id": "call-1",
+                    "status": "in_progress",
+                    "action": {"type": "exec", "command": "cargo test"}
+                }]),
+            );
+            object.insert("continuation_required".into(), json!(true));
+        }
+        "mcp" | "mcp_server" | "mcp_toolset" => {
+            object.insert("server_label".into(), json!("docs"));
+            object.insert("server_url".into(), json!("https://mcp.test"));
+            object.insert("connected".into(), json!(true));
+            object.insert("status".into(), json!("ready"));
+            object.insert("tool_count".into(), json!(3));
+        }
+        "memory" => {
+            object.insert("operation".into(), json!("save"));
+            object.insert("saved".into(), json!(true));
+            object.insert("status".into(), json!("completed"));
+        }
+        "text_editor" => {
+            object.insert("operation".into(), json!("str_replace"));
+            object.insert("path".into(), json!("src/lib.rs"));
+            object.insert("changed".into(), json!(true));
+            object.insert("replacements".into(), json!(1));
+        }
+        "advisor" => {
+            object.insert(
+                "assistant_content".into(),
+                json!([{"type": "text", "text": "Use a small patch."}]),
+            );
+        }
+        "image_generation" | "image_edit" => {
+            object.insert("path".into(), json!("/tmp/image.png"));
+            object.insert("mime".into(), json!("image/png"));
+            object.insert("image_count".into(), json!(1));
+            object.insert("size_bytes".into(), json!(4096));
+            object.insert("sha256".into(), json!("abc123"));
+            object.insert("revised_prompt".into(), json!("A polished image"));
+        }
+        "apply_patch" => {
+            object.insert(
+                "pending_calls".into(),
+                json!([{
+                    "type": "apply_patch_call", "id": "call-1", "action": {"type": "update_file"}
+                }]),
+            );
+            object.insert("continuation_required".into(), json!(true));
+        }
+        "function" | "custom" | "namespace" | "programmatic_tool_calling" => {
+            object.insert("pending_calls".into(), json!([{
+                "type": "function_call", "id": "call-1", "action": {"type": "invoke", "name": "search"}
+            }]));
+            object.insert("continuation_required".into(), json!(true));
+        }
+        _ => {
+            object.insert(
+                "assistant_content".into(),
+                json!([{"type": "text", "text": "Response received."}]),
+            );
+        }
     }
     payload
+}
+
+fn sample_text(tool: &str) -> String {
+    match tool {
+        "tools.plugins_list" => {
+            "Available plugins: returned 1 of 1 starting at offset 0.\n- agena.fs [filesystem, execute] (v0.1.0): Filesystem tools · tools: fs.read, fs.write"
+                .into()
+        }
+        "tools.plugins_search" => {
+            "Matching plugins for \"file\": returned 1 of 1 starting at offset 0.\n- agena.fs [filesystem]: Filesystem tools"
+                .into()
+        }
+        "tools.plugins_tags" => {
+            "Available plugin tags: returned 2 of 2 starting at offset 0.\n- filesystem: 3\n- execute: 2"
+                .into()
+        }
+        "memory.delete" => "Deleted memory 'release-notes'.".into(),
+        _ => String::new(),
+    }
+}
+
+fn sample_raw(tool: &str) -> RawOutput {
+    RawOutput {
+        text: sample_text(tool),
+        payload: (tool != "memory.delete").then(|| sample_payload(tool)),
+        ..RawOutput::default()
+    }
+}
+
+fn has_tool_specific_projection(tool: &str, blocks: &[ViewBlock]) -> bool {
+    let ids = blocks.iter().filter_map(ViewBlock::block_id);
+    if tool.starts_with("chatgpt.")
+        || tool.starts_with("claude.")
+        || tool.starts_with("gemini.")
+        || tool.starts_with("openai.")
+    {
+        return ids.into_iter().any(|id| {
+            id.starts_with("provider-")
+                && !matches!(
+                    id,
+                    "provider-meta"
+                        | "provider-usage"
+                        | "provider-receipt"
+                        | "provider-content"
+                        | "provider-error"
+                )
+        });
+    }
+    if tool.starts_with("tools.") || tool.starts_with("plugins.") {
+        return ids.into_iter().any(|id| id.starts_with("discovery-"));
+    }
+    ids.into_iter()
+        .any(|id| id != "result" && !id.starts_with("result-"))
 }
 
 #[test]
@@ -74,10 +706,7 @@ fn every_bundled_execution_tool_has_a_non_json_human_fallback() {
                 .canonical_name
                 .strip_prefix("agena.")
                 .unwrap_or(tool.canonical_name.as_str());
-            let raw = RawOutput {
-                payload: Some(sample_payload(compact_name)),
-                ..RawOutput::default()
-            };
+            let raw = sample_raw(compact_name);
             let blocks = BuiltinHumanRenderer::new(compact_name)
                 .render_human(&context, &raw)
                 .expect("bundled renderer should not fail");
@@ -86,6 +715,184 @@ fn every_bundled_execution_tool_has_a_non_json_human_fallback() {
                     .iter()
                     .any(|block| !matches!(block, ViewBlock::Json { .. })),
                 "{compact_name} rendered only an opaque JSON block: {blocks:?}"
+            );
+        }
+    }
+
+    assert_eq!(checked, 137);
+}
+
+#[test]
+fn every_bundled_execution_tool_has_a_tool_specific_human_projection() {
+    let manifest = agena_bundled_plugins::bundled_capability_manifest();
+    let context = render_context();
+    let mut checked = 0;
+
+    for plugin in manifest.plugins {
+        for tool in plugin.tools {
+            if tool.gateway {
+                continue;
+            }
+            checked += 1;
+            let compact_name = tool
+                .canonical_name
+                .strip_prefix("agena.")
+                .unwrap_or(tool.canonical_name.as_str());
+            let blocks = BuiltinHumanRenderer::new(compact_name)
+                .render_human(&context, &sample_raw(compact_name))
+                .expect("bundled renderer should not fail");
+            assert!(
+                !blocks
+                    .iter()
+                    .any(|block| matches!(block, ViewBlock::Json { .. })),
+                "{compact_name} must not expose an opaque JSON presentation: {blocks:?}"
+            );
+            assert!(
+                blocks
+                    .iter()
+                    .all(|block| { !block.block_id().is_some_and(|id| id.starts_with("result-")) }),
+                "{compact_name} must not use generic nested result blocks: {blocks:?}"
+            );
+            assert!(
+                has_tool_specific_projection(compact_name, &blocks),
+                "{compact_name} only produced generic result blocks: {blocks:?}"
+            );
+        }
+    }
+
+    assert_eq!(checked, 137);
+}
+
+#[test]
+fn every_bundled_execution_tool_has_a_typed_empty_state_projection() {
+    let manifest = agena_bundled_plugins::bundled_capability_manifest();
+    let context = render_context();
+    let mut checked = 0;
+
+    for plugin in manifest.plugins {
+        for tool in plugin.tools {
+            if tool.gateway {
+                continue;
+            }
+            checked += 1;
+            let compact_name = tool
+                .canonical_name
+                .strip_prefix("agena.")
+                .unwrap_or(tool.canonical_name.as_str());
+            let blocks = BuiltinHumanRenderer::new(compact_name)
+                .render_human(&context, &RawOutput::default())
+                .expect("bundled renderer should not fail for an empty result");
+            assert!(
+                !blocks
+                    .iter()
+                    .any(|block| matches!(block, ViewBlock::Json { .. })),
+                "{compact_name} must not expose JSON for an empty result"
+            );
+            assert!(
+                has_tool_specific_projection(compact_name, &blocks),
+                "{compact_name} has no typed empty-state presentation"
+            );
+        }
+    }
+
+    assert_eq!(checked, 137);
+}
+
+#[test]
+fn high_risk_tool_families_use_stable_operation_blocks() {
+    let context = render_context();
+    let render_ids = |tool: &str, raw: RawOutput| {
+        BuiltinHumanRenderer::new(tool)
+            .render_human(&context, &raw)
+            .expect("renderer should not fail")
+            .into_iter()
+            .filter_map(|block| block.block_id().map(str::to_owned))
+            .collect::<Vec<_>>()
+    };
+    let assert_has = |tool: &str, ids: &[String], expected: &str| {
+        assert!(
+            ids.iter().any(|id| id == expected),
+            "{tool} omitted {expected}; got {ids:?}"
+        );
+    };
+
+    let ids = render_ids("shell.run", sample_raw("shell.run"));
+    assert_has("shell.run", &ids, "command");
+    assert_has("shell.run", &ids, "process-meta");
+
+    let ids = render_ids("shell.list", sample_raw("shell.list"));
+    assert_has("shell.list", &ids, "processes");
+
+    let ids = render_ids("memory.delete", sample_raw("memory.delete"));
+    assert_has("memory.delete", &ids, "memory-delete");
+
+    let ids = render_ids("memory.write", sample_raw("memory.write"));
+    assert_has("memory.write", &ids, "memory-write");
+
+    for tool in ["chatgpt.apply_patch", "chatgpt.function", "chatgpt.shell"] {
+        let ids = render_ids(tool, sample_raw(tool));
+        assert_has(tool, &ids, "provider-calls");
+        assert_has(tool, &ids, "provider-call-operation-0");
+        assert!(
+            ids.iter().all(|id| !id.starts_with("result-")),
+            "{tool} must not use generic nested result blocks: {ids:?}"
+        );
+    }
+
+    let ids = render_ids("tools.plugins_list", sample_raw("tools.plugins_list"));
+    assert_has("tools.plugins_list", &ids, "discovery-plugins");
+    let ids = render_ids("tools.plugins_tags", sample_raw("tools.plugins_tags"));
+    assert_has("tools.plugins_tags", &ids, "discovery-tags");
+
+    for tool in ["mcp.prompts.list", "mcp.prompts.get"] {
+        let ids = render_ids(tool, sample_raw(tool));
+        assert!(
+            ids.iter().all(|id| !id.starts_with("result-")),
+            "{tool} must not use generic nested prompt blocks: {ids:?}"
+        );
+    }
+}
+
+#[test]
+fn every_bundled_execution_tool_has_a_human_initial_and_completed_title() {
+    let manifest = agena_bundled_plugins::bundled_capability_manifest();
+    let mut checked = 0;
+
+    for plugin in manifest.plugins {
+        for tool in plugin.tools {
+            if tool.gateway {
+                continue;
+            }
+            checked += 1;
+            let compact_name = tool
+                .canonical_name
+                .strip_prefix("agena.")
+                .unwrap_or(tool.canonical_name.as_str());
+            let input = StructuredObject::try_from(sample_input(compact_name))
+                .expect("sample structured input");
+            let invocation = ToolInvocation::new(tool.canonical_name.clone(), input);
+            let initial = initial_tool_title(&invocation);
+            assert!(
+                !initial.trim().is_empty(),
+                "{} must have a visible initial title",
+                tool.canonical_name
+            );
+            assert_ne!(
+                initial, tool.canonical_name,
+                "{} must not expose its registry identity as the human title",
+                tool.canonical_name
+            );
+
+            let completed = completed_tool_title(&invocation, &sample_raw(compact_name));
+            assert!(
+                completed.starts_with(initial.as_str()),
+                "{} completed title should retain its action",
+                tool.canonical_name
+            );
+            assert!(
+                completed != initial,
+                "{} completed title should expose a terminal result fact: initial={initial}, completed={completed}",
+                tool.canonical_name,
             );
         }
     }
@@ -858,6 +1665,21 @@ fn representative_plugin_payloads_render_complete_readable_facts() {
                     "path": "/workspace/.agena/artifacts/browser/screen.png",
                     "size_bytes": 8192
                 })),
+                attachments: vec![agena_domain::AttachmentItem {
+                    kind: agena_domain::AttachmentKind::Image,
+                    mime: "image/png".into(),
+                    source: agena_domain::AttachmentSource::LocalPath {
+                        path: "/workspace/.agena/artifacts/browser/screen.png".into(),
+                    },
+                    filename: Some("screen.png".into()),
+                    title: Some("Browser screenshot session-1".into()),
+                    size_bytes: Some(8192),
+                    sha256: None,
+                    width: None,
+                    height: None,
+                    duration_ms: None,
+                    page_count: None,
+                }],
                 ..RawOutput::default()
             },
             vec!["session-1", "screen.png", "8192"],
@@ -874,6 +1696,21 @@ fn representative_plugin_payloads_render_complete_readable_facts() {
                     "size_bytes": 4096,
                     "preflight_redirects": ["https://cdn.example.test/report.pdf"]
                 })),
+                attachments: vec![agena_domain::AttachmentItem {
+                    kind: agena_domain::AttachmentKind::Pdf,
+                    mime: "application/pdf".into(),
+                    source: agena_domain::AttachmentSource::LocalPath {
+                        path: "/workspace/downloads/report.pdf".into(),
+                    },
+                    filename: Some("report.pdf".into()),
+                    title: Some("Browser download".into()),
+                    size_bytes: Some(4096),
+                    sha256: None,
+                    width: None,
+                    height: None,
+                    duration_ms: None,
+                    page_count: Some(1),
+                }],
                 ..RawOutput::default()
             },
             vec!["report.pdf", "cdn.example.test", "4096"],
@@ -1045,6 +1882,14 @@ fn representative_plugin_payloads_render_complete_readable_facts() {
                     .iter()
                     .any(|block| matches!(block, ViewBlock::Table { .. })),
                 "{tool} should use a table for its repeated records: {blocks:?}"
+            );
+        }
+        if matches!(tool, "browser_screenshot" | "browser_download") {
+            assert!(
+                blocks
+                    .iter()
+                    .any(|block| matches!(block, ViewBlock::Media { .. })),
+                "{tool} should expose its returned artifact as media: {blocks:?}"
             );
         }
     }

@@ -25,6 +25,21 @@ case "$TARGET" in
   *) echo "ERROR: unsupported Haiku target: $TARGET" >&2; exit 2 ;;
 esac
 
+# The pinned Haiku repository's minimum-raw source list predates the current
+# official HaikuPorts dependency closure.  Keep the bootstrap small, but add
+# the real source packages needed by the pinned recipes: netpbm provides the
+# pnmcrop tools and libjpeg provider, while the x86_64 bash recipe also needs
+# gettext/libintl and groff.  Haiku's build rules expose this variable
+# specifically for extending the source-package list.
+case "$HAIKU_ARCH" in
+  x86)
+    HAIKU_BOOTSTRAP_ADDITIONAL_SOURCES="netpbm"
+    ;;
+  x86_64)
+    HAIKU_BOOTSTRAP_ADDITIONAL_SOURCES="gettext groff netpbm"
+    ;;
+esac
+
 # Pin both official Haiku GitHub mirrors so cross-tools/sysroot generation is
 # reproducible rather than following moving master branches.
 HAIKU_COMMIT=dfaff659fa944da59db4014f50cde2daea9415bd
@@ -207,6 +222,7 @@ if ! valid_toolchain; then
     # third-party package builds.
     jam -q \
       "-sHAIKU_PORTER_CONCURRENT_JOBS=${HAIKU_PORTER_CONCURRENT_JOBS:-2}" \
+      "-sHAIKU_REPOSITORY_BUILD_ADDITIONAL_PACKAGES=$HAIKU_BOOTSTRAP_ADDITIONAL_SOURCES" \
       "-sHAIKU_CCFLAGS_${HAIKU_ARCH}=${GCC_HEADER_FLAGS}" \
       "-sHAIKU_C++FLAGS_${HAIKU_ARCH}=${CXX_HEADER_FLAGS}" \
       @bootstrap-raw

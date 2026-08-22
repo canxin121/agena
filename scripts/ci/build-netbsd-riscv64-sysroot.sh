@@ -91,8 +91,11 @@ if ! valid_sysroot; then
     MKGDB=no
     MKLLVM=no
     MKLINT=no
+    # NetBSD's default for MKGCCCMDS is tied to MKGCC, but keep this explicit:
+    # the generated riscv64--netbsd-gcc/c++ drivers are the real target
+    # compiler used by the Agena C dependencies and by the final linker.
     MKGCC=yes
-    MKGCCCMDS=no
+    MKGCCCMDS=yes
   )
 
   echo "Building NetBSD ${NETBSD_SOURCE_ID} riscv64 tools" >&2
@@ -111,11 +114,11 @@ if ! valid_sysroot; then
         -j"$JOBS" -m riscv -a riscv64 distribution
   )
 
-  # NetBSD's build.sh names the C++ driver c++ when MKGCCCMDS=no.  cc-rs and
-  # the Rust target linker convention use g++, so provide an alias to the
-  # exact tool produced by build.sh rather than making cc-rs guess another
-  # host compiler.  This is only a name-level compatibility link; the ABI
-  # compiler and sysroot remain the official NetBSD build output.
+  # NetBSD's build.sh names the C++ driver c++ even when GCC commands are
+  # enabled. cc-rs and the Rust target linker convention use g++, so provide
+  # an alias to the exact tool produced by build.sh rather than making cc-rs
+  # guess another host compiler. This is only a name-level compatibility link;
+  # the ABI compiler and sysroot remain the official NetBSD build output.
   if [[ ! -e "$TOOLDIR/bin/riscv64--netbsd-g++" && -x "$TOOLDIR/bin/riscv64--netbsd-c++" ]]; then
     ln -s "riscv64--netbsd-c++" "$TOOLDIR/bin/riscv64--netbsd-g++"
   fi

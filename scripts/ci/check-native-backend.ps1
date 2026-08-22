@@ -52,11 +52,21 @@ if ($BuildStd) {
   $OldBootstrap = $env:RUSTC_BOOTSTRAP
   $OldRustFlags = $env:RUSTFLAGS
   $OldTargetDir = $env:CARGO_TARGET_DIR
+  $OldCargoUnstableBuildDirNewLayout = $env:CARGO_UNSTABLE_BUILD_DIR_NEW_LAYOUT
   try {
     $env:RUSTC = $StableRustc
     $env:RUSTDOC = $StableRustdoc
     $env:RUSTC_BOOTSTRAP = "1"
     $env:CARGO_TARGET_DIR = $BuildTargetDir
+    if ($TargetTriple -match "-windows-(msvc|gnu)$") {
+      # The new Cargo build-dir layout puts every target dependency under a
+      # separate build/<crate>/<hash>/out directory. On Windows the resulting
+      # rustc command for Agena exceeds CreateProcess' command-line limit and
+      # the compiler reports the truncated --extern paths as E0463. Keep the
+      # real build-std artifacts, but use Cargo's legacy deps layout for these
+      # targets so the complete dependency graph reaches rustc.
+      $env:CARGO_UNSTABLE_BUILD_DIR_NEW_LAYOUT = "false"
+    }
     $RustFlags = @($OldRustFlags, $TargetRustFlags) | Where-Object { $_ }
     if ($TargetTriple -match "-windows-(msvc|gnu)$") {
       # Build-std emits core/std into hashed build-script output directories.
@@ -113,6 +123,11 @@ if ($BuildStd) {
     $env:RUSTC_BOOTSTRAP = $OldBootstrap
     $env:RUSTFLAGS = $OldRustFlags
     $env:CARGO_TARGET_DIR = $OldTargetDir
+    if ($null -eq $OldCargoUnstableBuildDirNewLayout) {
+      Remove-Item Env:CARGO_UNSTABLE_BUILD_DIR_NEW_LAYOUT -ErrorAction SilentlyContinue
+    } else {
+      $env:CARGO_UNSTABLE_BUILD_DIR_NEW_LAYOUT = $OldCargoUnstableBuildDirNewLayout
+    }
     if ($null -eq $OldAgenaRealRustc) {
       Remove-Item Env:AGENA_REAL_RUSTC -ErrorAction SilentlyContinue
     } else {

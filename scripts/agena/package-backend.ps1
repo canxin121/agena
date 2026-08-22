@@ -114,6 +114,7 @@ if ($BuildStd) {
   $OldBootstrap = $env:RUSTC_BOOTSTRAP
   $OldRustFlags = $env:RUSTFLAGS
   $OldTargetDir = $env:CARGO_TARGET_DIR
+  $OldCargoUnstableBuildDirNewLayout = $env:CARGO_UNSTABLE_BUILD_DIR_NEW_LAYOUT
   $OldAgenaRealRustc = $env:AGENA_REAL_RUSTC
   $OldAgenaBuildStdRoot = $env:AGENA_BUILD_STD_ROOT
   try {
@@ -121,6 +122,13 @@ if ($BuildStd) {
     $env:RUSTDOC = $StableRustdoc
     $env:RUSTC_BOOTSTRAP = "1"
     $env:CARGO_TARGET_DIR = $BuildTargetDir
+    if ($TargetTriple -match "-windows-(msvc|gnu)$" -or $IsCygwinTarget) {
+      # Keep release target dependency paths below Windows' CreateProcess
+      # command-line limit. The new build-dir layout expands every --extern
+      # path into build/<crate>/<hash>/out and can make the real Agena graph
+      # appear as E0463 even though no dependency is missing.
+      $env:CARGO_UNSTABLE_BUILD_DIR_NEW_LAYOUT = "false"
+    }
     $RustFlags = @($OldRustFlags, $TargetRustFlags) | Where-Object { $_ }
     if ($TargetTriple -match "-windows-(msvc|gnu)$" -or $IsCygwinTarget) {
       # Build scripts such as autocfg invoke rustc directly with --target. The
@@ -157,6 +165,11 @@ if ($BuildStd) {
     $env:RUSTC_BOOTSTRAP = $OldBootstrap
     $env:RUSTFLAGS = $OldRustFlags
     $env:CARGO_TARGET_DIR = $OldTargetDir
+    if ($null -eq $OldCargoUnstableBuildDirNewLayout) {
+      Remove-Item Env:CARGO_UNSTABLE_BUILD_DIR_NEW_LAYOUT -ErrorAction SilentlyContinue
+    } else {
+      $env:CARGO_UNSTABLE_BUILD_DIR_NEW_LAYOUT = $OldCargoUnstableBuildDirNewLayout
+    }
     if ($null -eq $OldAgenaRealRustc) {
       Remove-Item Env:AGENA_REAL_RUSTC -ErrorAction SilentlyContinue
     } else {

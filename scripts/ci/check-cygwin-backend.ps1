@@ -117,6 +117,7 @@ $OldRustdoc = $env:RUSTDOC
 $OldBootstrap = $env:RUSTC_BOOTSTRAP
 $OldRustFlags = $env:RUSTFLAGS
 $OldTargetDir = $env:CARGO_TARGET_DIR
+$OldCargoUnstableBuildDirNewLayout = $env:CARGO_UNSTABLE_BUILD_DIR_NEW_LAYOUT
 $OldAgenaRealRustc = $env:AGENA_REAL_RUSTC
 $OldAgenaBuildStdRoot = $env:AGENA_BUILD_STD_ROOT
 $CargoExitCode = 1
@@ -125,6 +126,11 @@ try {
   $env:RUSTDOC = $StableRustdoc
   $env:RUSTC_BOOTSTRAP = "1"
   $env:CARGO_TARGET_DIR = $BuildTargetDir
+  # The new Cargo build-dir layout makes the complete Cygwin rustc command
+  # exceed Windows' CreateProcess command-line limit. Use the legacy deps
+  # layout so Cargo passes every real target dependency without truncating
+  # --extern paths into E0463 errors.
+  $env:CARGO_UNSTABLE_BUILD_DIR_NEW_LAYOUT = "false"
   # The shared wrapper supplies the real target standard-library artifacts to
   # direct target probes. Keep target-only search paths out of global RUSTFLAGS
   # so host build scripts use the host sysroot.
@@ -154,6 +160,11 @@ finally {
     $env:CFLAGS_X86_64_PC_CYGWIN = $OldCflags
   }
   $env:CARGO_TARGET_DIR = $OldTargetDir
+  if ($null -eq $OldCargoUnstableBuildDirNewLayout) {
+    Remove-Item Env:CARGO_UNSTABLE_BUILD_DIR_NEW_LAYOUT -ErrorAction SilentlyContinue
+  } else {
+    $env:CARGO_UNSTABLE_BUILD_DIR_NEW_LAYOUT = $OldCargoUnstableBuildDirNewLayout
+  }
   if ($null -eq $OldAgenaRealRustc) {
     Remove-Item Env:AGENA_REAL_RUSTC -ErrorAction SilentlyContinue
   } else {

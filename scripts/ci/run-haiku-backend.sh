@@ -29,6 +29,7 @@ esac
 # reproducible rather than following moving master branches.
 HAIKU_COMMIT=dfaff659fa944da59db4014f50cde2daea9415bd
 BUILDTOOLS_COMMIT=8375c2dbeaf109c520798cb234d57f0895463201
+PATCH_FILE="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/third_party/haiku-bootstrap-smbios.patch"
 ROOT="${RUNNER_TEMP:-/tmp}/agena-haiku/$HAIKU_ARCH"
 HAIKU="$ROOT/haiku"
 BUILDTOOLS="$ROOT/buildtools"
@@ -61,6 +62,8 @@ if ! valid_toolchain; then
   git -C "$HAIKU" remote add origin https://github.com/haiku/haiku.git
   git -C "$HAIKU" fetch -q --depth 1 origin "$HAIKU_COMMIT"
   git -C "$HAIKU" checkout -q FETCH_HEAD
+  git -C "$HAIKU" apply --check "$PATCH_FILE"
+  git -C "$HAIKU" apply "$PATCH_FILE"
 
   git init -q "$BUILDTOOLS"
   git -C "$BUILDTOOLS" remote add origin https://github.com/haiku/buildtools.git

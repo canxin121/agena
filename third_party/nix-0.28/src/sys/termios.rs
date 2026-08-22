@@ -354,13 +354,40 @@ libc_enum! {
         B1500000,
         #[cfg(linux_android)]
         B2000000,
-        #[cfg(any(target_os = "android", all(target_os = "linux", not(target_arch = "sparc64"))))]
+        // Linux's SPARC libc ABIs do not expose these high baud-rate
+        // constants. Do not emit enum variants for constants the target libc
+        // cannot provide.
+        #[cfg(any(
+            target_os = "android",
+            all(
+                target_os = "linux",
+                not(any(target_arch = "sparc", target_arch = "sparc64"))
+            )
+        ))]
         B2500000,
-        #[cfg(any(target_os = "android", all(target_os = "linux", not(target_arch = "sparc64"))))]
+        #[cfg(any(
+            target_os = "android",
+            all(
+                target_os = "linux",
+                not(any(target_arch = "sparc", target_arch = "sparc64"))
+            )
+        ))]
         B3000000,
-        #[cfg(any(target_os = "android", all(target_os = "linux", not(target_arch = "sparc64"))))]
+        #[cfg(any(
+            target_os = "android",
+            all(
+                target_os = "linux",
+                not(any(target_arch = "sparc", target_arch = "sparc64"))
+            )
+        ))]
         B3500000,
-        #[cfg(any(target_os = "android", all(target_os = "linux", not(target_arch = "sparc64"))))]
+        #[cfg(any(
+            target_os = "android",
+            all(
+                target_os = "linux",
+                not(any(target_arch = "sparc", target_arch = "sparc64"))
+            )
+        ))]
         B4000000,
     }
     impl TryFrom<libc::speed_t>
@@ -454,7 +481,10 @@ libc_enum! {
         VKILL,
         #[cfg(not(target_os = "haiku"))]
         VLNEXT,
-        #[cfg(not(any(all(target_os = "linux", target_arch = "sparc64"),
+        #[cfg(not(any(all(
+                    target_os = "linux",
+                    any(target_arch = "sparc", target_arch = "sparc64")
+                ),
                 solarish, target_os = "aix", target_os = "haiku")))]
         VMIN,
         VQUIT,
@@ -469,7 +499,10 @@ libc_enum! {
         VSWTC,
         #[cfg(any(solarish, target_os = "haiku"))]
         VSWTCH,
-        #[cfg(not(any(all(target_os = "linux", target_arch = "sparc64"),
+        #[cfg(not(any(all(
+                    target_os = "linux",
+                    any(target_arch = "sparc", target_arch = "sparc64")
+                ),
                 solarish, target_os = "aix", target_os = "haiku")))]
         VTIME,
         #[cfg(not(any(target_os = "aix", target_os = "haiku")))]
@@ -480,7 +513,10 @@ libc_enum! {
 }
 
 #[cfg(any(
-    all(target_os = "linux", target_arch = "sparc64"),
+    all(
+        target_os = "linux",
+        any(target_arch = "sparc", target_arch = "sparc64")
+    ),
     solarish,
     target_os = "aix",
     target_os = "haiku",

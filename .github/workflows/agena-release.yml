@@ -28,6 +28,7 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: "0"
+  AGENA_WEB_DIST_PREBUILT: "1"
 
 jobs:
   metadata:
@@ -236,7 +237,6 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJSON(needs.targets.outputs.native) }}
     env:
-      AGENA_WEB_DIST_PREBUILT: "1"
       SCCACHE_BASEDIRS: ${{ github.workspace }}
       SCCACHE_GHA_ENABLED: "true"
       SCCACHE_GHA_VERSION: agena-v1
@@ -464,10 +464,10 @@ jobs:
           root = Path("release-assets")
           actual = {
               path.name
-              for path in root.iterdir()
+              for path in root.rglob("*")
               if path.is_file() and (path.name.endswith(".tar.gz") or path.name.endswith(".zip"))
           }
-          checksum_files = {path.name for path in root.glob("*.sha256")}
+          checksum_files = {path.name for path in root.rglob("*.sha256") if path.is_file()}
           expected_checksums = {f"{name}.sha256" for name in expected}
 
           missing = sorted(expected - actual)
@@ -486,6 +486,58 @@ jobs:
               raise SystemExit(1)
 
           print(f"Verified exact release archive set: {len(expected)} targets")
+
+          def normalized_member(name):
+              while name.startswith("./"):
+                  name = name[2:]
+              return name.rstrip("/")
+
+          def archive_members(path):
+              if path.suffix == ".zip":
+                  import zipfile
+
+                  with zipfile.ZipFile(path) as archive:
+                      return {
+                          normalized_member(info.filename): info.file_size
+                          for info in archive.infolist()
+                          if not info.is_dir()
+                      }
+
+              import tarfile
+
+              with tarfile.open(path, "r:gz") as archive:
+                  return {
+                      normalized_member(info.name): info.size
+                      for info in archive.getmembers()
+                      if info.isfile()
+                  }
+
+          bad_contents = []
+          for archive_name in sorted(expected):
+              archive_path = next(root.rglob(archive_name))
+              target = archive_name.removeprefix("agena-backend-").split("-v", 1)[0]
+              executable = "bin/agena.exe" if ("windows" in target or "cygwin" in target) else "bin/agena"
+              required = {executable, "web-dist/index.html"}
+              if "cygwin" in target:
+                  required.add("bin/cygwin1.dll")
+              members = archive_members(archive_path)
+              missing_members = sorted(member for member in required if member not in members)
+              empty_members = sorted(member for member in required if member in members and members[member] <= 0)
+              if missing_members or empty_members:
+                  bad_contents.append(
+                      {
+                          "archive": archive_name,
+                          "missing": missing_members,
+                          "empty": empty_members,
+                      }
+                  )
+
+          if bad_contents:
+              for failure in bad_contents:
+                  print(f"Invalid archive contents: {failure}")
+              raise SystemExit(1)
+
+          print("Verified executable, web frontend, and Cygwin runtime contents for every archive")
           PY_VERIFY
           (
             cd release-assets

@@ -82,8 +82,7 @@ impl ToolExecutor {
             return entry.plugin_full_name();
         }
 
-        self.plugins
-            .lookup_tool_for_scope(invocation.tool_name.as_str(), self.plugin_scope.as_ref())
+        self.plugin_resolution_for_plugin_invocation(invocation)
             .map(|entry| entry.plugin_full_name())
             .unwrap_or_else(|| "custom".to_string())
     }
@@ -177,13 +176,7 @@ impl ToolExecutor {
         invocation: &PluginInvocation,
     ) -> Option<agena_plugin_host::registry::RegisteredTool> {
         self.plugins
-            .lookup_tool_for_scope(invocation.tool_name.as_str(), self.plugin_scope.as_ref())
-            .or_else(|| {
-                self.plugins.lookup_tool_for_scope(
-                    canonical_tool_name(invocation.tool_name.as_str()),
-                    self.plugin_scope.as_ref(),
-                )
-            })
+            .lookup_tool_for_name_scope(invocation.tool_name.as_str(), self.plugin_scope.as_ref())
             .or_else(|| {
                 unique_registered_tool_match(
                     self.registered_tools_with_definition_overrides(),
@@ -362,9 +355,9 @@ use super::{
     AccessKind, Path, PermissionDecision, PluginToolPermissionNetworksInput,
     PluginToolPermissionPathsInput, RegisteredTool, SdkInputNetworkSpec, SdkInputPathSpec,
     SdkNetworkAccessSpec, SdkPathAccessSpec, SdkPathKind, SdkToolStreamingMode, ToolError,
-    ToolExecutor, ToolInvocation, ToolPermissionCheck, canonical_tool_name,
-    extract_input_network_requests, extract_input_path_requests, filesystem_effects_from_input,
-    invocation_name, is_concurrency_safe_tool_invocation, sdk_path_kind_to_access_kind,
+    ToolExecutor, ToolInvocation, ToolPermissionCheck, extract_input_network_requests,
+    extract_input_path_requests, filesystem_effects_from_input, invocation_name,
+    is_concurrency_safe_tool_invocation, sdk_path_kind_to_access_kind,
     shell_command_from_invocation, unique_registered_tool_match, validate_shell_filesystem_effects,
 };
 use agena_domain::FilesystemEffects;

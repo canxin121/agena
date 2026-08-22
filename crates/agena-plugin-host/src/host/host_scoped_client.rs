@@ -42,6 +42,27 @@ impl HostClient for ScopedHostClient {
         host_api::run_in_host_callback_context(self.context()?, inner.publish_event(env)).await
     }
 
+    async fn publish_activity(&self, activity: BackgroundActivity) -> crate::sdk::Result<()> {
+        self.ensure_current_generation()?;
+        let inner = self.handle.inner.read().await.clone();
+        host_api::run_in_host_callback_context(self.context()?, inner.publish_activity(activity))
+            .await
+    }
+
+    async fn register_activity_source(
+        &self,
+        kind: BackgroundActivityKind,
+        adapter: std::sync::Arc<dyn crate::sdk::activity::ActivitySourceAdapter>,
+    ) -> crate::sdk::Result<()> {
+        self.ensure_current_generation()?;
+        let inner = self.handle.inner.read().await.clone();
+        host_api::run_in_host_callback_context(
+            self.context()?,
+            inner.register_activity_source(kind, adapter),
+        )
+        .await
+    }
+
     async fn subscribe_events(&self, filter: EventFilter) -> crate::sdk::Result<EventSubscription> {
         self.ensure_current_generation()?;
         let inner = self.handle.inner.read().await.clone();
@@ -427,6 +448,12 @@ impl HostClient for ScopedHostClient {
         Ok(HostDisplayRemoveResponse { removed })
     }
 
+    async fn notify(&self, req: PluginNotifyRequest) -> crate::sdk::Result<()> {
+        self.ensure_current_generation()?;
+        self.handle.push_host_notification(&self.plugin_id, req);
+        Ok(())
+    }
+
     async fn ui_theme_register(&self, req: HostThemeRegisterRequest) -> crate::sdk::Result<()> {
         self.ensure_current_generation()?;
         self.handle.theme_register(&self.plugin_id, req)
@@ -465,6 +492,7 @@ use super::{
     HostThemeRemoveResponse, HostToolMutationResponse, HostToolRegisterRequest,
     HostToolRemoveRequest, HostToolUpdateRequest, LogLevel, MessageSubtaskRequest, MonitorHandle,
     MonitorReadRequest, MonitorReadResponse, MonitorStartRequest, MonitorStopRequest, PluginError,
-    ReadSubtaskOutputRequest, ReadSubtaskOutputResponse, RunSubtaskRequest, RunSubtaskResponse,
-    ScopedHostClient, SubtaskControlResponse, ToolDescriptor, ToolInvokeOutput, host_api,
+    PluginNotifyRequest, ReadSubtaskOutputRequest, ReadSubtaskOutputResponse, RunSubtaskRequest,
+    RunSubtaskResponse, ScopedHostClient, SubtaskControlResponse, ToolDescriptor, ToolInvokeOutput,
+    host_api::{self, BackgroundActivity, BackgroundActivityKind},
 };

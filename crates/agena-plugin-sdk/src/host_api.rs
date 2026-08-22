@@ -16,7 +16,7 @@ use crate::error::{PluginError, Result};
 use crate::hooks::{EventEnvelope, EventFilter, ToolInvokeOutput};
 use crate::identity::{PluginKey, ToolKey};
 use crate::manifest::{PluginDisplayContribution, PluginTerminalThemeColors, ToolDefinition};
-use agena_domain::{BackgroundActivity, BackgroundActivityKind};
+pub use agena_domain::{BackgroundActivity, BackgroundActivityKind};
 
 #[async_trait]
 /// Client interface used by plugins to call host capabilities.

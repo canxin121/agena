@@ -1193,7 +1193,7 @@ impl agena_runtime::PluginRuntimeService for AgenaRuntime {
         let host = self.current_snapshot().plugin_manager();
         let entry = match plugin_id {
             Some(plugin_id) => host.resolve_registered_tool_for_plugin_tool(plugin_id, tool_name),
-            None => host.lookup_tool(tool_name),
+            None => host.lookup_tool_for_name(tool_name),
         }?;
         Some(agena_runtime::PluginToolDescriptor {
             canonical_name: entry.canonical_name(),

@@ -175,10 +175,6 @@ pub(super) fn plugin_invocation_name(invocation: &PluginInvocation) -> String {
     invocation.tool_name.clone()
 }
 
-pub(super) fn canonical_tool_name(name: &str) -> &str {
-    name
-}
-
 pub(super) fn resolved_tool_input_value(
     _registered_tool: &RegisteredTool,
     invocation: &ToolInvocation,

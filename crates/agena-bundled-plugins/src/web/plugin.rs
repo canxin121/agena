@@ -17,7 +17,7 @@ use base64::Engine as _;
 use futures_util::{SinkExt, StreamExt};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use tokio::sync::{Mutex, Semaphore, mpsc, oneshot};
+use tokio::sync::{Mutex, OnceCell, Semaphore, mpsc, oneshot};
 
 use agena_domain::{
     BackgroundActivity, BackgroundActivityKind, BackgroundActivityLogLine,
@@ -504,6 +504,11 @@ pub(crate) struct WebPlugin {
     workspace_root: OnceLock<PathBuf>,
     crawl_lock: Mutex<()>,
     browser_download_lock: Mutex<()>,
+    /// Activity-source registration must happen after the runtime installs
+    /// its live host client. Static plugins are initialized while the host is
+    /// still being assembled, so registering from `init` would hit the
+    /// temporary no-op client and lose the adapter permanently.
+    browser_activity_source: OnceCell<()>,
     /// Shared interactive-browser session state. Owned by the plugin and by
     /// the registered [`BrowserActivitySource`] so log reads and stop requests
     /// can reach live sessions without going through a tool invocation.
@@ -1036,6 +1041,7 @@ impl WebPlugin {
             workspace_root: OnceLock::new(),
             crawl_lock: Mutex::new(()),
             browser_download_lock: Mutex::new(()),
+            browser_activity_source: OnceCell::new(),
             browser_state: Arc::new(BrowserActivityState::new()),
             user_agent: "agena-web".to_owned(),
         }
@@ -1056,24 +1062,6 @@ impl WebPlugin {
         self.workspace_root.set(ctx.workspace_root).map_err(|_| {
             PluginError::internal("web plugin workspace root initialized more than once")
         })?;
-        // First-class activity source: the host dispatches browser log reads
-        // and stop requests back to this plugin, so the activities panel can
-        // tail and stop sessions like any other background work. Registration
-        // is best-effort: older hosts simply keep the empty/not-stoppable
-        // fallbacks for the Browser kind.
-        let source = BrowserActivitySource {
-            state: Arc::clone(&self.browser_state),
-            host: host.clone(),
-        };
-        if let Err(error) = host
-            .register_activity_source(BackgroundActivityKind::Browser, Arc::new(source))
-            .await
-        {
-            // Activity sources were added after the first host protocol. Keep
-            // older hosts compatible, but never hide why browser activities
-            // cannot be tailed or stopped through the shared activity API.
-            log_secondary_plugin_failure("register browser activity source", &error);
-        }
         Ok(agena_plugin_host::sdk::InitOutcome::ack(
             agena_plugin_host::sdk::Plugin::manifest(self),
         ))
@@ -1138,6 +1126,27 @@ impl WebPlugin {
             .get()
             .map(PathBuf::as_path)
             .ok_or_else(|| PluginError::internal("web plugin invoked before init"))
+    }
+
+    /// Register the browser activity adapter on first real browser use. The
+    /// runtime installs its concrete callback host only after static plugin
+    /// initialization has completed; doing this lazily avoids calling the
+    /// temporary `NoopHostClient` during startup while retaining compatibility
+    /// with hosts that do not implement activity sources.
+    async fn ensure_browser_activity_source(&self) -> SdkResult<()> {
+        let host = self.state()?.host.clone();
+        let state = Arc::clone(&self.browser_state);
+        self.browser_activity_source
+            .get_or_try_init(|| async move {
+                let source = BrowserActivitySource {
+                    state,
+                    host: host.clone(),
+                };
+                host.register_activity_source(BackgroundActivityKind::Browser, Arc::new(source))
+                    .await
+            })
+            .await
+            .map(|_| ())
     }
 
     /// Publish a browser session as a unified background activity so the TUI
@@ -1772,6 +1781,16 @@ impl WebPlugin {
     async fn browser_open(&self, input: &BrowserOpenInput) -> SdkResult<ToolInvokeOutput> {
         let url = prepare_fetch_url(input.url.as_str()).map_err(crawl_error_to_plugin)?;
         self.validate_network_target(&url).await?;
+        if let Err(error) = self.ensure_browser_activity_source().await {
+            // Activity-source support is optional for older hosts. Browser
+            // navigation remains usable; the host's generic activity fallback
+            // is still enough to show the session itself.
+            tracing::debug!(
+                operation = "register browser activity source",
+                diagnostic = %error.diagnostic_message(),
+                "browser activity source is unavailable"
+            );
+        }
         let preflight_redirects = self.browser_preflight_redirects(&url).await?;
         let browser = self.browser_client(None).await?;
         *self.browser_state.root.lock().await = Some(browser.clone());

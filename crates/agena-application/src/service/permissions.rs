@@ -27,7 +27,7 @@ impl ApplicationService {
                 limit: limit + 1,
             })
             .await
-            .map_err(|error| ApplicationError::internal(error.to_string()))?;
+            .map_err(|error| ApplicationError::internal_error(&error))?;
         let (slice, has_more) = trim_page(rows, limit)?;
         let items = slice
             .iter()
@@ -49,7 +49,7 @@ impl ApplicationService {
             .permission_rule_repository
             .get(rule_id)
             .await
-            .map_err(|error| ApplicationError::internal(error.to_string()))?;
+            .map_err(|error| ApplicationError::internal_error(&error))?;
         row.as_ref()
             .map(permission_rule_record_resource)
             .transpose()
@@ -78,7 +78,7 @@ impl ApplicationService {
             .permission_rule_repository
             .upsert(&rule)
             .await
-            .map_err(|error| ApplicationError::internal(error.to_string()))?;
+            .map_err(|error| ApplicationError::internal_error(&error))?;
         permission_rule_record_resource(&created)
     }
 
@@ -109,7 +109,7 @@ impl ApplicationService {
             .permission_rule_repository
             .replace(rule_id, &rule)
             .await
-            .map_err(|error| ApplicationError::internal(error.to_string()))?
+            .map_err(|error| ApplicationError::internal_error(&error))?
         else {
             return Err(ApplicationError::not_found_with_diagnostic(
                 "The permission rule was not found.",
@@ -138,7 +138,7 @@ impl ApplicationService {
             .permission_rule_repository
             .revoke(rule_id, reason, operator)
             .await
-            .map_err(|error| ApplicationError::internal(error.to_string()))?
+            .map_err(|error| ApplicationError::internal_error(&error))?
         else {
             return Err(ApplicationError::not_found_with_diagnostic(
                 "The permission rule was not found.",
@@ -162,7 +162,7 @@ impl ApplicationService {
                 self.workspace_repository
                     .ensure_id(self.workspace_root.as_str())
                     .await
-                    .map_err(|error| ApplicationError::internal(error.to_string()))?,
+                    .map_err(|error| ApplicationError::internal_error(&error))?,
             )
         } else {
             None
@@ -195,7 +195,7 @@ impl ApplicationService {
             .permission_rule_repository
             .delete(rule_id)
             .await
-            .map_err(|error| ApplicationError::internal(error.to_string()))?
+            .map_err(|error| ApplicationError::internal_error(&error))?
         else {
             return Err(ApplicationError::not_found_with_diagnostic(
                 "The permission rule was not found.",

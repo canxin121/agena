@@ -91,6 +91,14 @@ pub enum AppError {
 }
 
 impl AppError {
+    pub fn config_error(error: &(dyn std::error::Error + 'static)) -> Self {
+        Self::Config(agena_failure::diagnostic::format_error_chain(error))
+    }
+
+    pub fn internal_error(error: &(dyn std::error::Error + 'static)) -> Self {
+        Self::Internal(agena_failure::diagnostic::format_error_chain(error))
+    }
+
     /// Safe, audience-neutral summary for durable user activity. The original
     /// `Display` remains diagnostic and must not be persisted or rendered.
     pub fn public_message(&self) -> &'static str {
@@ -442,19 +450,27 @@ impl AppError {
                 // `(code: 5)` detail to the user.
                 UserPresentation::new(code, self.public_message())
             }
-            Self::Database(error) => {
-                UserPresentation::validated_with_context(code, error.to_string())
-            }
-            Self::SerdeJson(error) => {
-                UserPresentation::validated_with_context(code, error.to_string())
-            }
-            Self::Io(error) => UserPresentation::validated_with_context(code, error.to_string()),
-            Self::StorageConfig(error) => {
-                UserPresentation::validated_with_context(code, error.to_string())
-            }
+            Self::Database(error) => UserPresentation::validated_with_context(
+                code,
+                agena_failure::diagnostic::format_error_chain(error),
+            ),
+            Self::SerdeJson(error) => UserPresentation::validated_with_context(
+                code,
+                agena_failure::diagnostic::format_error_chain(error),
+            ),
+            Self::Io(error) => UserPresentation::validated_with_context(
+                code,
+                agena_failure::diagnostic::format_error_chain(error),
+            ),
+            Self::StorageConfig(error) => UserPresentation::validated_with_context(
+                code,
+                agena_failure::diagnostic::format_error_chain(error),
+            ),
             Self::Internal(diagnostic) => {
                 UserPresentation::validated_with_context(code, diagnostic)
             }
+            // ClassifyFailure is a display-only value with no Error/source
+            // implementation, so Display is the full available diagnostic.
             Self::AutoApproveClassifyFailed(failure) => {
                 UserPresentation::validated_with_context(code, failure.to_string())
             }
@@ -466,7 +482,7 @@ impl AppError {
     fn diagnostic_text(&self) -> Option<String> {
         match self {
             Self::Provider(message) => Some(message.clone()),
-            Self::Http(error) => Some(error.to_string()),
+            Self::Http(error) => Some(agena_failure::diagnostic::format_error_chain(error)),
             Self::HttpStatus { body, .. } if !body.is_empty() => Some(body.clone()),
             Self::HttpStatus { .. } => None,
             Self::ProviderClassified { message, .. } if !message.is_empty() => {

@@ -33,16 +33,39 @@ pub async fn handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> Res
     ws.on_upgrade(move |socket| run(socket, state))
 }
 
+async fn queue_server_message(
+    tx: &mpsc::Sender<ServerMessage>,
+    message: ServerMessage,
+    context: &'static str,
+) -> bool {
+    match tx.send(message).await {
+        Ok(()) => true,
+        Err(error) => {
+            tracing::debug!(
+                operation = context,
+                diagnostic = %error,
+                "WebSocket server message could not be queued because the connection closed"
+            );
+            false
+        }
+    }
+}
+
 async fn run(socket: WebSocket, state: AppState) {
     let (sink, mut stream) = socket.split();
     let (tx, mut rx) = mpsc::channel::<ServerMessage>(256);
 
     // Greet the client with the protocol version.
-    let _ = tx
+    if tx
         .send(ServerMessage::Hello {
             protocol_version: PROTOCOL_VERSION,
         })
-        .await;
+        .await
+        .is_err()
+    {
+        tracing::debug!("WebSocket closed before the protocol greeting could be queued");
+        return;
+    }
 
     let mut writer = tokio::spawn(async move {
         let mut sink = sink;
@@ -50,12 +73,19 @@ async fn run(socket: WebSocket, state: AppState) {
             let payload = match serde_json::to_string(&msg) {
                 Ok(p) => p,
                 Err(err) => {
-                    tracing::warn!(?err, "failed to serialize server message");
+                    tracing::error!(
+                        diagnostic = %agena_failure::diagnostic::format_error_chain(&err),
+                        "failed to serialize a WebSocket server message"
+                    );
                     continue;
                 }
             };
-            if sink.send(Message::Text(payload.into())).await.is_err() {
-                break;
+            if let Err(error) = sink.send(Message::Text(payload.into())).await {
+                tracing::debug!(
+                    diagnostic = %agena_failure::diagnostic::format_error_chain(&error),
+                    "WebSocket writer stopped after the peer disconnected"
+                );
+                return;
             }
         }
     });
@@ -81,17 +111,25 @@ async fn run(socket: WebSocket, state: AppState) {
                     Err(err) => {
                         let error = ApiError::protocol(format!("invalid frame: {err}"));
                         tracing::warn!(failure_id = %error.problem.id, diagnostic = %err, "invalid WebSocket protocol frame");
-                        let _ = tx.send(ServerMessage::Error { id: None, error }).await;
+                        queue_server_message(
+                            &tx,
+                            ServerMessage::Error { id: None, error },
+                            "deliver an invalid-frame protocol error",
+                        )
+                        .await;
                     }
                 }
             }
             Message::Binary(_) => {
-                let _ = tx
-                    .send(ServerMessage::Error {
+                queue_server_message(
+                    &tx,
+                    ServerMessage::Error {
                         id: None,
                         error: ApiError::protocol("binary frames are not supported"),
-                    })
-                    .await;
+                    },
+                    "deliver a binary-frame protocol error",
+                )
+                .await;
             }
             Message::Ping(_) | Message::Pong(_) => {}
             Message::Close(_) => break,
@@ -105,12 +143,30 @@ async fn run(socket: WebSocket, state: AppState) {
     }
     drop(guard);
     drop(tx);
-    if tokio::time::timeout(std::time::Duration::from_secs(1), &mut writer)
-        .await
-        .is_err()
-    {
-        writer.abort();
-        let _ = writer.await;
+    match tokio::time::timeout(std::time::Duration::from_secs(1), &mut writer).await {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => tracing::error!(
+            diagnostic = %agena_failure::diagnostic::format_error_chain(&error),
+            "WebSocket writer task failed"
+        ),
+        Err(timeout_error) => {
+            tracing::warn!(
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "WebSocket writer did not stop within the 1-second shutdown window",
+                    &timeout_error,
+                ),
+                "aborting WebSocket writer after shutdown timeout"
+            );
+            writer.abort();
+            if let Err(error) = writer.await
+                && !error.is_cancelled()
+            {
+                tracing::error!(
+                    diagnostic = %agena_failure::diagnostic::format_error_chain(&error),
+                    "WebSocket writer task failed while being aborted after its shutdown timeout"
+                );
+            }
+        }
     }
 }
 
@@ -127,53 +183,75 @@ async fn handle_client_message(
         ClientMessage::Command { id, command } => {
             match dispatch::dispatch_command(&state, command).await {
                 Ok(result) => {
-                    let _ = tx.send(ServerMessage::CommandResult { id, result }).await;
+                    queue_server_message(
+                        &tx,
+                        ServerMessage::CommandResult { id, result },
+                        "deliver a command result",
+                    )
+                    .await;
                 }
                 Err(err) => {
-                    let _ = tx
-                        .send(ServerMessage::Error {
+                    queue_server_message(
+                        &tx,
+                        ServerMessage::Error {
                             id: Some(id),
                             error: ServerError::from(err).into_api(),
-                        })
-                        .await;
+                        },
+                        "deliver a command failure",
+                    )
+                    .await;
                 }
             }
         }
         ClientMessage::Query { id, query } => match dispatch::dispatch_query(&state, query).await {
             Ok(result) => {
-                let _ = tx.send(ServerMessage::QueryResult { id, result }).await;
+                queue_server_message(
+                    &tx,
+                    ServerMessage::QueryResult { id, result },
+                    "deliver a query result",
+                )
+                .await;
             }
             Err(err) => {
-                let _ = tx
-                    .send(ServerMessage::Error {
+                queue_server_message(
+                    &tx,
+                    ServerMessage::Error {
                         id: Some(id),
                         error: ServerError::from(err).into_api(),
-                    })
-                    .await;
+                    },
+                    "deliver a query failure",
+                )
+                .await;
             }
         },
         ClientMessage::Subscribe { id, request } => {
             let subscription = match live::subscribe(&state) {
                 Ok(subscription) => subscription,
                 Err(err) => {
-                    let _ = tx
-                        .send(ServerMessage::Error {
+                    queue_server_message(
+                        &tx,
+                        ServerMessage::Error {
                             id: Some(id),
                             error: err.into_api(),
-                        })
-                        .await;
+                        },
+                        "deliver a subscription setup failure",
+                    )
+                    .await;
                     return;
                 }
             };
             let store = match state.session_store() {
                 Ok(store) => store,
                 Err(err) => {
-                    let _ = tx
-                        .send(ServerMessage::Error {
+                    queue_server_message(
+                        &tx,
+                        ServerMessage::Error {
                             id: Some(id),
                             error: err.into_api(),
-                        })
-                        .await;
+                        },
+                        "deliver a subscription storage failure",
+                    )
+                    .await;
                     return;
                 }
             };
@@ -185,10 +263,20 @@ async fn handle_client_message(
                 handle.abort();
             }
             drop(guard);
-            let _ = tx.send(ServerMessage::Unsubscribed { id }).await;
+            queue_server_message(
+                &tx,
+                ServerMessage::Unsubscribed { id },
+                "deliver an unsubscribe acknowledgement",
+            )
+            .await;
         }
         ClientMessage::Ping { nonce } => {
-            let _ = tx.send(ServerMessage::Pong { nonce }).await;
+            queue_server_message(
+                &tx,
+                ServerMessage::Pong { nonce },
+                "deliver a WebSocket pong",
+            )
+            .await;
         }
     }
 }
@@ -222,11 +310,15 @@ async fn spawn_subscription(
                     skipped,
                 },
             };
-            if tx_clone
+            if let Err(error) = tx_clone
                 .send(ServerMessage::Notification(notification))
                 .await
-                .is_err()
             {
+                tracing::debug!(
+                    subscription_id = %id_for_task,
+                    diagnostic = %error,
+                    "WebSocket subscription notification delivery stopped because the connection closed"
+                );
                 break;
             }
         }
@@ -237,5 +329,10 @@ async fn spawn_subscription(
         prev.abort();
     }
     drop(guard);
-    let _ = tx.send(ServerMessage::Subscribed { id }).await;
+    queue_server_message(
+        &tx,
+        ServerMessage::Subscribed { id },
+        "deliver a subscription acknowledgement",
+    )
+    .await;
 }

@@ -66,7 +66,17 @@ pub async fn handler(
             };
             let payload = match serde_json::to_string(&notification) {
                 Ok(p) => p,
-                Err(_) => continue,
+                Err(error) => {
+                    tracing::error!(
+                        subscription = %subscription_id,
+                        diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                            "failed to serialize an SSE subscription notification",
+                            &error,
+                        ),
+                        "SSE subscription notification was not sent"
+                    );
+                    continue;
+                }
             };
             let event = Event::default().event("notification").data(payload);
             if tx.send(Ok(event)).await.is_err() {

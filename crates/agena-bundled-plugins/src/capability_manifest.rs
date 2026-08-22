@@ -333,6 +333,19 @@ fn plugin_capability(
 }
 
 fn json_sha256(value: &serde_json::Value) -> String {
-    let digest = Sha256::digest(serde_json::to_vec(value).unwrap_or_default());
+    let bytes = match serde_json::to_vec(value) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            tracing::error!(
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "serialize bundled-plugin capability identity",
+                    &error,
+                ),
+                "bundled-plugin capability identity is using a debug fallback"
+            );
+            format!("{value:?}").into_bytes()
+        }
+    };
+    let digest = Sha256::digest(bytes);
     hex::encode(digest)
 }

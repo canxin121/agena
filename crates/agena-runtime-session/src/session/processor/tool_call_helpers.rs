@@ -19,7 +19,29 @@ pub(crate) fn placeholder_tool_invocation(
         };
     };
 
-    tool_invocation_for_definition(tool, StructuredObject::default())
+    // The placeholder uses a freshly constructed object, so this can only
+    // fail if an internal Tool API binding violates its own schema. Keep the
+    // placeholder path total, but record the invariant failure instead of
+    // silently substituting a different invocation.
+    match tool_invocation_for_definition(tool, StructuredObject::default()) {
+        Ok(invocation) => invocation,
+        Err(error) => {
+            tracing::error!(
+                tool = %tool.name,
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "construct a placeholder Tool API invocation",
+                    &error,
+                ),
+                "Tool API placeholder invocation fell back to an unbound shape"
+            );
+            ToolInvocation {
+                tool_api_call: None,
+                name: requested_name.to_string(),
+                plugin_name: None,
+                input: StructuredObject::default(),
+            }
+        }
+    }
 }
 
 pub(crate) fn parse_tool_invocation(
@@ -31,7 +53,7 @@ pub(crate) fn parse_tool_invocation(
         .ok_or_else(|| AppError::Provider(format!("unsupported tool call from model: {name:?}")))?;
 
     let parsed = parse_custom_input(arguments_json)?;
-    Ok(tool_invocation_for_definition(tool, parsed))
+    tool_invocation_for_definition(tool, parsed)
 }
 
 pub(crate) fn parse_tool_invocation_lossy(
@@ -140,7 +162,19 @@ fn json_value_type_name(value: &serde_json::Value) -> &'static str {
 }
 
 fn bounded_json_preview(value: &serde_json::Value) -> String {
-    bounded_text_preview(&serde_json::to_string(value).unwrap_or_default())
+    match serde_json::to_string(value) {
+        Ok(value) => bounded_text_preview(&value),
+        Err(error) => {
+            tracing::error!(
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "serialize malformed tool-call value for diagnostic preview",
+                    &error,
+                ),
+                "tool-call diagnostic preview could not be serialized"
+            );
+            "<tool-call value could not be serialized>".to_owned()
+        }
+    }
 }
 
 fn bounded_text_preview(text: &str) -> String {
@@ -170,9 +204,9 @@ pub(crate) fn tool_api_definition_identity(
 pub(crate) fn tool_invocation_for_definition(
     tool: &ToolApiDefinition,
     input: StructuredObject,
-) -> ToolInvocation {
+) -> Result<ToolInvocation, AppError> {
     let Some(function) = ToolApiFunction::from_function_name(tool.name.as_str()) else {
-        return ToolInvocation::new(tool.name.clone(), input);
+        return Ok(ToolInvocation::new(tool.name.clone(), input));
     };
     if function == ToolApiFunction::Call {
         let arguments = serde_json::Value::from(input.clone());
@@ -187,12 +221,15 @@ pub(crate) fn tool_invocation_for_definition(
             .filter(|target| !target.is_empty())
             .unwrap_or_else(|| function.function_name())
             .to_owned();
-        let target_input = arguments
-            .get("input")
-            .cloned()
-            .and_then(|value| StructuredObject::try_from(value).ok())
-            .unwrap_or_default();
-        return ToolInvocation {
+        let target_input = match arguments.get("input").cloned() {
+            Some(value) => StructuredObject::try_from(value).map_err(|error| {
+                AppError::Internal(format!(
+                    "decode the nested input of a tools_call invocation: {error}"
+                ))
+            })?,
+            None => StructuredObject::default(),
+        };
+        return Ok(ToolInvocation {
             tool_api_call: Some(ToolApiCall {
                 function,
                 arguments: input,
@@ -200,9 +237,9 @@ pub(crate) fn tool_invocation_for_definition(
             name: target,
             plugin_name: None,
             input: target_input,
-        };
+        });
     }
-    ToolInvocation {
+    Ok(ToolInvocation {
         tool_api_call: Some(ToolApiCall {
             function,
             arguments: input.clone(),
@@ -210,7 +247,7 @@ pub(crate) fn tool_invocation_for_definition(
         name: tool.name.clone(),
         plugin_name: None,
         input,
-    }
+    })
 }
 
 pub(crate) fn parse_custom_input(arguments_json: &str) -> Result<StructuredObject, AppError> {

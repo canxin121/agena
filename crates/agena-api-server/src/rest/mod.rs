@@ -425,7 +425,7 @@ pub async fn get_usage_stats(
             .queries
             .usage_stats(usage_query)
             .await
-            .map_err(|error| ServerError::internal(error.to_string()))?,
+            .map_err(|error| ServerError::internal_error(&error))?,
     ))
 }
 
@@ -665,7 +665,7 @@ async fn reload_settings_if_needed(
         .runtime_control()
         .reload()
         .await
-        .map_err(|error| ServerError::internal(error.to_string()))?;
+        .map_err(|error| ServerError::internal_error(&error))?;
     METRIC_RUNTIME_RELOADS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     response.reload = Some(ConfigSettingsReloadResponse {
         previous_generation: report.previous_generation,

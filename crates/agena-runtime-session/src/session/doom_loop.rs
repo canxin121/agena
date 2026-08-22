@@ -8,9 +8,12 @@
 
 use agena_domain::{DoomLoopHit, DoomLoopPolicy, ToolInvocation};
 use agena_storage::store::{Part, PartRole};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::session::store::typed_content_from_value;
 use agena_runtime_contracts::part_content::{TypedContent, operation_from_tool_call};
+
+static SIGNATURE_SERIALIZATION_FAILURE_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 /// Walk `parts` from the tail forward and detect a run of identical
 /// assistant tool invocations. Only assistant-role `Operation` parts
@@ -76,8 +79,21 @@ pub fn detect(parts: &[Part], policy: DoomLoopPolicy) -> Option<DoomLoopHit> {
 
 fn signature_of(invocation: &ToolInvocation) -> (String, String) {
     let ToolInvocation { name, input, .. } = invocation;
-    (
-        name.clone(),
-        serde_json::to_string(input).unwrap_or_default(),
-    )
+    let input = match serde_json::to_string(input) {
+        Ok(input) => input,
+        Err(error) => {
+            let sequence = SIGNATURE_SERIALIZATION_FAILURE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+            tracing::error!(
+                tool_name = name,
+                sequence,
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "serialize tool invocation for doom-loop detection",
+                    &error,
+                ),
+                "doom-loop detection assigned a one-use signature after serialization failure"
+            );
+            format!("__agena_doom_loop_serialization_failure_{sequence}")
+        }
+    };
+    (name.clone(), input)
 }

@@ -405,8 +405,14 @@ impl ClientHandler for AgenaMcpClientHandler {
                             warn!(target: "agena_mcp_client::manager", failure_id = %failure.id, server = %server_name, diagnostic = %error, "MCP tool list refresh failed");
                             *events.last_refresh_failure.write().await = Some(failure);
                         }
-                        Err(_) => {
-                            let error = McpError::Timeout;
+                        Err(timeout_error) => {
+                            let error = McpError::timeout_error(
+                                format!(
+                                    "MCP tool-list refresh timed out after {}ms",
+                                    timeout.as_millis()
+                                ),
+                                &timeout_error,
+                            );
                             let failure = mcp_failure(&error);
                             warn!(target: "agena_mcp_client::manager", failure_id = %failure.id, server = %server_name, diagnostic = %error, "MCP tool list refresh timed out");
                             *events.last_refresh_failure.write().await = Some(failure);
@@ -729,9 +735,16 @@ impl McpConnectionManager {
                     self.record_error(name, &error).await;
                     return Err(error);
                 }
-                Err(_) => {
-                    self.record_error(name, &McpError::Timeout).await;
-                    return Err(McpError::Timeout);
+                Err(error) => {
+                    let error = McpError::timeout_error(
+                        format!(
+                            "MCP connection timed out after {}ms",
+                            self.connect_timeout.as_millis()
+                        ),
+                        &error,
+                    );
+                    self.record_error(name, &error).await;
+                    return Err(error);
                 }
             };
 
@@ -745,13 +758,32 @@ impl McpConnectionManager {
             Ok(Err(error)) => {
                 let error = McpError::from(error);
                 self.record_error(name, &error).await;
-                let _ = running.cancel().await;
+                if let Err(cancel_error) = running.cancel().await {
+                    tracing::warn!(
+                        server = name,
+                        diagnostic = %agena_failure::diagnostic::format_error_chain(&cancel_error),
+                        "failed to cancel an MCP connection after tool listing failed"
+                    );
+                }
                 return Err(error);
             }
-            Err(_) => {
-                self.record_error(name, &McpError::Timeout).await;
-                let _ = running.cancel().await;
-                return Err(McpError::Timeout);
+            Err(timeout_error) => {
+                let error = McpError::timeout_error(
+                    format!(
+                        "initial MCP tool listing timed out after {}ms",
+                        self.request_timeout.as_millis()
+                    ),
+                    &timeout_error,
+                );
+                self.record_error(name, &error).await;
+                if let Err(cancel_error) = running.cancel().await {
+                    tracing::warn!(
+                        server = name,
+                        diagnostic = %agena_failure::diagnostic::format_error_chain(&cancel_error),
+                        "failed to cancel a timed-out MCP connection"
+                    );
+                }
+                return Err(error);
             }
         };
         *events.tools.write().await = tools;
@@ -915,7 +947,15 @@ impl McpConnectionManager {
         let tools = filter_tools(
             tokio::time::timeout(self.request_timeout, server.peer.list_all_tools())
                 .await
-                .map_err(|_| McpError::Timeout)??,
+                .map_err(|error| {
+                    McpError::timeout_error(
+                        format!(
+                            "MCP tool-list refresh timed out after {}ms",
+                            self.request_timeout.as_millis()
+                        ),
+                        &error,
+                    )
+                })??,
             &server.tool_policy,
         );
         *server.events.tools.write().await = tools.clone();
@@ -946,7 +986,15 @@ impl McpConnectionManager {
         }
         let result = tokio::time::timeout(self.request_timeout, server.peer.call_tool(params))
             .await
-            .map_err(|_| McpError::Timeout)??;
+            .map_err(|error| {
+                McpError::timeout_error(
+                    format!(
+                        "MCP tool call timed out after {}ms",
+                        self.request_timeout.as_millis()
+                    ),
+                    &error,
+                )
+            })??;
         Ok(convert_call_tool_result(result))
     }
 
@@ -961,7 +1009,15 @@ impl McpConnectionManager {
             server.peer.list_resources(pagination_params(cursor)),
         )
         .await
-        .map_err(|_| McpError::Timeout)??;
+        .map_err(|error| {
+            McpError::timeout_error(
+                format!(
+                    "MCP resource listing timed out after {}ms",
+                    self.request_timeout.as_millis()
+                ),
+                &error,
+            )
+        })??;
         Ok(ListResourcesResult {
             resources: result
                 .resources
@@ -985,7 +1041,15 @@ impl McpConnectionManager {
                 .list_resource_templates(pagination_params(cursor)),
         )
         .await
-        .map_err(|_| McpError::Timeout)??;
+        .map_err(|error| {
+            McpError::timeout_error(
+                format!(
+                    "MCP resource-template listing timed out after {}ms",
+                    self.request_timeout.as_millis()
+                ),
+                &error,
+            )
+        })??;
         Ok(ListResourceTemplatesResult {
             resource_templates: result
                 .resource_templates
@@ -1005,7 +1069,15 @@ impl McpConnectionManager {
                 .read_resource(ReadResourceRequestParams::new(uri.to_string())),
         )
         .await
-        .map_err(|_| McpError::Timeout)??;
+        .map_err(|error| {
+            McpError::timeout_error(
+                format!(
+                    "MCP resource read timed out after {}ms",
+                    self.request_timeout.as_millis()
+                ),
+                &error,
+            )
+        })??;
         Ok(ReadResourceResult {
             contents: result
                 .contents
@@ -1026,7 +1098,15 @@ impl McpConnectionManager {
             server.peer.list_prompts(pagination_params(cursor)),
         )
         .await
-        .map_err(|_| McpError::Timeout)??;
+        .map_err(|error| {
+            McpError::timeout_error(
+                format!(
+                    "MCP prompt listing timed out after {}ms",
+                    self.request_timeout.as_millis()
+                ),
+                &error,
+            )
+        })??;
         Ok(ListPromptsResult {
             prompts: result
                 .prompts
@@ -1055,7 +1135,15 @@ impl McpConnectionManager {
         }
         let result = tokio::time::timeout(self.request_timeout, server.peer.get_prompt(params))
             .await
-            .map_err(|_| McpError::Timeout)??;
+            .map_err(|error| {
+                McpError::timeout_error(
+                    format!(
+                        "MCP prompt read timed out after {}ms",
+                        self.request_timeout.as_millis()
+                    ),
+                    &error,
+                )
+            })??;
         Ok(GetPromptResult {
             description: result.description,
             messages: result
@@ -1161,7 +1249,7 @@ fn mcp_failure(error: &McpError) -> agena_failure::Failure {
             RecoveryDirective::Reauthenticate,
             "The MCP server requires authentication. Sign in and try again.",
         ),
-        McpError::Timeout => (
+        McpError::Timeout(_) => (
             "mcp.timeout",
             FailureCategory::Timeout,
             FailureResponsibility::Dependency,
@@ -1270,7 +1358,16 @@ fn mcp_roots(paths: impl IntoIterator<Item = PathBuf>) -> Vec<Root> {
     paths
         .into_iter()
         .filter_map(|path| {
-            let uri = Url::from_directory_path(path.as_path()).ok()?;
+            let uri = match Url::from_directory_path(path.as_path()) {
+                Ok(uri) => uri,
+                Err(()) => {
+                    tracing::warn!(
+                        root_path = %path.display(),
+                        "MCP root was omitted because the directory path cannot be represented as a file URL"
+                    );
+                    return None;
+                }
+            };
             let name = path
                 .file_name()
                 .and_then(|value| value.to_str())
@@ -1347,15 +1444,15 @@ async fn connect_http(
             ));
         }
         let store = KeyringOAuthCredentialStore::new(server_name)
-            .map_err(|error| McpError::Auth(error.to_string()))?;
+            .map_err(|error| McpError::auth_error(&error))?;
         let mut manager = AuthorizationManager::new(url.clone())
             .await
-            .map_err(|error| McpError::Auth(error.to_string()))?;
+            .map_err(|error| McpError::auth_error(&error))?;
         manager.set_credential_store(store);
         if !manager
             .initialize_from_store()
             .await
-            .map_err(|error| McpError::Auth(error.to_string()))?
+            .map_err(|error| McpError::auth_error(&error))?
         {
             return Err(McpError::Auth(format!(
                 "OAuth authorization is required for MCP server '{server_name}'; configure its OAuth credential in the configured MCP client credential store before starting Agena"
@@ -1363,10 +1460,10 @@ async fn connect_http(
         }
         let http_client = reqwest::Client::builder()
             .build()
-            .map_err(|error| McpError::Http(error.to_string()))?;
+            .map_err(|error| McpError::http_error(&error))?;
         manager
             .with_client(http_client.clone())
-            .map_err(|error| McpError::Auth(error.to_string()))?;
+            .map_err(|error| McpError::auth_error(&error))?;
         let transport = StreamableHttpClientTransport::with_client(
             AuthClient::new(http_client, manager),
             config,
@@ -1389,7 +1486,28 @@ async fn shutdown_server(server: Arc<ConnectedServer>) {
     // avoidable lock cycle.
     let running = server.running.lock().await.take();
     if let Some(running) = running {
-        let _ = tokio::time::timeout(SERVER_SHUTDOWN_TIMEOUT, running.cancel()).await;
+        match tokio::time::timeout(SERVER_SHUTDOWN_TIMEOUT, running.cancel()).await {
+            Ok(Ok(_reason)) => {}
+            Ok(Err(error)) => {
+                tracing::warn!(
+                    server = %server.name,
+                    diagnostic = %agena_failure::diagnostic::format_error_chain(&error),
+                    "failed to shut down an MCP connection"
+                );
+            }
+            Err(error) => tracing::warn!(
+                server = %server.name,
+                timeout_ms = SERVER_SHUTDOWN_TIMEOUT.as_millis(),
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    format!(
+                        "timed out after {}ms while shutting down an MCP connection",
+                        SERVER_SHUTDOWN_TIMEOUT.as_millis()
+                    ),
+                    &error,
+                ),
+                "timed out while shutting down an MCP connection"
+            ),
+        }
     }
 }
 
@@ -1606,7 +1724,21 @@ fn convert_content_block(content: RmcpContentBlock) -> ContentBlock {
             resource: convert_resource_descriptor(resource),
         },
         other => ContentBlock::Unknown {
-            raw: serde_json::to_value(other).unwrap_or(Value::Null),
+            raw: match serde_json::to_value(other) {
+                Ok(raw) => raw,
+                Err(error) => {
+                    tracing::error!(
+                        diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                            "serialize an unknown MCP content block",
+                            &error,
+                        ),
+                        "unknown MCP content block could not be preserved verbatim"
+                    );
+                    serde_json::json!({
+                        "projection_error": "The MCP content block could not be encoded."
+                    })
+                }
+            },
         },
     }
 }
@@ -1671,13 +1803,39 @@ fn convert_resource_contents(resource: RmcpResourceContents) -> Option<ResourceC
 }
 
 fn serialize_optional<T: serde::Serialize>(value: Option<T>) -> Option<Value> {
-    value.and_then(|value| serde_json::to_value(value).ok())
+    value.and_then(|value| match serde_json::to_value(value) {
+        Ok(value) => Some(value),
+        Err(error) => {
+            tracing::error!(
+                serialized_type = std::any::type_name::<T>(),
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "serialize optional MCP descriptor metadata",
+                    &error,
+                ),
+                "optional MCP descriptor metadata was omitted after serialization failure"
+            );
+            None
+        }
+    })
 }
 
 fn serialize_values<T: serde::Serialize>(values: Vec<T>) -> Vec<Value> {
     values
         .into_iter()
-        .filter_map(|value| serde_json::to_value(value).ok())
+        .filter_map(|value| match serde_json::to_value(value) {
+            Ok(value) => Some(value),
+            Err(error) => {
+                tracing::error!(
+                    serialized_type = std::any::type_name::<T>(),
+                    diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                        "serialize MCP descriptor metadata item",
+                        &error,
+                    ),
+                    "MCP descriptor metadata item was omitted after serialization failure"
+                );
+                None
+            }
+        })
         .collect()
 }
 

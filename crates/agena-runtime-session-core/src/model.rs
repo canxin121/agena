@@ -761,7 +761,17 @@ fn operation_from_part(part: &Part) -> Option<agena_runtime_contracts::part::Ope
         return None;
     }
     let tool_call =
-        agena_runtime_contracts::part_content::ToolCallContent::try_from(&part.content).ok()?;
+        match agena_runtime_contracts::part_content::ToolCallContent::try_from(&part.content) {
+            Ok(tool_call) => tool_call,
+            Err(error) => {
+                tracing::warn!(
+                    part_id = part.part_id,
+                    diagnostic = %error,
+                    "pending tool runtime projection skipped malformed persisted tool-call content"
+                );
+                return None;
+            }
+        };
     Some(agena_runtime_contracts::part_content::operation_from_tool_call(&tool_call))
 }
 
@@ -1157,7 +1167,19 @@ fn text_from_part(part: &Part) -> Option<String> {
 /// parses (serde defaults fill the rest); empty objects are ignored.
 fn usage_from_part_content(content: &serde_json::Value) -> Option<agena_provider::CompletionUsage> {
     let usage = content.get("usage")?;
-    let parsed: agena_provider::CompletionUsage = serde_json::from_value(usage.clone()).ok()?;
+    let parsed: agena_provider::CompletionUsage = match serde_json::from_value(usage.clone()) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            tracing::error!(
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "decode persisted part usage projection",
+                    &error,
+                ),
+                "session usage projection skipped malformed persisted usage"
+            );
+            return None;
+        }
+    };
     (parsed.requests > 0 || parsed.own_total_tokens() > 0).then_some(parsed)
 }
 

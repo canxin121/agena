@@ -128,8 +128,7 @@ impl LspPlugin {
         let _ = self.host()?;
         router::invoke_tool(
             tool_name,
-            serde_json::to_value(args)
-                .map_err(|err| PluginError::invalid_params(err.to_string()))?,
+            serde_json::to_value(args).map_err(|err| PluginError::invalid_params_error(&err))?,
             session_id,
             call_id,
         )
@@ -195,12 +194,15 @@ impl LspPlugin {
                 .collect(),
         };
         let body = serde_json::to_string_pretty(&summary)
-            .map_err(|err| PluginError::internal(err.to_string()))?;
+            .map_err(|err| PluginError::internal_error(&err))?;
         Ok(ToolInvokeOutput {
             title: "Language servers".to_string(),
             summary: format!("{} configured servers", summary.servers.len()),
             output_text: body,
-            payload: serde_json::to_value(&summary).ok(),
+            payload: Some(
+                serde_json::to_value(&summary)
+                    .map_err(|error| PluginError::internal_error(&error))?,
+            ),
             metadata: Default::default(),
             attachments: Vec::new(),
         })

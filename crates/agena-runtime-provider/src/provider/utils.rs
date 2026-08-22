@@ -25,6 +25,24 @@ const ADAPTER_LOG_STRING_LIMIT: usize = 2_048;
 const MAX_PROVIDER_JSON_RESPONSE_BYTES: usize = 64 * 1024 * 1024;
 pub(crate) const MAX_PROVIDER_ERROR_RESPONSE_BYTES: usize = 1024 * 1024;
 
+fn pretty_adapter_log_json(value: &serde_json::Value, context: &str) -> String {
+    match serde_json::to_string_pretty(value) {
+        Ok(value) => value,
+        Err(error) => {
+            tracing::error!(
+                target: ADAPTER_LOG_TARGET,
+                operation = context,
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    context,
+                    &error,
+                ),
+                "sanitized adapter diagnostic JSON could not be serialized"
+            );
+            "<sanitized JSON serialization failed>".to_owned()
+        }
+    }
+}
+
 tokio::task_local! {
     static REQUEST_CANCELLATION: Option<tokio_util::sync::CancellationToken>;
 }
@@ -48,7 +66,18 @@ static REQUEST_HEADER_HOOK: OnceLock<RwLock<Option<Arc<dyn ProviderRequestHeader
 
 pub fn install_request_header_hook(hook: Option<Arc<dyn ProviderRequestHeaderHook>>) {
     let slot = REQUEST_HEADER_HOOK.get_or_init(|| RwLock::new(None));
-    *slot.write().expect("provider request hook lock poisoned") = hook;
+    let mut installed = match slot.write() {
+        Ok(installed) => installed,
+        Err(error) => {
+            tracing::error!(
+                operation = "install provider request-header hook",
+                error = %error,
+                "recovering poisoned provider request-header hook lock"
+            );
+            error.into_inner()
+        }
+    };
+    *installed = hook;
 }
 
 /// Make the execution cancellation token visible to synchronous provider
@@ -83,10 +112,20 @@ pub fn resolved_request_headers(
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
 
-    if let Some(hook) = REQUEST_HEADER_HOOK
+    let hook = REQUEST_HEADER_HOOK
         .get()
-        .and_then(|slot| slot.read().ok().and_then(|guard| guard.clone()))
-    {
+        .and_then(|slot| match slot.read() {
+            Ok(guard) => guard.clone(),
+            Err(error) => {
+                tracing::error!(
+                    operation = "resolve provider request headers",
+                    error = %error,
+                    "recovering poisoned provider request-header hook lock"
+                );
+                error.into_inner().clone()
+            }
+        });
+    if let Some(hook) = hook {
         combined = hook.resolve(provider_id, combined, current_request_cancellation());
     }
 
@@ -354,11 +393,12 @@ pub fn adapter_log_http_request_json<I, K, V>(
     );
 
     if tracing::enabled!(target: ADAPTER_LOG_TARGET, tracing::Level::TRACE) {
-        let headers_json = serde_json::to_string_pretty(&sanitized_headers).unwrap_or_default();
+        let headers_json =
+            pretty_adapter_log_json(&sanitized_headers, "serialize adapter request headers");
         let body_json = body.map(sanitize_json_value);
         let body_text = body_json
             .as_ref()
-            .and_then(|value| serde_json::to_string_pretty(value).ok())
+            .map(|value| pretty_adapter_log_json(value, "serialize adapter request body"))
             .unwrap_or_default();
         tracing::trace!(
             target: ADAPTER_LOG_TARGET,
@@ -403,7 +443,8 @@ pub fn adapter_log_http_response_open(
     );
 
     if tracing::enabled!(target: ADAPTER_LOG_TARGET, tracing::Level::TRACE) {
-        let headers_json = serde_json::to_string_pretty(&sanitized_headers).unwrap_or_default();
+        let headers_json =
+            pretty_adapter_log_json(&sanitized_headers, "serialize adapter response headers");
         tracing::trace!(
             target: ADAPTER_LOG_TARGET,
             provider = provider_id,
@@ -426,7 +467,7 @@ pub fn adapter_log_stream_event(
     }
 
     let sanitized = sanitize_json_value(event);
-    let event_text = serde_json::to_string_pretty(&sanitized).unwrap_or_default();
+    let event_text = pretty_adapter_log_json(&sanitized, "serialize adapter stream event");
     tracing::trace!(
         target: ADAPTER_LOG_TARGET,
         provider = provider_id,
@@ -471,7 +512,8 @@ fn adapter_log_http_response_text(
     );
 
     if tracing::enabled!(target: ADAPTER_LOG_TARGET, tracing::Level::TRACE) {
-        let headers_json = serde_json::to_string_pretty(&sanitized_headers).unwrap_or_default();
+        let headers_json =
+            pretty_adapter_log_json(&sanitized_headers, "serialize adapter response headers");
         let body_text = sanitize_response_body_text(body);
         tracing::trace!(
             target: ADAPTER_LOG_TARGET,
@@ -612,9 +654,20 @@ fn redacted_marker(original_len: usize) -> String {
 }
 
 fn serialized_len(value: &serde_json::Value) -> usize {
-    serde_json::to_string(value)
-        .map(|text| text.chars().count())
-        .unwrap_or_default()
+    match serde_json::to_string(value) {
+        Ok(text) => text.chars().count(),
+        Err(error) => {
+            tracing::error!(
+                target: ADAPTER_LOG_TARGET,
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "measure sanitized adapter JSON diagnostic",
+                    &error,
+                ),
+                "adapter JSON diagnostic length is using a debug fallback"
+            );
+            format!("{value:?}").chars().count()
+        }
+    }
 }
 
 fn is_sensitive_key(key: &str) -> bool {

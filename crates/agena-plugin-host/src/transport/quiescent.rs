@@ -45,7 +45,9 @@ impl ActivityState {
 
     fn enter(self: &Arc<Self>) -> Result<ActivityGuard, TransportError> {
         if !self.accepting.load(Ordering::Acquire) {
-            return Err(TransportError::Disconnected);
+            return Err(TransportError::disconnected(
+                "plugin transport is no longer accepting new calls",
+            ));
         }
         self.active.fetch_add(1, Ordering::AcqRel);
         // Close the race where shutdown flips admission after the first check
@@ -54,7 +56,9 @@ impl ActivityState {
             if self.active.fetch_sub(1, Ordering::AcqRel) == 1 {
                 self.idle.notify_waiters();
             }
-            return Err(TransportError::Disconnected);
+            return Err(TransportError::disconnected(
+                "plugin transport began shutting down while the call was entering",
+            ));
         }
         Ok(ActivityGuard {
             state: Arc::clone(self),
@@ -168,6 +172,7 @@ impl PluginTransport for QuiescentTransport {
         let (chunk_tx, chunk_rx) = tokio::sync::mpsc::channel(32);
         let (end_tx, end_rx) = tokio::sync::oneshot::channel();
         let closing = self.state.closing.clone();
+        let stream_id_for_task = stream_id.clone();
         tokio::spawn(async move {
             let _activity = activity;
             let mut forward_chunks = true;
@@ -195,7 +200,12 @@ impl PluginTransport for QuiescentTransport {
                     "plugin stream ended without a terminal result: {error}"
                 )))
             });
-            let _ = end_tx.send(result);
+            if end_tx.send(result).is_err() {
+                tracing::debug!(
+                    stream_id = %stream_id_for_task,
+                    "quiescent plugin stream terminal-result receiver was dropped"
+                );
+            }
         });
         Ok(Some(ToolStreamHandle {
             stream_id,
@@ -294,7 +304,7 @@ mod tests {
             transport
                 .dispatch("test/late", serde_json::Value::Null)
                 .await,
-            Err(TransportError::Disconnected)
+            Err(TransportError::Disconnected(_))
         ));
         assert_eq!(shutdowns.load(Ordering::Acquire), 0);
         assert_eq!(closes.load(Ordering::Acquire), 0);

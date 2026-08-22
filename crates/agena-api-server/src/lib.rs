@@ -559,6 +559,13 @@ mod router_contract_tests {
             .expect("test runtime composes application repositories")
     }
 
+    fn isolated_global_config_path() -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "agena-api-server-test-global-{}.json",
+            std::process::id()
+        ))
+    }
+
     async fn wait_for_test_runtime_startup_quiescence(
         runtime: &agena_runtime::RuntimeBootstrapResult,
     ) {
@@ -591,6 +598,7 @@ mod router_contract_tests {
     async fn health_route_is_served_by_the_real_api_router() {
         let runtime = bootstrap_application_services(RuntimeBootstrapRequest {
             workspace_root: Some(std::env::temp_dir()),
+            config_path: Some(isolated_global_config_path()),
             database_url: Some("sqlite::memory:".to_owned()),
             initialize_schema: true,
             tracing_reload_handle: None,
@@ -911,6 +919,7 @@ mod router_contract_tests {
         let workspace = tempfile::tempdir().expect("create Provider Studio workspace");
         let runtime = bootstrap_application_services(RuntimeBootstrapRequest {
             workspace_root: Some(workspace.path().to_path_buf()),
+            config_path: Some(isolated_global_config_path()),
             database_url: Some("sqlite::memory:".to_owned()),
             initialize_schema: true,
             tracing_reload_handle: None,
@@ -951,6 +960,7 @@ mod router_contract_tests {
             .expect("write workspace ignore file");
         let runtime = bootstrap_application_services(RuntimeBootstrapRequest {
             workspace_root: Some(workspace.path().to_path_buf()),
+            config_path: Some(isolated_global_config_path()),
             database_url: Some("sqlite::memory:".to_owned()),
             initialize_schema: true,
             tracing_reload_handle: None,
@@ -1110,6 +1120,7 @@ mod router_contract_tests {
     async fn mark_interactive_request_presented_route_rejects_unknown_requests() {
         let runtime = bootstrap_application_services(RuntimeBootstrapRequest {
             workspace_root: Some(std::env::temp_dir()),
+            config_path: Some(isolated_global_config_path()),
             database_url: Some("sqlite::memory:".to_owned()),
             initialize_schema: true,
             tracing_reload_handle: None,
@@ -1225,6 +1236,7 @@ mod router_contract_tests {
     async fn websocket_upgrade_serves_shared_hello_and_pong_frames() {
         let runtime = bootstrap_application_services(RuntimeBootstrapRequest {
             workspace_root: Some(std::env::temp_dir()),
+            config_path: Some(isolated_global_config_path()),
             database_url: Some("sqlite::memory:".to_owned()),
             initialize_schema: true,
             tracing_reload_handle: None,
@@ -1509,6 +1521,7 @@ mod router_contract_tests {
     async fn notifications_rest_contract_lists_dismisses_and_resolves_actions() {
         let runtime = bootstrap_application_services(RuntimeBootstrapRequest {
             workspace_root: Some(std::env::temp_dir()),
+            config_path: Some(isolated_global_config_path()),
             database_url: Some("sqlite::memory:".to_owned()),
             initialize_schema: true,
             tracing_reload_handle: None,
@@ -1641,6 +1654,7 @@ mod router_contract_tests {
 
         let runtime = bootstrap_application_services(RuntimeBootstrapRequest {
             workspace_root: Some(std::env::temp_dir()),
+            config_path: Some(isolated_global_config_path()),
             database_url: Some("sqlite::memory:".to_owned()),
             initialize_schema: true,
             tracing_reload_handle: None,
@@ -1994,17 +2008,7 @@ mod router_contract_tests {
                 }
             },
             "providers": {
-                "default": "fake",
-                "default_selection": {
-                    "provider": "fake",
-                    "adapter": "openai_responses",
-                    "model": "fake-model"
-                },
                 "fake": {
-                    "defaults": {
-                        "adapter": "openai_responses",
-                        "model": "fake-model"
-                    },
                     "auth": {
                         "mode": "api",
                         "subtype": "custom",
@@ -2037,6 +2041,7 @@ mod router_contract_tests {
 
         let runtime = bootstrap_application_services(RuntimeBootstrapRequest {
             workspace_root: Some(workspace.path().to_path_buf()),
+            config_path: Some(workspace.path().join("isolated-global-agena.json")),
             database_url: Some("sqlite::memory:".to_owned()),
             initialize_schema: true,
             tracing_reload_handle: None,
@@ -2053,9 +2058,12 @@ mod router_contract_tests {
             runtime_config.project_config_found,
             "fake-provider project config must be loaded before any run"
         );
-        assert_eq!(
-            runtime_config.default_provider.as_deref(),
-            Some("fake"),
+        assert!(
+            runtime_config
+                .effective_config
+                .get("providers")
+                .and_then(serde_json::Value::as_object)
+                .is_some_and(|providers| providers.contains_key("fake")),
             "test isolation failed: refusing to submit through a non-fake provider"
         );
         // A fresh in-memory model catalog intentionally refreshes and reloads
@@ -2104,7 +2112,14 @@ mod router_contract_tests {
         client
             .submit_message(SubmitRunParams {
                 session_id: session.id,
-                options: RunOptions::default(),
+                options: RunOptions {
+                    model: Some(agena_api::resource::ModelRef::new_with_adapter(
+                        "fake",
+                        "openai_responses",
+                        "fake-model",
+                    )),
+                    ..RunOptions::default()
+                },
                 document: agena_domain::ComposerDocument(vec![agena_domain::ComposerNode::Text {
                     text: prompt.to_owned(),
                 }]),

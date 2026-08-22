@@ -56,6 +56,31 @@ impl PluginError {
         Self::from_kind(PluginErrorKind::Internal, diagnostic)
     }
 
+    pub fn internal_error(error: &(dyn std::error::Error + 'static)) -> Self {
+        Self::internal(agena_failure::diagnostic::format_error_chain(error))
+    }
+
+    /// Serialize the full structured error for a private JSON-RPC diagnostic
+    /// channel. The public `message` field remains safe-by-default; a
+    /// serialization failure is logged for operators instead of being
+    /// silently converted into missing diagnostic data.
+    pub fn rpc_error_data(&self) -> Option<serde_json::Value> {
+        match serde_json::to_value(self) {
+            Ok(value) => Some(value),
+            Err(error) => {
+                tracing::error!(
+                    plugin_diagnostic = %self.diagnostic.message,
+                    diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                        "serialize plugin error for JSON-RPC diagnostic data",
+                        &error,
+                    ),
+                    "plugin JSON-RPC diagnostic data could not be serialized"
+                );
+                None
+            }
+        }
+    }
+
     pub fn not_implemented(hook: impl Into<String>) -> Self {
         let hook = hook.into();
         Self::from_kind(
@@ -67,6 +92,10 @@ impl PluginError {
 
     pub fn invalid_params(diagnostic: impl std::fmt::Display) -> Self {
         Self::from_kind(PluginErrorKind::InvalidParams, diagnostic)
+    }
+
+    pub fn invalid_params_error(error: &(dyn std::error::Error + 'static)) -> Self {
+        Self::invalid_params(agena_failure::diagnostic::format_error_chain(error))
     }
 
     pub fn invalid_params_with_data(
@@ -113,10 +142,13 @@ impl PluginError {
         let diagnostic = diagnostic.to_string();
         let mut failure = failure_for_kind(kind);
         if !diagnostic.trim().is_empty() {
-            failure.user = UserPresentation::validated(
-                format!("{}-detail", failure.user.key),
-                diagnostic.as_str(),
-            );
+            let public = agena_failure::diagnostic::user_message_with_context(&diagnostic, 320);
+            if !public.is_empty() {
+                failure.user = UserPresentation::validated(
+                    format!("{}-detail", failure.user.key),
+                    public.as_str(),
+                );
+            }
         }
         Self {
             kind,

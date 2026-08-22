@@ -16,6 +16,74 @@
 //! degrades to a useless generic message. We instead remove the dangerous
 //! fragments and keep the remainder.
 
+use std::error::Error;
+
+/// Formats a complete [`Error::source`] chain for operator diagnostics.
+///
+/// Plain `Display::to_string()` only renders the outermost error. That is
+/// especially dangerous at process, task, HTTP, and RPC boundaries, where an
+/// operation context such as `failed to build runtime` can otherwise replace
+/// the configuration, database, provider, or I/O error that explains the
+/// failure. This helper keeps every non-empty source in outer-to-inner order.
+///
+/// Some `thiserror` displays already include their immediate source in the
+/// outer text. The suffix check avoids printing that source twice while still
+/// walking on to deeper causes. The depth cap protects diagnostic rendering
+/// from a broken custom `Error` implementation with a cyclic source chain.
+///
+/// This output is an operator diagnostic and may contain sensitive details.
+/// It must be scrubbed through [`user_message_with_context`] (or an equivalent
+/// audience-aware projection) before crossing a user/model protocol boundary.
+pub fn format_error_chain(error: &(dyn Error + 'static)) -> String {
+    const MAX_ERROR_CHAIN_DEPTH: usize = 64;
+
+    let mut diagnostic = error.to_string();
+    let mut source = error.source();
+    let mut depth = 0;
+    while let Some(current) = source {
+        if depth >= MAX_ERROR_CHAIN_DEPTH {
+            if !diagnostic.is_empty() {
+                diagnostic.push_str(": ");
+            }
+            diagnostic.push_str("error source chain exceeded 64 entries");
+            break;
+        }
+
+        let detail = current.to_string();
+        if !detail.trim().is_empty()
+            && detail != diagnostic
+            && !diagnostic.ends_with(&format!(": {detail}"))
+        {
+            if !diagnostic.is_empty() {
+                diagnostic.push_str(": ");
+            }
+            diagnostic.push_str(&detail);
+        }
+        source = current.source();
+        depth += 1;
+    }
+
+    if diagnostic.trim().is_empty() {
+        "error implementation returned an empty diagnostic".to_owned()
+    } else {
+        diagnostic
+    }
+}
+
+/// Prefixes a complete error chain with the operation that failed.
+pub fn format_error_chain_with_context(
+    context: impl AsRef<str>,
+    error: &(dyn Error + 'static),
+) -> String {
+    let context = context.as_ref().trim();
+    let diagnostic = format_error_chain(error);
+    if context.is_empty() || diagnostic.starts_with(context) {
+        diagnostic
+    } else {
+        format!("{context}: {diagnostic}")
+    }
+}
+
 /// Segments a raw diagnostic chain on its nesting separators.
 ///
 /// Chains look like `a: b: c`. We split on `: ` boundaries, then walk from the
@@ -357,6 +425,80 @@ pub fn scrubbed_preserve(message: &str, max_chars: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(Debug)]
+    struct TestError {
+        message: &'static str,
+        source: Option<Box<TestError>>,
+    }
+
+    impl std::fmt::Display for TestError {
+        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str(self.message)
+        }
+    }
+
+    impl std::error::Error for TestError {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            self.source
+                .as_deref()
+                .map(|source| source as &(dyn std::error::Error + 'static))
+        }
+    }
+
+    #[derive(Debug)]
+    struct InlineSourceError {
+        source: TestError,
+    }
+
+    impl std::fmt::Display for InlineSourceError {
+        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(formatter, "configuration failed: {}", self.source)
+        }
+    }
+
+    impl std::error::Error for InlineSourceError {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            Some(&self.source)
+        }
+    }
+
+    #[test]
+    fn operator_diagnostic_preserves_the_complete_source_chain() {
+        let error = TestError {
+            message: "failed to build runtime",
+            source: Some(Box::new(TestError {
+                message: "configuration validation failed",
+                source: Some(Box::new(TestError {
+                    message: "providers.default is no longer supported",
+                    source: None,
+                })),
+            })),
+        };
+
+        assert_eq!(
+            format_error_chain(&error),
+            "failed to build runtime: configuration validation failed: providers.default is no longer supported"
+        );
+    }
+
+    #[test]
+    fn operator_diagnostic_does_not_duplicate_an_inlined_source() {
+        let error = InlineSourceError {
+            source: TestError {
+                message: "invalid provider configuration",
+                source: Some(Box::new(TestError {
+                    message: "model id is empty",
+                    source: None,
+                })),
+            },
+        };
+
+        assert_eq!(
+            format_error_chain(&error),
+            "configuration failed: invalid provider configuration: model id is empty"
+        );
+    }
 
     #[test]
     fn extracts_deepest_root_cause() {

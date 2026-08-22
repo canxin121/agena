@@ -32,7 +32,7 @@ pub fn permission_paths_for(
         "apply_patch" => {
             let payload = ApplyPatchToolInput::parse_input(input.clone())?;
             let paths = crate::tool::apply_patch::planned_paths(&payload.patch)
-                .map_err(|err| PluginError::internal(err.to_string()))?;
+                .map_err(|error| PluginError::internal_error(&error))?;
             Ok(paths
                 .into_iter()
                 .map(agena_plugin_host::sdk::PathRequest::write)

@@ -255,7 +255,12 @@ impl ChatGptToolsPlugin {
             base["previous_response_id"] = serde_json::Value::String(previous_response_id);
         }
         if !input.include.is_empty() {
-            base["include"] = serde_json::to_value(input.include).unwrap_or_default();
+            base["include"] = serde_json::to_value(&input.include).map_err(|error| {
+                PluginError::internal(agena_failure::diagnostic::format_error_chain_with_context(
+                    "serialize ChatGPT Responses include fields",
+                    &error,
+                ))
+            })?;
         }
         let body = merge_object_options(
             base,

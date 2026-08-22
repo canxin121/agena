@@ -90,18 +90,21 @@ pub(crate) async fn execute_async(
         _ => {
             let executor = executor.clone();
             let input = input.clone();
-            let worker_permit = PROCESS_BLOCKING_WORKERS
-                .acquire()
-                .await
-                .map_err(|_| ToolError::plugin("process worker pool is unavailable".to_string()))?;
+            let worker_permit = PROCESS_BLOCKING_WORKERS.acquire().await.map_err(|error| {
+                ToolError::plugin(agena_failure::diagnostic::format_error_chain_with_context(
+                    "process worker pool is unavailable",
+                    &error,
+                ))
+            })?;
             tokio::task::spawn_blocking(move || {
                 let _worker_permit = worker_permit;
                 execute(&executor, &input, context)
             })
             .await
             .map_err(|error| {
-                ToolError::plugin(format!(
-                    "process tool worker failed before completion: {error}"
+                ToolError::plugin(agena_failure::diagnostic::format_error_chain_with_context(
+                    "process tool worker failed before completion",
+                    &error,
                 ))
             })?
         }
@@ -221,10 +224,12 @@ async fn execute_background_run_async(
     let worker_executor = executor.clone();
     let worker_command = command.clone();
     let worker_monitor = monitor.cloned();
-    let worker_permit = PROCESS_BLOCKING_WORKERS
-        .acquire()
-        .await
-        .map_err(|_| ToolError::plugin("process worker pool is unavailable".to_string()))?;
+    let worker_permit = PROCESS_BLOCKING_WORKERS.acquire().await.map_err(|error| {
+        ToolError::plugin(agena_failure::diagnostic::format_error_chain_with_context(
+            "process worker pool is unavailable",
+            &error,
+        ))
+    })?;
     tokio::task::spawn_blocking(move || {
         let _worker_permit = worker_permit;
         execute_background_run_prepared(
@@ -327,10 +332,10 @@ fn process_registry(executor: &ToolExecutor) -> Result<&dyn MonitorService, Tool
 fn into_tool_error(err: MonitorError) -> ToolError {
     match err {
         MonitorError::NotFound(_) | MonitorError::Invalid(_) => {
-            ToolError::invalid_input(err.to_string())
+            ToolError::invalid_input_error(&err)
         }
         MonitorError::InvalidPattern(e) => ToolError::InvalidRegexPattern(e),
-        MonitorError::RuntimeMissing => ToolError::invalid_input(err.to_string()),
+        MonitorError::RuntimeMissing => ToolError::invalid_input_error(&err),
     }
 }
 

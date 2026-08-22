@@ -1,6 +1,9 @@
 //! Attachment source discovery (files, directories, devices).
 
-use std::{fs, path::PathBuf};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 use crate::{
     clipboard::{PastedImageInfo, paste_image_to_temp_png},
@@ -63,7 +66,7 @@ impl AttachmentSource for ClipboardImageSource {
             ProviderError::Unsupported(format!("native clipboard image is unavailable: {error}"))
         })?;
         if let Err(error) = validate_image_dimensions(info.width, info.height) {
-            let _ = fs::remove_file(&path);
+            warn_remove_file(&path, "invalid clipboard image cleanup");
             return Err(error);
         }
         Ok(AttachmentAcquisition {
@@ -109,30 +112,30 @@ impl AttachmentSource for KittyClipboardImageSource {
         let root = secure_temp_root("agena-kitty-clipboard-")?;
         let destination = root.join("clipboard.png");
         if let Err(error) = kitty::request_clipboard_image(destination.as_path()) {
-            let _ = fs::remove_dir_all(&root);
+            warn_remove_directory(&root, "failed Kitty clipboard request cleanup");
             return Err(error);
         }
         let files = match inspect_transfer_tree(root.as_path(), self.label(), true) {
             Ok(files) => files,
             Err(error) => {
-                let _ = fs::remove_dir_all(&root);
+                warn_remove_directory(&root, "invalid Kitty clipboard transfer cleanup");
                 return Err(error);
             }
         };
         if files.len() != 1 || files[0] != destination {
-            let _ = fs::remove_dir_all(&root);
+            warn_remove_directory(&root, "unexpected Kitty clipboard transfer cleanup");
             return Err(ProviderError::Protocol(
                 "Kitty clipboard did not produce exactly one regular image file".to_owned(),
             ));
         }
         let (width, height) = image::image_dimensions(&destination).map_err(|error| {
-            let _ = fs::remove_dir_all(&root);
+            warn_remove_directory(&root, "unsupported Kitty clipboard image cleanup");
             ProviderError::Unsupported(format!(
                 "Kitty clipboard did not provide a supported raster image: {error}"
             ))
         })?;
         validate_image_dimensions(width, height).inspect_err(|_| {
-            let _ = fs::remove_dir_all(&root);
+            warn_remove_directory(&root, "invalid Kitty clipboard dimensions cleanup");
         })?;
         Ok(AttachmentAcquisition {
             items: vec![AcquiredAttachment {
@@ -268,9 +271,35 @@ fn transfer_acquisition(
             cleanup_root: Some(destination),
         }),
         Err(error) => {
-            let _ = fs::remove_dir_all(destination);
+            warn_remove_directory(&destination, "failed attachment transfer cleanup");
             Err(error)
         }
+    }
+}
+
+fn warn_remove_file(path: &Path, operation: &'static str) {
+    if let Err(error) = fs::remove_file(path)
+        && error.kind() != std::io::ErrorKind::NotFound
+    {
+        tracing::warn!(
+            operation,
+            path = %path.display(),
+            diagnostic = %agena_failure::diagnostic::format_error_chain(&error),
+            "failed to clean up a temporary attachment file"
+        );
+    }
+}
+
+fn warn_remove_directory(path: &Path, operation: &'static str) {
+    if let Err(error) = fs::remove_dir_all(path)
+        && error.kind() != std::io::ErrorKind::NotFound
+    {
+        tracing::warn!(
+            operation,
+            path = %path.display(),
+            diagnostic = %agena_failure::diagnostic::format_error_chain(&error),
+            "failed to clean up a temporary attachment directory"
+        );
     }
 }
 

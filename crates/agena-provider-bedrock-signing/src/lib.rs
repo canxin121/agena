@@ -46,7 +46,14 @@ pub fn signed_headers(
         .time(std::time::SystemTime::now())
         .settings(SigningSettings::default())
         .build()
-        .map_err(|error| BedrockSigningError::SigningParameters(error.to_string()))?;
+        .map_err(|error| {
+            BedrockSigningError::SigningParameters(
+                agena_failure::diagnostic::format_error_chain_with_context(
+                    "failed to build Amazon Bedrock SigV4 signing parameters",
+                    &error,
+                ),
+            )
+        })?;
     let signable_request = SignableRequest::new(
         method,
         url,
@@ -55,15 +62,36 @@ pub fn signed_headers(
             .map(|(name, value)| (name.as_str(), value.as_str())),
         SignableBody::Bytes(body),
     )
-    .map_err(|error| BedrockSigningError::SignableRequest(error.to_string()))?;
+    .map_err(|error| {
+        BedrockSigningError::SignableRequest(
+            agena_failure::diagnostic::format_error_chain_with_context(
+                "failed to build the Amazon Bedrock signable request",
+                &error,
+            ),
+        )
+    })?;
     let (instructions, _) = sign(signable_request, &signing_params.into())
-        .map_err(|error| BedrockSigningError::Signing(error.to_string()))?
+        .map_err(|error| {
+            BedrockSigningError::Signing(
+                agena_failure::diagnostic::format_error_chain_with_context(
+                    "failed to sign the Amazon Bedrock request",
+                    &error,
+                ),
+            )
+        })?
         .into_parts();
     let mut request = http::Request::builder()
         .method(method)
         .uri(url)
         .body(())
-        .map_err(|error| BedrockSigningError::RequestConstruction(error.to_string()))?;
+        .map_err(|error| {
+            BedrockSigningError::RequestConstruction(
+                agena_failure::diagnostic::format_error_chain_with_context(
+                    "failed to construct the signed Amazon Bedrock request",
+                    &error,
+                ),
+            )
+        })?;
     for (name, value) in headers {
         request.headers_mut().insert(
             http::header::HeaderName::from_bytes(name.as_bytes()).map_err(|error| {

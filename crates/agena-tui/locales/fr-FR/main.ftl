@@ -411,8 +411,6 @@ settings-runtime-verbosity-label = Verbosité
 
 settings-runtime-verbosity-description = verbosité de session actuelle
 
-settings-field-default-provider-label = Modèle par défaut
-
 settings-field-permission-approval-model-label = Modèle d’approbation automatique
 
 settings-field-ui-locale-label = Langue
@@ -547,7 +545,6 @@ settings-field-parse-float = {$field} s'attend à une valeur numérique
 
 settings-choice-adapter-fallback = adaptateur
 
-settings-choice-default-provider-detail = {$adapter}/{$model}
 
 settings-plugin-workbench-label = Atelier de configuration des plugins
 
@@ -637,7 +634,7 @@ settings-provider-workbench-label = Liste des fournisseurs
 
 settings-provider-workbench-value = {$count} fournisseur(s)
 
-settings-provider-default-mode-inherit-detail = Utilisez le modèle/fournisseur par défaut pour ce mode.
+settings-model-default-mode-inherit-detail = Utilisez le mode natif par défaut du modèle sélectionné.
 
 settings-provider-new-label = + Nouveau fournisseur
 
@@ -811,7 +808,7 @@ permission-studio-error-empty-value = {$field} ne peut pas être vide.
 
 overlay-providers-title = Fournisseurs
 
-overlay-providers-prompt = Choisir un fournisseur pour utiliser son modèle par défaut
+overlay-providers-prompt = Choisir un fournisseur à configurer
 
 overlay-provider-list-title = Liste des fournisseurs
 
@@ -1167,13 +1164,12 @@ overlay-settings-help-integer = Entrez un nombre entier. Laissez vide ou tapez `
 overlay-settings-help-float = Entrez un numéro. Laissez vide ou tapez `clear` pour supprimer le remplacement.
 overlay-choice-clear-value = Effacer la valeur
 overlay-settings-section-plugins-description = Configurez les plugins, inspectez leurs outils et diagnostics, et gérez les harnais du navigateur, du shell et de l'éditeur.
-overlay-settings-section-providers-description = Choisissez l'itinéraire de modèle par défaut, configurez les fournisseurs et leur comportement réseau, et inspectez le catalogue de modèles.
+overlay-settings-section-providers-description = Configurez les fournisseurs et leur comportement réseau, et inspectez le catalogue de modèles.
 overlay-settings-section-model-catalog-description = Parcourez le catalogue de modèles résolus, inspectez les métadonnées du modèle et actualisez le cache local.
 overlay-settings-section-permissions-description = Modifiez séparément les autorisations globales, de l'espace de travail et de la session en cours.
 overlay-settings-section-runtime-session-description = Configurez les versions client de compatibilité et le comportement de compactage automatique des sessions.
 settings-permission-effective-detail = Lecture seule · fusionné à partir du global, de l'espace de travail et de la session.
 settings-permission-effective-read-only = L'autorisation effective est en lecture seule ; modifiez plutôt la session, l'espace de travail ou la source globale.
-settings-field-default-provider-description = Fournisseur, adaptateur et itinéraire de modèle utilisés lorsqu'aucun remplacement de session n'est actif
 settings-field-permission-approval-model-description = Variantes de modèle et de réflexion/vitesse utilisées pour les décisions d'autorisation automatiques ; les sélections indisponibles reviennent à Ask
 settings-field-tui-color-scheme-description = Détecter automatiquement l'arrière-plan du terminal ou forcer une palette claire ou sombre
 settings-field-tui-graphics-description = Affichez des images et des formules de composition avec Kitty, Sixel ou iTerm2 lorsqu'ils sont pris en charge ; les modifications prennent effet après le redémarrage du TUI
@@ -1201,7 +1197,7 @@ settings-client-versions-refresh-description = Récupérez les dernières versio
 settings-client-versions-entry-detail = Ouvrez les versions de compatibilité exactes utilisées dans les en-têtes d'identité de demande du fournisseur.
 settings-client-versions-section-description = Versions de compatibilité exactes utilisées dans les en-têtes d'identité de demande du fournisseur. Modifiez chaque valeur ou appuyez sur Ctrl+R pour actualiser depuis npm.
 settings-provider-workbench-detail = Ouvrez la liste des fournisseurs consultables avant de configurer l'authentification, les adaptateurs, le routage de modèle ou les nouveaux fournisseurs.
-settings-provider-new-detail = Créez un nouveau fournisseur, répertoriez les modèles d'adaptateur en direct et modifiez la configuration de l'adaptateur de fournisseur ; choisissez le modèle global séparément.
+settings-provider-new-detail = Créez un nouveau fournisseur, répertoriez les modèles d'adaptateur en direct et modifiez la configuration de l'adaptateur de fournisseur ; choisissez le modèle séparément.
 settings-model-catalog-open-detail = Inspectez les métadonnées du modèle résolu et actualisez le cache du catalogue de modèles local.
 permission-studio-command-rules-shell-only = Les règles de commande s'appliquent uniquement à l'outil shell canonique (agena.shell.run) ; utilisez une règle de nom ou la règle par défaut pour d'autres outils.
 permission-studio-detail-editable = Enter ouvre un éditeur JSON multiligne pour cette tranche d’autorisation.
@@ -1271,7 +1267,6 @@ provider-field-access-key-id = ID de clé d'accès
 provider-field-secret-access-key = Clé d'accès secrète
 provider-field-session-token = Jeton de session
 provider-field-service-key-env = Environnement de clé de service
-provider-field-default-adapter = Adaptateur par défaut
 provider-field-request-timeout = Délai d'expiration de la demande (secondes)
 provider-field-connect-timeout = Délai d'expiration de la connexion (secondes)
 provider-field-adapter-id = ID de l'adaptateur
@@ -1411,10 +1406,7 @@ permission-rule-error-session-id-required = la portée de la session nécessite 
 flash-server-config-edit-in-settings = Le fichier de configuration appartient au serveur. Modifiez ses valeurs dans Paramètres au lieu d'ouvrir un chemin client local.
 flash-command-requires-session = cette action nécessite une session ouverte
 flash-session-busy = la séance est occupée
-flash-provider-selected = fournisseur sélectionné : { $provider } (par défaut { $model })
-flash-provider-cleared = Le remplacement du fournisseur/modèle a été effacé
 flash-provider-not-found = fournisseur introuvable : { $provider }
-flash-provider-default-updated = Itinéraire du fournisseur par défaut mis à jour : { $provider }/{ $model }
 flash-permission-approval-model-updated = modèle d'approbation automatique mis à jour : { $provider }/{ $model }
 flash-provider-studio-adapter-required = sélectionnez d'abord un adaptateur
 flash-provider-studio-adapter-not-enabled = vérifiez l'adaptateur sélectionné avant d'ajouter un modèle
@@ -1453,7 +1445,6 @@ flash-provider-delete-adapter = Adaptateur configuré supprimé { $provider }/{ 
 flash-provider-delete-model = Modèle configuré supprimé { $provider }/{ $adapter }/{ $model }.
 flash-provider-studio-adapter-delete-empty = Aucun paramètre d'adaptateur n'est sélectionné pour être supprimé.
 flash-provider-save-error-required-field = { $field } est requis
-flash-provider-save-error-unsupported-default-adapter = auth { $auth } ne prend pas en charge defaults.adapter `{ $adapter }`; attendu le { $supported }
 flash-provider-save-error-unsupported-adapters = auth { $auth } ne prend pas en charge les adaptateurs : { $adapters } ; attendu le { $supported }
 flash-provider-save-error-api-base-url = L'authentification API nécessite base_url lors de l'utilisation du protocole OpenAI, des adaptateurs Anthropic ou Gemini
 flash-provider-save-error-gitlab-token = l'authentification gitlab_api nécessite une source de clé API

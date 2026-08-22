@@ -243,16 +243,27 @@ impl App {
             crate::app_backend::provider_mappings::model_display_name(&self.application, model)
                 .unwrap_or_else(|| model_name_status_label(model))
         };
-        let fallback_model = || {
-            self.application
-                .resolved_model_for_run_options(&self.run_options.to_request())
-                .ok()
-                .map(|model| model_label(&model))
+        let resolved_run_model = match self
+            .application
+            .resolved_model_for_run_options(&self.run_options.to_request())
+        {
+            Ok(model) => Some(model),
+            Err(error) => {
+                tracing::warn!(
+                    diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                        "resolve the selected model for the TUI session status",
+                        &error,
+                    ),
+                    "TUI session status omitted an unresolved model"
+                );
+                None
+            }
         };
+        let fallback_model = || resolved_run_model.as_ref().map(model_label);
 
         // Model label: prefer the active session's model (run-options
         // override or the persisted execution context), then the execution
-        // label, then the resolved default model so the status stays
+        // label, then the explicitly selected model so the status stays
         // populated even before a session exists.
         let model_part =
             self.current_session_model_ref()
@@ -265,16 +276,14 @@ impl App {
                 .or_else(fallback_model);
 
         // Think/speed: prefer the execution context (the modes a run actually
-        // used), then run-options overrides, then the resolved model's
-        // default modes so the modes are always visible before the first
-        // message is sent. Speed has a meaningful empty value: when the
-        // selected model exposes speed modes but none is explicitly selected,
-        // the provider/model native default is used and shown as `default`.
-        let status_model = self.current_session_model_ref().or_else(|| {
-            self.application
-                .resolved_model_for_run_options(&self.run_options.to_request())
-                .ok()
-        });
+        // used), then run-options overrides, then the selected model's native
+        // mode metadata so the modes are visible before the first message is
+        // sent. Speed has a meaningful empty value: when the selected model
+        // exposes speed modes but none is explicitly selected, the
+        // provider/model native default is used and shown as `default`.
+        let status_model = self
+            .current_session_model_ref()
+            .or_else(|| resolved_run_model.clone());
         let (default_thinking, default_speed) = self
             .application
             .resolved_model_default_modes(&self.run_options.to_request());
@@ -381,9 +390,10 @@ async fn send_command_completion(
 }
 
 /// Picks the first non-empty status mode value from the execution context,
-/// run-options overrides, and the resolved model defaults. The composer
-/// status shows the modes a run actually used once a message has been sent,
-/// but keeps the pending/effective modes visible before the first message.
+/// run-options overrides, and the selected model's native mode metadata. The
+/// composer status shows the modes a run actually used once a message has
+/// been sent, but keeps the pending/effective modes visible before the first
+/// message.
 fn status_mode_value<'a>(
     execution_mode: Option<&'a str>,
     run_options_mode: Option<&'a str>,
@@ -477,7 +487,7 @@ mod status_mode_value_tests {
     }
 
     #[test]
-    fn falls_back_to_defaults_before_any_message_is_sent() {
+    fn falls_back_to_model_metadata_before_any_message_is_sent() {
         assert_eq!(
             status_mode_value(None, None, Some("medium")),
             Some("medium"),

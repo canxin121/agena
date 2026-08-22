@@ -5,6 +5,33 @@ use serde_json::Value;
 
 use crate::{AnthropicTextBlock, CopilotModelExtension};
 
+/// Prefix used by CPA's Anthropic-compatible endpoint for model aliases.
+///
+/// The endpoint exposes models that are not Anthropic models through the
+/// Messages protocol by prefixing `claude-fable-5-dd-` and reversing the
+/// original model id. The alias is accepted by the gateway, but it is not a
+/// useful Agena model identity: it makes the same model differ between the
+/// OpenAI and Anthropic adapters and leaks a gateway-specific encoding into
+/// Provider Studio and TUI routes.
+const CPA_ANTHROPIC_MODEL_ALIAS_PREFIX: &str = "claude-fable-5-dd-";
+
+/// Return the stable model id represented by a CPA Anthropic model alias.
+///
+/// Unknown Anthropic ids are returned unchanged. Keeping this conversion in
+/// the provider contract crate lets discovery, configuration compatibility,
+/// and concrete request adapters agree on the same model identity without
+/// making the Web or TUI duplicate provider-specific parsing.
+pub fn normalize_anthropic_model_id(model_id: &str) -> String {
+    let Some(encoded) = model_id.strip_prefix(CPA_ANTHROPIC_MODEL_ALIAS_PREFIX) else {
+        return model_id.to_owned();
+    };
+    if encoded.is_empty() {
+        return model_id.to_owned();
+    }
+
+    encoded.chars().rev().collect()
+}
+
 #[derive(Debug, Serialize)]
 /// Wire shape of an Anthropic Messages API request.
 pub struct AnthropicMessagesRequest {
@@ -214,6 +241,26 @@ pub struct AnthropicToolCallState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn normalizes_cpa_anthropic_aliases_to_the_original_model_id() {
+        assert_eq!(
+            normalize_anthropic_model_id("claude-fable-5-dd-1370-hsalF-4V-keeSpeeD"),
+            "DeepSeek-V4-Flash-0731"
+        );
+        assert_eq!(
+            normalize_anthropic_model_id("claude-fable-5-dd-arret-6.5-tpg"),
+            "gpt-5.6-terra"
+        );
+        assert_eq!(
+            normalize_anthropic_model_id("claude-fable-5"),
+            "claude-fable-5"
+        );
+        assert_eq!(
+            normalize_anthropic_model_id("claude-opus-4-8"),
+            "claude-opus-4-8"
+        );
+    }
 
     fn request(tool_choice: Option<Value>) -> AnthropicMessagesRequest {
         AnthropicMessagesRequest {

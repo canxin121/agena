@@ -72,10 +72,12 @@ async fn resolve_provider_chain(
     let provider = sdk_config
         .credentials_provider()
         .ok_or(BedrockCredentialError::ProviderUnavailable)?;
-    provider
-        .provide_credentials()
-        .await
-        .map_err(|error| BedrockCredentialError::Resolve(error.to_string()))
+    provider.provide_credentials().await.map_err(|error| {
+        BedrockCredentialError::Resolve(agena_failure::diagnostic::format_error_chain_with_context(
+            "failed to resolve AWS credentials for Amazon Bedrock",
+            &error,
+        ))
+    })
 }
 
 #[cfg(any(

@@ -155,10 +155,11 @@ fn build_schema() -> (Schema, MemoryIndexFields) {
 }
 
 fn register_tokenizers(index: &Index) -> Result<(), MemoryIndexError> {
-    let ngrams = TextAnalyzer::builder(
-        NgramTokenizer::new(2, 4, false)
-            .map_err(|error| tantivy::TantivyError::InvalidArgument(error.to_string()))?,
-    )
+    let ngrams = TextAnalyzer::builder(NgramTokenizer::new(2, 4, false).map_err(|error| {
+        tantivy::TantivyError::InvalidArgument(format!(
+            "failed to create the 2-4 character memory-index n-gram tokenizer: {error}"
+        ))
+    })?)
     .filter(LowerCaser)
     .build();
     let simple = TextAnalyzer::builder(SimpleTokenizer::default())

@@ -48,7 +48,7 @@ mod config_patch_values;
 pub use config_patch_values::{
     HostedCodeExecutionContainerOverlay, OpenAiResponsesBackendConfig, ProviderAdapterOverlay,
     ProviderApiSubtype, ProviderAuthMode, ProviderAuthOverlay, ProviderCapabilityFamilyConfig,
-    ProviderDefaultsOverlay, ProviderGitlabApiAccessOverlay, ProviderHostedCodeExecutionOverlay,
+    ProviderGitlabApiAccessOverlay, ProviderHostedCodeExecutionOverlay,
     ProviderHostedFileSearchOverlay, ProviderHostedImageGenerationOverlay,
     ProviderHostedToolsOverlay, ProviderHostedUrlContextOverlay, ProviderHostedWebSearchOverlay,
     ProviderNativeToolConnectorOverlay, ProviderNativeToolHarnessBindingsOverlay,
@@ -81,7 +81,7 @@ pub use anthropic_wire::{
     AnthropicCacheCreationUsage, AnthropicMessage, AnthropicMessagesRequest,
     AnthropicMessagesResponse, AnthropicModel, AnthropicModelListResponse, AnthropicOutputConfig,
     AnthropicOutputTokensDetails, AnthropicSseDelta, AnthropicSseEvent, AnthropicSseMessage,
-    AnthropicSseMessageDelta, AnthropicToolCallState, AnthropicUsage,
+    AnthropicSseMessageDelta, AnthropicToolCallState, AnthropicUsage, normalize_anthropic_model_id,
 };
 mod anthropic_thinking;
 pub use anthropic_thinking::{

@@ -1,44 +1,4 @@
 impl App {
-    pub(crate) fn current_provider_default_model_ref(&self) -> Option<ModelRef> {
-        let sources = crate::app_backend::config::config_json_sources(&self.application).ok()?;
-        if let Some(selection) =
-            get_json_path(&sources.effective, Some("providers.default_selection"))
-                .ok()
-                .and_then(|value| {
-                    serde_json::from_value::<agena_domain::ModelSelectionConfig>(value).ok()
-                })
-            && let (Some(provider_id), Some(model_id)) =
-                (selection.provider.as_deref(), selection.model.as_deref())
-        {
-            return Some(match selection.adapter.as_deref() {
-                Some(adapter_id) => ModelRef::new_with_adapter(provider_id, adapter_id, model_id),
-                None => ModelRef::new(provider_id, model_id),
-            });
-        }
-        let provider_id = get_json_path(&sources.effective, Some("providers.default"))
-            .ok()
-            .and_then(|value| value.as_str().map(str::to_owned))?;
-        let provider = crate::app_backend::operations::list_configured_providers(&self.application)
-            .into_iter()
-            .find(|provider| provider.provider_id == provider_id)?;
-        let model_id = provider.defaults.model.trim();
-        if model_id.is_empty() {
-            return None;
-        }
-        Some(
-            provider
-                .defaults
-                .adapter
-                .as_deref()
-                .map(str::trim)
-                .filter(|adapter_id| !adapter_id.is_empty())
-                .map(|adapter_id| {
-                    ModelRef::new_with_adapter(provider.provider_id.clone(), adapter_id, model_id)
-                })
-                .unwrap_or_else(|| ModelRef::new(provider.provider_id, model_id)),
-        )
-    }
-
     pub(crate) fn finish_model_selection(
         &mut self,
         purpose: agena_tui::model_chooser::SessionModelChooserPurpose,
@@ -47,27 +7,7 @@ impl App {
         speed_mode: Option<String>,
         verbosity: Option<String>,
     ) -> bool {
-        let selection = model_selection_value(
-            &model,
-            thinking_mode.clone(),
-            speed_mode.clone(),
-            verbosity.clone(),
-        );
         match purpose {
-            agena_tui::model_chooser::SessionModelChooserPurpose::ProviderDefault => {
-                let provider_id = model.provider_id.to_string();
-                self.dispatch_backend_operation(
-                    move |application| async move {
-                        application
-                            .set_provider_default_selection(provider_id.as_str(), selection)
-                            .await
-                    },
-                    move |app, result| {
-                        app.finish_model_selection_persisted(purpose, model, result.map(|_| ()))
-                    },
-                );
-                false
-            }
             agena_tui::model_chooser::SessionModelChooserPurpose::PermissionApproval => {
                 let mut approval = serde_json::Map::new();
                 approval.insert(
@@ -123,7 +63,7 @@ impl App {
                     {
                         "flash-permission-approval-model-updated"
                     } else {
-                        "flash-provider-default-updated"
+                        "flash-session-model-updated"
                     },
                     &agena_tui::fl_args!(
                         "provider" => model.provider_id.to_string(),
@@ -144,38 +84,60 @@ impl App {
     }
 
     pub(crate) fn current_permission_approval_model_ref(&self) -> Option<ModelRef> {
-        let sources = crate::app_backend::config::config_json_sources(&self.application).ok()?;
-        let permission = get_json_path(&sources.effective, Some("permission")).ok()?;
-        let permission = serde_json::from_value::<PermissionConfig>(permission).ok()?;
-        permission.approval_model?.model_ref().ok()
+        let sources = match crate::app_backend::config::config_json_sources(&self.application) {
+            Ok(sources) => sources,
+            Err(error) => {
+                tracing::warn!(
+                    diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                        "load effective configuration for the permission approval model",
+                        error.as_ref(),
+                    ),
+                    "permission approval model is unavailable"
+                );
+                return None;
+            }
+        };
+        let permission = match get_json_path(&sources.effective, Some("permission")) {
+            Ok(permission) => permission,
+            Err(error) => {
+                tracing::warn!(
+                    diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                        "read the permission configuration for the approval model",
+                        &error,
+                    ),
+                    "permission approval model is unavailable"
+                );
+                return None;
+            }
+        };
+        let permission = match serde_json::from_value::<PermissionConfig>(permission) {
+            Ok(permission) => permission,
+            Err(error) => {
+                tracing::warn!(
+                    diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                        "decode the permission configuration for the approval model",
+                        &error,
+                    ),
+                    "permission approval model is unavailable"
+                );
+                return None;
+            }
+        };
+        let approval_model = permission.approval_model?;
+        match approval_model.model_ref() {
+            Ok(model_ref) => Some(model_ref),
+            Err(error) => {
+                tracing::warn!(
+                    diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                        "decode the configured permission approval model reference",
+                        &error,
+                    ),
+                    "permission approval model is unavailable"
+                );
+                None
+            }
+        }
     }
-}
-
-fn model_selection_value(
-    model: &ModelRef,
-    thinking_mode: Option<String>,
-    speed_mode: Option<String>,
-    verbosity: Option<String>,
-) -> JsonValue {
-    let mut selection = serde_json::Map::new();
-    selection.insert(
-        "provider".to_owned(),
-        JsonValue::String(model.provider_id.to_string()),
-    );
-    if let Some(adapter_id) = model.adapter_id.as_ref() {
-        selection.insert(
-            "adapter".to_owned(),
-            JsonValue::String(adapter_id.to_string()),
-        );
-    }
-    selection.insert(
-        "model".to_owned(),
-        JsonValue::String(model.model_id.to_string()),
-    );
-    insert_optional_selection_value(&mut selection, "thinking_mode", thinking_mode);
-    insert_optional_selection_value(&mut selection, "speed_mode", speed_mode);
-    insert_optional_selection_value(&mut selection, "verbosity", verbosity);
-    JsonValue::Object(selection)
 }
 
 fn insert_optional_selection_value(

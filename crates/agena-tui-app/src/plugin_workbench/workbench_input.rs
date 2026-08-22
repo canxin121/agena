@@ -352,7 +352,25 @@ impl App {
         if input.is_null() {
             input = serde_json::json!({});
         }
-        let input = serde_json::to_string_pretty(&input).unwrap_or_else(|_| "{}".to_owned());
+        let input = match serde_json::to_string_pretty(&input) {
+            Ok(input) => input,
+            Err(error) => {
+                tracing::error!(
+                    plugin_id = %plugin.plugin_id,
+                    tool_name = %tool.name,
+                    diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                        "serialize the initial plugin tool input for the TUI editor",
+                        &error,
+                    ),
+                    "plugin tool editor could not be opened"
+                );
+                self.flash_error(
+                    "The plugin tool input could not be prepared. Review the diagnostic log and try again."
+                        .to_owned(),
+                );
+                return;
+            }
+        };
         let summary = tool
             .docs
             .help

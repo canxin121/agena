@@ -16,7 +16,8 @@ const MAX_REPO_DISCOVERY_ENTRIES: usize = 100_000;
 const MAX_REPO_DISCOVERY_DURATION: Duration = Duration::from_secs(5);
 
 use super::{
-    DirectoryQuery, is_safe_repo_rel_path, map_git_failure, path_slash, rel_path_slash,
+    DirectoryQuery, git_command_result_or_log, git_command_transport_error_response,
+    git_io_error_response, is_safe_repo_rel_path, map_git_failure, path_slash, rel_path_slash,
     require_directory, require_directory_raw, run_git, run_git_checked,
 };
 
@@ -88,10 +89,11 @@ async fn discover_parent_repos(base: &Path) -> Vec<String> {
     let mut current = base.parent();
 
     while let Some(dir) = current {
-        let (code, stdout, _stderr) = run_git(dir, &["rev-parse", "--show-toplevel"])
-            .await
-            .unwrap_or((1, "".to_string(), "".to_string()));
-        if code == 0 {
+        let result = git_command_result_or_log(
+            run_git(dir, &["rev-parse", "--show-toplevel"]).await,
+            "discover parent Git repository",
+        );
+        if let Some((0, stdout, _)) = result {
             let top = stdout.trim();
             if !top.is_empty() {
                 let root = PathBuf::from(top);
@@ -131,7 +133,17 @@ fn discover_nested_repos(base: &Path) -> (HashSet<PathBuf>, bool) {
         }
         let entry = match next {
             Ok(entry) => entry,
-            Err(_) => continue,
+            Err(error) => {
+                truncated = true;
+                tracing::warn!(
+                    diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                        "repository discovery skipped an unreadable workspace entry",
+                        &error,
+                    ),
+                    "repository discovery result is partial"
+                );
+                continue;
+            }
         };
 
         let name = entry.file_name().to_string_lossy();
@@ -176,7 +188,14 @@ pub async fn git_repos(Query(q): Query<GitReposQuery>) -> Response {
 
     let permit = match REPO_DISCOVERY_WORKERS.acquire().await {
         Ok(permit) => permit,
-        Err(_) => {
+        Err(error) => {
+            tracing::error!(
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "repository discovery worker pool is unavailable",
+                    &error,
+                ),
+                "repository discovery request cannot run"
+            );
             return (
                 StatusCode::SERVICE_UNAVAILABLE,
                 Json(serde_json::json!({"error":"repository discovery is unavailable"})),
@@ -193,9 +212,13 @@ pub async fn git_repos(Query(q): Query<GitReposQuery>) -> Response {
     {
         Ok(result) => result,
         Err(error) => {
+            let diagnostic = agena_failure::diagnostic::format_error_chain_with_context(
+                "repository discovery worker task failed",
+                &error,
+            );
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error":format!("repository discovery failed: {error}")})),
+                Json(serde_json::json!({"error": diagnostic})),
             )
                 .into_response();
         }
@@ -208,7 +231,18 @@ pub async fn git_repos(Query(q): Query<GitReposQuery>) -> Response {
             let kind = match std::fs::metadata(&git_path) {
                 Ok(m) if m.is_file() => "worktree".to_string(),
                 Ok(m) if m.is_dir() => "dir".to_string(),
-                _ => "unknown".to_string(),
+                Ok(_) => "unknown".to_string(),
+                Err(error) => {
+                    tracing::warn!(
+                        path = %git_path.display(),
+                        diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                            "failed to inspect a discovered Git metadata path",
+                            &error,
+                        ),
+                        "discovered repository kind is unknown"
+                    );
+                    "unknown".to_string()
+                }
             };
             GitRepoInfo {
                 root: path_slash(&root),
@@ -279,10 +313,17 @@ pub async fn git_safe_directory(Query(q): Query<DirectoryQuery>) -> Response {
     };
 
     let safe_path = path_slash(&dir);
-    let (check_code, check_out, _check_err) =
-        run_git(&dir, &["config", "--global", "--get-all", "safe.directory"])
-            .await
-            .unwrap_or((1, "".to_string(), "".to_string()));
+    let (check_code, check_out, check_err) =
+        match run_git(&dir, &["config", "--global", "--get-all", "safe.directory"]).await {
+            Ok(result) => result,
+            Err(error) => {
+                return git_command_transport_error_response(
+                    "read global Git safe.directory configuration",
+                    &error,
+                    Some("git_safe_directory_read_process_failed"),
+                );
+            }
+        };
 
     if check_code == 0 {
         let exists = check_out
@@ -297,6 +338,18 @@ pub async fn git_safe_directory(Query(q): Query<DirectoryQuery>) -> Response {
             }))
             .into_response();
         }
+    } else if check_code != 1 {
+        if let Some(response) = map_git_failure(check_code, &check_out, &check_err) {
+            return response;
+        }
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "error": check_err.trim(),
+                "code": "git_safe_directory_read_failed",
+            })),
+        )
+            .into_response();
     }
 
     if let Err(resp) = run_git_checked(
@@ -358,11 +411,11 @@ pub async fn git_init(Query(q): Query<DirectoryQuery>, Json(body): Json<GitInitB
     }
 
     if let Err(err) = tokio::fs::create_dir_all(&target).await {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": err.to_string(), "code": "mkdir_failed"})),
-        )
-            .into_response();
+        return git_io_error_response(
+            "create the target directory for Git initialization",
+            &err,
+            "mkdir_failed",
+        );
     }
 
     let git_marker = target.join(".git");
@@ -520,36 +573,63 @@ pub async fn git_clone(
             .into_response();
     }
 
-    if let Ok(meta) = tokio::fs::metadata(&target).await {
-        if meta.is_dir() {
-            if let Ok(mut entries) = tokio::fs::read_dir(&target).await
-                && entries.next_entry().await.ok().flatten().is_some()
-            {
-                return (
+    match tokio::fs::metadata(&target).await {
+        Ok(meta) if meta.is_dir() => {
+            let mut entries = match tokio::fs::read_dir(&target).await {
+                Ok(entries) => entries,
+                Err(error) => {
+                    return git_io_error_response(
+                        "open the Git clone target directory",
+                        &error,
+                        "clone_target_read_failed",
+                    );
+                }
+            };
+            match entries.next_entry().await {
+                Ok(Some(_)) => {
+                    return (
                         StatusCode::CONFLICT,
                         Json(
                             serde_json::json!({"error": "Target directory not empty", "code": "target_not_empty"}),
                         ),
                     )
                         .into_response();
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    return git_io_error_response(
+                        "inspect the Git clone target directory",
+                        &error,
+                        "clone_target_read_failed",
+                    );
+                }
             }
-        } else {
+        }
+        Ok(_) => {
             return (
                 StatusCode::CONFLICT,
                 Json(serde_json::json!({"error": "Target exists", "code": "target_exists"})),
             )
                 .into_response();
         }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return git_io_error_response(
+                "inspect the Git clone target",
+                &error,
+                "clone_target_metadata_failed",
+            );
+        }
     }
 
     if let Some(parent) = target.parent()
         && let Err(err) = tokio::fs::create_dir_all(parent).await
     {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": err.to_string(), "code": "mkdir_failed"})),
-        )
-            .into_response();
+        return git_io_error_response(
+            "create the Git clone target parent directory",
+            &err,
+            "mkdir_failed",
+        );
     }
 
     let target_str = target.to_string_lossy().to_string();

@@ -16,28 +16,27 @@ const CATALOG_STATE_ID: i32 = 1;
 const ENTRY_TABLE: &str = "agena_model_catalog_entries";
 const STATE_TABLE: &str = "agena_model_catalog_state";
 
-fn backend_error(error: impl std::fmt::Display) -> ModelCatalogRepositoryError {
-    ModelCatalogRepositoryError::Backend(error.to_string())
+fn backend_error(error: impl std::error::Error + 'static) -> ModelCatalogRepositoryError {
+    ModelCatalogRepositoryError::Backend(agena_failure::diagnostic::format_error_chain(&error))
 }
 
-fn now_unix_ms() -> i64 {
+fn now_unix_ms() -> Result<i64, std::time::SystemTimeError> {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis().min(i64::MAX as u128) as i64)
-        .unwrap_or_default()
 }
 
 fn model_catalog_definition_search_text(
     model_id: &str,
     definition: &CatalogModelDefinition,
+    definition_json: &str,
 ) -> String {
-    let definition_text = serde_json::to_string(definition).unwrap_or_default();
     [
         model_id,
         definition.display_name.as_deref().unwrap_or_default(),
         definition.origin.as_deref().unwrap_or_default(),
         definition.description.as_deref().unwrap_or_default(),
-        definition_text.as_str(),
+        definition_json,
     ]
     .into_iter()
     .filter(|value| !value.trim().is_empty())
@@ -122,10 +121,17 @@ impl SeaModelCatalogRepository {
         .await;
         match result {
             Ok(()) => txn.commit().await.map_err(backend_error),
-            Err(error) => {
-                let _ = txn.rollback().await;
-                Err(error)
-            }
+            Err(error) => match txn.rollback().await {
+                Ok(()) => Err(error),
+                Err(rollback_error) => Err(ModelCatalogRepositoryError::Backend(format!(
+                    "{}; additionally, {}",
+                    agena_failure::diagnostic::format_error_chain(&error),
+                    agena_failure::diagnostic::format_error_chain_with_context(
+                        "failed to roll back clearing the cached model catalog",
+                        &rollback_error,
+                    )
+                ))),
+            },
         }
     }
 
@@ -141,10 +147,12 @@ impl SeaModelCatalogRepository {
         .await
         .map_err(backend_error)?;
 
-        let updated_at_ms = now_unix_ms();
+        let updated_at_ms = now_unix_ms().map_err(backend_error)?;
         for (model_id, definition) in &document.models {
             let definition_json = definition.to_persisted_json()?;
-            let search_text = model_catalog_definition_search_text(model_id, definition);
+            let definition_search_json = definition_json.to_string();
+            let search_text =
+                model_catalog_definition_search_text(model_id, definition, &definition_search_json);
             db.execute(Statement::from_sql_and_values(
                 DatabaseBackend::Sqlite,
                 format!(
@@ -191,7 +199,12 @@ impl SeaModelCatalogRepository {
         };
         let source = match ModelCatalogSnapshotSourceKind::from_persisted(source_value.as_str()) {
             Ok(source) => source,
-            Err(_) => {
+            Err(error) => {
+                tracing::warn!(
+                    source = %source_value,
+                    error = %error,
+                    "cached model catalog has an invalid source and will be cleared"
+                );
                 self.clear_cached_official_from_db().await?;
                 return Ok(None);
             }
@@ -222,24 +235,37 @@ impl SeaModelCatalogRepository {
         // timeout applies at transaction start instead of surfacing SQLITE_BUSY
         // on the read→write lock upgrade. Without this, a concurrent writer in
         // another process makes the gate SELECT→write path fail immediately.
-        crate::acquire_write_lock(&txn)
-            .await
-            .map_err(backend_error)?;
+        if let Err(error) = crate::acquire_write_lock(&txn).await {
+            let primary_error = backend_error(error);
+            return match txn.rollback().await {
+                Ok(()) => Err(primary_error),
+                Err(rollback_error) => Err(ModelCatalogRepositoryError::Backend(format!(
+                    "{}; additionally, {}",
+                    agena_failure::diagnostic::format_error_chain(&primary_error),
+                    agena_failure::diagnostic::format_error_chain_with_context(
+                        "failed to roll back after acquiring the model-catalog write lock failed",
+                        &rollback_error,
+                    )
+                ))),
+            };
+        }
         let result = async {
             // Freshness gate: if another process already wrote a catalog
             // fetched at or after ours, skip the whole rewrite. SQLite's
             // single-writer transaction serializes concurrent writers, so the
             // check-and-write is atomic: the later process sees the earlier
             // commit and bails.
-            let existing: Option<i64> = txn
+            let existing = txn
                 .query_one(Statement::from_sql_and_values(
                     DatabaseBackend::Sqlite,
                     format!("SELECT fetched_at_unix_ms FROM {STATE_TABLE} WHERE id = ?"),
                     [CATALOG_STATE_ID.into()],
                 ))
                 .await
-                .map_err(backend_error)?
-                .and_then(|row| row.try_get("", "fetched_at_unix_ms").ok());
+                .map_err(backend_error)?;
+            let existing: Option<i64> = existing
+                .map(|row| row.try_get("", "fetched_at_unix_ms").map_err(backend_error))
+                .transpose()?;
             if existing.is_some_and(|value| value >= cached.fetched_at_unix_ms) {
                 return Ok(());
             }
@@ -260,7 +286,7 @@ impl SeaModelCatalogRepository {
                     CATALOG_STATE_ID.into(),
                     cached.fetched_at_unix_ms.into(),
                     cached.source.as_persisted().to_owned().into(),
-                    now_unix_ms().into(),
+                    now_unix_ms().map_err(backend_error)?.into(),
                 ],
             ))
             .await
@@ -270,10 +296,17 @@ impl SeaModelCatalogRepository {
         .await;
         match result {
             Ok(()) => txn.commit().await.map_err(backend_error),
-            Err(error) => {
-                let _ = txn.rollback().await;
-                Err(error)
-            }
+            Err(error) => match txn.rollback().await {
+                Ok(()) => Err(error),
+                Err(rollback_error) => Err(ModelCatalogRepositoryError::Backend(format!(
+                    "{}; additionally, {}",
+                    agena_failure::diagnostic::format_error_chain(&error),
+                    agena_failure::diagnostic::format_error_chain_with_context(
+                        "failed to roll back writing the cached model catalog",
+                        &rollback_error,
+                    )
+                ))),
+            },
         }
     }
 }

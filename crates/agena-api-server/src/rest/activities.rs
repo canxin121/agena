@@ -178,8 +178,5 @@ pub async fn clear_finished_activities(
 }
 
 fn activity_control_error(error: agena_runtime::ActivityControlError) -> ServerError {
-    ServerError::bad_request_with_diagnostic(
-        "The background activity operation failed.",
-        error.to_string(),
-    )
+    ServerError::bad_request_error(&error)
 }

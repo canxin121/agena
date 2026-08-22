@@ -10,8 +10,9 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 use super::{
-    DirectoryQuery, git_success_response, is_safe_repo_rel_path, map_git_failure,
-    require_directory, require_locked_directory, run_git, run_git_checked, run_locked_git_checked,
+    DirectoryQuery, git_command_result_or_log, git_command_transport_error_response,
+    git_success_response, is_safe_repo_rel_path, map_git_failure, require_directory,
+    require_locked_directory, run_git, run_git_checked, run_locked_git_checked,
 };
 
 fn count_status_paths(status_output: &str) -> usize {
@@ -61,9 +62,10 @@ fn resolve_worktree_migrate_source_path(raw: &str, repo: &Path) -> Result<PathBu
 }
 
 async fn git_common_dir(dir: &Path) -> Option<String> {
-    let (code, out, _err) = run_git(dir, &["rev-parse", "--git-common-dir"])
-        .await
-        .ok()?;
+    let (code, out, _) = git_command_result_or_log(
+        run_git(dir, &["rev-parse", "--git-common-dir"]).await,
+        "resolve Git common directory",
+    )?;
     if code != 0 {
         return None;
     }
@@ -112,18 +114,28 @@ pub async fn git_worktrees(Query(q): Query<DirectoryQuery>) -> Response {
         Err(resp) => return *resp,
     };
 
-    let (code, out, err) = run_git(&dir, &["worktree", "list", "--porcelain"])
-        .await
-        .unwrap_or((1, "".to_string(), "".to_string()));
+    let (code, out, err) = match run_git(&dir, &["worktree", "list", "--porcelain"]).await {
+        Ok(result) => result,
+        Err(error) => {
+            return git_command_transport_error_response(
+                "list Git worktrees",
+                &error,
+                Some("git_worktree_list_process_failed"),
+            );
+        }
+    };
     if code != 0 {
-        // Return [] for non-worktree repos.
-        let mut resp = Json(Vec::<GitWorktreeInfo>::new()).into_response();
-        resp.headers_mut().insert(
-            "X-Agena-Studio-Warning",
-            "git worktrees unavailable".parse().unwrap(),
-        );
-        tracing::warn!("git worktree list failed: {}", err.trim());
-        return resp;
+        if let Some(response) = map_git_failure(code, &out, &err) {
+            return response;
+        }
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "error": err.trim(),
+                "code": "git_worktree_list_failed",
+            })),
+        )
+            .into_response();
     }
 
     let mut worktrees = Vec::new();
@@ -506,13 +518,35 @@ pub async fn git_worktree_migrate(
     } else {
         ["stash", "apply", stash_ref.as_str()]
     };
-    let (apply_code, apply_out, apply_err) =
-        run_git(&dir, &apply_cmd)
-            .await
-            .unwrap_or((1, "".to_string(), "".to_string()));
+    let (apply_code, apply_out, apply_err) = match run_git(&dir, &apply_cmd).await {
+        Ok(result) => result,
+        Err(error) => {
+            return git_command_transport_error_response(
+                "apply migrated Git worktree stash",
+                &error,
+                Some("git_worktree_migrate_process_failed"),
+            );
+        }
+    };
     if apply_code != 0 {
         // Best-effort restore source changes so migration failures are not destructive.
-        let _ = run_git(&source, &["stash", "pop", "--index", &stash_ref]).await;
+        match run_git(&source, &["stash", "pop", "--index", &stash_ref]).await {
+            Ok((0, _, _)) => {}
+            Ok((restore_code, restore_out, restore_error)) => {
+                tracing::error!(
+                    exit_code = restore_code,
+                    stdout = %restore_out,
+                    stderr = %restore_error,
+                    "failed to restore source worktree after migration failure"
+                );
+            }
+            Err(error) => {
+                tracing::error!(
+                    diagnostic = %error,
+                    "source worktree restore process failed after migration failure"
+                );
+            }
+        }
         if let Some(resp) = map_git_failure(apply_code, &apply_out, &apply_err) {
             return resp;
         }

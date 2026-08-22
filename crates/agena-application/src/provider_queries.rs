@@ -6,9 +6,8 @@ use agena_api::{
     },
     resource::{
         ProviderAdapterModelsResource, ProviderAdapterModelsResponse,
-        ProviderAdapterSummaryResource, ProviderDefaultsResource,
-        ProviderModelCapabilitiesResource, ProviderModelMetadataResource,
-        ProviderModelRequestOverrideResource, ProviderModelResource,
+        ProviderAdapterSummaryResource, ProviderModelCapabilitiesResource,
+        ProviderModelMetadataResource, ProviderModelRequestOverrideResource, ProviderModelResource,
         ProviderModelSpeedModeResource, ProviderModelThinkingModeResource, ProviderModelsResponse,
         ProviderSummaryResource, ReasoningEffortResource, ThinkingDisplayResource,
         ThinkingRequestResource,
@@ -113,10 +112,6 @@ pub fn list_providers_response(state: &Application) -> Vec<ProviderSummaryResour
         .into_iter()
         .map(|provider| ProviderSummaryResource {
             provider_id: provider.provider_id.to_string(),
-            defaults: ProviderDefaultsResource {
-                adapter: provider.defaults.adapter,
-                model: provider.defaults.model,
-            },
             adapters: provider
                 .adapters
                 .into_iter()
@@ -150,13 +145,13 @@ pub async fn list_provider_models_response(
         Ok(models) if !models.is_empty() => models,
         Ok(_) => catalog
             .configured_local_models(&provider_id_value)
-            .map_err(|error| ApplicationError::internal(error.to_string()))?,
+            .map_err(|error| ApplicationError::internal_error(&error))?,
         Err(error) => {
             let fallback = catalog
                 .configured_local_models(&provider_id_value)
-                .map_err(|fallback_error| ApplicationError::internal(fallback_error.to_string()))?;
+                .map_err(|fallback_error| ApplicationError::internal_error(&fallback_error))?;
             if fallback.is_empty() {
-                return Err(ApplicationError::internal(error.to_string()));
+                return Err(ApplicationError::internal_error(&error));
             }
             fallback
         }
@@ -190,7 +185,7 @@ pub fn list_configured_provider_models_response(
     let models = state
         .provider_catalog()
         .configured_local_models(&provider_id_value)
-        .map_err(|error| ApplicationError::internal(error.to_string()))?;
+        .map_err(|error| ApplicationError::internal_error(&error))?;
     Ok(ProviderModelsResponse {
         provider_id,
         models: models

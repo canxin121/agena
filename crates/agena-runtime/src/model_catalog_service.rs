@@ -35,6 +35,16 @@ pub enum ModelCatalogServiceError {
     Composition(#[from] ModelCatalogCompositionError),
 }
 
+impl ModelCatalogServiceError {
+    fn initialization_error(error: &(dyn std::error::Error + 'static)) -> Self {
+        Self::Initialization(agena_failure::diagnostic::format_error_chain(error))
+    }
+
+    fn repository_error(error: &(dyn std::error::Error + 'static)) -> Self {
+        Self::Repository(agena_failure::diagnostic::format_error_chain(error))
+    }
+}
+
 #[derive(Clone)]
 /// Service managing the model catalog.
 pub struct ModelCatalogService {
@@ -53,7 +63,7 @@ impl ModelCatalogService {
         let snapshot = match store
             .read_cache()
             .await
-            .map_err(|error| ModelCatalogServiceError::Repository(error.to_string()))?
+            .map_err(|error| ModelCatalogServiceError::repository_error(&error))?
         {
             Some(record) => model_catalog_snapshot_from_cache_record(&record)?,
             None => ModelCatalogSnapshot::default(),
@@ -79,7 +89,7 @@ impl ModelCatalogService {
         let public_source = crate::build_default_public_model_catalog_source(
             crate::runtime_codex_user_agent(env!("CARGO_PKG_VERSION")),
         )
-        .map_err(|error| ModelCatalogServiceError::Initialization(error.to_string()))?;
+        .map_err(|error| ModelCatalogServiceError::initialization_error(&error))?;
         Ok(Arc::new(
             Self::new(
                 store,
@@ -142,7 +152,7 @@ impl ModelCatalogService {
         self.store
             .write_cache(&record)
             .await
-            .map_err(|error| ModelCatalogServiceError::Repository(error.to_string()))?;
+            .map_err(|error| ModelCatalogServiceError::repository_error(&error))?;
 
         let mut snapshot = self.snapshot();
         snapshot.official = document;

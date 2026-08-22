@@ -95,7 +95,7 @@ fn draft_auth_http_client() -> Result<&'static reqwest::Client, RuntimeAuthentic
         reqwest::Client::builder()
             .timeout(DRAFT_AUTH_HTTP_TIMEOUT)
             .build()
-            .map_err(|error| error.to_string())
+            .map_err(|error| agena_failure::diagnostic::format_error_chain(&error))
     }) {
         Ok(client) => Ok(client),
         Err(error) => Err(RuntimeAuthenticationError::internal(format!(
@@ -119,7 +119,7 @@ async fn draft_auth_response_body(
     while let Some(chunk) = response
         .chunk()
         .await
-        .map_err(|error| RuntimeAuthenticationError::internal(error.to_string()))?
+        .map_err(|error| RuntimeAuthenticationError::internal_error(&error))?
     {
         if body.len().saturating_add(chunk.len()) > MAX_DRAFT_AUTH_RESPONSE_BYTES {
             return Err(RuntimeAuthenticationError::internal(
@@ -131,12 +131,47 @@ async fn draft_auth_response_body(
     Ok(body)
 }
 
+async fn draft_auth_error_response_body(
+    operation: &str,
+    status: reqwest::StatusCode,
+    response: reqwest::Response,
+) -> Result<Vec<u8>, RuntimeAuthenticationError> {
+    draft_auth_response_body(response).await.map_err(|error| {
+        RuntimeAuthenticationError::internal(format!(
+            "{operation} failed with status {status}, and its error response body could not be read: {}",
+            error.message
+        ))
+    })
+}
+
+fn draft_auth_public_error_detail(body: &[u8]) -> String {
+    let text = String::from_utf8_lossy(body);
+    if let Ok(value) = serde_json::from_slice::<serde_json::Value>(body) {
+        for field in ["error_description", "message", "detail", "error"] {
+            if let Some(detail) = value.get(field).and_then(serde_json::Value::as_str) {
+                let detail = agena_failure::diagnostic::scrubbed_preserve(detail, 1_000);
+                if !detail.is_empty() {
+                    return detail;
+                }
+            }
+        }
+        return "provider returned an error response without a public diagnostic".to_owned();
+    }
+
+    let detail = agena_failure::diagnostic::scrubbed_preserve(&text, 1_000);
+    if detail.is_empty() {
+        "provider returned an error response without a public diagnostic".to_owned()
+    } else {
+        detail
+    }
+}
+
 async fn draft_auth_json<T: serde::de::DeserializeOwned>(
     response: reqwest::Response,
 ) -> Result<T, RuntimeAuthenticationError> {
     let body = draft_auth_response_body(response).await?;
     serde_json::from_slice(&body)
-        .map_err(|error| RuntimeAuthenticationError::internal(error.to_string()))
+        .map_err(|error| RuntimeAuthenticationError::internal_error(&error))
 }
 
 type DraftOAuthClient =
@@ -175,13 +210,14 @@ pub async fn start_copilot_draft_auth_device(
         }))
         .send()
         .await
-        .map_err(|error| RuntimeAuthenticationError::internal(error.to_string()))?;
+        .map_err(|error| RuntimeAuthenticationError::internal_error(&error))?;
     if !response.status().is_success() {
         let status = response.status();
-        let body = draft_auth_response_body(response).await.unwrap_or_default();
+        let operation = "github copilot device oauth start";
+        let body = draft_auth_error_response_body(operation, status, response).await?;
         return Err(RuntimeAuthenticationError::internal(format!(
-            "github copilot device oauth start failed with status {status}: {}",
-            String::from_utf8_lossy(&body)
+            "{operation} failed with status {status}: {}",
+            draft_auth_public_error_detail(&body)
         )));
     }
     let data: DeviceCodeResponse = draft_auth_json(response).await?;
@@ -217,13 +253,14 @@ pub async fn poll_copilot_draft_auth_device(
         }))
         .send()
         .await
-        .map_err(|error| RuntimeAuthenticationError::internal(error.to_string()))?;
+        .map_err(|error| RuntimeAuthenticationError::internal_error(&error))?;
     if !response.status().is_success() {
         let status = response.status();
-        let body = draft_auth_response_body(response).await.unwrap_or_default();
+        let operation = "github copilot device oauth poll";
+        let body = draft_auth_error_response_body(operation, status, response).await?;
         return Err(RuntimeAuthenticationError::internal(format!(
-            "github copilot device oauth poll failed with status {status}: {}",
-            String::from_utf8_lossy(&body)
+            "{operation} failed with status {status}: {}",
+            draft_auth_public_error_detail(&body)
         )));
     }
     let data: PollResult = draft_auth_json(response).await?;
@@ -263,7 +300,7 @@ pub async fn start_openai_draft_auth_device(
         .json(&serde_json::json!({ "client_id": OPENAI_CLIENT_ID }))
         .send()
         .await
-        .map_err(|error| RuntimeAuthenticationError::internal(error.to_string()))?;
+        .map_err(|error| RuntimeAuthenticationError::internal_error(&error))?;
     let response = openai_success("device oauth start", response).await?;
     let data: DeviceCodeResponse = draft_auth_json(response).await?;
     Ok(RuntimeDraftAuthDeviceStart {
@@ -307,7 +344,7 @@ pub async fn poll_openai_draft_auth_device(
         }))
         .send()
         .await
-        .map_err(|error| RuntimeAuthenticationError::internal(error.to_string()))?;
+        .map_err(|error| RuntimeAuthenticationError::internal_error(&error))?;
     if matches!(
         response.status(),
         reqwest::StatusCode::FORBIDDEN | reqwest::StatusCode::NOT_FOUND
@@ -338,7 +375,7 @@ pub async fn poll_openai_draft_auth_device(
         .body(encoded_form)
         .send()
         .await
-        .map_err(|error| RuntimeAuthenticationError::internal(error.to_string()))?;
+        .map_err(|error| RuntimeAuthenticationError::internal_error(&error))?;
     let token: TokenResponseBody =
         draft_auth_json(openai_success("device oauth token exchange", response).await?).await?;
     let refresh_token = token.refresh_token.ok_or_else(|| {
@@ -417,7 +454,7 @@ pub async fn finish_openai_draft_auth_browser(
         .body(encoded_form)
         .send()
         .await
-        .map_err(|error| RuntimeAuthenticationError::internal(error.to_string()))?;
+        .map_err(|error| RuntimeAuthenticationError::internal_error(&error))?;
     let token: TokenResponseBody =
         draft_auth_json(openai_success("oauth token exchange", response).await?).await?;
     let refresh_token = token.refresh_token.ok_or_else(|| {
@@ -452,7 +489,7 @@ pub async fn finish_gitlab_draft_auth_browser(
         .redirect(oauth2::reqwest::redirect::Policy::none())
         .timeout(DRAFT_AUTH_HTTP_TIMEOUT)
         .build()
-        .map_err(|error| RuntimeAuthenticationError::internal(error.to_string()))?;
+        .map_err(|error| RuntimeAuthenticationError::internal_error(&error))?;
     let token = client
         .exchange_code(AuthorizationCode::new(code.to_owned()))
         .set_pkce_verifier(PkceCodeVerifier::new(pkce_verifier.to_owned()))
@@ -576,10 +613,11 @@ async fn openai_success(
         return Ok(response);
     }
     let status = response.status();
-    let body = draft_auth_response_body(response).await.unwrap_or_default();
+    let operation = format!("openai {context}");
+    let body = draft_auth_error_response_body(&operation, status, response).await?;
     Err(RuntimeAuthenticationError::internal(format!(
-        "openai {context} failed with status {status}: {}",
-        String::from_utf8_lossy(&body)
+        "{operation} failed with status {status}: {}",
+        draft_auth_public_error_detail(&body)
     )))
 }
 

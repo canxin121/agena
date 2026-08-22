@@ -668,32 +668,80 @@ async fn bridge_websocket(
 
     let downstream_to_upstream = async {
         while let Some(message) = downstream_receiver.next().await {
-            let Ok(message) = message else {
-                break;
+            let message = match message {
+                Ok(message) => message,
+                Err(error) => {
+                    tracing::debug!(
+                        diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                            "preview WebSocket downstream receive failed",
+                            &error,
+                        ),
+                        "preview WebSocket downstream disconnected"
+                    );
+                    break;
+                }
             };
-            let Ok(message) = downstream_message_to_upstream(message) else {
-                break;
-            };
-            if upstream_sender.send(message).await.is_err() {
+            let message = downstream_message_to_upstream(message);
+            if let Err(error) = upstream_sender.send(message).await {
+                tracing::debug!(
+                    diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                        "preview WebSocket upstream send failed",
+                        &error,
+                    ),
+                    "preview WebSocket upstream disconnected"
+                );
                 break;
             }
         }
-        let _ = upstream_sender.close().await;
+        if let Err(error) = upstream_sender.close().await {
+            tracing::debug!(
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "preview WebSocket upstream close failed",
+                    &error,
+                ),
+                "preview WebSocket upstream did not close cleanly"
+            );
+        }
     };
 
     let upstream_to_downstream = async {
         while let Some(message) = upstream_receiver.next().await {
-            let Ok(message) = message else {
-                break;
+            let message = match message {
+                Ok(message) => message,
+                Err(error) => {
+                    tracing::debug!(
+                        diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                            "preview WebSocket upstream receive failed",
+                            &error,
+                        ),
+                        "preview WebSocket upstream disconnected"
+                    );
+                    break;
+                }
             };
             let Some(message) = upstream_message_to_downstream(message) else {
                 continue;
             };
-            if downstream_sender.send(message).await.is_err() {
+            if let Err(error) = downstream_sender.send(message).await {
+                tracing::debug!(
+                    diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                        "preview WebSocket downstream send failed",
+                        &error,
+                    ),
+                    "preview WebSocket downstream disconnected"
+                );
                 break;
             }
         }
-        let _ = downstream_sender.close().await;
+        if let Err(error) = downstream_sender.close().await {
+            tracing::debug!(
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "preview WebSocket downstream close failed",
+                    &error,
+                ),
+                "preview WebSocket downstream did not close cleanly"
+            );
+        }
     };
 
     tokio::select! {
@@ -702,18 +750,18 @@ async fn bridge_websocket(
     }
 }
 
-fn downstream_message_to_upstream(message: Message) -> Result<TungsteniteMessage, ()> {
+fn downstream_message_to_upstream(message: Message) -> TungsteniteMessage {
     match message {
-        Message::Text(text) => Ok(TungsteniteMessage::Text(text.to_string().into())),
-        Message::Binary(bytes) => Ok(TungsteniteMessage::Binary(bytes)),
-        Message::Ping(bytes) => Ok(TungsteniteMessage::Ping(bytes)),
-        Message::Pong(bytes) => Ok(TungsteniteMessage::Pong(bytes)),
-        Message::Close(frame) => Ok(TungsteniteMessage::Close(frame.map(|frame| {
-            TungsteniteCloseFrame {
+        Message::Text(text) => TungsteniteMessage::Text(text.to_string().into()),
+        Message::Binary(bytes) => TungsteniteMessage::Binary(bytes),
+        Message::Ping(bytes) => TungsteniteMessage::Ping(bytes),
+        Message::Pong(bytes) => TungsteniteMessage::Pong(bytes),
+        Message::Close(frame) => {
+            TungsteniteMessage::Close(frame.map(|frame| TungsteniteCloseFrame {
                 code: frame.code.into(),
                 reason: frame.reason.to_string().into(),
-            }
-        }))),
+            }))
+        }
     }
 }
 
@@ -822,7 +870,7 @@ fn preview_probe_client() -> ApiResult<reqwest::Client> {
         .connect_timeout(Duration::from_millis(350))
         .timeout(Duration::from_millis(700))
         .build()
-        .map_err(|err| AppError::internal(format!("failed to build preview probe client: {err}")))
+        .map_err(|err| AppError::internal_error_with_context("build preview probe client", &err))
 }
 
 async fn response_from_upstream(upstream: reqwest::Response) -> ApiResult<Response> {
@@ -841,7 +889,7 @@ fn preview_proxy_client() -> ApiResult<reqwest::Client> {
     reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .build()
-        .map_err(|err| AppError::internal(format!("failed to build preview proxy client: {err}")))
+        .map_err(|err| AppError::internal_error_with_context("build preview proxy client", &err))
 }
 
 fn add_preview_frame_headers(mut response: Response) -> Response {

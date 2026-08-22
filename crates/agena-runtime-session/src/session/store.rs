@@ -164,7 +164,7 @@ impl StoreAdapter {
                 .unwrap_or_default(),
             started_at_ms: meta.subtask_started_at_ms,
             finished_at_ms: meta.subtask_finished_at_ms,
-            failure: subtask_failure_from_value(meta.subtask_failure.as_ref()),
+            failure: subtask_failure_from_value(meta.subtask_failure.as_ref())?,
         };
         session.refresh_derived();
         Ok(session)
@@ -767,7 +767,7 @@ pub(crate) fn session_from_view(view: SessionView) -> Result<Session, AppError> 
     session.source_cutoff_seq_global = meta.cutoff_part_id;
     session.task_id = meta.task_id.clone();
     session.updated_at = timestamp_millis_to_utc(meta.updated_at_ms)?;
-    apply_meta_runtime(&mut session.runtime, &meta);
+    apply_meta_runtime(&mut session.runtime, &meta)?;
     session.bind_runtime_scope();
     session.install_projected_parts(parts);
     Ok(session)
@@ -1213,21 +1213,39 @@ fn domain_usage_stats_from_storage(
     }
 }
 
-/// Decode the subtask failure JSON column. A malformed value degrades to
-/// `None` rather than failing the whole session load.
-fn subtask_failure_from_value(value: Option<&Value>) -> Option<agena_failure::Failure> {
-    value.and_then(|value| serde_json::from_value::<agena_failure::Failure>(value.clone()).ok())
+/// Decode the subtask failure JSON column without treating corrupt persisted
+/// state as an absent failure.
+fn subtask_failure_from_value(
+    value: Option<&Value>,
+) -> Result<Option<agena_failure::Failure>, AppError> {
+    value
+        .map(|value| {
+            serde_json::from_value::<agena_failure::Failure>(value.clone()).map_err(|error| {
+                AppError::Internal(agena_failure::diagnostic::format_error_chain_with_context(
+                    "decode persisted subtask failure",
+                    &error,
+                ))
+            })
+        })
+        .transpose()
 }
 
 /// Apply session-row metadata (provider anchors, subtask, execution config)
 /// to a freshly built runtime state.
-fn apply_meta_runtime(runtime: &mut crate::session::SessionRuntimeState, meta: &SessionMeta) {
-    if let Some(value) = meta.provider_anchors_json.as_ref()
-        && let Ok(anchors) = serde_json::from_value::<
+fn apply_meta_runtime(
+    runtime: &mut crate::session::SessionRuntimeState,
+    meta: &SessionMeta,
+) -> Result<(), AppError> {
+    if let Some(value) = meta.provider_anchors_json.as_ref() {
+        runtime.provider_anchors = serde_json::from_value::<
             BTreeMap<String, crate::model::ProviderPromptAnchor>,
         >(value.clone())
-    {
-        runtime.provider_anchors = anchors;
+        .map_err(|error| {
+            AppError::Internal(agena_failure::diagnostic::format_error_chain_with_context(
+                format!("decode provider anchors for session {}", meta.id),
+                &error,
+            ))
+        })?;
     }
     runtime.subtask = crate::session::SubtaskRuntimeState {
         status: meta
@@ -1237,17 +1255,23 @@ fn apply_meta_runtime(runtime: &mut crate::session::SessionRuntimeState, meta: &
             .unwrap_or_default(),
         started_at_ms: meta.subtask_started_at_ms,
         finished_at_ms: meta.subtask_finished_at_ms,
-        failure: subtask_failure_from_value(meta.subtask_failure.as_ref()),
+        failure: subtask_failure_from_value(meta.subtask_failure.as_ref())?,
     };
-    if let Some(value) = meta.config_json.as_ref()
-        && let Ok(config) = serde_json::from_value::<PersistedExecutionConfig>(value.clone())
-    {
+    if let Some(value) = meta.config_json.as_ref() {
+        let config =
+            serde_json::from_value::<PersistedExecutionConfig>(value.clone()).map_err(|error| {
+                AppError::Internal(agena_failure::diagnostic::format_error_chain_with_context(
+                    format!("decode persisted execution config for session {}", meta.id),
+                    &error,
+                ))
+            })?;
         runtime.execution.selection = config.selection;
         runtime.execution.access = config.access;
         runtime.execution.permission_ceiling = config.permission_ceiling;
         runtime.execution.capability_denied_tool_names = config.capability_denied_tool_names;
         runtime.execution.effective_workspace_root = config.effective_workspace_root;
     }
+    Ok(())
 }
 
 /// The D5 slice of `sessions.config_json`: execution configuration only, never

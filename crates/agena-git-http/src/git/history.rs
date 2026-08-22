@@ -9,8 +9,9 @@ use serde::{Deserialize, Serialize};
 use crate::git2_utils;
 
 use super::{
-    DirectoryQuery, MAX_BLOB_BYTES, abs_path, git_success_response, git2_open_error_response,
-    is_safe_repo_rel_path, run_git, run_git_checked, run_locked_git_checked, spawn_libgit2,
+    DirectoryQuery, MAX_BLOB_BYTES, abs_path, git_command_result_or_log, git_success_response,
+    git_task_error_response, git2_open_error_response, is_safe_repo_rel_path, run_git,
+    run_git_checked, run_locked_git_checked, spawn_libgit2,
 };
 
 #[derive(Debug, Serialize)]
@@ -127,7 +128,10 @@ pub async fn git_log(Query(q): Query<GitLogQuery>) -> Response {
         )
             .into_response();
     };
-    let dir = abs_path(dir_raw);
+    let dir = match abs_path(dir_raw) {
+        Ok(dir) => dir,
+        Err(response) => return *response,
+    };
 
     let limit = q.limit.unwrap_or(50).clamp(1, 200);
     let offset = q.offset.unwrap_or(0);
@@ -282,7 +286,10 @@ pub async fn git_commit_diff(Query(q): Query<GitCommitDiffQuery>) -> Response {
         )
             .into_response();
     };
-    let dir = abs_path(dir_raw);
+    let dir = match abs_path(dir_raw) {
+        Ok(dir) => dir,
+        Err(response) => return *response,
+    };
     let Some(commit) = q
         .commit
         .as_deref()
@@ -519,7 +526,10 @@ pub async fn git_commit_files(Query(q): Query<GitCommitFilesQuery>) -> Response 
         )
             .into_response();
     };
-    let dir = abs_path(dir_raw);
+    let dir = match abs_path(dir_raw) {
+        Ok(dir) => dir,
+        Err(response) => return *response,
+    };
     let Some(commit) = q
         .commit
         .as_deref()
@@ -554,19 +564,29 @@ pub async fn git_commit_files(Query(q): Query<GitCommitFilesQuery>) -> Response 
         "-M",
         commit,
     ];
-    let (n_code, n_out, _n_err) =
-        run_git(&dir, &numstat_args)
-            .await
-            .unwrap_or((1, "".to_string(), "".to_string()));
+    let numstat = git_command_result_or_log(
+        run_git(&dir, &numstat_args).await,
+        "read Git commit numeric diff statistics",
+    );
 
     let mut stats_map: std::collections::HashMap<String, (i32, i32)> =
         std::collections::HashMap::new();
-    if n_code == 0 {
-        for line in n_out.lines().map(|l| l.trim()).filter(|l| !l.is_empty()) {
-            if let Some((path, ins, del)) = parse_numstat_line(line) {
-                stats_map.insert(path, (ins, del));
+    match numstat {
+        Some((0, n_out, _)) => {
+            for line in n_out.lines().map(|l| l.trim()).filter(|l| !l.is_empty()) {
+                if let Some((path, ins, del)) = parse_numstat_line(line) {
+                    stats_map.insert(path, (ins, del));
+                }
             }
         }
+        Some((code, _, error)) => {
+            tracing::warn!(
+                exit_code = code,
+                stderr = %error,
+                "Git commit file statistics are unavailable"
+            );
+        }
+        None => {}
     }
 
     let mut files: Vec<GitCommitFile> = Vec::new();
@@ -646,7 +666,10 @@ pub async fn git_commit_file_diff(Query(q): Query<GitCommitFileDiffQuery>) -> Re
         )
             .into_response();
     };
-    let dir = abs_path(dir_raw);
+    let dir = match abs_path(dir_raw) {
+        Ok(dir) => dir,
+        Err(response) => return *response,
+    };
     let Some(commit) = q
         .commit
         .as_deref()
@@ -731,7 +754,10 @@ pub async fn git_commit_file_content(Query(q): Query<GitCommitFileContentQuery>)
         )
             .into_response();
     };
-    let dir = abs_path(dir_raw);
+    let dir = match abs_path(dir_raw) {
+        Ok(dir) => dir,
+        Err(response) => return *response,
+    };
     let Some(commit) = q
         .commit
         .as_deref()
@@ -773,11 +799,19 @@ pub async fn git_commit_file_content(Query(q): Query<GitCommitFileContentQuery>)
         let commit_obj = repo
             .revparse_single(&commit)
             .and_then(|obj| obj.peel_to_commit())
-            .map_err(|err| git2_utils::Git2OpenError::Other(err.message().to_string()))?;
+            .map_err(|error| {
+                git2_utils::Git2OpenError::Other(git2_utils::git2_error_diagnostic(
+                    "failed to resolve a Git history revision",
+                    &error,
+                ))
+            })?;
 
-        let tree = commit_obj
-            .tree()
-            .map_err(|err| git2_utils::Git2OpenError::Other(err.message().to_string()))?;
+        let tree = commit_obj.tree().map_err(|error| {
+            git2_utils::Git2OpenError::Other(git2_utils::git2_error_diagnostic(
+                "failed to peel a Git history revision to a commit",
+                &error,
+            ))
+        })?;
 
         let entry = match tree.get_path(std::path::Path::new(&path)) {
             Ok(entry) => entry,
@@ -803,9 +837,12 @@ pub async fn git_commit_file_content(Query(q): Query<GitCommitFileContentQuery>)
             });
         }
 
-        let blob = repo
-            .find_blob(entry.id())
-            .map_err(|err| git2_utils::Git2OpenError::Other(err.message().to_string()))?;
+        let blob = repo.find_blob(entry.id()).map_err(|error| {
+            git2_utils::Git2OpenError::Other(git2_utils::git2_error_diagnostic(
+                "failed to walk Git history",
+                &error,
+            ))
+        })?;
         let bytes = blob.content();
         let truncated = bytes.len() > MAX_BLOB_BYTES;
         let payload = if truncated {
@@ -826,11 +863,7 @@ pub async fn git_commit_file_content(Query(q): Query<GitCommitFileContentQuery>)
     match read_result {
         Ok(Ok(resp)) => Json(resp).into_response(),
         Ok(Err(err)) => git2_open_error_response(err),
-        Err(err) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": err.to_string(), "code": "git2_task_failed"})),
-        )
-            .into_response(),
+        Err(error) => git_task_error_response("read a file from a Git commit", &error),
     }
 }
 

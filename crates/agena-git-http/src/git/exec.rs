@@ -15,7 +15,7 @@ use tokio::sync::Mutex;
 const DEFAULT_GIT_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_GIT_STREAM_BYTES: usize = 16 * 1024 * 1024;
 
-async fn read_git_stream<R>(mut reader: R) -> (Vec<u8>, bool)
+async fn read_git_stream<R>(mut reader: R) -> std::io::Result<(Vec<u8>, bool)>
 where
     R: tokio::io::AsyncRead + Unpin,
 {
@@ -25,34 +25,79 @@ where
     let mut truncated = false;
     let mut chunk = [0_u8; 16 * 1024];
     loop {
-        let read = match reader.read(&mut chunk).await {
-            Ok(0) | Err(_) => break,
-            Ok(read) => read,
-        };
+        let read = reader.read(&mut chunk).await?;
+        if read == 0 {
+            break;
+        }
         let remaining = MAX_GIT_STREAM_BYTES.saturating_sub(retained.len());
         retained.extend_from_slice(&chunk[..read.min(remaining)]);
         truncated |= read > remaining;
     }
-    (retained, truncated)
+    Ok((retained, truncated))
 }
 
 async fn join_git_streams(
-    stdout_task: tokio::task::JoinHandle<(Vec<u8>, bool)>,
-    stderr_task: tokio::task::JoinHandle<(Vec<u8>, bool)>,
-) -> ((Vec<u8>, bool), (Vec<u8>, bool)) {
+    mut stdout_task: tokio::task::JoinHandle<std::io::Result<(Vec<u8>, bool)>>,
+    mut stderr_task: tokio::task::JoinHandle<std::io::Result<(Vec<u8>, bool)>>,
+) -> Result<((Vec<u8>, bool), (Vec<u8>, bool)), String> {
     let stdout_abort = stdout_task.abort_handle();
     let stderr_abort = stderr_task.abort_handle();
-    match tokio::time::timeout(Duration::from_secs(2), async move {
-        let (stdout, stderr) = tokio::join!(stdout_task, stderr_task);
-        (stdout.unwrap_or_default(), stderr.unwrap_or_default())
+    match tokio::time::timeout(Duration::from_secs(2), async {
+        tokio::join!(&mut stdout_task, &mut stderr_task)
     })
     .await
     {
-        Ok(output) => output,
-        Err(_) => {
+        Ok((stdout, stderr)) => {
+            let stdout = stdout
+                .map_err(|error| {
+                    agena_failure::diagnostic::format_error_chain_with_context(
+                        "git stdout reader task failed",
+                        &error,
+                    )
+                })?
+                .map_err(|error| {
+                    agena_failure::diagnostic::format_error_chain_with_context(
+                        "failed to read git stdout",
+                        &error,
+                    )
+                })?;
+            let stderr = stderr
+                .map_err(|error| {
+                    agena_failure::diagnostic::format_error_chain_with_context(
+                        "git stderr reader task failed",
+                        &error,
+                    )
+                })?
+                .map_err(|error| {
+                    agena_failure::diagnostic::format_error_chain_with_context(
+                        "failed to read git stderr",
+                        &error,
+                    )
+                })?;
+            Ok((stdout, stderr))
+        }
+        Err(timeout_error) => {
             stdout_abort.abort();
             stderr_abort.abort();
-            ((Vec::new(), true), (Vec::new(), true))
+            let (stdout_join, stderr_join) = tokio::join!(stdout_task, stderr_task);
+            let mut diagnostic = agena_failure::diagnostic::format_error_chain_with_context(
+                "timed out after 2 seconds while draining git stdout and stderr",
+                &timeout_error,
+            );
+            for (stream, result) in [("stdout", stdout_join), ("stderr", stderr_join)] {
+                if let Err(error) = result
+                    && !error.is_cancelled()
+                {
+                    diagnostic.push_str("; additionally, ");
+                    diagnostic.push_str(
+                        &agena_failure::diagnostic::format_error_chain_with_context(
+                            format!("git {stream} reader did not stop cleanly after abort"),
+                            &error,
+                        ),
+                    );
+                }
+            }
+            Err(diagnostic)
         }
     }
 }
@@ -192,15 +237,24 @@ pub(crate) async fn lock_repo(dir: &Path) -> Result<RepoLockGuard, Response> {
 
     match tokio::time::timeout(Duration::from_secs(10), m.clone().lock_owned()).await {
         Ok(g) => Ok(g),
-        Err(_) => Err((
-            StatusCode::CONFLICT,
-            Json(serde_json::json!({
-                "error": "Repository is busy running another git operation",
-                "code": "git_busy",
-                "hint": "Wait for the current operation to finish, then retry.",
-            })),
-        )
-            .into_response()),
+        Err(error) => {
+            tracing::warn!(
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "timed out after 10s while waiting for the repository operation lock",
+                    &error,
+                ),
+                "repository operation lock acquisition timed out"
+            );
+            Err((
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({
+                    "error": "Repository is busy running another git operation",
+                    "code": "git_busy",
+                    "hint": "Wait for the current operation to finish, then retry.",
+                })),
+            )
+                .into_response())
+        }
     }
 }
 
@@ -223,16 +277,70 @@ fn git_command_error_response_with_status(
     }
 }
 
+pub(crate) fn git_command_transport_error_response(
+    context: &str,
+    error: &str,
+    code: Option<&str>,
+) -> Response {
+    let diagnostic = if context.trim().is_empty() || error.starts_with(context) {
+        error.to_owned()
+    } else {
+        format!("{context}: {error}")
+    };
+    tracing::error!(
+        operation = context,
+        diagnostic = %diagnostic,
+        "Git command transport failed before an exit status was available"
+    );
+    let public = agena_failure::diagnostic::user_message_with_context(&diagnostic, 400);
+    let public = if public.is_empty() {
+        "Git command could not be executed".to_owned()
+    } else {
+        public
+    };
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(serde_json::json!({
+            "error": public,
+            "code": code.unwrap_or("git_process_failed"),
+        })),
+    )
+        .into_response()
+}
+
+pub(crate) fn git_command_result_or_log(
+    result: Result<(i32, String, String), String>,
+    context: &str,
+) -> Option<(i32, String, String)> {
+    match result {
+        Ok(result) => Some(result),
+        Err(error) => {
+            tracing::error!(
+                operation = context,
+                diagnostic = %error,
+                "best-effort Git command transport failed"
+            );
+            None
+        }
+    }
+}
+
 pub(crate) async fn run_git_checked_with_status(
     directory: &Path,
     args: &[&str],
     failure_status: StatusCode,
     failure_code: Option<&str>,
 ) -> Result<(String, String), Response> {
-    let (code, out, err) =
-        run_git(directory, args)
-            .await
-            .unwrap_or((1, String::new(), String::new()));
+    let (code, out, err) = match run_git(directory, args).await {
+        Ok(result) => result,
+        Err(error) => {
+            return Err(git_command_transport_error_response(
+                "execute checked Git command",
+                &error,
+                failure_code,
+            ));
+        }
+    };
     if code == 0 {
         return Ok((out, err));
     }
@@ -267,10 +375,16 @@ pub(crate) async fn run_git_env_checked_with_status(
     failure_status: StatusCode,
     failure_code: Option<&str>,
 ) -> Result<(String, String), Response> {
-    let (code, out, err) =
-        run_git_env(directory, args, extra_env)
-            .await
-            .unwrap_or((1, String::new(), String::new()));
+    let (code, out, err) = match run_git_env(directory, args, extra_env).await {
+        Ok(result) => result,
+        Err(error) => {
+            return Err(git_command_transport_error_response(
+                "execute checked Git command with environment",
+                &error,
+                failure_code,
+            ));
+        }
+    };
     if code == 0 {
         return Ok((out, err));
     }
@@ -366,7 +480,12 @@ pub(crate) async fn run_git_env(
         cmd.env(k, v);
     }
 
-    let mut child = agena_process::spawn(cmd).map_err(|e| e.to_string())?;
+    let mut child = agena_process::spawn(cmd).map_err(|error| {
+        agena_failure::diagnostic::format_error_chain_with_context(
+            "failed to spawn the git process",
+            &error,
+        )
+    })?;
 
     let mut stdout = child.stdout().take();
     let mut stderr = child.stderr().take();
@@ -374,13 +493,13 @@ pub(crate) async fn run_git_env(
     let stdout_task = tokio::spawn(async move {
         match stdout.take() {
             Some(stream) => read_git_stream(stream).await,
-            None => (Vec::new(), false),
+            None => Ok((Vec::new(), false)),
         }
     });
     let stderr_task = tokio::spawn(async move {
         match stderr.take() {
             Some(stream) => read_git_stream(stream).await,
-            None => (Vec::new(), false),
+            None => Ok((Vec::new(), false)),
         }
     });
 
@@ -394,14 +513,29 @@ pub(crate) async fn run_git_env(
         }
     };
 
-    let _ = child.start_kill();
-
-    let ((stdout_bytes, stdout_truncated), (stderr_bytes, stderr_truncated)) =
-        join_git_streams(stdout_task, stderr_task).await;
+    let status_result = status.map_err(|error| {
+        agena_failure::diagnostic::format_error_chain_with_context(
+            if timed_out {
+                "failed to terminate and wait for the timed-out git process"
+            } else {
+                "failed to wait for the git process"
+            },
+            &error,
+        )
+    });
+    let streams_result = join_git_streams(stdout_task, stderr_task).await;
+    let (status, ((stdout_bytes, stdout_truncated), (stderr_bytes, stderr_truncated))) =
+        match (status_result, streams_result) {
+            (Ok(status), Ok(streams)) => (status, streams),
+            (Err(error), Ok(_)) | (Ok(_), Err(error)) => return Err(error),
+            (Err(status_error), Err(stream_error)) => {
+                return Err(format!("{status_error}; additionally, {stream_error}"));
+            }
+        };
     let stdout_text = git_stream_text(stdout_bytes, stdout_truncated);
     let mut stderr_text = git_stream_text(stderr_bytes, stderr_truncated);
 
-    let mut code = status.ok().and_then(|s| s.code()).unwrap_or(1);
+    let mut code = status.code().unwrap_or(1);
     if timed_out {
         // Use a conventional timeout exit code so callers can classify.
         code = 124;
@@ -445,7 +579,12 @@ pub(crate) async fn run_git_input(
         cmd.env(k, v);
     }
 
-    let mut child = agena_process::spawn(cmd).map_err(|e| e.to_string())?;
+    let mut child = agena_process::spawn(cmd).map_err(|error| {
+        agena_failure::diagnostic::format_error_chain_with_context(
+            "failed to spawn the git process with stdin",
+            &error,
+        )
+    })?;
 
     // Drain both output pipes while stdin is written. Writing first can
     // deadlock when git emits enough diagnostics to fill stdout/stderr before
@@ -453,9 +592,8 @@ pub(crate) async fn run_git_input(
     let input = input.as_bytes().to_vec();
     let stdin_task = child.stdin().take().map(|mut stdin| {
         tokio::spawn(async move {
-            let result = stdin.write_all(&input).await;
-            let _ = stdin.shutdown().await;
-            result
+            stdin.write_all(&input).await?;
+            stdin.shutdown().await
         })
     });
 
@@ -465,13 +603,13 @@ pub(crate) async fn run_git_input(
     let stdout_task = tokio::spawn(async move {
         match stdout.take() {
             Some(stream) => read_git_stream(stream).await,
-            None => (Vec::new(), false),
+            None => Ok((Vec::new(), false)),
         }
     });
     let stderr_task = tokio::spawn(async move {
         match stderr.take() {
             Some(stream) => read_git_stream(stream).await,
-            None => (Vec::new(), false),
+            None => Ok((Vec::new(), false)),
         }
     });
 
@@ -485,24 +623,86 @@ pub(crate) async fn run_git_input(
         }
     };
 
-    let _ = child.start_kill();
+    let status_result = status.map_err(|error| {
+        agena_failure::diagnostic::format_error_chain_with_context(
+            if timed_out {
+                "failed to terminate and wait for the timed-out git process"
+            } else {
+                "failed to wait for the git process"
+            },
+            &error,
+        )
+    });
 
-    if let Some(stdin_task) = stdin_task {
+    let stdin_result = if let Some(mut stdin_task) = stdin_task {
         let stdin_abort = stdin_task.abort_handle();
-        if tokio::time::timeout(Duration::from_secs(2), stdin_task)
-            .await
-            .is_err()
-        {
-            stdin_abort.abort();
+        match tokio::time::timeout(Duration::from_secs(2), &mut stdin_task).await {
+            Ok(result) => match result {
+                Ok(result) => result.map_err(|error| {
+                    agena_failure::diagnostic::format_error_chain_with_context(
+                        "failed to write or close git stdin",
+                        &error,
+                    )
+                }),
+                Err(error) => Err(agena_failure::diagnostic::format_error_chain_with_context(
+                    "git stdin writer task failed",
+                    &error,
+                )),
+            },
+            Err(timeout_error) => {
+                stdin_abort.abort();
+                let join_result = stdin_task.await;
+                let mut diagnostic = agena_failure::diagnostic::format_error_chain_with_context(
+                    "timed out after 2 seconds while finishing git stdin",
+                    &timeout_error,
+                );
+                if let Err(error) = join_result
+                    && !error.is_cancelled()
+                {
+                    diagnostic.push_str("; additionally, ");
+                    diagnostic.push_str(
+                        &agena_failure::diagnostic::format_error_chain_with_context(
+                            "git stdin writer did not stop cleanly after abort",
+                            &error,
+                        ),
+                    );
+                }
+                Err(diagnostic)
+            }
         }
-    }
+    } else {
+        Ok(())
+    };
 
+    let streams_result = join_git_streams(stdout_task, stderr_task).await;
+    let mut failures = Vec::new();
+    let status = match status_result {
+        Ok(status) => Some(status),
+        Err(error) => {
+            failures.push(error);
+            None
+        }
+    };
+    if let Err(error) = &stdin_result {
+        failures.push(error.clone());
+    }
+    let streams = match streams_result {
+        Ok(streams) => Some(streams),
+        Err(error) => {
+            failures.push(error);
+            None
+        }
+    };
+    if !failures.is_empty() {
+        return Err(failures.join("; additionally, "));
+    }
+    let status = status.expect("git process status is present when no failure was recorded");
     let ((stdout_bytes, stdout_truncated), (stderr_bytes, stderr_truncated)) =
-        join_git_streams(stdout_task, stderr_task).await;
+        streams.expect("git stream output is present when no failure was recorded");
     let stdout_text = git_stream_text(stdout_bytes, stdout_truncated);
     let mut stderr_text = git_stream_text(stderr_bytes, stderr_truncated);
 
-    let mut code = status.ok().and_then(|s| s.code()).unwrap_or(1);
+    let mut code = status.code().unwrap_or(1);
     if timed_out {
         code = 124;
         let prefix = format!("git command timed out after {}ms\n", timeout.as_millis());
@@ -553,7 +753,7 @@ mod tests {
             }
         });
 
-        let (retained, truncated) = read_git_stream(reader).await;
+        let (retained, truncated) = read_git_stream(reader).await.expect("read git stream");
         writer_task.await.expect("writer task");
 
         assert_eq!(retained.len(), MAX_GIT_STREAM_BYTES);

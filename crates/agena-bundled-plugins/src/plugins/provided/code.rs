@@ -102,7 +102,7 @@ impl CodePlugin {
             result.scanned_files
         );
         let payload =
-            serde_json::to_value(result).map_err(|err| PluginError::internal(err.to_string()))?;
+            serde_json::to_value(result).map_err(|err| PluginError::internal_error(&err))?;
         Ok(ToolInvokeOutput::from_parts(
             title,
             summary,
@@ -138,9 +138,9 @@ impl CodePlugin {
             }
         );
         let payload =
-            serde_json::to_value(result).map_err(|err| PluginError::internal(err.to_string()))?;
+            serde_json::to_value(result).map_err(|err| PluginError::internal_error(&err))?;
         let output = serde_json::to_string_pretty(&payload)
-            .map_err(|err| PluginError::internal(err.to_string()))?;
+            .map_err(|err| PluginError::internal_error(&err))?;
         Ok(ToolInvokeOutput::from_parts(
             title,
             summary,
@@ -164,18 +164,28 @@ where
     let worker_permit = crate::BLOCKING_PLUGIN_WORKERS
         .acquire()
         .await
-        .map_err(|_| PluginError::internal("code worker pool is unavailable"))?;
+        .map_err(|error| {
+            PluginError::internal(agena_failure::diagnostic::format_error_chain_with_context(
+                "acquire a code plugin worker",
+                &error,
+            ))
+        })?;
     tokio::task::spawn_blocking(move || {
         let _worker_permit = worker_permit;
         work()
     })
     .await
-    .map_err(|error| PluginError::internal(format!("code worker failed: {error}")))?
+    .map_err(|error| {
+        PluginError::internal(agena_failure::diagnostic::format_error_chain_with_context(
+            "code plugin worker failed",
+            &error,
+        ))
+    })?
 }
 
 fn code_search_error_to_plugin(error: CodeSearchError) -> PluginError {
     match error {
         CodeSearchError::InvalidParameters(message) => PluginError::invalid_params(message),
-        error => PluginError::internal(error.to_string()),
+        error => PluginError::internal_error(&error),
     }
 }

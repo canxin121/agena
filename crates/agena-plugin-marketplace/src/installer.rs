@@ -55,7 +55,12 @@ fn verify_signature_bytes(
         .map_err(|_| "signature must be 64 bytes".to_string())?;
     verifier
         .verify(bytes, &Signature::from_bytes(&signature_array))
-        .map_err(|error| error.to_string())
+        .map_err(|error| {
+            agena_failure::diagnostic::format_error_chain_with_context(
+                "ed25519 marketplace artifact signature verification failed",
+                &error,
+            )
+        })
 }
 
 #[cfg(test)]
@@ -211,7 +216,7 @@ pub fn parse_plugin_install_locator(
         _ => (spec, None),
     };
     agena_plugin_contracts::validate_plugin_identity(plugin_id)
-        .map_err(|error| MarketplaceError::Index(error.to_string()))?;
+        .map_err(|error| MarketplaceError::index_error(&error))?;
     if let Some(version) = version.as_deref() {
         semver::Version::parse(version.trim_start_matches('v')).map_err(|error| {
             MarketplaceError::Index(format!(
@@ -618,7 +623,7 @@ impl<F: HttpFetcher> MarketplaceClient<F> {
                         use std::os::unix::fs::PermissionsExt;
                         if matches!(version.kind, PluginKind::Stdio) {
                             let perms = std::fs::Permissions::from_mode(0o755);
-                            let _ = std::fs::set_permissions(&entrypoint_path, perms);
+                            std::fs::set_permissions(&entrypoint_path, perms)?;
                         }
                     }
                     (entrypoint_path, true)
@@ -776,10 +781,15 @@ impl<F: HttpFetcher> MarketplaceClient<F> {
                 continue;
             }
             let bytes = std::fs::read(&snapshot_path)?;
-            let version: PluginVersion = match serde_json::from_slice(&bytes) {
-                Ok(v) => v,
-                Err(_) => continue,
-            };
+            let version: PluginVersion = serde_json::from_slice(&bytes).map_err(|error| {
+                MarketplaceError::Index(agena_failure::diagnostic::format_error_chain_with_context(
+                    format!(
+                        "failed to decode installed manifest snapshot for plugin `{}`",
+                        record.plugin_id
+                    ),
+                    &error,
+                ))
+            })?;
             if version
                 .dependencies
                 .iter()

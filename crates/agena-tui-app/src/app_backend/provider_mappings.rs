@@ -62,10 +62,22 @@ pub(crate) fn model_display_name(
     application: &crate::TuiBackend,
     model: &ModelRef,
 ) -> Option<String> {
-    preferred_model_display_name(
-        list_local_provider_models(application, model.provider_id.as_ref()).ok()?,
-        model,
-    )
+    let models = match list_local_provider_models(application, model.provider_id.as_ref()) {
+        Ok(models) => models,
+        Err(error) => {
+            tracing::warn!(
+                provider_id = %model.provider_id,
+                model_id = %model.model_id,
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "read the local provider model cache for a TUI display name",
+                    error.as_ref(),
+                ),
+                "TUI model display name fell back to its identifier"
+            );
+            return None;
+        }
+    };
+    preferred_model_display_name(models, model)
 }
 
 /// The cached model-catalog listing. Synchronous: consumed while building the

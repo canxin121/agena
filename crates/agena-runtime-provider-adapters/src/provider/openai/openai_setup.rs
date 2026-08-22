@@ -197,13 +197,12 @@ impl OpenAiTransport {
             return Ok(self.base_url.clone());
         };
 
-        let Some(domain) = auth_data
-            .try_lock()
-            .ok()
-            .as_deref()
-            .and_then(AuthData::enterprise_url)
-            .map(ToOwned::to_owned)
-        else {
+        let auth = auth_data.try_lock().map_err(|error| {
+            ProviderError::Internal(format!(
+                "cannot resolve GitHub Copilot base URL while authentication data is locked: {error}"
+            ))
+        })?;
+        let Some(domain) = auth.enterprise_url().map(ToOwned::to_owned) else {
             return Ok(self.base_url.clone());
         };
 
@@ -211,17 +210,26 @@ impl OpenAiTransport {
     }
 
     pub(super) fn prompt_cache_base_url(&self) -> String {
-        self.resolved_base_url()
-            .unwrap_or_else(|_| self.base_url.clone())
+        self.resolved_base_url().unwrap_or_else(|error| {
+            tracing::warn!(
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "resolve OpenAI prompt-cache base URL",
+                    &error,
+                ),
+                "prompt-cache shape is using the configured OpenAI base URL"
+            );
+            self.base_url.clone()
+        })
     }
 
     pub(super) fn model_endpoint(&self) -> Result<String, ProviderError> {
-        Ok(self.models_url.clone().unwrap_or_else(|| {
-            format!(
-                "{}/models",
-                self.prompt_cache_base_url().trim_end_matches('/')
-            )
-        }))
+        if let Some(models_url) = &self.models_url {
+            return Ok(models_url.clone());
+        }
+        Ok(format!(
+            "{}/models",
+            self.resolved_base_url()?.trim_end_matches('/')
+        ))
     }
 
     pub(super) fn list_models_endpoint(&self) -> Result<String, ProviderError> {
@@ -503,7 +511,17 @@ impl OpenAiTransport {
     pub(super) fn chatgpt_account_id(&self) -> Option<String> {
         self.auth_data
             .as_ref()
-            .and_then(|auth| auth.try_lock().ok())
+            .and_then(|auth| match auth.try_lock() {
+                Ok(auth) => Some(auth),
+                Err(error) => {
+                    tracing::warn!(
+                        operation = "read ChatGPT account id",
+                        error = %error,
+                        "ChatGPT account metadata is temporarily locked"
+                    );
+                    None
+                }
+            })
             .as_deref()
             .and_then(AuthData::account_id)
             .map(ToOwned::to_owned)
@@ -513,7 +531,17 @@ impl OpenAiTransport {
     pub(super) fn chatgpt_account_is_fedramp(&self) -> bool {
         self.auth_data
             .as_ref()
-            .and_then(|auth| auth.try_lock().ok())
+            .and_then(|auth| match auth.try_lock() {
+                Ok(auth) => Some(auth),
+                Err(error) => {
+                    tracing::warn!(
+                        operation = "read ChatGPT FedRAMP account flag",
+                        error = %error,
+                        "ChatGPT account metadata is temporarily locked"
+                    );
+                    None
+                }
+            })
             .as_deref()
             .is_some_and(AuthData::chatgpt_account_is_fedramp)
     }

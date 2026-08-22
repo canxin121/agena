@@ -82,7 +82,7 @@ pub async fn get_session_cost(
         queries
             .session_cost_summary(session_id)
             .await
-            .map_err(|error| ServerError::internal(error.to_string()))?,
+            .map_err(|error| ServerError::internal_error(&error))?,
     ))
 }
 
@@ -171,7 +171,7 @@ pub async fn list_session_parts(
     let page = store
         .load_page(session_id, before, i64::try_from(limit).unwrap_or(i64::MAX))
         .await
-        .map_err(|error| ServerError::internal(error.to_string()))?;
+        .map_err(|error| ServerError::internal_error(&error))?;
     let (parts, next_cursor) = select_user_visible_part_page(session_id, page.parts)?;
     let projected = crate::live::project_parts_for_user(&state, &parts).await;
     Ok(Json(agena_api::live::SessionPartsResource {

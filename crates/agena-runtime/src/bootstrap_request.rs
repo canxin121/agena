@@ -24,10 +24,16 @@ pub fn resolve_runtime_bootstrap_preflight(
         .clone()
         .map(Ok)
         .unwrap_or_else(std::env::current_dir)
-        .map_err(|error| crate::RuntimeBootstrapError::io(error.to_string()))?;
+        .map_err(|error| crate::RuntimeBootstrapError::io_error(&error))?;
     let environment = crate::ProcessEnvironment;
     let mut tracing = crate::RuntimeTracingConfiguration::default();
-    apply_tracing_file(crate::default_config_path(&environment), &mut tracing)?;
+    apply_tracing_file(
+        request
+            .config_path
+            .clone()
+            .unwrap_or_else(|| crate::default_config_path(&environment)),
+        &mut tracing,
+    )?;
     apply_tracing_file(
         crate::project_config_path(workspace_root.as_path()),
         &mut tracing,
@@ -63,11 +69,10 @@ fn apply_tracing_file(
     tracing: &mut crate::RuntimeTracingConfiguration,
 ) -> Result<(), crate::RuntimeBootstrapError> {
     let Some(value) = crate::read_config_json(&path).map_err(|error| {
-        let message = error.to_string();
         if matches!(error, crate::ConfigError::ReadFile { .. }) {
-            crate::RuntimeBootstrapError::io(message)
+            crate::RuntimeBootstrapError::io_error(&error)
         } else {
-            crate::RuntimeBootstrapError::configuration(message)
+            crate::RuntimeBootstrapError::configuration_error(&error)
         }
     })?
     else {
@@ -96,6 +101,10 @@ fn apply_tracing_file(
 #[derive(Debug, Clone, Default)]
 pub struct RuntimeBootstrapRequest {
     pub workspace_root: Option<PathBuf>,
+    /// Optional explicit global configuration path. Normal process startup
+    /// leaves this unset so the conventional user configuration path is used;
+    /// isolated embedders and tests can provide a dedicated path.
+    pub config_path: Option<PathBuf>,
     pub config_override_expressions: Vec<String>,
     pub database_url: Option<String>,
     pub database_path: Option<PathBuf>,
@@ -120,7 +129,7 @@ impl RuntimeBootstrapRequest {
     ) -> Result<crate::RuntimeCompositionConfig, crate::RuntimeBootstrapError> {
         let bootstrap_preflight = resolve_runtime_bootstrap_preflight(&self)?;
         let load_request = load_config_request_from_bootstrap(&self)
-            .map_err(|error| crate::RuntimeBootstrapError::configuration(error.to_string()))?;
+            .map_err(|error| crate::RuntimeBootstrapError::configuration_error(&error))?;
         let Self {
             workspace_root,
             database_url,
@@ -155,5 +164,6 @@ pub(crate) fn load_config_request_from_bootstrap(
     Ok(crate::LoadConfigRequest {
         overrides: crate::parse_config_override_expressions(&request.config_override_expressions)?,
         workspace_root: request.workspace_root.clone(),
+        config_path: request.config_path.clone(),
     })
 }

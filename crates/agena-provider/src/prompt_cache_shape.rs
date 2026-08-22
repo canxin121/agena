@@ -1,7 +1,29 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+
+static SERIALIZATION_FAILURE_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+
+fn cache_shape_json<T: Serialize>(value: &T, operation: &str) -> String {
+    match serde_json::to_string(value) {
+        Ok(encoded) => encoded,
+        Err(error) => {
+            let sequence = SERIALIZATION_FAILURE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+            tracing::error!(
+                operation,
+                sequence,
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    operation,
+                    &error,
+                ),
+                "prompt-cache shape value could not be serialized; disabling cache-key reuse for this value"
+            );
+            format!("__agena_prompt_cache_serialization_failure_{sequence}")
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 /// Shape of a prompt for cache key computation.
@@ -44,7 +66,7 @@ impl PromptCacheShape {
     where
         T: Serialize,
     {
-        serde_json::to_string(value).unwrap_or_default()
+        cache_shape_json(value, "serialize prompt-cache shape field")
     }
 
     pub fn insert_string(&mut self, key: impl Into<String>, value: impl Into<String>) {
@@ -59,7 +81,7 @@ impl PromptCacheShape {
     where
         T: Serialize,
     {
-        let encoded = serde_json::to_string(value).unwrap_or_default();
+        let encoded = cache_shape_json(value, "serialize inserted prompt-cache shape field");
         self.fields.insert(key.into(), encoded);
     }
 
@@ -79,9 +101,16 @@ impl PromptCacheShape {
     }
 
     pub fn fingerprint(&self) -> String {
-        let bytes = serde_json::to_vec(self).unwrap_or_default();
         let mut hasher = Sha256::new();
-        hasher.update(bytes.as_slice());
+        hasher.update(self.provider_id.len().to_le_bytes());
+        hasher.update(self.provider_id.as_bytes());
+        hasher.update(self.fields.len().to_le_bytes());
+        for (key, value) in &self.fields {
+            hasher.update(key.len().to_le_bytes());
+            hasher.update(key.as_bytes());
+            hasher.update(value.len().to_le_bytes());
+            hasher.update(value.as_bytes());
+        }
         hex::encode(hasher.finalize())
     }
 

@@ -79,10 +79,10 @@ fn monitor_registry(executor: &ToolExecutor) -> Result<&dyn MonitorService, Tool
 fn into_tool_error(err: MonitorError) -> ToolError {
     match err {
         MonitorError::NotFound(_) | MonitorError::Invalid(_) => {
-            ToolError::invalid_input(err.to_string())
+            ToolError::invalid_input_error(&err)
         }
         MonitorError::InvalidPattern(e) => ToolError::InvalidRegexPattern(e),
-        MonitorError::RuntimeMissing => ToolError::invalid_input(err.to_string()),
+        MonitorError::RuntimeMissing => ToolError::invalid_input_error(&err),
     }
 }
 

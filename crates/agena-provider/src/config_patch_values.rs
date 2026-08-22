@@ -158,18 +158,6 @@ pub struct ProviderProtocolPathsOverlay {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
 #[serde(default, deny_unknown_fields)]
-/// Default provider/adapter/model overlay.
-pub struct ProviderDefaultsOverlay {
-    #[merge(strategy = option_override)]
-    pub provider: Option<String>,
-    #[merge(strategy = option_override)]
-    pub adapter: Option<String>,
-    #[merge(strategy = option_override)]
-    pub model: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
-#[serde(default, deny_unknown_fields)]
 /// Network timeout overlays.
 pub struct ProviderNetworkOverlay {
     #[merge(strategy = option_override)]
@@ -459,8 +447,6 @@ pub struct ProviderNativeToolsOverlay {
 pub struct ProviderOverlay {
     #[merge(strategy = option_override)]
     pub enabled: Option<bool>,
-    #[merge(strategy = option_struct_merge)]
-    pub defaults: Option<ProviderDefaultsOverlay>,
     #[merge(strategy = option_struct_merge)]
     pub auth: Option<ProviderAuthOverlay>,
     #[merge(strategy = option_struct_merge)]

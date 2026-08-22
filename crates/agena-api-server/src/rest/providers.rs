@@ -366,16 +366,12 @@ fn provider_studio_validation_message(
     match error {
         ProviderStudioSaveValidationError::FieldRequired(field) => match field {
             ProviderStudioSaveField::ProviderId => "Provider ID is required.",
-            ProviderStudioSaveField::DefaultAdapter => "A default adapter is required.",
             ProviderStudioSaveField::AdapterId => "Adapter ID is required.",
             ProviderStudioSaveField::ModelId => "Model ID is required.",
             ProviderStudioSaveField::AuthMode => "Choose an authentication mode.",
             ProviderStudioSaveField::AuthSubtype => "Choose an authentication subtype.",
             ProviderStudioSaveField::CredentialIssuer => "Choose a credential issuer.",
         },
-        ProviderStudioSaveValidationError::UnsupportedDefaultAdapter { .. } => {
-            "The selected default adapter is not supported by this authentication mode."
-        }
         ProviderStudioSaveValidationError::UnsupportedAdapters { .. } => {
             "One or more selected adapters are not supported by this authentication mode."
         }

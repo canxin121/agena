@@ -4,7 +4,6 @@ impl App {
             crate::app_backend::operations::list_configured_providers(&self.application);
         let mut items = Vec::new();
         for provider in providers {
-            let default_adapter = provider.defaults.adapter.clone();
             let models = crate::app_backend::provider_mappings::list_local_provider_models(
                 &self.application,
                 provider.provider_id.as_str(),
@@ -14,7 +13,6 @@ impl App {
                 items.push(session_model_choice_item(
                     &self.i18n,
                     provider.provider_id.as_str(),
-                    default_adapter.as_deref(),
                     model,
                 ));
             }
@@ -496,8 +494,7 @@ impl App {
             || dialog
                 .adapter_models
                 .iter()
-                .any(|adapter_models| adapter_models.adapter_id == adapter_id)
-            || dialog.draft.default_adapter == adapter_id;
+                .any(|adapter_models| adapter_models.adapter_id == adapter_id);
         if !has_state {
             self.flash_warning(ui_text::t(
                 &self.i18n,

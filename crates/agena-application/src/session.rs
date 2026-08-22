@@ -96,38 +96,16 @@ pub async fn resolve_session_run_options(
     session_id: i64,
     request: RunOptions,
 ) -> Result<SessionRunOptions, ApplicationError> {
-    let default_model = state
-        .provider_catalog()
-        .default_model()
-        .map_err(provider_catalog_error)?;
     let session_services = state.session_execution_services()?;
     state
         .service()
         .resolve_run_options(
             state.provider_catalog().as_ref(),
-            default_model,
             session_services.execution_control.as_ref(),
             session_id,
             request,
         )
         .await
-}
-
-fn provider_catalog_error(error: agena_provider::ProviderCatalogError) -> ApplicationError {
-    match error {
-        agena_provider::ProviderCatalogError::InvalidRequest(message) => {
-            ApplicationError::bad_request_with_diagnostic(
-                "The provider request is invalid.",
-                message,
-            )
-        }
-        agena_provider::ProviderCatalogError::NotFound(message) => {
-            ApplicationError::not_found_with_diagnostic("The provider was not found.", message)
-        }
-        agena_provider::ProviderCatalogError::Operation(message) => {
-            ApplicationError::internal(message)
-        }
-    }
 }
 
 pub async fn session_execution_request(

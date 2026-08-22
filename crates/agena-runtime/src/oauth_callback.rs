@@ -144,26 +144,54 @@ pub async fn wait_for_oauth_callback_async(
 
     let result = match tokio::time::timeout(timeout, result_rx).await {
         Ok(Ok(result)) => result,
-        Ok(Err(_)) => Err(RuntimeOAuthCallbackError::Io(std::io::Error::other(
-            "oauth callback server stopped before returning a result",
+        Ok(Err(error)) => Err(RuntimeOAuthCallbackError::Io(std::io::Error::other(
+            agena_failure::diagnostic::format_error_chain_with_context(
+                "oauth callback server stopped before returning a result",
+                &error,
+            ),
         ))),
-        Err(_) => Err(RuntimeOAuthCallbackError::Provider(
-            "oauth callback timeout".to_owned(),
+        Err(error) => Err(RuntimeOAuthCallbackError::Provider(
+            agena_failure::diagnostic::format_error_chain_with_context(
+                format!(
+                    "oauth callback timed out after {} seconds",
+                    timeout.as_secs_f64()
+                ),
+                &error,
+            ),
         )),
     };
     shutdown.cancel();
     match tokio::time::timeout(Duration::from_secs(1), &mut server).await {
-        Ok(Ok(Ok(()))) | Err(_) => {}
+        Ok(Ok(Ok(()))) => {}
         Ok(Ok(Err(error))) => return Err(RuntimeOAuthCallbackError::Io(error)),
         Ok(Err(error)) => {
             return Err(RuntimeOAuthCallbackError::Io(std::io::Error::other(
-                format!("oauth callback server task failed: {error}"),
+                agena_failure::diagnostic::format_error_chain_with_context(
+                    "oauth callback server task failed",
+                    &error,
+                ),
             )));
         }
+        Err(error) => tracing::warn!(
+            diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                "oauth callback server did not stop within the 1-second graceful shutdown window",
+                &error,
+            ),
+            "aborting OAuth callback server after graceful shutdown timeout"
+        ),
     }
     if !server.is_finished() {
         server.abort();
-        let _ = server.await;
+        if let Err(error) = server.await
+            && !error.is_cancelled()
+        {
+            return Err(RuntimeOAuthCallbackError::Io(std::io::Error::other(
+                agena_failure::diagnostic::format_error_chain_with_context(
+                    "oauth callback server failed while being aborted after its shutdown timeout",
+                    &error,
+                ),
+            )));
+        }
     }
     result
 }
@@ -192,7 +220,11 @@ async fn oauth_callback_handler(State(state): State<OAuthCallbackState>, uri: Ur
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .take()
     {
-        let _ = sender.send(result);
+        if sender.send(result).is_err() {
+            tracing::warn!(
+                "OAuth callback result receiver was dropped before the browser callback completed"
+            );
+        }
     }
     response
 }

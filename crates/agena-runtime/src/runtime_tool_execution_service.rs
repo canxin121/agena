@@ -67,6 +67,10 @@ impl RuntimeToolExecutionError {
             message: message.into(),
         }
     }
+
+    pub fn from_error(error: &(dyn std::error::Error + 'static)) -> Self {
+        Self::new(agena_failure::diagnostic::format_error_chain(error))
+    }
 }
 
 #[async_trait]
@@ -96,7 +100,24 @@ pub trait RuntimeToolExecutionService: Send + Sync {
         output: &RawOutput,
     ) -> RuntimeToolResultProjection {
         let model = match output.payload.as_ref() {
-            Some(payload) => serde_json::to_string(payload).unwrap_or_else(|_| output.text.clone()),
+            Some(payload) => match serde_json::to_string(payload) {
+                Ok(payload) => payload,
+                Err(error) => {
+                    tracing::error!(
+                        tool = %invocation.name,
+                        diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                            "serialize the default runtime tool result payload for model projection",
+                            &error,
+                        ),
+                        "default runtime tool result projection fell back to its text representation"
+                    );
+                    if output.text.is_empty() {
+                        "[tool result payload could not be serialized]".to_owned()
+                    } else {
+                        output.text.clone()
+                    }
+                }
+            },
             None => output.text.clone(),
         };
         let mut blocks = Vec::new();

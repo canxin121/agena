@@ -35,6 +35,24 @@ mod unix {
         state::AppState,
     };
 
+    async fn queue_server_message(
+        tx: &mpsc::Sender<ServerMessage>,
+        message: ServerMessage,
+        context: &'static str,
+    ) -> bool {
+        match tx.send(message).await {
+            Ok(()) => true,
+            Err(error) => {
+                tracing::debug!(
+                    operation = context,
+                    diagnostic = %error,
+                    "IPC server message could not be queued because the connection closed"
+                );
+                false
+            }
+        }
+    }
+
     /// Bind a Unix socket at `path` and serve the WS-equivalent protocol
     /// until the future is dropped.
     pub async fn serve(path: PathBuf, state: AppState) -> std::io::Result<()> {
@@ -60,23 +78,42 @@ mod unix {
         let mut lines = BufReader::new(read).lines();
         let (tx, mut rx) = mpsc::channel::<ServerMessage>(256);
 
-        let _ = tx
+        if tx
             .send(ServerMessage::Hello {
                 protocol_version: PROTOCOL_VERSION,
             })
-            .await;
+            .await
+            .is_err()
+        {
+            tracing::debug!("IPC connection closed before the protocol greeting could be queued");
+            return Ok(());
+        }
 
         let mut writer = tokio::spawn(async move {
             while let Some(msg) = rx.recv().await {
                 let payload = match serde_json::to_string(&msg) {
                     Ok(p) => p,
-                    Err(_) => continue,
+                    Err(error) => {
+                        tracing::error!(
+                            diagnostic = %agena_failure::diagnostic::format_error_chain(&error),
+                            "failed to serialize an IPC server message"
+                        );
+                        continue;
+                    }
                 };
-                if write.write_all(payload.as_bytes()).await.is_err() {
-                    break;
+                if let Err(error) = write.write_all(payload.as_bytes()).await {
+                    tracing::debug!(
+                        diagnostic = %agena_failure::diagnostic::format_error_chain(&error),
+                        "IPC writer stopped after the peer disconnected"
+                    );
+                    return;
                 }
-                if write.write_all(b"\n").await.is_err() {
-                    break;
+                if let Err(error) = write.write_all(b"\n").await {
+                    tracing::debug!(
+                        diagnostic = %agena_failure::diagnostic::format_error_chain(&error),
+                        "IPC writer could not terminate a frame after the peer disconnected"
+                    );
+                    return;
                 }
             }
         });
@@ -97,7 +134,12 @@ mod unix {
                 Err(err) => {
                     let error = ApiError::protocol(format!("invalid frame: {err}"));
                     tracing::warn!(failure_id = %error.problem.id, diagnostic = %err, "invalid IPC protocol frame");
-                    let _ = tx.send(ServerMessage::Error { id: None, error }).await;
+                    queue_server_message(
+                        &tx,
+                        ServerMessage::Error { id: None, error },
+                        "deliver an invalid-frame IPC protocol error",
+                    )
+                    .await;
                 }
             }
         }
@@ -108,12 +150,30 @@ mod unix {
         }
         drop(guard);
         drop(tx);
-        if tokio::time::timeout(std::time::Duration::from_secs(1), &mut writer)
-            .await
-            .is_err()
-        {
-            writer.abort();
-            let _ = writer.await;
+        match tokio::time::timeout(std::time::Duration::from_secs(1), &mut writer).await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => tracing::error!(
+                diagnostic = %agena_failure::diagnostic::format_error_chain(&error),
+                "IPC writer task failed"
+            ),
+            Err(timeout_error) => {
+                tracing::warn!(
+                    diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                        "IPC writer did not stop within the 1-second shutdown window",
+                        &timeout_error,
+                    ),
+                    "aborting IPC writer after shutdown timeout"
+                );
+                writer.abort();
+                if let Err(error) = writer.await
+                    && !error.is_cancelled()
+                {
+                    tracing::error!(
+                        diagnostic = %agena_failure::diagnostic::format_error_chain(&error),
+                        "IPC writer task failed while being aborted after its shutdown timeout"
+                    );
+                }
+            }
         }
         Ok(())
     }
@@ -128,30 +188,46 @@ mod unix {
             ClientMessage::Command { id, command } => {
                 match dispatch::dispatch_command(&state, command).await {
                     Ok(result) => {
-                        let _ = tx.send(ServerMessage::CommandResult { id, result }).await;
+                        queue_server_message(
+                            &tx,
+                            ServerMessage::CommandResult { id, result },
+                            "deliver an IPC command result",
+                        )
+                        .await;
                     }
                     Err(err) => {
-                        let _ = tx
-                            .send(ServerMessage::Error {
+                        queue_server_message(
+                            &tx,
+                            ServerMessage::Error {
                                 id: Some(id),
                                 error: ServerError::from(err).into_api(),
-                            })
-                            .await;
+                            },
+                            "deliver an IPC command failure",
+                        )
+                        .await;
                     }
                 }
             }
             ClientMessage::Query { id, query } => {
                 match dispatch::dispatch_query(&state, query).await {
                     Ok(result) => {
-                        let _ = tx.send(ServerMessage::QueryResult { id, result }).await;
+                        queue_server_message(
+                            &tx,
+                            ServerMessage::QueryResult { id, result },
+                            "deliver an IPC query result",
+                        )
+                        .await;
                     }
                     Err(err) => {
-                        let _ = tx
-                            .send(ServerMessage::Error {
+                        queue_server_message(
+                            &tx,
+                            ServerMessage::Error {
                                 id: Some(id),
                                 error: ServerError::from(err).into_api(),
-                            })
-                            .await;
+                            },
+                            "deliver an IPC query failure",
+                        )
+                        .await;
                     }
                 }
             }
@@ -159,24 +235,30 @@ mod unix {
                 let subscription = match live::subscribe(&state) {
                     Ok(subscription) => subscription,
                     Err(err) => {
-                        let _ = tx
-                            .send(ServerMessage::Error {
+                        queue_server_message(
+                            &tx,
+                            ServerMessage::Error {
                                 id: Some(id),
                                 error: err.into_api(),
-                            })
-                            .await;
+                            },
+                            "deliver an IPC subscription setup failure",
+                        )
+                        .await;
                         return;
                     }
                 };
                 let store = match state.session_store() {
                     Ok(store) => store,
                     Err(err) => {
-                        let _ = tx
-                            .send(ServerMessage::Error {
+                        queue_server_message(
+                            &tx,
+                            ServerMessage::Error {
                                 id: Some(id),
                                 error: err.into_api(),
-                            })
-                            .await;
+                            },
+                            "deliver an IPC subscription storage failure",
+                        )
+                        .await;
                         return;
                     }
                 };
@@ -188,10 +270,16 @@ mod unix {
                     handle.abort();
                 }
                 drop(guard);
-                let _ = tx.send(ServerMessage::Unsubscribed { id }).await;
+                queue_server_message(
+                    &tx,
+                    ServerMessage::Unsubscribed { id },
+                    "deliver an IPC unsubscribe acknowledgement",
+                )
+                .await;
             }
             ClientMessage::Ping { nonce } => {
-                let _ = tx.send(ServerMessage::Pong { nonce }).await;
+                queue_server_message(&tx, ServerMessage::Pong { nonce }, "deliver an IPC pong")
+                    .await;
             }
         }
     }
@@ -225,11 +313,15 @@ mod unix {
                         skipped,
                     },
                 };
-                if tx_clone
+                if let Err(error) = tx_clone
                     .send(ServerMessage::Notification(notification))
                     .await
-                    .is_err()
                 {
+                    tracing::debug!(
+                        subscription_id = %id_for_task,
+                        diagnostic = %error,
+                        "IPC subscription notification delivery stopped because the connection closed"
+                    );
                     break;
                 }
             }
@@ -240,7 +332,12 @@ mod unix {
             prev.abort();
         }
         drop(guard);
-        let _ = tx.send(ServerMessage::Subscribed { id }).await;
+        queue_server_message(
+            &tx,
+            ServerMessage::Subscribed { id },
+            "deliver an IPC subscription acknowledgement",
+        )
+        .await;
     }
 }
 

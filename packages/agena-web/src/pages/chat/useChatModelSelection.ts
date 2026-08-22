@@ -9,13 +9,12 @@ import {
   type ModelModeOption,
   type ProviderModel,
 } from './modelSelectionCatalog'
-import { encodeModelSelectionKey, parseModelSlug, resolveEffectiveDefaults } from './modelSelectionDefaults'
+import { encodeModelSelectionKey, parseModelSlug } from './modelSelectionDefaults'
 import {
   deriveSessionSelectionFromMessages,
   normalizeSessionManualModelStorageEntry,
   readSessionManualModelPair,
   readSessionRunConfigSelection,
-  removeSessionManualModelPair,
   writeSessionManualModelPair,
   type SessionSelection,
 } from './modelSelectionSession'
@@ -110,24 +109,16 @@ export function useChatModelSelection(opts: {
   } = opts
 
   const catalog = useModelSelectionCatalog()
-  const { providers, runtimeDefaultSelection, fallbackProviderModel, catalogLoading, catalogError, modelMetaFor } =
-    catalog
-
-  const effectiveDefaults = computed(() =>
-    resolveEffectiveDefaults({
-      runtime: runtimeDefaultSelection.value,
-      fallback: fallbackProviderModel.value,
-    }),
-  )
+  const { providers, catalogLoading, catalogError, modelMetaFor } = catalog
 
   const selectedProviderId = ref('')
   const selectedAdapterId = ref('')
   const selectedModelId = ref('')
   const selectedThinkingMode = ref('')
   const selectedSpeedMode = ref('')
-  const modelSource = ref<'empty' | 'session' | 'default' | 'auto' | 'manual'>('empty')
-  const thinkingModeSource = ref<'empty' | 'session' | 'default' | 'manual'>('empty')
-  const speedModeSource = ref<'empty' | 'session' | 'default' | 'manual'>('empty')
+  const modelSource = ref<'empty' | 'session' | 'manual'>('empty')
+  const thinkingModeSource = ref<'empty' | 'session' | 'model' | 'manual'>('empty')
+  const speedModeSource = ref<'empty' | 'session' | 'model' | 'manual'>('empty')
 
   const sessionManualModelBySession = ref<Record<string, string>>(
     loadStringMapFromStorage(
@@ -224,10 +215,9 @@ export function useChatModelSelection(opts: {
   const hasSpeedModesForSelection = computed(() => speedModeOptionsForModel(selectedModelMeta.value).length > 0)
 
   const modelChipLabel = computed(() => {
-    const hasSelectedModel = Boolean(selectedProviderId.value && selectedModelId.value)
-    const provider = hasSelectedModel ? selectedProviderId.value : effectiveDefaults.value.provider
-    const adapter = hasSelectedModel ? selectedAdapterId.value : effectiveDefaults.value.adapter
-    const model = hasSelectedModel ? selectedModelId.value : effectiveDefaults.value.model
+    const provider = selectedProviderId.value
+    const adapter = selectedAdapterId.value
+    const model = selectedModelId.value
     if (!provider || !model) return 'Model'
     return adapter ? `${provider}/${adapter}/${model}` : `${provider}/${model}`
   })
@@ -237,9 +227,9 @@ export function useChatModelSelection(opts: {
   const modelStatusLabel = computed(() => {
     const displayName = text(selectedModelMeta.value?.display_name)
     if (displayName) return displayName
-    return selectedModelId.value || effectiveDefaults.value.model || 'Model'
+    return selectedModelId.value || 'Model'
   })
-  const modelChipLabelMobile = computed(() => selectedModelId.value || effectiveDefaults.value.model || 'Model')
+  const modelChipLabelMobile = computed(() => selectedModelId.value || 'Model')
   const thinkingModeChipLabel = computed(() => {
     const selected = selectedThinkingMode.value
     return statusThinkingMode(selected) || 'Thinking'
@@ -252,11 +242,9 @@ export function useChatModelSelection(opts: {
   })
 
   const modelHint = computed(() => {
-    if (!selectedProviderId.value || !selectedModelId.value) return 'No default model configured on the Agena server'
+    if (!selectedProviderId.value || !selectedModelId.value) return 'Select a model before sending'
     if (modelSource.value === 'manual') return ''
-    return modelSource.value === 'auto'
-      ? 'Using the only configured model'
-      : `Using Agena model: ${modelChipLabel.value}`
+    return `Using session model: ${modelChipLabel.value}`
   })
   const thinkingModeHint = computed(() =>
     thinkingModeSource.value === 'manual' || !selectedThinkingMode.value
@@ -300,11 +288,6 @@ export function useChatModelSelection(opts: {
     modelSource.value = selectedProviderId.value && selectedModelId.value ? source : 'empty'
   }
 
-  function singletonAvailableModel() {
-    const all = modelSlugOptions.value
-    return all.length === 1 ? parseModelSlug(all[0]?.value || '') : { provider: '', adapter: '', model: '' }
-  }
-
   function sessionRunSelection(): SessionSelection {
     return readSessionRunConfigSelection(chat.selectedSessionRunConfig)
   }
@@ -325,16 +308,6 @@ export function useChatModelSelection(opts: {
       }
     }
 
-    const defaults = effectiveDefaults.value
-    if (defaults.provider && defaults.model) {
-      setModelSelection(defaults, 'default')
-      return
-    }
-    const singleton = singletonAvailableModel()
-    if (singleton.provider && singleton.model) {
-      setModelSelection(singleton, 'auto')
-      return
-    }
     setModelSelection({ provider: '', adapter: '', model: '' }, 'empty')
   }
 
@@ -355,27 +328,23 @@ export function useChatModelSelection(opts: {
       model: selectedModelId.value,
     }
     const runMatches = includeSessionLayers && sameModel(run, current)
-    const defaultsMatch = sameModel(effectiveDefaults.value, current)
-
     const savedThinking = text(thinkingModeByModelKey.value[key])
     const runThinking = runMatches ? run.thinkingMode : ''
-    const configuredThinking = defaultsMatch ? effectiveDefaults.value.thinkingMode : ''
     const modelThinking = defaultModeValue(thinkingModeOptionsForModel(selectedModelMeta.value))
-    selectedThinkingMode.value = savedThinking || runThinking || configuredThinking || modelThinking
+    selectedThinkingMode.value = savedThinking || runThinking || modelThinking
     thinkingModeSource.value = savedThinking
       ? 'manual'
       : runThinking
         ? 'session'
         : selectedThinkingMode.value
-          ? 'default'
+          ? 'model'
           : 'empty'
 
     const savedSpeed = text(speedModeByModelKey.value[key])
     const runSpeed = runMatches ? run.speedMode : ''
-    const configuredSpeed = defaultsMatch ? effectiveDefaults.value.speedMode : ''
     const modelSpeed = defaultModeValue(speedModeOptionsForModel(selectedModelMeta.value))
-    selectedSpeedMode.value = savedSpeed || runSpeed || configuredSpeed || modelSpeed
-    speedModeSource.value = savedSpeed ? 'manual' : runSpeed ? 'session' : selectedSpeedMode.value ? 'default' : 'empty'
+    selectedSpeedMode.value = savedSpeed || runSpeed || modelSpeed
+    speedModeSource.value = savedSpeed ? 'manual' : runSpeed ? 'session' : selectedSpeedMode.value ? 'model' : 'empty'
   }
 
   function applyResolvedSelection(includeSessionLayers: boolean) {
@@ -414,16 +383,6 @@ export function useChatModelSelection(opts: {
       sessionManualModelPersister.persistSoon()
     }
     resolveModes(false)
-    picker.closeComposerPicker()
-  }
-
-  function chooseModelDefault() {
-    const sessionId = activeSessionId()
-    if (sessionId) {
-      sessionManualModelBySession.value = removeSessionManualModelPair(sessionManualModelBySession.value, sessionId)
-      sessionManualModelPersister.persistSoon()
-    }
-    applyResolvedSelection(false)
     picker.closeComposerPicker()
   }
 
@@ -496,8 +455,6 @@ export function useChatModelSelection(opts: {
     providers,
     catalogLoading,
     catalogError,
-    runtimeDefaultSelection,
-    effectiveDefaults,
     selectedProviderId,
     selectedAdapterId,
     selectedModelId,
@@ -527,7 +484,6 @@ export function useChatModelSelection(opts: {
     modelPickerQuery,
     toggleComposerPicker: picker.toggleComposerPicker,
     chooseModelSlug,
-    chooseModelDefault,
     chooseThinkingMode,
     chooseThinkingModeDefault,
     chooseSpeedMode,

@@ -391,22 +391,7 @@ const composerPickerEmptyText = computed(() => {
 
 const composerPickerGroups = computed<OptionMenuGroup[]>(() => {
   if (composerPickerOpen.value === 'model') {
-    const groups: OptionMenuGroup[] = [
-      {
-        id: 'model-default',
-        title: String(t('common.default')),
-        collapsible: false,
-        items: [
-          {
-            id: 'model:default',
-            label: String(t('chat.composer.model.autoDefault')),
-            description: String(t('chat.composer.model.autoDefaultDescription')),
-            checked: modelSelection.modelSource.value === 'default' || modelSelection.modelSource.value === 'auto',
-            keywords: 'auto default model',
-          },
-        ],
-      },
-    ]
+    const groups: OptionMenuGroup[] = []
 
     const byProvider = new Map<string, OptionMenuItem[]>()
     for (const opt of modelSelection.filteredModelSlugOptions.value as ModelSlugPickerOption[]) {
@@ -658,10 +643,6 @@ function setComposerPickerOpen(next: boolean) {
 
 function handleComposerPickerSelect(item: OptionMenuItem) {
   const id = String(item.id || '')
-  if (id === 'model:default') {
-    void modelSelection.chooseModelDefault()
-    return
-  }
   if (id === 'thinking:default') {
     void modelSelection.chooseThinkingModeDefault()
     return
@@ -1540,7 +1521,7 @@ watch(
     requestInitialScroll(chat.selectedSessionId)
 
     // Existing sessions restore their model and run modes from the server execution context.
-    // New sessions fall back to the Agena runtime defaults.
+    // New sessions remain unassigned until the user selects a model.
     modelSelection.resetSelectionForSessionSwitch()
     modelSelection.applySessionSelection()
     activityExpandedByBlockKey.value = {}
@@ -2075,6 +2056,11 @@ async function send() {
 
   if (!sid) return
 
+  if (!modelSelection.selectedProviderId.value || !modelSelection.selectedModelId.value) {
+    toasts.push('error', 'Select a model before sending')
+    return
+  }
+
   // UX: if the editor is expanded, collapse it on send.
   if (editorFullscreen.value && !editorClosing.value) {
     closeEditorFullscreen()
@@ -2132,7 +2118,6 @@ async function send() {
       selectedModelId: modelSelection.selectedModelId.value,
       selectedThinkingMode: modelSelection.selectedThinkingMode.value,
       selectedSpeedMode: modelSelection.selectedSpeedMode.value,
-      effectiveDefaults: modelSelection.effectiveDefaults.value,
     })
 
     const sendResult = await chat.sendMessage(sid, { ...runCfg, parts })

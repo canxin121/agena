@@ -1209,7 +1209,8 @@ impl AgenaClient {
     /// The server owns the write: it validates against the full composed
     /// configuration, persists to the global file layer, and reloads the
     /// runtime when the edit requires it. `changes` is a JSON object merged
-    /// at the given `path` (e.g. `"providers"` with `{default, default_selection}`).
+    /// at the given `path` (for example, the `providers` object with explicit
+    /// provider configuration changes).
     pub async fn patch_settings(
         &self,
         path: &str,
@@ -1783,7 +1784,12 @@ impl AgenaClient {
                 let notification = match serde_json::from_str::<Notification>(&event.data) {
                     Ok(notification) => notification,
                     Err(error) => {
-                        let _ = tx.send(Err(ClientError::Decode(error))).await;
+                        if let Err(send_error) = tx.send(Err(ClientError::Decode(error))).await {
+                            tracing::debug!(
+                                diagnostic = %send_error,
+                                "notification decode failure receiver was dropped"
+                            );
+                        }
                         return;
                     }
                 };

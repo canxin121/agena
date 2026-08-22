@@ -2,7 +2,10 @@ use std::{
     collections::{HashMap, HashSet},
     future::Future,
     path::PathBuf,
-    sync::{Arc, Mutex as StdMutex, RwLock as StdRwLock},
+    sync::{
+        Arc, Mutex as StdMutex, MutexGuard as StdMutexGuard, RwLock as StdRwLock,
+        RwLockReadGuard as StdRwLockReadGuard, RwLockWriteGuard as StdRwLockWriteGuard,
+    },
     time::Duration,
 };
 
@@ -47,6 +50,36 @@ use agena_runtime::{
     SessionCreateRequest, SessionExecutionReplyRequest, SessionExecutionRequest,
     SessionPermissionReplyRequest, SessionRunOptions,
 };
+
+fn recover_mutex<'a, T>(lock: &'a StdMutex<T>, context: &str) -> StdMutexGuard<'a, T> {
+    match lock.lock() {
+        Ok(guard) => guard,
+        Err(error) => {
+            tracing::error!(operation = context, error = %error, "recovering poisoned session mutex");
+            error.into_inner()
+        }
+    }
+}
+
+fn recover_read<'a, T>(lock: &'a StdRwLock<T>, context: &str) -> StdRwLockReadGuard<'a, T> {
+    match lock.read() {
+        Ok(guard) => guard,
+        Err(error) => {
+            tracing::error!(operation = context, error = %error, "recovering poisoned session read lock");
+            error.into_inner()
+        }
+    }
+}
+
+fn recover_write<'a, T>(lock: &'a StdRwLock<T>, context: &str) -> StdRwLockWriteGuard<'a, T> {
+    match lock.write() {
+        Ok(guard) => guard,
+        Err(error) => {
+            tracing::error!(operation = context, error = %error, "recovering poisoned session write lock");
+            error.into_inner()
+        }
+    }
+}
 
 fn completion_request(
     options: &SessionRunOptions,
@@ -103,10 +136,14 @@ fn background_delivery_retry_delay_ms(attempts: u32) -> i64 {
 }
 
 fn background_delivery_error(error: &AppError) -> serde_json::Value {
+    let failure = error.failure();
+    let public_message = failure.user.fallback.clone();
     serde_json::json!({
-        "message": error.to_string(),
+        "message": public_message,
         "retryable": error.retryable(),
-        "public_message": error.public_message(),
+        "public_message": failure.user.fallback,
+        "failure_id": failure.id,
+        "failure_code": failure.code,
     })
 }
 
@@ -266,18 +303,22 @@ impl HostUserInputSequenceGuard {
         call_id: i64,
     ) -> Self {
         let key = (session_id, call_id);
-        if let Ok(mut guard) = sequences.lock() {
-            guard.remove(&key);
-        }
+        recover_mutex(
+            sequences.as_ref(),
+            "initialize host user-input sequence guard",
+        )
+        .remove(&key);
         Self { sequences, key }
     }
 }
 
 impl Drop for HostUserInputSequenceGuard {
     fn drop(&mut self) {
-        if let Ok(mut guard) = self.sequences.lock() {
-            guard.remove(&self.key);
-        }
+        recover_mutex(
+            self.sequences.as_ref(),
+            "release host user-input sequence guard",
+        )
+        .remove(&self.key);
     }
 }
 
@@ -977,8 +1018,36 @@ impl SessionManager {
                         .and_then(serde_json::Value::as_str),
                 ) {
                     (Some(turn_id), Some(reply_id)) => {
-                        let turn_id = uuid::Uuid::parse_str(turn_id).ok()?;
-                        let reply_id = uuid::Uuid::parse_str(reply_id).ok()?;
+                        let turn_id = match uuid::Uuid::parse_str(turn_id) {
+                            Ok(turn_id) => turn_id,
+                            Err(error) => {
+                                tracing::warn!(
+                                    session_id,
+                                    part_id = marker.part_id,
+                                    diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                                        "decode the persisted assistant run turn id",
+                                        &error,
+                                    ),
+                                    "malformed assistant run identity was skipped while resolving the conversation"
+                                );
+                                return None;
+                            }
+                        };
+                        let reply_id = match uuid::Uuid::parse_str(reply_id) {
+                            Ok(reply_id) => reply_id,
+                            Err(error) => {
+                                tracing::warn!(
+                                    session_id,
+                                    part_id = marker.part_id,
+                                    diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                                        "decode the persisted assistant run reply id",
+                                        &error,
+                                    ),
+                                    "malformed assistant run identity was skipped while resolving the conversation"
+                                );
+                                return None;
+                            }
+                        };
                         Some(ConversationIdentity {
                             turn_id: agena_domain::TurnId(turn_id),
                             reply_id: agena_domain::AssistantReplyId(reply_id),
@@ -1214,11 +1283,13 @@ impl SessionManager {
                 .drive_registered(session_id, task_name, control, steer_rx, operation)
                 .await
             {
+                let failure = error.failure();
                 tracing::error!(
                     session_id,
                     task_name,
+                    failure_id = %failure.id,
                     diagnostic = %error,
-                    public_message = %error.public_message(),
+                    public_message = %failure.user.fallback,
                     "accepted execution finished with a failure"
                 );
             }
@@ -1250,7 +1321,18 @@ impl SessionManager {
             _ = control.cancel.cancelled() => {
                 match tokio::time::timeout(Self::OPERATION_CANCELLATION_GRACE, &mut task).await {
                     Ok(joined) => joined,
-                    Err(_) => {
+                    Err(error) => {
+                        tracing::warn!(
+                            execution_id = ?control.execution_id(),
+                            diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                                format!(
+                                    "session operation did not stop within the {}ms cancellation grace period",
+                                    Self::OPERATION_CANCELLATION_GRACE.as_millis()
+                                ),
+                                &error,
+                            ),
+                            "aborting session operation after cancellation grace timeout"
+                        );
                         task.abort();
                         task.await
                     }
@@ -1520,9 +1602,23 @@ impl SessionManager {
         // originally created by the model. Reuse that operation's correlation
         // ids so shell output remains attached to the visible Activity.
         let outer_pending_tool = pending_tool_by_call_id(&session, call_id);
-        let resolved_outer_pending = outer_pending_tool
-            .as_ref()
-            .and_then(|pending| resolve_pending_tool(&session, pending).ok());
+        let resolved_outer_pending = outer_pending_tool.as_ref().and_then(|pending| {
+            match resolve_pending_tool(&session, pending) {
+                Ok(resolved) => Some(resolved),
+                Err(error) => {
+                    tracing::warn!(
+                        session_id,
+                        call_id,
+                        diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                            "resolve a host-invoked pending tool correlation",
+                            &error,
+                        ),
+                        "host-invoked tool output may not correlate with the pending operation"
+                    );
+                    None
+                }
+            }
+        });
         let command_event_sink = resolved_outer_pending
             .as_ref()
             .map(|pending| self.command_event_sink_for_pending(session_id, pending));
@@ -1618,10 +1714,10 @@ impl SessionManager {
     }
 
     fn next_host_user_input_sequence(&self, session_id: i64, call_id: i64) -> usize {
-        let mut guard = self
-            .host_user_input_sequences
-            .lock()
-            .expect("host user input sequence lock poisoned");
+        let mut guard = recover_mutex(
+            self.host_user_input_sequences.as_ref(),
+            "advance the host user-input sequence",
+        );
         let sequence = guard.entry((session_id, call_id)).or_insert(0);
         let next = *sequence;
         *sequence += 1;
@@ -1747,12 +1843,19 @@ impl SessionManager {
                 .collect::<Vec<_>>()
         };
         for waiter in input_waiters {
-            let _ = waiter
+            if waiter
                 .response
                 .send(agena_plugin_host::sdk::host_api::AskUserResponse {
                     cancelled: true,
                     ..Default::default()
-                });
+                })
+                .is_err()
+            {
+                tracing::debug!(
+                    session_id,
+                    "cancelled host user-input response receiver was already dropped"
+                );
+            }
         }
     }
 
@@ -1765,9 +1868,10 @@ impl SessionManager {
         config: RuntimeSessionManagerConfig,
     ) {
         let previous = self.execution.load_full();
-        if let Ok(mut permission) = previous.shared_permission.write() {
-            *permission = config.permission.clone();
-        }
+        *recover_write(
+            previous.shared_permission.as_ref(),
+            "reconfigure shared session permission",
+        ) = config.permission.clone();
         self.execution
             .store(Arc::new(SessionManagerState::new_with_permission_stores(
                 provider_registry,
@@ -1913,7 +2017,18 @@ impl SessionManager {
             match result {
                 Ok(_) => return Ok(()),
                 Err(error) if attempt == 3 => return Err(error),
-                Err(_) => continue,
+                Err(error) => {
+                    tracing::warn!(
+                        operation_id,
+                        attempt,
+                        diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                            "recording a background launch failure raced with another writer and will be retried",
+                            &error,
+                        ),
+                        "retrying background launch-failure transition"
+                    );
+                    continue;
+                }
             }
         }
         unreachable!("bounded launch-failure retry returns from the loop")
@@ -1953,7 +2068,18 @@ impl SessionManager {
             match result {
                 Ok(_) => return Ok(()),
                 Err(error) if attempt == 3 => return Err(error),
-                Err(_) => continue,
+                Err(error) => {
+                    tracing::warn!(
+                        operation_id,
+                        attempt,
+                        diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                            "background launch handoff raced with another writer and will be retried",
+                            &error,
+                        ),
+                        "retrying background launch handoff"
+                    );
+                    continue;
+                }
             }
         }
         unreachable!("bounded launch-handoff retry returns from the loop")
@@ -2116,7 +2242,16 @@ impl SessionManager {
             match self.store.transition_background_operation(transition).await {
                 Ok(updated) => operation = updated,
                 Err(error) if attempt == 7 => return Err(error),
-                Err(_) => {
+                Err(error) => {
+                    tracing::warn!(
+                        operation_id = %operation_id,
+                        attempt,
+                        diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                            "background operation transition failed and will be retried from the latest persisted state",
+                            &error,
+                        ),
+                        "retrying background operation transition"
+                    );
                     operation = self
                         .store
                         .background_operation(&operation_id)

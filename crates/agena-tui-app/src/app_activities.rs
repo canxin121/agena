@@ -83,8 +83,11 @@ impl App {
                             .collect::<Vec<_>>()
                     })
                     .map_err(crate::UiFailure::internal),
-                Err(_) => Err(crate::UiFailure::internal(
-                    "background activity list timed out after 10 seconds",
+                Err(error) => Err(crate::UiFailure::internal(
+                    agena_failure::diagnostic::format_error_chain_with_context(
+                        "background activity list timed out after 10 seconds",
+                        &error,
+                    ),
                 )),
             };
             let _ = tx
@@ -143,8 +146,11 @@ impl App {
                         dropped_lines: read.dropped_lines,
                     })
                     .map_err(crate::UiFailure::internal),
-                Err(_) => Err(crate::UiFailure::internal(
-                    "background activity log read timed out after 10 seconds",
+                Err(error) => Err(crate::UiFailure::internal(
+                    agena_failure::diagnostic::format_error_chain_with_context(
+                        "background activity log read timed out after 10 seconds",
+                        &error,
+                    ),
                 )),
             };
             let _ = tx
@@ -523,8 +529,11 @@ impl App {
                     .await
                     {
                         Ok(result) => result.map(|_| true).map_err(crate::UiFailure::internal),
-                        Err(_) => Err(crate::UiFailure::internal(
-                            "controlling background activity timed out after 10 seconds",
+                        Err(error) => Err(crate::UiFailure::internal(
+                            agena_failure::diagnostic::format_error_chain_with_context(
+                                "controlling background activity timed out after 10 seconds",
+                                &error,
+                            ),
                         )),
                     };
                     let _ = tx
@@ -551,8 +560,11 @@ impl App {
                     .await
                     {
                         Ok(result) => result.map(|_| true).map_err(crate::UiFailure::internal),
-                        Err(_) => Err(crate::UiFailure::internal(
-                            "clearing background activities timed out after 10 seconds",
+                        Err(error) => Err(crate::UiFailure::internal(
+                            agena_failure::diagnostic::format_error_chain_with_context(
+                                "clearing background activities timed out after 10 seconds",
+                                &error,
+                            ),
                         )),
                     };
                     let _ = tx

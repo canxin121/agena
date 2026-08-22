@@ -22,7 +22,7 @@ test('adapter row headers own enable and destructive actions', () => {
   assert.ok(providerSource.includes('@change="toggleAdapter(adapter.adapter_id)"'))
   assert.ok(providerSource.includes('@click="deleteAdapter(adapter.adapter_id)"'))
   assert.ok(providerSource.includes('@click="deleteProviderRow(row)"'))
-  assert.ok(providerSource.includes('@click="deleteModel(adapter.adapter_id, model.id)"'))
+  assert.ok(providerSource.includes('@click.stop="deleteModel(adapter.adapter_id, model.id)"'))
 })
 
 test('provider studio uses one dirty-aware save boundary for provider, adapter, and model edits', () => {
@@ -35,4 +35,20 @@ test('provider studio uses one dirty-aware save boundary for provider, adapter, 
   assert.ok(!providerSource.includes('Save model config'))
   assert.ok(!providerSource.includes('saveAdapter('))
   assert.ok(!providerSource.includes('saveModel('))
+})
+
+test('model edit action stops propagation from the adapter disclosure row', () => {
+  assert.ok(providerSource.includes('@click.stop="openModelEditor(adapter.adapter_id, model)"'))
+})
+
+test('model editor is rendered inside the matching model row', () => {
+  const modelLoop = providerSource.indexOf('<template\n                  v-for="model in adapter.models"')
+  const editor = providerSource.indexOf(
+    'v-if="editingModel?.adapterId === adapter.adapter_id && editingModel?.modelId === model.id"',
+  )
+  const globalEditor = providerSource.indexOf('<section v-if="editingModel"')
+
+  assert.ok(modelLoop >= 0)
+  assert.ok(editor > modelLoop)
+  assert.equal(globalEditor, -1)
 })

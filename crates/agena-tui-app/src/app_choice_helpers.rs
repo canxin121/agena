@@ -402,9 +402,10 @@ pub(crate) fn provider_studio_provider_rows(
             "overlay-provider-studio-provider-row-detail-no-model",
             &agena_tui::fl_args!(
                 "adapter" => provider
-                    .defaults
-                    .adapter
-                    .clone()
+                    .adapters
+                    .iter()
+                    .find(|adapter| adapter.enabled)
+                    .map(|adapter| adapter.adapter_id.clone())
                     .unwrap_or_else(|| settings_choice_adapter_fallback(i18n)),
                 "count" => provider.adapters.len() as i64,
             ),
@@ -438,9 +439,10 @@ pub(crate) fn i18n_provider_list_detail(i18n: &I18n, provider: &ProviderSummaryR
         "overlay-provider-list-row-detail-no-model",
         &agena_tui::fl_args!(
             "adapter" => provider
-                .defaults
-                .adapter
-                .clone()
+                .adapters
+                .iter()
+                .find(|adapter| adapter.enabled)
+                .map(|adapter| adapter.adapter_id.clone())
                 .unwrap_or_else(|| settings_choice_adapter_fallback(i18n)),
             "count" => provider.adapters.len() as i64,
         ),
@@ -450,14 +452,9 @@ pub(crate) fn i18n_provider_list_detail(i18n: &I18n, provider: &ProviderSummaryR
 pub(crate) fn session_model_choice_item(
     i18n: &I18n,
     provider_id: &str,
-    default_adapter: Option<&str>,
     model: ProviderModel,
 ) -> SessionModelChoiceItem {
-    let adapter_id = model
-        .adapter_id
-        .as_ref()
-        .map(ToString::to_string)
-        .or_else(|| default_adapter.map(str::to_owned));
+    let adapter_id = model.adapter_id.as_ref().map(ToString::to_string);
     let identity = SessionModelIdentity::new(provider_id, adapter_id.clone(), model.id.as_ref());
     let display_name = model
         .display_name
@@ -614,19 +611,16 @@ mod tests {
             session_model_choice_item(
                 &i18n,
                 "provider-a",
-                None,
                 ProviderModel::new("adapter-a", "model-a"),
             ),
             session_model_choice_item(
                 &i18n,
                 "provider-a",
-                None,
                 ProviderModel::new("adapter-b", "model-a"),
             ),
             session_model_choice_item(
                 &i18n,
                 "provider-a",
-                None,
                 ProviderModel::new("adapter-a", "model-b"),
             ),
         ];
@@ -648,7 +642,6 @@ mod tests {
         let mut items = vec![session_model_choice_item(
             &i18n,
             "provider-a",
-            None,
             ProviderModel::new("adapter-a", "model-a"),
         )];
         let current = ModelRef::new_with_adapter("provider-b", "adapter-b", "removed-model");
@@ -673,7 +666,7 @@ mod tests {
         model.display_name = Some("GPT-5.6 Sol".to_owned());
         model.metadata.limits.context_window_tokens = Some(1_050_000);
 
-        let item = session_model_choice_item(&i18n, "oai", None, model);
+        let item = session_model_choice_item(&i18n, "oai", model);
 
         assert_eq!(item.label, "GPT-5.6 Sol");
         assert_eq!(

@@ -115,7 +115,20 @@ impl Skill {
     /// Skill does not alter its content identity.
     pub fn content_hash(&self) -> String {
         let mut digest = Sha256::new();
-        let frontmatter = serde_yaml::to_string(&self.frontmatter).unwrap_or_default();
+        let frontmatter = match serde_yaml::to_string(&self.frontmatter) {
+            Ok(frontmatter) => frontmatter,
+            Err(error) => {
+                tracing::error!(
+                    skill_name = %self.frontmatter.name,
+                    diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                        "serialize Skill frontmatter for content identity",
+                        &error,
+                    ),
+                    "Skill content identity will include an explicit serialization-failure marker"
+                );
+                format!("<frontmatter serialization failed: {error}>")
+            }
+        };
         digest.update(frontmatter.as_bytes());
         digest.update([0]);
         digest.update(self.body.as_bytes());
@@ -162,9 +175,10 @@ impl Skill {
                 path: relative.display().to_string(),
                 limit,
             },
-            SkillError::ResourceNotText(_) => {
-                SkillError::ResourceNotText(relative.display().to_string())
-            }
+            SkillError::ResourceNotText { source, .. } => SkillError::ResourceNotText {
+                path: relative.display().to_string(),
+                source,
+            },
             other => other,
         })
     }
@@ -172,12 +186,9 @@ impl Skill {
 
 fn read_text_file_bounded(path: &Path, max_bytes: usize) -> SkillResult<String> {
     let file = std::fs::File::open(path)?;
-    let mut bytes = Vec::with_capacity(
-        file.metadata()
-            .ok()
-            .and_then(|metadata| usize::try_from(metadata.len().min(max_bytes as u64)).ok())
-            .unwrap_or_default(),
-    );
+    let metadata = file.metadata()?;
+    let capacity = usize::try_from(metadata.len().min(max_bytes as u64)).unwrap_or(max_bytes);
+    let mut bytes = Vec::with_capacity(capacity);
     file.take((max_bytes as u64).saturating_add(1))
         .read_to_end(&mut bytes)?;
     if bytes.len() > max_bytes {
@@ -186,7 +197,10 @@ fn read_text_file_bounded(path: &Path, max_bytes: usize) -> SkillResult<String> 
             limit: max_bytes,
         });
     }
-    String::from_utf8(bytes).map_err(|_| SkillError::ResourceNotText(path.display().to_string()))
+    String::from_utf8(bytes).map_err(|source| SkillError::ResourceNotText {
+        path: path.display().to_string(),
+        source,
+    })
 }
 
 #[cfg(test)]

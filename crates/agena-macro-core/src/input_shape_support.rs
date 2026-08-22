@@ -29,7 +29,7 @@ where
             if field_is_flatten(field)? {
                 Ok(quote! {
                     match serde_json::to_value(#binding)
-                        .map_err(|err| ::agena_plugin_sdk::PluginError::invalid_params(err.to_string()))? {
+                        .map_err(|err| ::agena_plugin_sdk::PluginError::invalid_params_error(&err))? {
                         serde_json::Value::Object(flattened) => {
                             object.extend(flattened);
                         }
@@ -51,7 +51,7 @@ where
                 Ok(quote! {
                     object.insert(
                         #name.to_string(),
-                        serde_json::to_value(#binding).map_err(|err| ::agena_plugin_sdk::PluginError::invalid_params(err.to_string()))?,
+                        serde_json::to_value(#binding).map_err(|err| ::agena_plugin_sdk::PluginError::invalid_params_error(&err))?,
                     );
                 })
             }
@@ -92,7 +92,7 @@ fn nested_input_shape_post_parse_expr(
                     let __inner_schema = <#ty as ::agena_plugin_sdk::ToolInput>::input_schema();
                     let __macro_parse_result = <#ty as ::agena_plugin_sdk::ToolInput>::parse_input(
                         serde_json::to_value(&#target)
-                            .map_err(|err| ::agena_plugin_sdk::PluginError::invalid_params(err.to_string()))?,
+                            .map_err(|err| ::agena_plugin_sdk::PluginError::invalid_params_error(&err))?,
                     );
                     let __mappings =
                         ::agena_plugin_sdk::macro_support::prefixed_input_error_path_mappings(
@@ -108,7 +108,7 @@ fn nested_input_shape_post_parse_expr(
                 quote! {
                     <#ty as ::agena_plugin_sdk::ToolInput>::parse_input(
                         serde_json::to_value(&#target)
-                            .map_err(|err| ::agena_plugin_sdk::PluginError::invalid_params(err.to_string()))?,
+                            .map_err(|err| ::agena_plugin_sdk::PluginError::invalid_params_error(&err))?,
                     )?
                 }
             }
@@ -122,7 +122,7 @@ fn nested_input_shape_post_parse_expr(
                             let __macro_parse_result =
                                 <#ty as ::agena_plugin_sdk::ToolInput>::parse_input(
                                     serde_json::to_value(value).map_err(|err| {
-                                        ::agena_plugin_sdk::PluginError::invalid_params(err.to_string())
+                                        ::agena_plugin_sdk::PluginError::invalid_params_error(&err)
                                     })?,
                                 );
                             let __mappings =
@@ -146,7 +146,7 @@ fn nested_input_shape_post_parse_expr(
                         Some(value) => Some(
                             <#ty as ::agena_plugin_sdk::ToolInput>::parse_input(
                                 serde_json::to_value(value)
-                                    .map_err(|err| ::agena_plugin_sdk::PluginError::invalid_params(err.to_string()))?,
+                                    .map_err(|err| ::agena_plugin_sdk::PluginError::invalid_params_error(&err))?,
                             )?,
                         ),
                         None => None,
@@ -165,7 +165,7 @@ fn nested_input_shape_post_parse_expr(
                             let __macro_parse_result =
                                 <#ty as ::agena_plugin_sdk::ToolInput>::parse_input(
                                     serde_json::to_value(value).map_err(|err| {
-                                        ::agena_plugin_sdk::PluginError::invalid_params(err.to_string())
+                                        ::agena_plugin_sdk::PluginError::invalid_params_error(&err)
                                     })?,
                                 );
                             let __prefix = format!("{}[{__index}]", #schema_path);
@@ -188,7 +188,7 @@ fn nested_input_shape_post_parse_expr(
                         .map(|value| {
                             <#ty as ::agena_plugin_sdk::ToolInput>::parse_input(
                                 serde_json::to_value(value)
-                                    .map_err(|err| ::agena_plugin_sdk::PluginError::invalid_params(err.to_string()))?,
+                                    .map_err(|err| ::agena_plugin_sdk::PluginError::invalid_params_error(&err))?,
                             )
                         })
                         .collect::<::agena_plugin_sdk::Result<Vec<_>>>()?
@@ -209,7 +209,7 @@ fn nested_input_shape_post_parse_expr(
                                         let __macro_parse_result =
                                             <#ty as ::agena_plugin_sdk::ToolInput>::parse_input(
                                                 serde_json::to_value(value).map_err(|err| {
-                                                    ::agena_plugin_sdk::PluginError::invalid_params(err.to_string())
+                                                    ::agena_plugin_sdk::PluginError::invalid_params_error(&err)
                                                 })?,
                                             );
                                         let __prefix = format!("{}[{__index}]", #schema_path);
@@ -238,7 +238,7 @@ fn nested_input_shape_post_parse_expr(
                                 .map(|value| {
                                     <#ty as ::agena_plugin_sdk::ToolInput>::parse_input(
                                         serde_json::to_value(value)
-                                            .map_err(|err| ::agena_plugin_sdk::PluginError::invalid_params(err.to_string()))?,
+                                            .map_err(|err| ::agena_plugin_sdk::PluginError::invalid_params_error(&err))?,
                                     )
                                 })
                                 .collect::<::agena_plugin_sdk::Result<Vec<_>>>()?,
@@ -277,7 +277,7 @@ pub fn expand_flatten_shape_post_parse_tokens(
                                 quote! {
                                     parsed.#member = <#ty as ::agena_plugin_sdk::ToolInput>::parse_input(
                                         serde_json::to_value(&parsed.#member)
-                                            .map_err(|err| ::agena_plugin_sdk::PluginError::invalid_params(err.to_string()))?,
+                                            .map_err(|err| ::agena_plugin_sdk::PluginError::invalid_params_error(&err))?,
                                     )?;
                                 }
                             })
@@ -349,7 +349,7 @@ pub fn expand_generated_input_post_parse_tokens(
                 return Some(quote! {
                     parsed.#ident = <#ty as ::agena_plugin_sdk::ToolInput>::parse_input(
                         serde_json::to_value(&parsed.#ident)
-                            .map_err(|err| ::agena_plugin_sdk::PluginError::invalid_params(err.to_string()))?,
+                            .map_err(|err| ::agena_plugin_sdk::PluginError::invalid_params_error(&err))?,
                     )?;
                 });
             }
@@ -417,7 +417,7 @@ fn expand_flatten_shape_variant_post_parse_arm(
                             quote! {
                                 let #ident = <#ty as ::agena_plugin_sdk::ToolInput>::parse_input(
                                     serde_json::to_value(&#ident)
-                                        .map_err(|err| ::agena_plugin_sdk::PluginError::invalid_params(err.to_string()))?,
+                                        .map_err(|err| ::agena_plugin_sdk::PluginError::invalid_params_error(&err))?,
                                 )?;
                             }
                         })
@@ -477,7 +477,7 @@ fn expand_flatten_shape_variant_post_parse_arm(
                             quote! {
                                 let #binding = <#ty as ::agena_plugin_sdk::ToolInput>::parse_input(
                                     serde_json::to_value(&#binding)
-                                        .map_err(|err| ::agena_plugin_sdk::PluginError::invalid_params(err.to_string()))?,
+                                        .map_err(|err| ::agena_plugin_sdk::PluginError::invalid_params_error(&err))?,
                                 )?;
                             }
                         })

@@ -32,21 +32,32 @@ pub struct GitSubmoduleListResponse {
 
 fn list_submodules(dir: &Path) -> Result<Vec<GitSubmoduleInfo>, Git2OpenError> {
     let repo = git2_utils::open_repo_discover(dir)?;
-    let discovered = repo
-        .submodules()
-        .map_err(|error| Git2OpenError::Other(error.message().to_string()))?;
+    let discovered = repo.submodules().map_err(|error| {
+        Git2OpenError::Other(crate::git2_utils::git2_error_diagnostic(
+            "failed to enumerate Git submodules",
+            &error,
+        ))
+    })?;
 
     let mut submodules = Vec::with_capacity(discovered.len());
     for submodule in discovered {
-        let Some(url) = submodule
-            .url()
-            .map_err(|error| Git2OpenError::Other(error.message().to_string()))?
+        let Some(url) = submodule.url().map_err(|error| {
+            Git2OpenError::Other(crate::git2_utils::git2_error_diagnostic(
+                "failed to resolve a Git submodule work directory",
+                &error,
+            ))
+        })?
         else {
             continue;
         };
         let branch = submodule
             .branch()
-            .map_err(|error| Git2OpenError::Other(error.message().to_string()))?
+            .map_err(|error| {
+                Git2OpenError::Other(crate::git2_utils::git2_error_diagnostic(
+                    "failed to open a Git submodule repository",
+                    &error,
+                ))
+            })?
             .map(str::to_string);
         submodules.push(GitSubmoduleInfo {
             path: submodule.path().to_string_lossy().into_owned(),

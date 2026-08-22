@@ -75,7 +75,7 @@ impl HttpFetcher for ReqwestFetcher {
                 .connect_timeout(CONNECT_TIMEOUT)
                 .timeout(FETCH_TIMEOUT)
                 .build()
-                .map_err(|e| MarketplaceError::Http(e.to_string()))?,
+                .map_err(|error| MarketplaceError::http_error(&error))?,
         };
         let response = client
             .get(url)

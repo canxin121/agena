@@ -230,8 +230,13 @@ impl<E> RuntimeBackgroundTaskRegistry<E> {
             self.inner
                 .lock()
                 .workers
-                .insert(task_id, worker.abort_handle());
-            let _ = start_tx.send(());
+                .insert(task_id.clone(), worker.abort_handle());
+            if start_tx.send(()).is_err() {
+                tracing::debug!(
+                    task_id,
+                    "background task start acknowledgement receiver was dropped"
+                );
+            }
         }
 
         RuntimeBackgroundTaskStart { started, task }

@@ -227,13 +227,6 @@ pub struct ProviderNativeToolBinding {
     pub connector_names: Vec<String>,
 }
 
-/// Presentation-neutral defaults for one configured provider route.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct ProviderDefaults {
-    pub adapter: Option<String>,
-    pub model: String,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 /// Summary of a configured provider adapter.
 pub struct ProviderAdapterSummary {
@@ -266,8 +259,6 @@ pub struct ProviderConfiguredRouting {
 pub struct ProviderConfiguredEditor {
     pub provider_id: String,
     pub auth: ProviderConfiguredEditorAuth,
-    pub default_adapter: Option<String>,
-    pub default_model: Option<String>,
     pub request_timeout_secs: u64,
     pub connect_timeout_secs: u64,
 }
@@ -308,7 +299,6 @@ pub enum ProviderConfiguredEditorAuth {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderCatalogEntry {
     pub provider_id: ProviderId,
-    pub defaults: ProviderDefaults,
     pub adapters: Vec<ProviderAdapterSummary>,
 }
 
@@ -412,7 +402,6 @@ pub struct ProviderAdapterModelsListing {
 /// Provider-derived values required to validate and materialize run options.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderModelExecutionOptions {
-    pub default_adapter: Option<AdapterId>,
     pub capabilities: ModelCapabilities,
     pub thinking_modes: Vec<ModelThinkingMode>,
     pub speed_modes: BTreeMap<String, ModelSpeedMode>,
@@ -439,14 +428,6 @@ pub trait ProviderCatalog: Send + Sync {
         &self,
         provider_id: &ProviderId,
     ) -> Result<Vec<Model>, ProviderCatalogError>;
-
-    fn default_model(&self) -> Result<Option<ModelRef>, ProviderCatalogError>;
-
-    /// The effective default execution selection (provider/adapter/model and
-    /// default thinking/speed/verbosity modes) from the merged configuration.
-    /// This is the selection the runtime applies when a fresh session starts
-    /// without explicit run options.
-    fn default_selection(&self) -> agena_domain::ExecutionSelection;
 
     /// Resolve a CLI/application model target against the current configured
     /// provider catalog. `target` may be a provider or a fully qualified

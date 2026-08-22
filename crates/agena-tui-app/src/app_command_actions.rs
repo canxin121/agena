@@ -368,10 +368,14 @@ impl App {
 
         let (title, body, base, head) = match parse_pr_command_args(trimmed) {
             Ok(parsed) => parsed,
-            Err(_) => {
-                self.flash_warning(self.i18n.text_args(
+            Err(error) => {
+                let usage = self.i18n.text_args(
                     "flash-command-usage",
                     &agena_tui::fl_args!("usage" => "/pr <title> [--body <text>] [--base <branch>] [--head <branch>]"),
+                );
+                self.flash_warning(format!(
+                    "{usage}: {}",
+                    agena_failure::diagnostic::format_error_chain(error.as_ref())
                 ));
                 return;
             }

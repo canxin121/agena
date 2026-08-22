@@ -786,8 +786,8 @@ impl SettingsPlugin {
     where
         T: Serialize,
     {
-        let mut payload = serde_json::to_value(&response)
-            .map_err(|err| PluginError::internal(err.to_string()))?;
+        let mut payload =
+            serde_json::to_value(&response).map_err(|err| PluginError::internal_error(&err))?;
         let reload_report = match payload
             .get("reload_required")
             .and_then(JsonValue::as_bool)
@@ -933,7 +933,7 @@ where
 {
     let text = text.into();
     let mut payload =
-        serde_json::to_value(payload).map_err(|err| PluginError::internal(err.to_string()))?;
+        serde_json::to_value(payload).map_err(|err| PluginError::internal_error(&err))?;
     if let Some(layer) = layer {
         insert_settings_layer(&mut payload, layer);
     }

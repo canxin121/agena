@@ -463,12 +463,21 @@ impl MonitorService for MonitorRegistry {
             .lookup(monitor_id)
             .ok_or_else(|| MonitorError::NotFound(monitor_id.to_string()))?;
         {
-            let mut inner = state.inner.lock().unwrap();
+            let mut inner = state.inner.lock().unwrap_or_else(|error| {
+                tracing::error!(
+                    diagnostic = %error,
+                    monitor_id,
+                    "recovering a poisoned monitor state while stopping it"
+                );
+                error.into_inner()
+            });
             if inner.status == ProcessStatus::Running {
                 inner.status = ProcessStatus::Stopped;
                 inner.completion_reason = Some("explicit_stop".to_string());
                 if let Some(tx) = inner.abort.take() {
-                    let _ = tx.send(());
+                    if tx.send(()).is_err() {
+                        tracing::debug!(monitor_id, "monitor abort receiver had already completed");
+                    }
                 }
             }
         }
@@ -494,7 +503,12 @@ impl Drop for MonitorRegistry {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             if let Some(abort) = inner.abort.take() {
-                let _ = abort.send(());
+                if abort.send(()).is_err() {
+                    tracing::debug!(
+                        monitor_id = %state.monitor_id,
+                        "monitor abort receiver had already completed during registry shutdown"
+                    );
+                }
             }
             // Let the runner receive the abort signal and terminate its whole
             // process tree. Aborting the task here would only drop the direct
@@ -657,35 +671,34 @@ async fn run_monitor(
         } => TerminationCause::TimedOut,
         result = child.wait() => match result {
             Ok(status) => TerminationCause::Exited(status.code()),
-            Err(err) => TerminationCause::WaitError(err.to_string()),
+            Err(error) => TerminationCause::WaitError(
+                agena_failure::diagnostic::format_error_chain_with_context(
+                    "failed to wait for the monitored process",
+                    &error,
+                ),
+            ),
         },
     };
 
-    let (final_status, final_exit_code, completion_reason) = match outcome {
+    let (mut final_status, final_exit_code, mut completion_reason) = match outcome {
         TerminationCause::Stopped => {
-            kill_child(&mut child).await;
-            let code = child.wait().await.ok().and_then(|s| s.code());
-            (ProcessStatus::Stopped, code, "explicit_stop".to_string())
+            terminate_monitored_child(&state, &mut child, ProcessStatus::Stopped, "explicit_stop")
+                .await
         }
         TerminationCause::TimedOut => {
-            kill_child(&mut child).await;
-            let code = child.wait().await.ok().and_then(|s| s.code());
-            (ProcessStatus::TimedOut, code, "timeout".to_string())
+            terminate_monitored_child(&state, &mut child, ProcessStatus::TimedOut, "timeout").await
         }
         TerminationCause::Condition(PatternOutcome::Success) => {
-            kill_child(&mut child).await;
-            let code = child.wait().await.ok().and_then(|s| s.code());
-            (ProcessStatus::Exited, code, "success_pattern".to_string())
+            terminate_monitored_child(&state, &mut child, ProcessStatus::Exited, "success_pattern")
+                .await
         }
         TerminationCause::Condition(PatternOutcome::Failure) => {
-            kill_child(&mut child).await;
-            let code = child.wait().await.ok().and_then(|s| s.code());
-            (ProcessStatus::Failed, code, "failure_pattern".to_string())
+            terminate_monitored_child(&state, &mut child, ProcessStatus::Failed, "failure_pattern")
+                .await
         }
         TerminationCause::Quiet => {
-            kill_child(&mut child).await;
-            let code = child.wait().await.ok().and_then(|s| s.code());
-            (ProcessStatus::Exited, code, "quiet_period".to_string())
+            terminate_monitored_child(&state, &mut child, ProcessStatus::Exited, "quiet_period")
+                .await
         }
         TerminationCause::Exited(code) => (ProcessStatus::Exited, code, "process_exit".to_string()),
         TerminationCause::WaitError(reason) => {
@@ -694,15 +707,24 @@ async fn run_monitor(
                 ProcessStream::Stderr,
                 format!("wait failed: {reason}"),
             );
-            kill_child(&mut child).await;
-            let code = child.wait().await.ok().and_then(|status| status.code());
-            (ProcessStatus::Failed, code, "wait_error".to_string())
+            terminate_monitored_child(&state, &mut child, ProcessStatus::Failed, "wait_error").await
         }
     };
 
     // A shell may exit while a descendant still owns inherited pipes.
     // `process-wrap` targets the complete process group or Job Object.
-    let _ = child.start_kill();
+    if let Err(error) = child.start_kill() {
+        push_event(
+            &state,
+            ProcessStream::Stderr,
+            agena_failure::diagnostic::format_error_chain_with_context(
+                "failed to terminate the remaining monitored process tree",
+                &error,
+            ),
+        );
+        final_status = ProcessStatus::Failed;
+        completion_reason = "process_tree_cleanup_failed".to_string();
+    }
     join_stream_tasks(stdout_task, stderr_task).await;
 
     {
@@ -875,13 +897,35 @@ fn mark_ws_finished(state: &MonitorState, status: ProcessStatus, completion_reas
     }
 }
 
-async fn kill_child(child: &mut ManagedChild) {
-    let _ = child.terminate(Duration::from_millis(150)).await;
+async fn terminate_monitored_child(
+    state: &MonitorState,
+    child: &mut ManagedChild,
+    success_status: ProcessStatus,
+    completion_reason: &str,
+) -> (ProcessStatus, Option<i32>, String) {
+    match child.terminate(Duration::from_millis(150)).await {
+        Ok(status) => (success_status, status.code(), completion_reason.to_string()),
+        Err(error) => {
+            push_event(
+                state,
+                ProcessStream::Stderr,
+                agena_failure::diagnostic::format_error_chain_with_context(
+                    format!("failed to terminate monitored process ({completion_reason})"),
+                    &error,
+                ),
+            );
+            (
+                ProcessStatus::Failed,
+                None,
+                format!("{completion_reason}_termination_failed"),
+            )
+        }
+    }
 }
 
 async fn join_stream_tasks(
-    stdout_task: Option<tokio::task::JoinHandle<()>>,
-    stderr_task: Option<tokio::task::JoinHandle<()>>,
+    mut stdout_task: Option<tokio::task::JoinHandle<()>>,
+    mut stderr_task: Option<tokio::task::JoinHandle<()>>,
 ) {
     let stdout_abort = stdout_task
         .as_ref()
@@ -889,28 +933,72 @@ async fn join_stream_tasks(
     let stderr_abort = stderr_task
         .as_ref()
         .map(tokio::task::JoinHandle::abort_handle);
-    let joined = async move {
-        if let Some(handle) = stdout_task {
-            let _ = handle.await;
-        }
-        if let Some(handle) = stderr_task {
-            let _ = handle.await;
-        }
+    let joined = async {
+        let stdout = async {
+            match stdout_task.as_mut() {
+                Some(handle) => handle.await,
+                None => Ok(()),
+            }
+        };
+        let stderr = async {
+            match stderr_task.as_mut() {
+                Some(handle) => handle.await,
+                None => Ok(()),
+            }
+        };
+        tokio::join!(stdout, stderr)
     };
-    if tokio::time::timeout(Duration::from_secs(2), joined)
-        .await
-        .is_err()
-    {
-        if let Some(abort) = stdout_abort {
-            abort.abort();
+    match tokio::time::timeout(Duration::from_secs(2), joined).await {
+        Ok((stdout_result, stderr_result)) => {
+            for (stream, result) in [("stdout", stdout_result), ("stderr", stderr_result)] {
+                if let Err(error) = result {
+                    tracing::error!(
+                        target: "agena_runtime::monitor",
+                        stream,
+                        diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                            format!("background process {stream} reader task failed"),
+                            &error,
+                        ),
+                        "background process reader task failed"
+                    );
+                }
+            }
         }
-        if let Some(abort) = stderr_abort {
-            abort.abort();
+        Err(timeout_error) => {
+            if let Some(abort) = stdout_abort {
+                abort.abort();
+            }
+            if let Some(abort) = stderr_abort {
+                abort.abort();
+            }
+            for (stream, task) in [
+                ("stdout", stdout_task.take()),
+                ("stderr", stderr_task.take()),
+            ] {
+                if let Some(task) = task
+                    && let Err(error) = task.await
+                    && !error.is_cancelled()
+                {
+                    tracing::error!(
+                        target: "agena_runtime::monitor",
+                        stream,
+                        diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                            format!("background process {stream} reader did not stop cleanly after abort"),
+                            &error,
+                        ),
+                        "background process reader abort failed"
+                    );
+                }
+            }
+            tracing::warn!(
+                target: "agena_runtime::monitor",
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "background process pipes did not close after 2 seconds",
+                    &timeout_error,
+                ),
+                "background process reader tasks were aborted"
+            );
         }
-        tracing::warn!(
-            target: "agena_runtime::monitor",
-            "background process pipes did not close after termination; reader tasks were aborted"
-        );
     }
 }
 
@@ -980,12 +1068,22 @@ async fn stream_lines<R>(
                     .as_ref()
                     .is_some_and(|pattern| pattern.is_match(&line))
                 {
-                    let _ = condition_tx.try_send(PatternOutcome::Failure);
+                    if let Err(error) = condition_tx.try_send(PatternOutcome::Failure) {
+                        tracing::debug!(
+                            diagnostic = %error,
+                            "monitor failure-pattern outcome was already queued or no longer observed"
+                        );
+                    }
                 } else if success
                     .as_ref()
                     .is_some_and(|pattern| pattern.is_match(&line))
                 {
-                    let _ = condition_tx.try_send(PatternOutcome::Success);
+                    if let Err(error) = condition_tx.try_send(PatternOutcome::Success) {
+                        tracing::debug!(
+                            diagnostic = %error,
+                            "monitor success-pattern outcome was already queued or no longer observed"
+                        );
+                    }
                 }
                 if let Some(re) = include.as_ref()
                     && !re.is_match(&line)

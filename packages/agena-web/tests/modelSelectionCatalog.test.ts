@@ -53,7 +53,7 @@ test('thinking and speed modes follow Agena model resource selectors', () => {
   assert.equal(modeOptionDisplayLabel(speed, ''), '')
 })
 
-test('speed modes without an explicit default preserve the provider default', () => {
+test('speed modes without an explicit model default preserve native model behavior', () => {
   const options = speedModeOptionsForModel({
     provider_id: 'openai',
     id: 'gpt-5.6-luna',

@@ -130,10 +130,14 @@ pub fn init_tui_tracing(
     let tracing = agena_runtime::RuntimeTracingConfiguration::default();
     let log_writer = resolve_tui_log_writer(args)?;
 
-    let initial_filter = agena_runtime::runtime_env_filter(&tracing).unwrap_or_else(|_| {
-        agena_runtime::runtime_env_filter(&agena_runtime::RuntimeTracingConfiguration::default())
-            .expect("default tracing filter should parse")
-    });
+    let initial_filter = agena_runtime::runtime_env_filter(&tracing).map_err(|error| {
+        AgenaProcessError::Configuration(
+            agena_failure::diagnostic::format_error_chain_with_context(
+                "invalid TUI tracing configuration",
+                &error,
+            ),
+        )
+    })?;
     tracing_subscriber::registry()
         .with(initial_filter)
         .with(
@@ -143,7 +147,13 @@ pub fn init_tui_tracing(
                 .with_target(false)
                 .compact(),
         )
-        .init();
+        .try_init()
+        .map_err(|error| {
+            AgenaProcessError::Internal(agena_failure::diagnostic::format_error_chain_with_context(
+                "failed to install the TUI tracing subscriber",
+                &error,
+            ))
+        })?;
 
     Ok(())
 }
@@ -157,10 +167,9 @@ pub async fn run_remote(args: TuiLaunchArgs) -> Result<(), AgenaProcessError> {
     )
     .await
     .map_err(|error| {
-        AgenaProcessError::Internal(format!(
-            "cannot connect TUI to server {}: {error:#}",
-            args.server_url
-        ))
+        AgenaProcessError::from_anyhow(
+            error.context(format!("cannot connect TUI to server {}", args.server_url)),
+        )
     })?;
     // The server's resolved UI preferences are cached on the backend at
     // connect; project them into the terminal configuration so the client
@@ -178,7 +187,7 @@ async fn run_app(
     args: &TuiLaunchArgs,
 ) -> Result<(), AgenaProcessError> {
     let mut terminal = terminal::TerminalRuntime::enter(tui_config.graphics)
-        .map_err(|error| AgenaProcessError::Internal(error.to_string()))?;
+        .map_err(|error| AgenaProcessError::internal_error(error.as_ref()))?;
     let terminal_background = terminal.background();
     let math_graphics = terminal.math_graphics();
     let math_protocol = math_graphics.protocol_name();
@@ -216,12 +225,15 @@ async fn run_app(
     let restore_result = terminal.restore();
     match (result, restore_result) {
         (Ok(()), Ok(())) => Ok(()),
-        (Err(error), Ok(())) => Err(AgenaProcessError::Internal(format!("{error:#}"))),
+        (Err(error), Ok(())) => Err(AgenaProcessError::from_anyhow(error)),
         (Ok(()), Err(error)) => Err(AgenaProcessError::Internal(format!(
-            "failed to restore the terminal: {error:#}"
+            "failed to restore the terminal: {}",
+            agena_failure::diagnostic::format_error_chain(error.as_ref())
         ))),
         (Err(run_error), Err(restore_error)) => Err(AgenaProcessError::Internal(format!(
-            "{run_error:#}; terminal restoration also failed: {restore_error:#}"
+            "{}; terminal restoration also failed: {}",
+            agena_failure::diagnostic::format_error_chain(run_error.as_ref()),
+            agena_failure::diagnostic::format_error_chain(restore_error.as_ref())
         ))),
     }
 }
@@ -253,7 +265,13 @@ fn default_agena_dir() -> PathBuf {
     let mut base = env::var("HOME")
         .or_else(|_| env::var("USERPROFILE"))
         .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("."));
+        .unwrap_or_else(|error| {
+            tracing::error!(
+                diagnostic = %error,
+                "TUI data home is unavailable; using the current-directory compatibility path"
+            );
+            PathBuf::from(".")
+        });
     base.push("agena");
     base
 }

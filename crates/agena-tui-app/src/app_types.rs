@@ -122,15 +122,6 @@ pub(super) const AWS_REGION_CHOICES: &[&str] = &[
 pub(super) fn settings_fields() -> Vec<SettingsFieldSpec> {
     vec![
         SettingsFieldSpec {
-            section: SettingsStudioSectionId::ModelsProviders,
-            path: "providers.default".to_string(),
-            label_key: "settings-field-default-provider-label",
-            description_key: "settings-field-default-provider-description",
-            kind: SettingsFieldKind::String,
-            label_override: None,
-            description_override: None,
-        },
-        SettingsFieldSpec {
             section: SettingsStudioSectionId::Interface,
             path: "ui.locale".to_string(),
             label_key: "settings-field-ui-locale-label",
@@ -600,7 +591,16 @@ impl Drop for App {
         // ordering to retain a large history until the whole App is torn down.
         self.transcript_cache.clear();
         self.sync_current_draft_slot();
-        let _ = self.try_persist_draft_store(true);
+        if let Err(error) = self.try_persist_draft_store(true) {
+            // UiFailure::internal records the raw diagnostic when the failure
+            // is created. Drop cannot return it, but still record that final
+            // persistence did not complete and correlate with its failure id.
+            tracing::error!(
+                failure_id = %error.failure.id,
+                message = %error,
+                "failed to persist the final TUI draft store during shutdown"
+            );
+        }
         cleanup_temporary_composer_items(self.composer_items.as_slice());
         self.cleanup_temporary_draft_store_items();
     }
@@ -833,7 +833,15 @@ impl UiFailure {
         if let Some(error) = error.downcast_ref::<agena_runtime::SessionQueryError>() {
             return Self::from_failure((*error.failure).clone());
         }
-        Self::internal(error)
+        let mut diagnostic = agena_failure::diagnostic::format_error_chain(error.as_ref());
+        if let Some(client_error) = error.downcast_ref::<agena_client::ClientError>() {
+            let client_diagnostic = client_error.operator_diagnostic();
+            if !diagnostic.contains(&client_diagnostic) {
+                diagnostic.push_str(": ");
+                diagnostic.push_str(&client_diagnostic);
+            }
+        }
+        Self::internal(diagnostic)
     }
 
     pub(super) fn from_failure(failure: agena_failure::Failure) -> Self {
@@ -843,6 +851,17 @@ impl UiFailure {
     }
 
     pub(super) fn internal(diagnostic: impl std::fmt::Display) -> Self {
+        let diagnostic = diagnostic.to_string();
+        let mut presentation = agena_failure::UserPresentation::validated_with_context(
+            "ui-operation-failed",
+            &diagnostic,
+        );
+        if presentation.fallback == "The request is invalid. Review the input and try again." {
+            presentation = agena_failure::UserPresentation::new(
+                "ui-operation-failed",
+                "The terminal diagnostic contained no safely displayable details; review the diagnostic log for the recorded failure id.",
+            );
+        }
         let failure = agena_failure::Failure::new(
             agena_failure::FailureCode::new("ui.operation_failed"),
             agena_failure::FailureCategory::Internal,
@@ -850,10 +869,7 @@ impl UiFailure {
             agena_failure::RetryDirective::Unknown,
             agena_failure::RecoveryDirective::Retry,
             agena_failure::FailureImpact::RequestRejected,
-            agena_failure::UserPresentation::new(
-                "ui-operation-failed",
-                "The terminal interface could not finish this action.",
-            ),
+            presentation,
         );
         tracing::error!(
             failure_id = %failure.id,
@@ -1162,7 +1178,7 @@ mod ui_failure_tests {
         // the structured failure instead of falling back to the generic
         // "terminal interface" message.
         let error = agena_runtime::RuntimeConfigSettingsError::invalid_input(
-            "providers.default `ghost` references unknown provider",
+            "providers.example `ghost` references unknown provider",
         );
         let expected = error.failure().user.fallback.clone();
         let wrapped = anyhow::Error::new(error).context("failed to set config setting");
@@ -1173,6 +1189,27 @@ mod ui_failure_tests {
         assert_eq!(projected.failure.user.fallback, expected);
         assert_ne!(
             projected.failure.user.fallback,
+            "The terminal interface could not finish this action."
+        );
+    }
+
+    #[test]
+    fn unstructured_backend_error_surfaces_a_scrubbed_real_root_cause() {
+        let error = anyhow::Error::new(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "token=secret /private/agena.sqlite is read-only",
+        ))
+        .context("failed to persist terminal state");
+
+        let projected = UiFailure::from_backend(error);
+        let message = projected.failure.user.fallback.as_str();
+
+        assert!(message.contains("failed to persist terminal state"));
+        assert!(message.contains("read-only"));
+        assert!(!message.contains("token=secret"));
+        assert!(!message.contains("/private/agena.sqlite"));
+        assert_ne!(
+            message,
             "The terminal interface could not finish this action."
         );
     }

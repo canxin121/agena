@@ -8,6 +8,7 @@ description = "Agena terminal UI application library"
 
 [dependencies]
 anyhow.workspace = true
+agena-failure.workspace = true
 agena-tui-components.workspace = true
 crossterm.workspace = true
 fluent-templates.workspace = true
@@ -15,6 +16,7 @@ ratatui-image.workspace = true
 ratatui.workspace = true
 reqwest = { workspace = true, features = ["query", "rustls"] }
 tokio = { workspace = true, features = ["net", "time"] }
+tracing.workspace = true
 sys-locale.workspace = true
 unic-langid.workspace = true
 unicode-width.workspace = true

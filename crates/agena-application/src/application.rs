@@ -439,7 +439,7 @@ impl Application {
         let task = self
             .model_catalog_runtime
             .start_model_catalog_refresh(agena_runtime::RuntimeBackgroundTaskOrigin::User)
-            .map_err(|error| ApplicationError::internal(error.to_string()))?;
+            .map_err(|error| ApplicationError::internal_error(&error))?;
         let catalog = self.model_catalog_runtime.model_catalog_response();
         Ok(ModelCatalogRefreshResponse {
             started: task.started,
@@ -458,7 +458,7 @@ impl Application {
             .runtime_control
             .fetch_provider_client_versions()
             .await
-            .map_err(|error| ApplicationError::internal(error.to_string()))?;
+            .map_err(|error| ApplicationError::internal_error(&error))?;
         let response = self
             .runtime_config_settings
             .patch_file_settings(agena_runtime::ConfigSettingsPatchInput {
@@ -476,13 +476,13 @@ impl Application {
                     reload: true,
                 },
             })
-            .map_err(|error| ApplicationError::internal(error.to_string()))?;
+            .map_err(|error| ApplicationError::internal_error(&error))?;
 
         if response.reload_required {
             self.runtime_control
                 .reload()
                 .await
-                .map_err(|error| ApplicationError::internal(error.to_string()))?;
+                .map_err(|error| ApplicationError::internal_error(&error))?;
         }
         Ok(versions)
     }
@@ -637,7 +637,7 @@ impl Application {
         self.runtime_configuration
             .runtime_configuration()
             .map(|configuration| configuration.ui.into())
-            .map_err(|error| ApplicationError::internal(error.to_string()))
+            .map_err(|error| ApplicationError::internal_error(&error))
     }
 
     /// Returns the complete configuration-source read model used by terminal
@@ -646,20 +646,18 @@ impl Application {
         let configuration = self
             .runtime_configuration
             .runtime_configuration()
-            .map_err(|error| ApplicationError::internal(error.to_string()))?;
+            .map_err(|error| ApplicationError::internal_error(&error))?;
         let file = self
             .runtime_config_settings
             .read_file_settings(agena_runtime::ConfigSettingsGetInput::default())
-            .map_err(|error| ApplicationError::internal(error.to_string()))?
+            .map_err(|error| ApplicationError::internal_error(&error))?
             .value;
         let project_file = self
             .runtime_config_settings
             .read_project_file_settings(agena_runtime::ConfigSettingsGetInput::default())
-            .map_err(|error| ApplicationError::internal(error.to_string()))?
+            .map_err(|error| ApplicationError::internal_error(&error))?
             .value;
-        let mut effective = configuration.effective_config;
-        augment_effective_config_json(&mut effective, configuration.default_provider.as_deref());
-
+        let effective = configuration.effective_config;
         Ok(ConfigJsonSources {
             config_path: configuration.config_path,
             config_found: configuration.config_found,
@@ -677,7 +675,7 @@ impl Application {
         self.runtime_configuration
             .runtime_configuration()
             .map(|configuration| configuration.config_path)
-            .map_err(|error| ApplicationError::internal(error.to_string()))
+            .map_err(|error| ApplicationError::internal_error(&error))
     }
 
     pub fn service(&self) -> &ApplicationService {
@@ -691,10 +689,12 @@ impl Application {
     pub async fn snapshot_status(
         &self,
     ) -> Result<crate::dto::SnapshotStatusResource, ApplicationError> {
-        let permit = SNAPSHOT_WORKERS
-            .acquire()
-            .await
-            .map_err(|_| ApplicationError::internal("snapshot worker pool is unavailable"))?;
+        let permit = SNAPSHOT_WORKERS.acquire().await.map_err(|error| {
+            ApplicationError::internal_error_with_context(
+                "acquire a snapshot status worker",
+                &error,
+            )
+        })?;
         let runtime_control = Arc::clone(&self.runtime_control);
         let execution_control = self.execution_control.clone();
         let workspace_root = self.workspace_root.clone();
@@ -709,7 +709,7 @@ impl Application {
         })
         .await
         .map_err(|error| {
-            ApplicationError::internal(format!("snapshot status worker failed: {error}"))
+            ApplicationError::internal_error_with_context("snapshot status worker failed", &error)
         })
     }
 
@@ -847,11 +847,11 @@ impl Application {
     /// instead of assembling the record themselves.
     pub async fn runtime_status_response(&self) -> agena_api::resource::RuntimeStatusResponse {
         use agena_api::resource::{
-            DefaultSelectionResource, ModelCatalogResponse, RuntimeAutomationResource,
-            RuntimeLspResource, RuntimeLspServerResource, RuntimeMcpResource,
-            RuntimeMcpServerResource, RuntimeOperatorResource, RuntimePluginSurfaceResource,
-            RuntimeSessionCacheResource, RuntimeSkillResource, RuntimeSkillsResource,
-            RuntimeStatusResponse, RuntimeTaskResource,
+            ModelCatalogResponse, RuntimeAutomationResource, RuntimeLspResource,
+            RuntimeLspServerResource, RuntimeMcpResource, RuntimeMcpServerResource,
+            RuntimeOperatorResource, RuntimePluginSurfaceResource, RuntimeSessionCacheResource,
+            RuntimeSkillResource, RuntimeSkillsResource, RuntimeStatusResponse,
+            RuntimeTaskResource,
         };
 
         let status = self.runtime_status().runtime_status().await;
@@ -955,19 +955,6 @@ impl Application {
                 .map(crate::service::scheduled_job_resource)
                 .collect(),
         };
-        let default_selection = {
-            let selection = self.provider_catalog().default_selection();
-            (!selection.is_empty()).then_some(DefaultSelectionResource {
-                provider: selection.provider,
-                adapter: selection.adapter,
-                model: selection.model,
-                thinking_mode: selection.thinking_mode,
-                speed_mode: selection.speed_mode,
-                verbosity: selection.verbosity,
-                parallel_tool_calls: selection.parallel_tool_calls,
-            })
-        };
-
         RuntimeStatusResponse {
             generation: status.generation,
             loaded_at: status.loaded_at,
@@ -992,7 +979,6 @@ impl Application {
             },
             session_cache,
             model_catalog: Some(model_catalog),
-            default_selection,
             background_tasks,
             automation,
             operator: RuntimeOperatorResource {
@@ -1018,7 +1004,7 @@ impl Application {
             .reload()
             .await
             .map(|_| ())
-            .map_err(|error| ApplicationError::internal(error.to_string()))
+            .map_err(|error| ApplicationError::internal_error(&error))
     }
 }
 
@@ -1136,45 +1122,6 @@ fn auth_provider_resource(provider: agena_runtime::RuntimeAuthProvider) -> AuthP
     }
 }
 
-fn augment_effective_config_json(
-    effective: &mut serde_json::Value,
-    default_provider: Option<&str>,
-) {
-    if let Some(provider) = default_provider {
-        set_effective_config_alias(
-            effective,
-            &["providers", "default"],
-            serde_json::Value::String(provider.to_owned()),
-        );
-    }
-}
-
-fn set_effective_config_alias(
-    root: &mut serde_json::Value,
-    segments: &[&str],
-    value: serde_json::Value,
-) {
-    if segments.is_empty() {
-        *root = value;
-        return;
-    }
-    if !root.is_object() {
-        *root = serde_json::Value::Object(serde_json::Map::new());
-    }
-    let mut cursor = root;
-    for segment in &segments[..segments.len().saturating_sub(1)] {
-        let object = cursor.as_object_mut().expect("effective config object");
-        cursor = object
-            .entry((*segment).to_owned())
-            .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
-        if !cursor.is_object() {
-            *cursor = serde_json::Value::Object(serde_json::Map::new());
-        }
-    }
-    let object = cursor.as_object_mut().expect("effective config object");
-    object.insert(segments[segments.len() - 1].to_owned(), value);
-}
-
 fn model_catalog_resources(
     catalog: &agena_provider::ModelCatalogResponse,
 ) -> Vec<CatalogModelResource> {
@@ -1184,6 +1131,23 @@ fn model_catalog_resources(
         .cloned()
         .map(|model| CatalogModelResource::from_record(model, catalog.last_successful_source))
         .collect()
+}
+
+fn model_catalog_search_json<T: serde::Serialize>(value: &T, field: &str) -> String {
+    match serde_json::to_string(value) {
+        Ok(value) => value,
+        Err(error) => {
+            tracing::error!(
+                model_catalog_field = field,
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    format!("serialize model catalog {field} for search indexing"),
+                    &error,
+                ),
+                "model catalog search text omitted an unserializable field"
+            );
+            String::new()
+        }
+    }
 }
 
 fn model_catalog_search_text(model: &CatalogModelResource) -> String {
@@ -1197,7 +1161,7 @@ fn model_catalog_search_text(model: &CatalogModelResource) -> String {
                 mode.description.clone().unwrap_or_default(),
                 mode.thinking
                     .as_ref()
-                    .and_then(|value| serde_json::to_string(value).ok())
+                    .map(|value| model_catalog_search_json(value, "thinking mode"))
                     .unwrap_or_default(),
             ]
         })
@@ -1211,8 +1175,8 @@ fn model_catalog_search_text(model: &CatalogModelResource) -> String {
                 name.clone(),
                 mode.display_name.clone().unwrap_or_default(),
                 mode.description.clone().unwrap_or_default(),
-                serde_json::to_string(&mode.request_override).unwrap_or_default(),
-                serde_json::to_string(&mode.adapter_overrides).unwrap_or_default(),
+                model_catalog_search_json(&mode.request_override, "speed-mode request override"),
+                model_catalog_search_json(&mode.adapter_overrides, "speed-mode adapter overrides"),
             ]
         })
         .collect::<Vec<_>>()
@@ -1276,7 +1240,21 @@ fn notification_from_session_change(
     // Storage rows carry the canonical typed JSON keyed by the part's `kind`
     // column (the v1 2-arm encoding is gone), so decode through the contracts
     // dispatcher rather than deserializing a v1 payload.
-    let content = agena_runtime_contracts::part_content::decode(&part.kind, &part.content).ok()?;
+    let content = match agena_runtime_contracts::part_content::decode(&part.kind, &part.content) {
+        Ok(content) => content,
+        Err(error) => {
+            tracing::warn!(
+                session_id,
+                part_id = part.part_id,
+                part_kind = %part.kind,
+                diagnostic = %format!(
+                    "decode a persisted session part for notification projection: {error}"
+                ),
+                "session notification projection skipped a malformed part"
+            );
+            return None;
+        }
+    };
     let agena_runtime_contracts::part_content::TypedContent::Notice(notice) = content else {
         return None;
     };

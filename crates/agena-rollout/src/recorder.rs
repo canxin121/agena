@@ -42,7 +42,7 @@ impl RolloutRecorder {
                 }
             })
             .await
-            .map_err(|e| RolloutError::Io(std::io::Error::other(e.to_string())))??
+            .map_err(|error| RolloutError::Io(std::io::Error::other(error)))??
         } else {
             0
         };

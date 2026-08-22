@@ -72,8 +72,7 @@ impl CronPlugin {
         let _ = self.host()?;
         router::invoke_tool(
             "cron_list",
-            serde_json::to_value(args)
-                .map_err(|err| PluginError::invalid_params(err.to_string()))?,
+            serde_json::to_value(args).map_err(|err| PluginError::invalid_params_error(&err))?,
             context.session_id,
             context.call_id,
         )
@@ -94,8 +93,7 @@ impl CronPlugin {
         let _ = self.host()?;
         router::invoke_tool(
             "cron_create",
-            serde_json::to_value(args)
-                .map_err(|err| PluginError::invalid_params(err.to_string()))?,
+            serde_json::to_value(args).map_err(|err| PluginError::invalid_params_error(&err))?,
             context.session_id,
             context.call_id,
         )
@@ -116,8 +114,7 @@ impl CronPlugin {
         let _ = self.host()?;
         router::invoke_tool(
             "cron_delete",
-            serde_json::to_value(args)
-                .map_err(|err| PluginError::invalid_params(err.to_string()))?,
+            serde_json::to_value(args).map_err(|err| PluginError::invalid_params_error(&err))?,
             context.session_id,
             context.call_id,
         )
@@ -138,8 +135,7 @@ impl CronPlugin {
         let _ = self.host()?;
         router::invoke_tool(
             "cron_update",
-            serde_json::to_value(args)
-                .map_err(|err| PluginError::invalid_params(err.to_string()))?,
+            serde_json::to_value(args).map_err(|err| PluginError::invalid_params_error(&err))?,
             context.session_id,
             context.call_id,
         )
@@ -160,8 +156,7 @@ impl CronPlugin {
         let _ = self.host()?;
         router::invoke_tool(
             "cron_pause",
-            serde_json::to_value(args)
-                .map_err(|err| PluginError::invalid_params(err.to_string()))?,
+            serde_json::to_value(args).map_err(|err| PluginError::invalid_params_error(&err))?,
             context.session_id,
             context.call_id,
         )
@@ -182,8 +177,7 @@ impl CronPlugin {
         let _ = self.host()?;
         router::invoke_tool(
             "cron_resume",
-            serde_json::to_value(args)
-                .map_err(|err| PluginError::invalid_params(err.to_string()))?,
+            serde_json::to_value(args).map_err(|err| PluginError::invalid_params_error(&err))?,
             context.session_id,
             context.call_id,
         )
@@ -205,8 +199,7 @@ impl CronPlugin {
         let _ = self.host()?;
         router::invoke_tool(
             "cron_history",
-            serde_json::to_value(args)
-                .map_err(|err| PluginError::invalid_params(err.to_string()))?,
+            serde_json::to_value(args).map_err(|err| PluginError::invalid_params_error(&err))?,
             context.session_id,
             context.call_id,
         )

@@ -455,6 +455,8 @@ export function useChatRunUi(opts: {
   const canSend = computed(() => {
     if (!chat.selectedSessionId) return false
     if (sending.value) return false
+    if (!String(modelSelection.selectedProviderId.value || '').trim()) return false
+    if (!String(modelSelection.selectedModelId.value || '').trim()) return false
     return Boolean(String(draft.value || '').trim() || attachedFiles.value.length > 0)
   })
 

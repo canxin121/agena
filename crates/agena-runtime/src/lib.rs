@@ -119,11 +119,11 @@ pub use agena_runtime_config::{
     HttpProviderAdapterConfig, OllamaProviderOptions, OpenAiChatCompletionsProviderOptions,
     OpenAiRealtimeProviderOptions, OpenAiResponsesProviderOptions, ProviderAdapterDefinition,
     ProviderApiAuthConfig, ProviderAuthConfig, ProviderClientVersionSettings,
-    ProviderDefaultsConfig, ProviderGitlabAuthConfig, ResolvedConfig,
-    ResolvedProviderAdapterConfig, ResolvedProviderConfig, RuntimeConfig, RuntimeProvidersConfig,
-    SessionCompactionConfig, SessionConfig, ShellHarnessConfig, SimpleHttpProviderOptions,
-    TuiColorSchemeConfig, TuiGraphicsModeConfig, TuiUiConfig, UiConfig,
-    config_resolution_json_value, resolved_config_json_value,
+    ProviderGitlabAuthConfig, ResolvedConfig, ResolvedProviderAdapterConfig,
+    ResolvedProviderConfig, RuntimeConfig, RuntimeProvidersConfig, SessionCompactionConfig,
+    SessionConfig, ShellHarnessConfig, SimpleHttpProviderOptions, TuiColorSchemeConfig,
+    TuiGraphicsModeConfig, TuiUiConfig, UiConfig, config_resolution_json_value,
+    resolved_config_json_value,
 };
 pub use agena_runtime_config::{ConfigEnvironment, ProcessEnvironment};
 pub(crate) use agena_runtime_config::{

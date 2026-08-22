@@ -404,18 +404,31 @@ impl ToolStreamSink {
     }
 
     pub async fn chunk(&self, chunk: ToolStreamChunk) {
-        let _ = self.tx.send(chunk).await;
+        if let Err(error) = self.tx.send(chunk).await {
+            tracing::debug!(
+                stream_id = %self.stream_id,
+                diagnostic = %error,
+                "plugin tool stream chunk receiver was dropped"
+            );
+        }
     }
 
     /// Convenience: push a text delta without a payload patch.
     pub async fn text(&self, delta: impl Into<String>) {
-        let _ = self
+        if let Err(error) = self
             .tx
             .send(ToolStreamChunk {
                 stream_id: self.stream_id.clone(),
                 text_delta: Some(delta.into()),
                 metadata: Default::default(),
             })
-            .await;
+            .await
+        {
+            tracing::debug!(
+                stream_id = %self.stream_id,
+                diagnostic = %error,
+                "plugin tool text stream receiver was dropped"
+            );
+        }
     }
 }

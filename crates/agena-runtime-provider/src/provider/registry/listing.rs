@@ -78,6 +78,6 @@ impl ProviderModelSource for ProviderRegistry {
     ) -> Result<Vec<Model>, agena_provider::ProviderCatalogError> {
         ProviderRegistry::list_models(self, provider_id.as_ref())
             .await
-            .map_err(|error| agena_provider::ProviderCatalogError::Operation(error.to_string()))
+            .map_err(|error| agena_provider::ProviderCatalogError::operation_error(&error))
     }
 }

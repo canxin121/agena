@@ -147,7 +147,16 @@ impl ToolCallView {
                     .or_else(|| payload.get("text").and_then(serde_json::Value::as_str))
                     .map(ToOwned::to_owned)
                     .unwrap_or_else(|| {
-                        serde_json::to_string(payload).unwrap_or_else(|_| raw.text.clone())
+                        serde_json::to_string(payload).unwrap_or_else(|error| {
+                            tracing::error!(
+                                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                                    "serialize tool payload for transcript model text",
+                                    &error,
+                                ),
+                                "transcript model text is using the raw tool output fallback"
+                            );
+                            raw.text.clone()
+                        })
                     }),
                 None => raw.text.clone(),
             })

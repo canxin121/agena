@@ -1,7 +1,4 @@
-use super::{
-    BTreeMap, Deserialize, ProviderAuthConfig, ProviderDefaultsConfig,
-    ResolvedProviderAdapterConfig, Serialize,
-};
+use super::{BTreeMap, Deserialize, ProviderAuthConfig, ResolvedProviderAdapterConfig, Serialize};
 use agena_provider::{ProviderNetworkConfig, ResolvedProviderModelConfig};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -151,7 +148,6 @@ impl Default for SessionCompactionConfig {
 /// Resolved configuration of one provider.
 pub struct ResolvedProviderConfig {
     pub enabled: bool,
-    pub defaults: ProviderDefaultsConfig,
     pub auth: ProviderAuthConfig,
     pub network: ProviderNetworkConfig,
     pub adapters: BTreeMap<String, ResolvedProviderAdapterConfig>,

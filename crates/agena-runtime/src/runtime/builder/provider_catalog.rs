@@ -9,7 +9,7 @@ impl agena_provider::ProviderCatalog for AgenaRuntime {
             .provider_ids()
             .into_iter()
             .filter_map(|provider_id| {
-                registry.get(provider_id.as_ref()).map(|provider| {
+                registry.get(provider_id.as_ref()).map(|_provider| {
                     let provider_config = snapshot.provider_configs().get(provider_id.as_str());
                     let adapters = provider_config
                         .map(|provider_config| {
@@ -39,10 +39,6 @@ impl agena_provider::ProviderCatalog for AgenaRuntime {
                         .unwrap_or_default();
                     agena_provider::ProviderCatalogEntry {
                         provider_id: agena_domain::ProviderId::new(provider_id),
-                        defaults: agena_provider::ProviderDefaults {
-                            adapter: provider.default_adapter().map(ToString::to_string),
-                            model: provider.default_model().to_string(),
-                        },
                         adapters,
                     }
                 })
@@ -169,8 +165,6 @@ impl agena_provider::ProviderCatalog for AgenaRuntime {
         Some(agena_provider::ProviderConfiguredEditor {
             provider_id: provider_key.to_owned(),
             auth,
-            default_adapter: provider.defaults.adapter.clone(),
-            default_model: provider.defaults.model.clone(),
             request_timeout_secs: provider.network.request_timeout_secs,
             connect_timeout_secs: provider.network.connect_timeout_secs,
         })
@@ -182,19 +176,7 @@ impl agena_provider::ProviderCatalog for AgenaRuntime {
     ) -> Result<Vec<agena_domain::Model>, agena_provider::ProviderCatalogError> {
         self.current_snapshot()
             .configured_local_models(provider_id.as_ref())
-            .map_err(|error| agena_provider::ProviderCatalogError::Operation(error.to_string()))
-    }
-
-    fn default_model(
-        &self,
-    ) -> Result<Option<agena_domain::ModelRef>, agena_provider::ProviderCatalogError> {
-        self.current_snapshot()
-            .resolve_default_model()
-            .map_err(|error| agena_provider::ProviderCatalogError::Operation(error.to_string()))
-    }
-
-    fn default_selection(&self) -> agena_domain::ExecutionSelection {
-        self.current_snapshot().default_selection()
+            .map_err(|error| agena_provider::ProviderCatalogError::operation_error(&error))
     }
 
     fn resolve_model_target(
@@ -204,7 +186,7 @@ impl agena_provider::ProviderCatalog for AgenaRuntime {
     ) -> Result<agena_domain::ModelRef, agena_provider::ProviderCatalogError> {
         self.current_snapshot()
             .resolve_model_target(target, model)
-            .map_err(|error| agena_provider::ProviderCatalogError::Operation(error.to_string()))
+            .map_err(|error| agena_provider::ProviderCatalogError::operation_error(&error))
     }
 
     fn model_execution_options(
@@ -214,23 +196,22 @@ impl agena_provider::ProviderCatalog for AgenaRuntime {
     {
         let snapshot = self.current_snapshot();
         let registry = snapshot.provider_registry();
-        let provider = registry.get(model.provider_id.as_ref()).ok_or_else(|| {
+        registry.get(model.provider_id.as_ref()).ok_or_else(|| {
             agena_provider::ProviderCatalogError::NotFound(model.provider_id.to_string())
         })?;
         Ok(agena_provider::ProviderModelExecutionOptions {
-            default_adapter: provider.default_adapter().cloned(),
-            capabilities: registry.model_capabilities(model).map_err(|error| {
-                agena_provider::ProviderCatalogError::Operation(error.to_string())
-            })?,
-            thinking_modes: registry.model_thinking_modes(model).map_err(|error| {
-                agena_provider::ProviderCatalogError::Operation(error.to_string())
-            })?,
-            speed_modes: registry.model_speed_modes(model).map_err(|error| {
-                agena_provider::ProviderCatalogError::Operation(error.to_string())
-            })?,
-            metadata: registry.model_metadata(model).map_err(|error| {
-                agena_provider::ProviderCatalogError::Operation(error.to_string())
-            })?,
+            capabilities: registry
+                .model_capabilities(model)
+                .map_err(|error| agena_provider::ProviderCatalogError::operation_error(&error))?,
+            thinking_modes: registry
+                .model_thinking_modes(model)
+                .map_err(|error| agena_provider::ProviderCatalogError::operation_error(&error))?,
+            speed_modes: registry
+                .model_speed_modes(model)
+                .map_err(|error| agena_provider::ProviderCatalogError::operation_error(&error))?,
+            metadata: registry
+                .model_metadata(model)
+                .map_err(|error| agena_provider::ProviderCatalogError::operation_error(&error))?,
         })
     }
 
@@ -241,7 +222,7 @@ impl agena_provider::ProviderCatalog for AgenaRuntime {
         self.current_snapshot()
             .list_provider_models(provider_id.as_ref())
             .await
-            .map_err(|error| agena_provider::ProviderCatalogError::Operation(error.to_string()))
+            .map_err(|error| agena_provider::ProviderCatalogError::operation_error(&error))
     }
 
     async fn list_draft_adapter_models(
@@ -364,7 +345,7 @@ impl agena_provider::ProviderCatalog for AgenaRuntime {
                 adapter_ids.as_slice(),
             ),
         }
-        .map_err(|error| agena_provider::ProviderCatalogError::InvalidRequest(error.to_string()))?;
+        .map_err(|error| agena_provider::ProviderCatalogError::invalid_request_error(&error))?;
         self.list_adapter_models_target(target).await
     }
 
@@ -387,7 +368,7 @@ impl agena_provider::ProviderCatalog for AgenaRuntime {
             resolved,
             adapter_ids.as_slice(),
         )
-        .map_err(|error| agena_provider::ProviderCatalogError::InvalidRequest(error.to_string()))?;
+        .map_err(|error| agena_provider::ProviderCatalogError::invalid_request_error(&error))?;
         self.list_adapter_models_target(target).await
     }
 }

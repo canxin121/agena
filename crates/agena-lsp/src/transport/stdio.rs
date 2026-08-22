@@ -83,12 +83,21 @@ impl StdioTransport {
             while let Some(request) = writes.recv().await {
                 let result = tokio::time::timeout(WRITE_TIMEOUT, stdin.send(request.body))
                     .await
-                    .map_err(|_| LspError::Transport("child stdin write timed out".into()))
-                    .and_then(|result| {
-                        result.map_err(|error| LspError::Transport(error.to_string()))
-                    });
+                    .map_err(|error| {
+                        LspError::Transport(
+                            agena_failure::diagnostic::format_error_chain_with_context(
+                                "child stdin write timed out",
+                                &error,
+                            ),
+                        )
+                    })
+                    .and_then(|result| result.map_err(|error| LspError::transport_error(&error)));
                 let failed = result.is_err();
-                let _ = request.completion.send(result);
+                if request.completion.send(result).is_err() {
+                    tracing::debug!(
+                        "LSP write result receiver was dropped before completion could be delivered"
+                    );
+                }
                 if failed {
                     break;
                 }
@@ -116,19 +125,33 @@ impl LspTransport for StdioTransport {
         self.writer
             .send(WriteRequest { body, completion })
             .await
-            .map_err(|_| LspError::TransportClosed)?;
-        result.await.map_err(|_| LspError::TransportClosed)?
+            .map_err(|error| {
+                LspError::transport_closed("failed to enqueue an outbound LSP stdio frame", &error)
+            })?;
+        result.await.map_err(|error| {
+            LspError::transport_closed(
+                "LSP stdio writer exited before confirming the outbound frame",
+                &error,
+            )
+        })?
     }
 
     async fn recv(&self) -> LspResult<InboundMessage> {
         let mut g = self.inbox.lock().await;
-        g.recv().await.unwrap_or(Err(LspError::TransportClosed))
+        g.recv().await.unwrap_or_else(|| {
+            Err(LspError::transport_closed_without_source(
+                "LSP stdio reader channel closed before another frame arrived",
+            ))
+        })
     }
 
     async fn close(&self) -> LspResult<()> {
         let child = self._child.lock().await.take();
         if let Some(mut child) = child {
-            let _ = child.terminate(std::time::Duration::from_millis(250)).await;
+            child
+                .terminate(std::time::Duration::from_millis(250))
+                .await
+                .map_err(|error| LspError::transport_error(&error))?;
         }
         Ok(())
     }
@@ -145,14 +168,32 @@ fn spawn_stdout_reader(
             let body = match frame {
                 Ok(body) => body,
                 Err(error) => {
-                    let _ = tx.send(Err(LspError::Protocol(error.to_string()))).await;
+                    if tx
+                        .send(Err(LspError::protocol_error(&error)))
+                        .await
+                        .is_err()
+                    {
+                        tracing::debug!(
+                            server = %name,
+                            "LSP frame decode failure could not be delivered because the receiver closed"
+                        );
+                    }
                     return;
                 }
             };
             let value = match serde_json::from_slice(body.as_ref()) {
                 Ok(value) => value,
                 Err(error) => {
-                    let _ = tx.send(Err(LspError::Protocol(error.to_string()))).await;
+                    if tx
+                        .send(Err(LspError::protocol_error(&error)))
+                        .await
+                        .is_err()
+                    {
+                        tracing::debug!(
+                            server = %name,
+                            "LSP JSON decode failure could not be delivered because the receiver closed"
+                        );
+                    }
                     return;
                 }
             };
@@ -171,7 +212,22 @@ fn spawn_stdout_reader(
                 }
             }
         }
-        let _ = tx.send(Err(LspError::TransportClosed)).await;
+        if let Err(error) = tx
+            .send(Err(LspError::transport_closed_without_source(
+                "LSP stdio input reached EOF",
+            )))
+            .await
+        {
+            tracing::debug!(
+                target: "agena_lsp::stdio",
+                server = %name,
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "failed to report LSP stdio EOF because the client receiver was closed",
+                    &error,
+                ),
+                "LSP stdio EOF notification was not delivered"
+            );
+        }
     });
 }
 

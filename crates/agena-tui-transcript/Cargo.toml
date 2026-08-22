@@ -24,6 +24,7 @@ regex = { workspace = true }
 serde_json = { workspace = true }
 syntect = { workspace = true }
 textwrap = { workspace = true }
+tracing = { workspace = true }
 tui-markdown = { version = "0.3.8", default-features = false }
 unicode-segmentation = { workspace = true }
 unicode-width = { workspace = true }

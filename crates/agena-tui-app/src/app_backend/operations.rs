@@ -232,11 +232,6 @@ pub(crate) async fn list_workspace_sessions_page(
         .await
 }
 
-/// List all known providers (without adapter detail).
-pub(crate) fn list_providers(application: &TuiBackend) -> Vec<ProviderSummaryResource> {
-    application.provider_summaries()
-}
-
 /// List configured providers (with adapter detail).
 pub(crate) fn list_configured_providers(application: &TuiBackend) -> Vec<ProviderSummaryResource> {
     application.provider_summaries()

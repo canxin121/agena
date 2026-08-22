@@ -14,12 +14,22 @@ pub(crate) struct DiffStats {
 }
 
 pub(crate) fn apply_patch_details(details: &agena_domain::ToolOutput) -> Option<ApplyPatchDisplay> {
-    let changes: Vec<agena_domain::FileChangeRecord> = details
-        .payload
-        .get("changes")
-        .cloned()
-        .and_then(|value| serde_json::from_value(serde_json::Value::from(value)).ok())
-        .unwrap_or_default();
+    let changes: Vec<agena_domain::FileChangeRecord> = match details.payload.get("changes") {
+        Some(value) => match serde_json::from_value(serde_json::Value::from(value.clone())) {
+            Ok(changes) => changes,
+            Err(error) => {
+                tracing::warn!(
+                    diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                        "decode apply-patch changes for transcript rendering",
+                        &error,
+                    ),
+                    "apply-patch transcript details are incomplete"
+                );
+                Vec::new()
+            }
+        },
+        None => Vec::new(),
+    };
     let diff = details
         .payload
         .get("diff")

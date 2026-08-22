@@ -57,6 +57,19 @@ pub enum ProviderCatalogError {
     Operation(String),
 }
 
+impl ProviderCatalogError {
+    /// Preserve a typed invalid-request failure's complete source chain at the
+    /// provider catalog boundary.
+    pub fn invalid_request_error(error: &(dyn std::error::Error + 'static)) -> Self {
+        Self::InvalidRequest(agena_failure::diagnostic::format_error_chain(error))
+    }
+
+    /// Preserve a typed catalog operation failure's complete source chain.
+    pub fn operation_error(error: &(dyn std::error::Error + 'static)) -> Self {
+        Self::Operation(agena_failure::diagnostic::format_error_chain(error))
+    }
+}
+
 /// Classifies provider failures that affect retry and recovery policy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderErrorKind {
@@ -2079,7 +2092,23 @@ impl ResponsesApiRequestMetadata {
                 value.insert(key.clone(), serde_json::Value::String(field_value.clone()));
             }
         }
-        serde_json::to_string(&value).unwrap_or_else(|_| "{}".to_owned())
+        match serde_json::to_string(&value) {
+            Ok(value) => value,
+            Err(error) => {
+                tracing::error!(
+                    diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                        "serialize Responses request metadata",
+                        &error,
+                    ),
+                    "Responses request metadata could not be encoded"
+                );
+                // All fields above are JSON-native strings/integers, so this
+                // is an invariant fallback rather than a recoverable data
+                // conversion. Keep the wire type valid while preserving the
+                // failure in the operator channel.
+                "{}".to_owned()
+            }
+        }
     }
 }
 

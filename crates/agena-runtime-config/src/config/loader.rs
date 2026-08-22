@@ -25,11 +25,14 @@ where
     }
 
     pub fn load(&self, request: &LoadConfigRequest) -> Result<ConfigResolution, ConfigError> {
-        let config_path = crate::default_config_path(&self.env);
-        let workspace_root = request
-            .workspace_root
+        let config_path = request
+            .config_path
             .clone()
-            .unwrap_or_else(crate::default_workspace_root);
+            .unwrap_or_else(|| crate::default_config_path(&self.env));
+        let workspace_root = match request.workspace_root.clone() {
+            Some(workspace_root) => workspace_root,
+            None => crate::try_default_workspace_root()?,
+        };
         let project_config_path = crate::project_config_path(workspace_root.as_path());
 
         crate::reject_unsupported_mode_environment(&self.env)?;
@@ -209,6 +212,7 @@ mod tests {
                     .parse()
                     .expect("parse graphics override"),
             ],
+            ..LoadConfigRequest::default()
         })
         .expect("load config with graphics override");
         assert_eq!(
@@ -354,9 +358,7 @@ mod tests {
             config_dir.join("agena.json"),
             r#"{
                 "providers": {
-                    "default": "local",
                     "local": {
-                        "defaults": { "adapter": "ollama", "model": "qwen3" },
                         "network": {
                             "request_timeout_secs": 45,
                             "connect_timeout_secs": 6
@@ -388,6 +390,7 @@ mod tests {
                         .parse()
                         .expect("parse provider connect timeout override"),
                 ],
+                ..LoadConfigRequest::default()
             })
             .expect("load provider network config");
 
@@ -407,7 +410,6 @@ mod tests {
             r#"{
                 "providers": {
                     "local": {
-                        "defaults": { "adapter": "ollama" },
                         "network": { "request_timeout_secs": 0 },
                         "adapters": {
                             "ollama": {

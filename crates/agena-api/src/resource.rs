@@ -367,25 +367,6 @@ pub struct RuntimeSkillResource {
 /// fresh session starts without explicit run options. Mirrors the
 /// `ExecutionSelection` fields the UI needs to resolve default think/speed
 /// modes before any session exists.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(default)]
-pub struct DefaultSelectionResource {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub provider: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub adapter: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub thinking_mode: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub speed_mode: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub verbosity: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub parallel_tool_calls: Option<bool>,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 /// Overall runtime status.
 pub struct RuntimeStatusResponse {
@@ -404,8 +385,6 @@ pub struct RuntimeStatusResponse {
     pub session_cache: Option<RuntimeSessionCacheResource>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_catalog: Option<ModelCatalogResponse>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub default_selection: Option<DefaultSelectionResource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub background_tasks: Vec<RuntimeBackgroundTaskResource>,
     pub automation: RuntimeAutomationResource,

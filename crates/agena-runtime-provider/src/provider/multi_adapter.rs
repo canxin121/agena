@@ -75,9 +75,17 @@ impl MultiAdapterProvider {
         })
     }
 
-    fn selected_adapter(&self, adapter_id: Option<&AdapterId>) -> AdapterId {
+    fn selected_adapter(&self, adapter_id: Option<&AdapterId>, model: &ModelId) -> AdapterId {
         adapter_id
             .cloned()
+            .or_else(|| {
+                self.routes
+                    .iter()
+                    .find(|((_, route_model), route)| {
+                        route.enabled && route_model.as_str() == model.as_ref()
+                    })
+                    .map(|((adapter_id, _), _)| AdapterId::new(adapter_id.clone()))
+            })
             .unwrap_or_else(|| self.default_adapter.clone())
     }
 
@@ -95,7 +103,7 @@ impl MultiAdapterProvider {
         ),
         ProviderError,
     > {
-        let adapter_id = self.selected_adapter(adapter_id);
+        let adapter_id = self.selected_adapter(adapter_id, model);
         let target_model = model.clone();
         let key = (adapter_id.to_string(), target_model.to_string());
         if let Some(route) = self.routes.get(&key) {
@@ -166,7 +174,22 @@ impl MultiAdapterProvider {
         ) -> T,
     ) -> Option<T> {
         let (adapter_id, target_model, agena_tool_mode, provider_native_tools, definition, adapter) =
-            self.resolve_route_and_adapter(adapter_id, model).ok()?;
+            match self.resolve_route_and_adapter(adapter_id, model) {
+                Ok(route) => route,
+                Err(error) => {
+                    tracing::warn!(
+                        provider_id = %self.id,
+                        requested_adapter = ?adapter_id,
+                        requested_model = %model,
+                        diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                            "resolve a provider route for model metadata projection",
+                            &error,
+                        ),
+                        "provider model metadata fell back because its configured route could not be resolved"
+                    );
+                    return None;
+                }
+            };
         Some(map(
             &adapter_id,
             &target_model,
@@ -401,7 +424,7 @@ impl ModelRuntime for MultiAdapterProvider {
         adapter_id: Option<&AdapterId>,
         model: &ModelId,
     ) -> bool {
-        let adapter_id = self.selected_adapter(adapter_id);
+        let adapter_id = self.selected_adapter(adapter_id, model);
         self.routes
             .get(&(adapter_id.to_string(), model.to_string()))
             .map(|route| route.native_compaction)
@@ -582,7 +605,7 @@ impl ModelRuntime for MultiAdapterProvider {
                 ProviderError::Config(format!(
                     "provider `{}` model `{visible_model}` enables image_generation, but adapter `{}` has no direct image runtime port",
                     self.id,
-                    self.selected_adapter(adapter_id)
+                    self.selected_adapter(adapter_id, &visible_model)
                 ))
             })?;
         if !capabilities.supports(request.operation) {

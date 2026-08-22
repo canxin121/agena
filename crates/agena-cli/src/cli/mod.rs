@@ -45,6 +45,28 @@ pub enum CliError {
     Internal(String),
 }
 
+impl CliError {
+    /// Convert a typed configuration failure without discarding any nested
+    /// `source()` diagnostics at the CLI process boundary.
+    pub fn config_error(error: &(dyn std::error::Error + 'static)) -> Self {
+        Self::Config(agena_failure::diagnostic::format_error_chain(error))
+    }
+
+    /// Convert a typed internal failure without truncating its source chain.
+    pub fn internal_error(error: &(dyn std::error::Error + 'static)) -> Self {
+        Self::Internal(agena_failure::diagnostic::format_error_chain(error))
+    }
+
+    pub fn internal_error_with_context(
+        context: impl AsRef<str>,
+        error: &(dyn std::error::Error + 'static),
+    ) -> Self {
+        Self::Internal(agena_failure::diagnostic::format_error_chain_with_context(
+            context, error,
+        ))
+    }
+}
+
 #[derive(Debug, Clone, Args)]
 /// Arguments for the resolved plugin architecture catalog.
 pub struct PluginArchitectureArgs {
@@ -1677,14 +1699,6 @@ struct ProviderListOutput {
 #[derive(Debug, Serialize)]
 struct ProviderSummary {
     provider_id: String,
-    defaults: ProviderDefaultsSummary,
-}
-
-#[derive(Debug, Serialize)]
-struct ProviderDefaultsSummary {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    adapter: Option<String>,
-    model: String,
 }
 
 #[derive(Debug, Serialize)]

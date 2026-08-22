@@ -10,11 +10,11 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 use super::{
-    DirectoryQuery, GitAuthInput, TempGitAskpass, git_http_auth_env, git_success_response,
-    map_git_failure, normalize_http_auth, require_directory, require_directory_raw,
-    require_locked_directory, run_git, run_git_checked, run_git_checked_with_status,
-    run_locked_git_checked, run_locked_git_checked_with_status,
-    run_locked_git_env_checked_with_status,
+    DirectoryQuery, GitAuthInput, TempGitAskpass, git_command_result_or_log,
+    git_command_transport_error_response, git_http_auth_env, git_success_response, map_git_failure,
+    normalize_http_auth, require_directory, require_directory_raw, require_locked_directory,
+    run_git, run_git_checked, run_git_checked_with_status, run_locked_git_checked,
+    run_locked_git_checked_with_status, run_locked_git_env_checked_with_status,
 };
 
 #[derive(Debug, Clone, Serialize)]
@@ -84,8 +84,17 @@ fn parse_track_counts(track: &str) -> (Option<i32>, Option<i32>) {
 }
 
 async fn list_remote_heads(dir: &Path, remote: &str) -> Option<HashSet<String>> {
-    let (code, out, _) = run_git(dir, &["ls-remote", "--heads", remote]).await.ok()?;
+    let (code, out, error) = git_command_result_or_log(
+        run_git(dir, &["ls-remote", "--heads", remote]).await,
+        "list remote Git branch heads",
+    )?;
     if code != 0 {
+        tracing::debug!(
+            remote,
+            exit_code = code,
+            stderr = %error,
+            "remote Git branch-head filtering is unavailable"
+        );
         return None;
     }
     let mut set = HashSet::new();
@@ -113,10 +122,11 @@ fn parse_remote_branch(name: &str) -> Option<(String, String)> {
 
 async fn local_branch_exists(dir: &Path, name: &str) -> bool {
     let refname = format!("refs/heads/{name}");
-    let (code, _out, _err) = run_git(dir, &["show-ref", "--verify", "--quiet", &refname])
-        .await
-        .unwrap_or((1, "".to_string(), "".to_string()));
-    code == 0
+    git_command_result_or_log(
+        run_git(dir, &["show-ref", "--verify", "--quiet", &refname]).await,
+        "check whether a local Git branch exists",
+    )
+    .is_some_and(|(code, _, _)| code == 0)
 }
 
 pub async fn git_branches(Query(q): Query<GitBranchesQuery>) -> Response {
@@ -131,27 +141,28 @@ pub async fn git_branches(Query(q): Query<GitBranchesQuery>) -> Response {
     let page_requested = q.page.is_some() || q.page_size.is_some() || !normalized_search.is_empty();
 
     // Determine current branch.
-    let current = run_git(&dir, &["rev-parse", "--abbrev-ref", "HEAD"])
-        .await
-        .ok()
-        .map(|(c, out, _)| {
-            if c == 0 {
-                out.trim().to_string()
-            } else {
-                "".to_string()
-            }
-        })
-        .unwrap_or_default();
+    let current = git_command_result_or_log(
+        run_git(&dir, &["rev-parse", "--abbrev-ref", "HEAD"]).await,
+        "resolve current Git branch",
+    )
+    .map(|(c, out, _)| {
+        if c == 0 {
+            out.trim().to_string()
+        } else {
+            "".to_string()
+        }
+    })
+    .unwrap_or_default();
 
     // Collect list like `git branch -a` provides (including remotes/ prefix).
     let (code, out, err) = match run_git(&dir, &["branch", "-a"]).await {
         Ok(v) => v,
         Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": e})),
-            )
-                .into_response();
+            return git_command_transport_error_response(
+                "list Git branches",
+                &e,
+                Some("git_branch_list_process_failed"),
+            );
         }
     };
     if code != 0 {
@@ -191,7 +202,7 @@ pub async fn git_branches(Query(q): Query<GitBranchesQuery>) -> Response {
     // Build branch details for local + remote refs.
     // Use for-each-ref for stable fields.
     let fmt = "%(*refname:short)\t%(refname:short)\t%(objectname)\t%(HEAD)\t%(upstream:short)\t%(upstream:track)\t%(subject)";
-    let (code, out, _) = run_git(
+    let (code, out, error) = match run_git(
         &dir,
         &[
             "for-each-ref",
@@ -202,9 +213,31 @@ pub async fn git_branches(Query(q): Query<GitBranchesQuery>) -> Response {
         ],
     )
     .await
-    .unwrap_or((1, "".to_string(), "".to_string()));
+    {
+        Ok(result) => result,
+        Err(error) => {
+            return git_command_transport_error_response(
+                "read Git branch reference details",
+                &error,
+                Some("git_branch_details_process_failed"),
+            );
+        }
+    };
     let mut branches: BTreeMap<String, GitBranchDetails> = BTreeMap::new();
-    if code == 0 {
+    if code != 0 {
+        if let Some(response) = map_git_failure(code, &out, &error) {
+            return response;
+        }
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "error": error.trim(),
+                "code": "git_branch_details_failed",
+            })),
+        )
+            .into_response();
+    }
+    {
         for line in out.lines().map(|l| l.trim()).filter(|l| !l.is_empty()) {
             let parts: Vec<&str> = line.split('\t').collect();
             if parts.len() < 7 {
@@ -574,10 +607,8 @@ async fn git_check_ref_format(dir: &Path, full_ref: &str, allow_onelevel: bool) 
         args.push("--allow-onelevel");
     }
     args.push(full_ref);
-    let (c, _o, _e) = run_git(dir, &args)
-        .await
-        .unwrap_or((1, "".to_string(), "".to_string()));
-    c == 0
+    git_command_result_or_log(run_git(dir, &args).await, "validate Git reference format")
+        .is_some_and(|(code, _, _)| code == 0)
 }
 
 #[derive(Debug, Serialize)]

@@ -72,13 +72,24 @@ fn run_actor(module: AgenaPluginCdylib_Ref, mut receiver: mpsc::Receiver<ActorCo
                 if response.is_closed() {
                     continue;
                 }
-                let _ = response.send(dispatch_native(module, method, params));
+                if response
+                    .send(dispatch_native(module, method, params))
+                    .is_err()
+                {
+                    tracing::debug!(
+                        "native plugin dispatch result receiver was dropped before completion"
+                    );
+                }
             }
             ActorCommand::Shutdown { complete } => {
-                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    (module.shutdown())()
-                }));
-                let _ = complete.send(());
+                if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (module.shutdown())()))
+                    .is_err()
+                {
+                    tracing::error!("native plugin panicked during shutdown");
+                }
+                if complete.send(()).is_err() {
+                    tracing::debug!("native plugin shutdown waiter was already dropped");
+                }
                 return;
             }
         }
@@ -107,7 +118,7 @@ fn dispatch_native(
                 Err(TransportError::Plugin(plugin_error))
             }
         },
-        Err(_) => Err(TransportError::Panicked),
+        Err(payload) => Err(TransportError::panicked(payload)),
     }
 }
 
@@ -119,7 +130,9 @@ impl PluginTransport for CdylibTransport {
         params: serde_json::Value,
     ) -> Result<serde_json::Value, TransportError> {
         if self.closed.load(Ordering::Acquire) {
-            return Err(TransportError::Disconnected);
+            return Err(TransportError::disconnected(
+                "cdylib plugin actor is already closed",
+            ));
         }
         let params = serde_json::to_string(&params)?;
         let (response, result) = oneshot::channel();
@@ -130,8 +143,18 @@ impl PluginTransport for CdylibTransport {
                 response,
             })
             .await
-            .map_err(|_| TransportError::Disconnected)?;
-        result.await.map_err(|_| TransportError::Disconnected)?
+            .map_err(|error| {
+                TransportError::disconnected_error(
+                    "cdylib plugin actor command channel closed before dispatch",
+                    &error,
+                )
+            })?;
+        result.await.map_err(|error| {
+            TransportError::disconnected_error(
+                "cdylib plugin actor exited before returning the dispatch result",
+                &error,
+            )
+        })?
     }
 
     async fn close(&self) -> Result<(), TransportError> {
@@ -144,12 +167,38 @@ impl PluginTransport for CdylibTransport {
             self.commands.send(ActorCommand::Shutdown { complete }),
         )
         .await
-        .map_err(|_| TransportError::Timeout)?
-        .map_err(|_| TransportError::Disconnected)?;
+        .map_err(|error| {
+            TransportError::timeout_error(
+                format!(
+                    "cdylib plugin actor shutdown command was not accepted within {}ms",
+                    ACTOR_SHUTDOWN_TIMEOUT.as_millis()
+                ),
+                &error,
+            )
+        })?
+        .map_err(|error| {
+            TransportError::disconnected_error(
+                "cdylib plugin actor command channel closed during shutdown",
+                &error,
+            )
+        })?;
         tokio::time::timeout(ACTOR_SHUTDOWN_TIMEOUT, completed)
             .await
-            .map_err(|_| TransportError::Timeout)?
-            .map_err(|_| TransportError::Disconnected)?;
+            .map_err(|error| {
+                TransportError::timeout_error(
+                    format!(
+                        "cdylib plugin actor did not acknowledge shutdown within {}ms",
+                        ACTOR_SHUTDOWN_TIMEOUT.as_millis()
+                    ),
+                    &error,
+                )
+            })?
+            .map_err(|error| {
+                TransportError::disconnected_error(
+                    "cdylib plugin actor exited without acknowledging shutdown",
+                    &error,
+                )
+            })?;
 
         let actor = self
             .actor
@@ -159,8 +208,13 @@ impl PluginTransport for CdylibTransport {
         if let Some(actor) = actor {
             tokio::task::spawn_blocking(move || actor.join())
                 .await
-                .map_err(|_| TransportError::Panicked)?
-                .map_err(|_| TransportError::Panicked)?;
+                .map_err(|error| {
+                    TransportError::Rpc(agena_failure::diagnostic::format_error_chain_with_context(
+                        "cdylib plugin actor join task failed",
+                        &error,
+                    ))
+                })?
+                .map_err(TransportError::panicked)?;
         }
         Ok(())
     }
@@ -170,7 +224,12 @@ impl Drop for CdylibTransport {
     fn drop(&mut self) {
         self.closed.store(true, Ordering::Release);
         let (complete, _completed) = oneshot::channel();
-        let _ = self.commands.try_send(ActorCommand::Shutdown { complete });
+        if let Err(error) = self.commands.try_send(ActorCommand::Shutdown { complete }) {
+            tracing::warn!(
+                diagnostic = %error,
+                "native plugin shutdown command could not be queued; the isolated actor may outlive the transport"
+            );
+        }
         // Never join here: native code may be permanently wedged. The actor
         // is isolated and may outlive this value without blocking teardown.
         let _ = self

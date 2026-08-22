@@ -208,10 +208,16 @@ pub enum ProviderDeviceAuthTarget {
     Copilot,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 /// Error resolving a provider auth target.
 pub enum ProviderAuthTargetError {
+    #[error(
+        "provider auth target is ambiguous because multiple compatible providers are configured"
+    )]
     AmbiguousProvider,
+    #[error(
+        "provider auth target is ambiguous because multiple GitLab configurations are available"
+    )]
     AmbiguousGitlab,
 }
 

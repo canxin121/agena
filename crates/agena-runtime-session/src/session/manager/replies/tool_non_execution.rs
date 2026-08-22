@@ -1,18 +1,15 @@
 use super::{
     AppError, Arc, ExecutionStatus, OperationPart, PersistedPermissionRule, SessionManager,
     SessionManagerState, SessionPendingTool, completed_lifecycle, inherit_operation_context,
-    operation_authorization, operation_from_part, resolve_pending_tool,
+    operation_authorization, operation_content_value, operation_from_part, resolve_pending_tool,
     update_resolved_tool_message,
 };
 use crate::session::Session;
-use crate::session::store::{
-    part_state_from_execution_status, tool_call_from_operation, typed_content_to_value,
-};
+use crate::session::store::part_state_from_execution_status;
 use agena_domain::{
     CapabilityUnavailableResult, PolicyDeniedResult, ToolOutput, ToolUnavailableResult,
     UserDeclinedResult,
 };
-use agena_runtime_contracts::part_content::TypedContent;
 
 impl SessionManager {
     pub(in crate::session::manager) async fn apply_tool_capability_unavailable(
@@ -55,12 +52,10 @@ impl SessionManager {
                 if let Some(existing) = operation_from_part(tool_part) {
                     inherit_operation_context(&mut operation, existing);
                 }
-                tool_part.content = typed_content_to_value(&TypedContent::ToolCall(Box::new(
-                    tool_call_from_operation(&operation),
-                )))
-                .expect("tool content is always JSON serializable");
+                tool_part.content = operation_content_value(&operation)?;
                 tool_part.state =
                     part_state_from_execution_status(ExecutionStatus::CapabilityUnavailable);
+                Ok(())
             })?;
         self.persist_tool_completion(session, &resolved, Vec::new(), state)
             .await
@@ -106,12 +101,10 @@ impl SessionManager {
                 if let Some(existing) = operation_from_part(tool_part) {
                     inherit_operation_context(&mut operation, existing);
                 }
-                tool_part.content = typed_content_to_value(&TypedContent::ToolCall(Box::new(
-                    tool_call_from_operation(&operation),
-                )))
-                .expect("tool content is always JSON serializable");
+                tool_part.content = operation_content_value(&operation)?;
                 tool_part.state =
                     part_state_from_execution_status(ExecutionStatus::ToolUnavailable);
+                Ok(())
             })?;
         self.persist_tool_completion(session, &resolved, Vec::new(), state)
             .await
@@ -158,11 +151,9 @@ impl SessionManager {
                 if let Some(existing) = operation_from_part(tool_part) {
                     inherit_operation_context(&mut operation, existing);
                 }
-                tool_part.content = typed_content_to_value(&TypedContent::ToolCall(Box::new(
-                    tool_call_from_operation(&operation),
-                )))
-                .expect("tool content is always JSON serializable");
+                tool_part.content = operation_content_value(&operation)?;
                 tool_part.state = part_state_from_execution_status(ExecutionStatus::PolicyDenied);
+                Ok(())
             })?;
 
         self.persist_tool_completion(session, &resolved, Vec::new(), state)
@@ -216,11 +207,9 @@ impl SessionManager {
                 if let Some(existing) = operation_from_part(tool_part) {
                     inherit_operation_context(&mut operation, existing);
                 }
-                tool_part.content = typed_content_to_value(&TypedContent::ToolCall(Box::new(
-                    tool_call_from_operation(&operation),
-                )))
-                .expect("tool content is always JSON serializable");
+                tool_part.content = operation_content_value(&operation)?;
                 tool_part.state = part_state_from_execution_status(ExecutionStatus::UserDeclined);
+                Ok(())
             })?;
 
         self.persist_tool_completion(session, &resolved, persisted_rules, state)

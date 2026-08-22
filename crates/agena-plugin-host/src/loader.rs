@@ -21,6 +21,29 @@ use crate::transport::{
 const TRANSPORT_INITIALIZATION_TIMEOUT: Duration = Duration::from_secs(30);
 const TRANSPORT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
+pub(crate) async fn close_transport_for_plugin(
+    plugin_id: &str,
+    transport: &dyn PluginTransport,
+) -> Result<(), HostError> {
+    match tokio::time::timeout(TRANSPORT_SHUTDOWN_TIMEOUT, transport.close()).await {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(error)) => Err(HostError::Load {
+            plugin: plugin_id.to_owned(),
+            message: agena_failure::diagnostic::format_error_chain_with_context(
+                "failed to close plugin transport",
+                &error,
+            ),
+        }),
+        Err(error) => Err(HostError::Load {
+            plugin: plugin_id.to_owned(),
+            message: agena_failure::diagnostic::format_error_chain_with_context(
+                "timed out while closing plugin transport after 5 seconds",
+                &error,
+            ),
+        }),
+    }
+}
+
 async fn dispatch_transport_with_timeout(
     transport: &dyn PluginTransport,
     method: &str,
@@ -29,7 +52,15 @@ async fn dispatch_transport_with_timeout(
 ) -> Result<serde_json::Value, TransportError> {
     tokio::time::timeout(timeout, transport.dispatch(method, params))
         .await
-        .map_err(|_| TransportError::Timeout)?
+        .map_err(|error| {
+            TransportError::timeout_error(
+                format!(
+                    "plugin transport method `{method}` did not complete within {}ms",
+                    timeout.as_millis()
+                ),
+                &error,
+            )
+        })?
 }
 
 /// Static plugin registration entry.
@@ -134,7 +165,7 @@ pub async fn prepare_entry(
             }
             let t = CdylibTransport::load(&resolved).map_err(|e| HostError::Load {
                 plugin: plugin_id.to_string(),
-                message: e.to_string(),
+                message: agena_failure::diagnostic::format_error_chain(&e),
             })?;
             Arc::new(t)
         }
@@ -192,7 +223,7 @@ pub async fn prepare_entry(
             .await
             .map_err(|e| HostError::Load {
                 plugin: plugin_id.to_string(),
-                message: e.to_string(),
+                message: agena_failure::diagnostic::format_error_chain(&e),
             })?;
             Arc::new(t)
         }
@@ -222,7 +253,7 @@ pub async fn prepare_entry(
             let t = crate::transport::wasm::WasmTransport::load(&resolved).map_err(|e| {
                 HostError::Load {
                     plugin: plugin_id.to_string(),
-                    message: e.to_string(),
+                    message: agena_failure::diagnostic::format_error_chain(&e),
                 }
             })?;
             Arc::new(t)
@@ -253,16 +284,25 @@ pub async fn prepare_entry(
     )
     .await;
 
-    if preparation.is_err() {
-        // A stdio transport owns a child process and does not kill it merely
-        // because the final Arc is dropped. Failed preparation must close
-        // every transport explicitly before the host proceeds.
-        let _ = tokio::time::timeout(TRANSPORT_SHUTDOWN_TIMEOUT, transport.close()).await;
-        host_handle
-            .dispose_plugin_resources_for_scope(&plugin_key, &effect_scope)
-            .await;
+    match preparation {
+        Ok(prepared) => Ok(prepared),
+        Err(primary_error) => {
+            // A stdio transport owns a child process and does not kill it merely
+            // because the final Arc is dropped. Failed preparation must close
+            // every transport explicitly before the host proceeds.
+            let cleanup = close_transport_for_plugin(plugin_id, transport.as_ref()).await;
+            host_handle
+                .dispose_plugin_resources_for_scope(&plugin_key, &effect_scope)
+                .await;
+            match cleanup {
+                Ok(()) => Err(primary_error),
+                Err(cleanup_error) => Err(primary_error.with_cleanup_error(
+                    "failed to clean up the plugin transport after preparation failed",
+                    &cleanup_error,
+                )),
+            }
+        }
     }
-    preparation
 }
 
 async fn prepare_transport(
@@ -282,7 +322,7 @@ async fn prepare_transport(
         .await
         .map_err(|e| HostError::Load {
             plugin: plugin_id.to_string(),
-            message: e.to_string(),
+            message: agena_failure::diagnostic::format_error_chain(&e),
         })?;
 
     let prefetched_manifest_value = dispatch_transport_with_timeout(
@@ -295,14 +335,16 @@ async fn prepare_transport(
     .map_err(|error| HostError::Init {
         plugin: plugin_id.to_string(),
         message: match error {
-            TransportError::Timeout => "meta/manifest timed out".to_string(),
-            error => error.to_string(),
+            TransportError::Timeout(diagnostic) => {
+                format!("meta/manifest timed out: {diagnostic}")
+            }
+            error => agena_failure::diagnostic::format_error_chain(&error),
         },
     })?;
     let prefetched_manifest: PluginManifest = serde_json::from_value(prefetched_manifest_value)
         .map_err(|e| HostError::Init {
             plugin: plugin_id.to_string(),
-            message: e.to_string(),
+            message: agena_failure::diagnostic::format_error_chain(&e),
         })?;
     validate_manifest(plugin_id, plugin_key, &prefetched_manifest, "meta/manifest")?;
     validate_manifest_settings(
@@ -345,7 +387,7 @@ pub async fn activate_entry(
     };
     let init_params = serde_json::to_value(&init_ctx).map_err(|error| HostError::Init {
         plugin: plugin_id.clone(),
-        message: error.to_string(),
+        message: agena_failure::diagnostic::format_error_chain(&error),
     })?;
     let init_dispatch = host_handle.run_in_authorized_callback_context(
         &plugin_key,
@@ -357,18 +399,21 @@ pub async fn activate_entry(
     );
     let outcome_value = tokio::time::timeout(TRANSPORT_INITIALIZATION_TIMEOUT, init_dispatch)
         .await
-        .map_err(|_| HostError::Init {
+        .map_err(|error| HostError::Init {
             plugin: plugin_id.clone(),
-            message: "meta/init timed out".to_string(),
+            message: agena_failure::diagnostic::format_error_chain_with_context(
+                "meta/init timed out after 30 seconds",
+                &error,
+            ),
         })?
         .map_err(|error| HostError::Init {
             plugin: plugin_id.clone(),
-            message: error.to_string(),
+            message: agena_failure::diagnostic::format_error_chain(&error),
         })?;
     let outcome: InitOutcome =
         serde_json::from_value(outcome_value).map_err(|error| HostError::Init {
             plugin: plugin_id.clone(),
-            message: error.to_string(),
+            message: agena_failure::diagnostic::format_error_chain(&error),
         })?;
     validate_manifest(&plugin_id, &plugin_key, &outcome.manifest, "meta/init")?;
     if outcome.manifest != prepared.manifest {
@@ -411,10 +456,18 @@ pub async fn load_entry(
     .await?;
     let transport = prepared.transport();
     let activation = activate_entry(prepared, &host_handle, agena_version, workspace_root).await;
-    if activation.is_err() {
-        let _ = tokio::time::timeout(TRANSPORT_SHUTDOWN_TIMEOUT, transport.close()).await;
+    match activation {
+        Ok(plugin) => Ok(plugin),
+        Err(primary_error) => {
+            match close_transport_for_plugin(plugin_id, transport.as_ref()).await {
+                Ok(()) => Err(primary_error),
+                Err(cleanup_error) => Err(primary_error.with_cleanup_error(
+                    "failed to clean up the plugin transport after activation failed",
+                    &cleanup_error,
+                )),
+            }
+        }
     }
-    activation
 }
 
 fn plugin_trust_level(
@@ -792,7 +845,15 @@ pub async fn shutdown_transport(transport: Arc<dyn PluginTransport>) -> Result<(
         transport.shutdown(),
     )
     .await
-    .map_err(|_| TransportError::Timeout)?
+    .map_err(|error| {
+        TransportError::timeout_error(
+            format!(
+                "plugin transport shutdown did not complete within {}ms",
+                TRANSPORT_SHUTDOWN_TIMEOUT.saturating_mul(2).as_millis()
+            ),
+            &error,
+        )
+    })?
 }
 
 /// Verify the sha256 of a file against an expected hex digest. Used by both
@@ -856,9 +917,12 @@ pub fn verify_signature_bytes(
         .try_into()
         .map_err(|_| "signature must be 64 bytes".to_string())?;
     let signature = Signature::from_bytes(&sig_array);
-    verifier
-        .verify(bytes, &signature)
-        .map_err(|e| e.to_string())
+    verifier.verify(bytes, &signature).map_err(|error| {
+        agena_failure::diagnostic::format_error_chain_with_context(
+            "ed25519 plugin signature verification failed",
+            &error,
+        )
+    })
 }
 
 #[cfg(test)]
@@ -899,7 +963,7 @@ mod manifest_tests {
         )
         .await
         .expect_err("silent transport must time out");
-        assert!(matches!(error, TransportError::Timeout));
+        assert!(matches!(error, TransportError::Timeout(_)));
     }
 
     fn manifest_with_tools(names: &[&str]) -> PluginManifest {

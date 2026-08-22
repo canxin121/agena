@@ -26,17 +26,16 @@ impl Application {
             });
         }
 
-        self.provider_catalog()
-            .default_model()
-            .map_err(|error| ApplicationError::internal(error.to_string()))?
-            .ok_or_else(|| ApplicationError::internal("no providers configured"))
+        Err(ApplicationError::bad_request(
+            "model is required; select a model before running",
+        ))
     }
 
     /// Resolve the effective think/speed mode selectors for the model implied
     /// by `request`, matching what a fresh session would apply. When the
-    /// request does not pin a model, the configured default selection's
-    /// thinking/speed modes take precedence (the runtime applies them to new
-    /// sessions); otherwise the resolved model's own defaults are used.
+    /// request does not pin a model, the request cannot be resolved without a
+    /// session-level model selection; otherwise the resolved model's own
+    /// defaults are used.
     /// Thinking falls back to the first listed mode for compatibility with
     /// catalogs that omit a thinking default. Speed only uses an explicitly
     /// marked default; `None` means the provider/model native speed default
@@ -52,30 +51,9 @@ impl Application {
         let Ok(options) = self.provider_catalog().model_execution_options(&model) else {
             return (None, None);
         };
-        let selection = self.provider_catalog().default_selection();
-        let configured_thinking = selection
-            .thinking_mode
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToOwned::to_owned);
-        let configured_speed = selection
-            .speed_mode
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToOwned::to_owned);
-        if request.model.is_none() {
-            (
-                configured_thinking
-                    .or_else(|| default_thinking_mode_selector(&options.thinking_modes)),
-                configured_speed.or_else(|| default_speed_mode_name(&options.speed_modes)),
-            )
-        } else {
-            (
-                default_thinking_mode_selector(&options.thinking_modes),
-                default_speed_mode_name(&options.speed_modes),
-            )
-        }
+        (
+            default_thinking_mode_selector(&options.thinking_modes),
+            default_speed_mode_name(&options.speed_modes),
+        )
     }
 }

@@ -14,7 +14,7 @@ const pages = buildSettingsSubpages('models-providers')
     :title="$st('Models & Providers')"
     :description="
       $st(
-        'Manage provider credentials and adapters, select default model routes, and inspect the complete model catalog.',
+        'Manage provider credentials, adapters, and model routes, then inspect the complete model catalog.',
       )
     "
     :pages="pages"
@@ -22,8 +22,7 @@ const pages = buildSettingsSubpages('models-providers')
     v-slot="{ activePage }"
   >
     <ProviderStudioPanel v-if="activePage === 'provider-studio'" />
-    <ProvidersPanel v-else-if="activePage === 'defaults'" view="defaults" />
     <ModelCatalogPanel v-else-if="activePage === 'model-catalog'" />
-    <ProvidersPanel v-else view="inventory" />
+    <ProvidersPanel v-else />
   </SettingsSectionWorkbench>
 </template>

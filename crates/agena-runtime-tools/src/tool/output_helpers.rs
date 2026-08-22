@@ -237,7 +237,7 @@ pub(super) fn plugin_invocation_input_json(
     invocation: &PluginInvocation,
 ) -> Result<String, ToolError> {
     serde_json::to_string(&serde_json::Value::from(invocation.input.clone()))
-        .map_err(|err| ToolError::invalid_input(err.to_string()))
+        .map_err(|err| ToolError::invalid_input_error(&err))
 }
 
 pub(super) fn invocation_input_value(invocation: &ToolInvocation) -> serde_json::Value {
@@ -255,10 +255,9 @@ pub(super) fn parse_invocation_from_json(
     let value = if input_json.trim().is_empty() {
         serde_json::json!({})
     } else {
-        serde_json::from_str(input_json).map_err(|err| ToolError::invalid_input(err.to_string()))?
+        serde_json::from_str(input_json).map_err(|err| ToolError::invalid_input_error(&err))?
     };
-    let input = StructuredObject::try_from(value)
-        .map_err(|err| ToolError::invalid_input(err.to_string()))?;
+    let input = StructuredObject::try_from(value).map_err(ToolError::invalid_input)?;
 
     Ok(ToolInvocation {
         tool_api_call: None,

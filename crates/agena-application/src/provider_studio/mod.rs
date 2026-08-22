@@ -34,6 +34,6 @@ pub use draft_config::ProviderConfigDraft;
 pub fn provider_model_draft_value_from_resource(
     model_id: &str,
     provider_model: Option<&agena_api::resource::ProviderModelResource>,
-) -> serde_json::Value {
+) -> Result<serde_json::Value, serde_json::Error> {
     catalog::provider_model_json_for_model_id(&[], model_id, provider_model)
 }

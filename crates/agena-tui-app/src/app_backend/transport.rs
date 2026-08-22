@@ -136,8 +136,7 @@ struct RemoteBackend {
     /// connect and refreshed before settings-studio rebuilds; settings reads
     /// are synchronous in the TUI event loop.
     config_sources: tokio::sync::RwLock<Option<agena_application::dto::ConfigJsonSources>>,
-    /// Authoritative runtime projection, including the fully resolved default
-    /// provider/model selection after provider-level defaults are applied.
+    /// Authoritative runtime projection used for status and capability caches.
     runtime_status: tokio::sync::RwLock<Option<agena_api::resource::RuntimeStatusResponse>>,
     /// Cached control projection for Agena's own HTTP MCP surface.
     mcp_server_control: tokio::sync::RwLock<Option<serde_json::Value>>,
@@ -414,17 +413,35 @@ impl TuiBackend {
             ),
         };
         // Config/plugin snapshots are presentation metadata; a failure here
-        // must not prevent the client from connecting and driving sessions.
-        let _ = backend.refresh_config_sources().await;
-        let _ = backend.refresh_provider_drafts().await;
-        let _ = backend.refresh_plugin_runtime_snapshot().await;
-        let _ = backend.refresh_model_catalog_cache("", 0, 1).await;
-        let _ = backend.refresh_workspace_file_tree().await;
-        let _ = backend
+        // must not prevent the client from connecting and driving sessions,
+        // but the diagnostic must remain observable.
+        if let Err(error) = backend.refresh_config_sources().await {
+            warn_initial_metadata_refresh("configuration sources", &error);
+        }
+        if let Err(error) = backend.refresh_provider_drafts().await {
+            warn_initial_metadata_refresh("provider drafts", &error);
+        }
+        if let Err(error) = backend.refresh_plugin_runtime_snapshot().await {
+            warn_initial_metadata_refresh("plugin runtime snapshot", &error);
+        }
+        if let Err(error) = backend.refresh_model_catalog_cache("", 0, 1).await {
+            warn_initial_metadata_refresh("model catalog", &error);
+        }
+        if let Err(error) = backend.refresh_workspace_file_tree().await {
+            warn_initial_metadata_refresh("workspace file tree", &error);
+        }
+        if let Err(error) = backend
             .refresh_workspace_directory(backend.workspace_root())
-            .await;
-        let _ = backend.refresh_aws_profiles().await;
-        let _ = backend.refresh_mcp_server_control().await;
+            .await
+        {
+            warn_initial_metadata_refresh("workspace directory", &error);
+        }
+        if let Err(error) = backend.refresh_aws_profiles().await {
+            warn_initial_metadata_refresh("AWS profiles", &error);
+        }
+        if let Err(error) = backend.refresh_mcp_server_control().await {
+            warn_initial_metadata_refresh("MCP server control", &error);
+        }
         Ok(backend)
     }
 
@@ -616,14 +633,6 @@ impl TuiBackend {
             .and_then(|guard| guard.clone())
     }
 
-    pub(crate) fn runtime_status(&self) -> Option<agena_api::resource::RuntimeStatusResponse> {
-        self.inner
-            .runtime_status
-            .try_read()
-            .ok()
-            .and_then(|guard| guard.clone())
-    }
-
     pub(crate) async fn refresh_runtime_status_cache(
         &self,
     ) -> Result<agena_api::resource::RuntimeStatusResponse> {
@@ -695,7 +704,7 @@ impl TuiBackend {
         let path = path.trim();
         let root = path.split('.').next().unwrap_or_default();
         match root {
-            "providers" if !matches!(path, "providers.default" | "providers.default_selection") => {
+            "providers" => {
                 self.refresh_provider_runtime_snapshot().await?;
                 return Ok(());
             }
@@ -1157,15 +1166,22 @@ impl TuiBackend {
             .await
             .map_err(|error| {
                 agena_application::ApplicationError::internal(format!(
-                    "failed to invoke plugin tool `{tool_name}` through the server: {error}"
+                    "failed to invoke plugin tool `{tool_name}` through the server: {}",
+                    error.operator_diagnostic()
                 ))
             })?;
         let response = serde_json::from_value(response).map_err(|error| {
-            agena_application::ApplicationError::internal(format!(
-                "plugin tool `{tool_name}` returned a response this TUI cannot decode: {error}"
-            ))
+            agena_application::ApplicationError::internal_error_with_context(
+                format!("plugin tool `{tool_name}` returned a response this TUI cannot decode"),
+                &error,
+            )
         })?;
-        let _ = self.refresh_plugin_presentation_snapshot().await;
+        if let Err(error) = self.refresh_plugin_presentation_snapshot().await {
+            tracing::warn!(
+                diagnostic = %agena_failure::diagnostic::format_error_chain(error.as_ref()),
+                "plugin tool invocation succeeded, but refreshing the TUI plugin presentation snapshot failed"
+            );
+        }
         Ok(response)
     }
 
@@ -1270,11 +1286,15 @@ impl TuiBackend {
         >(value.clone())
         {
             Ok(result) => result,
-            Err(_) => match serde_json::from_value(value) {
+            Err(wrapped_error) => match serde_json::from_value(value) {
                 Ok(action) => Ok(action),
-                Err(error) => {
-                    Err(agena_application::provider_studio::ProviderDraftAuthError::other(error))
-                }
+                Err(bare_error) => Err(
+                    agena_application::provider_studio::ProviderDraftAuthError::other(format!(
+                        "failed to decode Provider Studio authentication response as either the wrapped result or legacy bare action payload: wrapped result: {}; bare action: {}",
+                        agena_failure::diagnostic::format_error_chain(&wrapped_error),
+                        agena_failure::diagnostic::format_error_chain(&bare_error),
+                    )),
+                ),
             },
         }
     }
@@ -1332,12 +1352,16 @@ impl TuiBackend {
         {
             return Ok(value);
         }
-        Ok(
-            agena_application::provider_studio::provider_model_draft_value_from_resource(
-                model_id,
-                provider_model,
-            ),
+        agena_application::provider_studio::provider_model_draft_value_from_resource(
+            model_id,
+            provider_model,
         )
+        .map_err(|error| {
+            agena_application::ApplicationError::internal_error_with_context(
+                "failed to serialize provider model draft settings",
+                &error,
+            )
+        })
     }
 
     pub async fn save_provider_draft(
@@ -1477,9 +1501,13 @@ impl TuiBackend {
         >(value.clone())
         {
             Ok(result) => result,
-            Err(_) => match serde_json::from_value(value) {
+            Err(wrapped_error) => match serde_json::from_value(value) {
                 Ok(result) => Ok(result),
-                Err(error) => Err(provider_studio_transport_error(error)),
+                Err(bare_error) => Err(provider_studio_transport_error(format_args!(
+                    "failed to decode Provider Studio save response as either the wrapped result or legacy bare success payload: wrapped result: {}; bare result: {}",
+                    agena_failure::diagnostic::format_error_chain(&wrapped_error),
+                    agena_failure::diagnostic::format_error_chain(&bare_error),
+                ))),
             },
         };
         if result.is_ok() {
@@ -1716,53 +1744,6 @@ impl TuiBackend {
                 "the workspace setting was deleted but the TUI could not refresh its configuration snapshot: {error:#}"
             ))
         })?;
-        Ok(response)
-    }
-
-    /// Set the global default provider selection through the server. The
-    /// server atomically patches `providers.default` and
-    /// `providers.default_selection` on the global config and reloads the
-    /// runtime, mirroring the canonical embedded
-    /// `Application::set_provider_default_selection`.
-    pub async fn set_provider_default_selection(
-        &self,
-        provider_id: &str,
-        selection: serde_json::Value,
-    ) -> std::result::Result<
-        agena_runtime::ConfigSettingsEditResponse,
-        agena_application::ApplicationError,
-    > {
-        let provider_id = provider_id.trim();
-        if provider_id.is_empty() {
-            return Err(agena_application::ApplicationError::internal(
-                "provider id is required",
-            ));
-        }
-        let changes = serde_json::json!({
-            "default": provider_id,
-            "default_selection": selection,
-        });
-        let response = self
-            .client()
-            .patch_settings("providers", changes, false, true)
-            .await
-            .map_err(|error| {
-                agena_application::ApplicationError::internal(format!(
-                    "failed to set provider default selection through the server: {error}"
-                ))
-            })?;
-        let response = serde_json::from_value(response).map_err(|error| {
-            agena_application::ApplicationError::internal(format!(
-                "the server returned an undecodable config edit response: {error}"
-            ))
-        })?;
-        self.refresh_after_config_edit("providers.default_selection")
-            .await
-            .map_err(|error| {
-                agena_application::ApplicationError::internal(format!(
-                    "the default model was saved but the TUI could not refresh its configuration snapshot: {error:#}"
-                ))
-            })?;
         Ok(response)
     }
 
@@ -2164,13 +2145,10 @@ impl TuiBackend {
         &self,
         provider_id: &str,
     ) -> Result<Vec<agena_domain::Model>> {
-        Ok(self
-            .inner
-            .models
-            .try_read()
-            .ok()
-            .and_then(|guard| guard.get(provider_id.trim()).cloned())
-            .unwrap_or_default())
+        let models = self.inner.models.try_read().map_err(|error| {
+            anyhow::anyhow!("provider model cache is busy while reading {provider_id}: {error}")
+        })?;
+        Ok(models.get(provider_id.trim()).cloned().unwrap_or_default())
     }
 
     pub(crate) fn configured_provider_adapter_models(
@@ -2222,16 +2200,28 @@ impl TuiBackend {
         &self,
         model: &agena_domain::ModelRef,
     ) -> Option<agena_domain::Model> {
-        self.list_local_provider_models(model.provider_id.as_ref())
-            .ok()?
-            .into_iter()
-            .find(|candidate| {
-                candidate.id == model.model_id
-                    && model
-                        .adapter_id
-                        .as_ref()
-                        .is_none_or(|adapter_id| candidate.adapter_id.as_ref() == Some(adapter_id))
-            })
+        let models = match self.list_local_provider_models(model.provider_id.as_ref()) {
+            Ok(models) => models,
+            Err(error) => {
+                tracing::warn!(
+                    provider_id = %model.provider_id,
+                    model_id = %model.model_id,
+                    diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                        "read the TUI provider model cache",
+                        error.as_ref(),
+                    ),
+                    "configured model lookup could not read the current cache"
+                );
+                return None;
+            }
+        };
+        models.into_iter().find(|candidate| {
+            candidate.id == model.model_id
+                && model
+                    .adapter_id
+                    .as_ref()
+                    .is_none_or(|adapter_id| candidate.adapter_id.as_ref() == Some(adapter_id))
+        })
     }
 
     pub fn resolved_model_for_run_options(
@@ -2256,85 +2246,9 @@ impl TuiBackend {
                 ))
             });
         }
-        if let Some(selection) = self
-            .runtime_status()
-            .and_then(|status| status.default_selection)
-            && let (Some(provider_id), Some(model_id)) =
-                (selection.provider.as_deref(), selection.model.as_deref())
-        {
-            return match selection.adapter.as_deref() {
-                Some(adapter_id) => {
-                    agena_domain::ModelRef::try_new_with_adapter(provider_id, adapter_id, model_id)
-                }
-                None => agena_domain::ModelRef::try_new(provider_id, model_id),
-            }
-            .map_err(|error| {
-                agena_application::ApplicationError::internal(format!(
-                    "server default model reference is invalid: {error}"
-                ))
-            });
-        }
-        if let Some(sources) = self.config_sources()
-            && let Some(selection) = sources
-                .effective
-                .get("providers")
-                .and_then(|providers| providers.get("default_selection"))
-                .and_then(|value| {
-                    serde_json::from_value::<agena_domain::ModelSelectionConfig>(value.clone()).ok()
-                })
-            && let (Some(provider_id), Some(model_id)) =
-                (selection.provider.as_deref(), selection.model.as_deref())
-        {
-            return match selection.adapter.as_deref() {
-                Some(adapter_id) => {
-                    agena_domain::ModelRef::try_new_with_adapter(provider_id, adapter_id, model_id)
-                }
-                None => agena_domain::ModelRef::try_new(provider_id, model_id),
-            }
-            .map_err(|error| {
-                agena_application::ApplicationError::internal(format!(
-                    "configured default model reference is invalid: {error}"
-                ))
-            });
-        }
-
-        let providers = self.provider_summaries();
-        let configured_default = self.config_sources().and_then(|sources| {
-            sources
-                .effective
-                .get("providers")?
-                .get("default")?
-                .as_str()
-                .map(str::to_owned)
-        });
-        let provider = configured_default
-            .as_deref()
-            .and_then(|provider_id| {
-                providers
-                    .iter()
-                    .find(|provider| provider.provider_id == provider_id)
-            })
-            .or_else(|| providers.first())
-            .ok_or_else(|| {
-                agena_application::ApplicationError::internal(
-                    "server exposes no configured provider",
-                )
-            })?;
-        let models = self
-            .list_local_provider_models(provider.provider_id.as_str())
-            .map_err(|error| {
-                agena_application::ApplicationError::internal(format!(
-                    "failed to read the cached provider models: {error}"
-                ))
-            })?;
-        models
-            .iter()
-            .find(|model| model.id.as_ref() == provider.defaults.model)
-            .or_else(|| models.first())
-            .map(agena_domain::Model::reference)
-            .ok_or_else(|| {
-                agena_application::ApplicationError::internal("server exposes no configured model")
-            })
+        Err(agena_application::ApplicationError::bad_request(
+            "model is required; select a model before running",
+        ))
     }
 
     pub fn resolved_model_default_modes(
@@ -2347,33 +2261,17 @@ impl TuiBackend {
         let Some(model) = self.configured_model(&model_ref) else {
             return (None, None);
         };
-        let configured_modes = if request.model.is_none() {
-            self.runtime_status()
-                .and_then(|status| status.default_selection)
-        } else {
-            None
-        };
-        let thinking = configured_modes
-            .as_ref()
-            .and_then(|selection| selection.thinking_mode.clone())
-            .or_else(|| {
-                model
-                    .thinking_modes
-                    .iter()
-                    .find(|mode| mode.is_default)
-                    .or_else(|| model.thinking_modes.first())
-                    .and_then(|mode| mode.selector().map(|selector| selector.into_owned()))
-            });
-        let speed = configured_modes
-            .as_ref()
-            .and_then(|selection| selection.speed_mode.clone())
-            .or_else(|| {
-                model
-                    .speed_modes
-                    .iter()
-                    .find(|(_, mode)| mode.is_default)
-                    .map(|(name, _)| name.clone())
-            });
+        let thinking = model
+            .thinking_modes
+            .iter()
+            .find(|mode| mode.is_default)
+            .or_else(|| model.thinking_modes.first())
+            .and_then(|mode| mode.selector().map(|selector| selector.into_owned()));
+        let speed = model
+            .speed_modes
+            .iter()
+            .find(|(_, mode)| mode.is_default)
+            .map(|(name, _)| name.clone());
         (thinking, speed)
     }
 
@@ -2392,7 +2290,15 @@ impl TuiBackend {
                 // tool-registry changes; session mutations are filtered below.
                 let mut subscription = match client.stream_changes(agena_api::Scope::Global).await {
                     Ok(subscription) => subscription,
-                    Err(_) => {
+                    Err(error) => {
+                        tracing::warn!(
+                            session_id,
+                            diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                                "failed to establish the TUI session event subscription",
+                                &error,
+                            ),
+                            "TUI session event subscription failed; scheduling convergence retry"
+                        );
                         if tx
                             .send(LiveEvent {
                                 snapshot: None,
@@ -2413,7 +2319,15 @@ impl TuiBackend {
                 };
                 let snapshot = match backend.get_session_state(session_id).await {
                     Ok(snapshot) => snapshot,
-                    Err(_) => {
+                    Err(error) => {
+                        tracing::warn!(
+                            session_id,
+                            diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                                "failed to load the TUI session snapshot after subscribing",
+                                error.as_ref(),
+                            ),
+                            "TUI session snapshot load failed; scheduling convergence retry"
+                        );
                         drop(subscription);
                         if tx
                             .send(LiveEvent {
@@ -2446,11 +2360,24 @@ impl TuiBackend {
                 }
                 while let Some(item) = subscription.recv().await {
                     let (force_refresh, refresh_plugin_presentation) = match item.as_ref() {
-                        Err(_) => (true, true),
+                        Err(error) => {
+                            tracing::warn!(
+                                session_id,
+                                diagnostic = %error.operator_diagnostic(),
+                                "TUI session event stream yielded a transport failure; reconnecting"
+                            );
+                            (true, true)
+                        }
                         Ok(event) => match classify_session_subscription_event(event, session_id) {
                             SessionSubscriptionDispatch::Ignore => continue,
                             SessionSubscriptionDispatch::RefreshPluginRuntime => {
-                                let _ = backend.refresh_plugin_runtime_snapshot().await;
+                                if let Err(error) = backend.refresh_plugin_runtime_snapshot().await
+                                {
+                                    tracing::warn!(
+                                        diagnostic = %agena_failure::diagnostic::format_error_chain(error.as_ref()),
+                                        "failed to refresh the TUI plugin runtime snapshot after a runtime signal"
+                                    );
+                                }
                                 continue;
                             }
                             SessionSubscriptionDispatch::Emit {
@@ -2462,7 +2389,12 @@ impl TuiBackend {
                         },
                     };
                     if refresh_plugin_presentation {
-                        let _ = backend.refresh_plugin_presentation_snapshot().await;
+                        if let Err(error) = backend.refresh_plugin_presentation_snapshot().await {
+                            tracing::warn!(
+                                diagnostic = %agena_failure::diagnostic::format_error_chain(error.as_ref()),
+                                "failed to refresh the TUI plugin presentation snapshot after a session event"
+                            );
+                        }
                     }
                     if tx
                         .send(LiveEvent {
@@ -2559,6 +2491,14 @@ impl TuiBackend {
     }
 }
 
+fn warn_initial_metadata_refresh(operation: &str, error: &anyhow::Error) {
+    tracing::warn!(
+        operation,
+        diagnostic = %agena_failure::diagnostic::format_error_chain(error.as_ref()),
+        "optional TUI startup metadata refresh failed"
+    );
+}
+
 fn execution_result(result: CommandResult, operation: &str) -> Result<SessionExecutionResource> {
     let CommandResult::Execution(execution) = result else {
         bail!("server returned the wrong result for {operation}");
@@ -2650,7 +2590,18 @@ fn config_and_layers_from_resolved_response(
 fn provider_studio_transport_error(
     error: impl std::fmt::Display,
 ) -> agena_application::provider_studio::ProviderStudioSaveError {
-    tracing::error!(diagnostic = %error, "Provider Studio transport failed");
+    let diagnostic = error.to_string();
+    tracing::error!(diagnostic = %diagnostic, "Provider Studio transport failed");
+    let mut presentation = agena_failure::UserPresentation::validated_with_context(
+        "tui.provider_studio_transport_failed",
+        diagnostic.as_str(),
+    );
+    if presentation.fallback == "The request is invalid. Review the input and try again." {
+        presentation = agena_failure::UserPresentation::new(
+            "tui.provider_studio_transport_failed",
+            "The Provider Studio transport diagnostic contained no safely displayable details; review the diagnostic log for the recorded failure id.",
+        );
+    }
     let failure = agena_failure::Failure::new(
         agena_failure::FailureCode::new("tui.provider_studio_transport_failed"),
         agena_failure::FailureCategory::DependencyUnavailable,
@@ -2658,10 +2609,7 @@ fn provider_studio_transport_error(
         agena_failure::RetryDirective::AfterRefresh,
         agena_failure::RecoveryDirective::OpenSettings,
         agena_failure::FailureImpact::RequestRejected,
-        agena_failure::UserPresentation::new(
-            "tui.provider_studio_transport_failed",
-            "Provider Studio could not synchronize with the server.",
-        ),
+        presentation,
     );
     agena_application::provider_studio::ProviderStudioSaveError::Other(failure.into())
 }
@@ -2718,7 +2666,7 @@ mod tests {
     }
 
     #[test]
-    fn remote_backend_has_no_embedded_application_fallback() {
+    fn remote_backend_requires_an_explicit_model() {
         let first_model = agena_domain::Model::new("first", "model-1");
         let selected_model = agena_domain::Model::new("selected", "model-2");
         let backend = TuiBackend {
@@ -2728,18 +2676,10 @@ mod tests {
                 providers: tokio::sync::RwLock::new(vec![
                     ProviderSummaryResource {
                         provider_id: "first".to_owned(),
-                        defaults: agena_api::resource::ProviderDefaultsResource {
-                            adapter: None,
-                            model: "model-1".to_owned(),
-                        },
                         adapters: Vec::new(),
                     },
                     ProviderSummaryResource {
                         provider_id: "selected".to_owned(),
-                        defaults: agena_api::resource::ProviderDefaultsResource {
-                            adapter: Some("responses".to_owned()),
-                            model: "model-2".to_owned(),
-                        },
                         adapters: Vec::new(),
                     },
                 ]),
@@ -2781,28 +2721,15 @@ mod tests {
             applied_layers: Vec::new(),
             file: serde_json::Value::Null,
             project_file: serde_json::Value::Null,
-            effective: serde_json::json!({
-                "providers": {
-                    "default": "selected",
-                    "default_selection": {
-                        "provider": "selected",
-                        "adapter": "responses",
-                        "model": "model-2"
-                    }
-                }
-            }),
+            effective: serde_json::json!({ "providers": {} }),
         });
 
         assert_eq!(backend.mode(), BackendMode::Remote);
-        let resolved = backend
-            .resolved_model_for_run_options(&RunOptions::default())
-            .expect("resolve cached remote default");
-        assert_eq!(resolved.provider_id.as_ref(), "selected");
-        assert_eq!(
-            resolved.adapter_id.as_ref().map(AsRef::as_ref),
-            Some("responses")
+        assert!(
+            backend
+                .resolved_model_for_run_options(&RunOptions::default())
+                .is_err()
         );
-        assert_eq!(resolved.model_id.as_ref(), "model-2");
     }
 
     #[test]
@@ -2876,12 +2803,7 @@ mod tests {
         let (config, layers) = config_and_layers_from_resolved_response(serde_json::json!({
             "config": {
                 "providers": {
-                    "default": "selected",
-                    "default_selection": {
-                        "provider": "selected",
-                        "adapter": "responses",
-                        "model": "model-2"
-                    }
+                    "selected": {}
                 }
             },
             "meta": {
@@ -2893,10 +2815,8 @@ mod tests {
         }))
         .expect("decode resolved config response");
 
-        assert_eq!(
-            config.pointer("/providers/default_selection/model"),
-            Some(&serde_json::json!("model-2"))
-        );
+        assert!(config.pointer("/providers/default").is_none());
+        assert!(config.pointer("/providers/default_selection").is_none());
         assert_eq!(layers, vec!["built-in defaults", "file:/config/agena.json"]);
     }
 

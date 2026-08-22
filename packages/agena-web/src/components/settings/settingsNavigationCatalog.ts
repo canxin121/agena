@@ -16,12 +16,6 @@ const SETTINGS_SUBPAGE_SOURCES: Record<SettingsTab, readonly SettingsSubpageSour
       keywords: ['provider', 'authentication', 'oauth', 'api key', 'adapter', 'model'],
     },
     {
-      id: 'defaults',
-      label: () => st('Model defaults'),
-      description: () => st('Choose the runtime default and the automatic permission approval model.'),
-      keywords: ['default model', 'approval', 'thinking', 'speed', 'verbosity'],
-    },
-    {
       id: 'model-catalog',
       label: () => st('Model Catalog'),
       description: () => st('Search the resolved model catalog and inspect capabilities, limits, modes, and pricing.'),

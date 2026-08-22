@@ -49,9 +49,10 @@ impl InteractionPlugin {
         concurrency_safe
     )]
     fn notify(&self, input: &InteractionNotifyToolInput) -> SdkResult<ToolInvokeOutput> {
-        let input = InteractionNotifyToolInput::parse_input(serde_json::to_value(input).map_err(
-            |err| agena_plugin_host::sdk::PluginError::invalid_params(err.to_string()),
-        )?)?;
+        let input = InteractionNotifyToolInput::parse_input(
+            serde_json::to_value(input)
+                .map_err(|err| agena_plugin_host::sdk::PluginError::invalid_params_error(&err))?,
+        )?;
         let level = input.level.as_str();
         let title = if input.title.is_empty() {
             match input.level {

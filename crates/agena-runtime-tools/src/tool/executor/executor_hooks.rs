@@ -113,10 +113,33 @@ impl ToolExecutor {
         else {
             return;
         };
-        let input_value = invocation_input_json(invocation)
-            .ok()
-            .and_then(|j| serde_json::from_str::<serde_json::Value>(&j).ok())
-            .unwrap_or(serde_json::Value::Null);
+        let input_value = match invocation_input_json(invocation) {
+            Ok(json) => match serde_json::from_str::<serde_json::Value>(&json) {
+                Ok(value) => value,
+                Err(error) => {
+                    tracing::warn!(
+                        tool_name = %invocation.name,
+                        diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                            "decode serialized tool input for a plugin failure hook",
+                            &error,
+                        ),
+                        "plugin tool failure hook is receiving a null input projection"
+                    );
+                    serde_json::Value::Null
+                }
+            },
+            Err(error) => {
+                tracing::warn!(
+                    tool_name = %invocation.name,
+                    diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                        "serialize tool input for a plugin failure hook",
+                        &error,
+                    ),
+                    "plugin tool failure hook is receiving a null input projection"
+                );
+                serde_json::Value::Null
+            }
+        };
         let failure_input = PluginToolFailureInput {
             tool: hook_tool,
             session_id,
@@ -233,7 +256,23 @@ impl ToolExecutor {
 
 fn raw_model_fallback(output: &agena_domain::RawOutput) -> String {
     match output.payload.as_ref() {
-        Some(payload) => serde_json::to_string(payload).unwrap_or_else(|_| output.text.clone()),
+        Some(payload) => match serde_json::to_string(payload) {
+            Ok(payload) => payload,
+            Err(error) => {
+                tracing::error!(
+                    diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                        "serialize a tool result payload for model projection",
+                        &error,
+                    ),
+                    "tool result model projection fell back to its text representation"
+                );
+                if output.text.is_empty() {
+                    "[tool result payload could not be serialized]".to_owned()
+                } else {
+                    output.text.clone()
+                }
+            }
+        },
         None => output.text.clone(),
     }
 }

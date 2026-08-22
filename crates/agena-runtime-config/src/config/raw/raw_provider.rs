@@ -2,10 +2,9 @@ use super::Merge;
 use super::{
     BTreeMap, ConfigEnvironment, ConfigError, CredentialIssuer, HarnessesConfig,
     HttpProviderAdapterConfig, ProviderAdapterDefinition, ProviderApiAuthConfig,
-    ProviderAuthConfig, ProviderDefaultsConfig, ProviderKind, ResolvedProviderAdapterConfig,
-    ResolvedProviderConfig, merge_option, normalize_optional, normalize_optional_string,
-    required_string, strip_default_protocol_path_from_base_url, validate_configured_models,
-    validate_non_empty_strings,
+    ProviderAuthConfig, ProviderKind, ResolvedProviderAdapterConfig, ResolvedProviderConfig,
+    merge_option, normalize_optional, required_string, strip_default_protocol_path_from_base_url,
+    validate_configured_models, validate_non_empty_strings,
 };
 use crate::McpConfig;
 use agena_provider::{
@@ -37,9 +36,6 @@ pub(super) trait ProviderOverlayExt {
 impl ProviderOverlayExt for ProviderOverlay {
     fn merge_project_from(&mut self, overlay: Self) {
         merge_option(&mut self.enabled, overlay.enabled);
-        if overlay.defaults.is_some() {
-            self.defaults = overlay.defaults;
-        }
         if overlay.auth.is_some() {
             self.auth = overlay.auth;
         }
@@ -102,18 +98,6 @@ impl ProviderOverlayExt for ProviderOverlay {
             adapters.insert(adapter_id, adapter.config);
         }
 
-        let provider_defaults = self.defaults.unwrap_or_default();
-        if let Some(default_provider) =
-            normalize_optional_string(provider_defaults.provider.clone())
-            && default_provider.as_str() != provider_id.as_str()
-        {
-            return Err(ConfigError::InvalidProviderConfig {
-                provider_id: provider_id.clone(),
-                message: format!(
-                    "provider defaults.provider `{default_provider}` must match provider key `{provider_id}`"
-                ),
-            });
-        }
         let auth = resolve_provider_auth(provider_id.as_str(), self.auth, adapters.values())?;
         validate_provider_auth(provider_id.as_str(), &auth, adapters.values())?;
         let network = self.network.unwrap_or_default();
@@ -137,69 +121,10 @@ impl ProviderOverlayExt for ProviderOverlay {
             harnesses,
             mcp,
         )?;
-        let default_adapter = if let Some(default_adapter) = provider_defaults.adapter.clone() {
-            default_adapter
-        } else {
-            let enabled_adapters = adapters
-                .iter()
-                .filter(|(_, adapter)| adapter.enabled)
-                .map(|(adapter_id, _)| adapter_id.clone())
-                .collect::<Vec<_>>();
-            (enabled_adapters.len() == 1)
-                .then(|| enabled_adapters[0].clone())
-                .ok_or_else(|| ConfigError::MissingProviderField {
-                    provider_id: provider_id.clone(),
-                    field: "defaults.adapter",
-                })?
-        };
-        if default_adapter.trim().is_empty() {
-            return Err(ConfigError::MissingProviderField {
-                provider_id: provider_id.clone(),
-                field: "defaults.adapter",
-            });
-        }
-        let default_model = normalize_optional_string(provider_defaults.model.clone());
-        let default_adapter_id = default_adapter.trim().to_owned();
-        let default_adapter = adapters.get(default_adapter_id.as_str()).ok_or_else(|| {
-            ConfigError::InvalidProviderConfig {
-                provider_id: provider_id.clone(),
-                message: format!(
-                    "provider defaults.adapter `{default_adapter_id}` references unknown adapter"
-                ),
-            }
-        })?;
-        if !default_adapter.enabled {
-            return Err(ConfigError::InvalidProviderConfig {
-                provider_id: provider_id.clone(),
-                message: format!(
-                    "provider defaults.adapter `{default_adapter_id}` references disabled adapter"
-                ),
-            });
-        }
-        if let Some(default_model) = default_model.as_deref() {
-            let default_route = format!("{default_adapter_id}/{default_model}");
-            if matches!(models.get(default_route.as_str()), Some(configured) if !configured.enabled)
-            {
-                return Err(ConfigError::InvalidProviderConfig {
-                    provider_id: provider_id.clone(),
-                    message: format!(
-                        "provider defaults.model `{default_model}` references disabled model route `{default_route}`"
-                    ),
-                });
-            }
-        }
-
-        let resolved_provider_id = provider_id.clone();
-
         Ok((
             provider_id,
             ResolvedProviderConfig {
                 enabled,
-                defaults: ProviderDefaultsConfig {
-                    provider: Some(resolved_provider_id),
-                    adapter: Some(default_adapter_id),
-                    model: default_model,
-                },
                 auth,
                 network,
                 adapters,
@@ -443,6 +368,14 @@ fn normalize_model_configs(models: &mut BTreeMap<String, ResolvedProviderModelCo
     }
 }
 
+fn normalized_configured_model_id(adapter_id: &str, model_id: String) -> String {
+    if adapter_id == "anthropic" {
+        agena_provider::normalize_anthropic_model_id(model_id.as_str())
+    } else {
+        model_id
+    }
+}
+
 fn resolve_adapter(
     provider_id: &str,
     adapter_id: &str,
@@ -477,11 +410,18 @@ fn resolve_adapter(
         raw.ai_gateway_headers,
         raw.feature_flags,
     )?;
-    let models = raw
-        .models
-        .into_iter()
-        .map(|(model_id, configured)| Ok((model_id.clone(), configured)))
-        .collect::<Result<BTreeMap<_, _>, ConfigError>>()?;
+    let mut models = BTreeMap::new();
+    for (model_id, configured) in raw.models {
+        let model_id = normalized_configured_model_id(adapter_id, model_id);
+        if models.insert(model_id.clone(), configured).is_some() {
+            return Err(ConfigError::InvalidProviderConfig {
+                provider_id: provider_id.to_owned(),
+                message: format!(
+                    "adapter `{adapter_id}` contains duplicate model id after normalization: `{model_id}`"
+                ),
+            });
+        }
+    }
     Ok(ResolvedAdapterWithModels { config, models })
 }
 

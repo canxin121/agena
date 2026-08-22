@@ -16,6 +16,25 @@ use process_wrap::tokio::{ChildWrapper, CommandWrap, KillOnDrop};
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::process::{ChildStderr, ChildStdin, ChildStdout, Command};
 
+fn process_tree_is_absent(error: &io::Error) -> bool {
+    if matches!(
+        error.kind(),
+        io::ErrorKind::NotFound | io::ErrorKind::InvalidInput
+    ) {
+        return true;
+    }
+
+    // macOS maps killpg(2)'s ESRCH to `Uncategorized`, so checking only the
+    // portable ErrorKind turns an already-empty process group into a false
+    // termination failure after the direct child has been reaped.
+    #[cfg(unix)]
+    if error.raw_os_error() == Some(libc::ESRCH) {
+        return true;
+    }
+
+    false
+}
+
 /// Apply Agena's standard process-tree wrappers to a configured command.
 ///
 /// This is public so transports such as `rmcp`, which already accept a
@@ -75,40 +94,65 @@ pub async fn output(
         .stderr()
         .take()
         .ok_or_else(|| io::Error::other("managed child stderr is unavailable"))?;
-    let stdout_task = tokio::spawn(read_bounded(stdout, maximum_bytes_per_stream));
-    let stderr_task = tokio::spawn(read_bounded(stderr, maximum_bytes_per_stream));
+    let mut stdout_task = tokio::spawn(read_bounded(stdout, maximum_bytes_per_stream));
+    let mut stderr_task = tokio::spawn(read_bounded(stderr, maximum_bytes_per_stream));
 
     let status = match tokio::time::timeout(deadline, child.wait()).await {
         Ok(result) => result?,
-        Err(_) => {
-            let _ = child.terminate(Duration::from_millis(100)).await;
+        Err(timeout_error) => {
+            let termination_error = child.terminate(Duration::from_millis(100)).await.err();
             stdout_task.abort();
             stderr_task.abort();
-            return Err(io::Error::new(
-                io::ErrorKind::TimedOut,
-                "managed process timed out",
-            ));
+            let (stdout_join, stderr_join) = tokio::join!(stdout_task, stderr_task);
+            let mut diagnostic = format!("managed process timed out: {timeout_error}");
+            if let Some(error) = termination_error {
+                diagnostic.push_str(&format!(
+                    "; additionally, failed to terminate the timed-out process tree: {error}"
+                ));
+            }
+            for (stream, result) in [("stdout", stdout_join), ("stderr", stderr_join)] {
+                if let Err(error) = result
+                    && !error.is_cancelled()
+                {
+                    diagnostic.push_str(&format!(
+                        "; additionally, {stream} reader did not stop cleanly after abort: {error}"
+                    ));
+                }
+            }
+            return Err(io::Error::new(io::ErrorKind::TimedOut, diagnostic));
         }
     };
 
     // A command can exit after leaving a descendant that still owns its pipes.
     // End the managed process tree before waiting for EOF from both readers.
-    let _ = child.start_kill();
-    let join_readers = async {
-        let stdout = stdout_task
-            .await
-            .map_err(|error| io::Error::other(format!("stdout reader failed: {error}")))??;
-        let stderr = stderr_task
-            .await
-            .map_err(|error| io::Error::other(format!("stderr reader failed: {error}")))??;
-        Ok::<_, io::Error>((stdout, stderr))
+    child.start_kill()?;
+    let reader_result = tokio::time::timeout(Duration::from_secs(2), async {
+        tokio::join!(&mut stdout_task, &mut stderr_task)
+    })
+    .await;
+    let (stdout_result, stderr_result) = match reader_result {
+        Ok(results) => results,
+        Err(timeout_error) => {
+            stdout_task.abort();
+            stderr_task.abort();
+            let (stdout_join, stderr_join) = tokio::join!(stdout_task, stderr_task);
+            let mut diagnostic = format!("process pipes did not close: {timeout_error}");
+            for (stream, result) in [("stdout", stdout_join), ("stderr", stderr_join)] {
+                if let Err(error) = result
+                    && !error.is_cancelled()
+                {
+                    diagnostic.push_str(&format!(
+                        "; additionally, {stream} reader did not stop cleanly after abort: {error}"
+                    ));
+                }
+            }
+            return Err(io::Error::new(io::ErrorKind::TimedOut, diagnostic));
+        }
     };
-    let ((stdout, stdout_exceeded), (stderr, stderr_exceeded)) =
-        tokio::time::timeout(Duration::from_secs(2), join_readers)
-            .await
-            .map_err(|_| {
-                io::Error::new(io::ErrorKind::TimedOut, "process pipes did not close")
-            })??;
+    let (stdout, stdout_exceeded) = stdout_result
+        .map_err(|error| io::Error::other(format!("stdout reader task failed: {error}")))??;
+    let (stderr, stderr_exceeded) = stderr_result
+        .map_err(|error| io::Error::other(format!("stderr reader task failed: {error}")))??;
 
     if stdout_exceeded || stderr_exceeded {
         return Err(io::Error::new(
@@ -157,29 +201,61 @@ impl ManagedChild {
 
     /// Request immediate termination of the entire process tree.
     pub fn start_kill(&mut self) -> io::Result<()> {
-        self.inner.start_kill()
+        match self.inner.start_kill() {
+            Ok(()) => Ok(()),
+            Err(error)
+                if process_tree_is_absent(&error)
+                    && matches!(self.inner.try_wait(), Ok(Some(_))) =>
+            {
+                // Killing an already-reaped process tree is idempotent.
+                Ok(())
+            }
+            Err(error) => Err(error),
+        }
     }
 
     /// Give the process tree a short graceful window, then force-kill and
     /// reap it. The deadline prevents shutdown from waiting forever.
     pub async fn terminate(&mut self, grace: Duration) -> io::Result<ExitStatus> {
         #[cfg(unix)]
-        let _ = self.inner.signal(libc::SIGTERM);
+        let graceful_signal_error = self.inner.signal(libc::SIGTERM).err();
         #[cfg(not(unix))]
-        let _ = self.inner.start_kill();
+        let graceful_signal_error = self.start_kill().err();
 
         match tokio::time::timeout(grace, self.inner.wait()).await {
             Ok(status) => {
-                let status = status?;
+                let status = status.map_err(|wait_error| {
+                    if let Some(signal_error) = graceful_signal_error {
+                        io::Error::other(format!(
+                            "failed to wait for the process after graceful termination failed: {wait_error}; additionally, failed to signal the process tree: {signal_error}"
+                        ))
+                    } else {
+                        wait_error
+                    }
+                })?;
                 // The direct child may exit on SIGTERM while a descendant in
                 // the same group ignores it. A final group/job kill closes
                 // that race; an already-empty group simply returns ESRCH.
-                let _ = self.inner.start_kill();
+                self.start_kill()?;
                 Ok(status)
             }
-            Err(_) => {
-                let _ = self.inner.start_kill();
-                self.inner.wait().await
+            Err(timeout_error) => {
+                self.start_kill().map_err(|kill_error| {
+                    let mut diagnostic = format!(
+                        "failed to force-kill the process tree after the graceful termination window expired: {kill_error}; termination timeout: {timeout_error}"
+                    );
+                    if let Some(signal_error) = graceful_signal_error {
+                        diagnostic.push_str(&format!(
+                            "; additionally, failed to send the graceful termination signal: {signal_error}"
+                        ));
+                    }
+                    io::Error::other(diagnostic)
+                })?;
+                self.inner.wait().await.map_err(|wait_error| {
+                    io::Error::other(format!(
+                        "failed to reap the force-killed process tree: {wait_error}; graceful termination timeout: {timeout_error}"
+                    ))
+                })
             }
         }
     }
@@ -189,7 +265,14 @@ impl Drop for ManagedChild {
     fn drop(&mut self) {
         // The wrapper translates this to killpg(2) or TerminateJobObject,
         // unlike Tokio's raw Child kill-on-drop which only targets one PID.
-        let _ = self.inner.start_kill();
+        if let Err(error) = self.inner.start_kill()
+            && !process_tree_is_absent(&error)
+        {
+            tracing::error!(
+                error = %error,
+                "failed to kill a managed process tree while dropping its handle"
+            );
+        }
     }
 }
 

@@ -6,7 +6,10 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
-use super::{DirectoryQuery, git_success_response, map_git_failure, require_directory, run_git};
+use super::{
+    DirectoryQuery, git_command_transport_error_response, git_success_response, map_git_failure,
+    require_directory, run_git,
+};
 
 fn is_lfs_missing(out: &str, err: &str) -> bool {
     let combined = format!("{}\n{}", out, err).to_ascii_lowercase();
@@ -37,9 +40,16 @@ async fn run_lfs_checked(
     failure_status: StatusCode,
     failure_code: &'static str,
 ) -> Result<(String, String), Response> {
-    let (code, out, err) = run_git(dir, args)
-        .await
-        .unwrap_or((1, String::new(), String::new()));
+    let (code, out, err) = match run_git(dir, args).await {
+        Ok(result) => result,
+        Err(error) => {
+            return Err(git_command_transport_error_response(
+                "execute Git LFS command",
+                &error,
+                Some(failure_code),
+            ));
+        }
+    };
     if code == 0 {
         return Ok((out, err));
     }
@@ -112,10 +122,16 @@ pub async fn git_lfs_status(Query(q): Query<DirectoryQuery>) -> Response {
         Err(resp) => return *resp,
     };
 
-    let (code, out, err) =
-        run_git(&dir, &["lfs", "version"])
-            .await
-            .unwrap_or((1, "".to_string(), "".to_string()));
+    let (code, out, err) = match run_git(&dir, &["lfs", "version"]).await {
+        Ok(result) => result,
+        Err(error) => {
+            return git_command_transport_error_response(
+                "detect Git LFS version",
+                &error,
+                Some("git_lfs_process_failed"),
+            );
+        }
+    };
     if code != 0 {
         if is_lfs_missing(&out, &err) {
             return Json(GitLfsStatusResponse {
@@ -136,17 +152,26 @@ pub async fn git_lfs_status(Query(q): Query<DirectoryQuery>) -> Response {
     }
 
     let version = parse_lfs_version(&out);
-    let tracked = run_git(&dir, &["lfs", "track", "-l"])
-        .await
-        .ok()
-        .map(|(c, out, _)| {
-            if c == 0 {
-                parse_lfs_tracked(&out)
-            } else {
-                vec![]
+    let tracked = match run_git(&dir, &["lfs", "track", "-l"]).await {
+        Ok((0, out, _)) => parse_lfs_tracked(&out),
+        Ok((code, out, error)) => {
+            if let Some(response) = map_git_failure(code, &out, &error) {
+                return response;
             }
-        })
-        .unwrap_or_default();
+            return lfs_command_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &error,
+                "git_lfs_track_list_failed",
+            );
+        }
+        Err(error) => {
+            return git_command_transport_error_response(
+                "list Git LFS tracked patterns",
+                &error,
+                Some("git_lfs_track_list_process_failed"),
+            );
+        }
+    };
 
     Json(GitLfsStatusResponse {
         installed: true,

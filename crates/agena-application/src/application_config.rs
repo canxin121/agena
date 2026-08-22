@@ -22,7 +22,7 @@ impl Application {
         self.runtime_configuration()
             .runtime_configuration()
             .map(|configuration| configuration.configuration_document)
-            .map_err(|error| ApplicationError::internal(error.to_string()))
+            .map_err(|error| ApplicationError::internal_error(&error))
     }
 
     pub async fn set_config_setting(

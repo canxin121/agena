@@ -233,7 +233,14 @@ fn detect_dimensions(bytes: &[u8]) -> (Option<u32>, Option<u32>) {
             let height = u32::try_from(size.height).ok();
             (width, height)
         }
-        Err(_) => (None, None),
+        Err(error) => {
+            tracing::debug!(
+                diagnostic = %error,
+                attachment_bytes = bytes.len(),
+                "attachment image dimensions are unavailable; keeping the attachment without optional dimensions"
+            );
+            (None, None)
+        }
     }
 }
 

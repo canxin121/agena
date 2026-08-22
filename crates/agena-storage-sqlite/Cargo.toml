@@ -8,6 +8,7 @@ authors.workspace = true
 
 [dependencies]
 agena-domain = { workspace = true }
+agena-failure = { workspace = true }
 agena-provider = { workspace = true }
 agena-storage = { workspace = true }
 async-trait = { workspace = true }
@@ -16,6 +17,7 @@ path-clean = { workspace = true }
 sea-orm = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["time"] }
+tracing = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

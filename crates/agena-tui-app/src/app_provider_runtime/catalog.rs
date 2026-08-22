@@ -65,10 +65,6 @@ impl App {
         self.open_model_chooser(SessionModelChooserPurpose::RuntimeOverride);
     }
 
-    pub(crate) fn open_provider_default_model_chooser(&mut self) {
-        self.open_model_chooser(SessionModelChooserPurpose::ProviderDefault);
-    }
-
     pub(crate) fn open_permission_approval_model_chooser(&mut self) {
         self.open_model_chooser(SessionModelChooserPurpose::PermissionApproval);
     }
@@ -92,9 +88,6 @@ impl App {
             Ok(mut items) => {
                 let current_model = match purpose {
                     SessionModelChooserPurpose::RuntimeOverride => self.current_session_model_ref(),
-                    SessionModelChooserPurpose::ProviderDefault => {
-                        self.current_provider_default_model_ref()
-                    }
                     SessionModelChooserPurpose::PermissionApproval => {
                         self.current_permission_approval_model_ref()
                     }
@@ -292,7 +285,12 @@ impl App {
             let result = crate::app_backend::provider_mappings::refresh_model_catalog(&application)
                 .await
                 .map_err(crate::UiFailure::internal);
-            let _ = tx.send(AppMessage::ModelCatalogRefreshed { result }).await;
+            if let Err(error) = tx.send(AppMessage::ModelCatalogRefreshed { result }).await {
+                tracing::debug!(
+                    diagnostic = %error,
+                    "model catalog refresh result receiver was dropped"
+                );
+            }
         });
     }
 

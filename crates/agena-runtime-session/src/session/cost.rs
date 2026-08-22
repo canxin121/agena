@@ -143,7 +143,19 @@ fn for_each_usage_observation(
 /// fill the rest); empty objects are ignored.
 fn usage_from_run_marker_content(content: &serde_json::Value) -> Option<CompletionUsage> {
     let usage = content.get("usage")?;
-    let parsed: CompletionUsage = serde_json::from_value(usage.clone()).ok()?;
+    let parsed: CompletionUsage = match serde_json::from_value(usage.clone()) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            tracing::error!(
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "decode persisted run-marker usage for cost summary",
+                    &error,
+                ),
+                "session cost summary skipped malformed persisted usage"
+            );
+            return None;
+        }
+    };
     (parsed.requests > 0 || parsed.own_total_tokens() > 0).then_some(parsed)
 }
 

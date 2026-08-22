@@ -180,7 +180,7 @@ impl LspClient {
         // The spec requires the initialized notification before any other
         // request — in practice servers tolerate either order, but we send
         // it eagerly for correctness.
-        let _ = self.notify("initialized", serde_json::json!({})).await;
+        self.notify("initialized", serde_json::json!({})).await?;
         Ok(result)
     }
 
@@ -190,17 +190,60 @@ impl LspClient {
             self.request_opt::<Value, Value>("shutdown", Value::Null),
         )
         .await;
-        if matches!(handshake, Ok(Ok(_))) {
-            let _ = self.notify("exit", Value::Null).await;
-        }
+        let exit_result = if matches!(handshake, Ok(Ok(_))) {
+            self.notify("exit", Value::Null).await
+        } else {
+            Ok(())
+        };
         let close_result = self.inner.transport.close().await;
-        let _ = self.inner.shutdown.send(true);
+        if let Err(error) = self.inner.shutdown.send(true) {
+            tracing::debug!(
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "failed to notify the LSP reader about shutdown because it had already exited",
+                    &error,
+                ),
+                "LSP shutdown notification had no active receiver"
+            );
+        }
         match handshake {
-            Ok(Ok(_)) => close_result,
-            Ok(Err(error)) => Err(error),
-            Err(_) => Err(LspError::Timeout(
-                SHUTDOWN_REQUEST_TIMEOUT.as_millis() as u64
-            )),
+            Ok(Ok(_)) => match (exit_result, close_result) {
+                (Ok(()), result) | (result, Ok(())) => result,
+                (Err(exit_error), Err(close_error)) => {
+                    tracing::error!(
+                        diagnostic = %agena_failure::diagnostic::format_error_chain(&close_error),
+                        "LSP exit notification and transport close both failed; returning the exit failure"
+                    );
+                    Err(exit_error)
+                }
+            },
+            Ok(Err(error)) => {
+                if let Err(close_error) = close_result {
+                    tracing::error!(
+                        diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                            "LSP transport close also failed after the shutdown request failed",
+                            &close_error,
+                        ),
+                        "returning the primary LSP shutdown request failure"
+                    );
+                }
+                Err(error)
+            }
+            Err(source) => {
+                if let Err(close_error) = close_result {
+                    tracing::error!(
+                        diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                            "LSP transport close also failed after the shutdown handshake timed out",
+                            &close_error,
+                        ),
+                        "returning the primary LSP shutdown timeout"
+                    );
+                }
+                Err(LspError::Timeout {
+                    operation: "LSP shutdown handshake".to_owned(),
+                    timeout_ms: SHUTDOWN_REQUEST_TIMEOUT.as_millis() as u64,
+                    source,
+                })
+            }
         }
     }
 
@@ -449,10 +492,19 @@ impl LspClient {
         }
         let resp = match tokio::time::timeout(DEFAULT_REQUEST_TIMEOUT, rx).await {
             Ok(Ok(resp)) => resp,
-            Ok(Err(_)) => return Err(LspError::TransportClosed),
-            Err(_) => {
+            Ok(Err(error)) => {
+                return Err(LspError::transport_closed(
+                    format!("response channel closed for LSP request `{method}` (id {id})"),
+                    &error,
+                ));
+            }
+            Err(source) => {
                 self.inner.pending.remove(&id);
-                return Err(LspError::Timeout(DEFAULT_REQUEST_TIMEOUT.as_millis() as u64));
+                return Err(LspError::Timeout {
+                    operation: format!("LSP request `{method}` (id {id})"),
+                    timeout_ms: DEFAULT_REQUEST_TIMEOUT.as_millis() as u64,
+                    source,
+                });
             }
         };
         if let Some(err) = resp.error {
@@ -508,7 +560,7 @@ fn should_retry_navigation<T: NavigationResult>(result: &LspResult<Option<T>>) -
         Ok(None) => true,
         Ok(Some(value)) => value.is_empty_navigation_result(),
         Err(LspError::Server { code, .. }) => *code == CONTENT_MODIFIED_ERROR_CODE,
-        Err(_) => false,
+        Err(..) => false,
     }
 }
 
@@ -545,7 +597,13 @@ async fn reader_loop(
             InboundMessage::Response(resp) => {
                 let RequestId::Number(id) = resp.id;
                 if let Some((_, tx)) = inner.pending.remove(&id) {
-                    let _ = tx.send(resp);
+                    if tx.send(resp).is_err() {
+                        tracing::debug!(
+                            target: "agena_lsp::reader",
+                            request_id = id,
+                            "LSP response receiver was dropped before delivery"
+                        );
+                    }
                 } else {
                     tracing::warn!(
                         target: "agena_lsp::reader",
@@ -575,9 +633,22 @@ async fn reader_loop(
                     }),
                 };
                 drop(inner);
-                let _ = transport
-                    .send(serde_json::to_value(&resp).unwrap_or(Value::Null))
-                    .await;
+                let response = match serde_json::to_value(&resp) {
+                    Ok(response) => response,
+                    Err(error) => {
+                        tracing::error!(
+                            diagnostic = %agena_failure::diagnostic::format_error_chain(&error),
+                            "failed to serialize the LSP method-not-found response"
+                        );
+                        continue;
+                    }
+                };
+                if let Err(error) = transport.send(response).await {
+                    tracing::warn!(
+                        diagnostic = %agena_failure::diagnostic::format_error_chain(&error),
+                        "failed to send the LSP method-not-found response"
+                    );
+                }
             }
         }
     }
@@ -585,7 +656,9 @@ async fn reader_loop(
 
 impl Drop for Inner {
     fn drop(&mut self) {
-        let _ = self.shutdown.send(true);
+        if self.shutdown.send(true).is_err() {
+            tracing::debug!("LSP shutdown signal had no active receivers");
+        }
     }
 }
 
@@ -601,10 +674,17 @@ async fn handle_notification(inner: &Inner, n: JsonRpcNotification) {
         // Diagnostics have their own latest-value cache above. The generic
         // notification feed is observational, so a slow subscriber must not
         // create an unbounded queue or stop the LSP response reader.
-        let _ = tx.try_send(ServerNotification {
-            method: n.method,
+        let method = n.method;
+        if let Err(error) = tx.try_send(ServerNotification {
+            method: method.clone(),
             params,
-        });
+        }) {
+            tracing::warn!(
+                notification_method = %method,
+                diagnostic = %error,
+                "LSP notification was dropped because the observational queue was unavailable"
+            );
+        }
     }
 }
 

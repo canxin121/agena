@@ -68,12 +68,16 @@ mod in_memory {
             self.outbox
                 .send(payload)
                 .await
-                .map_err(|e| LspError::Transport(e.to_string()))
+                .map_err(|error| LspError::transport_error(&error))
         }
 
         async fn recv(&self) -> LspResult<InboundMessage> {
             let mut g = self.inbox.lock().await;
-            g.recv().await.ok_or(LspError::TransportClosed)
+            g.recv().await.ok_or_else(|| {
+                LspError::transport_closed_without_source(
+                    "in-memory LSP inbound channel closed before another frame arrived",
+                )
+            })
         }
 
         async fn close(&self) -> LspResult<()> {

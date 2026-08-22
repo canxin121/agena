@@ -229,7 +229,19 @@ fn command_input_to_args(input: Option<&serde_json::Value>) -> String {
     match input {
         None => String::new(),
         Some(serde_json::Value::String(text)) => text.clone(),
-        Some(value) => serde_json::to_string(value).unwrap_or_default(),
+        Some(value) => match serde_json::to_string(value) {
+            Ok(value) => value,
+            Err(error) => {
+                tracing::error!(
+                    diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                        "serialize notification command arguments",
+                        &error,
+                    ),
+                    "notification command arguments could not be rendered"
+                );
+                String::new()
+            }
+        },
     }
 }
 

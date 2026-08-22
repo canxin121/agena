@@ -11,6 +11,13 @@ const DB_POOL_MAX_CONNECTIONS: u32 = 16;
 const DB_POOL_ACQUIRE_TIMEOUT_MS: u64 = 1500;
 const DB_POOL_IDLE_TIMEOUT_SECS: u64 = 120;
 
+fn database_diagnostic(
+    context: impl AsRef<str>,
+    error: &(dyn std::error::Error + 'static),
+) -> String {
+    agena_failure::diagnostic::format_error_chain_with_context(context, error)
+}
+
 pub(crate) const KV_KEY_TERMINAL_SESSION_REGISTRY: &str = "terminal.sessionRegistry";
 pub(crate) const KV_KEY_WORKSPACE_PREVIEW_SERVER_STATE: &str = "workspacePreview.state.server";
 pub(crate) const KV_KEY_MCP_SERVER_CONTROL: &str = "mcp.server.control";
@@ -25,14 +32,14 @@ pub(crate) struct ServerStateDb {
 
 impl ServerStateDb {
     pub(crate) async fn open() -> Result<Self, String> {
-        Self::open_at_path(crate::server::persistence::paths::server_state_db_path()).await
+        Self::open_at_path(crate::server::persistence::paths::server_state_db_path()?).await
     }
 
     pub(crate) async fn open_at_path(path: PathBuf) -> Result<Self, String> {
         if let Some(parent) = path.parent() {
-            tokio::fs::create_dir_all(parent)
-                .await
-                .map_err(|err| err.to_string())?;
+            tokio::fs::create_dir_all(parent).await.map_err(|error| {
+                database_diagnostic("failed to create the server-state directory", &error)
+            })?;
             secure_server_state_directory(parent).await?;
         }
 
@@ -51,7 +58,9 @@ impl ServerStateDb {
             .idle_timeout(Some(Duration::from_secs(DB_POOL_IDLE_TIMEOUT_SECS)))
             .connect_with(options)
             .await
-            .map_err(|err| err.to_string())?;
+            .map_err(|error| {
+                database_diagnostic("failed to open the server-state SQLite database", &error)
+            })?;
 
         initialize_schema(&pool).await?;
         secure_server_state_files(&path).await?;
@@ -71,19 +80,25 @@ impl ServerStateDb {
         .bind(key)
         .fetch_optional(&self.pool)
         .await
-        .map_err(|err| err.to_string())?;
+        .map_err(|error| {
+            database_diagnostic("failed to read a server-state database value", &error)
+        })?;
 
         let Some(raw) = raw else {
             return Ok(None);
         };
         serde_json::from_str::<Value>(&raw)
             .map(Some)
-            .map_err(|err| err.to_string())
+            .map_err(|error| {
+                database_diagnostic("failed to decode a server-state database value", &error)
+            })
     }
 
     pub(crate) async fn set_value(&self, key: &str, value: &Value) -> Result<(), String> {
         let key = normalize_kv_key(key)?;
-        let payload = serde_json::to_string(value).map_err(|err| err.to_string())?;
+        let payload = serde_json::to_string(value).map_err(|error| {
+            database_diagnostic("failed to encode a server-state database value", &error)
+        })?;
         let now = now_unix_ms();
         sqlx::query(
             "INSERT INTO server_kv (key, value_json, updated_at) VALUES (?, ?, ?)\n             ON CONFLICT(key) DO UPDATE SET\n               value_json = excluded.value_json,\n               updated_at = excluded.updated_at",
@@ -93,7 +108,9 @@ impl ServerStateDb {
         .bind(now)
         .execute(&self.pool)
         .await
-        .map_err(|err| err.to_string())?;
+        .map_err(|error| {
+            database_diagnostic("failed to write a server-state database value", &error)
+        })?;
         Ok(())
     }
 
@@ -106,11 +123,15 @@ impl ServerStateDb {
         };
         serde_json::from_value::<T>(value)
             .map(Some)
-            .map_err(|err| err.to_string())
+            .map_err(|error| {
+                database_diagnostic("failed to decode typed server-state data", &error)
+            })
     }
 
     pub(crate) async fn set_json<T: Serialize>(&self, key: &str, value: &T) -> Result<(), String> {
-        let json = serde_json::to_value(value).map_err(|err| err.to_string())?;
+        let json = serde_json::to_value(value).map_err(|error| {
+            database_diagnostic("failed to encode typed server-state data", &error)
+        })?;
         self.set_value(key, &json).await
     }
 }
@@ -163,21 +184,30 @@ async fn secure_server_state_files(_path: &Path) -> Result<(), String> {
 }
 
 async fn initialize_schema(pool: &SqlitePool) -> Result<(), String> {
-    let mut tx = pool.begin().await.map_err(|err| err.to_string())?;
+    let mut tx = pool.begin().await.map_err(|error| {
+        database_diagnostic(
+            "failed to begin the server-state schema transaction",
+            &error,
+        )
+    })?;
 
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS server_kv (\n           key TEXT PRIMARY KEY,\n           value_json TEXT NOT NULL,\n           updated_at INTEGER NOT NULL\n         )",
     )
     .execute(&mut *tx)
     .await
-    .map_err(|err| err.to_string())?;
+    .map_err(|error| {
+        database_diagnostic("failed to create the server-state key-value table", &error)
+    })?;
 
     sqlx::query(
         "CREATE INDEX IF NOT EXISTS idx_server_kv_updated_at ON server_kv(updated_at DESC)",
     )
     .execute(&mut *tx)
     .await
-    .map_err(|err| err.to_string())?;
+    .map_err(|error| {
+        database_diagnostic("failed to index server-state update timestamps", &error)
+    })?;
 
     // Attachment cache tables.
     sqlx::query(
@@ -185,30 +215,43 @@ async fn initialize_schema(pool: &SqlitePool) -> Result<(), String> {
     )
     .execute(&mut *tx)
     .await
-    .map_err(|err| err.to_string())?;
+    .map_err(|error| {
+        database_diagnostic("failed to create the attachment blob cache table", &error)
+    })?;
 
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS attachment_cache_source_index (\n           source_path TEXT NOT NULL,\n           source_mtime_ns INTEGER NOT NULL,\n           source_size INTEGER NOT NULL,\n           mime TEXT NOT NULL,\n           digest_sha256 TEXT NOT NULL,\n           created_at INTEGER NOT NULL,\n           last_accessed_at INTEGER NOT NULL,\n           hit_count INTEGER NOT NULL DEFAULT 0,\n           PRIMARY KEY (source_path, source_mtime_ns, source_size, mime)\n         )",
     )
     .execute(&mut *tx)
     .await
-    .map_err(|err| err.to_string())?;
+    .map_err(|error| {
+        database_diagnostic("failed to create the attachment source cache table", &error)
+    })?;
 
     sqlx::query(
         "CREATE INDEX IF NOT EXISTS idx_attachment_cache_source_last_accessed\n           ON attachment_cache_source_index(last_accessed_at DESC)",
     )
     .execute(&mut *tx)
     .await
-    .map_err(|err| err.to_string())?;
+    .map_err(|error| {
+        database_diagnostic("failed to index attachment source access times", &error)
+    })?;
 
     sqlx::query(
         "CREATE INDEX IF NOT EXISTS idx_attachment_cache_blob_last_accessed\n           ON attachment_cache_blob_store(last_accessed_at DESC)",
     )
     .execute(&mut *tx)
     .await
-    .map_err(|err| err.to_string())?;
+    .map_err(|error| {
+        database_diagnostic("failed to index attachment blob access times", &error)
+    })?;
 
-    tx.commit().await.map_err(|err| err.to_string())?;
+    tx.commit().await.map_err(|error| {
+        database_diagnostic(
+            "failed to commit the server-state schema transaction",
+            &error,
+        )
+    })?;
     Ok(())
 }
 

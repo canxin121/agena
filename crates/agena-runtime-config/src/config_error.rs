@@ -7,6 +7,11 @@ use thiserror::Error;
 /// Schema-neutral configuration parsing and validation failure.
 #[derive(Debug, Error)]
 pub enum ConfigError {
+    #[error("failed to resolve the current directory for runtime configuration: {source}")]
+    CurrentDirectory {
+        #[source]
+        source: std::io::Error,
+    },
     #[error("failed to read config file {path}: {source}")]
     ReadFile {
         path: PathBuf,
@@ -56,6 +61,12 @@ pub enum ConfigError {
     SerializeJson(#[from] serde_json::Error),
     #[error(transparent)]
     Settings(#[from] crate::RuntimeConfigSettingsError),
+}
+
+impl ConfigError {
+    pub fn validation_error(error: &(dyn std::error::Error + 'static)) -> Self {
+        Self::Validation(agena_failure::diagnostic::format_error_chain(error))
+    }
 }
 
 pub fn parse_numeric<T>(value: &str, key: &str) -> Result<T, ConfigError>
@@ -150,19 +161,25 @@ pub fn reject_unsupported_mode_environment(
 pub fn config_error_to_settings_error(error: ConfigError) -> crate::RuntimeConfigSettingsError {
     match error {
         ConfigError::Settings(error) => error,
-        ConfigError::ReadFile { .. }
+        error @ (ConfigError::ReadFile { .. }
         | ConfigError::WriteFile { .. }
-        | ConfigError::SerializeJson(_) => {
-            crate::RuntimeConfigSettingsError::internal(error.to_string())
+        | ConfigError::SerializeJson(_)) => {
+            crate::RuntimeConfigSettingsError::internal_error(&error)
         }
-        ConfigError::ParseFile { source, .. } => {
-            crate::RuntimeConfigSettingsError::invalid_input(format!(
-                "Configuration JSON is invalid at line {}, column {}.",
-                source.line(),
-                source.column()
-            ))
+        error @ ConfigError::ParseFile { .. } => {
+            let ConfigError::ParseFile { source, .. } = &error else {
+                unreachable!("matched parse-file configuration error")
+            };
+            crate::RuntimeConfigSettingsError::invalid_input_with_diagnostic(
+                format!(
+                    "Configuration JSON is invalid at line {}, column {}.",
+                    source.line(),
+                    source.column()
+                ),
+                agena_failure::diagnostic::format_error_chain(&error),
+            )
         }
-        other => crate::RuntimeConfigSettingsError::invalid_input(other.to_string()),
+        other => crate::RuntimeConfigSettingsError::invalid_input_error(&other),
     }
 }
 

@@ -159,5 +159,5 @@ fn patch_line_delta(diff: &str) -> (usize, usize) {
 }
 
 fn parse_shape_input<T: ToolInput>(input: JsonValue) -> Result<T, ToolError> {
-    T::parse_input(input).map_err(|err| ToolError::invalid_input(err.to_string()))
+    T::parse_input(input).map_err(|err| ToolError::invalid_input_error(&err))
 }

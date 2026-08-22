@@ -38,6 +38,24 @@ impl std::fmt::Display for PasteImageError {
 
 impl std::error::Error for PasteImageError {}
 
+impl PasteImageError {
+    fn clipboard_error(error: &(dyn std::error::Error + 'static)) -> Self {
+        Self::ClipboardUnavailable(agena_failure::diagnostic::format_error_chain(error))
+    }
+
+    fn no_image_error(error: &(dyn std::error::Error + 'static)) -> Self {
+        Self::NoImage(agena_failure::diagnostic::format_error_chain(error))
+    }
+
+    fn encode_error(error: &(dyn std::error::Error + 'static)) -> Self {
+        Self::EncodeFailed(agena_failure::diagnostic::format_error_chain(error))
+    }
+
+    fn io_error(error: &(dyn std::error::Error + 'static)) -> Self {
+        Self::IoError(agena_failure::diagnostic::format_error_chain(error))
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 /// Encoded format of a pasted image.
 pub enum EncodedImageFormat {
@@ -78,12 +96,11 @@ pub fn paste_image_to_temp_png() -> Result<(PathBuf, PastedImageInfo), PasteImag
                 .prefix("agena-clipboard-")
                 .suffix(".png")
                 .tempfile()
-                .map_err(|error| PasteImageError::IoError(error.to_string()))?;
-            std::fs::write(file.path(), png)
-                .map_err(|error| PasteImageError::IoError(error.to_string()))?;
+                .map_err(|error| PasteImageError::io_error(&error))?;
+            std::fs::write(file.path(), png).map_err(|error| PasteImageError::io_error(&error))?;
             let (_, path) = file
                 .keep()
-                .map_err(|error| PasteImageError::IoError(error.error.to_string()))?;
+                .map_err(|error| PasteImageError::io_error(&error.error))?;
             Ok((path, info))
         }
         Err(error) => {
@@ -122,13 +139,13 @@ pub fn paste_image_to_temp_png() -> Result<(PathBuf, PastedImageInfo), PasteImag
     target_os = "visionos"
 )))]
 fn paste_image_as_png() -> Result<(Vec<u8>, PastedImageInfo), PasteImageError> {
-    let mut clipboard = arboard::Clipboard::new()
-        .map_err(|error| PasteImageError::ClipboardUnavailable(error.to_string()))?;
+    let mut clipboard =
+        arboard::Clipboard::new().map_err(|error| PasteImageError::clipboard_error(&error))?;
 
     let files = clipboard
         .get()
         .file_list()
-        .map_err(|error| PasteImageError::ClipboardUnavailable(error.to_string()))
+        .map_err(|error| PasteImageError::clipboard_error(&error))
         .unwrap_or_default();
 
     let image = if let Some(image) = files.into_iter().find_map(|path| image::open(path).ok()) {
@@ -136,7 +153,7 @@ fn paste_image_as_png() -> Result<(Vec<u8>, PastedImageInfo), PasteImageError> {
     } else {
         let image = clipboard
             .get_image()
-            .map_err(|error| PasteImageError::NoImage(error.to_string()))?;
+            .map_err(|error| PasteImageError::no_image_error(&error))?;
         let width = image.width as u32;
         let height = image.height as u32;
         let Some(rgba) = image::RgbaImage::from_raw(width, height, image.bytes.into_owned()) else {
@@ -151,7 +168,7 @@ fn paste_image_as_png() -> Result<(Vec<u8>, PastedImageInfo), PasteImageError> {
     let mut cursor = std::io::Cursor::new(&mut png);
     image
         .write_to(&mut cursor, image::ImageFormat::Png)
-        .map_err(|error| PasteImageError::EncodeFailed(error.to_string()))?;
+        .map_err(|error| PasteImageError::encode_error(&error))?;
 
     Ok((
         png,
@@ -194,8 +211,18 @@ fn try_wsl_clipboard_fallback(
     let Some(path) = convert_windows_path_to_wsl(win_path.as_str()) else {
         return Err(error.clone());
     };
-    let Ok((width, height)) = image::image_dimensions(&path) else {
-        return Err(error.clone());
+    let (width, height) = match image::image_dimensions(&path) {
+        Ok(dimensions) => dimensions,
+        Err(dimension_error) => {
+            tracing::debug!(
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "the WSL clipboard fallback produced an unreadable image",
+                    &dimension_error,
+                ),
+                "discarding an unusable WSL clipboard image fallback"
+            );
+            return Err(error.clone());
+        }
     };
 
     Ok((path, PastedImageInfo { width, height }))
@@ -210,13 +237,35 @@ fn try_dump_windows_clipboard_image() -> Option<String> {
             .args(["-NoProfile", "-Command", script])
             .output()
         {
-            Ok(output) if output.status.success() => {
-                let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                if !path.is_empty() {
-                    return Some(path);
-                }
-            }
-            Ok(_) | Err(_) => {}
+            Ok(output) if output.status.success() => match String::from_utf8(output.stdout) {
+                Ok(path) if !path.trim().is_empty() => return Some(path.trim().to_owned()),
+                Ok(_) => tracing::debug!(
+                    clipboard_command = command,
+                    "Windows clipboard helper succeeded without returning an image path"
+                ),
+                Err(error) => tracing::debug!(
+                    clipboard_command = command,
+                    diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                        "Windows clipboard helper returned a non-UTF-8 image path",
+                        &error,
+                    ),
+                    "discarding an invalid Windows clipboard helper response"
+                ),
+            },
+            Ok(output) => tracing::debug!(
+                clipboard_command = command,
+                status = %output.status,
+                stderr = %String::from_utf8_lossy(&output.stderr).trim(),
+                "Windows clipboard helper did not return an image"
+            ),
+            Err(error) => tracing::debug!(
+                clipboard_command = command,
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "failed to launch the Windows clipboard helper",
+                    &error,
+                ),
+                "Windows clipboard helper is unavailable"
+            ),
         }
     }
     None

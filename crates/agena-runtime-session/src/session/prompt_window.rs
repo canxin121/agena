@@ -1,6 +1,7 @@
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use smol_str::SmolStr;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::{provider::project_completion_input, tool::ToolApiBinding};
 use agena_domain::{Role, ToolCallId};
@@ -18,6 +19,8 @@ use super::transcript::{
     ProviderTranscript, TranscriptBlock, TranscriptContent, TranscriptFragment, TranscriptToolCall,
     TranscriptToolOutput,
 };
+
+static FINGERPRINT_SERIALIZATION_FAILURE_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 const PROMPT_PROTOCOL_OVERHEAD_CHARS: usize = 2_048;
 /// Fixed discriminator for the one current development request shape.
@@ -862,9 +865,19 @@ pub(crate) fn approximate_request_overhead_chars(
         .filter(|value| !value.is_empty())
         .map(str::len)
         .unwrap_or_default();
-    let tools_chars = serde_json::to_vec(tools)
-        .map(|bytes| bytes.len())
-        .unwrap_or_default();
+    let tools_chars = match serde_json::to_vec(tools) {
+        Ok(bytes) => bytes.len(),
+        Err(error) => {
+            tracing::error!(
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "serialize tool catalog for prompt-size estimate",
+                    &error,
+                ),
+                "prompt-size estimate is using a debug-length fallback for tools"
+            );
+            format!("{tools:?}").len()
+        }
+    };
     PROMPT_PROTOCOL_OVERHEAD_CHARS
         .saturating_add(system_chars)
         .saturating_add(tools_chars)
@@ -877,8 +890,19 @@ pub(crate) fn approximate_total_request_tokens_with_compaction(
     provider_compaction: Option<&ProviderCompactionContext>,
 ) -> u64 {
     let native_chars = provider_compaction
-        .and_then(|value| serde_json::to_vec(value).ok())
-        .map(|bytes| bytes.len())
+        .map(|value| match serde_json::to_vec(value) {
+            Ok(bytes) => bytes.len(),
+            Err(error) => {
+                tracing::error!(
+                    diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                        "serialize provider compaction context for prompt-size estimate",
+                        &error,
+                    ),
+                    "prompt-size estimate is using a debug-length fallback for provider compaction"
+                );
+                format!("{value:?}").len()
+            }
+        })
         .unwrap_or_default();
     let total_chars = approximate_prompt_payload_chars(parts)
         .saturating_add(approximate_request_overhead_chars(system, tools))
@@ -912,8 +936,19 @@ pub(crate) fn approximate_request_tokens_from_runs_with_compaction(
     provider_compaction: Option<&ProviderCompactionContext>,
 ) -> u64 {
     let native_chars = provider_compaction
-        .and_then(|value| serde_json::to_vec(value).ok())
-        .map(|bytes| bytes.len())
+        .map(|value| match serde_json::to_vec(value) {
+            Ok(bytes) => bytes.len(),
+            Err(error) => {
+                tracing::error!(
+                    diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                        "serialize provider compaction context for projected prompt-size estimate",
+                        &error,
+                    ),
+                    "projected prompt-size estimate is using a debug-length fallback for provider compaction"
+                );
+                format!("{value:?}").len()
+            }
+        })
         .unwrap_or_default();
     let payload_chars = messages
         .iter()
@@ -1530,7 +1565,23 @@ fn fingerprint_value<T>(value: &T) -> String
 where
     T: Serialize,
 {
-    let bytes = serde_json::to_vec(value).unwrap_or_default();
+    let bytes = match serde_json::to_vec(value) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            let sequence =
+                FINGERPRINT_SERIALIZATION_FAILURE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+            tracing::error!(
+                serialized_type = std::any::type_name::<T>(),
+                sequence,
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "serialize prompt fingerprint input",
+                    &error,
+                ),
+                "prompt fingerprint serialization failed; assigning a one-use fingerprint"
+            );
+            format!("__agena_prompt_fingerprint_serialization_failure_{sequence}").into_bytes()
+        }
+    };
     digest_bytes(bytes.as_slice())
 }
 

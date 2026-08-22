@@ -108,7 +108,19 @@ pub struct MathRenderContext {
 
 impl MathRenderContext {
     pub fn new(graphics: Option<&MathGraphicsConfig>, workspace: &Path) -> Self {
-        let workspace = fs::canonicalize(workspace).unwrap_or_else(|_| workspace.to_path_buf());
+        let workspace = match fs::canonicalize(workspace) {
+            Ok(workspace) => workspace,
+            Err(error) => {
+                tracing::error!(
+                    diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                        "canonicalize the TUI media workspace root",
+                        &error,
+                    ),
+                    "TUI media workspace containment will use the unresolved root"
+                );
+                workspace.to_path_buf()
+            }
+        };
         Self {
             layout: graphics.map_or_else(MathLayoutConfig::default, |graphics| graphics.layout),
             workspace: Some(Arc::new(workspace)),
@@ -423,7 +435,7 @@ pub fn render_formula(source: &str, display: bool) -> Result<Arc<MathArtifact>, 
         return Ok(artifact);
     }
 
-    let ast = parse(source).map_err(|error| error.to_string())?;
+    let ast = parse(source).map_err(|error| format!("failed to parse formula: {error}"))?;
     let foreground = Color::new(
         f32::from(config.foreground[0]) / 255.0,
         f32::from(config.foreground[1]) / 255.0,
@@ -466,7 +478,12 @@ pub fn render_formula(source: &str, display: bool) -> Result<Arc<MathArtifact>, 
             device_pixel_ratio: 1.0,
         },
     )?;
-    let image = image::load_from_memory(&png).map_err(|error| error.to_string())?;
+    let image = image::load_from_memory(&png).map_err(|error| {
+        agena_failure::diagnostic::format_error_chain_with_context(
+            "failed to decode the rendered formula image",
+            &error,
+        )
+    })?;
     if image.width() > MAX_IMAGE_DIMENSION || image.height() > MAX_IMAGE_DIMENSION {
         return Err("rendered formula exceeds the image safety limit".to_string());
     }

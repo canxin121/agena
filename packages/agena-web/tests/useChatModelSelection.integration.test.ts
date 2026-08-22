@@ -60,48 +60,12 @@ test('useChatModelSelection: manual model overrides newer session run-config', a
   assert.equal(selection.selectedModelId.value, 'manual-model')
 })
 
-test('useChatModelSelection: model label does not borrow an adapter from a different default model', async () => {
+test('useChatModelSelection: model label does not borrow an adapter from another model', async () => {
   const { selection } = await createTestHarness({ selectedSessionId: 'session-model-label' })
-  selection.runtimeDefaultSelection.value = {
-    provider: 'openai',
-    adapter: 'responses',
-    model: 'gpt-5',
-    thinkingMode: '',
-    speedMode: '',
-    verbosity: '',
-  }
 
   selection.chooseModelSlug('manual-provider//manual-model')
 
   assert.equal(selection.modelChipLabel.value, 'manual-provider/manual-model')
-})
-
-test('useChatModelSelection: chooseModelDefault clears manual history and falls back to defaults', async () => {
-  const { chat, selection } = await createTestHarness({ selectedSessionId: 'session-1' })
-
-  selection.providers.value = [
-    {
-      id: 'fallback-provider',
-      name: 'Fallback Provider',
-      models: [{ id: 'fallback-model' }],
-    },
-  ]
-
-  selection.chooseModelSlug('manual-provider/manual-model')
-  assert.equal(selection.selectedProviderId.value, 'manual-provider')
-  assert.equal(selection.selectedModelId.value, 'manual-model')
-
-  selection.chooseModelDefault()
-  assert.equal(selection.selectedProviderId.value, 'fallback-provider')
-  assert.equal(selection.selectedModelId.value, 'fallback-model')
-
-  chat.selectedSessionRunConfig = { at: 3 }
-  chat.messages = []
-  selection.resetSelectionForSessionSwitch()
-  selection.applySessionSelection()
-
-  assert.equal(selection.selectedProviderId.value, 'fallback-provider')
-  assert.equal(selection.selectedModelId.value, 'fallback-model')
 })
 
 test('useChatModelSelection: watch selectedSessionRunConfig.at triggers session apply', async () => {
@@ -162,14 +126,20 @@ test('useChatModelSelection: watch messages.length triggers derived session appl
   assert.equal(selection.selectedModelId.value, 'msg-model-2')
 })
 
-test('useChatModelSelection: an unmarked speed catalog uses provider default and display names for overrides', async () => {
-  const { selection } = await createTestHarness({ selectedSessionId: 'session-speed-default' })
+test('useChatModelSelection: an explicit session model exposes speed display names for overrides', async () => {
+  const { chat, selection } = await createTestHarness({
+    selectedSessionId: 'session-speed-selection',
+    selectedSessionRunConfig: {
+      providerID: 'cpa',
+      adapterID: 'openai_responses',
+      modelID: 'gpt-5.6-luna',
+      at: 1,
+    },
+  })
   selection.providers.value = [
     {
       id: 'cpa',
       name: 'CPA',
-      defaultAdapter: 'openai_responses',
-      defaultModel: 'gpt-5.6-luna',
       models: [
         {
           provider_id: 'cpa',
@@ -183,14 +153,6 @@ test('useChatModelSelection: an unmarked speed catalog uses provider default and
       ],
     },
   ]
-  selection.runtimeDefaultSelection.value = {
-    provider: 'cpa',
-    adapter: 'openai_responses',
-    model: 'gpt-5.6-luna',
-    thinkingMode: '',
-    speedMode: '',
-    verbosity: '',
-  }
   selection.applySessionSelection()
 
   assert.equal(selection.selectedSpeedMode.value, '')

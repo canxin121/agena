@@ -539,17 +539,7 @@ fn write_isolated_project_config(workspace: &Path, provider_base_url: &str) {
     std::fs::create_dir_all(&config_dir).expect("create project config directory");
     let config = serde_json::json!({
         "providers": {
-            "default": "fake",
-            "default_selection": {
-                "provider": "fake",
-                "adapter": "openai_responses",
-                "model": "fake-model"
-            },
             "fake": {
-                "defaults": {
-                    "adapter": "openai_responses",
-                    "model": "fake-model"
-                },
                 "auth": {
                     "mode": "api",
                     "subtype": "custom",
@@ -644,13 +634,11 @@ async fn killed_server_restarts_with_interrupted_then_reconciled_session() {
         .runtime_status()
         .await
         .expect("read first server runtime status");
-    assert_eq!(
+    assert!(
         status
-            .default_selection
-            .as_ref()
-            .and_then(|selection| selection.provider.as_deref()),
-        Some("fake"),
-        "test isolation failed: refusing to submit through a non-fake provider"
+            .provider_ids
+            .iter()
+            .any(|provider| provider == "fake")
     );
     let workspace_result = client_a
         .command(Command::ResolveWorkspace(ResolveWorkspaceParams {
@@ -824,13 +812,11 @@ async fn simultaneous_web_tui_cli_ide_clients_leave_runtime_ownership_in_server(
         .runtime_status()
         .await
         .expect("read process-ownership Runtime status");
-    assert_eq!(
+    assert!(
         status
-            .default_selection
-            .as_ref()
-            .and_then(|selection| selection.provider.as_deref()),
-        Some("fake"),
-        "test isolation failed: refusing to submit through a non-fake provider"
+            .provider_ids
+            .iter()
+            .any(|provider| provider == "fake")
     );
 
     let workspace_result = web_client

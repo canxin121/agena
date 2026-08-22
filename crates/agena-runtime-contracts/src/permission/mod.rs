@@ -1007,9 +1007,19 @@ impl MatchContext {
         let root_absolute = if workspace_root.is_absolute() {
             workspace_root.to_path_buf()
         } else {
-            std::env::current_dir()
-                .unwrap_or_else(|_| PathBuf::from("."))
-                .join(workspace_root)
+            match std::env::current_dir() {
+                Ok(directory) => directory.join(workspace_root),
+                Err(error) => {
+                    tracing::error!(
+                        diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                            "resolve the current directory for permission path matching",
+                            &error,
+                        ),
+                        "permission path matching is using the unresolved workspace root"
+                    );
+                    workspace_root.to_path_buf()
+                }
+            }
         };
         let root_norm = normalize_path_string(&root_absolute);
 

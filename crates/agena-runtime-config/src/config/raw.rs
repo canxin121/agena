@@ -20,12 +20,10 @@ use agena_provider::{
 use crate::{
     ConfigEnvironment, ConfigError, HarnessViewportConfig, HarnessesConfig,
     HttpProviderAdapterConfig, ProviderAdapterDefinition, ProviderApiAuthConfig,
-    ProviderAuthConfig, ProviderDefaultsConfig, ResolvedConfig, ResolvedProviderAdapterConfig,
-    ResolvedProviderConfig, RuntimeConfig, RuntimeProvidersConfig, SessionCompactionConfig,
-    SessionConfig, TuiColorSchemeConfig, TuiGraphicsModeConfig, TuiUiConfig, TuiUiTranscriptConfig,
-    UiConfig,
+    ProviderAuthConfig, ResolvedConfig, ResolvedProviderAdapterConfig, ResolvedProviderConfig,
+    RuntimeConfig, RuntimeProvidersConfig, SessionCompactionConfig, SessionConfig,
+    TuiColorSchemeConfig, TuiGraphicsModeConfig, TuiUiConfig, TuiUiTranscriptConfig, UiConfig,
 };
-use agena_domain::ModelSelectionConfig;
 
 pub use crate::merge_optional_config as merge_option;
 pub use crate::normalize_config_optional as normalize_optional;
@@ -49,8 +47,7 @@ pub struct RawConfigFile {
 impl RawConfigFile {
     pub fn read(path: &Path) -> Result<Self, ConfigError> {
         match crate::read_config_json(path)? {
-            Some(mut value) => {
-                strip_legacy_provider_default_variants(&mut value);
+            Some(value) => {
                 reject_unsupported_fields_value(&value)?;
                 let merge_keys = RawProjectMergeKeys::from_value(&value);
                 let config = serde_json::from_value::<RawConfig>(value).map_err(|source| {
@@ -147,8 +144,7 @@ fn parse_raw_config_text(
     path: &Path,
     text: &str,
 ) -> Result<(RawConfig, RawProjectMergeKeys), ConfigError> {
-    let mut value = crate::parse_config_json(path, text)?;
-    strip_legacy_provider_default_variants(&mut value);
+    let value = crate::parse_config_json(path, text)?;
     reject_unsupported_fields_value(&value)?;
     let merge_keys = RawProjectMergeKeys::from_value(&value);
     let config =
@@ -157,35 +153,6 @@ fn parse_raw_config_text(
             source,
         })?;
     Ok((config, merge_keys))
-}
-
-/// Provider defaults used to carry request variants such as thinking mode,
-/// verbosity, and parallel tool calls. Those values now belong to a model
-/// capability or an explicit session/run option. Silently discard the legacy
-/// keys while loading so an existing user configuration keeps working, but do
-/// not let the removed fields enter the typed configuration or effective
-/// configuration output.
-fn strip_legacy_provider_default_variants(value: &mut Value) {
-    let Some(providers) = value.get_mut("providers").and_then(Value::as_object_mut) else {
-        return;
-    };
-    for provider in providers.values_mut() {
-        let Some(defaults) = provider
-            .as_object_mut()
-            .and_then(|provider| provider.get_mut("defaults"))
-            .and_then(Value::as_object_mut)
-        else {
-            continue;
-        };
-        for field in [
-            "thinking_mode",
-            "speed_mode",
-            "verbosity",
-            "parallel_tool_calls",
-        ] {
-            defaults.remove(field);
-        }
-    }
 }
 
 fn reject_unsupported_fields_value(value: &Value) -> Result<(), ConfigError> {
@@ -209,10 +176,26 @@ fn reject_unsupported_fields_value(value: &Value) -> Result<(), ConfigError> {
         ));
     }
     if let Some(providers) = table.get("providers").and_then(Value::as_object) {
+        if providers.contains_key("default") {
+            return Err(ConfigError::Validation(
+                "`providers.default` is no longer supported; select a model explicitly".to_string(),
+            ));
+        }
+        if providers.contains_key("default_selection") {
+            return Err(ConfigError::Validation(
+                "`providers.default_selection` is no longer supported; select a model explicitly"
+                    .to_string(),
+            ));
+        }
         for (provider_id, provider) in providers {
             let Some(provider) = provider.as_object() else {
                 continue;
             };
+            if provider.contains_key("defaults") {
+                return Err(ConfigError::Validation(format!(
+                    "provider `{provider_id}` no longer supports `defaults`; select a model explicitly"
+                )));
+            }
             if provider.contains_key("variants")
                 || provider.contains_key("thinking_variants")
                 || provider.contains_key("thinking_modes")
@@ -255,14 +238,8 @@ fn reject_unsupported_fields_value(value: &Value) -> Result<(), ConfigError> {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
 #[serde(default)]
-/// Raw provider configuration with a default selection and per-provider overlays.
+/// Raw provider configuration with per-provider overlays.
 pub struct RawProvidersConfig {
-    #[merge(strategy = option_override)]
-    pub default: Option<String>,
-    /// Explicit global model route and variants selected in the settings
-    /// model picker. `default` remains the legacy provider-only selector.
-    #[merge(strategy = option_override)]
-    pub default_selection: Option<ModelSelectionConfig>,
     #[serde(flatten)]
     #[merge(strategy = map_extend)]
     pub providers: BTreeMap<String, ProviderOverlay>,
@@ -270,12 +247,10 @@ pub struct RawProvidersConfig {
 
 impl RawProvidersConfig {
     fn is_empty(&self) -> bool {
-        self.default.is_none() && self.default_selection.is_none() && self.providers.is_empty()
+        self.providers.is_empty()
     }
 
     fn merge_project_from(&mut self, overlay: Self) {
-        merge_option(&mut self.default, overlay.default);
-        merge_option(&mut self.default_selection, overlay.default_selection);
         for (provider_id, provider) in overlay.providers {
             match self.providers.get_mut(&provider_id) {
                 Some(existing) => existing.merge_project_from(provider),
@@ -289,8 +264,6 @@ impl RawProvidersConfig {
 
 impl Merge for RawProvidersConfig {
     fn merge_from(&mut self, overlay: Self) {
-        merge_option(&mut self.default, overlay.default);
-        merge_option(&mut self.default_selection, overlay.default_selection);
         merge_map(&mut self.providers, overlay.providers);
     }
 }
@@ -325,9 +298,9 @@ impl RawConfig {
     ///
     /// Project config is partial, but keyed entities use their natural key as
     /// the conflict boundary: `plugins.list.<id>` replaces
-    /// the lower-priority entry, while provider `defaults` and `auth` replace
-    /// as whole selection/auth tuples. This keeps project overrides from
-    /// inheriting unrelated nested fields by accident.
+    /// the lower-priority entry, while provider `auth` replaces as a whole
+    /// authentication tuple. This keeps project overrides from inheriting
+    /// unrelated nested fields by accident.
     pub fn merge_project_from_with_keys(&mut self, overlay: Self, merge_keys: RawProjectMergeKeys) {
         merge_option_struct(&mut self.tracing, overlay.tracing);
         merge_option_struct(&mut self.ui, overlay.ui);
@@ -505,9 +478,6 @@ impl RawConfig {
         let plugins: PluginConfig = self.plugins.unwrap_or_default();
         let mcp = crate::mcp_config_from_plugins(&plugins).map_err(ConfigError::Validation)?;
         let harnesses: HarnessesConfig = self.harnesses.unwrap_or_default();
-        let providers_default = self.providers.default.clone();
-        let explicit_default_selection = self.providers.default_selection.clone();
-
         validate_harnesses(&harnesses)?;
 
         let providers = self
@@ -516,15 +486,9 @@ impl RawConfig {
             .into_iter()
             .map(|(provider_id, raw)| raw.resolve(provider_id, env, &harnesses, &mcp))
             .collect::<Result<BTreeMap<_, _>, _>>()?;
-        let default_selection = resolve_default_selection(
-            providers_default.as_deref(),
-            explicit_default_selection.as_ref(),
-            &providers,
-        )?;
         validate_permission_config("permission", &permission)?;
 
         Ok(ResolvedConfig {
-            default_selection,
             tracing,
             ui,
             runtime,
@@ -535,87 +499,6 @@ impl RawConfig {
             providers,
         })
     }
-}
-
-fn resolve_default_selection(
-    explicit_provider: Option<&str>,
-    explicit_selection: Option<&agena_domain::ModelSelectionConfig>,
-    providers: &BTreeMap<String, ResolvedProviderConfig>,
-) -> Result<agena_domain::ExecutionSelection, ConfigError> {
-    let selected_provider = explicit_selection
-        .and_then(|selection| selection.provider.as_deref())
-        .or(explicit_provider);
-    let provider_id = if let Some(explicit_provider) = selected_provider
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        let provider = providers.get(explicit_provider).ok_or_else(|| {
-            ConfigError::Validation(format!(
-                "providers.default `{explicit_provider}` references unknown provider"
-            ))
-        })?;
-        if !provider.enabled {
-            return Err(ConfigError::Validation(format!(
-                "providers.default `{explicit_provider}` references disabled provider"
-            )));
-        }
-        Some(explicit_provider.to_owned())
-    } else {
-        providers
-            .iter()
-            .find_map(|(provider_id, provider)| provider.enabled.then(|| provider_id.clone()))
-    };
-
-    let Some(provider_id) = provider_id else {
-        return Ok(agena_domain::ExecutionSelection::default());
-    };
-    let provider = providers.get(provider_id.as_str()).ok_or_else(|| {
-        ConfigError::Validation(format!(
-            "providers.default `{provider_id}` references unknown provider"
-        ))
-    })?;
-
-    // A `default_selection` can pin the adapter independently of the
-    // provider's `defaults.adapter`. When that adapter is not enabled the
-    // selection would point at a route the runtime never builds, so the
-    // effective model reference resolves to a "provider has no enabled
-    // adapter" failure at run time instead of a load-time error. Reject the
-    // reference here so config validation surfaces it (the provider-level
-    // `defaults.adapter` check in `raw_provider.rs` cannot see it).
-    if let Some(selection_adapter) = explicit_selection
-        .and_then(|selection| selection.adapter.as_deref())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        let resolved_adapter = provider
-            .adapters
-            .get(selection_adapter)
-            .ok_or_else(|| {
-                ConfigError::Validation(format!(
-                    "providers.default_selection adapter `{selection_adapter}` references unknown adapter for provider `{provider_id}`"
-                ))
-            })?;
-        if !resolved_adapter.enabled {
-            return Err(ConfigError::Validation(format!(
-                "providers.default_selection adapter `{selection_adapter}` references disabled adapter for provider `{provider_id}`"
-            )));
-        }
-    }
-
-    Ok(agena_domain::ExecutionSelection {
-        provider: Some(provider_id),
-        adapter: explicit_selection
-            .and_then(|selection| selection.adapter.clone())
-            .or_else(|| provider.defaults.adapter.clone()),
-        model: explicit_selection
-            .and_then(|selection| selection.model.clone())
-            .or_else(|| provider.defaults.model.clone()),
-        thinking_mode: explicit_selection.and_then(|selection| selection.thinking_mode.clone()),
-        speed_mode: explicit_selection.and_then(|selection| selection.speed_mode.clone()),
-        verbosity: explicit_selection.and_then(|selection| selection.verbosity.clone()),
-        parallel_tool_calls: explicit_selection.and_then(|selection| selection.parallel_tool_calls),
-        ..Default::default()
-    })
 }
 
 impl Merge for PluginConfig {
@@ -1297,9 +1180,7 @@ mod openai_protocol_adapter_tests {
         format!(
             r#"{{
                 "providers": {{
-                    "default": "test",
                     "test": {{
-                        "defaults": {{ "adapter": "{adapter_id}", "model": "gpt-test" }},
                         "auth": {{
                             "mode": "api",
                             "subtype": "custom",
@@ -1571,35 +1452,22 @@ mod openai_protocol_adapter_tests {
     }
 
     #[test]
-    fn provider_default_model_variants_are_removed_while_loading() {
-        let mut value = serde_json::json!({
+    fn provider_defaults_are_rejected() {
+        let value = serde_json::json!({
             "providers": {
                 "test": {
-                    "defaults": {
-                        "adapter": "openai_responses",
-                        "model": "gpt-test",
-                        "thinking_mode": "high",
-                        "speed_mode": "fast",
-                        "verbosity": "low",
-                        "parallel_tool_calls": true
-                    },
+                    "defaults": { "adapter": "openai_responses", "model": "gpt-test" },
                     "adapters": {}
                 }
             }
         });
-        super::strip_legacy_provider_default_variants(&mut value);
-        let defaults = &value["providers"]["test"]["defaults"];
-        assert_eq!(
-            defaults,
-            &serde_json::json!({
-                "adapter": "openai_responses",
-                "model": "gpt-test"
-            })
-        );
+        let error = reject_unsupported_fields_value(&value)
+            .expect_err("provider defaults must not be accepted");
+        assert!(error.to_string().contains("no longer supports"));
     }
 
     #[test]
-    fn explicit_default_selection_resolves_model_variants() {
+    fn provider_default_selection_is_rejected() {
         let value = serde_json::json!({
             "providers": {
                 "default": "test",
@@ -1629,33 +1497,9 @@ mod openai_protocol_adapter_tests {
                 }
             }
         });
-        let raw = serde_json::from_value::<RawConfig>(value).expect("config should parse");
-        let resolved = raw
-            .resolve_with_env(&crate::ProcessEnvironment)
-            .expect("config should resolve");
-
-        assert_eq!(resolved.default_selection.provider.as_deref(), Some("test"));
-        assert_eq!(
-            resolved.default_selection.adapter.as_deref(),
-            Some("openai_responses")
-        );
-        assert_eq!(
-            resolved.default_selection.model.as_deref(),
-            Some("gpt-test")
-        );
-        assert_eq!(
-            resolved.default_selection.thinking_mode.as_deref(),
-            Some("high")
-        );
-        assert_eq!(
-            resolved.default_selection.speed_mode.as_deref(),
-            Some("fast")
-        );
-        assert_eq!(
-            resolved.default_selection.verbosity.as_deref(),
-            Some("high")
-        );
-        assert_eq!(resolved.default_selection.parallel_tool_calls, Some(false));
+        let error = reject_unsupported_fields_value(&value)
+            .expect_err("provider default selection must not be accepted");
+        assert!(error.to_string().contains("providers.default"));
     }
 
     #[test]
@@ -1678,12 +1522,9 @@ mod openai_protocol_adapter_tests {
     }
 
     #[test]
-    fn default_selection_adapter_referencing_a_disabled_adapter_is_rejected() {
-        // `providers.default_selection` pins an adapter that is disabled in
-        // the provider. Unlike the provider-level `defaults.adapter` check,
-        // resolution must reject this too, otherwise the runtime resolves a
-        // model through an adapter that is never built and fails per request
-        // with a generic "no enabled adapter" configuration error.
+    fn legacy_provider_default_selection_with_disabled_adapter_is_rejected() {
+        // Keep rejecting the removed provider-level selection shape even when
+        // its nested adapter would otherwise be invalid.
         let value = serde_json::json!({
             "providers": {
                 "default": "test",
@@ -1708,18 +1549,13 @@ mod openai_protocol_adapter_tests {
                 }
             }
         });
-        let raw = serde_json::from_value::<RawConfig>(value).expect("config should parse");
-        let error = raw.resolve_with_env(&crate::ProcessEnvironment).expect_err(
-            "default_selection adapter referencing a disabled adapter must be rejected",
-        );
-        assert!(
-            error.to_string().contains("references disabled adapter"),
-            "unexpected error: {error}"
-        );
+        let error = reject_unsupported_fields_value(&value)
+            .expect_err("provider default selection must be rejected");
+        assert!(error.to_string().contains("providers.default"));
     }
 
     #[test]
-    fn default_selection_adapter_referencing_an_unknown_adapter_is_rejected() {
+    fn legacy_provider_default_selection_with_unknown_adapter_is_rejected() {
         let value = serde_json::json!({
             "providers": {
                 "default": "test",
@@ -1742,21 +1578,15 @@ mod openai_protocol_adapter_tests {
                 }
             }
         });
-        let raw = serde_json::from_value::<RawConfig>(value).expect("config should parse");
-        let error = raw.resolve_with_env(&crate::ProcessEnvironment).expect_err(
-            "default_selection adapter referencing an unknown adapter must be rejected",
-        );
-        assert!(
-            error.to_string().contains("references unknown adapter"),
-            "unexpected error: {error}"
-        );
+        let error = reject_unsupported_fields_value(&value)
+            .expect_err("provider default selection must be rejected");
+        assert!(error.to_string().contains("providers.default"));
     }
 
     #[test]
-    fn deleted_provider_with_dangling_default_selection_is_rejected() {
-        // A provider was removed from the file but `default_selection` still
-        // references it: resolution must reject the dangling reference so the
-        // settings layer refuses to persist the invalid document.
+    fn legacy_provider_default_selection_for_removed_provider_is_rejected() {
+        // A removed provider must not leave the deleted global selection
+        // schema behind in the settings document.
         let value = serde_json::json!({
             "providers": {
                 "default": "opencode",
@@ -1782,22 +1612,15 @@ mod openai_protocol_adapter_tests {
                 }
             }
         });
-        let raw = serde_json::from_value::<RawConfig>(value).expect("config should parse");
-        let error = raw
-            .resolve_with_env(&crate::ProcessEnvironment)
-            .expect_err("dangling default_selection must be rejected");
-        assert!(
-            error.to_string().contains("references unknown provider"),
-            "unexpected error: {error}"
-        );
+        let error = reject_unsupported_fields_value(&value)
+            .expect_err("provider default selection must be rejected");
+        assert!(error.to_string().contains("providers.default"));
     }
 
     #[test]
-    fn provider_default_adapter_may_not_point_at_a_disabled_adapter() {
-        // Provider Studio unchecking an adapter keeps the adapter entry with
-        // `enabled: false`; a stale `defaults.adapter` pointing at it must be
-        // rejected during validation, which is exactly the failure the studio
-        // hit when it tried to save such a selection.
+    fn legacy_provider_defaults_with_disabled_adapter_are_rejected() {
+        // The old provider defaults object is rejected before adapter-level
+        // validation, regardless of the adapter's enabled state.
         let value = serde_json::json!({
             "providers": {
                 "test": {
@@ -1815,22 +1638,16 @@ mod openai_protocol_adapter_tests {
                 }
             }
         });
-        let raw = serde_json::from_value::<RawConfig>(value).expect("config should parse");
-        let error = raw
-            .resolve_with_env(&crate::ProcessEnvironment)
-            .expect_err("defaults.adapter referencing a disabled adapter must be rejected");
-        assert!(
-            error.to_string().contains("references disabled adapter"),
-            "unexpected error: {error}"
-        );
+        let error = reject_unsupported_fields_value(&value)
+            .expect_err("provider defaults must be rejected");
+        assert!(error.to_string().contains("no longer supports"));
     }
 
     #[test]
-    fn deleting_a_provider_and_clearing_its_references_validates() {
-        // This is the document produced by `delete_provider` after its atomic
-        // patch removes `providers.<id>`, `providers.default`, and
-        // `providers.default_selection` (which referenced the deleted provider).
-        // The remaining providers must still resolve.
+    fn provider_config_without_legacy_selection_fields_is_rejected_only_for_legacy_defaults() {
+        // This fixture represents a provider document after the global
+        // selection mechanism was removed; only the obsolete nested defaults
+        // object should make it fail.
         let value = serde_json::json!({
             "providers": {
                 "chatgpt": {
@@ -1849,14 +1666,8 @@ mod openai_protocol_adapter_tests {
                 }
             }
         });
-        let raw = serde_json::from_value::<RawConfig>(value).expect("config should parse");
-        let resolved = raw
-            .resolve_with_env(&crate::ProcessEnvironment)
-            .expect("config with provider references cleared must resolve");
-        assert_eq!(
-            resolved.default_selection.provider.as_deref(),
-            Some("chatgpt"),
-            "default selection falls back to the remaining enabled provider"
-        );
+        let error = reject_unsupported_fields_value(&value)
+            .expect_err("provider defaults must be rejected");
+        assert!(error.to_string().contains("no longer supports"));
     }
 }

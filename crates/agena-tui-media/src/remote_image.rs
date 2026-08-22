@@ -182,8 +182,12 @@ pub(super) fn load(url: &Url) -> Result<Arc<Vec<u8>>, String> {
         return result;
     }
 
-    let handle = Handle::try_current()
-        .map_err(|_| "remote image loading requires the TUI runtime".to_string())?;
+    let handle = Handle::try_current().map_err(|error| {
+        agena_failure::diagnostic::format_error_chain_with_context(
+            "remote image loading requires the TUI runtime",
+            &error,
+        )
+    })?;
     if !cache.begin(key.clone()) {
         return Err("remote image cache is busy".to_string());
     }
@@ -196,7 +200,10 @@ pub(super) fn load(url: &Url) -> Result<Arc<Vec<u8>>, String> {
         };
         let result = match Arc::clone(&REMOTE_IMAGE_DOWNLOADS).acquire_owned().await {
             Ok(_permit) => fetch(url).await,
-            Err(_) => Err("remote image downloader is unavailable".to_string()),
+            Err(error) => Err(agena_failure::diagnostic::format_error_chain_with_context(
+                "remote image downloader is unavailable because its concurrency limiter was closed",
+                &error,
+            )),
         };
         guard.complete(result);
     });
@@ -237,9 +244,12 @@ async fn fetch(mut url: Url) -> Result<Vec<u8>, String> {
         if matches!(url.host(), Some(Host::Domain(_))) {
             builder = builder.resolve_to_addrs(host, &target);
         }
-        let client = builder
-            .build()
-            .map_err(|error| format!("cannot configure remote image request: {error}"))?;
+        let client = builder.build().map_err(|error| {
+            agena_failure::diagnostic::format_error_chain_with_context(
+                "cannot configure remote image request",
+                &error,
+            )
+        })?;
         let mut response = client
             .get(url.clone())
             .header(
@@ -249,7 +259,12 @@ async fn fetch(mut url: Url) -> Result<Vec<u8>, String> {
             .header(header::ACCEPT_ENCODING, "identity")
             .send()
             .await
-            .map_err(|error| format!("remote image request failed: {error}"))?;
+            .map_err(|error| {
+                agena_failure::diagnostic::format_error_chain_with_context(
+                    "remote image request failed",
+                    &error,
+                )
+            })?;
 
         if response.status().is_redirection() {
             if redirects == MAX_REMOTE_IMAGE_REDIRECTS {
@@ -260,11 +275,18 @@ async fn fetch(mut url: Url) -> Result<Vec<u8>, String> {
                 .get(header::LOCATION)
                 .ok_or_else(|| "remote image redirect has no location".to_string())?
                 .to_str()
-                .map_err(|_| "remote image redirect location is invalid".to_string())?;
-            let next = canonical_remote_image_url(
-                &url.join(location)
-                    .map_err(|_| "remote image redirect URL is invalid".to_string())?,
-            )?;
+                .map_err(|error| {
+                    agena_failure::diagnostic::format_error_chain_with_context(
+                        "remote image redirect location is invalid",
+                        &error,
+                    )
+                })?;
+            let next = canonical_remote_image_url(&url.join(location).map_err(|error| {
+                agena_failure::diagnostic::format_error_chain_with_context(
+                    "remote image redirect URL is invalid",
+                    &error,
+                )
+            })?)?;
             if url.scheme() == "https" && next.scheme() != "https" {
                 return Err("remote image redirect cannot downgrade HTTPS".to_string());
             }
@@ -286,11 +308,12 @@ async fn fetch(mut url: Url) -> Result<Vec<u8>, String> {
             .unwrap_or(0)
             .min(MAX_MARKDOWN_IMAGE_BYTES);
         let mut bytes = Vec::with_capacity(capacity);
-        while let Some(chunk) = response
-            .chunk()
-            .await
-            .map_err(|error| format!("cannot read remote image: {error}"))?
-        {
+        while let Some(chunk) = response.chunk().await.map_err(|error| {
+            agena_failure::diagnostic::format_error_chain_with_context(
+                "cannot read remote image",
+                &error,
+            )
+        })? {
             if bytes.len().saturating_add(chunk.len()) > MAX_MARKDOWN_IMAGE_BYTES {
                 return Err("remote image exceeds the encoded byte safety limit".to_string());
             }
@@ -317,7 +340,12 @@ fn validate_response_headers(response: &reqwest::Response) -> Result<(), String>
     };
     let content_type = content_type
         .to_str()
-        .map_err(|_| "remote image content type is invalid".to_string())?
+        .map_err(|error| {
+            agena_failure::diagnostic::format_error_chain_with_context(
+                "remote image content type is invalid",
+                &error,
+            )
+        })?
         .split(';')
         .next()
         .unwrap_or_default()
@@ -348,7 +376,17 @@ async fn resolve_public_target(url: &Url) -> Result<Vec<SocketAddr>, String> {
                 tokio::net::lookup_host((host, port)),
             )
             .await
-            .map_err(|_| format!("remote image DNS lookup timed out for {host}"))?
+            .map_err(|error| {
+                tracing::warn!(
+                    remote_host = host,
+                    diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                        "wait for remote image DNS resolution",
+                        &error,
+                    ),
+                    "remote image DNS lookup timed out"
+                );
+                format!("remote image DNS lookup timed out for {host}")
+            })?
             .map_err(|error| format!("cannot resolve remote image host {host}: {error}"))?;
             (
                 resolved.collect::<BTreeSet<_>>().into_iter().collect(),

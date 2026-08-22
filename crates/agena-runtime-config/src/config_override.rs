@@ -17,7 +17,6 @@ pub enum ConfigOverride {
     UiTuiColorScheme(TuiColorSchemeConfig),
     UiTuiGraphics(TuiGraphicsModeConfig),
     UiTuiTheme(String),
-    ProvidersDefault(String),
     ProviderRequestTimeoutSecs {
         provider_id: String,
         value: u64,
@@ -25,18 +24,6 @@ pub enum ConfigOverride {
     ProviderConnectTimeoutSecs {
         provider_id: String,
         value: u64,
-    },
-    ProviderDefaultsProvider {
-        provider_id: String,
-        value: String,
-    },
-    ProviderDefaultsAdapter {
-        provider_id: String,
-        value: String,
-    },
-    ProviderDefaultsModel {
-        provider_id: String,
-        value: String,
     },
     ProviderAuthBaseUrl {
         provider_id: String,
@@ -64,6 +51,11 @@ pub enum ConfigOverride {
 pub struct LoadConfigRequest {
     pub overrides: Vec<ConfigOverride>,
     pub workspace_root: Option<PathBuf>,
+    /// Optional explicit global configuration path. Normal process startup
+    /// leaves this unset so the loader resolves the conventional path from
+    /// the process environment; tests and embedded callers can provide an
+    /// isolated path without mutating process-wide environment variables.
+    pub config_path: Option<PathBuf>,
 }
 
 /// Parse raw `--set` expressions at the Runtime bootstrap boundary.
@@ -115,7 +107,9 @@ impl FromStr for ConfigOverride {
                     .map_err(RuntimeConfigOverrideError::Validation)?,
             )),
             "ui.tui.theme" => Ok(Self::UiTuiTheme(raw_value.to_owned())),
-            "providers.default" => Ok(Self::ProvidersDefault(raw_value.to_owned())),
+            "providers.default" => Err(RuntimeConfigOverrideError::InvalidOverride(
+                "providers.default is no longer supported; select a model explicitly".to_owned(),
+            )),
             _ if key.starts_with("providers.") => parse_provider_override(key, raw_value),
             _ => Err(RuntimeConfigOverrideError::InvalidOverride(key.to_owned())),
         }
@@ -139,17 +133,9 @@ fn parse_provider_override(
             provider_id,
             value: parse_bool(key, raw_value)?,
         }),
-        _ if field.starts_with("defaults.") => match field.trim_start_matches("defaults.").trim() {
-            "provider" => Ok(ConfigOverride::ProviderDefaultsProvider { provider_id, value }),
-            "adapter" => Ok(ConfigOverride::ProviderDefaultsAdapter { provider_id, value }),
-            "model" => Ok(ConfigOverride::ProviderDefaultsModel { provider_id, value }),
-            "thinking_mode" | "speed_mode" | "verbosity" | "parallel_tool_calls" => {
-                Err(RuntimeConfigOverrideError::InvalidOverride(format!(
-                    "{key} is no longer supported; configure a model capability or explicit session/run option"
-                )))
-            }
-            _ => Err(RuntimeConfigOverrideError::InvalidOverride(key.to_owned())),
-        },
+        _ if field.starts_with("defaults.") => Err(RuntimeConfigOverrideError::InvalidOverride(
+            format!("{key} is no longer supported; select a model explicitly"),
+        )),
         "network.request_timeout_secs" => Ok(ConfigOverride::ProviderRequestTimeoutSecs {
             provider_id,
             value: parse_numeric(raw_value, key)?,
@@ -259,7 +245,7 @@ mod tests {
     fn parses_bootstrap_override_batches_in_order() {
         let expressions = vec![
             "tracing.filter=debug".to_owned(),
-            "providers.demo.defaults.model=gpt-test".to_owned(),
+            "providers.demo.enabled=true".to_owned(),
         ];
         let parsed = parse_config_override_expressions(&expressions)
             .expect("bootstrap override batch should parse");

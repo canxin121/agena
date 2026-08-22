@@ -82,6 +82,34 @@ fn notify_request(kind: TerminalNotify) -> PluginNotifyRequest {
     }
 }
 
+fn recover_read<'a, T>(lock: &'a RwLock<T>, context: &str) -> std::sync::RwLockReadGuard<'a, T> {
+    match lock.read() {
+        Ok(guard) => guard,
+        Err(error) => {
+            tracing::error!(
+                operation = context,
+                error = %error,
+                "recovering poisoned terminal plugin read lock"
+            );
+            error.into_inner()
+        }
+    }
+}
+
+fn recover_write<'a, T>(lock: &'a RwLock<T>, context: &str) -> std::sync::RwLockWriteGuard<'a, T> {
+    match lock.write() {
+        Ok(guard) => guard,
+        Err(error) => {
+            tracing::error!(
+                operation = context,
+                error = %error,
+                "recovering poisoned terminal plugin write lock"
+            );
+            error.into_inner()
+        }
+    }
+}
+
 #[agena_plugin_host::sdk::agena_plugin(
     namespace = "agena",
     name = "terminal",
@@ -98,9 +126,7 @@ impl TerminalPlugin {
     }
 
     fn host(&self) -> SdkResult<Arc<dyn HostClient>> {
-        self.host
-            .read()
-            .map_err(|_| PluginError::internal("terminal plugin host lock poisoned"))?
+        recover_read(&self.host, "read terminal plugin host")
             .clone()
             .ok_or_else(|| PluginError::internal("terminal plugin invoked before init"))
     }
@@ -110,37 +136,42 @@ impl TerminalPlugin {
     /// render the terminal title. Best-effort: a missing host or a failed
     /// write is non-fatal because the TUI retains a local fallback.
     async fn set_and_publish(&self, activity: TerminalActivity, notify: Option<TerminalNotify>) {
-        if let Ok(mut guard) = self.activity.write() {
-            *guard = activity;
-        }
-        if notify.is_some()
-            && let Ok(mut guard) = self.notify.write()
-        {
-            *guard = notify;
+        *recover_write(&self.activity, "update terminal activity") = activity;
+        if notify.is_some() {
+            *recover_write(&self.notify, "update terminal notification intent") = notify;
         }
         self.publish_display().await;
     }
 
     async fn publish_display(&self) {
-        let Ok(host) = self.host() else {
-            return;
+        let host = match self.host() {
+            Ok(host) => host,
+            Err(error) => {
+                tracing::warn!(
+                    diagnostic = %error.diagnostic.message,
+                    "terminal display publication skipped because the host is unavailable"
+                );
+                return;
+            }
         };
         // One-shot attention notification via the unified notify entry. The
         // host decides surface; the TUI consumes it for terminal bells.
-        if let Some(kind) = self.notify.read().ok().and_then(|guard| *guard) {
-            let _ = host.notify(notify_request(kind)).await;
+        let notify = *recover_read(&self.notify, "read terminal notification intent");
+        if let Some(kind) = notify
+            && let Err(error) = host.notify(notify_request(kind)).await
+        {
+            tracing::warn!(
+                diagnostic = %error.diagnostic.message,
+                "failed to publish terminal attention notification"
+            );
         }
-        let activity = self
-            .activity
-            .read()
-            .map(|guard| *guard)
-            .unwrap_or(TerminalActivity::Idle);
+        let activity = *recover_read(&self.activity, "read terminal activity");
         let value = match activity {
             TerminalActivity::Idle => "idle",
             TerminalActivity::Running => "running",
             TerminalActivity::Blocked => "blocked",
         };
-        let _ = host
+        if let Err(error) = host
             .display_contribute(HostDisplayContributeRequest {
                 contribution: PluginDisplayContribution {
                     id: ACTIVITY_CONTRIBUTION_ID.to_owned(),
@@ -151,27 +182,28 @@ impl TerminalPlugin {
                     },
                 },
             })
-            .await;
+            .await
+        {
+            tracing::warn!(
+                diagnostic = %error.diagnostic.message,
+                "failed to publish terminal activity display"
+            );
+        }
     }
 
     /// Clear the display contribution on shutdown.
-    async fn clear_display(&self) {
-        let Ok(host) = self.host() else {
-            return;
-        };
-        let _ = host
-            .display_remove(HostDisplayRemoveRequest {
-                contribution_id: ACTIVITY_CONTRIBUTION_ID.to_owned(),
-            })
-            .await;
+    async fn clear_display(&self) -> SdkResult<()> {
+        let host = self.host()?;
+        host.display_remove(HostDisplayRemoveRequest {
+            contribution_id: ACTIVITY_CONTRIBUTION_ID.to_owned(),
+        })
+        .await
+        .map(|_| ())
     }
 
     #[hook(init)]
     async fn init(&self, _ctx: InitContext, host: Arc<dyn HostClient>) -> SdkResult<InitOutcome> {
-        *self
-            .host
-            .write()
-            .map_err(|_| PluginError::internal("terminal plugin host lock poisoned"))? = Some(host);
+        *recover_write(&self.host, "initialize terminal plugin host") = Some(host);
         Ok(InitOutcome::ack(agena_plugin_host::sdk::Plugin::manifest(
             self,
         )))
@@ -179,8 +211,7 @@ impl TerminalPlugin {
 
     #[hook(shutdown)]
     async fn shutdown(&self) -> SdkResult<()> {
-        self.clear_display().await;
-        Ok(())
+        self.clear_display().await
     }
 
     #[hook(run.pre)]

@@ -165,7 +165,19 @@ impl RegisteredTool {
             "streaming": self.definition.runtime.streaming,
             "tags": self.effective_tags(),
         });
-        let bytes = serde_json::to_vec(&value).unwrap_or_default();
+        let bytes = match serde_json::to_vec(&value) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                tracing::error!(
+                    diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                        "serialize plugin tool definition identity",
+                        &error,
+                    ),
+                    "plugin tool definition identity is using a debug fallback"
+                );
+                format!("{value:?}").into_bytes()
+            }
+        };
         blake3::hash(bytes.as_slice()).to_hex().to_string()
     }
 
@@ -224,7 +236,21 @@ impl PluginToolRegistry {
         plugin_key: &PluginKey,
         tool_name: &str,
     ) -> Option<RegisteredTool> {
-        let key = ToolKey::new(plugin_key.clone(), tool_name.to_string()).ok()?;
+        let key = match ToolKey::new(plugin_key.clone(), tool_name.to_string()) {
+            Ok(key) => key,
+            Err(error) => {
+                tracing::warn!(
+                    plugin_id = %plugin_key,
+                    tool_name,
+                    diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                        "construct tool key while removing a registered tool",
+                        &error,
+                    ),
+                    "registered tool removal rejected an invalid tool name"
+                );
+                return None;
+            }
+        };
         let removed = self.by_key.remove(&key)?;
         self.by_canonical_name
             .remove(removed.canonical_name().as_str());
@@ -297,7 +323,21 @@ impl PluginToolRegistry {
         plugin_key: &PluginKey,
         tool_name: &str,
     ) -> Option<&RegisteredTool> {
-        let key = ToolKey::new(plugin_key.clone(), tool_name.to_string()).ok()?;
+        let key = match ToolKey::new(plugin_key.clone(), tool_name.to_string()) {
+            Ok(key) => key,
+            Err(error) => {
+                tracing::warn!(
+                    plugin_id = %plugin_key,
+                    tool_name,
+                    diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                        "construct tool key while looking up a registered tool",
+                        &error,
+                    ),
+                    "registered tool lookup rejected an invalid tool name"
+                );
+                return None;
+            }
+        };
         self.by_key.get(&key)
     }
 }

@@ -593,6 +593,17 @@ fn gemini_tool_call_arguments_json(
     })
 }
 
+fn json_value_kind(value: &serde_json::Value) -> &'static str {
+    match value {
+        serde_json::Value::Null => "null",
+        serde_json::Value::Bool(_) => "boolean",
+        serde_json::Value::Number(_) => "number",
+        serde_json::Value::String(_) => "string",
+        serde_json::Value::Array(_) => "array",
+        serde_json::Value::Object(_) => "object",
+    }
+}
+
 fn parse_json_or_object(raw: &str) -> serde_json::Value {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -600,7 +611,24 @@ fn parse_json_or_object(raw: &str) -> serde_json::Value {
     }
     match serde_json::from_str::<serde_json::Value>(trimmed) {
         Ok(value @ serde_json::Value::Object(_)) => value,
-        Ok(_) | Err(_) => serde_json::Value::Object(Default::default()),
+        Ok(other) => {
+            tracing::debug!(
+                value_kind = %json_value_kind(&other),
+                "Gemini object-only compatibility field contained non-object JSON; using an empty object"
+            );
+            serde_json::Value::Object(Default::default())
+        }
+        Err(error) => {
+            tracing::debug!(
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "Gemini object-only compatibility field was not valid JSON",
+                    &error,
+                ),
+                input_bytes = trimmed.len(),
+                "using an empty object for a malformed Gemini compatibility field"
+            );
+            serde_json::Value::Object(Default::default())
+        }
     }
 }
 
@@ -614,7 +642,17 @@ fn parse_json_or_string_object(raw: &str) -> serde_json::Value {
     match serde_json::from_str::<serde_json::Value>(trimmed) {
         Ok(value @ serde_json::Value::Object(_)) => value,
         Ok(other) => serde_json::json!({ "output": other }),
-        Err(_) => serde_json::json!({ "output": raw }),
+        Err(error) => {
+            tracing::debug!(
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "Gemini tool output was plain text rather than JSON",
+                    &error,
+                ),
+                output_bytes = raw.len(),
+                "wrapping Gemini tool output in an object"
+            );
+            serde_json::json!({ "output": raw })
+        }
     }
 }
 

@@ -10,6 +10,7 @@ description = "Cross-platform Tokio subprocess lifecycle policy for Agena"
 libc = { workspace = true }
 process-wrap = { workspace = true }
 tokio = { workspace = true, features = ["io-util", "process", "rt", "time"] }
+tracing = { workspace = true }
 
 [lints]
 workspace = true

@@ -1,31 +1,6 @@
 use super::{AdapterId, ModelId, ModelRef, ProviderError, ProviderId, ProviderRegistry};
 
 impl ProviderRegistry {
-    pub fn resolve_default_model_selection(
-        &self,
-        selection: &agena_domain::ExecutionSelection,
-    ) -> Result<Option<ModelRef>, ProviderError> {
-        let Some(provider_id) = selection.provider.as_deref() else {
-            return self.resolve_first_provider_default_model();
-        };
-
-        self.resolve_model_selection(
-            provider_id,
-            selection.adapter.as_deref(),
-            selection.model.as_deref(),
-        )
-        .map(Some)
-    }
-
-    pub fn resolve_first_provider_default_model(&self) -> Result<Option<ModelRef>, ProviderError> {
-        let mut providers = self.provider_ids();
-        providers.sort();
-        let Some(provider_id) = providers.first() else {
-            return Ok(None);
-        };
-        self.resolve_model_target(provider_id, None).map(Some)
-    }
-
     pub fn supports_prompt_continuation(&self, model: &ModelRef) -> Result<bool, ProviderError> {
         self.use_model_ref_provider(model, |provider, adapter_id, model_id| {
             provider.supports_prompt_continuation_for_adapter(adapter_id, model_id)
@@ -86,31 +61,28 @@ impl ProviderRegistry {
                     "model reference `{target}` already includes a model; omit `--model`"
                 )));
             }
-            let mut parsed = target.parse::<ModelRef>().map_err(|err| {
+            let parsed = target.parse::<ModelRef>().map_err(|err| {
                 ProviderError::Config(format!("invalid model reference `{target}`: {err}"))
             })?;
-            if parsed.adapter_id.is_none()
-                && let Some(provider) = self.get(parsed.provider_id.as_ref())
-            {
-                parsed.adapter_id = provider.default_adapter().cloned();
-            }
             return Ok(parsed);
         }
 
-        let provider = self.require_provider(target)?;
+        self.require_provider(target)?;
         let provider_id = ProviderId::try_new(target).map_err(|err| {
             ProviderError::Config(format!("invalid provider id `{target}`: {err}"))
         })?;
-        let model_id = match requested_model {
-            Some(requested_model) => ModelId::try_new(requested_model).map_err(|err| {
-                ProviderError::Config(format!("invalid model id `{requested_model}`: {err}"))
-            })?,
-            None => provider.default_model().clone(),
-        };
+        let requested_model = requested_model.ok_or_else(|| {
+            ProviderError::Config(format!(
+                "model is required for provider `{target}`; select a model explicitly"
+            ))
+        })?;
+        let model_id = ModelId::try_new(requested_model).map_err(|err| {
+            ProviderError::Config(format!("invalid model id `{requested_model}`: {err}"))
+        })?;
 
         Ok(ModelRef {
             provider_id,
-            adapter_id: provider.default_adapter().cloned(),
+            adapter_id: None,
             model_id,
         })
     }
@@ -127,7 +99,7 @@ impl ProviderRegistry {
                 "provider id cannot be empty".to_owned(),
             ));
         }
-        let provider = self.require_provider(provider_id)?;
+        self.require_provider(provider_id)?;
         let provider_id = ProviderId::try_new(provider_id).map_err(|err| {
             ProviderError::Config(format!("invalid provider id `{provider_id}`: {err}"))
         })?;
@@ -135,14 +107,21 @@ impl ProviderRegistry {
             Some(adapter_id) => Some(AdapterId::try_new(adapter_id).map_err(|err| {
                 ProviderError::Config(format!("invalid adapter id `{adapter_id}`: {err}"))
             })?),
-            None => provider.default_adapter().cloned(),
+            None => None,
         };
-        let model_id = match model_id.map(str::trim).filter(|value| !value.is_empty()) {
-            Some(model_id) => ModelId::try_new(model_id).map_err(|err| {
-                ProviderError::Config(format!("invalid model id `{model_id}`: {err}"))
-            })?,
-            None => provider.default_model().clone(),
-        };
+        let model_id = model_id
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                ProviderError::Config(format!(
+                    "model is required for provider `{provider_id}`; select a model explicitly"
+                ))
+            })
+            .and_then(|model_id| {
+                ModelId::try_new(model_id).map_err(|err| {
+                    ProviderError::Config(format!("invalid model id `{model_id}`: {err}"))
+                })
+            })?;
 
         Ok(ModelRef {
             provider_id,

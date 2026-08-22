@@ -16,9 +16,13 @@ const ENTRYPOINT_NAME: &str = "MEMORY.md";
 static MEMORY_FILE_WRITE_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
 fn with_memory_write_lock<T>(operation: impl FnOnce() -> T) -> T {
-    let _guard = MEMORY_FILE_WRITE_LOCK
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _guard = MEMORY_FILE_WRITE_LOCK.lock().unwrap_or_else(|error| {
+        tracing::error!(
+            diagnostic = %error,
+            "memory file write lock is poisoned; recovering serialized write access"
+        );
+        error.into_inner()
+    });
     operation()
 }
 
@@ -30,10 +34,12 @@ fn write_memory_file_atomically(path: &Path, contents: &[u8]) -> io::Result<()> 
         )
     })?;
     fs::create_dir_all(parent)?;
-    let permissions = fs::metadata(path)
-        .ok()
-        .filter(|metadata| metadata.is_file())
-        .map(|metadata| metadata.permissions());
+    let permissions = match fs::metadata(path) {
+        Ok(metadata) if metadata.is_file() => Some(metadata.permissions()),
+        Ok(_) => None,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error),
+    };
     let mut builder = tempfile::Builder::new();
     builder.prefix(".agena-memory-").suffix(".tmp");
     #[cfg(unix)]

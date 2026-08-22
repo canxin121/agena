@@ -89,7 +89,13 @@ impl StorageConfig {
         let mut base = std::env::var("HOME")
             .or_else(|_| std::env::var("USERPROFILE"))
             .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from("."));
+            .unwrap_or_else(|error| {
+                tracing::error!(
+                    diagnostic = %error,
+                    "storage home is unavailable; using the current-directory compatibility path"
+                );
+                PathBuf::from(".")
+            });
         base.push("agena");
         base.push("agena.db");
         base

@@ -471,7 +471,8 @@ pub(crate) fn plugin_get_json_path(
     value: &JsonValue,
     path: Option<&str>,
 ) -> Result<JsonValue, String> {
-    agena_domain::get_json_path(value, path).map_err(|error| error.to_string())
+    agena_domain::get_json_path(value, path)
+        .map_err(|error| agena_failure::diagnostic::format_error_chain(&error))
 }
 
 pub fn plugin_config_record_value(plugin: &PluginWorkbenchPlugin) -> JsonValue {

@@ -526,7 +526,7 @@ fn image_option<T: Serialize>(value: Option<T>) -> SdkResult<Option<String>> {
     value
         .map(|value| {
             serde_json::to_value(value)
-                .map_err(|error| PluginError::internal(error.to_string()))
+                .map_err(|error| PluginError::internal_error(&error))
                 .and_then(|value| {
                     value.as_str().map(ToOwned::to_owned).ok_or_else(|| {
                         PluginError::internal("image option did not serialize as text")

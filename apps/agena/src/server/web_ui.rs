@@ -49,10 +49,24 @@ pub(crate) fn resolve_ui_dir(
         push_candidate(&mut candidates, &mut seen, install_root.join("web-dist"));
     }
 
-    Ok(candidates
-        .into_iter()
-        .find(|directory| directory.join(INDEX_FILE).is_file())
-        .and_then(|directory| std::fs::canonicalize(directory).ok()))
+    for directory in candidates {
+        if !directory.join(INDEX_FILE).is_file() {
+            continue;
+        }
+        match std::fs::canonicalize(&directory) {
+            Ok(directory) => return Ok(Some(directory)),
+            Err(error) => {
+                tracing::warn!(
+                    diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                        format!("resolve discovered web UI directory {}", directory.display()),
+                        &error,
+                    ),
+                    "discovered web frontend could not be used"
+                );
+            }
+        }
+    }
+    Ok(None)
 }
 
 fn validate_ui_dir(directory: &Path) -> Result<PathBuf> {

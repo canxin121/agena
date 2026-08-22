@@ -1,8 +1,7 @@
 use super::{
     ConfigJsonSources, I18n, JsonValue, ProviderSummaryResource, SessionModelModeStep,
     SettingsFieldKind, SettingsFieldSpec, SettingsPickerAction, SettingsStudioItem,
-    SettingsStudioSectionId, SettingsStudioSourceRow, get_json_path, join_inline_segments,
-    settings_fields,
+    SettingsStudioSectionId, SettingsStudioSourceRow, get_json_path, settings_fields,
 };
 
 mod fields;

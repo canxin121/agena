@@ -46,26 +46,40 @@ pub enum MarketplaceError {
     },
 }
 
+impl MarketplaceError {
+    pub(crate) fn http_error(error: &(dyn std::error::Error + 'static)) -> Self {
+        Self::Http(agena_failure::diagnostic::format_error_chain(error))
+    }
+
+    pub(crate) fn index_error(error: &(dyn std::error::Error + 'static)) -> Self {
+        Self::Index(agena_failure::diagnostic::format_error_chain(error))
+    }
+
+    pub(crate) fn project_error(error: &(dyn std::error::Error + 'static)) -> Self {
+        Self::Project(agena_failure::diagnostic::format_error_chain(error))
+    }
+}
+
 impl From<toml::de::Error> for MarketplaceError {
     fn from(err: toml::de::Error) -> Self {
-        Self::Project(err.to_string())
+        Self::project_error(&err)
     }
 }
 
 impl From<toml::ser::Error> for MarketplaceError {
     fn from(err: toml::ser::Error) -> Self {
-        Self::Project(err.to_string())
+        Self::project_error(&err)
     }
 }
 
 impl From<reqwest::Error> for MarketplaceError {
     fn from(err: reqwest::Error) -> Self {
-        Self::Http(err.to_string())
+        Self::http_error(&err)
     }
 }
 
 impl From<serde_json::Error> for MarketplaceError {
     fn from(err: serde_json::Error) -> Self {
-        Self::Index(err.to_string())
+        Self::index_error(&err)
     }
 }

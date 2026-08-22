@@ -51,7 +51,6 @@ pub fn apply_config_override(override_value: &ConfigOverride, config: &mut RawCo
                 .get_or_insert_with(RawTuiUiConfig::default)
                 .theme = Some(theme.clone());
         }
-        ConfigOverride::ProvidersDefault(value) => config.providers.default = Some(value.clone()),
         ConfigOverride::ProviderRequestTimeoutSecs { provider_id, value } => {
             config
                 .providers
@@ -71,36 +70,6 @@ pub fn apply_config_override(override_value: &ConfigOverride, config: &mut RawCo
                 .network
                 .get_or_insert_with(Default::default)
                 .connect_timeout_secs = Some(*value);
-        }
-        ConfigOverride::ProviderDefaultsProvider { provider_id, value } => {
-            config
-                .providers
-                .providers
-                .entry(provider_id.clone())
-                .or_default()
-                .defaults
-                .get_or_insert_with(Default::default)
-                .provider = Some(value.clone());
-        }
-        ConfigOverride::ProviderDefaultsAdapter { provider_id, value } => {
-            config
-                .providers
-                .providers
-                .entry(provider_id.clone())
-                .or_default()
-                .defaults
-                .get_or_insert_with(Default::default)
-                .adapter = Some(value.clone());
-        }
-        ConfigOverride::ProviderDefaultsModel { provider_id, value } => {
-            config
-                .providers
-                .providers
-                .entry(provider_id.clone())
-                .or_default()
-                .defaults
-                .get_or_insert_with(Default::default)
-                .model = Some(value.clone());
         }
         ConfigOverride::ProviderAuthBaseUrl { provider_id, value } => {
             config

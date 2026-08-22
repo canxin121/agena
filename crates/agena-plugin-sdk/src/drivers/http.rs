@@ -40,20 +40,25 @@ struct HttpCallbackHostClient {
 }
 
 impl HttpCallbackHostClient {
-    fn from_init_context(ctx: &InitContext) -> Option<Self> {
-        let url = ctx.host_callback_url.clone()?;
-        Some(Self {
-            client: reqwest::Client::builder()
-                .timeout(Duration::from_secs(60))
-                .build()
-                .ok()?,
+    fn from_init_context(ctx: &InitContext) -> crate::error::Result<Option<Self>> {
+        let Some(url) = ctx.host_callback_url.clone() else {
+            return Ok(None);
+        };
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(60))
+            .build()
+            .map_err(|error| {
+                PluginError::internal_error(&error).with_hook(method::META_INIT.to_owned())
+            })?;
+        Ok(Some(Self {
+            client,
             url,
             auth_header: ctx
                 .host_callback_token
                 .as_ref()
                 .map(|token| format!("Bearer {token}")),
             next_id: AtomicI64::new(1),
-        })
+        }))
     }
 
     async fn call<T: serde::de::DeserializeOwned>(
@@ -74,12 +79,26 @@ impl HttpCallbackHostClient {
             builder = builder.header("authorization", header);
         }
         let mut resp = builder.send().await.map_err(|error| {
-            PluginError::from_kind(PluginErrorKind::Disconnected, error).with_hook(method_name)
+            PluginError::from_kind(
+                PluginErrorKind::Disconnected,
+                agena_failure::diagnostic::format_error_chain_with_context(
+                    format!("failed to send HTTP host callback `{method_name}`"),
+                    &error,
+                ),
+            )
+            .with_hook(method_name)
         })?;
         let status = resp.status();
         let mut body = Vec::new();
         while let Some(chunk) = resp.chunk().await.map_err(|error| {
-            PluginError::from_kind(PluginErrorKind::Disconnected, error).with_hook(method_name)
+            PluginError::from_kind(
+                PluginErrorKind::Disconnected,
+                agena_failure::diagnostic::format_error_chain_with_context(
+                    format!("failed to read HTTP host callback `{method_name}` response body"),
+                    &error,
+                ),
+            )
+            .with_hook(method_name)
         })? {
             if body.len().saturating_add(chunk.len()) > MAX_CALLBACK_RESPONSE_BYTES {
                 return Err(PluginError::from_kind(
@@ -94,18 +113,30 @@ impl HttpCallbackHostClient {
             body.extend_from_slice(&chunk);
         }
         let body = String::from_utf8(body).map_err(|error| {
-            PluginError::from_kind(PluginErrorKind::Disconnected, error).with_hook(method_name)
+            PluginError::from_kind(
+                PluginErrorKind::Disconnected,
+                agena_failure::diagnostic::format_error_chain_with_context(
+                    format!("HTTP host callback `{method_name}` returned a non-UTF-8 body"),
+                    &error,
+                ),
+            )
+            .with_hook(method_name)
         })?;
         let resp: Response = serde_json::from_str(&body).map_err(|error| {
             PluginError::from_kind(
                 PluginErrorKind::Disconnected,
-                format_args!("{status}: {error}; body={body}"),
+                agena_failure::diagnostic::format_error_chain_with_context(
+                    format!(
+                        "HTTP host callback `{method_name}` returned status {status} with an invalid JSON-RPC response"
+                    ),
+                    &error,
+                ),
             )
             .with_hook(method_name)
         })?;
         match resp.payload {
             ResponsePayload::Ok { result } => serde_json::from_value(result)
-                .map_err(|e| PluginError::invalid_params(e.to_string())),
+                .map_err(|error| PluginError::invalid_params_error(&error)),
             ResponsePayload::Err { error } => {
                 let mut plugin_error =
                     PluginError::from_kind(PluginErrorKind::Internal, error.message)
@@ -125,7 +156,7 @@ impl HttpCallbackHostClient {
 #[async_trait::async_trait]
 impl HostClient for HttpCallbackHostClient {
     async fn log(&self, level: LogLevel, message: String, fields: serde_json::Value) {
-        let _ = self
+        if let Err(error) = self
             .fire(
                 method::HOST_LOG,
                 params_with_current_context(serde_json::json!({
@@ -134,15 +165,20 @@ impl HostClient for HttpCallbackHostClient {
                     "fields": fields,
                 })),
             )
-            .await;
+            .await
+        {
+            tracing::warn!(
+                diagnostic = %error.diagnostic_message(),
+                "failed to deliver a plugin log record to the HTTP callback host"
+            );
+        }
     }
 
     async fn publish_event(&self, env: EventEnvelope) -> crate::error::Result<()> {
         self.fire(
             method::HOST_EVENT_PUBLISH,
             params_with_current_context(
-                serde_json::to_value(env)
-                    .map_err(|e| PluginError::invalid_params(e.to_string()))?,
+                serde_json::to_value(env).map_err(|e| PluginError::invalid_params_error(&e))?,
             ),
         )
         .await
@@ -249,12 +285,17 @@ async fn handle_rpc<P: Plugin>(
 
     if req.method == method::META_INIT
         && let Ok(ctx) = serde_json::from_value::<InitContext>(params.clone())
-        && let Some(callback_client) = HttpCallbackHostClient::from_init_context(&ctx)
     {
-        let callback_client = Arc::new(callback_client);
-        let host: Arc<dyn HostClient> = callback_client.clone();
-        state.dispatcher.set_host(host).await;
-        *state.callback_client.write().await = Some(callback_client);
+        match HttpCallbackHostClient::from_init_context(&ctx) {
+            Ok(Some(callback_client)) => {
+                let callback_client = Arc::new(callback_client);
+                let host: Arc<dyn HostClient> = callback_client.clone();
+                state.dispatcher.set_host(host).await;
+                *state.callback_client.write().await = Some(callback_client);
+            }
+            Ok(None) => {}
+            Err(error) => return Json(error_response(id, error)),
+        }
     }
 
     if req.method == method::HOOK_TOOL_INVOKE_STREAM {
@@ -267,10 +308,7 @@ async fn handle_rpc<P: Plugin>(
         let input: ToolInvokeInput = match serde_json::from_value(params) {
             Ok(input) => input,
             Err(err) => {
-                return Json(error_response(
-                    id,
-                    PluginError::invalid_params(err.to_string()),
-                ));
+                return Json(error_response(id, PluginError::invalid_params_error(&err)));
             }
         };
         let mut handle = if let Some(context) = callback_context.clone() {
@@ -292,72 +330,147 @@ async fn handle_rpc<P: Plugin>(
         tokio::spawn(async move {
             let _dispatch_slot = dispatch_slot;
             while let Some(chunk) = handle.chunks.recv().await {
-                if callback_client
+                let chunk = match serde_json::to_value(&chunk) {
+                    Ok(chunk) => chunk,
+                    Err(error) => {
+                        tracing::error!(
+                            diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                                "failed to serialize an HTTP plugin stream chunk callback",
+                                &error,
+                            ),
+                            "HTTP plugin stream callback stopped"
+                        );
+                        return;
+                    }
+                };
+                if let Err(error) = callback_client
                     .fire(
                         method::TOOL_STREAM_CHUNK,
-                        attach_host_context(
-                            serde_json::to_value(&chunk).expect("stream chunk serialize"),
-                            callback_context.clone(),
-                        ),
+                        attach_host_context(chunk, callback_context.clone()),
                     )
                     .await
-                    .is_err()
                 {
+                    tracing::warn!(
+                        diagnostic = %error.diagnostic_message(),
+                        "failed to deliver an HTTP plugin stream chunk callback"
+                    );
                     return;
                 }
             }
             match handle.end.await {
                 Ok(Ok(end)) => {
-                    let _ = callback_client
+                    let end = match serde_json::to_value(&end) {
+                        Ok(end) => end,
+                        Err(error) => {
+                            tracing::error!(
+                                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                                    "failed to serialize an HTTP plugin stream terminal callback",
+                                    &error,
+                                ),
+                                "HTTP plugin stream terminal callback was not sent"
+                            );
+                            return;
+                        }
+                    };
+                    if let Err(error) = callback_client
                         .fire(
                             method::TOOL_STREAM_END,
-                            attach_host_context(
-                                serde_json::to_value(&end).expect("stream end serialize"),
-                                callback_context,
-                            ),
+                            attach_host_context(end, callback_context),
                         )
-                        .await;
+                        .await
+                    {
+                        tracing::warn!(
+                            diagnostic = %error.diagnostic_message(),
+                            "failed to deliver an HTTP plugin stream terminal callback"
+                        );
+                    }
                 }
                 Ok(Err(error)) => {
-                    let _ = callback_client
+                    let stream_error = match serde_json::to_value(ToolStreamError {
+                        stream_id,
+                        error,
+                    }) {
+                        Ok(stream_error) => stream_error,
+                        Err(error) => {
+                            tracing::error!(
+                                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                                    "failed to serialize an HTTP plugin stream error callback",
+                                    &error,
+                                ),
+                                "HTTP plugin stream error callback was not sent"
+                            );
+                            return;
+                        }
+                    };
+                    if let Err(error) = callback_client
                         .fire(
                             method::TOOL_STREAM_ERROR,
-                            attach_host_context(
-                                serde_json::to_value(ToolStreamError { stream_id, error })
-                                    .expect("stream error serialize"),
-                                callback_context,
-                            ),
+                            attach_host_context(stream_error, callback_context),
                         )
-                        .await;
+                        .await
+                    {
+                        tracing::warn!(
+                            diagnostic = %error.diagnostic_message(),
+                            "failed to deliver an HTTP plugin stream error callback"
+                        );
+                    }
                 }
-                Err(_) => {
-                    let _ = callback_client
+                Err(receive_error) => {
+                    let stream_error = ToolStreamError {
+                        stream_id,
+                        error: PluginError::internal(
+                            agena_failure::diagnostic::format_error_chain_with_context(
+                                "tool stream terminated before sending its final frame",
+                                &receive_error,
+                            ),
+                        ),
+                    };
+                    let stream_error = match serde_json::to_value(stream_error) {
+                        Ok(stream_error) => stream_error,
+                        Err(error) => {
+                            tracing::error!(
+                                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                                    "failed to serialize an HTTP plugin premature-stream callback",
+                                    &error,
+                                ),
+                                "HTTP plugin premature-stream callback was not sent"
+                            );
+                            return;
+                        }
+                    };
+                    if let Err(error) = callback_client
                         .fire(
                             method::TOOL_STREAM_ERROR,
-                            attach_host_context(
-                                serde_json::to_value(ToolStreamError {
-                                    stream_id,
-                                    error: PluginError::internal(
-                                        "stream terminated before sending final frame",
-                                    ),
-                                })
-                                .expect("stream error serialize"),
-                                callback_context,
-                            ),
+                            attach_host_context(stream_error, callback_context),
                         )
-                        .await;
+                        .await
+                    {
+                        tracing::warn!(
+                            diagnostic = %error.diagnostic_message(),
+                            "failed to deliver an HTTP plugin premature-stream callback"
+                        );
+                    }
                 }
             }
         });
+        let handle_resource = match serde_json::to_value(ToolInvokeStreamHandle {
+            stream_id: handle.stream_id,
+            title: None,
+        }) {
+            Ok(handle) => handle,
+            Err(error) => {
+                return Json(error_response(
+                    id,
+                    PluginError::internal_error(&error)
+                        .with_hook(method::HOOK_TOOL_INVOKE_STREAM.to_owned()),
+                ));
+            }
+        };
         return Json(Response {
             jsonrpc: JsonRpcVersion,
             id,
             payload: ResponsePayload::Ok {
-                result: serde_json::to_value(ToolInvokeStreamHandle {
-                    stream_id: handle.stream_id,
-                    title: None,
-                })
-                .expect("stream handle serialize"),
+                result: handle_resource,
             },
         });
     }
@@ -390,10 +503,20 @@ fn attach_host_context(
     context: crate::host_api::HostCallbackContext,
 ) -> serde_json::Value {
     if let Some(object) = params.as_object_mut() {
-        object.insert(
-            "context".to_string(),
-            serde_json::to_value(context).unwrap_or(serde_json::Value::Object(Default::default())),
-        );
+        match serde_json::to_value(context) {
+            Ok(context) => {
+                object.insert("context".to_string(), context);
+            }
+            Err(error) => {
+                tracing::error!(
+                    diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                        "serialize HTTP plugin host callback context",
+                        &error,
+                    ),
+                    "HTTP plugin callback is missing its unserializable host context"
+                );
+            }
+        }
     }
     params
 }
@@ -406,7 +529,7 @@ fn error_response(id: RequestId, error: PluginError) -> Response {
             error: ErrorObject {
                 code: codes::PLUGIN_GENERIC,
                 message: error.to_string(),
-                data: serde_json::to_value(&error).ok(),
+                data: error.rpc_error_data(),
             },
         },
     }

@@ -124,9 +124,17 @@ impl ModelRuntime for AnthropicAdapter {
                     || (m.copilot.visible() && m.copilot.uses_messages_endpoint())
             })
             .map(|m| {
-                let metadata = m.copilot.metadata(m.id.as_str());
-                let model_id = ModelId::new(m.id);
-                let mut capabilities = self.model_capabilities(&model_id);
+                let raw_model_id = m.id;
+                // CPA uses an Anthropic-compatible alias for non-Anthropic
+                // models. Keep the raw id while deriving provider behavior
+                // so its Anthropic thinking/capability profile is retained,
+                // but expose the stable underlying id to every caller.
+                let behavior_model_id = ModelId::new(raw_model_id.clone());
+                let model_id = ModelId::new(agena_provider::normalize_anthropic_model_id(
+                    raw_model_id.as_str(),
+                ));
+                let metadata = m.copilot.metadata(raw_model_id.as_str());
+                let mut capabilities = self.model_capabilities(&behavior_model_id);
                 if self.profile == AnthropicProfile::GithubCopilot {
                     capabilities = m
                         .copilot
@@ -142,7 +150,7 @@ impl ModelRuntime for AnthropicAdapter {
                     native_compaction: true,
                     capabilities,
                     metadata,
-                    thinking_modes: Vec::new(),
+                    thinking_modes: self.model_thinking_modes(&behavior_model_id),
                     speed_modes: BTreeMap::new(),
                 }
             })
@@ -155,7 +163,9 @@ impl ModelRuntime for AnthropicAdapter {
         request: CompletionRequest,
     ) -> Result<CompletionResponse, ProviderError> {
         tracing::Span::current().record("provider", tracing::field::display(self.id.as_str()));
-        let model = request.model.clone();
+        let model = ModelId::new(agena_provider::normalize_anthropic_model_id(
+            request.model.as_ref(),
+        ));
         let stream_fallback_request = request.clone();
 
         let max_tokens = request.max_output_tokens.unwrap_or(4096);
@@ -344,7 +354,9 @@ impl ModelRuntime for AnthropicAdapter {
         ProviderError,
     > {
         tracing::Span::current().record("provider", tracing::field::display(self.id.as_str()));
-        let model = request.model.clone();
+        let model = ModelId::new(agena_provider::normalize_anthropic_model_id(
+            request.model.as_ref(),
+        ));
 
         // Mirror the non-streaming path: structured-output requests force a
         // single tool whose input_schema is the requested JSON schema, and the
@@ -730,5 +742,58 @@ impl ModelRuntime for AnthropicAdapter {
         };
 
         Ok(Box::pin(stream))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::provider::ManagedCredential;
+    use tokio::io::AsyncWriteExt;
+
+    #[tokio::test]
+    async fn list_models_exposes_the_original_id_for_cpa_anthropic_aliases() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind fixture");
+        let address = listener.local_addr().expect("fixture address");
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.expect("accept request");
+            let payload = serde_json::json!({
+                "data": [{
+                    "id": "claude-fable-5-dd-arret-6.5-tpg",
+                    "display_name": "GPT 5.6 Terra"
+                }]
+            });
+            let response_body = serde_json::to_vec(&payload).expect("response JSON");
+            let headers = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                response_body.len()
+            );
+            stream
+                .write_all(headers.as_bytes())
+                .await
+                .expect("write headers");
+            stream
+                .write_all(response_body.as_slice())
+                .await
+                .expect("write body");
+        });
+
+        let adapter = super::super::AnthropicAdapter::new_managed_with_options(
+            "anthropic-fixture",
+            reqwest::Client::new(),
+            ManagedCredential::static_value("test key", "secret"),
+            format!("http://{address}/v1"),
+            "__list_models__",
+            super::super::AnthropicAdapterOptions::default(),
+        );
+        let models = adapter.list_models().await.expect("list models");
+        server.await.expect("fixture server");
+
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].id.as_ref(), "gpt-5.6-terra");
+        assert_eq!(models[0].display_name.as_deref(), Some("GPT 5.6 Terra"));
+        assert!(!models[0].thinking_modes.is_empty());
     }
 }

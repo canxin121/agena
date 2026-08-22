@@ -1,3 +1,47 @@
+fn recover_mutex<'a, T>(
+    lock: &'a std::sync::Mutex<T>,
+    label: &'static str,
+) -> std::sync::MutexGuard<'a, T> {
+    lock.lock().unwrap_or_else(|error| {
+        tracing::error!(diagnostic = %error, %label, "recovering a poisoned plugin-host mutex");
+        error.into_inner()
+    })
+}
+
+fn recover_read<'a, T>(
+    lock: &'a std::sync::RwLock<T>,
+    label: &'static str,
+) -> std::sync::RwLockReadGuard<'a, T> {
+    lock.read().unwrap_or_else(|error| {
+        tracing::error!(diagnostic = %error, %label, "recovering a poisoned plugin-host read lock");
+        error.into_inner()
+    })
+}
+
+fn recover_write<'a, T>(
+    lock: &'a std::sync::RwLock<T>,
+    label: &'static str,
+) -> std::sync::RwLockWriteGuard<'a, T> {
+    lock.write().unwrap_or_else(|error| {
+        tracing::error!(diagnostic = %error, %label, "recovering a poisoned plugin-host write lock");
+        error.into_inner()
+    })
+}
+
+fn host_unavailable_error(context: &str, error: &(dyn std::error::Error + 'static)) -> PluginError {
+    let diagnostic = agena_failure::diagnostic::format_error_chain_with_context(context, error);
+    tracing::error!(
+        operation = context,
+        diagnostic,
+        "plugin host operation failed"
+    );
+    PluginError::from_kind_with_public_detail(
+        PluginErrorKind::HostUnavailable,
+        diagnostic,
+        "The plugin host could not complete the operation. Restart the runtime and try again.",
+    )
+}
+
 pub(super) struct CallbackAuthorityLease {
     authorities: Arc<Mutex<HashMap<String, CallbackAuthorityRecord>>>,
     token: String,
@@ -5,9 +49,7 @@ pub(super) struct CallbackAuthorityLease {
 
 impl Drop for CallbackAuthorityLease {
     fn drop(&mut self) {
-        if let Ok(mut authorities) = self.authorities.lock() {
-            authorities.remove(&self.token);
-        }
+        recover_mutex(&self.authorities, "callback authority registry").remove(&self.token);
     }
 }
 
@@ -84,9 +126,7 @@ impl HostHandle {
                 "host.manifest.tools",
                 "manifest".to_string(),
                 move || {
-                    registry
-                        .write()
-                        .map_err(|_| "tool registry lock poisoned".to_string())?
+                    recover_write(&registry, "plugin tool registry manifest disposer")
                         .remove_plugin(&owned_plugin);
                     Ok(())
                 },
@@ -113,7 +153,7 @@ impl HostHandle {
                     "host.operation",
                     operation.id.clone(),
                 )
-                .map_err(|error| host_unavailable(error.to_string()))?;
+                .map_err(|error| host_unavailable_error("register a manifest operation", &error))?;
         }
         for export in &manifest.services.exports {
             self.replace_effect_sync(
@@ -165,11 +205,8 @@ impl HostHandle {
     pub(super) fn dispose_tool_scope(&self, scope: &PluginScopeKey) {
         for removed in self.scoped_tools.clear_scope_tree(scope) {
             let tool = removed.value;
-            let generation = self
-                .tool_registry
-                .write()
-                .map(|mut registry| registry.touch_generation())
-                .unwrap_or_default();
+            let generation =
+                recover_write(&self.tool_registry, "plugin tool registry").touch_generation();
             self.record_tool_registry_event(ToolRegistryChangedEvent {
                 kind: ToolRegistryChangeKind::Removed,
                 generation,
@@ -193,18 +230,13 @@ impl HostHandle {
 
     pub fn begin_plugin_instance(&self, plugin_id: PluginKey) -> Arc<PluginEffectScope> {
         let scope = PluginEffectScope::new(plugin_id.clone());
-        self.effect_scopes
-            .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+        recover_write(&self.effect_scopes, "plugin effect scope registry")
             .insert(plugin_id, Arc::clone(&scope));
         scope
     }
 
     fn ensure_effect_scope(&self, plugin_id: &PluginKey) -> Arc<PluginEffectScope> {
-        if let Some(scope) = self
-            .effect_scopes
-            .read()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+        if let Some(scope) = recover_read(&self.effect_scopes, "plugin effect scope registry")
             .get(plugin_id)
             .filter(|scope| scope.state() == crate::effect_scope::PluginEffectScopeState::Active)
             .cloned()
@@ -219,25 +251,19 @@ impl HostHandle {
         plugin_id: &PluginKey,
         scope: &Arc<PluginEffectScope>,
     ) -> bool {
-        self.effect_scopes
-            .read()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+        recover_read(&self.effect_scopes, "plugin effect scope registry")
             .get(plugin_id)
             .is_some_and(|current| Arc::ptr_eq(current, scope))
     }
 
     pub fn effect_scope(&self, plugin_id: &PluginKey) -> Option<Arc<PluginEffectScope>> {
-        self.effect_scopes
-            .read()
-            .expect("effect scope registry lock")
+        recover_read(&self.effect_scopes, "plugin effect scope registry")
             .get(plugin_id)
             .cloned()
     }
 
     pub fn effect_scope_inspect(&self, plugin_id: &PluginKey) -> Option<PluginEffectScopeInspect> {
-        self.effect_scopes
-            .read()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+        recover_read(&self.effect_scopes, "plugin effect scope registry")
             .get(plugin_id)
             .map(|scope| scope.inspect())
     }
@@ -257,7 +283,7 @@ impl HostHandle {
         scope
             .own_sync(kind, label, disposer)
             .map(|_| ())
-            .map_err(|error| host_unavailable(error.to_string()))
+            .map_err(|error| host_unavailable_error("own a synchronous plugin effect", &error))
     }
 
     fn replace_effect_async<F, Fut>(
@@ -276,13 +302,11 @@ impl HostHandle {
         scope
             .own_async(kind, label, disposer)
             .map(|_| ())
-            .map_err(|error| host_unavailable(error.to_string()))
+            .map_err(|error| host_unavailable_error("own an asynchronous plugin effect", &error))
     }
 
     fn release_effect(&self, plugin_id: &PluginKey, kind: &str, label: &str) -> bool {
-        self.effect_scopes
-            .read()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+        recover_read(&self.effect_scopes, "plugin effect scope registry")
             .get(plugin_id)
             .is_some_and(|scope| scope.release(kind, label))
     }
@@ -356,21 +380,28 @@ impl HostHandle {
         let generation = self
             .effect_scope(plugin_id)
             .map(|scope| scope.generation())
-            .unwrap_or_default();
+            .unwrap_or_else(|| {
+                tracing::error!(
+                    plugin = %plugin_id,
+                    "issuing a callback authority without an active plugin effect generation"
+                );
+                0
+            });
         context.plugin_id = Some(plugin_id.to_string());
         context.authority_token = None;
         let token = format!("ctx-{}", uuid::Uuid::new_v4().simple());
-        self.callback_authorities
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .insert(
-                token.clone(),
-                CallbackAuthorityRecord {
-                    plugin_id: plugin_id.clone(),
-                    generation,
-                    context: context.clone(),
-                },
-            );
+        recover_mutex(
+            &self.callback_authorities,
+            "plugin callback authority registry",
+        )
+        .insert(
+            token.clone(),
+            CallbackAuthorityRecord {
+                plugin_id: plugin_id.clone(),
+                generation,
+                context: context.clone(),
+            },
+        );
         context.authority_token = Some(token.clone());
         (
             context,
@@ -391,7 +422,7 @@ impl HostHandle {
             .filter(|value| !value.is_empty())
             .map(str::parse::<PluginKey>)
             .transpose()
-            .map_err(|error| PluginError::invalid_params(error.to_string()))?;
+            .map_err(|error| PluginError::invalid_params_error(&error))?;
         let plugin_only = HostCallbackContext {
             plugin_id: attributed_plugin_id.clone(),
             ..HostCallbackContext::default()
@@ -412,18 +443,18 @@ impl HostHandle {
             }
             return Ok(plugin_only);
         };
-        let record = self
-            .callback_authorities
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .get(token)
-            .cloned()
-            .ok_or_else(|| {
-                PluginError::from_kind(
-                    PluginErrorKind::PolicyDenied,
-                    "plugin callback authority token is unknown or expired",
-                )
-            })?;
+        let record = recover_mutex(
+            &self.callback_authorities,
+            "plugin callback authority registry",
+        )
+        .get(token)
+        .cloned()
+        .ok_or_else(|| {
+            PluginError::from_kind(
+                PluginErrorKind::PolicyDenied,
+                "plugin callback authority token is unknown or expired",
+            )
+        })?;
         let Some(plugin_key) = plugin_key else {
             return Err(PluginError::from_kind(
                 PluginErrorKind::PolicyDenied,
@@ -476,7 +507,7 @@ impl HostHandle {
         let context = self.validated_callback_context(Some(consumer.to_string()), context)?;
         request
             .validate()
-            .map_err(|error| PluginError::invalid_params(error.to_string()))?;
+            .map_err(|error| PluginError::invalid_params_error(&error))?;
         let key = PluginServiceBindingKey {
             consumer: consumer.to_string(),
             service: request.service.clone(),
@@ -535,7 +566,7 @@ impl HostHandle {
                 )
             })?;
         let params = serde_json::to_value(&request)
-            .map_err(|error| PluginError::invalid_params(error.to_string()))?;
+            .map_err(|error| PluginError::invalid_params_error(&error))?;
         let call = self.run_in_authorized_callback_context(
             &provider_key,
             context,
@@ -599,9 +630,8 @@ impl HostHandle {
 
     pub fn set_plugin_hook_catalog(&self, registration: HostHookRegistration) {
         let plugin_id = registration.plugin_id.clone();
-        if let Ok(mut catalog) = self.hook_catalog.write() {
-            catalog.insert(plugin_id.clone(), registration);
-        }
+        recover_write(&self.hook_catalog, "plugin hook catalog")
+            .insert(plugin_id.clone(), registration);
         let catalog = Arc::clone(&self.hook_catalog);
         let owned_plugin = plugin_id.clone();
         if let Err(error) = self.replace_effect_sync(
@@ -609,10 +639,7 @@ impl HostHandle {
             "host.hooks",
             "manifest".to_string(),
             move || {
-                catalog
-                    .write()
-                    .map_err(|_| "hook catalog lock poisoned".to_string())?
-                    .remove(&owned_plugin);
+                recover_write(&catalog, "plugin hook catalog disposer").remove(&owned_plugin);
                 Ok(())
             },
         ) {
@@ -627,29 +654,27 @@ impl HostHandle {
     }
 
     pub fn set_tool_registry_event_listener(&self, listener: Option<ToolRegistryEventListener>) {
-        if let Ok(mut slot) = self.tool_registry_event_listener.write() {
-            *slot = listener;
-        }
+        *recover_write(
+            &self.tool_registry_event_listener,
+            "tool registry event listener",
+        ) = listener;
     }
 
     pub fn latest_tool_registry_event(&self) -> Option<ToolRegistryChangedEvent> {
-        self.tool_registry_events
-            .read()
-            .ok()
-            .and_then(|events| events.back().cloned())
+        recover_read(&self.tool_registry_events, "tool registry events")
+            .back()
+            .cloned()
     }
 
     fn latest_visible_tool_registry_event(
         &self,
         scope: Option<&PluginScopeKey>,
     ) -> Option<ToolRegistryChangedEvent> {
-        self.tool_registry_events.read().ok().and_then(|events| {
-            events
-                .iter()
-                .rev()
-                .find(|event| tool_registry_event_visible_in_scope(event, scope))
-                .cloned()
-        })
+        recover_read(&self.tool_registry_events, "tool registry events")
+            .iter()
+            .rev()
+            .find(|event| tool_registry_event_visible_in_scope(event, scope))
+            .cloned()
     }
 
     pub fn tool_registry_events_since(
@@ -658,39 +683,34 @@ impl HostHandle {
         limit: usize,
     ) -> Vec<ToolRegistryChangedEvent> {
         let limit = limit.clamp(1, 500);
-        self.tool_registry_events
-            .read()
-            .map(|events| {
-                events
-                    .iter()
-                    .filter(|event| {
-                        after_generation
-                            .map(|generation| event.generation > generation)
-                            .unwrap_or(true)
-                    })
-                    .rev()
-                    .take(limit)
-                    .cloned()
-                    .collect::<Vec<_>>()
-                    .into_iter()
-                    .rev()
-                    .collect()
+        recover_read(&self.tool_registry_events, "tool registry events")
+            .iter()
+            .filter(|event| {
+                after_generation
+                    .map(|generation| event.generation > generation)
+                    .unwrap_or(true)
             })
-            .unwrap_or_default()
+            .rev()
+            .take(limit)
+            .cloned()
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect()
     }
 
     pub(super) fn record_tool_registry_event(&self, event: ToolRegistryChangedEvent) {
-        let listener = self
-            .tool_registry_event_listener
-            .read()
-            .ok()
-            .and_then(|slot| slot.clone());
-        if let Ok(mut events) = self.tool_registry_events.write() {
-            events.push_back(event.clone());
-            while events.len() > 256 {
-                events.pop_front();
-            }
+        let listener = recover_read(
+            &self.tool_registry_event_listener,
+            "tool registry event listener",
+        )
+        .clone();
+        let mut events = recover_write(&self.tool_registry_events, "tool registry events");
+        events.push_back(event.clone());
+        while events.len() > 256 {
+            events.pop_front();
         }
+        drop(events);
         if let Some(listener) = listener {
             listener(event);
         }
@@ -705,7 +725,17 @@ impl HostHandle {
         fields: serde_json::Value,
     ) -> Option<PluginLogRecord> {
         let plugin_id = plugin_id.into();
-        let plugin_key = plugin_id.parse().ok()?;
+        let plugin_key = match plugin_id.parse() {
+            Ok(plugin_key) => plugin_key,
+            Err(error) => {
+                tracing::warn!(
+                    plugin_id,
+                    diagnostic = %error,
+                    "plugin log record was rejected because the plugin id is invalid"
+                );
+                return None;
+            }
+        };
         Some(
             self.logs
                 .append(&plugin_key, level, source, message, fields),
@@ -718,8 +748,16 @@ impl HostHandle {
         after_seq: Option<u64>,
         limit: usize,
     ) -> Vec<PluginLogRecord> {
-        let Some(plugin_key) = plugin_id.parse().ok() else {
-            return Vec::new();
+        let plugin_key = match plugin_id.parse() {
+            Ok(plugin_key) => plugin_key,
+            Err(error) => {
+                tracing::warn!(
+                    plugin_id,
+                    diagnostic = %error,
+                    "plugin logs could not be listed because the plugin id is invalid"
+                );
+                return Vec::new();
+            }
         };
         self.logs.list(&plugin_key, after_seq, limit)
     }
@@ -731,9 +769,8 @@ impl HostHandle {
     }
 
     pub fn set_plugin_manifest_name(&self, plugin_id: PluginKey, plugin_name: impl Into<String>) {
-        if let Ok(mut names) = self.plugin_names.write() {
-            names.insert(plugin_id, plugin_name.into());
-        }
+        recover_write(&self.plugin_names, "plugin name registry")
+            .insert(plugin_id, plugin_name.into());
     }
 
     /// Remove every in-memory contribution made while a plugin was
@@ -781,30 +818,18 @@ impl HostHandle {
         self.service_bindings.write().await.retain(|key, binding| {
             key.consumer != plugin_id.to_string() && binding.provider != plugin_id.to_string()
         });
-        if let Ok(mut indices) = self.plugin_indices.write() {
-            indices.remove(plugin_id);
-        }
-        if let Ok(mut names) = self.plugin_names.write() {
-            names.remove(plugin_id);
-        }
-        if let Ok(mut hooks) = self.hook_catalog.write() {
-            hooks.remove(plugin_id);
-        }
-        if let Ok(mut tools) = self.tool_registry.write() {
-            tools.remove_plugin(plugin_id);
-        }
-        if let Ok(mut events) = self.tool_registry_events.write() {
-            events.retain(|event| &event.plugin != plugin_id);
-        }
-        if let Ok(mut display) = self.display.write() {
-            display.retain(|(owner, _), _| owner != plugin_id);
-        }
-        if let Ok(mut themes) = self.themes.write() {
-            themes.retain(|_, theme| &theme.plugin_id != plugin_id);
-        }
-        if let Ok(mut notifications) = self.host_notifications.write() {
-            notifications.retain(|notification| notification.plugin_id != plugin_id.to_string());
-        }
+        recover_write(&self.plugin_indices, "plugin index registry").remove(plugin_id);
+        recover_write(&self.plugin_names, "plugin name registry").remove(plugin_id);
+        recover_write(&self.hook_catalog, "plugin hook catalog").remove(plugin_id);
+        recover_write(&self.tool_registry, "plugin tool registry").remove_plugin(plugin_id);
+        recover_write(&self.tool_registry_events, "tool registry events")
+            .retain(|event| &event.plugin != plugin_id);
+        recover_write(&self.display, "plugin display registry")
+            .retain(|(owner, _), _| owner != plugin_id);
+        recover_write(&self.themes, "plugin theme registry")
+            .retain(|_, theme| &theme.plugin_id != plugin_id);
+        recover_write(&self.host_notifications, "plugin host notification queue")
+            .retain(|notification| notification.plugin_id != plugin_id.to_string());
         self.quotas.remove_plugin(plugin_id);
     }
 
@@ -824,7 +849,17 @@ impl HostHandle {
 
     pub async fn callback_token(&self, plugin_id: &str) -> Option<String> {
         self.callback_base_url.as_ref()?;
-        let plugin_key: PluginKey = plugin_id.parse().ok()?;
+        let plugin_key: PluginKey = match plugin_id.parse() {
+            Ok(plugin_key) => plugin_key,
+            Err(error) => {
+                tracing::warn!(
+                    plugin_id,
+                    diagnostic = %error,
+                    "plugin callback token was not issued because the plugin id is invalid"
+                );
+                return None;
+            }
+        };
         let mut tokens = self.tokens.lock().await;
         Some(
             tokens
@@ -838,8 +873,16 @@ impl HostHandle {
         let Some(token) = token else {
             return false;
         };
-        let Some(plugin_key) = plugin_id.parse().ok() else {
-            return false;
+        let plugin_key = match plugin_id.parse() {
+            Ok(plugin_key) => plugin_key,
+            Err(error) => {
+                tracing::debug!(
+                    plugin_id,
+                    diagnostic = %error,
+                    "plugin callback token validation rejected an invalid plugin id"
+                );
+                return false;
+            }
         };
         let tokens = self.tokens.lock().await;
         tokens
@@ -983,8 +1026,7 @@ impl HostHandle {
                         inner.reload_config(),
                     )
                     .await?;
-                    serde_json::to_value(out)
-                        .map_err(|e| PluginError::invalid_params(e.to_string()))
+                    serde_json::to_value(out).map_err(|e| PluginError::invalid_params_error(&e))
                 }
                 method::HOST_TOOL_INVOKE => {
                     let p: HostInvokeToolParams = parse(params)?;
@@ -993,8 +1035,7 @@ impl HostHandle {
                         inner.invoke_tool(p.tool, p.input),
                     )
                     .await?;
-                    serde_json::to_value(&out)
-                        .map_err(|e| PluginError::invalid_params(e.to_string()))
+                    serde_json::to_value(&out).map_err(|e| PluginError::invalid_params_error(&e))
                 }
                 method::HOST_SERVICE_INVOKE => {
                     let p: HostInvokeServiceParams = parse(params)?;
@@ -1010,8 +1051,7 @@ impl HostHandle {
                             host_api::current_host_callback_context(),
                         )
                         .await?;
-                    serde_json::to_value(&out)
-                        .map_err(|e| PluginError::invalid_params(e.to_string()))
+                    serde_json::to_value(&out).map_err(|e| PluginError::invalid_params_error(&e))
                 }
                 method::HOST_ASK_USER => {
                     let p: HostAskUserParams = parse(params)?;
@@ -1020,8 +1060,7 @@ impl HostHandle {
                         inner.ask_user(p.request),
                     )
                     .await?;
-                    serde_json::to_value(&out)
-                        .map_err(|e| PluginError::invalid_params(e.to_string()))
+                    serde_json::to_value(&out).map_err(|e| PluginError::invalid_params_error(&e))
                 }
                 method::HOST_SUBTASK_RUN => {
                     let p: HostRunSubtaskParams = parse(params)?;
@@ -1030,8 +1069,7 @@ impl HostHandle {
                         inner.run_subtask(p.request),
                     )
                     .await?;
-                    serde_json::to_value(&out)
-                        .map_err(|e| PluginError::invalid_params(e.to_string()))
+                    serde_json::to_value(&out).map_err(|e| PluginError::invalid_params_error(&e))
                 }
                 method::HOST_SUBTASK_CANCEL => {
                     let p: HostCancelSubtaskParams = parse(params)?;
@@ -1040,8 +1078,7 @@ impl HostHandle {
                         inner.cancel_subtask(p.request),
                     )
                     .await?;
-                    serde_json::to_value(&out)
-                        .map_err(|e| PluginError::invalid_params(e.to_string()))
+                    serde_json::to_value(&out).map_err(|e| PluginError::invalid_params_error(&e))
                 }
                 method::HOST_SUBTASK_MESSAGE => {
                     let p: HostMessageSubtaskParams = parse(params)?;
@@ -1050,8 +1087,7 @@ impl HostHandle {
                         inner.message_subtask(p.request),
                     )
                     .await?;
-                    serde_json::to_value(&out)
-                        .map_err(|e| PluginError::invalid_params(e.to_string()))
+                    serde_json::to_value(&out).map_err(|e| PluginError::invalid_params_error(&e))
                 }
                 method::HOST_SUBTASK_OUTPUT => {
                     let p: HostReadSubtaskOutputParams = parse(params)?;
@@ -1060,8 +1096,7 @@ impl HostHandle {
                         inner.read_subtask_output(p.request),
                     )
                     .await?;
-                    serde_json::to_value(&out)
-                        .map_err(|e| PluginError::invalid_params(e.to_string()))
+                    serde_json::to_value(&out).map_err(|e| PluginError::invalid_params_error(&e))
                 }
                 method::HOST_TOOL_LIST => {
                     let _p: HostListToolsParams = parse(params)?;
@@ -1070,8 +1105,7 @@ impl HostHandle {
                         inner.list_tools(),
                     )
                     .await?;
-                    serde_json::to_value(&out)
-                        .map_err(|e| PluginError::invalid_params(e.to_string()))
+                    serde_json::to_value(&out).map_err(|e| PluginError::invalid_params_error(&e))
                 }
                 method::HOST_CONTEXT_STATUS => {
                     let p: HostContextStatusParams = parse(params)?;
@@ -1080,8 +1114,7 @@ impl HostHandle {
                         inner.get_context_status(p.request),
                     )
                     .await?;
-                    serde_json::to_value(&out)
-                        .map_err(|e| PluginError::invalid_params(e.to_string()))
+                    serde_json::to_value(&out).map_err(|e| PluginError::invalid_params_error(&e))
                 }
                 method::HOST_SESSION_SET_MODEL => {
                     let p: HostSetSessionModelParams = parse(params)?;
@@ -1090,8 +1123,7 @@ impl HostHandle {
                         inner.set_session_model(p.request),
                     )
                     .await?;
-                    serde_json::to_value(&out)
-                        .map_err(|e| PluginError::invalid_params(e.to_string()))
+                    serde_json::to_value(&out).map_err(|e| PluginError::invalid_params_error(&e))
                 }
                 method::HOST_IMAGE_EXECUTE => {
                     let p: HostImageExecuteParams = parse(params)?;
@@ -1100,8 +1132,7 @@ impl HostHandle {
                         inner.image_execute(p.request),
                     )
                     .await?;
-                    serde_json::to_value(&out)
-                        .map_err(|e| PluginError::invalid_params(e.to_string()))
+                    serde_json::to_value(&out).map_err(|e| PluginError::invalid_params_error(&e))
                 }
                 method::HOST_SNAPSHOT_ENTER => {
                     let p: HostEnterSnapshotParams = parse(params)?;
@@ -1110,8 +1141,7 @@ impl HostHandle {
                         inner.enter_snapshot(p.request),
                     )
                     .await?;
-                    serde_json::to_value(&out)
-                        .map_err(|e| PluginError::invalid_params(e.to_string()))
+                    serde_json::to_value(&out).map_err(|e| PluginError::invalid_params_error(&e))
                 }
                 method::HOST_SNAPSHOT_EXIT => {
                     let p: HostExitSnapshotParams = parse(params)?;
@@ -1120,8 +1150,7 @@ impl HostHandle {
                         inner.exit_snapshot(p.request),
                     )
                     .await?;
-                    serde_json::to_value(&out)
-                        .map_err(|e| PluginError::invalid_params(e.to_string()))
+                    serde_json::to_value(&out).map_err(|e| PluginError::invalid_params_error(&e))
                 }
                 method::HOST_MONITOR_START => {
                     let p: HostMonitorStartParams = parse(params)?;
@@ -1130,8 +1159,7 @@ impl HostHandle {
                         inner.monitor_start(p.request),
                     )
                     .await?;
-                    serde_json::to_value(&out)
-                        .map_err(|e| PluginError::invalid_params(e.to_string()))
+                    serde_json::to_value(&out).map_err(|e| PluginError::invalid_params_error(&e))
                 }
                 method::HOST_MONITOR_LIST => {
                     let _p: HostMonitorListParams = parse(params)?;
@@ -1140,8 +1168,7 @@ impl HostHandle {
                         inner.monitor_list(),
                     )
                     .await?;
-                    serde_json::to_value(&out)
-                        .map_err(|e| PluginError::invalid_params(e.to_string()))
+                    serde_json::to_value(&out).map_err(|e| PluginError::invalid_params_error(&e))
                 }
                 method::HOST_MONITOR_READ => {
                     let p: HostMonitorReadParams = parse(params)?;
@@ -1150,8 +1177,7 @@ impl HostHandle {
                         inner.monitor_read(p.request),
                     )
                     .await?;
-                    serde_json::to_value(&out)
-                        .map_err(|e| PluginError::invalid_params(e.to_string()))
+                    serde_json::to_value(&out).map_err(|e| PluginError::invalid_params_error(&e))
                 }
                 method::HOST_MONITOR_STOP => {
                     let p: HostMonitorStopParams = parse(params)?;
@@ -1160,8 +1186,7 @@ impl HostHandle {
                         inner.monitor_stop(p.request),
                     )
                     .await?;
-                    serde_json::to_value(&out)
-                        .map_err(|e| PluginError::invalid_params(e.to_string()))
+                    serde_json::to_value(&out).map_err(|e| PluginError::invalid_params_error(&e))
                 }
                 method::HOST_TOOL_REGISTRY_REGISTER => {
                     let p: HostToolRegisterParams = parse(params)?;
@@ -1170,7 +1195,7 @@ impl HostHandle {
                     })?;
                     let response = self.tool_upsert_for_plugin(&plugin_id, p.request.tool)?;
                     serde_json::to_value(&response)
-                        .map_err(|e| PluginError::invalid_params(e.to_string()))
+                        .map_err(|e| PluginError::invalid_params_error(&e))
                 }
                 method::HOST_TOOL_REGISTRY_UPDATE => {
                     let p: HostToolUpdateParams = parse(params)?;
@@ -1179,7 +1204,7 @@ impl HostHandle {
                     })?;
                     let response = self.tool_upsert_for_plugin(&plugin_id, p.request.tool)?;
                     serde_json::to_value(&response)
-                        .map_err(|e| PluginError::invalid_params(e.to_string()))
+                        .map_err(|e| PluginError::invalid_params_error(&e))
                 }
                 method::HOST_TOOL_REGISTRY_REMOVE => {
                     let p: HostToolRemoveParams = parse(params)?;
@@ -1192,12 +1217,12 @@ impl HostHandle {
                         p.request.by_model_name,
                     )?;
                     serde_json::to_value(&response)
-                        .map_err(|e| PluginError::invalid_params(e.to_string()))
+                        .map_err(|e| PluginError::invalid_params_error(&e))
                 }
                 method::HOST_TOOL_REGISTRY_LIST => {
                     let response = self.registered_tool_list_response()?;
                     serde_json::to_value(&response)
-                        .map_err(|e| PluginError::invalid_params(e.to_string()))
+                        .map_err(|e| PluginError::invalid_params_error(&e))
                 }
                 method::HOST_STORAGE_GET => {
                     let p: HostStorageGetParams = parse(params)?;
@@ -1206,8 +1231,7 @@ impl HostHandle {
                         inner.storage_get(p.request),
                     )
                     .await?;
-                    serde_json::to_value(&out)
-                        .map_err(|e| PluginError::invalid_params(e.to_string()))
+                    serde_json::to_value(&out).map_err(|e| PluginError::invalid_params_error(&e))
                 }
                 method::HOST_STORAGE_SET => {
                     let p: HostStorageSetParams = parse(params)?;
@@ -1234,8 +1258,7 @@ impl HostHandle {
                         inner.storage_list(p.request),
                     )
                     .await?;
-                    serde_json::to_value(&out)
-                        .map_err(|e| PluginError::invalid_params(e.to_string()))
+                    serde_json::to_value(&out).map_err(|e| PluginError::invalid_params_error(&e))
                 }
                 method::HOST_SECRET_GET => {
                     let p: HostSecretGetParams = parse(params)?;
@@ -1244,8 +1267,7 @@ impl HostHandle {
                         inner.secret_get(p.request),
                     )
                     .await?;
-                    serde_json::to_value(&out)
-                        .map_err(|e| PluginError::invalid_params(e.to_string()))
+                    serde_json::to_value(&out).map_err(|e| PluginError::invalid_params_error(&e))
                 }
                 method::HOST_SECRET_SET => {
                     let p: HostSecretSetParams = parse(params)?;
@@ -1272,19 +1294,18 @@ impl HostHandle {
                         inner.secret_list(),
                     )
                     .await?;
-                    serde_json::to_value(&out)
-                        .map_err(|e| PluginError::invalid_params(e.to_string()))
+                    serde_json::to_value(&out).map_err(|e| PluginError::invalid_params_error(&e))
                 }
                 method::HOST_PLUGIN_STATUS_LIST => {
                     let response = self.plugin_status_list_response();
                     serde_json::to_value(&response)
-                        .map_err(|e| PluginError::invalid_params(e.to_string()))
+                        .map_err(|e| PluginError::invalid_params_error(&e))
                 }
                 method::HOST_PLUGIN_STATUS_GET => {
                     let p: HostPluginStatusGetParams = parse(params)?;
                     let response = self.plugin_status_get_response(&p.request.plugin_id);
                     serde_json::to_value(&response)
-                        .map_err(|e| PluginError::invalid_params(e.to_string()))
+                        .map_err(|e| PluginError::invalid_params_error(&e))
                 }
                 method::HOST_LSP_LIST_SERVERS => {
                     let _p: HostLspListServersParams = parse(params)?;
@@ -1293,8 +1314,7 @@ impl HostHandle {
                         inner.lsp_list_servers(),
                     )
                     .await?;
-                    serde_json::to_value(&out)
-                        .map_err(|e| PluginError::invalid_params(e.to_string()))
+                    serde_json::to_value(&out).map_err(|e| PluginError::invalid_params_error(&e))
                 }
                 method::HOST_LSP_LIST_DIAGNOSTICS => {
                     let p: HostLspListDiagnosticsParams = parse(params)?;
@@ -1303,8 +1323,7 @@ impl HostHandle {
                         inner.lsp_list_diagnostics(p.request),
                     )
                     .await?;
-                    serde_json::to_value(&out)
-                        .map_err(|e| PluginError::invalid_params(e.to_string()))
+                    serde_json::to_value(&out).map_err(|e| PluginError::invalid_params_error(&e))
                 }
                 method::HOST_SNAPSHOT_LIST => {
                     let _p: HostSnapshotListParams = parse(params)?;
@@ -1313,8 +1332,7 @@ impl HostHandle {
                         inner.snapshot_list(),
                     )
                     .await?;
-                    serde_json::to_value(&out)
-                        .map_err(|e| PluginError::invalid_params(e.to_string()))
+                    serde_json::to_value(&out).map_err(|e| PluginError::invalid_params_error(&e))
                 }
                 method::HOST_SCHEDULER_LIST => {
                     let _p: HostSchedulerListParams = parse(params)?;
@@ -1323,8 +1341,7 @@ impl HostHandle {
                         inner.scheduler_list(),
                     )
                     .await?;
-                    serde_json::to_value(&out)
-                        .map_err(|e| PluginError::invalid_params(e.to_string()))
+                    serde_json::to_value(&out).map_err(|e| PluginError::invalid_params_error(&e))
                 }
                 method::HOST_SCHEDULER_CREATE => {
                     let p: HostSchedulerCreateParams = parse(params)?;
@@ -1333,8 +1350,7 @@ impl HostHandle {
                         inner.scheduler_create(p.request),
                     )
                     .await?;
-                    serde_json::to_value(&out)
-                        .map_err(|e| PluginError::invalid_params(e.to_string()))
+                    serde_json::to_value(&out).map_err(|e| PluginError::invalid_params_error(&e))
                 }
                 method::HOST_SCHEDULER_DELETE => {
                     let p: HostSchedulerDeleteParams = parse(params)?;
@@ -1343,13 +1359,12 @@ impl HostHandle {
                         inner.scheduler_delete(p.request),
                     )
                     .await?;
-                    serde_json::to_value(&out)
-                        .map_err(|e| PluginError::invalid_params(e.to_string()))
+                    serde_json::to_value(&out).map_err(|e| PluginError::invalid_params_error(&e))
                 }
                 method::HOST_HOOK_LIST => {
                     let response = self.hook_list_response().await;
                     serde_json::to_value(&response)
-                        .map_err(|e| PluginError::invalid_params(e.to_string()))
+                        .map_err(|e| PluginError::invalid_params_error(&e))
                 }
                 method::HOST_MCP_LIST_SERVERS => {
                     let _p: HostMcpListServersParams = parse(params)?;
@@ -1358,8 +1373,7 @@ impl HostHandle {
                         inner.mcp_list_servers(),
                     )
                     .await?;
-                    serde_json::to_value(&out)
-                        .map_err(|e| PluginError::invalid_params(e.to_string()))
+                    serde_json::to_value(&out).map_err(|e| PluginError::invalid_params_error(&e))
                 }
                 method::HOST_MCP_ADD_SERVER => {
                     let p: HostMcpAddServerParams = parse(params)?;
@@ -1377,8 +1391,7 @@ impl HostHandle {
                         inner.mcp_remove_server(p.request),
                     )
                     .await?;
-                    serde_json::to_value(&out)
-                        .map_err(|e| PluginError::invalid_params(e.to_string()))
+                    serde_json::to_value(&out).map_err(|e| PluginError::invalid_params_error(&e))
                 }
                 method::HOST_UI_DISPLAY_CONTRIBUTE => {
                     let plugin_id = plugin_id.ok_or_else(|| {
@@ -1394,7 +1407,7 @@ impl HostHandle {
                     let p: HostDisplayRemoveParams = parse(params)?;
                     let removed = self.display_remove(&plugin_id, &p.request.contribution_id);
                     serde_json::to_value(&HostDisplayRemoveResponse { removed })
-                        .map_err(|e| PluginError::invalid_params(e.to_string()))
+                        .map_err(|e| PluginError::invalid_params_error(&e))
                 }
                 method::HOST_NOTIFY => {
                     let plugin_id =
@@ -1413,7 +1426,7 @@ impl HostHandle {
                 method::HOST_UI_THEME_LIST => {
                     let response = self.theme_list_response();
                     serde_json::to_value(&response)
-                        .map_err(|e| PluginError::invalid_params(e.to_string()))
+                        .map_err(|e| PluginError::invalid_params_error(&e))
                 }
                 method::HOST_UI_THEME_REMOVE => {
                     let plugin_id = plugin_id
@@ -1421,7 +1434,7 @@ impl HostHandle {
                     let p: HostThemeRemoveParams = parse(params)?;
                     let removed = self.theme_remove(&plugin_id, &p.request.id);
                     serde_json::to_value(&HostThemeRemoveResponse { removed })
-                        .map_err(|e| PluginError::invalid_params(e.to_string()))
+                        .map_err(|e| PluginError::invalid_params_error(&e))
                 }
                 other => Err(PluginError::not_implemented(other)),
             }
@@ -1435,11 +1448,8 @@ impl HostHandle {
         definition: crate::sdk::ToolDefinition,
     ) -> Result<HostToolMutationResponse, PluginError> {
         let plugin_key: PluginKey = plugin_id.parse()?;
-        let registered = self
-            .plugin_indices
-            .read()
-            .map_err(|_| host_unavailable("plugin index lock poisoned"))?
-            .contains_key(&plugin_key);
+        let registered =
+            recover_read(&self.plugin_indices, "plugin index registry").contains_key(&plugin_key);
         if !registered {
             return Err(host_unavailable(format!(
                 "plugin `{plugin_id}` is not registered"
@@ -1456,10 +1466,7 @@ impl HostHandle {
                 host_unavailable(format!("plugin `{plugin_id}` has no active effect scope"))
             })?;
             let existed = self.scoped_tools.resolve(Some(&scope), &tool_key).is_some()
-                || self
-                    .tool_registry
-                    .read()
-                    .map_err(|_| host_unavailable("tool registry lock poisoned"))?
+                || recover_read(&self.tool_registry, "plugin tool registry")
                     .lookup_tool_by_key(&tool_key)
                     .is_some();
             self.scoped_tools
@@ -1471,12 +1478,9 @@ impl HostHandle {
                     "host.tool",
                     format!("{scope}:{plugin_tool_name}"),
                 )
-                .map_err(|error| PluginError::internal(error.to_string()))?;
-            let generation = self
-                .tool_registry
-                .write()
-                .map_err(|_| host_unavailable("tool registry lock poisoned"))?
-                .touch_generation();
+                .map_err(|error| PluginError::internal_error(&error))?;
+            let generation =
+                recover_write(&self.tool_registry, "plugin tool registry").touch_generation();
             let event = ToolRegistryChangedEvent {
                 kind: if existed {
                     ToolRegistryChangeKind::Updated
@@ -1499,10 +1503,7 @@ impl HostHandle {
             });
         }
 
-        let mut tool_registry = self
-            .tool_registry
-            .write()
-            .map_err(|_| host_unavailable("tool registry lock poisoned"))?;
+        let mut tool_registry = recover_write(&self.tool_registry, "plugin tool registry");
         let kind = if tool_registry.lookup_tool_by_key(&tool_key).is_some() {
             ToolRegistryChangeKind::Updated
         } else {
@@ -1525,9 +1526,7 @@ impl HostHandle {
         let owned_plugin = plugin_key.clone();
         let owned_name = plugin_tool_name.clone();
         self.replace_effect_sync(&plugin_key, "host.tool", plugin_tool_name, move || {
-            registry
-                .write()
-                .map_err(|_| "tool registry lock poisoned".to_string())?
+            recover_write(&registry, "plugin tool registry disposer")
                 .remove_from_plugin(&owned_plugin, owned_name.as_str());
             Ok(())
         })?;
@@ -1567,22 +1566,13 @@ impl HostHandle {
                 .scoped_tools
                 .remove_owned(&owner, Some(&scope), &tool_key)
                 .map(|entry| entry.value);
-            let fallback = self
-                .tool_registry
-                .read()
-                .map_err(|_| host_unavailable("tool registry lock poisoned"))?
+            let fallback = recover_read(&self.tool_registry, "plugin tool registry")
                 .lookup_tool_by_key(&tool_key)
                 .cloned();
             let generation = if removed.is_some() {
-                self.tool_registry
-                    .write()
-                    .map_err(|_| host_unavailable("tool registry lock poisoned"))?
-                    .touch_generation()
+                recover_write(&self.tool_registry, "plugin tool registry").touch_generation()
             } else {
-                self.tool_registry
-                    .read()
-                    .map_err(|_| host_unavailable("tool registry lock poisoned"))?
-                    .generation()
+                recover_read(&self.tool_registry, "plugin tool registry").generation()
             };
             let event = removed.as_ref().map(|tool| ToolRegistryChangedEvent {
                 kind: if fallback.is_some() {
@@ -1608,10 +1598,7 @@ impl HostHandle {
             });
         }
 
-        let mut tool_registry = self
-            .tool_registry
-            .write()
-            .map_err(|_| host_unavailable("tool registry lock poisoned"))?;
+        let mut tool_registry = recover_write(&self.tool_registry, "plugin tool registry");
         let removed = tool_registry.remove_from_plugin(&plugin_key, tool_name.as_str());
         let event = removed.as_ref().map(|tool| ToolRegistryChangedEvent {
             kind: ToolRegistryChangeKind::Removed,
@@ -1640,10 +1627,7 @@ impl HostHandle {
         &self,
     ) -> Result<HostRegisteredToolListResponse, PluginError> {
         let scope = current_tool_scope();
-        let registry = self
-            .tool_registry
-            .read()
-            .map_err(|_| host_unavailable("tool registry lock poisoned"))?;
+        let registry = recover_read(&self.tool_registry, "plugin tool registry");
         let generation = registry.generation();
         let mut visible = registry
             .registered_tools()
@@ -1687,30 +1671,29 @@ impl HostHandle {
     /// host_handle fills from the connection registry.
     pub(super) fn plugin_list_response(&self) -> crate::sdk::HostPluginListResponse {
         let mut plugins = BTreeMap::<String, crate::sdk::HostPluginDescriptor>::new();
-        if let Ok(names) = self.plugin_names.read() {
-            for key in names.keys() {
-                plugins.entry(key.to_string()).or_insert_with(|| {
-                    crate::sdk::HostPluginDescriptor {
-                        plugin_id: key.clone(),
-                        summary: None,
-                        version: String::new(),
-                        tags: Vec::new(),
-                        tools: Vec::new(),
-                    }
+        let names = recover_read(&self.plugin_names, "plugin name registry");
+        for key in names.keys() {
+            plugins
+                .entry(key.to_string())
+                .or_insert_with(|| crate::sdk::HostPluginDescriptor {
+                    plugin_id: key.clone(),
+                    summary: None,
+                    version: String::new(),
+                    tags: Vec::new(),
+                    tools: Vec::new(),
                 });
-            }
         }
-        if let Ok(registry) = self.tool_registry.read() {
-            for tool in registry.registered_tools_owned() {
-                if let Some(descriptor) = plugins.get_mut(&tool.plugin_key().to_string()) {
-                    if !(tool.namespace() == "agena" && tool.plugin_name() == "tools") {
-                        descriptor.tools.push(tool.canonical_name());
-                    }
-                    for tag in &tool.definition.tags {
-                        let label = tag.to_string();
-                        if !descriptor.tags.contains(&label) {
-                            descriptor.tags.push(label);
-                        }
+        drop(names);
+        let registry = recover_read(&self.tool_registry, "plugin tool registry");
+        for tool in registry.registered_tools_owned() {
+            if let Some(descriptor) = plugins.get_mut(&tool.plugin_key().to_string()) {
+                if !(tool.namespace() == "agena" && tool.plugin_name() == "tools") {
+                    descriptor.tools.push(tool.canonical_name());
+                }
+                for tag in &tool.definition.tags {
+                    let label = tag.to_string();
+                    if !descriptor.tags.contains(&label) {
+                        descriptor.tags.push(label);
                     }
                 }
             }
@@ -1734,11 +1717,10 @@ impl HostHandle {
     }
 
     pub(super) async fn hook_list_response(&self) -> HostHookListResponse {
-        let hooks = self
-            .hook_catalog
-            .read()
-            .map(|catalog| catalog.values().cloned().collect())
-            .unwrap_or_default();
+        let hooks = recover_read(&self.hook_catalog, "plugin hook catalog")
+            .values()
+            .cloned()
+            .collect();
         HostHookListResponse { hooks }
     }
 
@@ -1747,24 +1729,20 @@ impl HostHandle {
             return;
         };
         let contribution_id = req.contribution.id.clone();
-        if let Ok(mut guard) = self.display.write() {
-            let key = (plugin_id.clone(), req.contribution.id.clone());
-            guard.insert(
-                key,
-                HostDisplayContribution {
-                    plugin_id: plugin_id.clone(),
-                    contribution: req.contribution,
-                },
-            );
-        }
+        let key = (plugin_id.clone(), req.contribution.id.clone());
+        recover_write(&self.display, "plugin display registry").insert(
+            key,
+            HostDisplayContribution {
+                plugin_id: plugin_id.clone(),
+                contribution: req.contribution,
+            },
+        );
         let display = Arc::clone(&self.display);
         let owned_plugin = plugin_id.clone();
         let owned_id = contribution_id.clone();
         if let Err(error) =
             self.replace_effect_sync(&plugin_id, "host.display", contribution_id, move || {
-                display
-                    .write()
-                    .map_err(|_| "display registry lock poisoned".to_string())?
+                recover_write(&display, "plugin display registry disposer")
                     .remove(&(owned_plugin, owned_id));
                 Ok(())
             })
@@ -1783,16 +1761,13 @@ impl HostHandle {
         let Ok(plugin_id) = plugin_id.parse::<PluginKey>() else {
             return false;
         };
-        if let Ok(mut guard) = self.display.write() {
-            let removed = guard
-                .remove(&(plugin_id.clone(), contribution_id.to_string()))
-                .is_some();
-            if removed {
-                self.release_effect(&plugin_id, "host.display", contribution_id);
-            }
-            return removed;
+        let removed = recover_write(&self.display, "plugin display registry")
+            .remove(&(plugin_id.clone(), contribution_id.to_string()))
+            .is_some();
+        if removed {
+            self.release_effect(&plugin_id, "host.display", contribution_id);
         }
-        false
+        removed
     }
 
     /// Record a plugin notification intent through the unified `host.notify`
@@ -1803,36 +1778,35 @@ impl HostHandle {
         let Ok(plugin_id) = plugin_id.parse::<PluginKey>() else {
             return;
         };
-        if let Ok(mut guard) = self.host_notifications.write() {
-            guard.push_back(HostNotification {
-                plugin_id: plugin_id.to_string(),
-                title: req.title,
-                body: req.body,
-                severity: req.severity,
-                session_id: req.session_id,
-                actions: req.actions,
-            });
-            while guard.len() > HOST_NOTIFICATION_QUEUE_LIMIT {
-                guard.pop_front();
-            }
+        let mut guard = recover_write(&self.host_notifications, "plugin host notification queue");
+        guard.push_back(HostNotification {
+            plugin_id: plugin_id.to_string(),
+            title: req.title,
+            body: req.body,
+            severity: req.severity,
+            session_id: req.session_id,
+            actions: req.actions,
+        });
+        while guard.len() > HOST_NOTIFICATION_QUEUE_LIMIT {
+            guard.pop_front();
         }
     }
 
     /// Snapshot of the recent plugin notifications (newest last). Frontends
     /// dedupe/consume by `plugin_id:severity:body`.
     pub fn host_notifications(&self) -> Vec<HostNotification> {
-        self.host_notifications
-            .read()
-            .map(|guard| guard.iter().cloned().collect())
-            .unwrap_or_default()
+        recover_read(&self.host_notifications, "plugin host notification queue")
+            .iter()
+            .cloned()
+            .collect()
     }
 
     pub fn display_list_response(&self) -> Vec<HostDisplayContribution> {
-        let mut contributions: Vec<HostDisplayContribution> = self
-            .display
-            .read()
-            .map(|guard| guard.values().cloned().collect())
-            .unwrap_or_default();
+        let mut contributions: Vec<HostDisplayContribution> =
+            recover_read(&self.display, "plugin display registry")
+                .values()
+                .cloned()
+                .collect();
         contributions.sort_by(|a, b| {
             b.contribution
                 .priority
@@ -1855,10 +1829,7 @@ impl HostHandle {
             ));
         }
         let theme_id = req.id.clone();
-        let mut guard = self
-            .themes
-            .write()
-            .map_err(|_| host_unavailable("theme registry lock poisoned"))?;
+        let mut guard = recover_write(&self.themes, "plugin theme registry");
         let key = (plugin_id.clone(), theme_id.clone());
         guard.insert(
             key,
@@ -1874,9 +1845,7 @@ impl HostHandle {
         let owned_plugin = plugin_id.clone();
         let owned_id = theme_id.clone();
         self.replace_effect_sync(&plugin_id, "host.theme", theme_id, move || {
-            themes
-                .write()
-                .map_err(|_| "theme registry lock poisoned".to_string())?
+            recover_write(&themes, "plugin theme registry disposer")
                 .remove(&(owned_plugin, owned_id));
             Ok(())
         })?;
@@ -1887,22 +1856,20 @@ impl HostHandle {
         let Ok(plugin_id) = plugin_id.parse::<PluginKey>() else {
             return false;
         };
-        if let Ok(mut guard) = self.themes.write() {
-            let removed = guard.remove(&(plugin_id.clone(), id.to_owned())).is_some();
-            if removed {
-                self.release_effect(&plugin_id, "host.theme", id);
-            }
-            return removed;
+        let removed = recover_write(&self.themes, "plugin theme registry")
+            .remove(&(plugin_id.clone(), id.to_owned()))
+            .is_some();
+        if removed {
+            self.release_effect(&plugin_id, "host.theme", id);
         }
-        false
+        removed
     }
 
     pub fn theme_list_response(&self) -> HostThemeListResponse {
-        let themes: Vec<HostThemePalette> = self
-            .themes
-            .read()
-            .map(|guard| guard.values().cloned().collect())
-            .unwrap_or_default();
+        let themes: Vec<HostThemePalette> = recover_read(&self.themes, "plugin theme registry")
+            .values()
+            .cloned()
+            .collect();
         HostThemeListResponse { themes }
     }
 }

@@ -82,9 +82,9 @@ impl MarketplaceProjectManifest {
         }
         for (alias, target) in &self.renames {
             agena_plugin_contracts::validate_plugin_identity(alias)
-                .map_err(|error| MarketplaceError::Project(error.to_string()))?;
+                .map_err(|error| MarketplaceError::project_error(&error))?;
             agena_plugin_contracts::validate_plugin_identity(target)
-                .map_err(|error| MarketplaceError::Project(error.to_string()))?;
+                .map_err(|error| MarketplaceError::project_error(&error))?;
             if alias == target {
                 return Err(MarketplaceError::Project(format!(
                     "marketplace rename `{alias}` cannot point to itself"
@@ -93,7 +93,7 @@ impl MarketplaceProjectManifest {
         }
         for plugin_id in self.plugins.keys() {
             agena_plugin_contracts::validate_plugin_identity(plugin_id)
-                .map_err(|error| MarketplaceError::Project(error.to_string()))?;
+                .map_err(|error| MarketplaceError::project_error(&error))?;
         }
         Ok(())
     }
@@ -347,7 +347,7 @@ pub fn build_marketplace(
         .follow_links(false)
         .into_iter()
     {
-        let entry = entry.map_err(|error| MarketplaceError::Project(error.to_string()))?;
+        let entry = entry.map_err(|error| MarketplaceError::project_error(&error))?;
         if entry.file_type().is_file()
             && entry
                 .path()
@@ -488,7 +488,7 @@ impl PluginProjectManifest {
             )));
         }
         agena_plugin_contracts::validate_plugin_identity(self.plugin.id.as_str())
-            .map_err(|error| MarketplaceError::Project(error.to_string()))?;
+            .map_err(|error| MarketplaceError::project_error(&error))?;
         semver::Version::parse(self.plugin.version.trim_start_matches('v')).map_err(|error| {
             MarketplaceError::Project(format!(
                 "invalid plugin version `{}`: {error}",
@@ -515,7 +515,7 @@ impl PluginProjectManifest {
         let mut dependencies = BTreeSet::new();
         for dependency in &self.plugin.dependencies {
             agena_plugin_contracts::validate_plugin_identity(dependency.plugin_id.as_str())
-                .map_err(|error| MarketplaceError::Project(error.to_string()))?;
+                .map_err(|error| MarketplaceError::project_error(&error))?;
             semver::VersionReq::parse(&dependency.version_req).map_err(|error| {
                 MarketplaceError::Project(format!(
                     "invalid dependency requirement `{}` for `{}`: {error}",
@@ -770,7 +770,7 @@ pub struct ScaffoldPluginRequest {
 
 pub fn scaffold_plugin(request: ScaffoldPluginRequest) -> Result<(), MarketplaceError> {
     agena_plugin_contracts::validate_plugin_identity(request.plugin_id.as_str())
-        .map_err(|error| MarketplaceError::Project(error.to_string()))?;
+        .map_err(|error| MarketplaceError::project_error(&error))?;
     if let Some(repository) = request.repository.as_deref() {
         validate_canonical_github_repository(repository)?;
     }

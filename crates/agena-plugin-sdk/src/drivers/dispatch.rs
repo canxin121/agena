@@ -157,7 +157,7 @@ impl<P: Plugin> PluginDispatcher<P> {
                 let input: crate::PluginServiceInvokeInput = serde_json::from_value(params)?;
                 input
                     .validate()
-                    .map_err(|error| PluginError::invalid_params(error.to_string()))?;
+                    .map_err(|error| PluginError::invalid_params_error(&error))?;
                 ok_json(&plugin.service_invoke(input).await?)
             }
             method::HOOK_TOOL_PERMISSION_PATHS => {
@@ -326,7 +326,7 @@ impl<P: Plugin> PluginDispatcher<P> {
 }
 
 fn ok_json<T: Serialize>(value: &T) -> Result<Value> {
-    serde_json::to_value(value).map_err(|e| PluginError::invalid_params(e.to_string()))
+    serde_json::to_value(value).map_err(|e| PluginError::invalid_params_error(&e))
 }
 
 impl<P: Plugin> PluginDispatcher<P> {
@@ -359,7 +359,9 @@ impl<P: Plugin> PluginDispatcher<P> {
                 _ = end_tx.closed() => return,
                 result = invoke => result,
             };
-            let _ = end_tx.send(result);
+            if end_tx.send(result).is_err() {
+                tracing::debug!("plugin stream terminal-result receiver was dropped");
+            }
         });
         StreamHandle {
             stream_id,

@@ -109,14 +109,6 @@ impl Application {
         save::provider_model_draft_value(self, draft, adapter_id, model_id, provider_model)
     }
 
-    pub async fn set_provider_default_selection(
-        &self,
-        provider_id: &str,
-        selection: serde_json::Value,
-    ) -> Result<agena_runtime::ConfigSettingsEditResponse, ApplicationError> {
-        save::set_provider_default_selection(self, provider_id, selection).await
-    }
-
     pub async fn start_provider_draft_auth(
         &self,
         mut draft: ProviderConfigDraft,

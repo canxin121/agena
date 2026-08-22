@@ -10,7 +10,10 @@ use axum::{
 use serde::Deserialize;
 use tokio::process::Command;
 
-use super::{DirectoryQuery, map_git_failure, require_directory, run_git};
+use super::{
+    DirectoryQuery, git_command_transport_error_response, map_git_failure, require_directory,
+    run_git,
+};
 
 const GPG_COMMAND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 const GPG_COMMAND_MAX_OUTPUT_BYTES: usize = 4 * 1024 * 1024;
@@ -152,12 +155,24 @@ async fn gpg_agent_enable_allow_preset_passphrase() -> Result<bool, String> {
     };
 
     if let Some(parent) = conf.parent() {
-        tokio::fs::create_dir_all(parent)
-            .await
-            .map_err(|e| e.to_string())?;
+        tokio::fs::create_dir_all(parent).await.map_err(|error| {
+            agena_failure::diagnostic::format_error_chain_with_context(
+                "failed to create the GPG agent configuration directory",
+                &error,
+            )
+        })?;
     }
 
-    let existing = tokio::fs::read_to_string(&conf).await.unwrap_or_default();
+    let existing = match tokio::fs::read_to_string(&conf).await {
+        Ok(existing) => existing,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(error) => {
+            return Err(agena_failure::diagnostic::format_error_chain_with_context(
+                "failed to read the GPG agent configuration",
+                &error,
+            ));
+        }
+    };
     let has = existing
         .lines()
         .any(|l| l.trim() == "allow-preset-passphrase");
@@ -170,7 +185,12 @@ async fn gpg_agent_enable_allow_preset_passphrase() -> Result<bool, String> {
         next.push_str("allow-preset-passphrase\n");
         super::atomic_file::write_file_atomically(conf.clone(), next.into_bytes())
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|error| {
+                agena_failure::diagnostic::format_error_chain_with_context(
+                    "failed to update the GPG agent configuration",
+                    &error,
+                )
+            })?;
     }
 
     // Restart agent so the config applies.
@@ -219,9 +239,17 @@ pub async fn git_gpg_disable_signing(Query(q): Query<DirectoryQuery>) -> Respons
         Err(resp) => return *resp,
     };
 
-    let (code, out, err) = run_git(&dir, &["config", "--local", "commit.gpgsign", "false"])
-        .await
-        .unwrap_or((1, "".to_string(), "".to_string()));
+    let (code, out, err) =
+        match run_git(&dir, &["config", "--local", "commit.gpgsign", "false"]).await {
+            Ok(result) => result,
+            Err(error) => {
+                return git_command_transport_error_response(
+                    "disable Git commit signing",
+                    &error,
+                    Some("git_config_process_failed"),
+                );
+            }
+        };
     if code != 0 {
         if let Some(resp) = map_git_failure(code, &out, &err) {
             return resp;
@@ -267,9 +295,17 @@ pub async fn git_gpg_set_signing_key(
             .into_response();
     };
 
-    let (code, out, err) = run_git(&dir, &["config", "--local", "user.signingkey", key])
-        .await
-        .unwrap_or((1, "".to_string(), "".to_string()));
+    let (code, out, err) = match run_git(&dir, &["config", "--local", "user.signingkey", key]).await
+    {
+        Ok(result) => result,
+        Err(error) => {
+            return git_command_transport_error_response(
+                "set Git signing key",
+                &error,
+                Some("git_config_process_failed"),
+            );
+        }
+    };
     if code != 0 {
         if let Some(resp) = map_git_failure(code, &out, &err) {
             return resp;

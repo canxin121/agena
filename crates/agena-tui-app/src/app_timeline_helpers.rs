@@ -40,7 +40,20 @@ pub(crate) fn build_timeline_item(
         ));
     }
     detail_lines.push(app_detail_plain_line(String::new()));
-    let body = serde_json::to_string_pretty(&record.content).unwrap_or_default();
+    let body = match serde_json::to_string_pretty(&record.content) {
+        Ok(body) => body,
+        Err(error) => {
+            tracing::error!(
+                part_id = record.part_id,
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "serialize timeline record content",
+                    &error,
+                ),
+                "timeline detail content could not be rendered"
+            );
+            "<timeline content serialization failed>".to_owned()
+        }
+    };
     detail_lines.push(app_detail_plain_line(body.clone()));
     let detail_document =
         build_detail_document(detail_lines.as_slice(), &DetailTextSpec::label_width(16));

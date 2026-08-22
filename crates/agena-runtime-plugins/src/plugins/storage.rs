@@ -36,6 +36,14 @@ pub enum PluginStorageError {
     Secret(String),
 }
 
+impl PluginStorageError {
+    fn data_error(context: impl AsRef<str>, error: &(dyn std::error::Error + 'static)) -> Self {
+        Self::Data(agena_failure::diagnostic::format_error_chain_with_context(
+            context, error,
+        ))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 /// Locator of a plugin storage record.
 pub struct StorageLocator {
@@ -138,7 +146,13 @@ pub fn default_storage_root() -> PathBuf {
     let mut base = std::env::var("HOME")
         .or_else(|_| std::env::var("USERPROFILE"))
         .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("."));
+        .unwrap_or_else(|error| {
+            tracing::error!(
+                diagnostic = %error,
+                "plugin storage home is unavailable; using the current-directory compatibility path"
+            );
+            PathBuf::from(".")
+        });
     base.push("agena");
     base.push("plugin-storage");
     base
@@ -228,7 +242,9 @@ fn read_namespace_map(path: &Path) -> Result<BTreeMap<String, String>, PluginSto
     if text.trim().is_empty() {
         return Ok(BTreeMap::new());
     }
-    serde_json::from_str(&text).map_err(|e| PluginStorageError::Data(e.to_string()))
+    serde_json::from_str(&text).map_err(|error| {
+        PluginStorageError::data_error("failed to decode the plugin storage namespace", &error)
+    })
 }
 
 fn read_index(path: &Path) -> Result<BTreeSet<String>, PluginStorageError> {
@@ -239,7 +255,9 @@ fn read_index(path: &Path) -> Result<BTreeSet<String>, PluginStorageError> {
     if text.trim().is_empty() {
         return Ok(BTreeSet::new());
     }
-    serde_json::from_str(&text).map_err(|e| PluginStorageError::Data(e.to_string()))
+    serde_json::from_str(&text).map_err(|error| {
+        PluginStorageError::data_error("failed to decode the plugin storage index", &error)
+    })
 }
 
 fn plugin_dir(root: &Path, plugin_id: &PluginKey) -> PathBuf {
@@ -353,8 +371,12 @@ impl PluginStorage for FilePluginStorage {
         agena_runtime_tools::with_file_mutation_locks(std::slice::from_ref(&path), || {
             let mut map = read_namespace_map(&path)?;
             map.insert(key.to_string(), value.to_string());
-            let json = serde_json::to_string_pretty(&map)
-                .map_err(|error| PluginStorageError::Data(error.to_string()))?;
+            let json = serde_json::to_string_pretty(&map).map_err(|error| {
+                PluginStorageError::data_error(
+                    "failed to encode the plugin storage namespace",
+                    &error,
+                )
+            })?;
             write_secure_file_unlocked(&path, json.as_bytes())
         })?
     }
@@ -379,8 +401,12 @@ impl PluginStorage for FilePluginStorage {
             if map.is_empty() {
                 fs::remove_file(&path)?;
             } else {
-                let json = serde_json::to_string_pretty(&map)
-                    .map_err(|error| PluginStorageError::Data(error.to_string()))?;
+                let json = serde_json::to_string_pretty(&map).map_err(|error| {
+                    PluginStorageError::data_error(
+                        "failed to encode the plugin storage namespace after deletion",
+                        &error,
+                    )
+                })?;
                 write_secure_file_unlocked(&path, json.as_bytes())?;
             }
             Ok(())
@@ -497,7 +523,12 @@ impl PluginKeyringSecretStore {
         if text.trim().is_empty() {
             return Ok(BTreeMap::new());
         }
-        serde_json::from_str(&text).map_err(|e| PluginStorageError::Data(e.to_string()))
+        serde_json::from_str(&text).map_err(|error| {
+            PluginStorageError::data_error(
+                "failed to decode the plugin secret fallback file",
+                &error,
+            )
+        })
     }
 
     fn update_fallback(
@@ -515,8 +546,12 @@ impl PluginKeyringSecretStore {
                 }
                 return Ok(());
             }
-            let json = serde_json::to_string_pretty(&map)
-                .map_err(|error| PluginStorageError::Data(error.to_string()))?;
+            let json = serde_json::to_string_pretty(&map).map_err(|error| {
+                PluginStorageError::data_error(
+                    "failed to encode the plugin secret fallback file",
+                    &error,
+                )
+            })?;
             write_secure_file_unlocked(&path, json.as_bytes())
         })?
     }
@@ -526,8 +561,12 @@ impl PluginKeyringSecretStore {
         agena_runtime_tools::with_file_mutation_locks(std::slice::from_ref(&path), || {
             let mut names = read_index(&path)?;
             if names.insert(name.to_string()) {
-                let json = serde_json::to_string_pretty(&names)
-                    .map_err(|error| PluginStorageError::Data(error.to_string()))?;
+                let json = serde_json::to_string_pretty(&names).map_err(|error| {
+                    PluginStorageError::data_error(
+                        "failed to encode the plugin secret index",
+                        &error,
+                    )
+                })?;
                 write_secure_file_unlocked(&path, json.as_bytes())?;
             }
             Ok(())
@@ -542,8 +581,12 @@ impl PluginKeyringSecretStore {
                 if names.is_empty() {
                     fs::remove_file(&path)?;
                 } else {
-                    let json = serde_json::to_string_pretty(&names)
-                        .map_err(|error| PluginStorageError::Data(error.to_string()))?;
+                    let json = serde_json::to_string_pretty(&names).map_err(|error| {
+                        PluginStorageError::data_error(
+                            "failed to encode the plugin secret index after deletion",
+                            &error,
+                        )
+                    })?;
                     write_secure_file_unlocked(&path, json.as_bytes())?;
                 }
             }
@@ -553,9 +596,17 @@ impl PluginKeyringSecretStore {
 
     fn map_secret_err(&self, err: SecretStoreError) -> PluginStorageError {
         if err.is_unavailable() {
-            PluginStorageError::SecretUnavailable(err.to_string())
+            PluginStorageError::SecretUnavailable(
+                agena_failure::diagnostic::format_error_chain_with_context(
+                    "plugin secret store is unavailable",
+                    &err,
+                ),
+            )
         } else {
-            PluginStorageError::Secret(err.to_string())
+            PluginStorageError::Secret(agena_failure::diagnostic::format_error_chain_with_context(
+                "plugin secret store operation failed",
+                &err,
+            ))
         }
     }
 }

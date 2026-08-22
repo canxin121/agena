@@ -159,9 +159,9 @@ impl AgenaCli {
                     kind,
                     force: args.force,
                 })
-                .map_err(|error| AppError::Config(error.to_string()))?;
+                .map_err(|error| AppError::config_error(&error))?;
                 generate_plugin_lockfile(&args.path)
-                    .map_err(|error| AppError::Config(error.to_string()))?;
+                    .map_err(|error| AppError::config_error(&error))?;
                 println!("Created Agena plugin repository at {}", args.path.display());
                 println!("Next: cargo test && agena plugin validate .");
                 Ok(())
@@ -175,7 +175,7 @@ impl AgenaCli {
                         .unwrap_or_else(|| current_target_triple().to_string()),
                     output_dir: args.output,
                 })
-                .map_err(|error| AppError::Config(error.to_string()))?;
+                .map_err(|error| AppError::config_error(&error))?;
                 println!(
                     "Packaged {} v{} for {}\narchive: {}\nfragment: {}\nsha256: {}",
                     outcome.plugin_id,
@@ -204,7 +204,7 @@ impl AgenaCli {
                         expected_version: args.expected_version,
                         source,
                     })
-                    .map_err(|error| AppError::Config(error.to_string()))?;
+                    .map_err(|error| AppError::config_error(&error))?;
                     println!(
                         "Assembled {} artifact(s) into {}",
                         outcome.artifact_count,
@@ -344,7 +344,7 @@ impl AgenaCli {
         let backend = self.server_mcp_backend(args).await?;
         agena_mcp_server::serve_tools_stdio(backend)
             .await
-            .map_err(|error| AppError::Config(error.to_string()))
+            .map_err(|error| AppError::config_error(&error))
     }
 
     pub(super) async fn run_mcp(self, command: McpCommand) -> Result<(), AppError> {
@@ -425,7 +425,7 @@ fn run_plugin_marketplace_lifecycle(command: PluginSubcommand) -> Result<(), App
     match command {
         PluginSubcommand::Install(args) => {
             let locator = parse_plugin_install_locator(args.spec.as_str())
-                .map_err(|error| AppError::Config(error.to_string()))?;
+                .map_err(|error| AppError::config_error(&error))?;
             let (registry, plugin_id, version) = match (args.registry.as_deref(), locator) {
                 (Some(source), PluginInstallLocator::Marketplace { plugin_id, version }) => (
                     RegistrySpec::from_source(
@@ -433,7 +433,7 @@ fn run_plugin_marketplace_lifecycle(command: PluginSubcommand) -> Result<(), App
                         source,
                         args.require_signature,
                     )
-                    .map_err(|error| AppError::Config(error.to_string()))?,
+                    .map_err(|error| AppError::config_error(&error))?,
                     plugin_id,
                     version,
                 ),
@@ -449,11 +449,11 @@ fn run_plugin_marketplace_lifecycle(command: PluginSubcommand) -> Result<(), App
                         tag.as_deref(),
                         args.require_signature,
                     )
-                    .map_err(|error| AppError::Config(error.to_string()))?;
+                    .map_err(|error| AppError::config_error(&error))?;
                     let index = client
                         .registry(registry.clone())
                         .fetch_index(args.refresh)
-                        .map_err(|error| AppError::Config(error.to_string()))?;
+                        .map_err(|error| AppError::config_error(&error))?;
                     let plugin_id = single_release_plugin_id(&index)?;
                     (registry, plugin_id, None)
                 }
@@ -463,7 +463,7 @@ fn run_plugin_marketplace_lifecycle(command: PluginSubcommand) -> Result<(), App
                         DEFAULT_MARKETPLACE_SOURCE,
                         args.require_signature,
                     )
-                    .map_err(|error| AppError::Config(error.to_string()))?,
+                    .map_err(|error| AppError::config_error(&error))?,
                     plugin_id,
                     version,
                 ),
@@ -481,7 +481,7 @@ fn run_plugin_marketplace_lifecycle(command: PluginSubcommand) -> Result<(), App
                     allow_unverified: args.allow_unverified,
                     refresh_index: args.refresh,
                 })
-                .map_err(|err| AppError::Config(err.to_string()))?;
+                .map_err(|error| AppError::config_error(&error))?;
             if outcome.dry_run {
                 println!(
                     "DRY-RUN: would install {} v{} ({}) into {}",
@@ -504,7 +504,7 @@ fn run_plugin_marketplace_lifecycle(command: PluginSubcommand) -> Result<(), App
         PluginSubcommand::Uninstall(args) => {
             let outcomes = client
                 .uninstall_with(&args.plugin_id, args.cascade)
-                .map_err(|err| AppError::Config(err.to_string()))?;
+                .map_err(|error| AppError::config_error(&error))?;
             for outcome in outcomes {
                 println!(
                     "Uninstalled {} v{} from {}",
@@ -518,7 +518,7 @@ fn run_plugin_marketplace_lifecycle(command: PluginSubcommand) -> Result<(), App
         PluginSubcommand::ListInstalled => {
             let records = client
                 .list_installed()
-                .map_err(|err| AppError::Config(err.to_string()))?;
+                .map_err(|error| AppError::config_error(&error))?;
             if records.is_empty() {
                 println!("(no plugins installed via agena marketplace)");
             } else {
@@ -537,11 +537,11 @@ fn run_plugin_marketplace_lifecycle(command: PluginSubcommand) -> Result<(), App
         PluginSubcommand::Sync(args) => {
             let registry = client.registry(
                 RegistrySpec::from_source(args.registry_id, args.registry, false)
-                    .map_err(|error| AppError::Config(error.to_string()))?,
+                    .map_err(|error| AppError::config_error(&error))?,
             );
             let index = registry
                 .fetch_index(true)
-                .map_err(|err| AppError::Config(err.to_string()))?;
+                .map_err(|error| AppError::config_error(&error))?;
             println!(
                 "registry index refreshed: {} plugin(s)",
                 index.plugins.len()
@@ -551,11 +551,11 @@ fn run_plugin_marketplace_lifecycle(command: PluginSubcommand) -> Result<(), App
         PluginSubcommand::Search(args) => {
             let registry = client.registry(
                 RegistrySpec::from_source(args.registry_id, args.registry, false)
-                    .map_err(|error| AppError::Config(error.to_string()))?,
+                    .map_err(|error| AppError::config_error(&error))?,
             );
             let index = registry
                 .fetch_index(false)
-                .map_err(|err| AppError::Config(err.to_string()))?;
+                .map_err(|error| AppError::config_error(&error))?;
             let needle = args.query.to_ascii_lowercase();
             let mut hits = 0usize;
             for plugin in index.plugins {
@@ -587,11 +587,11 @@ fn run_plugin_marketplace_lifecycle(command: PluginSubcommand) -> Result<(), App
                 .as_ref()
                 .map(|source| RegistrySpec::from_source(args.registry_id.clone(), source, false))
                 .transpose()
-                .map_err(|error| AppError::Config(error.to_string()))?;
+                .map_err(|error| AppError::config_error(&error))?;
             let targets: Vec<String> = if args.all {
                 client
                     .list_installed()
-                    .map_err(|err| AppError::Config(err.to_string()))?
+                    .map_err(|error| AppError::config_error(&error))?
                     .into_iter()
                     .map(|r| r.plugin_id)
                     .collect()
@@ -616,7 +616,10 @@ fn run_plugin_marketplace_lifecycle(command: PluginSubcommand) -> Result<(), App
                             out.plugin_id, out.previous_version
                         )
                     }
-                    Err(err) => errors.push(format!("{id}: {err}")),
+                    Err(error) => errors.push(format!(
+                        "{id}: {}",
+                        agena_failure::diagnostic::format_error_chain(&error)
+                    )),
                 }
             }
             if !errors.is_empty() {
@@ -627,7 +630,7 @@ fn run_plugin_marketplace_lifecycle(command: PluginSubcommand) -> Result<(), App
         PluginSubcommand::Outdated => {
             let outdated = client
                 .list_outdated()
-                .map_err(|err| AppError::Config(err.to_string()))?;
+                .map_err(|error| AppError::config_error(&error))?;
             if outdated.is_empty() {
                 println!("(all installed plugins are up to date)");
             } else {

@@ -142,19 +142,36 @@ fn wait_for_child(
             return Ok(status);
         }
         if let Err(error) = guard() {
-            let _ = child.kill();
-            let _ = child.wait();
+            stop_child_after_failure(child, operation);
             return Err(error);
         }
         if Instant::now() >= deadline {
-            let _ = child.kill();
-            let _ = child.wait();
+            stop_child_after_failure(child, operation);
             return Err(ProviderError::Timeout {
                 operation: operation.to_owned(),
                 seconds: timeout.as_secs().max(1),
             });
         }
         thread::sleep(POLL_INTERVAL.min(deadline.saturating_duration_since(Instant::now())));
+    }
+}
+
+fn stop_child_after_failure(child: &mut std::process::Child, operation: &str) {
+    if let Err(error) = child.kill()
+        && error.kind() != std::io::ErrorKind::InvalidInput
+    {
+        tracing::warn!(
+            operation,
+            diagnostic = %agena_failure::diagnostic::format_error_chain(&error),
+            "failed to terminate a TUI helper after its operation failed"
+        );
+    }
+    if let Err(error) = child.wait() {
+        tracing::warn!(
+            operation,
+            diagnostic = %agena_failure::diagnostic::format_error_chain(&error),
+            "failed to reap a TUI helper after its operation failed"
+        );
     }
 }
 
@@ -198,8 +215,7 @@ fn interrupt_guard_for_child(
     match ParentInterruptGuard::install() {
         Ok(guard) => Ok(guard),
         Err(error) => {
-            let _ = child.kill();
-            let _ = child.wait();
+            stop_child_after_failure(child, "install parent interrupt guard");
             Err(error)
         }
     }

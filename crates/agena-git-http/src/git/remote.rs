@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
@@ -14,8 +15,9 @@ use tokio::process::Command;
 
 use super::utils::git_config_get;
 use super::{
-    DirectoryQuery, git_success_response, require_directory, require_directory_raw, run_git,
-    run_git_checked, run_git_env, run_locked_git_checked,
+    DirectoryQuery, git_command_result_or_log, git_io_error_response, git_success_response,
+    require_directory, require_directory_raw, run_git, run_git_checked, run_git_env,
+    run_locked_git_checked,
 };
 
 #[derive(Debug, Serialize)]
@@ -418,9 +420,17 @@ async fn ssh_signing_probe(
         }
     };
 
-    let (init_code, _init_out, init_err) = run_git(temp_dir.path(), &["init", "-q"])
-        .await
-        .unwrap_or((1, "".to_string(), "failed to run git init".to_string()));
+    let (init_code, _init_out, init_err) = match run_git(temp_dir.path(), &["init", "-q"]).await {
+        Ok(result) => result,
+        Err(error) => {
+            return (
+                false,
+                Some(format!(
+                    "SSH signing probe Git initialization failed: {error}"
+                )),
+            );
+        }
+    };
     if init_code != 0 {
         let msg = init_err.trim();
         if msg.is_empty() {
@@ -466,9 +476,15 @@ async fn ssh_signing_probe(
     let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
     let env = [("LC_ALL", "C")];
 
-    let (code, out, err) = run_git_env(temp_dir.path(), &arg_refs, &env)
-        .await
-        .unwrap_or((1, "".to_string(), "failed to run signing probe".to_string()));
+    let (code, out, err) = match run_git_env(temp_dir.path(), &arg_refs, &env).await {
+        Ok(result) => result,
+        Err(error) => {
+            return (
+                false,
+                Some(format!("SSH signing probe process failed: {error}")),
+            );
+        }
+    };
 
     if code == 0 {
         return (true, None);
@@ -532,20 +548,45 @@ pub struct GitRepoStateResponse {
     pub revert_in_progress: bool,
 }
 
-async fn git_path_exists(dir: &Path, name: &str) -> bool {
-    let (code, out, _) = run_git(dir, &["rev-parse", "--git-path", name])
-        .await
-        .unwrap_or((1, "".to_string(), "".to_string()));
+async fn git_path_exists(dir: &Path, name: &str) -> Result<bool, Response> {
+    let (code, out, error) = match run_git(dir, &["rev-parse", "--git-path", name]).await {
+        Ok(result) => result,
+        Err(error) => {
+            return Err(super::git_command_transport_error_response(
+                "resolve Git repository state marker",
+                &error,
+                Some("git_state_process_failed"),
+            ));
+        }
+    };
     if code != 0 {
-        return false;
+        if let Some(response) = super::map_git_failure(code, &out, &error) {
+            return Err(response);
+        }
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "error": error.trim(),
+                "code": "git_state_marker_failed",
+            })),
+        )
+            .into_response());
     }
     let raw = out.trim();
     if raw.is_empty() {
-        return false;
+        return Ok(false);
     }
     let p = PathBuf::from(raw);
     let full = if p.is_absolute() { p } else { dir.join(p) };
-    tokio::fs::metadata(full).await.is_ok()
+    match tokio::fs::metadata(full).await {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(git_io_error_response(
+            "inspect Git repository state marker",
+            &error,
+            "git_state_marker_metadata_failed",
+        )),
+    }
 }
 
 pub async fn git_state(Query(q): Query<DirectoryQuery>) -> Response {
@@ -557,11 +598,27 @@ pub async fn git_state(Query(q): Query<DirectoryQuery>) -> Response {
     let current_branch = git_current_branch(&dir).await;
     let upstream = git_upstream_ref(&dir).await;
 
-    let merge_in_progress = git_path_exists(&dir, "MERGE_HEAD").await;
-    let cherry_pick_in_progress = git_path_exists(&dir, "CHERRY_PICK_HEAD").await;
-    let revert_in_progress = git_path_exists(&dir, "REVERT_HEAD").await;
-    let rebase_in_progress =
-        git_path_exists(&dir, "rebase-apply").await || git_path_exists(&dir, "rebase-merge").await;
+    let merge_in_progress = match git_path_exists(&dir, "MERGE_HEAD").await {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let cherry_pick_in_progress = match git_path_exists(&dir, "CHERRY_PICK_HEAD").await {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let revert_in_progress = match git_path_exists(&dir, "REVERT_HEAD").await {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let rebase_apply = match git_path_exists(&dir, "rebase-apply").await {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let rebase_merge = match git_path_exists(&dir, "rebase-merge").await {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let rebase_in_progress = rebase_apply || rebase_merge;
 
     Json(GitRepoStateResponse {
         current_branch,
@@ -633,9 +690,10 @@ pub async fn git_remote_branches_list(Query(q): Query<GitRemoteBranchesQuery>) -
 
 pub(crate) async fn git_current_branch(dir: &Path) -> Option<String> {
     // `symbolic-ref` returns a stable answer and fails on detached HEAD.
-    let (code, out, _) = run_git(dir, &["symbolic-ref", "--short", "HEAD"])
-        .await
-        .unwrap_or((1, "".to_string(), "".to_string()));
+    let (code, out, _) = git_command_result_or_log(
+        run_git(dir, &["symbolic-ref", "--short", "HEAD"]).await,
+        "resolve current Git branch",
+    )?;
     if code != 0 {
         return None;
     }
@@ -649,12 +707,14 @@ pub(crate) async fn git_current_branch(dir: &Path) -> Option<String> {
 
 pub(crate) async fn git_upstream_ref(dir: &Path) -> Option<String> {
     // Examples: "origin/main". Fails if no upstream is configured.
-    let (code, out, _) = run_git(
-        dir,
-        &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
-    )
-    .await
-    .unwrap_or((1, "".to_string(), "".to_string()));
+    let (code, out, _) = git_command_result_or_log(
+        run_git(
+            dir,
+            &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+        )
+        .await,
+        "resolve current Git upstream",
+    )?;
     if code != 0 {
         return None;
     }

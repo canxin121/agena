@@ -16,7 +16,19 @@ impl AnthropicAdapter {
             .anthropic_thinking_blocks
             .iter()
             .filter_map(|block| {
-                let block = serde_json::from_value::<AnthropicTextBlock>(block.clone()).ok()?;
+                let block = match serde_json::from_value::<AnthropicTextBlock>(block.clone()) {
+                    Ok(block) => block,
+                    Err(error) => {
+                        tracing::warn!(
+                            diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                                "decode a persisted Anthropic thinking block",
+                                &error,
+                            ),
+                            "malformed Anthropic thinking block was not replayed"
+                        );
+                        return None;
+                    }
+                };
                 match block.kind.as_str() {
                     "thinking"
                         if block

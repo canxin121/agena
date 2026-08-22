@@ -21,7 +21,7 @@ const COMMON_PATHS = [
   {
     value: 'providers',
     label: 'providers',
-    description: st('Provider inventory, default selection, adapters, authentication, and model routes.'),
+    description: st('Provider inventory, adapters, authentication, and model routes.'),
   },
   {
     value: 'permission',

@@ -30,6 +30,12 @@ impl std::fmt::Display for ClipboardTextError {
 
 impl std::error::Error for ClipboardTextError {}
 
+impl ClipboardTextError {
+    pub fn from_error(error: &(dyn std::error::Error + 'static)) -> Self {
+        Self(agena_failure::diagnostic::format_error_chain(error))
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 /// Method used to copy text to the clipboard.
 pub enum ClipboardCopyMethod {
@@ -146,10 +152,10 @@ impl<'a> ClipboardService<'a> {
 )))]
 fn set_clipboard_text_native(text: &str) -> Result<(), ClipboardTextError> {
     let mut clipboard =
-        arboard::Clipboard::new().map_err(|error| ClipboardTextError(error.to_string()))?;
+        arboard::Clipboard::new().map_err(|error| ClipboardTextError::from_error(&error))?;
     clipboard
         .set_text(text.to_string())
-        .map_err(|error| ClipboardTextError(error.to_string()))
+        .map_err(|error| ClipboardTextError::from_error(&error))
 }
 
 #[cfg(not(any(
@@ -171,7 +177,7 @@ fn set_clipboard_text_via_tmux(text: &str) -> Result<(), ClipboardTextError> {
         "tmux clipboard copy",
         Duration::from_secs(10),
     )
-    .map_err(|error| ClipboardTextError(error.to_string()))?;
+    .map_err(|error| ClipboardTextError::from_error(&error))?;
     if status.success() {
         Ok(())
     } else {

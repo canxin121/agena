@@ -12,7 +12,10 @@ use serde::{Deserialize, Serialize};
 use tokio::process::Command;
 
 use super::super::remote::git_current_branch;
-use super::super::{DirectoryQuery, map_git_failure, require_locked_directory, run_git};
+use super::super::{
+    DirectoryQuery, git_command_transport_error_response, map_git_failure,
+    require_locked_directory, run_git,
+};
 
 const GH_TIMEOUT: Duration = Duration::from_secs(45);
 const GH_MAX_OUTPUT_BYTES: usize = 4 * 1024 * 1024;
@@ -285,9 +288,16 @@ pub async fn git_create_github_repo_and_push<S: crate::GitHttpState + 'static>(
         }
     };
 
-    let remote_check = run_git(&dir, &["remote", "get-url", &remote])
-        .await
-        .unwrap_or((1, String::new(), String::new()));
+    let remote_check = match run_git(&dir, &["remote", "get-url", &remote]).await {
+        Ok(result) => result,
+        Err(error) => {
+            return git_command_transport_error_response(
+                "check whether Git remote already exists",
+                &error,
+                Some("git_remote_check_process_failed"),
+            );
+        }
+    };
     if remote_check.0 == 0 {
         return (
             StatusCode::CONFLICT,
@@ -374,9 +384,16 @@ pub async fn git_create_github_repo_and_push<S: crate::GitHttpState + 'static>(
     };
 
     let (add_code, add_out, add_err) =
-        run_git(&dir, &["remote", "add", &remote, &created.clone_url])
-            .await
-            .unwrap_or((1, String::new(), String::new()));
+        match run_git(&dir, &["remote", "add", &remote, &created.clone_url]).await {
+            Ok(result) => result,
+            Err(error) => {
+                return git_command_transport_error_response(
+                    "add newly created GitHub repository as a Git remote",
+                    &error,
+                    Some("git_remote_add_process_failed"),
+                );
+            }
+        };
     if add_code != 0 {
         if let Some(resp) = map_git_failure(add_code, &add_out, &add_err) {
             return resp;
@@ -392,9 +409,16 @@ pub async fn git_create_github_repo_and_push<S: crate::GitHttpState + 'static>(
     }
 
     let (push_code, push_out, push_err) =
-        run_git(&dir, &["push", "--set-upstream", &remote, &branch])
-            .await
-            .unwrap_or((1, String::new(), String::new()));
+        match run_git(&dir, &["push", "--set-upstream", &remote, &branch]).await {
+            Ok(result) => result,
+            Err(error) => {
+                return git_command_transport_error_response(
+                    "push initial branch to newly created GitHub repository",
+                    &error,
+                    Some("git_push_process_failed"),
+                );
+            }
+        };
     if push_code != 0 {
         if let Some(resp) = map_git_failure(push_code, &push_out, &push_err) {
             return resp;

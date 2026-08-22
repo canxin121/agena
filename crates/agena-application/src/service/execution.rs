@@ -33,7 +33,6 @@ impl ApplicationService {
     pub async fn resolve_run_options(
         &self,
         provider_catalog: &dyn ProviderCatalog,
-        default_model: Option<ModelRef>,
         execution_control: &dyn agena_runtime::SessionExecutionControl,
         session_id: i64,
         request: SessionRunOptionsRequest,
@@ -56,11 +55,11 @@ impl ApplicationService {
                         ensure_provider_exists(provider_catalog, &model)?;
                         model
                     }
-                    None => default_model.ok_or_else(|| {
-                    ApplicationError::bad_request(
-                        "model is required when neither the request, session, nor global default specifies one",
-                    )
-                })?,
+                    None => {
+                        return Err(ApplicationError::bad_request(
+                            "model is required when neither the request nor session specifies one",
+                        ));
+                    }
                 }
             }
         };
@@ -86,10 +85,7 @@ impl ApplicationService {
         let provider_options = provider_catalog
             .model_execution_options(&model)
             .map_err(provider_catalog_error)?;
-        let resolved_adapter_id = model
-            .adapter_id
-            .clone()
-            .or(provider_options.default_adapter);
+        let resolved_adapter_id = model.adapter_id.clone();
 
         let thinking_modes = provider_options.thinking_modes;
         if thinking_mode.is_none() {

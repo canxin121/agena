@@ -13,8 +13,6 @@ use agena_provider::{
 pub enum ModelCatalogCurationError {
     #[error(transparent)]
     Serde(#[from] serde_json::Error),
-    #[error("merge model catalog definitions: {0}")]
-    Merge(String),
 }
 
 const BANNED_SOURCE_PREFIXES: &[&str] = &[
@@ -602,8 +600,7 @@ fn merge_definitions(
         serde_json::to_value(primary).map_err(ModelCatalogCurationError::from)?;
     let fallback_value = serde_json::to_value(fallback).map_err(ModelCatalogCurationError::from)?;
     merge_json(&mut primary_value, &fallback_value);
-    let mut merged: CatalogModelDefinition = serde_json::from_value(primary_value)
-        .map_err(|err| ModelCatalogCurationError::Merge(err.to_string()))?;
+    let mut merged: CatalogModelDefinition = serde_json::from_value(primary_value)?;
     apply_priority_limit_overrides(&mut merged, primary, fallback);
     merged.source_priority = CatalogDefinitionSourcePriority {
         sort_priority: primary

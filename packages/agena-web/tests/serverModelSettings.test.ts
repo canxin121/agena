@@ -4,36 +4,9 @@ import test from 'node:test'
 import {
   approvalModelFromSettingsResponse,
   buildApprovalModelSettingsPatch,
-  buildProviderDefaultSettingsPatch,
   normalizeServerModelIdentity,
   sameServerModelIdentity,
 } from '../src/lib/serverModelSettings'
-
-test('provider default patch matches the Agena settings edit contract', () => {
-  assert.deepEqual(
-    buildProviderDefaultSettingsPatch(
-      { provider: 'openai', adapter: 'responses', model: 'gpt-5' },
-      { thinkingMode: 'high', speedMode: 'fast', parallelToolCalls: false },
-    ),
-    {
-      path: 'providers',
-      changes: {
-        default: 'openai',
-        default_selection: {
-          provider: 'openai',
-          adapter: 'responses',
-          model: 'gpt-5',
-          thinking_mode: 'high',
-          speed_mode: 'fast',
-          parallel_tool_calls: false,
-        },
-      },
-      dry_run: false,
-      validate: true,
-      reload: true,
-    },
-  )
-})
 
 test('approval model patch uses the permission-specific identity field names', () => {
   assert.deepEqual(

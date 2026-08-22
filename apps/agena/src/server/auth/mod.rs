@@ -390,19 +390,30 @@ pub(crate) fn hash_password(candidate: &str) -> Result<String, String> {
     }
 
     let mut salt_bytes = [0u8; 16];
-    getrandom::fill(&mut salt_bytes).map_err(|error| error.to_string())?;
-    let salt = SaltString::encode_b64(&salt_bytes).map_err(|error| error.to_string())?;
+    getrandom::fill(&mut salt_bytes).map_err(|error| {
+        agena_failure::diagnostic::format_error_chain_with_context(
+            "failed to generate password salt entropy",
+            &error,
+        )
+    })?;
+    // password_hash::Error does not implement std::error::Error and therefore
+    // has no traversable source chain; retain its complete Display text.
+    let salt = SaltString::encode_b64(&salt_bytes)
+        .map_err(|error| format!("failed to encode the password salt: {error}"))?;
     Argon2::default()
         .hash_password(password.as_bytes(), &salt)
         .map(|hash| hash.to_string())
-        .map_err(|error| error.to_string())
+        .map_err(|error| format!("failed to hash the server UI password: {error}"))
 }
 
 /// Rehydrate a password verifier from a PHC value read from server state.
 /// Keeping the login-attempt map on the verifier preserves the same OAuth
 /// lockout behavior as the UI password without ever returning the PHC value.
 pub(crate) fn init_ui_auth_from_phc(password_phc: String) -> Result<UiAuth, String> {
-    PasswordHash::new(password_phc.as_str()).map_err(|error| error.to_string())?;
+    PasswordHash::new(password_phc.as_str()).map_err(|error| {
+        // password_hash::Error has no std::error::Error implementation/source.
+        format!("failed to parse the persisted server UI password hash: {error}")
+    })?;
     Ok(UiAuth::Enabled(Arc::new(UiAuthInner {
         password_phc,
         sessions: DashMap::new(),

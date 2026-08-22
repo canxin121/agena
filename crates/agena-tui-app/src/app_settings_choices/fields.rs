@@ -4,28 +4,6 @@ impl App {
         field: &SettingsFieldSpec,
     ) -> Option<Vec<ChoiceItem>> {
         match field.path.as_str() {
-            "providers.default" => {
-                let fallback_adapter = settings_choice_adapter_fallback(&self.i18n);
-                Some(
-                    crate::app_backend::operations::list_providers(&self.application)
-                        .into_iter()
-                        .map(|provider| {
-                            choice_item(
-                                provider.provider_id,
-                                settings_choice_default_provider_detail(
-                                    &self.i18n,
-                                    provider
-                                        .defaults
-                                        .adapter
-                                        .as_deref()
-                                        .unwrap_or(fallback_adapter.as_str()),
-                                    provider.defaults.model.as_str(),
-                                ),
-                            )
-                        })
-                        .collect(),
-                )
-            }
             "ui.locale" => Some(
                 SUPPORTED_LOCALES
                     .iter()
@@ -98,7 +76,6 @@ impl App {
         field: &SettingsFieldSpec,
     ) -> agena_tui::choice::ChoicePresentationStyle {
         match field.path.as_str() {
-            "providers.default" => agena_tui::choice::ChoicePresentationStyle::SearchableSelect,
             "ui.locale"
             | "ui.tui.color_scheme"
             | "ui.tui.graphics"
@@ -369,23 +346,19 @@ use crate::{
     ProviderDraftSecretSourceKind, ProviderModelConfigField, ProviderStudioField,
     ProviderStudioOverlay, SUPPORTED_LOCALES, SettingsFieldSpec, boolean_choice_items, choice_item,
     choice_item_with_value, provider_studio_api_key_env_choice_items,
-    provider_studio_profile_choice_items, settings_choice_adapter_fallback,
-    settings_choice_default_provider_detail, ui_text,
+    provider_studio_profile_choice_items, ui_text,
 };
 
 #[cfg(test)]
 mod tests {
-    use crate::{App, settings_fields};
+    use crate::settings_fields;
 
     #[test]
-    fn registered_default_catalogs_do_not_offer_arbitrary_typed_values() {
-        let field = settings_fields()
-            .into_iter()
-            .find(|field| field.path == "providers.default")
-            .expect("settings field");
-        assert_eq!(
-            App::settings_field_choice_overlay_style(&field),
-            agena_tui::choice::ChoicePresentationStyle::SearchableSelect
+    fn provider_defaults_are_not_registered_as_settings_fields() {
+        assert!(
+            !settings_fields()
+                .into_iter()
+                .any(|field| field.path == "providers.default")
         );
     }
 }

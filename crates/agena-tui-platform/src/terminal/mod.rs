@@ -144,9 +144,7 @@ impl TerminalRuntime {
 
         let backend = CrosstermBackend::new(io::stdout());
         let mut terminal = Terminal::new(backend)?;
-        terminal
-            .clear()
-            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        terminal.clear().map_err(anyhow::Error::new)?;
         let input_reader =
             TerminalInput::new().context("failed to register terminal input readiness")?;
         let input = InputNormalizer::default();
@@ -324,7 +322,7 @@ impl TerminalRuntime {
         self.terminal
             .draw(render)
             .map(|_| ())
-            .map_err(|error| anyhow::anyhow!(error.to_string()))
+            .map_err(anyhow::Error::new)
     }
 
     pub async fn next_event(&mut self) -> Option<Result<Event, std::io::Error>> {
@@ -385,7 +383,7 @@ impl TerminalRuntime {
             .context("terminal response transaction did not settle before suspension")?;
         self.terminal
             .flush()
-            .map_err(|error| anyhow::anyhow!(error.to_string()))
+            .map_err(anyhow::Error::new)
             .context("failed to flush the TUI before suspending the terminal")?;
 
         // No background task owns stdin. Drain only events already reported as
@@ -448,7 +446,7 @@ impl TerminalRuntime {
         // the runtime input reader already owns terminal responses at this
         // point, so Terminal::clear's CPR would race it and can time out.
         reset_terminal_after_suspension(&mut self.terminal)
-            .map_err(|error| anyhow::anyhow!(error.to_string()))
+            .map_err(anyhow::Error::new)
             .with_context(|| format!("failed to reset the terminal after {reason:?}"))?;
         self.request_terminal_color_refresh();
         Ok(())
@@ -487,7 +485,11 @@ impl TerminalRuntime {
         } else {
             Ok(())
         };
-        let _ = self.terminal.flush();
+        let flush_result = self
+            .terminal
+            .flush()
+            .map_err(anyhow::Error::new)
+            .context("failed to flush terminal output during restoration");
         let lifecycle_result = if TERMINAL_MODES_ACTIVE.load(Ordering::Acquire) {
             self.lifecycle.shutdown()
         } else {
@@ -502,12 +504,23 @@ impl TerminalRuntime {
             TERMINAL_KEYBOARD_STACK_ACTIVE.store(false, Ordering::Release);
             self.ownership.release();
         }
-        match (protocol_result, lifecycle_result) {
-            (Err(protocol_error), Err(lifecycle_error)) => Err(protocol_error.context(format!(
-                "terminal lifecycle restoration also failed: {lifecycle_error:#}"
-            ))),
-            (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
-            (Ok(()), Ok(())) => Ok(()),
+        match (protocol_result, flush_result, lifecycle_result) {
+            (Ok(()), Ok(()), Ok(())) => Ok(()),
+            (Err(error), Ok(()), Ok(()))
+            | (Ok(()), Err(error), Ok(()))
+            | (Ok(()), Ok(()), Err(error)) => Err(error),
+            (Err(protocol), Err(flush), Ok(())) => Err(anyhow::anyhow!(
+                "terminal protocol restoration failed: {protocol:#}; terminal flush also failed: {flush:#}"
+            )),
+            (Err(protocol), Ok(()), Err(lifecycle)) => Err(anyhow::anyhow!(
+                "terminal protocol restoration failed: {protocol:#}; terminal lifecycle restoration also failed: {lifecycle:#}"
+            )),
+            (Ok(()), Err(flush), Err(lifecycle)) => Err(anyhow::anyhow!(
+                "terminal flush failed during restoration: {flush:#}; terminal lifecycle restoration also failed: {lifecycle:#}"
+            )),
+            (Err(protocol), Err(flush), Err(lifecycle)) => Err(anyhow::anyhow!(
+                "terminal protocol restoration failed: {protocol:#}; terminal flush also failed: {flush:#}; terminal lifecycle restoration also failed: {lifecycle:#}"
+            )),
         }
     }
 

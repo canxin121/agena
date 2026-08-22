@@ -581,21 +581,36 @@ pub fn tool_call_from_operation(operation: &OperationPart) -> ToolCallContent {
 /// preferring the lossless `extra["attachments"]` list and otherwise
 /// reconstructing a single item from the named keys + extended keys.
 pub fn attachment_from_file_ref(part: &FileRefContent) -> AttachmentPart {
-    if let Some(items) = part
-        .extra
-        .get("attachments")
-        .and_then(|value| serde_json::from_value::<Vec<AttachmentItem>>(value.clone()).ok())
-    {
-        return AttachmentPart { attachments: items };
+    if let Some(value) = part.extra.get("attachments") {
+        match serde_json::from_value::<Vec<AttachmentItem>>(value.clone()) {
+            Ok(items) => return AttachmentPart { attachments: items },
+            Err(error) => tracing::warn!(
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "decode a persisted attachment snapshot",
+                    &error,
+                ),
+                "persisted attachment snapshot is malformed; rebuilding it from canonical fields"
+            ),
+        }
     }
-    let kind = part
-        .extra
-        .get("kind")
-        .and_then(Value::as_str)
-        .and_then(|value| {
-            serde_json::from_value::<AttachmentKind>(Value::String(value.to_owned())).ok()
-        })
-        .unwrap_or(AttachmentKind::File);
+    let kind = match part.extra.get("kind").and_then(Value::as_str) {
+        Some(value) => {
+            match serde_json::from_value::<AttachmentKind>(Value::String(value.to_owned())) {
+                Ok(kind) => kind,
+                Err(error) => {
+                    tracing::warn!(
+                        diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                            "decode a persisted attachment kind",
+                            &error,
+                        ),
+                        "persisted attachment kind is malformed; using file"
+                    );
+                    AttachmentKind::File
+                }
+            }
+        }
+        None => AttachmentKind::File,
+    };
     let source = attachment_source_from_file_ref(part);
     AttachmentPart {
         attachments: vec![AttachmentItem {
@@ -659,12 +674,19 @@ pub fn attachment_source_from_file_ref(part: &FileRefContent) -> AttachmentSourc
             path: path.to_owned(),
         };
     }
-    if let Some(source) = extra
-        .get("source")
-        .and_then(|value| serde_json::from_value::<AttachmentSource>(value.clone()).ok())
-    {
-        return source;
+    if let Some(value) = extra.get("source") {
+        match serde_json::from_value::<AttachmentSource>(value.clone()) {
+            Ok(source) => return source,
+            Err(error) => tracing::warn!(
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "decode persisted attachment source",
+                    &error,
+                ),
+                "persisted attachment source is malformed; using the legacy fallback"
+            ),
+        }
     }
+    tracing::warn!("file_ref content has no usable attachment source; using an empty local path");
     AttachmentSource::LocalPath {
         path: String::new(),
     }
@@ -673,11 +695,22 @@ pub fn attachment_source_from_file_ref(part: &FileRefContent) -> AttachmentSourc
 /// Project the lossless skill snapshot from `extra["skills"]` into a
 /// [`SkillReferencePart`]. A missing or malformed snapshot yields no skills.
 pub fn skill_reference_from_skill_ref(part: &SkillRefContent) -> SkillReferencePart {
-    let skills = part
-        .extra
-        .get("skills")
-        .and_then(|value| serde_json::from_value::<Vec<SkillReference>>(value.clone()).ok())
-        .unwrap_or_default();
+    let skills = match part.extra.get("skills") {
+        Some(value) => match serde_json::from_value::<Vec<SkillReference>>(value.clone()) {
+            Ok(skills) => skills,
+            Err(error) => {
+                tracing::warn!(
+                    diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                        "decode persisted skill reference snapshot",
+                        &error,
+                    ),
+                    "persisted skill reference snapshot is malformed; projecting an empty snapshot"
+                );
+                Vec::new()
+            }
+        },
+        None => Vec::new(),
+    };
     SkillReferencePart { skills }
 }
 
@@ -685,23 +718,42 @@ pub fn skill_reference_from_skill_ref(part: &SkillRefContent) -> SkillReferenceP
 /// shape, preferring the lossless `extra["problem"]` object and otherwise
 /// constructing a minimal problem from the named keys.
 pub fn user_problem_from_error(part: &ErrorContent) -> UserProblem {
-    if let Some(problem) = part
-        .extra
-        .get("problem")
-        .and_then(|value| serde_json::from_value::<UserProblem>(value.clone()).ok())
-    {
-        return problem;
+    if let Some(value) = part.extra.get("problem") {
+        match serde_json::from_value::<UserProblem>(value.clone()) {
+            Ok(problem) => return problem,
+            Err(error) => tracing::warn!(
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "decode persisted user problem",
+                    &error,
+                ),
+                "persisted user problem is malformed; rebuilding it from canonical error fields"
+            ),
+        }
     }
+    let category = part
+        .category
+        .as_deref()
+        .map(|value| {
+            serde_json::from_value::<FailureCategory>(Value::String(value.to_owned())).map_err(
+                |error| {
+                    tracing::warn!(
+                        diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                            "decode persisted failure category",
+                            &error,
+                        ),
+                        "persisted failure category is malformed; using internal"
+                    );
+                },
+            )
+        })
+        .transpose()
+        .ok()
+        .flatten()
+        .unwrap_or(FailureCategory::Internal);
     UserProblem {
         id: FailureId::new(),
         code: FailureCode::new("runtime.error"),
-        category: part
-            .category
-            .as_deref()
-            .and_then(|value| {
-                serde_json::from_value::<FailureCategory>(Value::String(value.to_owned())).ok()
-            })
-            .unwrap_or(FailureCategory::Internal),
+        category,
         responsibility: FailureResponsibility::System,
         retry: RetryDirective::Never,
         recovery: RecoveryDirective::None,

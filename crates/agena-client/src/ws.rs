@@ -71,9 +71,25 @@ impl WsClient {
             while let Some(msg) = out_rx.recv().await {
                 let payload = match serde_json::to_string(&msg) {
                     Ok(p) => p,
-                    Err(_) => continue,
+                    Err(error) => {
+                        tracing::error!(
+                            diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                                "failed to serialize an Agena WebSocket client message",
+                                &error,
+                            ),
+                            "Agena WebSocket client message was not sent"
+                        );
+                        continue;
+                    }
                 };
-                if sink.send(Message::Text(payload.into())).await.is_err() {
+                if let Err(error) = sink.send(Message::Text(payload.into())).await {
+                    tracing::warn!(
+                        diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                            "failed to send an Agena WebSocket client message",
+                            &error,
+                        ),
+                        "Agena WebSocket writer stopped"
+                    );
                     break;
                 }
             }
@@ -83,15 +99,38 @@ impl WsClient {
         let subs_for_reader = Arc::clone(&subscribers);
         tokio::spawn(async move {
             while let Some(message) = stream.next().await {
-                let Ok(message) = message else { break };
+                let message = match message {
+                    Ok(message) => message,
+                    Err(error) => {
+                        tracing::warn!(
+                            diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                                "failed to receive an Agena WebSocket server message",
+                                &error,
+                            ),
+                            "Agena WebSocket reader stopped"
+                        );
+                        break;
+                    }
+                };
                 let text = match message {
                     Message::Text(t) => t,
                     Message::Binary(_) => continue,
                     Message::Close(_) => break,
                     _ => continue,
                 };
-                let parsed: Result<ServerMessage, _> = serde_json::from_str(&text);
-                let Ok(server_msg) = parsed else { continue };
+                let server_msg: ServerMessage = match serde_json::from_str(&text) {
+                    Ok(message) => message,
+                    Err(error) => {
+                        tracing::error!(
+                            diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                                "failed to decode an Agena WebSocket server message",
+                                &error,
+                            ),
+                            "invalid Agena WebSocket server message was ignored"
+                        );
+                        continue;
+                    }
+                };
                 if let ServerMessage::Notification(notification) = server_msg {
                     let (id, item) = match notification {
                         Notification::SessionChanged {

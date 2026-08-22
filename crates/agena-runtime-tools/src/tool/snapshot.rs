@@ -64,12 +64,12 @@ pub(super) fn execute_enter(
     let creation = if let Some(path) = input.path.as_deref() {
         SnapshotCreation {
             session: attach_existing_snapshot(workspace, path)
-                .map_err(|error| ToolError::plugin(error.to_string()))?,
+                .map_err(|error| ToolError::plugin_error(&error))?,
             note: None,
         }
     } else {
         create_managed_snapshot(workspace, input.name.as_deref())
-            .map_err(|error| ToolError::plugin(error.to_string()))?
+            .map_err(|error| ToolError::plugin_error(&error))?
     };
     let SnapshotCreation { session, note } = creation;
     let note_line = note
@@ -150,5 +150,5 @@ fn remove_created_workspace(
                 .to_string(),
         ));
     }
-    remove_managed_snapshot(session).map_err(|error| ToolError::plugin(error.to_string()))
+    remove_managed_snapshot(session).map_err(|error| ToolError::plugin_error(&error))
 }

@@ -528,12 +528,58 @@ impl JobStore for SqliteJobStore {
             Ok(rows) => rows
                 .iter()
                 .filter_map(|row| {
-                    let job_id = row.try_get::<String>("", "job_id").ok()?.parse().ok()?;
-                    let json = row.try_get::<String>("", "run_json").ok()?;
+                    let job_id = match row.try_get::<String>("", "job_id") {
+                        Ok(job_id) => match job_id.parse() {
+                            Ok(job_id) => job_id,
+                            Err(error) => {
+                                tracing::warn!(
+                                    target: "agena_scheduler::store",
+                                    diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                                        "decode scheduler history job id",
+                                        &error,
+                                    ),
+                                    "skipping malformed scheduler history row"
+                                );
+                                return None;
+                            }
+                        },
+                        Err(error) => {
+                            tracing::warn!(
+                                target: "agena_scheduler::store",
+                                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                                    "read scheduler history job id column",
+                                    &error,
+                                ),
+                                "skipping malformed scheduler history row"
+                            );
+                            return None;
+                        }
+                    };
+                    let json = match row.try_get::<String>("", "run_json") {
+                        Ok(json) => json,
+                        Err(error) => {
+                            tracing::warn!(
+                                target: "agena_scheduler::store",
+                                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                                    "read scheduler history run JSON column",
+                                    &error,
+                                ),
+                                "skipping malformed scheduler history row"
+                            );
+                            return None;
+                        }
+                    };
                     match serde_json::from_str(&json) {
                         Ok(record) => Some(SchedulerHistoryEntry { job_id, record }),
                         Err(error) => {
-                            tracing::warn!(target: "agena_scheduler::store", %error, "invalid scheduler history JSON");
+                            tracing::warn!(
+                                target: "agena_scheduler::store",
+                                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                                    "decode scheduler history run JSON",
+                                    &error,
+                                ),
+                                "skipping malformed scheduler history row"
+                            );
                             None
                         }
                     }

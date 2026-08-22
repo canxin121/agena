@@ -154,25 +154,12 @@ impl App {
         dialog.presentation.empty_message = ui_text::t(&self.i18n, "overlay-picker-empty");
         match result {
             Ok(providers) => {
-                let fallback_adapter = settings_choice_adapter_fallback(&self.i18n);
                 let mut rows = Vec::new();
                 if purpose == ProviderPickerPurpose::Configure {
                     rows.push(provider_list_create_item(&self.i18n));
                 }
                 rows.extend(providers.into_iter().map(|provider| {
-                    let detail = if purpose == ProviderPickerPurpose::Configure {
-                        i18n_provider_list_detail(&self.i18n, &provider)
-                    } else {
-                        settings_choice_default_provider_detail(
-                            &self.i18n,
-                            provider
-                                .defaults
-                                .adapter
-                                .as_deref()
-                                .unwrap_or(fallback_adapter.as_str()),
-                            provider.defaults.model.as_str(),
-                        )
-                    };
+                    let detail = i18n_provider_list_detail(&self.i18n, &provider);
                     let label = provider.provider_id.clone();
                     (
                         agena_tui::selection_picker::SelectionPickerItem::new(
@@ -853,8 +840,7 @@ use crate::{
     provider_studio_new_selected_model_keys, provider_studio_preferred_detail_field_index,
     provider_studio_provider_rows, provider_studio_restore_model_selection,
     provider_studio_save_error_message, provider_studio_save_result_message,
-    provider_studio_selected_adapter_id, restore_provider_studio_adapter_selection,
-    settings_choice_adapter_fallback, settings_choice_default_provider_detail, ui_text,
+    provider_studio_selected_adapter_id, restore_provider_studio_adapter_selection, ui_text,
 };
 use agena_tui::main_focus::Focus;
 use agena_tui::permission_prompt::PermissionPromptAutoApproveStatus;

@@ -350,41 +350,110 @@ fn rift(
 }
 
 fn is_managed_rift_workspace(workspace: &Path, path: &Path) -> bool {
-    path.join(".rift").is_file()
-        && path
-            .canonicalize()
-            .unwrap_or_else(|_| path.to_path_buf())
-            .starts_with(
-                snapshot_managed_dir(workspace)
-                    .canonicalize()
-                    .unwrap_or_else(|_| snapshot_managed_dir(workspace)),
-            )
+    if !path.join(".rift").is_file() {
+        return false;
+    }
+    let path = match path.canonicalize() {
+        Ok(path) => path,
+        Err(error) => {
+            tracing::warn!(
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "canonicalize a possible managed Rift workspace",
+                    &error,
+                ),
+                "snapshot path was not accepted as a managed Rift workspace"
+            );
+            return false;
+        }
+    };
+    let managed = snapshot_managed_dir(workspace);
+    let managed = match managed.canonicalize() {
+        Ok(path) => path,
+        Err(error) => {
+            tracing::warn!(
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "canonicalize the managed snapshot directory",
+                    &error,
+                ),
+                "snapshot path was not accepted as a managed Rift workspace"
+            );
+            return false;
+        }
+    };
+    path.starts_with(managed)
 }
 
 fn ensure_rift_branch(path: &Path, slug: &str) -> Option<String> {
     let branch = format!("agena/{slug}");
-    git(path, &["switch", "-c", &branch])
-        .or_else(|_| git(path, &["checkout", "-b", &branch]))
-        .ok()
-        .map(|_| branch)
+    match git(path, &["switch", "-c", &branch]) {
+        Ok(_) => Some(branch),
+        Err(primary) => match git(path, &["checkout", "-b", &branch]) {
+            Ok(_) => {
+                tracing::debug!(
+                    diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                        "create a Rift snapshot branch with git switch",
+                        &primary,
+                    ),
+                    "used legacy git checkout to create the Rift snapshot branch"
+                );
+                Some(branch)
+            }
+            Err(fallback) => {
+                tracing::warn!(
+                    primary = %agena_failure::diagnostic::format_error_chain_with_context(
+                        "create a Rift snapshot branch with git switch",
+                        &primary,
+                    ),
+                    fallback = %agena_failure::diagnostic::format_error_chain_with_context(
+                        "create a Rift snapshot branch with git checkout",
+                        &fallback,
+                    ),
+                    "Rift snapshot branch creation failed"
+                );
+                None
+            }
+        },
+    }
 }
 
 fn describe_workspace_head(path: &Path) -> String {
-    git(path, &["branch", "--show-current"])
-        .ok()
-        .and_then(|output| {
+    let branch = match git(path, &["branch", "--show-current"]) {
+        Ok(output) => {
             let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
             (!branch.is_empty()).then_some(branch)
-        })
-        .or_else(|| {
-            git(path, &["rev-parse", "--short", "HEAD"])
-                .ok()
-                .and_then(|output| {
-                    let head = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                    (!head.is_empty()).then(|| format!("detached@{head}"))
-                })
-        })
-        .unwrap_or_else(|| "snapshot".to_string())
+        }
+        Err(error) => {
+            tracing::debug!(
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "read the current snapshot branch",
+                    &error,
+                ),
+                "snapshot branch name is unavailable"
+            );
+            None
+        }
+    };
+    if let Some(branch) = branch {
+        return branch;
+    }
+    match git(path, &["rev-parse", "--short", "HEAD"]) {
+        Ok(output) => {
+            let head = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            (!head.is_empty())
+                .then(|| format!("detached@{head}"))
+                .unwrap_or_else(|| "snapshot".to_owned())
+        }
+        Err(error) => {
+            tracing::debug!(
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "read the current snapshot commit",
+                    &error,
+                ),
+                "using a generic snapshot description"
+            );
+            "snapshot".to_owned()
+        }
+    }
 }
 
 fn generate_slug() -> String {

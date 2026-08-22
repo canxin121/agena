@@ -17,7 +17,7 @@ impl ToolExecutor {
         else {
             return Ok((invocation.clone(), None));
         };
-        let payload = payload.map_err(|error| ToolError::invalid_input(error.to_string()))?;
+        let payload = payload.map_err(|error| ToolError::invalid_input_error(&error))?;
         let ToolPayloadInput::Shell(crate::part::ShellToolInput::Run {
             shell: agena_domain::ProcessShell::Bash,
             command: process_input,
@@ -45,8 +45,7 @@ impl ToolExecutor {
         })
         .into_invocation();
         let input_value = serde_json::Value::from(rewritten_invocation.input);
-        let input = StructuredObject::try_from(input_value)
-            .map_err(|err| ToolError::invalid_input(err.to_string()))?;
+        let input = StructuredObject::try_from(input_value).map_err(ToolError::invalid_input)?;
         Ok((
             ToolInvocation {
                 tool_api_call: invocation.tool_api_call.clone(),
@@ -108,8 +107,8 @@ impl ToolExecutor {
             .or_else(|| hook_tool_name.parse().ok())
             .ok_or_else(|| self.unknown_tool_error(hook_tool_name.as_str()))?;
         let input_json = invocation_input_json(invocation)?;
-        let input_value: serde_json::Value = serde_json::from_str(&input_json)
-            .map_err(|e| ToolError::invalid_input(e.to_string()))?;
+        let input_value: serde_json::Value =
+            serde_json::from_str(&input_json).map_err(|e| ToolError::invalid_input_error(&e))?;
         let effective_tags = definition
             .as_ref()
             .map(|definition| invocation_effective_tags(definition, invocation))
@@ -138,8 +137,8 @@ impl ToolExecutor {
             .await
             .map_err(|err| self.plugin_error_or_cancelled(err))?;
 
-        let input_json = serde_json::to_string(&hooked.input)
-            .map_err(|e| ToolError::invalid_input(e.to_string()))?;
+        let input_json =
+            serde_json::to_string(&hooked.input).map_err(|e| ToolError::invalid_input_error(&e))?;
         let mut prepared_invocation =
             parse_invocation_from_json(model_tool_name.as_str(), input_json.as_str())?;
         prepared_invocation.tool_api_call = invocation.tool_api_call.clone();
@@ -280,6 +279,7 @@ impl ToolExecutor {
         let cancellation = self.cancellation_token.clone();
         let invocation = invocation.clone();
         let (mut end_tx, end_rx) = tokio::sync::oneshot::channel();
+        let stream_id_for_task = stream_id.clone();
         tokio::spawn(async move {
             let lifecycle = async {
                 match end.await {
@@ -309,8 +309,11 @@ impl ToolExecutor {
                             .await
                     }
                     Ok(Err(err)) => Err(ToolError::from_plugin_error(err)),
-                    Err(_) => Err(ToolError::plugin(
-                        "stream ended without a terminal frame".to_string(),
+                    Err(error) => Err(ToolError::plugin(
+                        agena_failure::diagnostic::format_error_chain_with_context(
+                            "stream ended without a terminal frame",
+                            &error,
+                        ),
                     )),
                 }
             };
@@ -328,7 +331,12 @@ impl ToolExecutor {
                     result = &mut lifecycle => result,
                 },
             };
-            let _ = end_tx.send(result);
+            if end_tx.send(result).is_err() {
+                tracing::debug!(
+                    stream_id = %stream_id_for_task,
+                    "runtime tool stream terminal-result receiver was dropped"
+                );
+            }
         });
         Ok(Some(StreamingToolExecution {
             stream_id,
@@ -376,7 +384,7 @@ impl ToolExecutor {
         if let Some(payload) =
             ToolPayloadInput::from_executor_backed_invocation(&resolution, invocation)
         {
-            let payload = payload.map_err(|error| ToolError::invalid_input(error.to_string()))?;
+            let payload = payload.map_err(|error| ToolError::invalid_input_error(&error))?;
             let context = crate::tool::ToolRuntimeContext {
                 session_id: (session_id >= 0).then_some(session_id),
                 call_id: (call_id >= 0).then_some(call_id),
@@ -426,7 +434,7 @@ impl ToolExecutor {
                 payload => {
                     let payload_name = payload.tool_name();
                     let mut input = serde_json::to_value(payload)
-                        .map_err(|error| ToolError::invalid_input(error.to_string()))?;
+                        .map_err(|error| ToolError::invalid_input_error(&error))?;
                     if let Some(input) = input.as_object_mut() {
                         input.remove("tool");
                     }

@@ -100,7 +100,14 @@ impl fmt::Display for ScopedRegistryError {
     }
 }
 
-impl std::error::Error for ScopedRegistryError {}
+impl std::error::Error for ScopedRegistryError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Owner(error) => Some(error),
+            Self::InvalidScope(_) | Self::DuplicateEntry { .. } | Self::ParentCycle { .. } => None,
+        }
+    }
+}
 
 impl From<PluginEffectScopeError> for ScopedRegistryError {
     fn from(value: PluginEffectScopeError) -> Self {

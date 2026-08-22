@@ -26,12 +26,12 @@ pub(super) fn map_storage_error(err: PluginStorageError) -> PluginError {
         | PluginStorageError::MissingWorkspaceRoot
         | PluginStorageError::EmptyNamespace
         | PluginStorageError::EmptyKey
-        | PluginStorageError::Data(_) => PluginError::invalid_params(err.to_string()),
+        | PluginStorageError::Data(_) => PluginError::invalid_params_error(&err),
         PluginStorageError::SecretUnavailable(_) => {
             PluginError::from_kind(PluginErrorKind::HostUnavailable, err)
         }
         PluginStorageError::Io(_) | PluginStorageError::Secret(_) => {
-            PluginError::internal(err.to_string())
+            PluginError::internal_error(&err)
         }
     }
 }
@@ -134,9 +134,9 @@ pub(super) fn render_monitor_read(read: crate::tool::MonitorRead) -> MonitorRead
 pub(super) fn map_monitor_error(err: MonitorError) -> PluginError {
     match err {
         MonitorError::NotFound(_) | MonitorError::Invalid(_) | MonitorError::InvalidPattern(_) => {
-            PluginError::invalid_params(err.to_string())
+            PluginError::invalid_params_error(&err)
         }
-        other => PluginError::internal(other.to_string()),
+        other => PluginError::internal_error(&other),
     }
 }
 
@@ -178,7 +178,7 @@ pub(super) fn ask_user_tool_input(req: AskUserRequest) -> Result<AskUserToolInpu
         };
         return AskUserToolInput::parse_input(
             serde_json::to_value(input)
-                .map_err(|err| PluginError::invalid_params(err.to_string()))?,
+                .map_err(|error| PluginError::invalid_params_error(&error))?,
         );
     }
 
@@ -204,7 +204,7 @@ pub(super) fn ask_user_tool_input(req: AskUserRequest) -> Result<AskUserToolInpu
         }],
     };
     AskUserToolInput::parse_input(
-        serde_json::to_value(input).map_err(|err| PluginError::invalid_params(err.to_string()))?,
+        serde_json::to_value(input).map_err(|error| PluginError::invalid_params_error(&error))?,
     )
 }
 

@@ -4,8 +4,7 @@
 use anyhow::{Result, anyhow};
 
 use super::catalog::{
-    credential_issuer_label, optional_non_empty, required_trimmed,
-    supported_provider_draft_adapter_list,
+    credential_issuer_label, optional_non_empty, supported_provider_draft_adapter_list,
 };
 use super::draft_auth_data::{
     CLINE_API_MODELS_URL, ProviderDraftAuthKind, ProviderStudioSaveField,
@@ -23,15 +22,6 @@ impl ProviderConfigDraft {
         &self,
         adapter_ids: &std::collections::BTreeSet<String>,
     ) -> Result<()> {
-        let default_adapter = required_trimmed(self.default_adapter.as_str(), "defaults.adapter")?;
-        if !self.auth_kind.supports_adapter(default_adapter) {
-            return Err(anyhow!(
-                "auth {} does not support defaults.adapter `{default_adapter}`; expected one of {}",
-                self.auth_kind.label(),
-                supported_provider_draft_adapter_list(&self.auth_kind),
-            ));
-        }
-
         let incompatible = adapter_ids
             .iter()
             .filter(|adapter_id| !self.auth_kind.supports_adapter(adapter_id.as_str()))
@@ -114,21 +104,6 @@ impl ProviderConfigDraft {
         &self,
         adapter_ids: &std::collections::BTreeSet<String>,
     ) -> std::result::Result<(), ProviderStudioSaveValidationError> {
-        let default_adapter = optional_non_empty(self.default_adapter.as_str()).ok_or(
-            ProviderStudioSaveValidationError::FieldRequired(
-                ProviderStudioSaveField::DefaultAdapter,
-            ),
-        )?;
-        if !self.auth_kind.supports_adapter(default_adapter) {
-            return Err(
-                ProviderStudioSaveValidationError::UnsupportedDefaultAdapter {
-                    auth_kind: self.auth_kind.clone(),
-                    adapter: default_adapter.to_owned(),
-                    supported: supported_provider_draft_adapter_list(&self.auth_kind),
-                },
-            );
-        }
-
         let incompatible = adapter_ids
             .iter()
             .filter(|adapter_id| !self.auth_kind.supports_adapter(adapter_id.as_str()))
@@ -430,8 +405,6 @@ impl ProviderConfigDraft {
         self.auth.secret_access_key.trim().hash(&mut hasher);
         self.auth.session_token.trim().hash(&mut hasher);
         self.auth.service_key_env.trim().hash(&mut hasher);
-        self.default_adapter.trim().hash(&mut hasher);
-        self.default_model.trim().hash(&mut hasher);
         let mut normalized_adapter_ids = adapter_ids
             .iter()
             .map(|adapter_id| adapter_id.trim())

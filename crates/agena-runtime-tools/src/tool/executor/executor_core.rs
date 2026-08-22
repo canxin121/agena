@@ -172,48 +172,38 @@ impl ToolExecutor {
             ToolError::Cancelled
         } else {
             match error.kind {
-                agena_plugin_host::sdk::PluginErrorKind::PolicyDenied => error
-                    .diagnostic
-                    .data
-                    .as_ref()
-                    .and_then(|data| {
-                        data.get("denial")
-                            .or_else(|| data.pointer("/details/denial"))
-                    })
-                    .cloned()
-                    .and_then(|value| serde_json::from_value(value).ok())
+                agena_plugin_host::sdk::PluginErrorKind::PolicyDenied => {
+                    decode_plugin_diagnostic_data(
+                        &error,
+                        &["/denial", "/details/denial"],
+                        "policy denial",
+                    )
                     .map(|denial| ToolError::PolicyDenied(Box::new(denial)))
-                    .unwrap_or_else(|| ToolError::from_plugin_error(error)),
-                agena_plugin_host::sdk::PluginErrorKind::UserDeclined => error
-                    .diagnostic
-                    .data
-                    .as_ref()
-                    .and_then(|data| {
-                        data.get("decline")
-                            .or_else(|| data.pointer("/details/decline"))
-                    })
-                    .cloned()
-                    .and_then(|value| serde_json::from_value(value).ok())
+                    .unwrap_or_else(|| ToolError::from_plugin_error(error))
+                }
+                agena_plugin_host::sdk::PluginErrorKind::UserDeclined => {
+                    decode_plugin_diagnostic_data(
+                        &error,
+                        &["/decline", "/details/decline"],
+                        "user decline",
+                    )
                     .map(|decline| ToolError::UserDeclined(Box::new(decline)))
-                    .unwrap_or_else(|| ToolError::from_plugin_error(error)),
-                agena_plugin_host::sdk::PluginErrorKind::CapabilityUnavailable => error
-                    .diagnostic
-                    .data
-                    .as_ref()
-                    .and_then(|data| data.get("unavailable"))
-                    .cloned()
-                    .and_then(|value| serde_json::from_value(value).ok())
+                    .unwrap_or_else(|| ToolError::from_plugin_error(error))
+                }
+                agena_plugin_host::sdk::PluginErrorKind::CapabilityUnavailable => {
+                    decode_plugin_diagnostic_data(
+                        &error,
+                        &["/unavailable"],
+                        "capability unavailability",
+                    )
                     .map(|unavailable| ToolError::CapabilityUnavailable(Box::new(unavailable)))
-                    .unwrap_or_else(|| ToolError::from_plugin_error(error)),
-                agena_plugin_host::sdk::PluginErrorKind::ToolUnavailable => error
-                    .diagnostic
-                    .data
-                    .as_ref()
-                    .and_then(|data| data.get("unavailable"))
-                    .cloned()
-                    .and_then(|value| serde_json::from_value(value).ok())
-                    .map(|unavailable| ToolError::ToolUnavailable(Box::new(unavailable)))
-                    .unwrap_or_else(|| ToolError::from_plugin_error(error)),
+                    .unwrap_or_else(|| ToolError::from_plugin_error(error))
+                }
+                agena_plugin_host::sdk::PluginErrorKind::ToolUnavailable => {
+                    decode_plugin_diagnostic_data(&error, &["/unavailable"], "tool unavailability")
+                        .map(|unavailable| ToolError::ToolUnavailable(Box::new(unavailable)))
+                        .unwrap_or_else(|| ToolError::from_plugin_error(error))
+                }
                 _ => ToolError::from_plugin_error(error),
             }
         }
@@ -460,6 +450,30 @@ use super::{
 };
 use crate::tool::ToolApiBinding;
 use agena_plugin_host::PluginError;
+
+fn decode_plugin_diagnostic_data<T: serde::de::DeserializeOwned>(
+    error: &PluginError,
+    pointers: &[&str],
+    label: &'static str,
+) -> Option<T> {
+    let data = error.diagnostic.data.as_ref()?;
+    let value = pointers.iter().find_map(|pointer| data.pointer(pointer))?;
+    match serde_json::from_value(value.clone()) {
+        Ok(value) => Some(value),
+        Err(decode_error) => {
+            tracing::error!(
+                diagnostic_kind = label,
+                plugin_diagnostic = %error.diagnostic.message,
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    format!("decode plugin {label} diagnostic data"),
+                    &decode_error,
+                ),
+                "plugin diagnostic data was malformed; preserving the original plugin failure"
+            );
+            None
+        }
+    }
+}
 
 fn apply_definition_overrides(
     tools: Vec<RegisteredTool>,

@@ -167,7 +167,12 @@ fn server_arguments(args: &ServerArgs) -> Result<Vec<OsString>> {
         .clone()
         .map(Ok)
         .unwrap_or_else(std::env::current_dir)?;
-    let workspace = fs::canonicalize(&workspace).unwrap_or(workspace);
+    let workspace = fs::canonicalize(&workspace).with_context(|| {
+        format!(
+            "failed to canonicalize the user-service workspace {}",
+            workspace.display()
+        )
+    })?;
     arguments.push("--workspace".into());
     arguments.push(workspace.into_os_string());
     if let Some(ui_dir) = &args.ui_dir {
@@ -238,7 +243,15 @@ fn write_private_file(path: &Path, contents: &[u8]) -> Result<()> {
         Ok(())
     })();
     if result.is_err() {
-        let _ = fs::remove_file(&temporary);
+        if let Err(cleanup_error) = fs::remove_file(&temporary)
+            && cleanup_error.kind() != std::io::ErrorKind::NotFound
+        {
+            tracing::warn!(
+                path = %temporary.display(),
+                diagnostic = %agena_failure::diagnostic::format_error_chain(&cleanup_error),
+                "failed to remove a temporary service file after installation failed"
+            );
+        }
     }
     result
 }
@@ -524,6 +537,7 @@ mod tests {
 
     #[test]
     fn service_arguments_preserve_the_web_frontend_directory() {
+        let workspace = tempfile::tempdir().expect("temporary Agena workspace");
         let args = ServerArgs {
             action: None,
             overrides: Vec::new(),
@@ -538,7 +552,7 @@ mod tests {
             mcp_auth_mode: Some(agena_cli::McpAuthModeArg::Mixed),
             mcp_anonymous_access: Some(agena_cli::McpAnonymousAccessArg::ReadOnly),
             mcp_client_registration: Some(agena_cli::McpClientRegistrationArg::CimdOnly),
-            workspace_root: Some(PathBuf::from("/tmp/agena-workspace")),
+            workspace_root: Some(workspace.path().to_path_buf()),
             ui_dir: Some(PathBuf::from("/opt/agena/web-dist")),
         };
         let arguments = server_arguments(&args).expect("render server arguments");

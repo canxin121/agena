@@ -10,6 +10,7 @@ description = "Agena command-line argument schema, command dispatch, and output 
 agena-api = { workspace = true }
 agena-client = { workspace = true }
 agena-domain = { workspace = true }
+agena-failure = { workspace = true }
 agena-application = { workspace = true }
 agena-bundled-plugins = { workspace = true }
 agena-runtime = { workspace = true }

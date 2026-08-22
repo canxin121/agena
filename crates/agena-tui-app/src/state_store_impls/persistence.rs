@@ -7,10 +7,12 @@ fn persist_atomically(path: &Path, raw: &[u8]) -> UiResult<()> {
             path.display()
         ))
     })?;
-    let permissions = fs::metadata(path)
-        .ok()
-        .filter(|metadata| metadata.is_file())
-        .map(|metadata| metadata.permissions());
+    let permissions = match fs::metadata(path) {
+        Ok(metadata) if metadata.is_file() => Some(metadata.permissions()),
+        Ok(_) => None,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(crate::UiFailure::internal(error)),
+    };
     let mut builder = tempfile::Builder::new();
     builder.prefix(".agena-tui-state-").suffix(".tmp");
     #[cfg(unix)]

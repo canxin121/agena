@@ -4,16 +4,6 @@ export type ProviderModelPair = {
   model?: string
 }
 
-export type EffectiveModelDefaults = {
-  provider: string
-  adapter: string
-  model: string
-  thinkingMode: string
-  speedMode: string
-  verbosity: string
-  parallelToolCalls?: boolean
-}
-
 function clean(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''
 }
@@ -52,25 +42,5 @@ export function parseModelSlug(slug: string): { provider: string; adapter: strin
     provider: decodePart(parts[0] || ''),
     adapter: decodePart(parts[1] || ''),
     model: decodePart(parts[2] || ''),
-  }
-}
-
-export function resolveEffectiveDefaults(input: {
-  runtime?: Partial<EffectiveModelDefaults> | null
-  fallback?: ProviderModelPair | null
-}): EffectiveModelDefaults {
-  const runtime = input.runtime || null
-  const fallback = input.fallback || null
-  const runtimeProvider = clean(runtime?.provider)
-  const runtimeModel = clean(runtime?.model)
-  const hasRuntimeModel = Boolean(runtimeProvider && runtimeModel)
-  return {
-    provider: hasRuntimeModel ? runtimeProvider : clean(fallback?.provider),
-    adapter: hasRuntimeModel ? clean(runtime?.adapter) : clean(fallback?.adapter),
-    model: hasRuntimeModel ? runtimeModel : clean(fallback?.model),
-    thinkingMode: clean(runtime?.thinkingMode),
-    speedMode: clean(runtime?.speedMode),
-    verbosity: clean(runtime?.verbosity),
-    ...(typeof runtime?.parallelToolCalls === 'boolean' ? { parallelToolCalls: runtime.parallelToolCalls } : {}),
   }
 }

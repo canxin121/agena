@@ -111,10 +111,20 @@ fn settings_node_editor_schema(node: &agena_plugin_host::sdk::SettingsNode) -> J
         SettingsNodeKind::Path { path_kind } => {
             schema.insert("type".to_string(), JsonValue::String("string".to_string()));
             schema.insert("format".to_string(), JsonValue::String("path".to_string()));
-            schema.insert(
-                "x-agena-path-kind".to_string(),
-                serde_json::to_value(path_kind).unwrap_or(JsonValue::Null),
-            );
+            match serde_json::to_value(path_kind) {
+                Ok(path_kind) => {
+                    schema.insert("x-agena-path-kind".to_string(), path_kind);
+                }
+                Err(error) => {
+                    tracing::error!(
+                        diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                            "serialize a plugin settings path-kind constraint",
+                            &error,
+                        ),
+                        "plugin settings schema omitted an invalid path-kind extension"
+                    );
+                }
+            }
         }
         SettingsNodeKind::Url => {
             schema.insert("type".to_string(), JsonValue::String("string".to_string()));

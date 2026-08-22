@@ -59,7 +59,7 @@ impl<P: Plugin> PluginTransport for InProcessTransport<P> {
         match dispatch {
             Ok(Ok(value)) => Ok(value),
             Ok(Err(error)) => Err(TransportError::Plugin(error)),
-            Err(_) => Err(TransportError::Panicked),
+            Err(payload) => Err(TransportError::panicked(payload)),
         }
     }
 

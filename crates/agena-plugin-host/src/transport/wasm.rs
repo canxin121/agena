@@ -116,14 +116,19 @@ impl PluginTransport for WasmTransport {
         let dispatch_slot = Arc::clone(&self.dispatch_slot)
             .acquire_owned()
             .await
-            .map_err(|_| TransportError::Disconnected)?;
+            .map_err(|error| {
+                TransportError::disconnected_error(
+                    "Wasm plugin dispatch limiter closed before a slot was acquired",
+                    &error,
+                )
+            })?;
 
         let inner = Arc::clone(&self.inner);
         let result_bytes = tokio::task::spawn_blocking(move || {
             let _dispatch_slot = dispatch_slot;
-            let mut guard = inner
-                .lock()
-                .map_err(|_| TransportError::Io("wasm transport lock poisoned".to_string()))?;
+            let mut guard = inner.lock().map_err(|error| {
+                TransportError::Io(format!("wasm transport lock poisoned: {error}"))
+            })?;
             let inner = &mut *guard;
             inner
                 .store

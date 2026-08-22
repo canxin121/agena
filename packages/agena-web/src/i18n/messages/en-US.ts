@@ -2202,8 +2202,6 @@ export default {
         availableCount: '{count} available',
       },
       model: {
-        autoDefault: 'Agena runtime default',
-        autoDefaultDescription: 'Use the default model configured on the Agena server',
         defaultThinkingDescription: 'Use the thinking mode configured for this model',
         defaultSpeedDescription: 'Use the speed mode configured for this model',
       },
@@ -3783,6 +3781,7 @@ export default {
         noQuery: 'No search query.',
         noFilesFound: 'No files found.',
         results: '{count} results',
+        truncatedResults: '{count} results shown · search was partial or truncated',
       },
       content: {
         placeholder: 'Search',

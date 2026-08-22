@@ -20,6 +20,7 @@ agena-application = { workspace = true }
 agena-cli = { workspace = true }
 agena-client = { workspace = true }
 agena-domain = { workspace = true }
+agena-failure = { workspace = true }
 agena-git-http = { workspace = true }
 agena-mcp-server = { workspace = true }
 agena-runtime = { workspace = true }
@@ -38,6 +39,7 @@ dashmap = { workspace = true }
 ed25519-dalek = { workspace = true }
 futures-util = { workspace = true }
 getrandom = { workspace = true }
+http-body-util = { workspace = true }
 ignore = { workspace = true }
 jsonwebtoken = { workspace = true }
 libc = "0.2.186"

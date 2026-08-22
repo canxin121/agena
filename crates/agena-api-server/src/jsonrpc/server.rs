@@ -80,7 +80,9 @@ impl EventBroadcaster {
     }
 
     pub fn publish(&self, notification: AppServerNotification) {
-        let _ = self.sender.send(notification);
+        if self.sender.send(notification).is_err() {
+            tracing::debug!("JSON-RPC notification had no active subscribers");
+        }
     }
 }
 
@@ -266,8 +268,15 @@ async fn websocket_events(
         let (mut sender, _) = socket.split();
         let mut rx = events.subscribe();
         while let Ok(notification) = rx.recv().await {
-            let Ok(text) = serde_json::to_string(&notification) else {
-                continue;
+            let text = match serde_json::to_string(&notification) {
+                Ok(text) => text,
+                Err(error) => {
+                    tracing::error!(
+                        diagnostic = %agena_failure::diagnostic::format_error_chain(&error),
+                        "failed to serialize JSON-RPC event notification"
+                    );
+                    continue;
+                }
             };
             if sender.send(Message::Text(text.into())).await.is_err() {
                 break;
@@ -292,8 +301,9 @@ where
     T: serde::Serialize,
 {
     serde_json::to_value(value).map_err(|err| {
-        let error = agena_api::ApiError::internal(err.to_string());
-        tracing::error!(failure_id = %error.problem.id, diagnostic = %err, "failed to serialize JSON-RPC result");
+        let diagnostic = agena_failure::diagnostic::format_error_chain(&err);
+        let error = agena_api::ApiError::internal(diagnostic.clone());
+        tracing::error!(failure_id = %error.problem.id, diagnostic = %diagnostic, "failed to serialize JSON-RPC result");
         json_rpc_problem(-32603, error)
     })
 }
@@ -324,9 +334,22 @@ fn to_json_rpc_error(error: AppServerError) -> JsonRpcError {
 }
 
 fn json_rpc_problem(code: i64, error: agena_api::ApiError) -> JsonRpcError {
+    let failure_id = error.problem.id;
+    let message = error.to_string();
+    let data = match serde_json::to_value(error) {
+        Ok(data) => Some(data),
+        Err(serialization_error) => {
+            tracing::error!(
+                failure_id = %failure_id,
+                diagnostic = %agena_failure::diagnostic::format_error_chain(&serialization_error),
+                "failed to serialize JSON-RPC error detail"
+            );
+            None
+        }
+    };
     JsonRpcError {
         code,
-        message: error.to_string(),
-        data: serde_json::to_value(error).ok(),
+        message,
+        data,
     }
 }

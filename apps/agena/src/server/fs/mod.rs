@@ -99,7 +99,7 @@ where
         return None;
     }
 
-    serde_json::to_string(&FsChangedEvent {
+    match serde_json::to_string(&FsChangedEvent {
         event_type: "agena:fs-changed",
         properties: FsChangedEventProperties {
             directory: to_api_path(root),
@@ -109,8 +109,19 @@ where
             new_path: new_path.map(to_api_path),
             truncated,
         },
-    })
-    .ok()
+    }) {
+        Ok(event) => Some(event),
+        Err(error) => {
+            tracing::error!(
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "serialize a filesystem change event",
+                    &error,
+                ),
+                "filesystem change event could not be encoded"
+            );
+            None
+        }
+    }
 }
 
 pub(crate) fn publish_fs_changed_event<I>(
@@ -123,7 +134,14 @@ pub(crate) fn publish_fs_changed_event<I>(
     I: IntoIterator,
     I::Item: AsRef<Path>,
 {
-    let _ = encode_fs_changed_event(root, change_type, changed_paths, old_path, new_path);
+    if let Some(event) =
+        encode_fs_changed_event(root, change_type, changed_paths, old_path, new_path)
+    {
+        tracing::debug!(
+            event,
+            "filesystem change event was projected for legacy compatibility"
+        );
+    }
 }
 
 fn has_parent_dir_component(p: &Path) -> bool {

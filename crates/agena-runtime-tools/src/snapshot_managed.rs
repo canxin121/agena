@@ -127,14 +127,34 @@ fn rift_gc(workspace: &Path) -> Vec<PathBuf> {
 }
 
 fn scan_git_backend_paths(workspace: &Path) -> HashSet<PathBuf> {
-    let Ok(output) = git(workspace, &["worktree", "list", "--porcelain"]) else {
-        return HashSet::new();
+    let output = match git(workspace, &["worktree", "list", "--porcelain"]) {
+        Ok(output) => output,
+        Err(error) => {
+            tracing::warn!(
+                diagnostic = %error,
+                "managed snapshot Git worktree discovery failed; backend path exclusion is partial"
+            );
+            return HashSet::new();
+        }
     };
     String::from_utf8_lossy(&output.stdout)
         .lines()
         .filter_map(|line| line.strip_prefix("worktree "))
         .map(PathBuf::from)
-        .map(|path| path.canonicalize().unwrap_or(path))
+        .map(|path| match path.canonicalize() {
+            Ok(canonical) => canonical,
+            Err(error) => {
+                tracing::warn!(
+                    worktree_path = %path.display(),
+                    diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                        "canonicalize a Git worktree backend path",
+                        &error,
+                    ),
+                    "managed snapshot backend exclusion will use an unresolved worktree path"
+                );
+                path
+            }
+        })
         .collect()
 }
 
@@ -176,21 +196,34 @@ fn rift(cwd: &Path, db_path: &Path, args: &[&str]) -> Result<process_control::Ou
 }
 
 fn describe_workspace_head(path: &Path) -> String {
-    git(path, &["branch", "--show-current"])
-        .ok()
-        .and_then(|output| {
+    let branch = match git(path, &["branch", "--show-current"]) {
+        Ok(output) => {
             let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
             (!branch.is_empty()).then_some(branch)
-        })
-        .or_else(|| {
-            git(path, &["rev-parse", "--short", "HEAD"])
-                .ok()
-                .and_then(|output| {
-                    let head = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                    (!head.is_empty()).then(|| format!("detached@{head}"))
-                })
-        })
-        .unwrap_or_else(|| "snapshot".to_string())
+        }
+        Err(error) => {
+            tracing::debug!(
+                diagnostic = %error,
+                "managed snapshot branch name is unavailable"
+            );
+            None
+        }
+    };
+    if let Some(branch) = branch {
+        return branch;
+    }
+    match git(path, &["rev-parse", "--short", "HEAD"]) {
+        Ok(output) => {
+            let head = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            (!head.is_empty())
+                .then(|| format!("detached@{head}"))
+                .unwrap_or_else(|| "snapshot".to_owned())
+        }
+        Err(error) => {
+            tracing::debug!(diagnostic = %error, "using a generic managed snapshot description");
+            "snapshot".to_owned()
+        }
+    }
 }
 
 fn is_reserved_managed_entry(path: &Path) -> bool {
@@ -200,8 +233,33 @@ fn is_reserved_managed_entry(path: &Path) -> bool {
 }
 
 fn paths_equal(a: &Path, b: &Path) -> bool {
-    a.canonicalize().unwrap_or_else(|_| a.to_path_buf())
-        == b.canonicalize().unwrap_or_else(|_| b.to_path_buf())
+    let left = match a.canonicalize() {
+        Ok(path) => path,
+        Err(error) => {
+            tracing::debug!(
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "canonicalize the first managed snapshot path",
+                    &error,
+                ),
+                "falling back to lexical snapshot path comparison"
+            );
+            a.to_path_buf()
+        }
+    };
+    let right = match b.canonicalize() {
+        Ok(path) => path,
+        Err(error) => {
+            tracing::debug!(
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "canonicalize the second managed snapshot path",
+                    &error,
+                ),
+                "falling back to lexical snapshot path comparison"
+            );
+            b.to_path_buf()
+        }
+    };
+    left == right
 }
 
 #[cfg(test)]

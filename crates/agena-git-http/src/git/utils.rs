@@ -87,12 +87,71 @@ pub(crate) fn git_not_repo_response() -> Response {
 pub(crate) fn git2_open_error_response(e: git2_utils::Git2OpenError) -> Response {
     match e {
         git2_utils::Git2OpenError::NotARepository => git_not_repo_response(),
-        other => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": other.message(), "code": other.code()})),
-        )
-            .into_response(),
+        other => {
+            let diagnostic = other.message();
+            tracing::error!(
+                error_code = other.code(),
+                diagnostic,
+                "libgit2 repository operation failed"
+            );
+            let public = agena_failure::diagnostic::user_message_with_context(&diagnostic, 400);
+            let public = if public.is_empty() {
+                "Git repository operation failed".to_owned()
+            } else {
+                public
+            };
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": public, "code": other.code()})),
+            )
+                .into_response()
+        }
     }
+}
+
+pub(crate) fn git_io_error_response(
+    context: &str,
+    error: &std::io::Error,
+    code: &'static str,
+) -> Response {
+    let diagnostic = agena_failure::diagnostic::format_error_chain_with_context(context, error);
+    tracing::error!(
+        operation = context,
+        error_code = code,
+        diagnostic = %diagnostic,
+        "Git filesystem operation failed"
+    );
+    let public = agena_failure::diagnostic::user_message_with_context(&diagnostic, 400);
+    let public = if public.is_empty() {
+        "Git filesystem operation failed".to_owned()
+    } else {
+        public
+    };
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(serde_json::json!({"error": public, "code": code})),
+    )
+        .into_response()
+}
+
+pub(crate) fn git_task_error_response(context: &str, error: &tokio::task::JoinError) -> Response {
+    let diagnostic = agena_failure::diagnostic::format_error_chain_with_context(context, error);
+    tracing::error!(
+        operation = context,
+        diagnostic = %diagnostic,
+        "Git background worker task failed"
+    );
+    let public = agena_failure::diagnostic::user_message_with_context(&diagnostic, 400);
+    let public = if public.is_empty() {
+        "Git background operation failed".to_owned()
+    } else {
+        public
+    };
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(serde_json::json!({"error": public, "code": "git2_task_failed"})),
+    )
+        .into_response()
 }
 
 pub(crate) fn map_git_failure(code: i32, stdout: &str, stderr: &str) -> Option<Response> {
@@ -549,14 +608,20 @@ pub(crate) fn normalize_directory_path(value: &str) -> String {
     crate::path_utils::normalize_directory_path(value)
 }
 
-pub(crate) fn abs_path(value: &str) -> PathBuf {
+pub(crate) fn abs_path(value: &str) -> Result<PathBuf, Box<Response>> {
     let p = PathBuf::from(normalize_directory_path(value));
     if p.is_absolute() {
-        p
+        Ok(p)
     } else {
         std::env::current_dir()
-            .unwrap_or_else(|_| PathBuf::from("."))
-            .join(p)
+            .map(|directory| directory.join(p))
+            .map_err(|error| {
+                Box::new(git_io_error_response(
+                    "resolve the current directory for a Git request",
+                    &error,
+                    "current_directory_failed",
+                ))
+            })
     }
 }
 
@@ -610,9 +675,22 @@ pub(crate) async fn git_config_get(
     cmd.stdin(Stdio::null());
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::null());
-    let out = agena_process::output(cmd, std::time::Duration::from_secs(10), 1024 * 1024)
-        .await
-        .ok()?;
+    let out =
+        match agena_process::output(cmd, std::time::Duration::from_secs(10), 1024 * 1024).await {
+            Ok(output) => output,
+            Err(error) => {
+                tracing::warn!(
+                    config_scope = scope,
+                    config_key = key,
+                    diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                        "read an optional Git configuration value",
+                        &error,
+                    ),
+                    "optional Git configuration value is unavailable"
+                );
+                return None;
+            }
+        };
     if !out.status.success() {
         return None;
     }

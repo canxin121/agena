@@ -14,7 +14,7 @@ use agena_domain::{
 };
 use agena_failure::{
     Failure, FailureCategory, FailureCode, FailureImpact, FailureResponsibility, RecoveryDirective,
-    RetryDirective, UserPresentation, UserProblem,
+    RetryDirective, UserPresentation,
 };
 use agena_plugin_sdk::activity::ActivitySourceAdapter;
 use agena_runtime_contracts::part_content::SystemNotificationContent;
@@ -274,6 +274,24 @@ fn subtask_activity(
     }
 }
 
+fn persisted_subtask_failure(meta: &SessionMeta) -> Option<Failure> {
+    let value = meta.subtask_failure.as_ref()?;
+    match serde_json::from_value::<Failure>(value.clone()) {
+        Ok(failure) => Some(failure),
+        Err(error) => {
+            tracing::error!(
+                session_id = meta.id,
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "decode a persisted subtask failure",
+                    &error,
+                ),
+                "persisted subtask failure is malformed"
+            );
+            None
+        }
+    }
+}
+
 /// Project a session's persisted subtask state ([`SessionMeta`] columns) into
 /// the unified registry. v2 keeps subtask state in the `sessions` row; the
 /// facade's [`SessionChange::SessionMetaUpdated`] notifications drive this.
@@ -288,6 +306,7 @@ pub(crate) fn upsert_task_activity_from_meta(registry: &ActivityRegistry, meta: 
         return;
     };
     let started_at = meta.subtask_started_at_ms.unwrap_or(meta.updated_at_ms);
+    let persisted_failure = persisted_subtask_failure(meta);
     registry.upsert(subtask_activity(
         task_id,
         meta.id,
@@ -295,15 +314,10 @@ pub(crate) fn upsert_task_activity_from_meta(registry: &ActivityRegistry, meta: 
         subtask_status_to_background(status),
         started_at,
         meta.subtask_finished_at_ms,
-        meta.subtask_failure
+        persisted_failure
             .as_ref()
-            .and_then(|value| {
-                serde_json::from_value::<agena_failure::UserProblem>(value.clone()).ok()
-            })
             .map(|failure| failure.user.fallback.clone()),
-        meta.subtask_failure.as_ref().and_then(|value| {
-            serde_json::from_value::<agena_failure::UserProblem>(value.clone()).ok()
-        }),
+        persisted_failure.as_ref().map(Into::into),
     ));
 }
 
@@ -616,11 +630,7 @@ fn terminalize_task_part(bridge: &BackgroundCompletionBridge, meta: SessionMeta)
     if !status.is_terminal() {
         return;
     }
-    let persisted_failure = meta
-        .subtask_failure
-        .as_ref()
-        .and_then(|value| serde_json::from_value::<UserProblem>(value.clone()).ok())
-        .map(Failure::from);
+    let persisted_failure = persisted_subtask_failure(&meta);
     let (terminal, failure) = match status {
         SubtaskStatus::Completed => (PartState::Completed, None),
         SubtaskStatus::Failed => (
@@ -667,7 +677,13 @@ fn terminalize_task_part(bridge: &BackgroundCompletionBridge, meta: SessionMeta)
     let Some(manager) = bridge
         .manager
         .lock()
-        .expect("background manager lock")
+        .unwrap_or_else(|error| {
+            tracing::error!(
+                diagnostic = %error,
+                "background completion manager lock is poisoned; recovering state"
+            );
+            error.into_inner()
+        })
         .clone()
     else {
         return;
@@ -693,16 +709,29 @@ fn terminalize_task_part(bridge: &BackgroundCompletionBridge, meta: SessionMeta)
     tokio::spawn(async move {
         let outcome = match terminal {
             PartState::Completed => {
-                let final_text = manager
-                    .session_store()
-                    .load(child_session_id)
-                    .await
-                    .ok()
-                    .and_then(|view| final_child_text_from_parts(&view.parts))
-                    .unwrap_or_else(|| "Task completed.".to_string());
+                let final_text = match manager.session_store().load(child_session_id).await {
+                    Ok(view) => final_child_text_from_parts(&view.parts)
+                        .unwrap_or_else(|| "Task completed.".to_string()),
+                    Err(error) => {
+                        tracing::error!(
+                            session_id = child_session_id,
+                            diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                                "load a completed child session for its final task result",
+                                &error,
+                            ),
+                            "task completion notification is using a fallback result"
+                        );
+                        "Task completed, but its final result could not be loaded.".to_string()
+                    }
+                };
                 Ok(final_text)
             }
-            _ => Err(failure.expect("non-completed task carries a failure")),
+            _ => Err(failure.unwrap_or_else(|| {
+                background_failure(
+                    ProcessStatus::Failed,
+                    "The delegated task ended without a persisted failure detail.".to_owned(),
+                )
+            })),
         };
         // Wake the model with a completion notification (the agena analog of
         // Claude Code's `<task-notification>`); the task's final text is
@@ -859,7 +888,19 @@ pub(crate) async fn read_task_logs(
                 completion_reason: None,
             }
         }
-        Err(_) => empty_task_logs(task_id, after_cursor),
+        Err(error) => {
+            tracing::warn!(
+                parent_session_id,
+                task_id,
+                after_cursor,
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "failed to read delegated-task logs; returning an empty activity-log page",
+                    &error,
+                ),
+                "delegated-task activity log is temporarily unavailable"
+            );
+            empty_task_logs(task_id, after_cursor)
+        }
     }
 }
 

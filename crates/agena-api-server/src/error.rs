@@ -39,6 +39,10 @@ impl ServerError {
         ApplicationError::bad_request_with_diagnostic(message, diagnostic).into()
     }
 
+    pub fn bad_request_error(error: &(dyn std::error::Error + 'static)) -> Self {
+        ApplicationError::bad_request_error(error).into()
+    }
+
     pub fn not_found(message: &'static str) -> Self {
         ApplicationError::not_found(message).into()
     }
@@ -67,6 +71,10 @@ impl ServerError {
 
     pub fn internal(diagnostic: impl std::fmt::Display) -> Self {
         ApplicationError::internal(diagnostic).into()
+    }
+
+    pub fn internal_error(error: &(dyn std::error::Error + 'static)) -> Self {
+        ApplicationError::internal_error(error).into()
     }
 
     pub fn into_api(self) -> ApiError {

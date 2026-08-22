@@ -535,7 +535,7 @@ pub fn expand_input_shape_variant_validation_arm(
                 quote! {
                     Self::#variant_name(#(#bindings),*) => {
                         let value = serde_json::to_value((#(#bindings,)*))
-                            .map_err(|err| ::agena_plugin_sdk::PluginError::invalid_params(err.to_string()))?;
+                            .map_err(|err| ::agena_plugin_sdk::PluginError::invalid_params_error(&err))?;
                         #built_in_validate_expr
                         #validate_expr
                     }

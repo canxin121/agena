@@ -1,3 +1,4 @@
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -11,9 +12,10 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     DirectoryQuery, GitBranchProtectionPrompt, GitCommitSummary, git_allow_no_verify_commit,
-    git_branch_protection_for_branch, git_config_get, git_enforce_branch_protection,
-    map_git_failure, redact_git_output, require_directory, require_locked_directory, run_git,
-    run_git_checked_with_status, truncate_for_payload,
+    git_branch_protection_for_branch, git_command_transport_error_response, git_config_get,
+    git_enforce_branch_protection, git_io_error_response, map_git_failure, redact_git_output,
+    require_directory, require_locked_directory, run_git, run_git_checked_with_status,
+    truncate_for_payload,
 };
 
 #[derive(Debug, Deserialize)]
@@ -66,9 +68,17 @@ pub struct GitResetCommitBody {
 }
 
 async fn git_path_exists(dir: &Path, name: &str) -> bool {
-    let (code, out, _) = run_git(dir, &["rev-parse", "--git-path", name])
-        .await
-        .unwrap_or((1, "".to_string(), "".to_string()));
+    let (code, out, _) = match run_git(dir, &["rev-parse", "--git-path", name]).await {
+        Ok(result) => result,
+        Err(error) => {
+            tracing::error!(
+                diagnostic = %error,
+                marker = name,
+                "failed to resolve Git marker path"
+            );
+            return false;
+        }
+    };
     if code != 0 {
         return false;
     }
@@ -274,13 +284,23 @@ pub async fn git_commit_template(Query(q): Query<DirectoryQuery>) -> Response {
         path = dir.join(path);
     }
 
-    let Ok(meta) = tokio::fs::metadata(&path).await else {
-        return Json(GitCommitTemplateResponse {
-            configured: true,
-            path: Some(path.to_string_lossy().into_owned()),
-            template: None,
-        })
-        .into_response();
+    let meta = match tokio::fs::metadata(&path).await {
+        Ok(meta) => meta,
+        Err(error) if error.kind() == ErrorKind::NotFound => {
+            return Json(GitCommitTemplateResponse {
+                configured: true,
+                path: Some(path.to_string_lossy().into_owned()),
+                template: None,
+            })
+            .into_response();
+        }
+        Err(error) => {
+            return git_io_error_response(
+                "failed to inspect configured Git commit template",
+                &error,
+                "commit_template_metadata_failed",
+            );
+        }
     };
     if !meta.is_file() || meta.len() > 64 * 1024 {
         return Json(GitCommitTemplateResponse {
@@ -291,7 +311,24 @@ pub async fn git_commit_template(Query(q): Query<DirectoryQuery>) -> Response {
         .into_response();
     }
 
-    let template = tokio::fs::read_to_string(&path).await.unwrap_or_default();
+    let template = match tokio::fs::read_to_string(&path).await {
+        Ok(template) => template,
+        Err(error) if error.kind() == ErrorKind::NotFound => {
+            return Json(GitCommitTemplateResponse {
+                configured: true,
+                path: Some(path.to_string_lossy().into_owned()),
+                template: None,
+            })
+            .into_response();
+        }
+        Err(error) => {
+            return git_io_error_response(
+                "failed to read configured Git commit template",
+                &error,
+                "commit_template_read_failed",
+            );
+        }
+    };
     let t = template.trim_end().to_string();
     Json(GitCommitTemplateResponse {
         configured: true,
@@ -304,6 +341,33 @@ pub async fn git_commit_template(Query(q): Query<DirectoryQuery>) -> Response {
 fn parse_commit_hash(stdout: &str) -> String {
     // Capture last commit hash.
     stdout.trim().to_string()
+}
+
+fn post_commit_git_output(
+    result: Result<(i32, String, String), String>,
+    operation: &str,
+) -> Option<String> {
+    match result {
+        Ok((0, output, _)) => Some(output),
+        Ok((exit_code, output, error)) => {
+            tracing::warn!(
+                operation,
+                exit_code,
+                stdout = %redact_git_output(&truncate_for_payload(&output, 4_000)),
+                stderr = %redact_git_output(&truncate_for_payload(&error, 4_000)),
+                "post-commit Git metadata command failed"
+            );
+            None
+        }
+        Err(error) => {
+            tracing::error!(
+                operation,
+                diagnostic = %error,
+                "post-commit Git metadata process failed"
+            );
+            None
+        }
+    }
 }
 
 fn parse_shortstat(lines: &[&str]) -> (i32, i32, i32) {
@@ -439,10 +503,16 @@ pub async fn git_commit<S: crate::GitHttpState + 'static>(
     }
 
     if body.add_all {
-        let (c, o, e) =
-            run_git(&dir, &["add", "-A"])
-                .await
-                .unwrap_or((1, "".to_string(), "".to_string()));
+        let (c, o, e) = match run_git(&dir, &["add", "-A"]).await {
+            Ok(result) => result,
+            Err(error) => {
+                return git_command_transport_error_response(
+                    "stage all files before commit",
+                    &error,
+                    Some("git_add_process_failed"),
+                );
+            }
+        };
         if c != 0 {
             if let Some(resp) = map_git_failure(c, &o, &e) {
                 return resp;
@@ -463,9 +533,16 @@ pub async fn git_commit<S: crate::GitHttpState + 'static>(
         for f in &body.files {
             args.push(f);
         }
-        let (c, o, e) = run_git(&dir, &args)
-            .await
-            .unwrap_or((1, "".to_string(), "".to_string()));
+        let (c, o, e) = match run_git(&dir, &args).await {
+            Ok(result) => result,
+            Err(error) => {
+                return git_command_transport_error_response(
+                    "stage selected files before commit",
+                    &error,
+                    Some("git_add_process_failed"),
+                );
+            }
+        };
         if c != 0 {
             if let Some(resp) = map_git_failure(c, &o, &e) {
                 return resp;
@@ -502,10 +579,16 @@ pub async fn git_commit<S: crate::GitHttpState + 'static>(
             commit_args.push(f);
         }
     }
-    let (c, o, e) =
-        run_git(&dir, &commit_args)
-            .await
-            .unwrap_or((1, "".to_string(), "".to_string()));
+    let (c, o, e) = match run_git(&dir, &commit_args).await {
+        Ok(result) => result,
+        Err(error) => {
+            return git_command_transport_error_response(
+                "create Git commit",
+                &error,
+                Some("git_commit_process_failed"),
+            );
+        }
+    };
     if c != 0 {
         if let Some(resp) = map_git_failure(c, &o, &e) {
             return resp;
@@ -524,29 +607,26 @@ pub async fn git_commit<S: crate::GitHttpState + 'static>(
     }
 
     // Return commit hash + branch.
-    let commit = run_git(&dir, &["rev-parse", "HEAD"])
-        .await
-        .ok()
-        .map(|(_, o, _)| parse_commit_hash(&o))
-        .unwrap_or_default();
-    let branch = run_git(&dir, &["rev-parse", "--abbrev-ref", "HEAD"])
-        .await
-        .ok()
-        .map(|(_, o, _)| o.trim().to_string())
-        .unwrap_or_default();
+    let commit = post_commit_git_output(
+        run_git(&dir, &["rev-parse", "HEAD"]).await,
+        "resolve resulting commit hash",
+    )
+    .map(|output| parse_commit_hash(&output))
+    .unwrap_or_default();
+    let branch = post_commit_git_output(
+        run_git(&dir, &["rev-parse", "--abbrev-ref", "HEAD"]).await,
+        "resolve resulting commit branch",
+    )
+    .map(|output| output.trim().to_string())
+    .unwrap_or_default();
 
     // Best-effort summary from last commit.
-    let (files_changed, insertions, deletions) = {
-        let (c3, o3, _) = run_git(&dir, &["show", "--shortstat", "--format=", "HEAD"])
-            .await
-            .unwrap_or((1, "".to_string(), "".to_string()));
-        if c3 != 0 {
-            (0, 0, 0)
-        } else {
-            let lines: Vec<&str> = o3.lines().collect();
-            parse_shortstat(&lines)
-        }
-    };
+    let (files_changed, insertions, deletions) = post_commit_git_output(
+        run_git(&dir, &["show", "--shortstat", "--format=", "HEAD"]).await,
+        "read resulting commit short-stat",
+    )
+    .map(|output| parse_shortstat(&output.lines().collect::<Vec<_>>()))
+    .unwrap_or_default();
 
     Json(GitCommitResult {
         success: true,

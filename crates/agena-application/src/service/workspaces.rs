@@ -23,7 +23,7 @@ impl ApplicationService {
                 limit: limit + 1,
             })
             .await
-            .map_err(|error| ApplicationError::internal(error.to_string()))?;
+            .map_err(|error| ApplicationError::internal_error(&error))?;
         let (slice, has_more) = trim_page(rows, limit)?;
         let workspace_ids = slice.iter().map(|row| row.id).collect::<Vec<_>>();
         let session_counts = if query.include_session_count {
@@ -51,7 +51,7 @@ impl ApplicationService {
             .workspace_repository
             .get(workspace_id)
             .await
-            .map_err(|error| ApplicationError::internal(error.to_string()))?;
+            .map_err(|error| ApplicationError::internal_error(&error))?;
         let Some(row) = row else {
             return Ok(None);
         };
@@ -71,7 +71,7 @@ impl ApplicationService {
             self.workspace_repository
                 .path_by_id(workspace_id)
                 .await
-                .map_err(|error| ApplicationError::internal(error.to_string()))?
+                .map_err(|error| ApplicationError::internal_error(&error))?
                 .ok_or_else(|| {
                     ApplicationError::not_found_with_diagnostic(
                         "The workspace was not found.",
@@ -139,7 +139,7 @@ impl ApplicationService {
             self.workspace_repository
                 .path_by_id(workspace_id)
                 .await
-                .map_err(|error| ApplicationError::internal(error.to_string()))?
+                .map_err(|error| ApplicationError::internal_error(&error))?
                 .ok_or_else(|| {
                     ApplicationError::not_found_with_diagnostic(
                         "The workspace was not found.",
@@ -229,7 +229,7 @@ impl ApplicationService {
             .workspace_repository
             .path_by_id(session.workspace_id)
             .await
-            .map_err(|error| ApplicationError::internal(error.to_string()))?
+            .map_err(|error| ApplicationError::internal_error(&error))?
             .ok_or_else(|| {
                 ApplicationError::not_found_with_diagnostic(
                     "The workspace was not found.",
@@ -294,7 +294,7 @@ impl ApplicationService {
             self.workspace_repository
                 .path_by_id(workspace_id)
                 .await
-                .map_err(|error| ApplicationError::internal(error.to_string()))?
+                .map_err(|error| ApplicationError::internal_error(&error))?
                 .ok_or_else(|| {
                     ApplicationError::not_found_with_diagnostic(
                         "The workspace was not found.",
@@ -369,7 +369,7 @@ impl ApplicationService {
             .workspace_repository
             .create(path)
             .await
-            .map_err(|error| ApplicationError::internal(error.to_string()))?;
+            .map_err(|error| ApplicationError::internal_error(&error))?;
 
         workspace_record_resource(&created, Some(0))
     }
@@ -427,7 +427,7 @@ impl ApplicationService {
             .workspace_repository
             .get(workspace_id)
             .await
-            .map_err(|error| ApplicationError::internal(error.to_string()))?
+            .map_err(|error| ApplicationError::internal_error(&error))?
         else {
             return Err(ApplicationError::not_found_with_diagnostic(
                 "The workspace was not found.",
@@ -452,7 +452,7 @@ impl ApplicationService {
             .workspace_repository
             .update_path(workspace_id, path)
             .await
-            .map_err(|error| ApplicationError::internal(error.to_string()))?
+            .map_err(|error| ApplicationError::internal_error(&error))?
         else {
             return Err(ApplicationError::not_found_with_diagnostic(
                 "The workspace was not found.",
@@ -471,7 +471,7 @@ impl ApplicationService {
             .workspace_repository
             .get(workspace_id)
             .await
-            .map_err(|error| ApplicationError::internal(error.to_string()))?
+            .map_err(|error| ApplicationError::internal_error(&error))?
         else {
             return Err(ApplicationError::not_found_with_diagnostic(
                 "The workspace was not found.",
@@ -483,7 +483,7 @@ impl ApplicationService {
         self.workspace_repository
             .delete(workspace_id)
             .await
-            .map_err(|error| ApplicationError::internal(error.to_string()))?;
+            .map_err(|error| ApplicationError::internal_error(&error))?;
         workspace_record_resource(&existing, counts.get(&workspace_id).copied())
     }
 }

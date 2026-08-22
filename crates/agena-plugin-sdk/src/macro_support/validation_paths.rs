@@ -51,7 +51,7 @@ where
     T: Serialize,
 {
     let json =
-        serde_json::to_value(value).map_err(|err| PluginError::invalid_params(err.to_string()))?;
+        serde_json::to_value(value).map_err(|err| PluginError::invalid_params_error(&err))?;
     for path in paths {
         let matches = json_path_matches(&json, path);
         if matches.is_empty() || matches.iter().any(|value| !value_present(value)) {
@@ -69,7 +69,7 @@ where
     T: Serialize,
 {
     let json =
-        serde_json::to_value(value).map_err(|err| PluginError::invalid_params(err.to_string()))?;
+        serde_json::to_value(value).map_err(|err| PluginError::invalid_params_error(&err))?;
     for path in paths {
         let matches = json_path_matches(&json, path);
         if matches.iter().any(|value| !value_present(value)) {
@@ -87,7 +87,7 @@ where
     T: Serialize,
 {
     let json =
-        serde_json::to_value(value).map_err(|err| PluginError::invalid_params(err.to_string()))?;
+        serde_json::to_value(value).map_err(|err| PluginError::invalid_params_error(&err))?;
     let present = paths
         .iter()
         .filter(|path| json_path_present(&json, path))
@@ -106,7 +106,7 @@ where
     T: Serialize,
 {
     let json =
-        serde_json::to_value(value).map_err(|err| PluginError::invalid_params(err.to_string()))?;
+        serde_json::to_value(value).map_err(|err| PluginError::invalid_params_error(&err))?;
     if !paths.iter().any(|path| json_path_present(&json, path)) {
         return Err(PluginError::invalid_params(format!(
             "at least one of {} is required",
@@ -121,7 +121,7 @@ where
     T: Serialize,
 {
     let json =
-        serde_json::to_value(value).map_err(|err| PluginError::invalid_params(err.to_string()))?;
+        serde_json::to_value(value).map_err(|err| PluginError::invalid_params_error(&err))?;
     let matches = json_path_matches(&json, path);
     if matches.is_empty() || matches.iter().any(|value| array_len(value) < minimum) {
         return Err(PluginError::invalid_params(format!(
@@ -138,7 +138,7 @@ where
     T: Serialize,
 {
     let json =
-        serde_json::to_value(value).map_err(|err| PluginError::invalid_params(err.to_string()))?;
+        serde_json::to_value(value).map_err(|err| PluginError::invalid_params_error(&err))?;
     if json_path_matches(&json, path)
         .iter()
         .any(|value| array_len(value) > maximum)
@@ -157,7 +157,7 @@ where
     T: Serialize,
 {
     let json =
-        serde_json::to_value(value).map_err(|err| PluginError::invalid_params(err.to_string()))?;
+        serde_json::to_value(value).map_err(|err| PluginError::invalid_params_error(&err))?;
     for candidate in json_path_matches(&json, path) {
         let Value::Object(object) = candidate else {
             return Err(PluginError::invalid_params(format!(
@@ -181,7 +181,7 @@ where
     T: Serialize,
 {
     let json =
-        serde_json::to_value(value).map_err(|err| PluginError::invalid_params(err.to_string()))?;
+        serde_json::to_value(value).map_err(|err| PluginError::invalid_params_error(&err))?;
     for candidate in json_path_matches(&json, path) {
         let Value::Object(object) = candidate else {
             return Err(PluginError::invalid_params(format!(
@@ -205,7 +205,7 @@ where
     T: Serialize,
 {
     let json =
-        serde_json::to_value(value).map_err(|err| PluginError::invalid_params(err.to_string()))?;
+        serde_json::to_value(value).map_err(|err| PluginError::invalid_params_error(&err))?;
     if json_path_matches(&json, path)
         .iter()
         .any(|value| string_char_count(value) < minimum)
@@ -224,7 +224,7 @@ where
     T: Serialize,
 {
     let json =
-        serde_json::to_value(value).map_err(|err| PluginError::invalid_params(err.to_string()))?;
+        serde_json::to_value(value).map_err(|err| PluginError::invalid_params_error(&err))?;
     if json_path_matches(&json, path)
         .iter()
         .any(|value| string_char_count(value) > maximum)
@@ -249,7 +249,7 @@ where
         )));
     };
     let json =
-        serde_json::to_value(value).map_err(|err| PluginError::invalid_params(err.to_string()))?;
+        serde_json::to_value(value).map_err(|err| PluginError::invalid_params_error(&err))?;
     for candidate in json_path_matches(&json, path) {
         let Value::Number(candidate_number) = candidate else {
             return Err(PluginError::invalid_params(format!(
@@ -281,7 +281,7 @@ where
         )));
     };
     let json =
-        serde_json::to_value(value).map_err(|err| PluginError::invalid_params(err.to_string()))?;
+        serde_json::to_value(value).map_err(|err| PluginError::invalid_params_error(&err))?;
     for candidate in json_path_matches(&json, path) {
         let Value::Number(candidate_number) = candidate else {
             return Err(PluginError::invalid_params(format!(
@@ -313,7 +313,7 @@ where
         )));
     };
     let json =
-        serde_json::to_value(value).map_err(|err| PluginError::invalid_params(err.to_string()))?;
+        serde_json::to_value(value).map_err(|err| PluginError::invalid_params_error(&err))?;
     for candidate in json_path_matches(&json, path) {
         let Value::Number(candidate_number) = candidate else {
             return Err(PluginError::invalid_params(format!(
@@ -345,7 +345,7 @@ where
         )));
     };
     let json =
-        serde_json::to_value(value).map_err(|err| PluginError::invalid_params(err.to_string()))?;
+        serde_json::to_value(value).map_err(|err| PluginError::invalid_params_error(&err))?;
     for candidate in json_path_matches(&json, path) {
         let Value::Number(candidate_number) = candidate else {
             return Err(PluginError::invalid_params(format!(
@@ -378,7 +378,7 @@ where
         )));
     }
     let json =
-        serde_json::to_value(value).map_err(|err| PluginError::invalid_params(err.to_string()))?;
+        serde_json::to_value(value).map_err(|err| PluginError::invalid_params_error(&err))?;
     for candidate in json_path_matches(&json, path) {
         let Value::String(text) = candidate else {
             return Err(PluginError::invalid_params(format!(
@@ -408,7 +408,7 @@ where
         ))
     })?;
     let json =
-        serde_json::to_value(value).map_err(|err| PluginError::invalid_params(err.to_string()))?;
+        serde_json::to_value(value).map_err(|err| PluginError::invalid_params_error(&err))?;
     for candidate in json_path_matches(&json, path) {
         let Value::String(text) = candidate else {
             return Err(PluginError::invalid_params(format!(
@@ -526,7 +526,7 @@ where
     T: Serialize,
 {
     let json =
-        serde_json::to_value(value).map_err(|err| PluginError::invalid_params(err.to_string()))?;
+        serde_json::to_value(value).map_err(|err| PluginError::invalid_params_error(&err))?;
     for candidate in json_path_matches(&json, path) {
         if allowed.iter().any(|value| value == candidate) {
             continue;
@@ -547,7 +547,7 @@ where
     T: Serialize,
 {
     let json =
-        serde_json::to_value(value).map_err(|err| PluginError::invalid_params(err.to_string()))?;
+        serde_json::to_value(value).map_err(|err| PluginError::invalid_params_error(&err))?;
     for candidate in json_path_matches(&json, path) {
         let Value::String(text) = candidate else {
             return Err(PluginError::invalid_params(format!(
@@ -571,7 +571,7 @@ where
     T: Serialize,
 {
     let json =
-        serde_json::to_value(value).map_err(|err| PluginError::invalid_params(err.to_string()))?;
+        serde_json::to_value(value).map_err(|err| PluginError::invalid_params_error(&err))?;
     validate_distinct_trimmed_matches(json_path_matches(&json, path), path, None)
 }
 
@@ -584,7 +584,7 @@ where
     T: Serialize,
 {
     let json =
-        serde_json::to_value(value).map_err(|err| PluginError::invalid_params(err.to_string()))?;
+        serde_json::to_value(value).map_err(|err| PluginError::invalid_params_error(&err))?;
     let path_segments = parse_json_path(path);
     let scope_segments = parse_json_path(scope_path);
     let Some(suffix) = path_segments.strip_prefix(scope_segments.as_slice()) else {
@@ -609,7 +609,7 @@ where
     T: Serialize,
 {
     let json =
-        serde_json::to_value(value).map_err(|err| PluginError::invalid_params(err.to_string()))?;
+        serde_json::to_value(value).map_err(|err| PluginError::invalid_params_error(&err))?;
     let relation = parsed_relation_paths(path, required_path);
     for subroot in relation_subroots(&json, &relation) {
         if path_present_segments(subroot, &relation.left_suffix)
@@ -630,7 +630,7 @@ where
     T: Serialize,
 {
     let json =
-        serde_json::to_value(value).map_err(|err| PluginError::invalid_params(err.to_string()))?;
+        serde_json::to_value(value).map_err(|err| PluginError::invalid_params_error(&err))?;
     let relation = parsed_relation_paths(path, other_path);
     for subroot in relation_subroots(&json, &relation) {
         if path_present_segments(subroot, &relation.left_suffix)
@@ -655,7 +655,7 @@ where
     T: Serialize,
 {
     let json =
-        serde_json::to_value(value).map_err(|err| PluginError::invalid_params(err.to_string()))?;
+        serde_json::to_value(value).map_err(|err| PluginError::invalid_params_error(&err))?;
     let relation = parsed_relation_paths(path, unless_path);
     for subroot in relation_subroots(&json, &relation) {
         if !path_present_segments(subroot, &relation.right_suffix)

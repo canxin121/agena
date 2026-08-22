@@ -446,6 +446,7 @@ void sessionActionsMenuRef
                 :is-node-search-match="isTranscriptNodeSearchMatch"
                 :optimistic-user="optimisticUser"
                 :show-optimistic-user="showOptimisticUser"
+                :pending-attention="chat.selectedAttention"
                 :open-mobile-sidebar="() => ui.setSessionSwitcherOpen(true)"
                 @fork="handleForkFromMessage"
                 @revert="handleRevertFromMessage"

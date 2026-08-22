@@ -8,6 +8,7 @@ import ToolbarChipButton from '@/components/ui/ToolbarChipButton.vue'
 import MobileSidebarEmptyState from '@/components/ui/MobileSidebarEmptyState.vue'
 import MessageItem from '@/components/chat/MessageItem.vue'
 import AgenaTranscriptPart from '@/components/chat/AgenaTranscriptPart.vue'
+import AgenaInteractionPart from '@/components/chat/AgenaInteractionPart.vue'
 import type {
   MessageLike,
   RenderBlock,
@@ -15,9 +16,13 @@ import type {
   SessionErrorLike,
   TranscriptDisplayPart,
 } from '@/components/chat/messageList.types'
-import type { MessageFold } from '@/types/chat'
+import type { AttentionEvent, MessageFold } from '@/types/chat'
 import { formatTimeHMS } from '@/i18n/intl'
 import type { OptimisticUserMessage } from '@/composables/chat/useMessageStreaming'
+import {
+  pendingInteractionPresentationFromAttention,
+  partInteractionRequestIds,
+} from '@/pages/chat/transcriptPartPresentation'
 
 const props = defineProps<{
   isCompactLayout: boolean
@@ -46,6 +51,7 @@ const props = defineProps<{
   isNodeSearchMatch?: (key: string) => boolean
   optimisticUser: OptimisticUserMessage | null
   showOptimisticUser: boolean
+  pendingAttention?: AttentionEvent | null
   openMobileSidebar?: () => void | Promise<void>
 }>()
 
@@ -64,6 +70,21 @@ const emit = defineEmits<{
 }>()
 
 const { t } = useI18n()
+
+const durableInteractionRequestIds = computed(() => {
+  const ids = new Set<string>()
+  for (const block of props.renderBlocks) {
+    if (block.kind !== 'message') continue
+    for (const part of block.displayParts) {
+      for (const requestId of partInteractionRequestIds(part)) ids.add(requestId)
+    }
+  }
+  return ids
+})
+
+const pendingInteractionFallback = computed(() =>
+  pendingInteractionPresentationFromAttention(props.pendingAttention, durableInteractionRequestIds.value),
+)
 
 const hasExpandableTranscript = computed(() =>
   props.renderBlocks.some(
@@ -280,6 +301,27 @@ function forwardFoldExpand(fold: MessageFold, all: boolean) {
           </div>
         </div>
       </template>
+
+      <!--
+        Pending requests are state-driven and can briefly exist before the
+        durable tool_call part reaches the transcript stream. Render the same
+        interaction component from that canonical attention state so a page
+        refresh is never required. Once the part arrives, request-id de-duping
+        above removes this temporary projection.
+      -->
+      <article
+        v-if="pendingInteractionFallback"
+        :key="`pending-interaction:${pendingInteractionFallback.requestId}`"
+        class="ml-7 min-w-0 rounded-r-md border-l-2 border-primary/45 py-1 pl-3"
+        data-transcript-node="interaction"
+        :data-interaction-request-id="pendingInteractionFallback.requestId"
+      >
+        <AgenaInteractionPart
+          :interaction="pendingInteractionFallback.interaction"
+          :permission="pendingInteractionFallback.permission"
+          :session-id="selectedSessionId"
+        />
+      </article>
 
       <article v-if="optimisticUser && showOptimisticUser" :key="optimisticUser.key" class="py-2">
         <header class="flex min-h-6 items-center gap-2 px-1 text-[11px] text-muted-foreground">

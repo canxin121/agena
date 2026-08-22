@@ -11,6 +11,7 @@ import { getAssistantErrorInfo } from '@/pages/chat/assistantError'
 import { foldTranscriptActivityRun } from '@/pages/chat/transcriptActivityFolding'
 import { transcriptPartNavigationText } from '@/pages/chat/transcriptNavigation'
 import { partStatusPresentation } from '@/pages/chat/transcriptPartPresentation'
+import { partHasPendingInteraction } from '@/pages/chat/transcriptProjection'
 import { useI18n } from 'vue-i18n'
 
 const props = defineProps<{
@@ -111,7 +112,16 @@ const transcriptRows = computed<TranscriptRow[]>(() => {
     const visibleCount = allActivityRunsExpanded.value
       ? Number.MAX_SAFE_INTEGER
       : (activityRunVisibleCount.value[summaryKey] ?? COLLAPSED_ACTIVITY_VISIBLE_COUNT)
-    const folded = foldTranscriptActivityRun(run, visibleCount)
+    // An unanswered permission/question is an active control surface, not
+    // passive activity. Keep its operation visible even when the surrounding
+    // activity run is collapsed; otherwise the user can receive attention but
+    // has no keyboard-reachable control in the transcript.
+    const preservesPendingInteraction = run.some(
+      (part) => part.kind === 'operation' && partHasPendingInteraction(part.source),
+    )
+    const folded = preservesPendingInteraction
+      ? { hiddenCount: 0, visibleParts: run }
+      : foldTranscriptActivityRun(run, visibleCount)
     const hiddenCount = (remoteFold?.hiddenCount || 0) + folded.hiddenCount
     if (hiddenCount) {
       rows.push({ kind: 'summary', key: summaryKey, hiddenCount, expanded: false })

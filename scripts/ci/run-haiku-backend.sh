@@ -114,6 +114,54 @@ if ! valid_toolchain; then
       exit 1
     }
     GCC_HEADER_FLAGS="-isystem$GCC_INCLUDE_DIR -isystem$GCC_FIXED_INCLUDE_DIR"
+    # The bootstrap profile also adds -nostdinc to C++ compilations.  The
+    # compiler's intrinsic headers above are not enough for libstdc++: headers
+    # such as <new> and <bits/c++config.h> live in the target compiler's C++
+    # include directories and are deliberately not part of the Haiku sysroot.
+    # Ask this exact cross g++ for its search list instead of guessing a GCC
+    # version or an ABI directory.  Every directory passed below therefore
+    # belongs to the pinned Haiku cross toolchain, never to the Ubuntu host.
+    CXX_SEARCH_OUTPUT="$(printf '%s\n' '' | "$TOOLBIN/$GNU_TARGET-g++" -E -v -x c++ - 2>&1)"
+    CXX_HEADER_FLAGS="$GCC_HEADER_FLAGS"
+    CXX_TOOL_ROOT="$OUTPUT/cross-tools-$HAIKU_ARCH"
+    CXX_HEADER_COUNT=0
+    CXX_BASE_HEADER_DIR=""
+    CXX_CONFIG_FOUND=false
+    while IFS= read -r CXX_INCLUDE_DIR; do
+      [[ -d "$CXX_INCLUDE_DIR" ]] || continue
+      case "$CXX_INCLUDE_DIR" in
+        "$CXX_TOOL_ROOT"/*/include/c++/*)
+          CXX_HEADER_FLAGS+=" -isystem$CXX_INCLUDE_DIR"
+          CXX_HEADER_COUNT=$((CXX_HEADER_COUNT + 1))
+          if [[ -f "$CXX_INCLUDE_DIR/new" ]]; then
+            CXX_BASE_HEADER_DIR="$CXX_INCLUDE_DIR"
+          fi
+          if [[ -f "$CXX_INCLUDE_DIR/bits/c++config.h" ]]; then
+            CXX_CONFIG_FOUND=true
+          fi
+          ;;
+      esac
+    done < <(
+      printf '%s\n' "$CXX_SEARCH_OUTPUT" |
+        awk '
+          /#include <\.\.\.> search starts here:/ { in_search = 1; next }
+          /^End of search list\./ { in_search = 0 }
+          in_search {
+            sub(/^[[:space:]]+/, "")
+            print
+          }
+        '
+    )
+    [[ "$CXX_HEADER_COUNT" -gt 0 && -n "$CXX_BASE_HEADER_DIR" ]] || {
+      echo "ERROR: Haiku cross g++ did not expose its libstdc++ headers" >&2
+      echo "$CXX_SEARCH_OUTPUT" >&2
+      exit 1
+    }
+    [[ "$CXX_CONFIG_FOUND" == true ]] || {
+      echo "ERROR: Haiku cross g++ target-specific bits/c++config.h is missing" >&2
+      echo "$CXX_SEARCH_OUTPUT" >&2
+      exit 1
+    }
     # The profile must be passed through Jam's @profile command-line syntax;
     # setting HAIKU_BUILD_PROFILE with -s is overwritten while Jam parses its
     # targets and silently leaves the build in the regular profile.  The
@@ -122,7 +170,7 @@ if ! valid_toolchain; then
     # the sysroot does not depend on the moving HaikuPorts repository.
     jam -q -j2 \
       "-sHAIKU_CCFLAGS_${HAIKU_ARCH}=${GCC_HEADER_FLAGS}" \
-      "-sHAIKU_C++FLAGS_${HAIKU_ARCH}=${GCC_HEADER_FLAGS}" \
+      "-sHAIKU_C++FLAGS_${HAIKU_ARCH}=${CXX_HEADER_FLAGS}" \
       @bootstrap-raw build haiku.hpkg haiku_devel.hpkg
   )
 

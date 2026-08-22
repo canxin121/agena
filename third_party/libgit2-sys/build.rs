@@ -4,6 +4,118 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+const CYGWIN_PATH_WRAPPER_SOURCE: &str = r#"
+use std::env;
+use std::ffi::OsString;
+use std::path::PathBuf;
+use std::process::Command;
+
+const TOOL: &str = __AGENA_CYGWIN_TOOL__;
+
+fn cygwin_path(value: &str) -> Option<String> {
+    let value = if let Some(rest) = value.strip_prefix("\\\\?\\UNC\\") {
+        return Some(format!("//{}", rest.replace('\\', "/")));
+    } else {
+        value.strip_prefix("\\\\?\\").unwrap_or(value)
+    };
+
+    let bytes = value.as_bytes();
+    if bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && matches!(bytes[2], b'/' | b'\\')
+    {
+        let drive = (bytes[0] as char).to_ascii_lowercase();
+        let rest = value[3..].replace('\\', "/");
+        return Some(format!("/cygdrive/{drive}/{rest}"));
+    }
+
+    if let Some(rest) = value.strip_prefix("\\\\\\\\") {
+        return Some(format!("//{}", rest.replace('\\', "/")));
+    }
+
+    None
+}
+
+fn convert_arg(argument: OsString) -> OsString {
+    let value = argument.to_string_lossy();
+
+    if let Some(path) = value.strip_prefix('@').and_then(cygwin_path) {
+        return format!("@{path}").into();
+    }
+
+    for prefix in [
+        "-I",
+        "-isystem",
+        "-iquote",
+        "-include",
+        "-o",
+        "-MF",
+        "-MQ",
+        "-MT",
+        "-L",
+        "--sysroot=",
+    ] {
+        if let Some(path) = value.strip_prefix(prefix).and_then(cygwin_path) {
+            return format!("{prefix}{path}").into();
+        }
+    }
+
+    cygwin_path(&value)
+        .map(Into::into)
+        .unwrap_or_else(|| value.into_owned().into())
+}
+
+fn main() {
+    let arguments = env::args_os().skip(1).map(convert_arg);
+    let status = Command::new(PathBuf::from(TOOL))
+        .args(arguments)
+        .status()
+        .unwrap_or_else(|error| {
+            eprintln!("failed to execute official Cygwin tool {TOOL}: {error}");
+            std::process::exit(127);
+        });
+    std::process::exit(status.code().unwrap_or(1));
+}
+"#;
+
+fn build_cygwin_path_wrapper(output: &Path, name: &str, tool: &Path) -> PathBuf {
+    let source = output.join(format!("{name}.rs"));
+    let executable = output.join(format!("{name}.exe"));
+    let tool_literal = format!("{:?}", tool.to_string_lossy());
+    let source_text = CYGWIN_PATH_WRAPPER_SOURCE.replace("__AGENA_CYGWIN_TOOL__", &tool_literal);
+    fs::write(&source, source_text).unwrap_or_else(|error| {
+        panic!(
+            "failed to write Cygwin path wrapper source {}: {error}",
+            source.display()
+        )
+    });
+
+    let rustc = env::var_os("AGENA_REAL_RUSTC")
+        .or_else(|| env::var_os("RUSTC"))
+        .unwrap_or_else(|| "rustc".into());
+    let status = Command::new(&rustc)
+        .args([
+            "--crate-name",
+            "agena_cygwin_path_wrapper",
+            "--crate-type",
+            "bin",
+            "--edition=2021",
+        ])
+        .arg(&source)
+        .arg("-o")
+        .arg(&executable)
+        .status()
+        .unwrap_or_else(|error| panic!("failed to start host rustc for Cygwin wrapper: {error}"));
+    if !status.success() || !executable.is_file() {
+        panic!(
+            "host rustc failed to build the Cygwin path wrapper {}",
+            executable.display()
+        );
+    }
+    executable
+}
+
 /// Tries to use system libgit2 and emits necessary build script instructions.
 fn try_system_libgit2(
     experimental_sha256: bool,
@@ -147,6 +259,40 @@ The build is now aborting. To disable, unset the variable or use `LIBGIT2_NO_VEN
         .include(libgit2_root.join("src/util"))
         .out_dir(dst.join("build"))
         .warnings(false);
+
+    if target == "x86_64-pc-cygwin" {
+        // cc-rs runs as a native Windows host process.  Its absolute
+        // source/include/output arguments are therefore Windows paths, while
+        // the official Cygwin tools resolve arguments in the POSIX namespace.
+        // Use small native host adapters for every Cygwin tool that cc-rs
+        // invokes; the adapters only translate argument spelling and then
+        // execute the pinned, real Cygwin programs.
+        println!("cargo:rerun-if-env-changed=AGENA_CYGWIN_ROOT");
+        let cygwin_root = PathBuf::from(
+            env::var_os("AGENA_CYGWIN_ROOT")
+                .expect("AGENA_CYGWIN_ROOT is required for the Cygwin libgit2 backend"),
+        );
+        let cygwin_bin = cygwin_root.join("bin");
+        let cygwin_gcc = cygwin_bin.join("x86_64-pc-cygwin-gcc.exe");
+        let cygwin_ar = cygwin_bin.join("ar.exe");
+        let cygwin_ranlib = cygwin_bin.join("ranlib.exe");
+        for tool in [&cygwin_gcc, &cygwin_ar, &cygwin_ranlib] {
+            if !tool.is_file() {
+                panic!(
+                    "official Cygwin tool required by vendored libgit2 is missing: {}",
+                    tool.display()
+                );
+            }
+        }
+        let gcc_wrapper =
+            build_cygwin_path_wrapper(&dst, "agena-cygwin-gcc-wrapper", &cygwin_gcc);
+        let ar_wrapper = build_cygwin_path_wrapper(&dst, "agena-cygwin-ar-wrapper", &cygwin_ar);
+        let ranlib_wrapper =
+            build_cygwin_path_wrapper(&dst, "agena-cygwin-ranlib-wrapper", &cygwin_ranlib);
+        cfg.compiler(gcc_wrapper)
+            .archiver(ar_wrapper)
+            .ranlib(ranlib_wrapper);
+    }
 
     if unstable_sha256 {
         println!("cargo:rustc-cfg=libgit2_experimental_sha256");

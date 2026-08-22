@@ -29,19 +29,40 @@ esac
 # reproducible rather than following moving master branches.
 HAIKU_COMMIT=dfaff659fa944da59db4014f50cde2daea9415bd
 BUILDTOOLS_COMMIT=8375c2dbeaf109c520798cb234d57f0895463201
+# Haiku's bootstrap build is a three-repository build.  Pin the repositories
+# independently so a moving HaikuPorts master cannot silently change the
+# generated compiler/sysroot for a release target.  The cross repository pin
+# contains the GCC 13.3 bootstrap recipe named by the pinned Haiku source.
+HAIKUPORTER_COMMIT=690d2215daffb4ff260b45be16192af94a98e034
+HAIKUPORTS_CROSS_COMMIT=056f1b6de5536478255f6abe8d51f94a57f5f119
+HAIKUPORTS_COMMIT=ad4f7e86f917445bdc12ee9cb0003e9e6780700b
 PATCH_FILE="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/third_party/haiku-bootstrap-smbios.patch"
 ROOT="${RUNNER_TEMP:-/tmp}/agena-haiku/$HAIKU_ARCH"
 HAIKU="$ROOT/haiku"
 BUILDTOOLS="$ROOT/buildtools"
+HAIKUPORTER="$ROOT/haikuporter"
+HAIKUPORTS_CROSS="$ROOT/haikuports.cross"
+HAIKUPORTS="$ROOT/haikuports"
 OUTPUT="$ROOT/generated"
 PACKAGE_ROOT="$ROOT/system"
 SYSROOT="$OUTPUT/cross-tools-$HAIKU_ARCH/sysroot"
 TOOLBIN="$OUTPUT/cross-tools-$HAIKU_ARCH/bin"
+BOOTSTRAP_STAMP="$OUTPUT/agena-bootstrap-versions"
 mkdir -p "$ROOT"
 
 valid_toolchain() {
-  [[ -x "$TOOLBIN/$GNU_TARGET-gcc" ]] \
+  [[ -f "$BOOTSTRAP_STAMP" ]] \
+    && grep -Fxq "haiku=$HAIKU_COMMIT" "$BOOTSTRAP_STAMP" \
+    && grep -Fxq "buildtools=$BUILDTOOLS_COMMIT" "$BOOTSTRAP_STAMP" \
+    && grep -Fxq "haikuporter=$HAIKUPORTER_COMMIT" "$BOOTSTRAP_STAMP" \
+    && grep -Fxq "haikuports.cross=$HAIKUPORTS_CROSS_COMMIT" "$BOOTSTRAP_STAMP" \
+    && grep -Fxq "haikuports=$HAIKUPORTS_COMMIT" "$BOOTSTRAP_STAMP" \
+    && [[ -x "$TOOLBIN/$GNU_TARGET-gcc" ]] \
     && [[ -f "$PACKAGE_ROOT/develop/headers/posix/stdio.h" || -f "$PACKAGE_ROOT/develop/headers/stdio.h" ]] \
+    && [[ -d "$PACKAGE_ROOT/develop/headers/c++" ]] \
+    && [[ -d "$PACKAGE_ROOT/develop/headers/gcc" ]] \
+    && [[ -f "$PACKAGE_ROOT/develop/lib/libsupc++-kernel.a" ]] \
+    && [[ -f "$PACKAGE_ROOT/develop/lib/libgcc-kernel.a" ]] \
     && find "$PACKAGE_ROOT" -type f -name 'libroot.so' -print -quit | grep -q .
 }
 
@@ -52,23 +73,35 @@ if ! valid_toolchain; then
   fi
   sudo apt-get update -y
   sudo apt-get install -y --no-install-recommends \
-    autoconf automake bison bzip2 ca-certificates cmake curl file flex g++ gawk git \
-    libtool-bin make nasm pkg-config python3 texinfo wget xz-utils zlib1g-dev
+    autoconf automake autopoint bison bzip2 ca-certificates cmake curl file flex g++ gawk git \
+    libncurses-dev libtool-bin make nasm pkg-config python3 texinfo wget xz-utils zlib1g-dev
 
-  rm -rf "$HAIKU" "$BUILDTOOLS" "$OUTPUT" "$PACKAGE_ROOT" "$ROOT/bin"
+  rm -rf "$HAIKU" "$BUILDTOOLS" "$HAIKUPORTER" "$HAIKUPORTS_CROSS" \
+    "$HAIKUPORTS" "$OUTPUT" "$PACKAGE_ROOT" "$ROOT/bin"
   mkdir -p "$ROOT/bin" "$PACKAGE_ROOT"
 
-  git init -q "$HAIKU"
-  git -C "$HAIKU" remote add origin https://github.com/haiku/haiku.git
-  git -C "$HAIKU" fetch -q --depth 1 origin "$HAIKU_COMMIT"
-  git -C "$HAIKU" checkout -q FETCH_HEAD
+  checkout_repo() {
+    local destination="$1"
+    local repository="$2"
+    local commit="$3"
+    git init -q "$destination"
+    git -C "$destination" remote add origin "$repository"
+    git -C "$destination" fetch -q --depth 1 origin "$commit"
+    git -C "$destination" checkout -q --detach FETCH_HEAD
+  }
+
+  checkout_repo "$HAIKU" https://github.com/haiku/haiku.git "$HAIKU_COMMIT"
   git -C "$HAIKU" apply --check "$PATCH_FILE"
   git -C "$HAIKU" apply "$PATCH_FILE"
 
-  git init -q "$BUILDTOOLS"
-  git -C "$BUILDTOOLS" remote add origin https://github.com/haiku/buildtools.git
-  git -C "$BUILDTOOLS" fetch -q --depth 1 origin "$BUILDTOOLS_COMMIT"
-  git -C "$BUILDTOOLS" checkout -q FETCH_HEAD
+  checkout_repo "$BUILDTOOLS" https://github.com/haiku/buildtools.git "$BUILDTOOLS_COMMIT"
+  checkout_repo "$HAIKUPORTER" https://github.com/haikuports/haikuporter.git "$HAIKUPORTER_COMMIT"
+  checkout_repo "$HAIKUPORTS_CROSS" https://github.com/haikuports/haikuports.cross.git "$HAIKUPORTS_CROSS_COMMIT"
+  checkout_repo "$HAIKUPORTS" https://github.com/haikuports/haikuports.git "$HAIKUPORTS_COMMIT"
+  [[ -x "$HAIKUPORTER/haikuporter" ]] || {
+    echo "ERROR: pinned HaikuPorter checkout does not contain an executable haikuporter" >&2
+    exit 1
+  }
 
   (
     cd "$BUILDTOOLS/jam"
@@ -84,6 +117,7 @@ if ! valid_toolchain; then
     "$HAIKU/configure" \
       --cross-tools-source "$BUILDTOOLS" \
       --build-cross-tools "$HAIKU_ARCH" \
+      --bootstrap "$HAIKUPORTER/haikuporter" "$HAIKUPORTS_CROSS" "$HAIKUPORTS" \
       --no-downloads
     # The source checkout is the complete, fixed Haiku source revision.  Build
     # the two packages needed for the sysroot entirely from that checkout so
@@ -164,14 +198,16 @@ if ! valid_toolchain; then
     }
     # The profile must be passed through Jam's @profile command-line syntax;
     # setting HAIKU_BUILD_PROFILE with -s is overwritten while Jam parses its
-    # targets and silently leaves the build in the regular profile.  The
-    # bootstrap profile uses the pinned source-tree HaikuPortsCross packages
-    # and still builds the real Haiku runtime/development packages below, so
-    # the sysroot does not depend on the moving HaikuPorts repository.
-    jam -q -j2 \
+    # targets and silently leaves the build in the regular profile.  Do not
+    # pass Jam -j here: Haiku's bootstrap documentation warns that parallel
+    # top-level Jam instances race while haikuporter generates package metadata.
+    # HAIKU_PORTER_CONCURRENT_JOBS still parallelizes the individual real
+    # third-party package builds.
+    jam -q \
+      "-sHAIKU_PORTER_CONCURRENT_JOBS=${HAIKU_PORTER_CONCURRENT_JOBS:-2}" \
       "-sHAIKU_CCFLAGS_${HAIKU_ARCH}=${GCC_HEADER_FLAGS}" \
       "-sHAIKU_C++FLAGS_${HAIKU_ARCH}=${CXX_HEADER_FLAGS}" \
-      @bootstrap-raw build haiku.hpkg haiku_devel.hpkg
+      @bootstrap-raw
   )
 
   PACKAGE_TOOL="$(find "$OUTPUT/objects/linux" -type f -path '*/release/tools/package/package' -perm -111 -print -quit)"
@@ -184,14 +220,22 @@ if ! valid_toolchain; then
       "$PACKAGE_TOOL" extract -C "$PACKAGE_ROOT" "$hpkg"
   }
 
-  extract_hpkg "$OUTPUT/objects/haiku/$HAIKU_ARCH/packaging/packages/haiku.hpkg"
-  extract_hpkg "$OUTPUT/objects/haiku/$HAIKU_ARCH/packaging/packages/haiku_devel.hpkg"
+  while IFS= read -r hpkg; do extract_hpkg "$hpkg"; done < <(
+    find "$OUTPUT/objects/haiku/$HAIKU_ARCH/packaging/packages" \
+      -type f -name '*.hpkg' -print 2>/dev/null || true
+  )
   while IFS= read -r hpkg; do extract_hpkg "$hpkg"; done < <(find "$OUTPUT/download" -type f -name '*.hpkg' -print 2>/dev/null || true)
 
   if [[ -f "$PACKAGE_ROOT/lib/libgcc_s.so" && -d "$PACKAGE_ROOT/develop/lib" ]]; then
     ln -sfn ../../lib/libgcc_s.so "$PACKAGE_ROOT/develop/lib/libgcc_s.so"
   fi
 
+  printf '%s\n' \
+    "haiku=$HAIKU_COMMIT" \
+    "buildtools=$BUILDTOOLS_COMMIT" \
+    "haikuporter=$HAIKUPORTER_COMMIT" \
+    "haikuports.cross=$HAIKUPORTS_CROSS_COMMIT" \
+    "haikuports=$HAIKUPORTS_COMMIT" > "$BOOTSTRAP_STAMP"
   valid_toolchain || { echo "ERROR: incomplete Haiku cross-tools/sysroot for $TARGET" >&2; exit 1; }
 fi
 

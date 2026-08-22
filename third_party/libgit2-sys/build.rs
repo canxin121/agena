@@ -10,6 +10,7 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 use std::process::Command;
 
+const BASH: &str = __AGENA_CYGWIN_BASH__;
 const TOOL: &str = __AGENA_CYGWIN_TOOL__;
 
 fn cygwin_path(value: &str) -> Option<String> {
@@ -66,24 +67,43 @@ fn convert_arg(argument: OsString) -> OsString {
         .unwrap_or_else(|| value.into_owned().into())
 }
 
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
 fn main() {
-    let arguments = env::args_os().skip(1).map(convert_arg);
-    let status = Command::new(PathBuf::from(TOOL))
-        .args(arguments)
+    // Cygwin's native Windows entry point does not preserve the argv spelling
+    // that cc-rs gives a native wrapper when the wrapper directly starts the
+    // compiler with CreateProcess.  Run the real tool from the official
+    // Cygwin bash instead: bash parses the translated POSIX arguments inside
+    // the Cygwin process boundary, and gcc/ar/ranlib remain the pinned tools
+    // installed under AGENA_CYGWIN_ROOT.
+    let tool = cygwin_path(TOOL).unwrap_or_else(|| TOOL.to_owned());
+    let mut command = format!("exec {}", shell_quote(&tool));
+    for argument in env::args_os().skip(1).map(convert_arg) {
+        command.push(' ');
+        command.push_str(&shell_quote(&argument.to_string_lossy()));
+    }
+
+    let status = Command::new(PathBuf::from(BASH))
+        .args(["--noprofile", "--norc", "-c", &command])
         .status()
         .unwrap_or_else(|error| {
-            eprintln!("failed to execute official Cygwin tool {TOOL}: {error}");
+            eprintln!("failed to execute official Cygwin bash {BASH} for {TOOL}: {error}");
             std::process::exit(127);
         });
     std::process::exit(status.code().unwrap_or(1));
 }
 "#;
 
-fn build_cygwin_path_wrapper(output: &Path, name: &str, tool: &Path) -> PathBuf {
+fn build_cygwin_path_wrapper(output: &Path, name: &str, bash: &Path, tool: &Path) -> PathBuf {
     let source = output.join(format!("{name}.rs"));
     let executable = output.join(format!("{name}.exe"));
+    let bash_literal = format!("{:?}", bash.to_string_lossy());
     let tool_literal = format!("{:?}", tool.to_string_lossy());
-    let source_text = CYGWIN_PATH_WRAPPER_SOURCE.replace("__AGENA_CYGWIN_TOOL__", &tool_literal);
+    let source_text = CYGWIN_PATH_WRAPPER_SOURCE
+        .replace("__AGENA_CYGWIN_BASH__", &bash_literal)
+        .replace("__AGENA_CYGWIN_TOOL__", &tool_literal);
     fs::write(&source, source_text).unwrap_or_else(|error| {
         panic!(
             "failed to write Cygwin path wrapper source {}: {error}",
@@ -273,10 +293,11 @@ The build is now aborting. To disable, unset the variable or use `LIBGIT2_NO_VEN
                 .expect("AGENA_CYGWIN_ROOT is required for the Cygwin libgit2 backend"),
         );
         let cygwin_bin = cygwin_root.join("bin");
+        let cygwin_bash = cygwin_bin.join("bash.exe");
         let cygwin_gcc = cygwin_bin.join("x86_64-pc-cygwin-gcc.exe");
         let cygwin_ar = cygwin_bin.join("ar.exe");
         let cygwin_ranlib = cygwin_bin.join("ranlib.exe");
-        for tool in [&cygwin_gcc, &cygwin_ar, &cygwin_ranlib] {
+        for tool in [&cygwin_bash, &cygwin_gcc, &cygwin_ar, &cygwin_ranlib] {
             if !tool.is_file() {
                 panic!(
                     "official Cygwin tool required by vendored libgit2 is missing: {}",
@@ -285,10 +306,16 @@ The build is now aborting. To disable, unset the variable or use `LIBGIT2_NO_VEN
             }
         }
         let gcc_wrapper =
-            build_cygwin_path_wrapper(&dst, "agena-cygwin-gcc-wrapper", &cygwin_gcc);
-        let ar_wrapper = build_cygwin_path_wrapper(&dst, "agena-cygwin-ar-wrapper", &cygwin_ar);
+            build_cygwin_path_wrapper(&dst, "agena-cygwin-gcc-wrapper", &cygwin_bash, &cygwin_gcc);
+        let ar_wrapper =
+            build_cygwin_path_wrapper(&dst, "agena-cygwin-ar-wrapper", &cygwin_bash, &cygwin_ar);
         let ranlib_wrapper =
-            build_cygwin_path_wrapper(&dst, "agena-cygwin-ranlib-wrapper", &cygwin_ranlib);
+            build_cygwin_path_wrapper(
+                &dst,
+                "agena-cygwin-ranlib-wrapper",
+                &cygwin_bash,
+                &cygwin_ranlib,
+            );
         cfg.compiler(gcc_wrapper)
             .archiver(ar_wrapper)
             .ranlib(ranlib_wrapper);

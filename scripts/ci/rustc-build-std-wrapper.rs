@@ -229,8 +229,15 @@ fn main() {
             arg.to_str()
                 .is_some_and(|value| value == "--print" || value.starts_with("--print="))
         });
-        let (mut directories, artifacts) = discover_artifacts(&build_root);
-        if !building_rust_sysroot && !is_print_query {
+        let (_, artifacts) = discover_artifacts(&build_root);
+        let cargo_supplied_standard_library =
+            has_extern(&args, "core") || has_extern(&args, "std") || has_extern(&args, "alloc");
+        if !building_rust_sysroot && !is_print_query && !cargo_supplied_standard_library {
+            // Cargo target invocations already carry the exact build-std --extern paths. Adding
+            // the probe output directories to those commands makes rustc discover a second copy
+            // of core and reports duplicate inherent methods (for example in hashbrown). A
+            // direct build-script probe is identifiable by the absence of all standard-library
+            // externs, so augment only that narrow case.
             let mut standard_artifacts = Vec::new();
             for standard_crate in ["core", "std"] {
                 if standard_crate == "std" && is_no_std_crate(&args) {
@@ -243,36 +250,23 @@ fn main() {
                     .or_else(|| find_artifact(&artifacts, standard_crate, ".rmeta"))
                     .map(|artifact| (Vec::new(), artifact))
                     .or_else(|| wait_for_artifact(&build_root, standard_crate));
-                let Some((found_directories, artifact)) = found else {
+                let Some((_, artifact)) = found else {
                     panic!(
                         "target build-std artifact for {standard_crate} was not found below {} after waiting 300 seconds",
                         build_root.display()
                     );
                 };
-                for directory in found_directories {
-                    if !directories.iter().any(|candidate| candidate == &directory) {
-                        directories.push(directory);
-                    }
-                }
                 standard_artifacts.push((standard_crate, artifact));
             }
-            directories.sort();
-            for directory in &directories {
-                command
-                    .arg("-L")
-                    .arg(format!("dependency={}", directory.display()));
-            }
             for (standard_crate, artifact) in standard_artifacts {
+                if let Some(directory) = artifact.parent() {
+                    command
+                        .arg("-L")
+                        .arg(format!("dependency={}", directory.display()));
+                }
                 command
                     .arg("--extern")
                     .arg(format!("{standard_crate}={}", artifact.display()));
-            }
-        } else {
-            directories.sort();
-            for directory in &directories {
-                command
-                    .arg("-L")
-                    .arg(format!("dependency={}", directory.display()));
             }
         }
     }

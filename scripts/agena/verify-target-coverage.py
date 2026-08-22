@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify the Rust 1.97 full-backend release target policy."""
+"""Verify the Rust 1.97 full-backend release target manifest."""
 from __future__ import annotations
 
 import json
@@ -49,9 +49,8 @@ def main() -> None:
     if duplicates:
         raise SystemExit(f"universal target manifest contains duplicate targets: {duplicates}")
 
-    # The manifest is the complete Agena release surface. Validate only these
-    # full-backend rows; Rust's other built-in targets are intentionally not a
-    # second policy surface here.
+    # The manifest is the complete Agena release surface. Validate its
+    # full-backend rows directly.
     backend_targets = {row["target"] for row in backend_rows}
 
     bad_artifacts = sorted(
@@ -73,12 +72,6 @@ def main() -> None:
 
     distributed_backends = backend_targets & rustup_targets
     build_std_backends = backend_targets - rustup_targets
-    std_unknown = sorted(
-        target
-        for target in backend_targets
-        if (specs[target].get("metadata") or {}).get("std") is None
-    )
-
     print(f"Rust distributed full-backend targets: {len(distributed_backends)}")
     print(f"Cross backend targets: {len(groups['cross_backend'])}")
     print(f"Native/SDK backend targets: {len(groups['native_backend'])}")
@@ -86,7 +79,6 @@ def main() -> None:
     print(f"Custom OS backend targets: {len(groups['custom_backend'])}")
     print(f"Build-std full backend targets: {len(build_std_backends)}")
     print(f"Full backend release target triples: {len(backend_targets)}")
-    print(f"Std status unknown/WIP backend targets: {len(std_unknown)}")
 
 
 if __name__ == "__main__":

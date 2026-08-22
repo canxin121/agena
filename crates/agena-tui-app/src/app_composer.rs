@@ -1,3 +1,26 @@
+fn tool_detail_api_section(
+    section: agena_tui_transcript::TranscriptActivitySection,
+) -> Option<agena_api::live::ToolDetailSection> {
+    match section {
+        agena_tui_transcript::TranscriptActivitySection::Metadata => {
+            Some(agena_api::live::ToolDetailSection::Metadata)
+        }
+        agena_tui_transcript::TranscriptActivitySection::Input => {
+            Some(agena_api::live::ToolDetailSection::Input)
+        }
+        agena_tui_transcript::TranscriptActivitySection::Output => {
+            Some(agena_api::live::ToolDetailSection::Output)
+        }
+        agena_tui_transcript::TranscriptActivitySection::OutputMetadata => {
+            Some(agena_api::live::ToolDetailSection::OutputMetadata)
+        }
+        // Presentation is present in every transcript snapshot and is open by
+        // default, so reopening it never needs a detail request.
+        agena_tui_transcript::TranscriptActivitySection::Presentation => None,
+        _ => None,
+    }
+}
+
 impl App {
     pub(crate) fn enter_insert_mode(&mut self) {
         self.focus = Focus::Composer;
@@ -39,14 +62,41 @@ impl App {
             self.flash_warning(ui_text::t(&self.i18n, "flash-transcript-no-selection"));
             return;
         }
-        let server_fold = self
-            .transcript
-            .current_cursor_node_cloned(width)
+        let current_node = self.transcript.current_cursor_node_cloned(width);
+        let server_fold = current_node
+            .as_ref()
             .and_then(|node| self.transcript.transcript_fold_for_node(&node.key));
+        let tool_detail = current_node.as_ref().and_then(|node| {
+            let agena_tui_transcript::TranscriptNodeKey::ActivitySection {
+                content_id,
+                section,
+                ..
+            } = &node.key
+            else {
+                return None;
+            };
+            let agena_tui_transcript::TranscriptContentId::StoredPart(part_id) = content_id else {
+                return None;
+            };
+            let should_fetch = matches!(
+                section,
+                agena_tui_transcript::TranscriptActivitySection::Metadata
+                    | agena_tui_transcript::TranscriptActivitySection::Input
+                    | agena_tui_transcript::TranscriptActivitySection::Output
+                    | agena_tui_transcript::TranscriptActivitySection::OutputMetadata
+            );
+            should_fetch.then_some((*part_id, *section))
+        });
         let Some((kind, expanded)) = self.transcript.toggle_cursor_node_expansion(width, height)
         else {
             return;
         };
+        if expanded
+            && let Some((part_id, section)) = tool_detail
+            && let Some(section) = tool_detail_api_section(section)
+        {
+            self.request_tool_detail(part_id, section);
+        }
         if expanded && let Some(fold) = server_fold {
             self.request_transcript_fold_parts(fold, false);
         }

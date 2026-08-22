@@ -1568,8 +1568,26 @@ impl AgenaClient {
             .await
     }
 
+    /// Fetch one tool-call detail section. Transcript snapshots intentionally
+    /// omit the collapsed raw sections, so callers should request this only
+    /// when the corresponding disclosure row is opened.
+    pub async fn session_tool_detail(
+        &self,
+        session_id: i64,
+        part_id: i64,
+        section: agena_api::live::ToolDetailSection,
+    ) -> Result<agena_api::live::ToolDetailResource, ClientError> {
+        self.get_json(&format!(
+            "/api/v1/sessions/{session_id}/parts/{part_id}/tool-sections/{}",
+            section.as_str()
+        ))
+        .await
+    }
+
     /// Fetch one bounded newest-first cursor page. The response rows are
-    /// chronological, ready for transcript renderers.
+    /// chronological, ready for transcript renderers. Tool-call input,
+    /// metadata, and raw output remain omitted until `session_tool_detail`
+    /// loads the corresponding disclosure section.
     pub async fn session_parts_page(
         &self,
         session_id: i64,
@@ -1592,8 +1610,9 @@ impl AgenaClient {
 
     /// Fetch one presentation-oriented transcript page. The server skips
     /// folded assistant raw parts before responding, so this endpoint is
-    /// suitable for interactive Web/TUI history while `session_parts_page`
-    /// remains the lossless raw surface.
+    /// suitable for interactive Web/TUI history. Both transcript endpoints
+    /// keep collapsed tool detail sections lazy; use `session_tool_detail`
+    /// for an explicitly opened raw section.
     pub async fn session_transcript_page(
         &self,
         session_id: i64,

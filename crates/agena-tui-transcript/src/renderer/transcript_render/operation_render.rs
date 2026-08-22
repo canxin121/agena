@@ -11,6 +11,7 @@ use super::request_render::render_file_changes;
 use crate::ui_text;
 use crate::{PartExecutionStatusResource, ToolCallView, TranscriptEntryPart};
 use agena_domain::{AttachmentItem, AttachmentKind, AttachmentSource, ViewBlock};
+use serde_json::Value;
 
 #[derive(Debug, Clone)]
 pub(crate) struct ToolExecutionSectionRender {
@@ -23,8 +24,11 @@ pub(crate) struct ToolExecutionSectionRender {
 #[derive(Debug, Clone)]
 pub(crate) struct ToolExecutionRender {
     pub headline_end: usize,
+    pub metadata: Option<ToolExecutionSectionRender>,
     pub input: Option<ToolExecutionSectionRender>,
     pub output: Option<ToolExecutionSectionRender>,
+    pub output_metadata: Option<ToolExecutionSectionRender>,
+    pub presentation: Option<ToolExecutionSectionRender>,
     pub visible_copy_text: String,
 }
 
@@ -38,15 +42,18 @@ pub(crate) fn render_tool_execution(
     expanded: bool,
 ) {
     let _ = render_tool_execution_with_sections(
-        part, expanded, expanded, tool, out, width, i18n, expanded,
+        part, expanded, expanded, expanded, expanded, expanded, tool, out, width, i18n, expanded,
     );
 }
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn render_tool_execution_with_sections(
     part: &TranscriptEntryPart,
+    metadata_expanded: bool,
     input_expanded: bool,
     output_expanded: bool,
+    output_metadata_expanded: bool,
+    presentation_expanded: bool,
     tool: &ToolCallView,
     out: &mut Vec<RenderedLine>,
     width: u16,
@@ -55,11 +62,29 @@ pub(crate) fn render_tool_execution_with_sections(
 ) -> ToolExecutionRender {
     if part.status == PartExecutionStatusResource::Completed && is_interaction_notification(tool) {
         render_interaction_notification(tool, out, width, expanded);
+        let headline_end = out.len();
+        let details = render_tool_detail_sections_with_sections(
+            part,
+            metadata_expanded,
+            input_expanded,
+            output_expanded,
+            output_metadata_expanded,
+            presentation_expanded,
+            tool,
+            out,
+            width,
+            i18n,
+            expanded,
+        );
+        let visible_copy_text = [tool_display_label(tool), details.visible_copy_text]
+            .into_iter()
+            .filter(|section| !section.trim().is_empty())
+            .collect::<Vec<_>>()
+            .join("\n\n");
         return ToolExecutionRender {
-            headline_end: out.len(),
-            input: None,
-            output: None,
-            visible_copy_text: tool_display_label(tool),
+            headline_end,
+            visible_copy_text,
+            ..details
         };
     }
     let label = tool_display_label(tool);
@@ -75,8 +100,11 @@ pub(crate) fn render_tool_execution_with_sections(
         );
         return ToolExecutionRender {
             headline_end: out.len(),
+            metadata: None,
             input: None,
             output: None,
+            output_metadata: None,
+            presentation: None,
             visible_copy_text: String::new(),
         };
     }
@@ -90,7 +118,64 @@ pub(crate) fn render_tool_execution_with_sections(
         width,
     );
     let headline_end = out.len();
-    let mut visible_copy_sections = vec![label];
+    let details = render_tool_detail_sections_with_sections(
+        part,
+        metadata_expanded,
+        input_expanded,
+        output_expanded,
+        output_metadata_expanded,
+        presentation_expanded,
+        tool,
+        out,
+        width,
+        i18n,
+        expanded,
+    );
+    let visible_copy_text = [label, details.visible_copy_text]
+        .into_iter()
+        .filter(|section| !section.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n");
+
+    ToolExecutionRender {
+        headline_end,
+        visible_copy_text,
+        ..details
+    }
+}
+
+/// Render the independently expandable tool detail sections without drawing
+/// the operation headline. Interaction operations use this after their
+/// interaction body has already rendered; ordinary operations call it from
+/// [`render_tool_execution_with_sections`].
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn render_tool_detail_sections_with_sections(
+    part: &TranscriptEntryPart,
+    metadata_expanded: bool,
+    input_expanded: bool,
+    output_expanded: bool,
+    output_metadata_expanded: bool,
+    presentation_expanded: bool,
+    tool: &ToolCallView,
+    out: &mut Vec<RenderedLine>,
+    width: u16,
+    i18n: &I18n,
+    expanded: bool,
+) -> ToolExecutionRender {
+    let headline_end = out.len();
+    if !expanded {
+        return ToolExecutionRender {
+            headline_end,
+            metadata: None,
+            input: None,
+            output: None,
+            output_metadata: None,
+            presentation: None,
+            visible_copy_text: String::new(),
+        };
+    }
+
+    let mut visible_copy_sections = Vec::new();
 
     let failure_text = if part.status == PartExecutionStatusResource::Failed {
         tool.error_message()
@@ -118,93 +203,155 @@ pub(crate) fn render_tool_execution_with_sections(
         visible_copy_sections.push(format!("Error\n{error_message}"));
     }
 
+    let metadata_value = serde_json::to_value(&tool.operation.metadata)
+        .unwrap_or(Value::Object(serde_json::Map::new()));
+    let metadata_copy = json_detail_copy_text("Metadata", &metadata_value);
+    let metadata =
+        render_json_detail_section(out, "Metadata", &metadata_value, metadata_expanded, width);
+    if metadata_expanded {
+        visible_copy_sections.push(metadata_copy);
+    }
+
     // Tool arguments, presented as a nested Markdown bullet list instead of the
     // raw JSON dump. `compact_tool_identity` also unwraps a `tools.call` wrapper
     // to the inner tool + its real input.
     let tool_input = compact_tool_identity(&tool.operation.invocation).1;
-    let input = if !tool_input.is_null()
-        && tool_input
-            .as_object()
-            .is_none_or(|fields| !fields.is_empty())
-    {
-        let input_markdown = json_value_to_markdown(&tool_input);
-        let section_start = out.len();
-        push_section_heading(
-            out,
-            if input_expanded {
-                "    ▾ Input"
-            } else {
-                "    ▸ Input"
-            },
-            Style::default()
-                .fg(agena_tui_components::theme::special_color())
-                .add_modifier(Modifier::BOLD),
-            width,
-        );
-        if input_expanded {
-            push_expanded_markdown(out, "      ", input_markdown.as_str(), width);
-            visible_copy_sections.push(format!("Input\n{input_markdown}"));
-        }
-        Some(ToolExecutionSectionRender {
-            start_line: section_start,
-            end_line: out.len(),
-            copy_text: format!("Input\n{input_markdown}"),
-            expanded: input_expanded,
-        })
-    } else {
-        None
-    };
+    let input_markdown = json_value_to_markdown(&tool_input);
+    let input =
+        render_markdown_detail_section(out, "Input", &input_markdown, input_expanded, width);
+    if input_expanded {
+        visible_copy_sections.push(format!("Input\n{input_markdown}"));
+    }
 
-    // All result-facing material belongs to one independently collapsible
-    // Output section. This includes human/model output, stdout/stderr, rich
-    // operation blocks, attachments, file changes, and diffs.
+    // Raw result facts belong to Output. Human-facing ViewBlocks are kept in
+    // the separate Presentation section below.
     let output_copy_text = tool_output_section_copy_text(tool, i18n, failure_text);
-    let has_output = !output_copy_text.trim().is_empty()
-        || tool.attachments().iter().next().is_some()
-        || apply_patch_details(&tool.details())
-            .is_some_and(|payload| !payload.changes.is_empty() || !payload.diff.trim().is_empty());
-    let output = if !has_output {
-        None
-    } else {
-        let section_start = out.len();
-        push_section_heading(
-            out,
-            if output_expanded {
-                "    ▾ Output"
-            } else {
-                "    ▸ Output"
-            },
-            Style::default()
-                .fg(agena_tui_components::theme::special_color())
-                .add_modifier(Modifier::BOLD),
-            width,
-        );
-        if output_expanded {
-            let mut output_body = Vec::new();
-            render_tool_output_body(tool, &mut output_body, width, i18n, failure_text);
-            out.append(&mut output_body);
-            if !output_copy_text.trim().is_empty() {
-                visible_copy_sections.push(format!("Output\n{output_copy_text}"));
-            }
-        }
-        Some(ToolExecutionSectionRender {
-            start_line: section_start,
-            end_line: out.len(),
-            copy_text: format!("Output\n{output_copy_text}"),
-            expanded: output_expanded,
+    let output = render_detail_section_with_body(
+        out,
+        "Output",
+        output_expanded,
+        width,
+        |body| render_tool_output_body(tool, body, width, i18n, failure_text),
+        format!("Output\n{output_copy_text}"),
+    );
+    if output_expanded && !output_copy_text.trim().is_empty() {
+        visible_copy_sections.push(format!("Output\n{output_copy_text}"));
+    }
+
+    let output_metadata_value = tool
+        .raw_output()
+        .map(|raw| {
+            serde_json::to_value(&raw.metadata).unwrap_or(Value::Object(serde_json::Map::new()))
         })
-    };
+        .unwrap_or_else(|| Value::Object(serde_json::Map::new()));
+    let output_metadata_copy = json_detail_copy_text("Output metadata", &output_metadata_value);
+    let output_metadata = render_json_detail_section(
+        out,
+        "Output metadata",
+        &output_metadata_value,
+        output_metadata_expanded,
+        width,
+    );
+    if output_metadata_expanded {
+        visible_copy_sections.push(output_metadata_copy);
+    }
+
+    let presentation_copy_text = tool_presentation_copy_text(tool, i18n);
+    let presentation = render_detail_section_with_body(
+        out,
+        "Presentation",
+        presentation_expanded,
+        width,
+        |body| render_tool_presentation_body(tool, body, width, i18n, failure_text),
+        format!("Presentation\n{presentation_copy_text}"),
+    );
+    if presentation_expanded && !presentation_copy_text.trim().is_empty() {
+        visible_copy_sections.push(format!("Presentation\n{presentation_copy_text}"));
+    }
 
     ToolExecutionRender {
         headline_end,
-        input,
-        output,
+        metadata: Some(metadata),
+        input: Some(input),
+        output: Some(output),
+        output_metadata: Some(output_metadata),
+        presentation: Some(presentation),
         visible_copy_text: visible_copy_sections
             .into_iter()
             .filter(|section| !section.trim().is_empty())
             .collect::<Vec<_>>()
             .join("\n\n"),
     }
+}
+
+fn render_detail_section_with_body(
+    out: &mut Vec<RenderedLine>,
+    title: &str,
+    expanded: bool,
+    width: u16,
+    render_body: impl FnOnce(&mut Vec<RenderedLine>),
+    copy_text: String,
+) -> ToolExecutionSectionRender {
+    let section_start = out.len();
+    push_section_heading(
+        out,
+        &format!("    {} {title}", if expanded { "▾" } else { "▸" }),
+        Style::default()
+            .fg(agena_tui_components::theme::special_color())
+            .add_modifier(Modifier::BOLD),
+        width,
+    );
+    if expanded {
+        render_body(out);
+    }
+    ToolExecutionSectionRender {
+        start_line: section_start,
+        end_line: out.len(),
+        copy_text,
+        expanded,
+    }
+}
+
+fn render_json_detail_section(
+    out: &mut Vec<RenderedLine>,
+    title: &str,
+    value: &Value,
+    expanded: bool,
+    width: u16,
+) -> ToolExecutionSectionRender {
+    let text = json_detail_copy_text(title, value);
+    let body_text = text.clone();
+    render_detail_section_with_body(
+        out,
+        title,
+        expanded,
+        width,
+        |body| render_expanded_tool_text_block(body, "      ", body_text.as_str(), width),
+        text,
+    )
+}
+
+fn render_markdown_detail_section(
+    out: &mut Vec<RenderedLine>,
+    title: &str,
+    markdown: &str,
+    expanded: bool,
+    width: u16,
+) -> ToolExecutionSectionRender {
+    let copy_text = format!("{title}\n{markdown}");
+    render_detail_section_with_body(
+        out,
+        title,
+        expanded,
+        width,
+        |body| push_expanded_markdown(body, "      ", markdown, width),
+        copy_text,
+    )
+}
+
+fn json_detail_copy_text(title: &str, value: &Value) -> String {
+    let rendered = serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string());
+    format!("{title}\n{rendered}")
 }
 
 fn render_tool_output_body(
@@ -258,7 +405,19 @@ fn render_tool_output_body(
         );
         push_expanded_diff_text(out, "    ", diff, width);
     }
+}
 
+fn render_tool_presentation_body(
+    tool: &ToolCallView,
+    out: &mut Vec<RenderedLine>,
+    width: u16,
+    i18n: &I18n,
+    failure_text: Option<&str>,
+) {
+    if !tool.presentation.summary.trim().is_empty() {
+        render_expanded_tool_text_block(out, "      ", tool.presentation.summary.as_str(), width);
+    }
+    let apply_patch = apply_patch_details(&tool.details());
     render_operation_blocks(
         tool.presentation.blocks.as_slice(),
         out,
@@ -274,7 +433,7 @@ fn render_tool_output_body(
 
 fn tool_output_section_copy_text(
     tool: &ToolCallView,
-    i18n: &I18n,
+    _i18n: &I18n,
     failure_text: Option<&str>,
 ) -> String {
     let model_text = tool.model_text();
@@ -291,21 +450,26 @@ fn tool_output_section_copy_text(
     {
         sections.push(diff.trim().to_owned());
     }
-    sections.extend(
-        tool.presentation
-            .blocks
-            .iter()
-            .map(|block| operation_block_copy_text(block, i18n))
-            .filter(|text| {
-                !text.trim().is_empty()
-                    && failure_text.is_none_or(|failure| text.trim() != failure.trim())
-            }),
-    );
     sections
         .into_iter()
         .filter(|section| !section.trim().is_empty())
         .collect::<Vec<_>>()
         .join("\n\n")
+}
+
+fn tool_presentation_copy_text(tool: &ToolCallView, i18n: &I18n) -> String {
+    let mut sections = Vec::new();
+    if !tool.presentation.summary.trim().is_empty() {
+        sections.push(tool.presentation.summary.clone());
+    }
+    sections.extend(
+        tool.presentation
+            .blocks
+            .iter()
+            .map(|block| operation_block_copy_text(block, i18n))
+            .filter(|text| !text.trim().is_empty()),
+    );
+    sections.join("\n\n")
 }
 
 fn patch_rendered_lines_style(lines: &mut [RenderedLine], style: Style) {

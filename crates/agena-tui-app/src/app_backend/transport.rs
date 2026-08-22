@@ -1970,6 +1970,18 @@ impl TuiBackend {
             .await?)
     }
 
+    pub(crate) async fn get_tool_detail(
+        &self,
+        session_id: i64,
+        part_id: i64,
+        section: agena_api::live::ToolDetailSection,
+    ) -> Result<agena_api::live::ToolDetailResource> {
+        Ok(self
+            .client()
+            .session_tool_detail(session_id, part_id, section)
+            .await?)
+    }
+
     pub async fn refresh_session(
         &self,
         session_id: i64,

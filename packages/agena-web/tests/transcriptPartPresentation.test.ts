@@ -4,9 +4,12 @@ import { readFileSync } from 'node:fs'
 import type { TranscriptDisplayPart } from '../src/components/chat/messageList.types'
 import {
   decodeStructuredValue,
+  interactionPresentationFromAttention,
   operationPresentation,
   partInteractionRequestIds,
   partStatusPresentation,
+  pendingInteractionPresentationFromAttention,
+  permissionPresentationFromAttention,
   structuredValueMarkdown,
 } from '../src/pages/chat/transcriptPartPresentation'
 import { projectTranscriptBlocks } from '../src/pages/chat/transcriptProjection'
@@ -310,6 +313,76 @@ describe('TUI-parity part presentation', () => {
     expect(partInteractionRequestIds(part)).toEqual(['input-1', 'permission-1'])
   })
 
+  test('projects live review attention with the same shape as a durable interaction part', () => {
+    const reviewAttention = {
+      kind: 'question',
+      payload: {
+        type: 'question.asked',
+        properties: {
+          id: 'review-live',
+          request: {
+            kind: 'user_input',
+            request_id: 'review-live',
+            input_kind: 'review',
+            title: 'Review proposed plan',
+            body_markdown: '## Plan\n\n1. Update the renderer.',
+            questions: [
+              {
+                question: 'How should this plan proceed?',
+                options: [{ label: 'Approve', description: 'Run the plan' }],
+                allow_custom: true,
+              },
+            ],
+          },
+        },
+      },
+    } as const
+    const review = interactionPresentationFromAttention(reviewAttention)
+    expect(review).toMatchObject({
+      requestId: 'review-live',
+      kind: 'review',
+      pending: true,
+      bodyMarkdown: '## Plan\n\n1. Update the renderer.',
+    })
+    expect(review?.questions[0]).toMatchObject({
+      question: 'How should this plan proceed?',
+      allowCustom: true,
+    })
+    expect(pendingInteractionPresentationFromAttention(reviewAttention, new Set())).toMatchObject({
+      requestId: 'review-live',
+    })
+    expect(pendingInteractionPresentationFromAttention(reviewAttention, new Set(['review-live']))).toBeNull()
+  })
+
+  test('projects live permission attention with full action context', () => {
+    const permission = permissionPresentationFromAttention({
+      kind: 'permission',
+      payload: {
+        type: 'permission.asked',
+        properties: {
+          id: 'permission-live',
+          request: {
+            request_id: 'permission-live',
+            action: { kind: 'path_access', access_kind: 'read', target_path: 'notes.md' },
+            reason: 'The operation needs to inspect the note.',
+            explanation: 'The file is read-only.',
+            source: 'tool',
+            scope: 'session',
+          },
+        },
+      },
+    })
+    expect(permission).toMatchObject({
+      requestId: 'permission-live',
+      pending: true,
+      status: 'Awaiting user approval',
+      action: 'read notes.md',
+      reason: 'The operation needs to inspect the note.',
+      explanation: 'The file is read-only.',
+      provenance: 'tool · session',
+    })
+  })
+
   test('auto-expands a pending interaction operation as one transcript Part', () => {
     const [block] = projectTranscriptBlocks(
       [
@@ -399,12 +472,19 @@ describe('TUI-parity part presentation', () => {
     expect(projected.attachments).toEqual([])
   })
 
-  test('keeps Input and Output folded while Stdout is expanded Markdown', () => {
+  test('keeps non-presentation sections folded and presents the five tool sections in order', () => {
     const source = readFileSync(new URL('../src/components/chat/AgenaOperationPart.vue', import.meta.url), 'utf8')
+    expect(source).toContain('const metadataExpanded = ref(false)')
     expect(source).toContain('const inputExpanded = ref(false)')
     expect(source).toContain('const outputExpanded = ref(false)')
-    expect(source).toContain('const stdoutExpanded = ref(true)')
-    expect(source).toContain('<MarkdownRenderer :content="operation.stdout" mode="markdown" :stream="false" />')
+    expect(source).toContain('const outputMetadataExpanded = ref(false)')
+    expect(source).toContain('const presentationExpanded = ref(true)')
+    expect(source).toContain(
+      "const toolDetailSections: ToolDetailSection[] = ['metadata', 'input', 'output', 'output_metadata', 'presentation']",
+    )
+    expect(source).toContain('getToolPartDetail')
+    expect(source).toContain('data-tool-detail-section')
+    expect(source).not.toContain('stdoutExpanded')
     expect(source).toContain('AgenaInteractionPart')
     expect(source).not.toContain('AttentionPanel')
 
@@ -413,6 +493,19 @@ describe('TUI-parity part presentation', () => {
       'utf8',
     )
     expect(interactionSource).toContain('data-transcript-interaction-part="true"')
+    expect(interactionSource).toContain('data-transcript-chrome="true"')
+    expect(interactionSource).toContain('@keydown.stop="handleKeydown"')
+    expect(interactionSource).toContain('ArrowUp')
+    expect(interactionSource).toContain('ArrowDown')
+    expect(interactionSource).toContain("lowerKey === 'k'")
+    expect(interactionSource).toContain("lowerKey === 'j'")
+    expect(interactionSource).toContain("key === 'Tab'")
+    expect(interactionSource).toContain("key === 'Enter'")
+    expect(interactionSource).toContain('focusNextIncompleteQuestion(index)')
+    expect(interactionSource).toContain("key === 'Escape'")
+    expect(interactionSource).toContain("lowerKey === 'd'")
+    expect(interactionSource).toContain("lowerKey === 'x'")
+    expect(interactionSource).toContain('nextTick')
     expect(interactionSource).toContain('v-for="(question, questionIndex) in questions"')
     expect(interactionSource).not.toContain('questionPage')
     expect(interactionSource).toContain('permission.replyReason')
@@ -431,6 +524,8 @@ describe('TUI-parity part presentation', () => {
     const messageListSource = readFileSync(new URL('../src/components/chat/MessageList.vue', import.meta.url), 'utf8')
     expect(chatPageViewSource).not.toContain('AttentionPanel')
     expect(messageListSource).not.toContain('AttentionPanel')
+    expect(messageListSource).toContain('pendingInteractionFallback')
+    expect(messageListSource).toContain('partInteractionRequestIds')
 
     const attachmentSource = readFileSync(
       new URL('../src/components/chat/AgenaAttachmentPreview.vue', import.meta.url),
@@ -441,5 +536,35 @@ describe('TUI-parity part presentation', () => {
 
     const headerSource = readFileSync(new URL('../src/components/chat/ChatHeader.vue', import.meta.url), 'utf8')
     expect(headerSource).not.toContain('AttentionPanel')
+  })
+
+  test('keeps raw output and output metadata independent in section projections', () => {
+    const projected = operationPresentation(
+      operationPart(
+        {
+          name: 'shell.run',
+          input: { script: 'echo done' },
+          metadata: { source: 'test' },
+          state: 'completed',
+        },
+        {
+          title: 'shell.run',
+          summary: 'Command finished',
+          blocks: [{ type: 'text', text: 'Human summary' }],
+        },
+      ),
+      {
+        input: { script: 'private input' },
+        output: { text: 'done', payload: { exit_code: 0 }, metadata: { exit_code: 0 } },
+        output_metadata: { exit_code: 0 },
+      },
+    )
+
+    expect(projected.input).toEqual({ script: 'private input' })
+    expect(projected.metadata).toEqual({ source: 'test' })
+    expect(projected.outputText).toBe('done')
+    expect(projected.rawOutput).toEqual({ text: 'done', payload: { exit_code: 0 } })
+    expect(projected.outputMetadata).toEqual({ exit_code: 0 })
+    expect(projected.presentationBlocks).toEqual([{ type: 'text', text: 'Human summary' }])
   })
 })

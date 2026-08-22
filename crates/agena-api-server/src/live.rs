@@ -13,7 +13,7 @@ use agena_api::{
     Scope,
     live::{
         PartResource, RuntimeSignalResource, SessionChangeResource, SessionPartsResource,
-        ToolHumanPresentationResource,
+        ToolDetailResource, ToolDetailSection, ToolHumanPresentationResource,
     },
 };
 use agena_runtime::{RuntimeLiveSignal, RuntimeLiveSignalItem};
@@ -218,13 +218,33 @@ pub(crate) async fn session_parts(
 }
 
 pub(crate) async fn project_part_for_user(state: &AppState, part: &Part) -> PartResource {
-    let presentation = project_tool_presentation(state, part).await;
+    project_part_for_sections(state, part, &[ToolDetailSection::Presentation]).await
+}
+
+/// Project one part for a caller that has explicitly requested particular
+/// tool-call sections. Transcript snapshots deliberately request only the
+/// human presentation; the raw input/output sections are fetched separately
+/// when a disclosure row is opened.
+pub(crate) async fn project_part_for_sections(
+    state: &AppState,
+    part: &Part,
+    sections: &[ToolDetailSection],
+) -> PartResource {
+    let presentation = if sections.contains(&ToolDetailSection::Presentation) {
+        project_tool_presentation(state, part).await
+    } else {
+        None
+    };
     PartResource {
         part_id: part.part_id,
         kind: part.kind.clone(),
         role: part.role.as_str().to_owned(),
         state: part.state.as_str().to_owned(),
-        content: part.content.clone(),
+        content: if part.kind == ToolCallContent::kind() {
+            agena_api::live::project_tool_call_content(&part.content, sections)
+        } else {
+            part.content.clone()
+        },
         presentation,
         summary: part.summary.clone(),
         visibility: part.visibility.as_str().to_owned(),
@@ -238,6 +258,50 @@ pub(crate) async fn project_part_for_user(state: &AppState, part: &Part) -> Part
         updated_at_ms: part.updated_at_ms,
         provider_state: part.provider_state.clone(),
     }
+}
+
+/// Project exactly one tool-call detail section. The returned value never
+/// contains a sibling section, which keeps the lazy-loading boundary useful
+/// even when the requested section is large.
+pub(crate) async fn project_tool_detail(
+    state: &AppState,
+    part: &Part,
+    section: ToolDetailSection,
+) -> Option<ToolDetailResource> {
+    if part.kind != ToolCallContent::kind() {
+        return None;
+    }
+    let content = ToolCallContent::try_from(&part.content).ok()?;
+    let value = match section {
+        ToolDetailSection::Metadata => serde_json::to_value(content.metadata).ok()?,
+        ToolDetailSection::Input => content.input,
+        ToolDetailSection::Output => match content.output {
+            Some(output) => {
+                let mut output = serde_json::to_value(output).ok()?;
+                if let Some(object) = output.as_object_mut() {
+                    object.remove("metadata");
+                }
+                output
+            }
+            None => serde_json::Value::Null,
+        },
+        ToolDetailSection::OutputMetadata => {
+            let metadata = content
+                .output
+                .map(|output| output.metadata)
+                .unwrap_or_default();
+            serde_json::to_value(metadata).ok()?
+        }
+        ToolDetailSection::Presentation => project_tool_presentation(state, part)
+            .await
+            .and_then(|presentation| serde_json::to_value(presentation).ok())
+            .unwrap_or(serde_json::Value::Null),
+    };
+    Some(ToolDetailResource {
+        part_id: part.part_id,
+        section,
+        value,
+    })
 }
 
 pub(crate) async fn project_parts_for_user(state: &AppState, parts: &[Part]) -> Vec<PartResource> {

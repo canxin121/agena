@@ -58,6 +58,18 @@ pub(crate) async fn get_session_state_with_transcript_page(
         .context("failed to load session state")
 }
 
+pub(crate) async fn get_tool_detail(
+    application: &TuiBackend,
+    session_id: i64,
+    part_id: i64,
+    section: agena_api::live::ToolDetailSection,
+) -> Result<agena_api::live::ToolDetailResource> {
+    application
+        .get_tool_detail(session_id, part_id, section)
+        .await
+        .context("failed to load tool detail")
+}
+
 /// Submit a user document (composer message) as a run.
 pub(crate) async fn submit_document_with_options(
     application: &TuiBackend,

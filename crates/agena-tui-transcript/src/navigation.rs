@@ -43,7 +43,7 @@ pub enum TranscriptNodeKey {
         content_id: crate::TranscriptContentId,
     },
     /// One independently navigable section inside an expanded Activity.
-    /// Input and result sections have stable keys because their independent
+    /// Tool detail sections have stable keys because their independent
     /// expansion state must survive outer Activity toggles and streamed
     /// Activity revisions.
     ActivitySection {
@@ -56,7 +56,13 @@ pub enum TranscriptNodeKey {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 /// Activity section of the transcript.
 pub enum TranscriptActivitySection {
+    Metadata,
     Input,
+    Output,
+    OutputMetadata,
+    Presentation,
+    /// Compatibility key for older cached/default expansion state. New tool
+    /// rows use [`Self::Output`].
     Result,
     StructuredResult,
     ManagedOutputs,

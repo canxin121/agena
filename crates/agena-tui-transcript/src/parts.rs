@@ -430,7 +430,17 @@ fn part_content(part: &SessionTranscriptPart) -> TranscriptPartContent<'static> 
 /// Decode the canonical `tool_call` facts and keep the human presentation in
 /// its native `ViewBlock` form. No API envelope or flattened mirror is built.
 fn tool_call_view_from_part(part: &SessionTranscriptPart) -> Option<ToolCallView> {
-    let content = match ToolCallContent::try_from(&part.content) {
+    // Transcript snapshots intentionally omit collapsed tool detail sections.
+    // The canonical durable decoder requires `input`, so provide only the
+    // empty structural default needed to decode a presentation-only snapshot;
+    // the actual input is inserted when the TUI's lazy section request lands.
+    let mut projected_content = part.content.clone();
+    if let Some(object) = projected_content.as_object_mut() {
+        object
+            .entry("input".to_owned())
+            .or_insert_with(|| serde_json::json!({}));
+    }
+    let content = match ToolCallContent::try_from(&projected_content) {
         Ok(content) => content,
         Err(error) => {
             tracing::warn!(

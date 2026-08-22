@@ -25,9 +25,17 @@ impl Application {
             let Ok(content) =
                 agena_runtime_contracts::part_content::ToolCallContent::try_from(&part.content)
             else {
+                part.content = agena_api::live::project_tool_call_content(
+                    &part.content,
+                    &[agena_api::live::ToolDetailSection::Presentation],
+                );
                 continue;
             };
             let Ok(input) = agena_domain::StructuredObject::try_from(content.input) else {
+                part.content = agena_api::live::project_tool_call_content(
+                    &part.content,
+                    &[agena_api::live::ToolDetailSection::Presentation],
+                );
                 continue;
             };
             let invocation = agena_domain::ToolInvocation {
@@ -49,6 +57,10 @@ impl Application {
                 summary: human.summary,
                 blocks: human.blocks,
             });
+            part.content = agena_api::live::project_tool_call_content(
+                &part.content,
+                &[agena_api::live::ToolDetailSection::Presentation],
+            );
         }
     }
 

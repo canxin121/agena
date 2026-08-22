@@ -1618,7 +1618,7 @@ mod tests {
     }
 
     #[test]
-    fn canonical_tool_call_input_and_output_are_independent_and_default_collapsed() {
+    fn canonical_tool_call_sections_keep_presentation_open_by_default() {
         let now = Utc::now();
         let operation = ToolCallView::from_operation(
             OperationPart {
@@ -1672,7 +1672,17 @@ mod tests {
         let output_key = TranscriptNodeKey::ActivitySection {
             entry_id: TranscriptEntryId::StoredMessage(3),
             content_id: TranscriptContentId::StoredPart(9),
-            section: crate::TranscriptActivitySection::Result,
+            section: crate::TranscriptActivitySection::Output,
+        };
+        let output_metadata_key = TranscriptNodeKey::ActivitySection {
+            entry_id: TranscriptEntryId::StoredMessage(3),
+            content_id: TranscriptContentId::StoredPart(9),
+            section: crate::TranscriptActivitySection::OutputMetadata,
+        };
+        let presentation_key = TranscriptNodeKey::ActivitySection {
+            entry_id: TranscriptEntryId::StoredMessage(3),
+            content_id: TranscriptContentId::StoredPart(9),
+            section: crate::TranscriptActivitySection::Presentation,
         };
         let defaults = TranscriptDetailDefaults {
             activity_default_expanded: true,
@@ -1694,6 +1704,8 @@ mod tests {
             .join("\n");
         assert!(folded_text.contains("▸ Input"), "{folded_text}");
         assert!(folded_text.contains("▸ Output"), "{folded_text}");
+        assert!(folded_text.contains("▸ Output metadata"), "{folded_text}");
+        assert!(folded_text.contains("▾ Presentation"), "{folded_text}");
         assert!(
             !folded_text.contains("private input sentinel"),
             "{folded_text}"
@@ -1702,8 +1714,8 @@ mod tests {
             !folded_text.contains("model output sentinel"),
             "{folded_text}"
         );
-        assert!(!folded_text.contains("stdout sentinel"), "{folded_text}");
-        for key in [&input_key, &output_key] {
+        assert!(folded_text.contains("stdout sentinel"), "{folded_text}");
+        for key in [&input_key, &output_key, &output_metadata_key] {
             let node = folded
                 .nodes
                 .iter()
@@ -1712,13 +1724,49 @@ mod tests {
             assert!(node.toggleable);
             assert!(!node.expanded);
         }
+        let presentation = folded
+            .nodes
+            .iter()
+            .find(|node| &node.key == &presentation_key)
+            .expect("presentation section node");
+        assert!(presentation.toggleable);
+        assert!(presentation.expanded);
+        let section_order = folded
+            .nodes
+            .iter()
+            .filter_map(|node| match &node.key {
+                TranscriptNodeKey::ActivitySection { section, .. }
+                    if matches!(
+                        section,
+                        crate::TranscriptActivitySection::Metadata
+                            | crate::TranscriptActivitySection::Input
+                            | crate::TranscriptActivitySection::Output
+                            | crate::TranscriptActivitySection::OutputMetadata
+                            | crate::TranscriptActivitySection::Presentation
+                    ) =>
+                {
+                    Some(*section)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            section_order,
+            vec![
+                crate::TranscriptActivitySection::Metadata,
+                crate::TranscriptActivitySection::Input,
+                crate::TranscriptActivitySection::Output,
+                crate::TranscriptActivitySection::OutputMetadata,
+                crate::TranscriptActivitySection::Presentation,
+            ]
+        );
         let parent = folded
             .nodes
             .iter()
             .find(|node| node.key == activity_key)
             .expect("operation Activity node");
         assert!(!parent.copy_text.contains("private input sentinel"));
-        assert!(!parent.copy_text.contains("stdout sentinel"));
+        assert!(parent.copy_text.contains("stdout sentinel"));
 
         let input_expanded = render_entry_detailed(
             &message,
@@ -1739,11 +1787,12 @@ mod tests {
             "{input_text}"
         );
         assert!(input_text.contains("▸ Output"), "{input_text}");
+        assert!(input_text.contains("▾ Presentation"), "{input_text}");
         assert!(
             !input_text.contains("model output sentinel"),
             "{input_text}"
         );
-        assert!(!input_text.contains("stdout sentinel"), "{input_text}");
+        assert!(input_text.contains("stdout sentinel"), "{input_text}");
 
         let output_expanded = render_entry_detailed(
             &message,

@@ -187,6 +187,34 @@ pub async fn list_session_parts(
     }))
 }
 
+/// Load one tool-call detail section on demand. The normal transcript
+/// projection contains only the human-facing presentation; this endpoint is
+/// the explicit disclosure boundary for the other four sections.
+pub async fn get_session_tool_detail(
+    State(state): State<AppState>,
+    Path((session_id, part_id, section_name)): Path<(i64, i64, String)>,
+) -> Result<impl IntoResponse, ServerError> {
+    let section = section_name
+        .parse::<agena_api::live::ToolDetailSection>()
+        .map_err(|error| {
+            ServerError::bad_request_with_diagnostic("Unknown tool detail section.", error)
+        })?;
+    let store = state.session_store()?;
+    let view = store
+        .load(session_id)
+        .await
+        .map_err(|error| ServerError::internal_error(&error))?;
+    let part = view
+        .parts
+        .into_iter()
+        .find(|part| part.part_id == part_id && part.visibility.visible_to_user())
+        .ok_or_else(|| ServerError::not_found("The tool part was not found."))?;
+    let detail = crate::live::project_tool_detail(&state, &part, section)
+        .await
+        .ok_or_else(|| ServerError::not_found("The tool part was not found."))?;
+    Ok(Json(detail))
+}
+
 fn select_user_visible_part_page(
     session_id: i64,
     raw_parts: Vec<agena_storage::store::Part>,

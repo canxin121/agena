@@ -93,7 +93,20 @@ impl ToolPayloadInput {
     /// and a `StructuredObject` payload.
     pub fn into_invocation(self) -> ToolInvocation {
         let tool_name = self.tool_name();
-        let value = serde_json::to_value(&self).unwrap_or(serde_json::Value::Null);
+        let value = match serde_json::to_value(&self) {
+            Ok(value) => value,
+            Err(error) => {
+                tracing::error!(
+                    tool_name,
+                    diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                        "serialize typed tool input payload",
+                        &error,
+                    ),
+                    "typed tool input payload could not be serialized"
+                );
+                serde_json::Value::Object(Default::default())
+            }
+        };
         let mut object = match value {
             serde_json::Value::Object(map) => map,
             _ => serde_json::Map::new(),
@@ -101,8 +114,17 @@ impl ToolPayloadInput {
         object.remove("tool");
         let name = invocation_name_for_payload_tool(tool_name, &mut object)
             .unwrap_or_else(|| tool_name.to_string());
-        let payload =
-            StructuredObject::try_from(serde_json::Value::Object(object)).unwrap_or_default();
+        let payload = match StructuredObject::try_from(serde_json::Value::Object(object)) {
+            Ok(payload) => payload,
+            Err(error) => {
+                tracing::error!(
+                    tool_name,
+                    error = %error,
+                    "serialized tool input object could not be converted to StructuredObject"
+                );
+                StructuredObject::default()
+            }
+        };
         ToolInvocation::new(name, payload)
     }
 
@@ -120,7 +142,20 @@ impl ToolPayloadInput {
         };
         let payload_name = payload_name_for_invocation(invocation.name.as_str(), &mut object)?;
         object.insert("tool".to_string(), serde_json::Value::String(payload_name));
-        serde_json::from_value(serde_json::Value::Object(object)).ok()
+        match serde_json::from_value(serde_json::Value::Object(object)) {
+            Ok(payload) => Some(payload),
+            Err(error) => {
+                tracing::warn!(
+                    tool_name = %invocation.name,
+                    diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                        "decode a typed tool invocation payload",
+                        &error,
+                    ),
+                    "typed tool invocation payload projection failed"
+                );
+                None
+            }
+        }
     }
 
     /// Decode the payload for a bundled tool whose registered handler is a
@@ -421,14 +456,34 @@ impl ToolPayloadOutput {
     /// persisted message parts. The tool name lives on [`ToolInvocation`],
     /// so the payload stores only the output fields.
     pub fn into_tool_output(self) -> ToolOutput {
-        let value = serde_json::to_value(&self).unwrap_or(serde_json::Value::Null);
+        let value = match serde_json::to_value(&self) {
+            Ok(value) => value,
+            Err(error) => {
+                tracing::error!(
+                    diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                        "serialize typed tool output payload",
+                        &error,
+                    ),
+                    "typed tool output payload could not be serialized"
+                );
+                serde_json::Value::Object(Default::default())
+            }
+        };
         let mut object = match value {
             serde_json::Value::Object(map) => map,
             _ => serde_json::Map::new(),
         };
         object.remove("tool");
-        let payload =
-            StructuredObject::try_from(serde_json::Value::Object(object)).unwrap_or_default();
+        let payload = match StructuredObject::try_from(serde_json::Value::Object(object)) {
+            Ok(payload) => payload,
+            Err(error) => {
+                tracing::error!(
+                    error = %error,
+                    "serialized tool output object could not be converted to StructuredObject"
+                );
+                StructuredObject::default()
+            }
+        };
         ToolOutput {
             payload,
             managed_outputs: Vec::new(),
@@ -447,7 +502,20 @@ impl ToolPayloadOutput {
         };
         let payload_name = payload_name_for_output_tool(tool_name)?;
         object.insert("tool".to_string(), serde_json::Value::String(payload_name));
-        serde_json::from_value(serde_json::Value::Object(object)).ok()
+        match serde_json::from_value(serde_json::Value::Object(object)) {
+            Ok(payload) => Some(payload),
+            Err(error) => {
+                tracing::warn!(
+                    tool_name,
+                    diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                        "decode a typed tool output payload",
+                        &error,
+                    ),
+                    "typed tool output payload projection failed"
+                );
+                None
+            }
+        }
     }
 }
 

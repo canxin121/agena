@@ -195,7 +195,7 @@ fn render_tool(out: &mut String, plugin_id: &str, tool: &ToolDefinition) {
                     writeln!(out, "{}", pretty_json(&value)).unwrap();
                     writeln!(out, "```").unwrap();
                 }
-                Err(_) => {
+                Err(..) => {
                     writeln!(out, "```text").unwrap();
                     writeln!(out, "{example}").unwrap();
                     writeln!(out, "```").unwrap();
@@ -335,12 +335,36 @@ fn schema_type(schema: &Value) -> String {
 fn compact_json(value: &Value) -> String {
     match value {
         Value::String(text) => text.clone(),
-        other => serde_json::to_string(other).unwrap_or_default(),
+        other => match serde_json::to_string(other) {
+            Ok(text) => text,
+            Err(error) => {
+                tracing::error!(
+                    diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                        "serialize compact documentation JSON",
+                        &error,
+                    ),
+                    "documentation JSON could not be rendered"
+                );
+                "<JSON serialization failed>".to_owned()
+            }
+        },
     }
 }
 
 fn pretty_json(value: &Value) -> String {
-    serde_json::to_string_pretty(value).unwrap_or_else(|_| "{}".to_string())
+    match serde_json::to_string_pretty(value) {
+        Ok(text) => text,
+        Err(error) => {
+            tracing::error!(
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "serialize pretty documentation JSON",
+                    &error,
+                ),
+                "documentation JSON could not be rendered"
+            );
+            "<JSON serialization failed>".to_owned()
+        }
+    }
 }
 
 fn cell_text(text: &str) -> String {

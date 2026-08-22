@@ -1,3 +1,4 @@
+use super::super::recover_read;
 use super::{
     AppError, Arc, ModelRef, PathBuf, PersistedPermissionRule, SessionManager, SessionManagerState,
     SessionRunOptions, ToolInvocationExecution, custom_payload_value,
@@ -157,11 +158,7 @@ impl SessionManager {
         session: &Session,
         options: &mut SessionRunOptions,
     ) -> Result<(), AppError> {
-        let state = self.execution_state();
-        let effective_selection = state
-            .config
-            .default_selection
-            .overlay_with_cascade(&session.runtime.execution.selection);
+        let effective_selection = session.runtime.execution.selection.clone();
         let selection_model = effective_selection.model_ref().map_err(|error| {
             AppError::Internal(format!(
                 "session {} contains invalid execution model selection: {error}",
@@ -202,11 +199,7 @@ impl SessionManager {
     ) -> Result<(), AppError> {
         let execution = self.execution_state();
         let provider_registry = &execution.provider_registry;
-        let resolved_adapter_id = options.model.adapter_id.clone().or_else(|| {
-            provider_registry
-                .get(options.model.provider_id.as_ref())
-                .and_then(|provider| provider.default_adapter().cloned())
-        });
+        let resolved_adapter_id = options.model.adapter_id.clone();
 
         let requested_parallel_tool_calls = options.request_override.parallel_tool_calls();
         let mut merged_override = options.request_override.clone();
@@ -268,20 +261,21 @@ impl SessionManager {
         session: &Session,
         state: &SessionManagerState,
     ) -> crate::authorization::PermissionConfig {
-        let mut effective = state
-            .shared_permission
-            .read()
-            .map(|permission| permission.clone())
-            .unwrap_or_else(|_| state.config.permission.clone());
+        let mut effective = recover_read(
+            state.shared_permission.as_ref(),
+            "resolve shared session permission",
+        )
+        .clone();
         effective.merge_from(managed_project_state_permission(
             state.tool_executor.workspace_root(),
         ));
-        let session_permission = state
-            .shared_session_permissions
-            .read()
-            .ok()
-            .and_then(|permissions| permissions.get(&session.id).cloned())
-            .unwrap_or_else(|| session.runtime.execution.selection.permission.clone());
+        let session_permission = recover_read(
+            state.shared_session_permissions.as_ref(),
+            "resolve session-specific permission",
+        )
+        .get(&session.id)
+        .cloned()
+        .unwrap_or_else(|| session.runtime.execution.selection.permission.clone());
         effective.merge_from(session_permission);
         effective
     }
@@ -323,29 +317,18 @@ impl SessionManager {
             })
     }
 
-    pub(in crate::session::manager) fn default_model_from_config(
-        &self,
-        state: &SessionManagerState,
-    ) -> Result<Option<ModelRef>, AppError> {
-        Ok(state
-            .provider_registry
-            .resolve_default_model_selection(&state.config.default_selection)?)
-    }
-
-    pub(in crate::session::manager) fn model_from_session_or_default(
+    pub(in crate::session::manager) fn model_from_session_or_error(
         &self,
         session: &Session,
-        state: &SessionManagerState,
+        _state: &SessionManagerState,
     ) -> Result<ModelRef, AppError> {
         self.model_from_session_selection(session)?
             .map(Ok)
             .unwrap_or_else(|| {
-                self.default_model_from_config(state)?.ok_or_else(|| {
-                    AppError::Internal(format!(
-                        "model is required for session {}; set a session model or global default model",
-                        session.id
-                    ))
-                })
+                Err(AppError::Internal(format!(
+                    "model is required for session {}; select a model before running",
+                    session.id
+                )))
             })
     }
 
@@ -354,7 +337,7 @@ impl SessionManager {
         session: &Session,
         state: Arc<SessionManagerState>,
     ) -> Result<SessionRunOptions, AppError> {
-        let model = self.model_from_session_or_default(session, &state)?;
+        let model = self.model_from_session_or_error(session, &state)?;
 
         self.apply_execution_context_to_run_options_async(
             session,
@@ -465,28 +448,26 @@ impl SessionManager {
         state: &SessionManagerState,
         requested_selection: &agena_domain::ModelSelectionConfig,
     ) -> Result<SessionRunOptions, AppError> {
-        let parent_model = match self.model_from_session_selection(parent)? {
-            Some(model) => model,
-            None => self.default_model_from_config(state)?.ok_or_else(|| {
-                AppError::Internal(
-                    "subtask requires a parent or global default model before it can run"
-                        .to_string(),
-                )
-            })?,
-        };
+        let parent_model = self.model_from_session_selection(parent)?.ok_or_else(|| {
+            AppError::Internal(
+                "subtask requires the parent session to have a selected model before it can run"
+                    .to_string(),
+            )
+        })?;
         let model = self.resolve_model_selection_override(
             &state.provider_registry,
             &parent_model,
             requested_selection,
         )?;
-        let parent_selection = state
-            .config
-            .default_selection
-            .overlay_with_cascade(&parent.runtime.execution.selection);
+        let parent_selection = parent.runtime.execution.selection.clone();
         let inherit_parent_modes = parent_selection
             .model_ref()
-            .ok()
-            .flatten()
+            .map_err(|error| {
+                AppError::Config(agena_failure::diagnostic::format_error_chain_with_context(
+                    "decode the parent session model selection while preparing a subtask",
+                    &error,
+                ))
+            })?
             .is_some_and(|selected| selected == model);
         let inherited = inherit_parent_modes.then_some(&parent_selection);
         let requested_mode = |value: &Option<String>| {

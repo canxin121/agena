@@ -315,7 +315,18 @@ impl PluginHost {
                         candidate = BuildCandidate::Prepared(Box::new(prepared));
                     }
                     Ok(prepared) => {
-                        let _ = shutdown_transport(prepared.transport()).await;
+                        if let Err(error) = crate::loader::close_transport_for_plugin(
+                            &id,
+                            prepared.transport().as_ref(),
+                        )
+                        .await
+                        {
+                            tracing::error!(
+                                plugin = %id,
+                                diagnostic = %agena_failure::diagnostic::format_error_chain(&error),
+                                "failed to close a re-prepared plugin whose manifest changed during reload"
+                            );
+                        }
                         let block = crate::activation::PluginActivationBlock {
                             plugin_id: id.clone(),
                             code: "manifest_changed_during_reload",
@@ -367,7 +378,10 @@ impl PluginHost {
                         .await
                         .map_err(|error| HostError::Load {
                             plugin: id.clone(),
-                            message: error.to_string(),
+                            message: agena_failure::diagnostic::format_error_chain_with_context(
+                                "failed to attach the successor host to a reused plugin transport",
+                                &error,
+                            ),
                         })?;
                     if let Some(previous_status) = previous
                         .as_ref()
@@ -384,7 +398,19 @@ impl PluginHost {
                     {
                         Ok(plugin) => (Arc::new(plugin), false),
                         Err(error) => {
-                            let _ = shutdown_transport(transport).await;
+                            if let Err(close_error) =
+                                crate::loader::close_transport_for_plugin(&id, transport.as_ref())
+                                    .await
+                            {
+                                tracing::error!(
+                                    plugin = %id,
+                                    diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                                        "plugin transport cleanup also failed after plugin initialization failed",
+                                        &close_error,
+                                    ),
+                                    "plugin initialization and transport cleanup both failed"
+                                );
+                            }
                             host_handle.rollback_failed_plugin(&plugin_key).await;
                             let block = crate::activation::PluginActivationBlock {
                                 plugin_id: id.clone(),
@@ -398,7 +424,7 @@ impl PluginHost {
                                 &plugin_key,
                                 "error",
                                 "init",
-                                error.to_string(),
+                                agena_failure::diagnostic::format_error_chain(&error),
                                 serde_json::Value::Null,
                             );
                             continue;
@@ -416,7 +442,19 @@ impl PluginHost {
                 })?;
             if let Err(error) = host_handle.own_manifest_resources(&plugin.key(), &plugin.manifest)
             {
-                let _ = shutdown_transport(plugin.transport()).await;
+                if let Err(close_error) =
+                    crate::loader::close_transport_for_plugin(&id, plugin.transport().as_ref())
+                        .await
+                {
+                    tracing::error!(
+                        plugin = %id,
+                        diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                            "plugin transport cleanup also failed after effect-scope registration failed",
+                            &close_error,
+                        ),
+                        "plugin effect-scope registration and transport cleanup both failed"
+                    );
+                }
                 host_handle.rollback_failed_plugin(&plugin.key()).await;
                 let block = crate::activation::PluginActivationBlock {
                     plugin_id: id.clone(),
@@ -455,9 +493,11 @@ impl PluginHost {
             if let BuildCandidate::Prepared(prepared) = candidate {
                 let plugin_key = prepared.key();
                 let transport = prepared.transport();
-                let _ = tokio::time::timeout(std::time::Duration::from_secs(5), transport.close())
-                    .await;
+                let plugin_id = plugin_key.to_string();
+                let close_result =
+                    crate::loader::close_transport_for_plugin(&plugin_id, transport.as_ref()).await;
                 host_handle.dispose_plugin_resources(&plugin_key).await;
+                close_result?;
             }
         }
 
@@ -581,7 +621,9 @@ impl PluginHost {
                         }
                     },
                 )
-                .map_err(|error| HostError::Config(error.to_string()))?;
+                .map_err(|error| {
+                    HostError::Config(agena_failure::diagnostic::format_error_chain(&error))
+                })?;
         }
         let tool_after_pipeline = Arc::new(crate::event_pipeline::PluginTransformPipeline::new(
             crate::event_pipeline::PluginPipelineFailurePolicy::Abort,
@@ -611,8 +653,13 @@ impl PluginHost {
                         let plugin = Arc::clone(&plugin);
                         let host_handle = Arc::clone(&callback_host_handle);
                         async move {
-                            let params = serde_json::to_value(&dispatch.input)
-                                .map_err(|error| error.to_string())?;
+                            let params =
+                                serde_json::to_value(&dispatch.input).map_err(|error| {
+                                    agena_failure::diagnostic::format_error_chain_with_context(
+                                        "failed to serialize tool.after hook input",
+                                        &error,
+                                    )
+                                })?;
                             let context = tool_hook_context(
                                 &plugin,
                                 dispatch.input.tool_name(),
@@ -634,12 +681,20 @@ impl PluginHost {
                                 ),
                             )
                             .await
-                            .map_err(|error| transport_to_plugin_error(error).to_string())?;
+                            .map_err(|error| {
+                                let error = transport_to_plugin_error(error);
+                                error.diagnostic_message().to_owned()
+                            })?;
                             if value.is_null() {
                                 return Ok(dispatch);
                             }
-                            let patch: Option<ToolAfterPatch> =
-                                serde_json::from_value(value).map_err(|error| error.to_string())?;
+                            let patch: Option<ToolAfterPatch> = serde_json::from_value(value)
+                                .map_err(|error| {
+                                    agena_failure::diagnostic::format_error_chain_with_context(
+                                        "failed to decode tool.after hook output",
+                                        &error,
+                                    )
+                                })?;
                             if let Some(patch) = patch {
                                 if let Some(title) = patch.title {
                                     dispatch.input.title = title;
@@ -659,7 +714,9 @@ impl PluginHost {
                         }
                     },
                 )
-                .map_err(|error| HostError::Config(error.to_string()))?;
+                .map_err(|error| {
+                    HostError::Config(agena_failure::diagnostic::format_error_chain(&error))
+                })?;
         }
         Ok(Arc::new(PluginHost {
             plugins: loaded,
@@ -793,7 +850,7 @@ use super::{
     PluginPackage, PluginServiceBinding, PluginServiceBindingKey, PluginToolRegistry,
     PreparedPlugin, RwLock, StaticRegistration, ToolAfterDispatch, ToolAfterPatch, ToolBeforeBail,
     ToolBeforeDispatch, ToolBeforePatch, TransportError, activate_entry, call_with_timeout,
-    hook_registration_for_plugin, method, prepare_entry, shutdown_transport, tool_hook_context,
+    hook_registration_for_plugin, method, prepare_entry, tool_hook_context,
     transport_to_plugin_error,
 };
 

@@ -10,6 +10,7 @@ description = "Terminal and host-platform integration for Agena's TUI"
 agena-tui = { workspace = true }
 agena-tui-components = { workspace = true }
 agena-tui-media = { workspace = true }
+agena-failure = { workspace = true }
 anyhow = { workspace = true }
 base64 = { workspace = true }
 crossterm = { workspace = true }

@@ -15,16 +15,23 @@ const FILE_WORKER_LIMIT: usize = 16;
 static FILE_WORKERS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(FILE_WORKER_LIMIT);
 
 pub(super) async fn write_file_atomically(path: PathBuf, bytes: Vec<u8>) -> io::Result<()> {
-    let permit = FILE_WORKERS
-        .acquire()
-        .await
-        .map_err(|_| io::Error::other("Git atomic-file worker pool is no longer available"))?;
+    let permit = FILE_WORKERS.acquire().await.map_err(|error| {
+        io::Error::other(agena_failure::diagnostic::format_error_chain_with_context(
+            "acquire a Git atomic-file worker",
+            &error,
+        ))
+    })?;
     tokio::task::spawn_blocking(move || {
         let _permit = permit;
         write_file_atomically_blocking(&path, &bytes)
     })
     .await
-    .map_err(|error| io::Error::other(format!("Git atomic-file worker failed: {error}")))?
+    .map_err(|error| {
+        io::Error::other(agena_failure::diagnostic::format_error_chain_with_context(
+            "Git atomic-file worker failed",
+            &error,
+        ))
+    })?
 }
 
 fn write_file_atomically_blocking(path: &Path, bytes: &[u8]) -> io::Result<()> {

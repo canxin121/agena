@@ -87,8 +87,8 @@ async fn publish_tool_registry_changed_event(
         ));
 }
 
-fn plugin_error(error: impl ToString) -> PluginError {
-    PluginError::internal(error.to_string())
+fn plugin_error(error: impl std::error::Error + 'static) -> PluginError {
+    PluginError::internal_error(&error)
 }
 
 fn plugin_error_from_app(error: crate::AppError) -> PluginError {
@@ -162,7 +162,7 @@ impl RuntimeHostClient {
         use_manager: impl FnOnce(Arc<crate::session::SessionManager>) -> F,
     ) -> Result<T, PluginError>
     where
-        E: ToString,
+        E: std::error::Error + 'static,
         F: Future<Output = Result<T, E>>,
     {
         use_manager(self.session_manager()?)
@@ -408,9 +408,9 @@ impl HostClient for RuntimeHostClient {
         let snapshot = self.runtime.current_snapshot();
         let value = snapshot
             .config_value()
-            .map_err(|e| PluginError::invalid_params(e.to_string()))?;
+            .map_err(|e| PluginError::invalid_params_error(&e))?;
         agena_domain::get_json_path(&value, path.as_deref())
-            .map_err(|e| PluginError::invalid_params(e.to_string()))
+            .map_err(|e| PluginError::invalid_params_error(&e))
     }
 
     async fn reload_config(&self) -> Result<HostConfigReloadResponse, PluginError> {
@@ -418,7 +418,7 @@ impl HostClient for RuntimeHostClient {
             .runtime
             .reload()
             .await
-            .map_err(|e| PluginError::internal(e.to_string()))?;
+            .map_err(|e| PluginError::internal_error(&e))?;
         Ok(HostConfigReloadResponse {
             previous_generation: report.previous_generation,
             generation: report.generation,
@@ -805,21 +805,15 @@ impl HostClient for RuntimeHostClient {
             .await
             .map_err(plugin_error)?;
         let snapshot = self.snapshot();
-        let model = match session
+        let model = session
             .runtime()
             .effective_model_ref()
             .map_err(plugin_error)?
-        {
-            Some(model) => model,
-            None => snapshot
-                .resolve_default_model()
-                .map_err(plugin_error)?
-                .ok_or_else(|| {
-                    host_unavailable(
-                        "the active session has no selected model and no default provider route",
-                    )
-                })?,
-        };
+            .ok_or_else(|| {
+                host_unavailable(
+                    "the active session has no selected model; select a model before requesting image generation",
+                )
+            })?;
         let provider_registry = snapshot.provider_registry();
         let capabilities = provider_registry
             .image_capabilities(&model)
@@ -1221,7 +1215,7 @@ impl HostClient for RuntimeHostClient {
                     prompt,
                     max_age_days.unwrap_or(7),
                 )
-                .map_err(|err| PluginError::invalid_params(err.to_string()))?;
+                .map_err(|error| PluginError::invalid_params_error(&error))?;
                 if let Some(session) = owner_session_id {
                     job.set_owner(session);
                 }
@@ -1303,10 +1297,12 @@ impl HostClient for RuntimeHostClient {
                 }
             }
         };
-        manager
-            .add_server(&req.name, spec)
-            .await
-            .map_err(|e| PluginError::internal(format!("mcp.add_server: {e}")))
+        manager.add_server(&req.name, spec).await.map_err(|error| {
+            PluginError::internal(agena_failure::diagnostic::format_error_chain_with_context(
+                "mcp.add_server failed",
+                &error,
+            ))
+        })
     }
 
     async fn mcp_remove_server(
@@ -1319,7 +1315,15 @@ impl HostClient for RuntimeHostClient {
         )?;
         match manager.remove_server(&req.name).await {
             Ok(()) => Ok(HostMcpRemoveServerResponse { removed: true }),
-            Err(_) => Ok(HostMcpRemoveServerResponse { removed: false }),
+            Err(agena_mcp_client::McpError::ServerNotConnected(_)) => {
+                Ok(HostMcpRemoveServerResponse { removed: false })
+            }
+            Err(error) => Err(PluginError::internal(
+                agena_failure::diagnostic::format_error_chain_with_context(
+                    "mcp.remove_server failed",
+                    &error,
+                ),
+            )),
         }
     }
 }

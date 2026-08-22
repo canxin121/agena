@@ -171,11 +171,24 @@ pub(super) fn validate_plugin_target(
         validate_configured_plugin_value("$", &value, base_dir, &BTreeMap::new(), &mut messages);
     } else if let Some(plugins_value) = value.get("plugins") {
         target_kind = "agena_config".to_string();
-        let trusted_keys = value
-            .pointer("/plugins/host/trusted_keys")
-            .cloned()
-            .and_then(|value| serde_json::from_value::<BTreeMap<String, String>>(value).ok())
-            .unwrap_or_default();
+        let trusted_keys = match value.pointer("/plugins/host/trusted_keys").cloned() {
+            Some(value) => match serde_json::from_value::<BTreeMap<String, String>>(value) {
+                Ok(keys) => keys,
+                Err(error) => {
+                    push_error(
+                        &mut messages,
+                        "config.plugins.trusted_keys.decode",
+                        agena_failure::diagnostic::format_error_chain_with_context(
+                            "decode plugins.host.trusted_keys",
+                            &error,
+                        ),
+                        Some("$.plugins.host.trusted_keys"),
+                    );
+                    BTreeMap::new()
+                }
+            },
+            None => BTreeMap::new(),
+        };
         match serde_json::from_value::<agena_plugin_host::PluginsConfig>(plugins_value.clone()) {
             Ok(plugins) => match plugins.resolved_profile_view() {
                 Ok(resolution) => {

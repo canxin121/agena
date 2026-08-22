@@ -225,7 +225,13 @@ pub fn default_cache_root() -> PathBuf {
     let mut base = std::env::var("HOME")
         .or_else(|_| std::env::var("USERPROFILE"))
         .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("."));
+        .unwrap_or_else(|error| {
+            tracing::error!(
+                diagnostic = %error,
+                "plugin marketplace home is unavailable; using the current-directory compatibility path"
+            );
+            PathBuf::from(".")
+        });
     base.push("agena");
     base.push("marketplace");
     base

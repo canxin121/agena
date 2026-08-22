@@ -371,7 +371,7 @@ overlay-settings-section-providers-label = 模型與服務商
 
 overlay-settings-section-providers-summary = {$count} 個已配置服務商
 
-overlay-settings-section-providers-description = 選擇預設模型路由，配置服務商及其網絡行為，並查看模型目錄。
+overlay-settings-section-providers-description = 配置服務商及其網絡行為，並查看模型目錄。
 
 overlay-settings-section-model-catalog-label = 模型目錄
 
@@ -436,10 +436,6 @@ settings-runtime-speed-description = 目前工作階段 speed 模式覆蓋
 settings-runtime-verbosity-label = 詳細程度
 
 settings-runtime-verbosity-description = 目前工作階段 verbosity 覆蓋
-
-settings-field-default-provider-label = 預設模型
-
-settings-field-default-provider-description = 沒有工作階段覆蓋時使用的 provider、adapter 和 model 路由
 
 settings-field-permission-approval-model-label = 自動核准模型
 
@@ -585,7 +581,6 @@ settings-field-parse-float = {$field} 需要數值
 
 settings-choice-adapter-fallback = 適配器
 
-settings-choice-default-provider-detail = {$adapter}/{$model}
 
 settings-plugin-workbench-label = 插件設定工作台
 
@@ -717,11 +712,11 @@ settings-provider-workbench-value = {$count} 個服務商
 
 settings-provider-workbench-detail = 先打開可搜索的服務商列表，再配置認證、adapter、模型路由或新建服務商。
 
-settings-provider-default-mode-inherit-detail = 使用該 model/provider 的預設模式。
+settings-model-default-mode-inherit-detail = 使用所選 model 的原生預設模式。
 
 settings-provider-new-label = + 新建 provider
 
-settings-provider-new-detail = 建立新 provider，列出 live adapter models，並編輯 provider adapter 配置；全局模型單獨選擇。
+settings-provider-new-detail = 建立新 provider，列出 live adapter models，並編輯 provider adapter 配置；模型需單獨選擇。
 
 settings-provider-existing-detail = 已配置 {$count} 個 adapter
 
@@ -903,7 +898,7 @@ permission-studio-error-empty-value = {$field} 不能為空。
 
 overlay-providers-title = Provider 列表
 
-overlay-providers-prompt = 選擇一個 provider，並使用它的預設模型
+overlay-providers-prompt = 選擇一個 provider 進行配置
 
 overlay-provider-list-title = Provider 列表
 
@@ -1332,7 +1327,6 @@ provider-field-access-key-id = 存取密鑰 ID
 provider-field-secret-access-key = 秘密存取密鑰
 provider-field-session-token = 會話令牌
 provider-field-service-key-env = 服務密鑰環境
-provider-field-default-adapter = 預設適配器
 provider-field-request-timeout = 請求超時（秒）
 provider-field-connect-timeout = 連接逾時（秒）
 provider-field-adapter-id = 適配器ID
@@ -1471,10 +1465,7 @@ permission-rule-error-network-target-required = 網路規則需要網路目標
 permission-rule-error-session-id-required = 會話範圍需要會話 ID
 flash-command-requires-session = 此操作需要一個開放的會話
 flash-session-busy = 會話正忙
-flash-provider-selected = 選擇的提供者：{ $provider }（預設{ $model }）
-flash-provider-cleared = 提供者/模型覆蓋已清除
 flash-provider-not-found = 找不到提供者：{ $provider }
-flash-provider-default-updated = 預設提供者路線已更新：{ $provider }/{ $model }
 flash-permission-approval-model-updated = 自動核准模型更新：{ $provider }/{ $model }
 flash-provider-studio-adapter-required = 首先選擇一個適配器
 flash-provider-studio-adapter-not-enabled = 新增型號之前檢查所選適配器
@@ -1513,7 +1504,6 @@ flash-provider-delete-adapter = 刪除了配置的適配器 { $provider }/{ $ada
 flash-provider-delete-model = 刪除了配置的模型 { $provider }/{ $adapter }/{ $model }。
 flash-provider-studio-adapter-delete-empty = 未選擇要刪除的適配器設定。
 flash-provider-save-error-required-field = { $field } 是必要的
-flash-provider-save-error-unsupported-default-adapter = auth { $auth } 不支援defaults.adapter `{ $adapter }`；應為 { $supported } 之一
 flash-provider-save-error-unsupported-adapters = auth { $auth } 不支援適配器：{ $adapters }；應為 { $supported } 之一
 flash-provider-save-error-api-base-url = 使用 OpenAI 協定、Anthropic 或 Gemini 適配器時，api 驗證需要 base_url
 flash-provider-save-error-gitlab-token = gitlab_api auth 需要 API 金鑰來源

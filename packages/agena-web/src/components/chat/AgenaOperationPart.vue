@@ -3,26 +3,24 @@ import { computed, ref, watch } from 'vue'
 
 import MarkdownRenderer from '@/components/markdown/MarkdownRenderer.vue'
 import CodeBlock from '@/components/ui/CodeBlock.vue'
-import AttentionPanel from '@/components/chat/AttentionPanel.vue'
+import AgenaAttachmentPreview from '@/components/chat/AgenaAttachmentPreview.vue'
+import AgenaInteractionPart from '@/components/chat/AgenaInteractionPart.vue'
 import AgenaOperationBlock from '@/components/chat/AgenaOperationBlock.vue'
-import type { AttentionLike, TranscriptDisplayPart } from '@/components/chat/messageList.types'
+import type { TranscriptDisplayPart } from '@/components/chat/messageList.types'
 import {
   operationPresentation,
   partStatusPresentation,
   prettyJson,
-  jsonRecord,
-  jsonArray,
-  stringValue,
-  type InteractionPresentation,
-  attentionRequestId,
+  structuredValueMarkdown,
 } from '@/pages/chat/transcriptPartPresentation'
+import { useDirectoryStore } from '@/stores/directory'
+import { useUiStore } from '@/stores/ui'
 
 const props = defineProps<{
   part: TranscriptDisplayPart
   expanded: boolean
   collapseSignal: number
   sessionId?: string | null
-  attention?: AttentionLike
 }>()
 
 const emit = defineEmits<{
@@ -32,10 +30,12 @@ const emit = defineEmits<{
 
 const operation = computed(() => operationPresentation(props.part))
 const status = computed(() => partStatusPresentation(props.part.status))
+const directory = useDirectoryStore()
+const ui = useUiStore()
 const inputExpanded = ref(false)
 const outputExpanded = ref(false)
 const stdoutExpanded = ref(true)
-const permissionsExpanded = ref(false)
+const metadataExpanded = ref(false)
 
 watch(
   () => props.collapseSignal,
@@ -43,7 +43,7 @@ watch(
     inputExpanded.value = false
     outputExpanded.value = false
     stdoutExpanded.value = true
-    permissionsExpanded.value = false
+    metadataExpanded.value = false
   },
 )
 
@@ -56,37 +56,22 @@ const headlineSummary = computed(
 )
 const hasOutput = computed(() => {
   const value = operation.value
-  return Boolean(
-    value.structured !== null ||
-    value.blocks.length ||
-    value.attachments.length,
-  )
+  return Boolean(value.structured !== null || value.blocks.length || value.attachments.length)
 })
-const activeAttentionRequestId = computed(() => attentionRequestId(props.attention?.payload))
+const hasMetadata = computed(() => Object.keys(operation.value.metadata).length > 0)
 
-function interactionOwnsAttention(interaction: InteractionPresentation): boolean {
-  return (
-    Boolean(interaction.pending && interaction.requestId) && interaction.requestId === activeAttentionRequestId.value
-  )
+function openAttachment(path: string, url: string) {
+  const workspace = String(directory.currentDirectory || '').trim()
+  if (workspace && path) {
+    ui.requestWorkspaceDockFile(path, 'open')
+    return
+  }
+  if (url) window.open(url, '_blank', 'noopener,noreferrer')
 }
-
-const pendingPermissionOwnsAttention = computed(() =>
-  operation.value.permissions.some(
-    (permission) =>
-      permission.status === 'Awaiting user approval' &&
-      Boolean(permission.requestId) &&
-      permission.requestId === activeAttentionRequestId.value,
-  ),
-)
 
 function toggleOuter() {
   emit('select')
   emit('toggle')
-}
-
-function interactionAnswers(interaction: InteractionPresentation, questionIndex: number): string[] {
-  const answers = jsonRecord(jsonRecord(interaction.reply).answers)
-  return jsonArray(answers[String(questionIndex)]).map(stringValue).filter(Boolean)
 }
 </script>
 
@@ -128,105 +113,24 @@ function interactionAnswers(interaction: InteractionPresentation, questionIndex:
 
     <div v-if="expanded" class="ml-5 rounded-r-md border-l border-border/60 bg-muted/[0.08] pb-1 pl-4 pr-1">
       <div v-if="operation.userInputs.length" class="space-y-4 py-1 text-sm">
-        <section v-for="interaction in operation.userInputs" :key="interaction.requestId || interaction.title">
-          <AttentionPanel
-            v-if="interactionOwnsAttention(interaction) && attention && sessionId"
-            :kind="attention.kind"
-            :session-id="sessionId"
-            :payload="attention.payload"
-            inline
-          />
-          <template v-else>
-            <MarkdownRenderer
-              v-if="interaction.bodyMarkdown"
-              :content="interaction.bodyMarkdown"
-              mode="markdown"
-              :stream="false"
-            />
-            <div
-              v-for="(question, questionIndex) in interaction.questions"
-              :key="`${question.question}:${questionIndex}`"
-              class="mt-2"
-            >
-              <div v-if="question.header" class="text-[10px] font-semibold uppercase text-muted-foreground">
-                {{ question.header }}
-              </div>
-              <div class="font-medium">{{ question.question }}</div>
-              <div class="mt-1 border-y border-border/50">
-                <div v-for="option in question.options" :key="option.label" class="py-1.5 text-xs">
-                  <span class="font-mono text-primary">{{
-                    interactionAnswers(interaction, questionIndex).includes(option.label) ? '(x)' : '( )'
-                  }}</span>
-                  <span class="ml-2 font-medium">{{ option.label }}</span>
-                  <span v-if="option.description" class="ml-2 text-muted-foreground">{{ option.description }}</span>
-                </div>
-              </div>
-              <div
-                v-for="custom in interactionAnswers(interaction, questionIndex).filter(
-                  (answer) => !question.options.some((option) => option.label === answer),
-                )"
-                :key="custom"
-                class="mt-1 border-l border-primary/40 pl-2 text-xs"
-              >
-                {{ custom }}
-              </div>
-            </div>
-            <div v-if="interaction.pending" class="mt-2 font-mono text-[11px] text-amber-600 dark:text-amber-400">
-              Awaiting user input
-            </div>
-          </template>
-        </section>
+        <AgenaInteractionPart
+          v-for="interaction in operation.userInputs"
+          :key="interaction.requestId || interaction.title"
+          :interaction="interaction"
+          :session-id="sessionId"
+        />
       </div>
 
-      <section v-else-if="operation.permissions.length" class="py-1">
-        <AttentionPanel
-          v-if="pendingPermissionOwnsAttention && attention && sessionId"
-          :kind="attention.kind"
+      <section v-if="operation.permissions.length" class="space-y-4 py-1 text-sm">
+        <AgenaInteractionPart
+          v-for="permission in operation.permissions"
+          :key="permission.requestId || `${permission.action}:${permission.status}`"
+          :permission="permission"
           :session-id="sessionId"
-          :payload="attention.payload"
-          inline
         />
-        <template v-else>
-          <button
-            type="button"
-            class="flex items-center gap-2 rounded-md px-1 py-1 text-xs font-semibold text-primary outline-none hover:bg-muted/40"
-            :aria-expanded="permissionsExpanded"
-            @click="permissionsExpanded = !permissionsExpanded"
-          >
-            <span class="w-3 text-center font-mono text-muted-foreground" aria-hidden="true">{{
-              permissionsExpanded ? '▾' : '▸'
-            }}</span>
-            Permissions
-          </button>
-          <div v-if="permissionsExpanded" class="divide-y divide-border/50 pl-5 pt-1 text-xs">
-            <div
-              v-for="permission in operation.permissions"
-              :key="`${permission.action}:${permission.status}`"
-              class="py-2"
-            >
-              <div class="font-medium">{{ permission.status }} · {{ permission.action }}</div>
-              <div v-if="permission.reason" class="mt-1 text-muted-foreground">Request: {{ permission.reason }}</div>
-              <div
-                v-if="permission.explanation && permission.explanation !== permission.reason"
-                class="mt-1 text-muted-foreground"
-              >
-                Policy: {{ permission.explanation }}
-              </div>
-              <div
-                v-if="permission.replyReason && permission.replyReason !== permission.reason"
-                class="mt-1 text-muted-foreground"
-              >
-                Reply: {{ permission.replyReason }}
-              </div>
-              <div v-if="permission.provenance" class="mt-1 font-mono text-[10px] text-muted-foreground/75">
-                {{ permission.provenance }}
-              </div>
-            </div>
-          </div>
-        </template>
       </section>
 
-      <section v-if="!operation.userInputs.length && operation.error" class="py-1.5">
+      <section v-if="operation.error" class="py-1.5">
         <div class="text-xs font-semibold text-rose-600 dark:text-rose-400">› Error</div>
         <pre
           class="mt-1 whitespace-pre-wrap break-words font-mono text-xs leading-relaxed text-rose-700 dark:text-rose-300"
@@ -234,7 +138,7 @@ function interactionAnswers(interaction: InteractionPresentation, questionIndex:
         >
       </section>
 
-      <section v-if="!operation.userInputs.length && operation.input !== null" class="py-1">
+      <section v-if="operation.input !== null" class="py-1">
         <button
           type="button"
           class="flex items-center gap-2 rounded-md px-1 py-1 text-xs font-semibold text-primary outline-none hover:bg-muted/40"
@@ -257,7 +161,7 @@ function interactionAnswers(interaction: InteractionPresentation, questionIndex:
         </div>
       </section>
 
-      <section v-if="!operation.userInputs.length && hasOutput" class="py-1">
+      <section v-if="hasOutput" class="py-1">
         <button
           type="button"
           class="flex items-center gap-2 rounded-md px-1 py-1 text-xs font-semibold text-primary outline-none hover:bg-muted/40"
@@ -277,19 +181,14 @@ function interactionAnswers(interaction: InteractionPresentation, questionIndex:
             :block="block"
           />
 
-          <div v-if="operation.attachments.length" class="border-y border-border/50 py-1 font-mono text-xs">
-            <a
+          <div v-if="operation.attachments.length" class="space-y-1">
+            <AgenaAttachmentPreview
               v-for="attachment in operation.attachments"
               :key="attachment.key"
-              :href="attachment.url || undefined"
-              :target="attachment.url ? '_blank' : undefined"
-              :rel="attachment.url ? 'noopener noreferrer' : undefined"
-              class="flex min-w-0 items-center gap-2 py-1 text-foreground hover:text-primary"
-            >
-              <span aria-hidden="true">›</span>
-              <span class="min-w-0 flex-1 truncate">{{ attachment.label }}</span>
-              <span v-if="attachment.mime" class="text-[10px] text-muted-foreground">{{ attachment.mime }}</span>
-            </a>
+              :attachment="attachment"
+              :workspace-root="String(directory.currentDirectory || '')"
+              @open="openAttachment"
+            />
           </div>
 
           <CodeBlock
@@ -301,7 +200,24 @@ function interactionAnswers(interaction: InteractionPresentation, questionIndex:
         </div>
       </section>
 
-      <section v-if="!operation.userInputs.length && operation.stdout" class="py-1">
+      <section v-if="hasMetadata" class="py-1">
+        <button
+          type="button"
+          class="flex items-center gap-2 rounded-md px-1 py-1 text-xs font-semibold text-primary outline-none hover:bg-muted/40"
+          :aria-expanded="metadataExpanded"
+          @click="metadataExpanded = !metadataExpanded"
+        >
+          <span class="w-3 text-center font-mono text-muted-foreground" aria-hidden="true">{{
+            metadataExpanded ? '▾' : '▸'
+          }}</span>
+          Metadata
+        </button>
+        <div v-if="metadataExpanded" class="pl-5 pt-1">
+          <MarkdownRenderer :content="structuredValueMarkdown(operation.metadata)" mode="markdown" :stream="false" />
+        </div>
+      </section>
+
+      <section v-if="operation.stdout" class="py-1">
         <button
           type="button"
           class="flex items-center gap-2 rounded-md px-1 py-1 text-xs font-semibold text-primary outline-none hover:bg-muted/40"

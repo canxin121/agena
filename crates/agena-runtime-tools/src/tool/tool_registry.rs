@@ -437,8 +437,8 @@ impl ToolError {
             Self::InvalidInput { diagnostic, .. } => Some(diagnostic.to_string()),
             Self::InvalidGlobPattern(error) => Some(error.to_string()),
             Self::InvalidRegexPattern(error) => Some(error.to_string()),
-            Self::Shell(error) => Some(error.to_string()),
-            Self::Io(error) => Some(error.to_string()),
+            Self::Shell(error) => Some(agena_failure::diagnostic::format_error_chain(error)),
+            Self::Io(error) => Some(agena_failure::diagnostic::format_error_chain(error)),
             Self::Plugin(problem) => Some(problem.public.user.fallback.clone()),
             Self::StaleToolCall { tool } => Some(format!(
                 "Tool `{tool}` changed after this call was created. Refresh the tool catalog and retry."
@@ -463,6 +463,10 @@ impl ToolError {
         }
     }
 
+    pub fn invalid_input_error(error: &(dyn std::error::Error + 'static)) -> Self {
+        Self::invalid_input(agena_failure::diagnostic::format_error_chain(error))
+    }
+
     pub fn invalid_field(
         field: impl AsRef<str>,
         kind: agena_failure::FieldIssueKind,
@@ -476,6 +480,10 @@ impl ToolError {
 
     pub fn plugin(diagnostic: impl std::fmt::Display) -> Self {
         Self::from_plugin_error(agena_plugin_host::sdk::PluginError::internal(diagnostic))
+    }
+
+    pub fn plugin_error(error: &(dyn std::error::Error + 'static)) -> Self {
+        Self::from_plugin_error(agena_plugin_host::sdk::PluginError::internal_error(error))
     }
 
     pub fn from_plugin_error(error: agena_plugin_host::sdk::PluginError) -> Self {

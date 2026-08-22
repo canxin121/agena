@@ -94,7 +94,12 @@ impl NotebookPlugin {
         let worker_permit = crate::BLOCKING_PLUGIN_WORKERS
             .acquire()
             .await
-            .map_err(|_| PluginError::internal("notebook worker pool is unavailable"))?;
+            .map_err(|error| {
+                PluginError::internal(agena_failure::diagnostic::format_error_chain_with_context(
+                    "acquire a notebook plugin worker",
+                    &error,
+                ))
+            })?;
         tokio::task::spawn_blocking(move || {
             let _worker_permit = worker_permit;
             let path = resolve_path(workspace_root.as_str(), input.path.as_str());
@@ -105,14 +110,21 @@ impl NotebookPlugin {
             }
             agena_runtime_tools::with_file_mutation_locks(std::slice::from_ref(&path), || {
                 let file = std::fs::File::open(&path).map_err(io_error)?;
-                let mut original = Vec::with_capacity(
-                    file.metadata()
-                        .ok()
-                        .and_then(|metadata| {
-                            usize::try_from(metadata.len().min(MAX_NOTEBOOK_BYTES)).ok()
-                        })
+                let capacity = match file.metadata() {
+                    Ok(metadata) => usize::try_from(metadata.len().min(MAX_NOTEBOOK_BYTES))
                         .unwrap_or_default(),
-                );
+                    Err(error) => {
+                        tracing::warn!(
+                            diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                                "read notebook metadata for bounded preallocation",
+                                &error,
+                            ),
+                            "notebook edit is continuing without a preallocated read buffer"
+                        );
+                        0
+                    }
+                };
+                let mut original = Vec::with_capacity(capacity);
                 file.take(MAX_NOTEBOOK_BYTES.saturating_add(1))
                     .read_to_end(&mut original)
                     .map_err(io_error)?;
@@ -131,8 +143,13 @@ impl NotebookPlugin {
                 }
                 let mut notebook: serde_json::Value = serde_json::from_slice(original.as_slice())
                     .map_err(|error| {
-                    PluginError::invalid_params(format!("invalid notebook JSON: {error}"))
-                })?;
+                        PluginError::invalid_params(
+                            agena_failure::diagnostic::format_error_chain_with_context(
+                                "invalid notebook JSON",
+                                &error,
+                            ),
+                        )
+                    })?;
                 let cells = notebook
                     .get_mut("cells")
                     .and_then(serde_json::Value::as_array_mut)
@@ -198,7 +215,12 @@ impl NotebookPlugin {
 
                 let cell_count = cells.len();
                 let updated = serde_json::to_vec_pretty(&notebook).map_err(|error| {
-                    PluginError::internal(format!("cannot serialize notebook: {error}"))
+                    PluginError::internal(
+                        agena_failure::diagnostic::format_error_chain_with_context(
+                            "cannot serialize notebook",
+                            &error,
+                        ),
+                    )
                 })?;
                 atomic_write(&path, updated.as_slice())?;
                 let after_sha256 = sha256(updated.as_slice());
@@ -236,7 +258,12 @@ impl NotebookPlugin {
             .map_err(io_error)?
         })
         .await
-        .map_err(|error| PluginError::internal(format!("notebook worker failed: {error}")))?
+        .map_err(|error| {
+            PluginError::internal(agena_failure::diagnostic::format_error_chain_with_context(
+                "notebook plugin worker failed",
+                &error,
+            ))
+        })?
     }
 }
 

@@ -540,9 +540,19 @@ fn durable_operation_activity(
         _ => {}
     }
     if activity.failure.is_none() {
-        activity.failure = operation
-            .failure
-            .and_then(|failure| serde_json::from_value(failure).ok());
+        if let Some(failure) = operation.failure {
+            match serde_json::from_value(failure) {
+                Ok(failure) => activity.failure = Some(failure),
+                Err(error) => tracing::warn!(
+                    operation_id = activity.operation_id.as_deref().unwrap_or("unknown"),
+                    diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                        "decode a persisted background-operation failure",
+                        &error,
+                    ),
+                    "background activity failure projection is incomplete"
+                ),
+            }
+        }
     }
     activity
 }
@@ -629,7 +639,20 @@ async fn cron_source_part_id(
     // first-class: recover the source once from their completed cron.create
     // receipt when it is still present.
     let session_id = job.owner_session_id?;
-    let session = manager.session_store().load(session_id).await.ok()?;
+    let session = match manager.session_store().load(session_id).await {
+        Ok(session) => session,
+        Err(error) => {
+            tracing::warn!(
+                %session_id,
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "load the owning session while recovering legacy cron provenance",
+                    &error,
+                ),
+                "legacy cron provenance could not be recovered"
+            );
+            return None;
+        }
+    };
     let job_id = job.id.to_string();
     session.parts.iter().rev().find_map(|part| {
         (part.kind == "tool_call"
@@ -771,7 +794,7 @@ impl agena_runtime::RuntimeActivityService for AgenaRuntime {
             return adapter
                 .read_logs(activity_id, since_seq, limit, wait_ms)
                 .await
-                .map_err(|error| agena_runtime::ActivityControlError::internal(error.to_string()));
+                .map_err(|error| agena_runtime::ActivityControlError::internal_error(&error));
         }
         match activity.kind {
             agena_domain::BackgroundActivityKind::Shell
@@ -798,7 +821,7 @@ impl agena_runtime::RuntimeActivityService for AgenaRuntime {
                         "shell log worker failed: {error}"
                     ))
                 })?
-                .map_err(|err| agena_runtime::ActivityControlError::internal(err.to_string()))
+                .map_err(|err| agena_runtime::ActivityControlError::internal_error(&err))
             }
             agena_domain::BackgroundActivityKind::Task => {
                 let (parent_session_id, task_id) = activity
@@ -857,9 +880,10 @@ impl agena_runtime::RuntimeActivityService for AgenaRuntime {
         // the web plugin closes the matching browser session); the adapter
         // publishes the terminal record so the refreshed activity reflects it.
         if let Some(adapter) = self.activities.source_for(activity.kind) {
-            adapter.stop(activity_id).await.map_err(|error| {
-                agena_runtime::ActivityControlError::internal(error.to_string())
-            })?;
+            adapter
+                .stop(activity_id)
+                .await
+                .map_err(|error| agena_runtime::ActivityControlError::internal_error(&error))?;
             return self.get_activity(activity_id).await;
         }
         match activity.kind {
@@ -870,18 +894,16 @@ impl agena_runtime::RuntimeActivityService for AgenaRuntime {
                         activity_id,
                     ));
                 };
-                monitor.stop(activity_id).map_err(|err| {
-                    agena_runtime::ActivityControlError::internal(err.to_string())
-                })?;
+                monitor
+                    .stop(activity_id)
+                    .map_err(|err| agena_runtime::ActivityControlError::internal_error(&err))?;
             }
             agena_domain::BackgroundActivityKind::Runtime => {
                 self.inner
                     .control_state
                     .background_tasks()
                     .cancel(activity_id)
-                    .map_err(|err| {
-                        agena_runtime::ActivityControlError::internal(err.to_string())
-                    })?;
+                    .map_err(|err| agena_runtime::ActivityControlError::internal_error(&err))?;
             }
             agena_domain::BackgroundActivityKind::Task => {
                 let Some((parent_session_id, task_id)) = activity
@@ -900,9 +922,7 @@ impl agena_runtime::RuntimeActivityService for AgenaRuntime {
                 manager
                     .cancel_subtask(parent_session_id, task_id)
                     .await
-                    .map_err(|err| {
-                        agena_runtime::ActivityControlError::internal(err.to_string())
-                    })?;
+                    .map_err(|err| agena_runtime::ActivityControlError::internal_error(&err))?;
             }
             // Without a registered source adapter there is nothing to stop;
             // the record's `cancellable` flag is the source's responsibility.
@@ -925,7 +945,7 @@ impl agena_runtime::RuntimeActivityService for AgenaRuntime {
         let job = scheduler
             .pause(job_id)
             .await
-            .map_err(|error| agena_runtime::ActivityControlError::internal(error.to_string()))?
+            .map_err(|error| agena_runtime::ActivityControlError::internal_error(&error))?
             .ok_or_else(|| agena_runtime::ActivityControlError::not_found(activity_id))?;
         let source_part_id = if let Some(manager) = self.current_snapshot().session_manager() {
             cron_source_part_id(manager.as_ref(), &job).await
@@ -946,7 +966,7 @@ impl agena_runtime::RuntimeActivityService for AgenaRuntime {
         let job = scheduler
             .resume(job_id)
             .await
-            .map_err(|error| agena_runtime::ActivityControlError::internal(error.to_string()))?
+            .map_err(|error| agena_runtime::ActivityControlError::internal_error(&error))?
             .ok_or_else(|| agena_runtime::ActivityControlError::not_found(activity_id))?;
         let source_part_id = if let Some(manager) = self.current_snapshot().session_manager() {
             cron_source_part_id(manager.as_ref(), &job).await
@@ -1060,7 +1080,7 @@ impl agena_runtime::ModelCatalogRuntimeService for AgenaRuntime {
     ) -> Result<agena_runtime::RuntimeBackgroundTaskStart, agena_runtime::ModelCatalogRefreshError>
     {
         AgenaRuntime::start_model_catalog_refresh(self, origin)
-            .map_err(|error| agena_runtime::ModelCatalogRefreshError::new(error.to_string()))
+            .map_err(|error| agena_runtime::ModelCatalogRefreshError::from_error(&error))
     }
 }
 
@@ -1190,7 +1210,12 @@ impl agena_runtime::PluginRuntimeService for AgenaRuntime {
         let host = self.current_snapshot().plugin_manager();
         host.invoke_plugin_operation_async(plugin_id, input)
             .await
-            .map_err(|error| error.to_string())
+            .map_err(|error| {
+                agena_failure::diagnostic::format_error_chain_with_context(
+                    format!("plugin operation `{plugin_id}` failed"),
+                    &error,
+                )
+            })
     }
 
     async fn plugin_rpc(
@@ -1284,7 +1309,7 @@ impl agena_runtime::RuntimeToolExecutionService for AgenaRuntime {
         manager
             .execute_unscoped_tool(invocation.clone(), call_id)
             .await
-            .map_err(|error| agena_runtime::RuntimeToolExecutionError::new(error.to_string()))
+            .map_err(|error| agena_runtime::RuntimeToolExecutionError::from_error(&error))
     }
 
     async fn render_tool_result(
@@ -1676,19 +1701,18 @@ impl agena_runtime::RuntimeConfigurationService for AgenaRuntime {
         let snapshot = self.current_snapshot();
         let effective_config = snapshot
             .resolved_config_value()
-            .map_err(|error| agena_runtime::RuntimeConfigurationError::new(error.to_string()))?;
+            .map_err(|error| agena_runtime::RuntimeConfigurationError::from_error(&error))?;
         let effective_config = serde_json::to_value(effective_config)
-            .map_err(|error| agena_runtime::RuntimeConfigurationError::new(error.to_string()))?;
+            .map_err(|error| agena_runtime::RuntimeConfigurationError::from_error(&error))?;
         let configuration_document = snapshot
             .config_value()
-            .map_err(|error| agena_runtime::RuntimeConfigurationError::new(error.to_string()))?;
+            .map_err(|error| agena_runtime::RuntimeConfigurationError::from_error(&error))?;
         Ok(agena_runtime::RuntimeConfigurationSnapshot {
             config_path: snapshot.config_path().to_path_buf(),
             config_found: snapshot.config_found(),
             project_config_path: snapshot.project_config_path().to_path_buf(),
             project_config_found: snapshot.project_config_found(),
             applied_layers: snapshot.applied_layer_descriptions(),
-            default_provider: snapshot.default_provider().map(ToOwned::to_owned),
             ui: agena_runtime::RuntimeUiConfiguration {
                 locale: snapshot.ui_config().locale,
                 theme: snapshot.ui_config().tui.theme,
@@ -1845,7 +1869,7 @@ impl agena_runtime::RuntimeControlService for AgenaRuntime {
     ) -> Result<agena_runtime::RuntimeReloadReport, agena_runtime::RuntimeControlServiceError> {
         AgenaRuntime::reload(self)
             .await
-            .map_err(|error| agena_runtime::RuntimeControlServiceError::new(error.to_string()))
+            .map_err(|error| agena_runtime::RuntimeControlServiceError::from_error(&error))
     }
 
     async fn fetch_provider_client_versions(
@@ -1854,7 +1878,7 @@ impl agena_runtime::RuntimeControlService for AgenaRuntime {
     {
         agena_runtime::fetch_latest_provider_client_versions()
             .await
-            .map_err(|error| agena_runtime::RuntimeControlServiceError::new(error.to_string()))
+            .map_err(|error| agena_runtime::RuntimeControlServiceError::from_error(&error))
     }
 
     fn runtime_metrics(&self) -> agena_runtime::RuntimeMetricsSnapshot {
@@ -1901,7 +1925,7 @@ impl agena_runtime::RuntimeControlService for AgenaRuntime {
             move |cancel| async move {
                 work(cancel)
                     .await
-                    .map_err(|error| AppError::Config(error.to_string()))
+                    .map_err(|error| AppError::config_error(&error))
             },
         )
     }
@@ -2121,7 +2145,7 @@ impl agena_provider::ProviderModelSource for AgenaRuntime {
             .catalog_source_provider_registry()
             .list_models(provider_id.as_ref())
             .await
-            .map_err(|error| agena_provider::ProviderCatalogError::Operation(error.to_string()))
+            .map_err(|error| agena_provider::ProviderCatalogError::operation_error(&error))
     }
 }
 
@@ -2143,7 +2167,7 @@ impl AgenaRuntime {
                 connect_timeout: std::time::Duration::from_secs(network.connect_timeout_secs),
             },
         )
-        .map_err(|error| agena_provider::ProviderCatalogError::Operation(error.to_string()))?;
+        .map_err(|error| agena_provider::ProviderCatalogError::operation_error(&error))?;
         let adapters = agena_runtime_provider_adapters::config_support::registry::list_provider_adapter_models(
             target.provider_id.as_str(),
             &target.auth,
@@ -2169,16 +2193,15 @@ impl AgenaRuntime {
 }
 
 fn runtime_bootstrap_error(error: AppError) -> agena_runtime::RuntimeBootstrapError {
-    let message = error.to_string();
-    match error {
+    match &error {
         AppError::Config(_) | AppError::ConfigErr(_) => {
-            agena_runtime::RuntimeBootstrapError::configuration(message)
+            agena_runtime::RuntimeBootstrapError::configuration_error(&error)
         }
         AppError::Database(_) | AppError::StorageConfig(_) => {
-            agena_runtime::RuntimeBootstrapError::database(message)
+            agena_runtime::RuntimeBootstrapError::database_error(&error)
         }
-        AppError::Io(_) => agena_runtime::RuntimeBootstrapError::io(message),
-        _ => agena_runtime::RuntimeBootstrapError::internal(message),
+        AppError::Io(_) => agena_runtime::RuntimeBootstrapError::io_error(&error),
+        _ => agena_runtime::RuntimeBootstrapError::internal_error(&error),
     }
 }
 
@@ -2347,9 +2370,13 @@ impl AgenaRuntime {
                             .await;
                     });
                 }
-                Err(_) => {
-                    tracing::debug!(
+                Err(error) => {
+                    tracing::warn!(
                         target: "agena_plugin_host::session_end",
+                        diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                            "session.end could not be broadcast during runtime shutdown because no Tokio runtime is available",
+                            &error,
+                        ),
                         "no tokio runtime available during shutdown; skipping session.end broadcast"
                     );
                 }
@@ -2399,7 +2426,13 @@ impl AgenaRuntime {
             );
         }
         let _ = self.inner.control_state.swap_snapshot(next.clone());
-        let _ = self.start_model_catalog_refresh_if_needed(RuntimeBackgroundTaskOrigin::System);
+        self.start_model_catalog_refresh_if_needed(RuntimeBackgroundTaskOrigin::System)
+            .map_err(|error| {
+                AppError::Internal(agena_failure::diagnostic::format_error_chain_with_context(
+                    "failed to start model catalog refresh after runtime reload",
+                    &error,
+                ))
+            })?;
 
         Ok(RuntimeReloadReport {
             cause,
@@ -2511,9 +2544,9 @@ impl AgenaRuntime {
     fn start_model_catalog_refresh_if_needed(
         &self,
         origin: RuntimeBackgroundTaskOrigin,
-    ) -> Option<RuntimeBackgroundTaskStart> {
+    ) -> Result<Option<RuntimeBackgroundTaskStart>, RuntimeBackgroundTaskControlError> {
         if self.is_shutdown() {
-            return None;
+            return Ok(None);
         }
 
         if !self
@@ -2521,10 +2554,10 @@ impl AgenaRuntime {
             .model_catalog()
             .needs_startup_refresh()
         {
-            return None;
+            return Ok(None);
         }
 
-        self.spawn_model_catalog_refresh(origin).ok()
+        self.spawn_model_catalog_refresh(origin).map(Some)
     }
 
     fn spawn_model_catalog_refresh(
@@ -2554,7 +2587,7 @@ impl AgenaRuntime {
                                     Some(&provider_priorities),
                                 )
                                 .await
-                                .map_err(|error| AppError::Config(error.to_string()))
+                                .map_err(|error| AppError::config_error(&error))
                         },
                         || async { runtime.reload().await.map(|_| ()) },
                     )
@@ -2664,7 +2697,14 @@ impl AgenaRuntime {
             async move { reload::run(reload_runtime).await },
         );
 
-        let _ = self.start_model_catalog_refresh_if_needed(RuntimeBackgroundTaskOrigin::System);
+        if let Err(error) =
+            self.start_model_catalog_refresh_if_needed(RuntimeBackgroundTaskOrigin::System)
+        {
+            tracing::error!(
+                diagnostic = %agena_failure::diagnostic::format_error_chain(&error),
+                "failed to start the initial background model catalog refresh"
+            );
+        }
     }
 
     fn apply_tracing_filter(&self, tracing: &agena_runtime::RuntimeTracingConfiguration) {

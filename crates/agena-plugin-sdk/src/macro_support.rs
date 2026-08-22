@@ -172,7 +172,7 @@ where
     T: Serialize,
 {
     let payload =
-        serde_json::to_value(value).map_err(|err| PluginError::invalid_params(err.to_string()))?;
+        serde_json::to_value(value).map_err(|err| PluginError::invalid_params_error(&err))?;
     let output_text = match &payload {
         Value::Null => String::new(),
         Value::String(value) => value.clone(),
@@ -322,7 +322,7 @@ pub fn store_once<T>(cell: &OnceLock<T>, value: T, already: &str) -> Result<()> 
 pub fn store_rwlock_option<T>(cell: &RwLock<Option<T>>, value: T, poisoned: &str) -> Result<()> {
     *cell
         .write()
-        .map_err(|_| PluginError::internal(poisoned.to_string()))? = Some(value);
+        .map_err(|error| PluginError::internal(format!("{poisoned}: {error}")))? = Some(value);
     Ok(())
 }
 
@@ -442,7 +442,7 @@ where
     F: FnOnce(&mut Value),
 {
     let mut json =
-        serde_json::to_value(value).map_err(|err| PluginError::invalid_params(err.to_string()))?;
+        serde_json::to_value(value).map_err(|err| PluginError::invalid_params_error(&err))?;
     normalize(&mut json);
     parse_typed_json_value(json)
 }

@@ -971,7 +971,13 @@ pub fn push_inline_math(
                         height = height.max(artifact.size.height);
                         items.push(InlineItem::Math(artifact));
                     }
-                    Err(_) => render_failed = true,
+                    Err(error) => {
+                        tracing::debug!(
+                            diagnostic = %error,
+                            "native inline math rendering failed; falling back to text rendering"
+                        );
+                        render_failed = true;
+                    }
                 },
             }
         }

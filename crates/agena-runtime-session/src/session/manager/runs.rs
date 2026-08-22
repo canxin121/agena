@@ -702,24 +702,68 @@ impl SessionManager {
             let remaining = timeout.saturating_sub(task_started.elapsed());
             match tokio::time::timeout(remaining, &mut run).await {
                 Ok(result) => result,
-                Err(_) => {
+                Err(timeout_error) => {
                     timed_out = true;
+                    tracing::warn!(
+                        session_id = child_id,
+                        task_id = task_id.as_str(),
+                        diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                            format!(
+                                "subtask execution timed out after {}ms",
+                                request.timeout_ms.unwrap_or_default()
+                            ),
+                            &timeout_error,
+                        ),
+                        "subtask execution deadline expired"
+                    );
                     // `execute_registered` has no suspension point between
                     // registry insertion and lifecycle-owner spawn. If there
                     // is no active execution now, this future timed out before
                     // registration and is safe to drop. Otherwise signal the
                     // supervised owner and give it a bounded cleanup window.
                     if self.execution_registry.is_active(child_id).await {
-                        let _ = tokio::time::timeout(
+                        match tokio::time::timeout(
                             std::time::Duration::from_secs(2),
                             self.cancel_active_execution_with_outcome(child_id),
                         )
-                        .await;
+                        .await
+                        {
+                            Ok(Ok(_)) => {}
+                            Ok(Err(error)) => tracing::error!(
+                                session_id = child_id,
+                                task_id = task_id.as_str(),
+                                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                                    "failed to request cancellation for a timed-out subtask",
+                                    &error,
+                                ),
+                                "timed-out subtask cancellation request failed"
+                            ),
+                            Err(error) => tracing::error!(
+                                session_id = child_id,
+                                task_id = task_id.as_str(),
+                                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                                    "timed out after 2 seconds while requesting cancellation for a timed-out subtask",
+                                    &error,
+                                ),
+                                "timed-out subtask cancellation request did not complete"
+                            ),
+                        }
                         match tokio::time::timeout(std::time::Duration::from_secs(5), &mut run)
                             .await
                         {
                             Ok(result) => result,
-                            Err(_) => Err(AppError::Cancelled),
+                            Err(error) => {
+                                tracing::error!(
+                                    session_id = child_id,
+                                    task_id = task_id.as_str(),
+                                    diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                                        "timed out after 5 seconds while waiting for a cancelled subtask to finish cleanup",
+                                        &error,
+                                    ),
+                                    "timed-out subtask cleanup did not complete"
+                                );
+                                Err(AppError::Cancelled)
+                            }
                         }
                     } else {
                         Err(AppError::Cancelled)

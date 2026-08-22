@@ -23,8 +23,8 @@ pub enum ModelRefParseError {
     MissingSeparator,
     #[error(transparent)]
     InvalidProviderId(#[from] IdentifierError),
-    #[error("{0}")]
-    InvalidModelId(String),
+    #[error(transparent)]
+    InvalidModelId(IdentifierError),
 }
 
 fn normalize_non_empty(
@@ -170,8 +170,7 @@ impl FromStr for ModelRef {
             return Err(ModelRefParseError::MissingSeparator);
         };
         let provider_id = ProviderId::try_new(provider_id)?;
-        let model_id = ModelId::try_new(model_id)
-            .map_err(|err| ModelRefParseError::InvalidModelId(err.to_string()))?;
+        let model_id = ModelId::try_new(model_id).map_err(ModelRefParseError::InvalidModelId)?;
         Ok(Self {
             provider_id,
             adapter_id: None,

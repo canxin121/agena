@@ -149,7 +149,16 @@ pub(crate) async fn begin_with_write_lock(
         match acquire_write_lock(&transaction).await {
             Ok(()) => return Ok(transaction),
             Err(error) => {
-                let _ = transaction.rollback().await;
+                if let Err(rollback_error) = transaction.rollback().await {
+                    return Err(DbErr::Custom(format!(
+                        "{}; additionally, {}",
+                        agena_failure::diagnostic::format_error_chain(&error),
+                        agena_failure::diagnostic::format_error_chain_with_context(
+                            "failed to roll back after acquiring the SQLite write lock failed",
+                            &rollback_error,
+                        )
+                    )));
+                }
                 if is_sqlite_busy(&error) && attempt < MAX_BUSY_RETRIES {
                     attempt += 1;
                     tokio::time::sleep(busy_backoff(attempt)).await;

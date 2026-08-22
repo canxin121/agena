@@ -78,9 +78,17 @@ impl ManagedBrowser {
         ) {
             Ok(endpoint) => endpoint,
             Err(err) => {
-                kill_browser_tree(&mut child);
-                let _ = child.wait();
-                return Err(err);
+                return match shutdown_browser_process(&mut child) {
+                    Ok(()) => Err(err),
+                    Err(cleanup_error) => Err(CrawlError::InvalidInput(format!(
+                        "{}; additionally, {}",
+                        agena_failure::diagnostic::format_error_chain(&err),
+                        agena_failure::diagnostic::format_error_chain_with_context(
+                            "failed to clean up the local browser after startup failed",
+                            &cleanup_error,
+                        )
+                    ))),
+                };
             }
         };
 
@@ -98,21 +106,42 @@ impl ManagedBrowser {
         })
     }
 
-    fn is_running(&mut self) -> bool {
-        matches!(self.child.try_wait(), Ok(None))
+    fn is_running(&mut self) -> Result<bool, CrawlError> {
+        self.child
+            .try_wait()
+            .map(|status| status.is_none())
+            .map_err(|error| {
+                CrawlError::InvalidInput(
+                    agena_failure::diagnostic::format_error_chain_with_context(
+                        "failed to inspect the managed local browser process",
+                        &error,
+                    ),
+                )
+            })
     }
 
     /// Kill the browser process tree. `TempDir` removes the profile when this
     /// managed entry is dropped, including startup-error paths.
-    fn shutdown(&mut self) {
-        kill_browser_tree(&mut self.child);
-        let _ = self.child.wait();
+    fn shutdown(&mut self) -> Result<(), CrawlError> {
+        if !self.is_running()? {
+            return Ok(());
+        }
+        shutdown_browser_process(&mut self.child)
     }
 }
 
 impl Drop for ManagedBrowser {
     fn drop(&mut self) {
-        self.shutdown();
+        if let Err(error) = self.shutdown() {
+            tracing::error!(
+                target: "agena::web",
+                error = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "failed to shut down the managed local browser while dropping it",
+                    &error,
+                ),
+                "managed local browser cleanup failed"
+            );
+        }
     }
 }
 
@@ -140,11 +169,14 @@ static LOCAL_BROWSER: LazyLock<Mutex<LocalBrowserState>> = LazyLock::new(|| {
 /// shut down by [`shutdown_local_browser`] or after `options.idle_timeout` of
 /// inactivity.
 pub fn local_browser_endpoint(options: &LocalBrowserOptions) -> Result<String, CrawlError> {
-    let mut state = LOCAL_BROWSER
-        .lock()
-        .map_err(|_| CrawlError::InvalidInput("local browser mutex poisoned".to_string()))?;
+    let mut state = LOCAL_BROWSER.lock().map_err(|error| {
+        CrawlError::InvalidInput(agena_failure::diagnostic::format_error_chain_with_context(
+            "local browser registry mutex is poisoned",
+            &error,
+        ))
+    })?;
     if let Some(existing) = state.browser.as_mut()
-        && existing.is_running()
+        && existing.is_running()?
     {
         let endpoint = existing.endpoint.clone();
         state.last_used = Some(Instant::now());
@@ -167,70 +199,101 @@ pub fn local_browser_endpoint(options: &LocalBrowserOptions) -> Result<String, C
 
 /// Report whether the managed browser process is currently running. This never
 /// starts a browser; management tools use it to inspect state cheaply.
-pub fn local_browser_running() -> bool {
-    LOCAL_BROWSER
-        .lock()
-        .ok()
-        .map(|mut state| {
-            state
-                .browser
-                .as_mut()
-                .is_some_and(ManagedBrowser::is_running)
-        })
-        .unwrap_or(false)
+pub fn local_browser_running() -> Result<bool, CrawlError> {
+    let mut state = LOCAL_BROWSER.lock().map_err(|error| {
+        CrawlError::InvalidInput(agena_failure::diagnostic::format_error_chain_with_context(
+            "local browser registry mutex is poisoned",
+            &error,
+        ))
+    })?;
+    match state.browser.as_mut() {
+        Some(browser) => browser.is_running(),
+        None => Ok(false),
+    }
 }
 
 /// Mark the managed browser as recently used so the idle auto-close timer
 /// restarts. No-op when no browser is running.
-pub fn local_browser_touch() {
-    if let Ok(mut state) = LOCAL_BROWSER.lock()
-        && state
-            .browser
-            .as_mut()
-            .is_some_and(ManagedBrowser::is_running)
+pub fn local_browser_touch() -> Result<(), CrawlError> {
+    let mut state = LOCAL_BROWSER.lock().map_err(|error| {
+        CrawlError::InvalidInput(agena_failure::diagnostic::format_error_chain_with_context(
+            "local browser registry mutex is poisoned",
+            &error,
+        ))
+    })?;
+    if let Some(browser) = state.browser.as_mut()
+        && browser.is_running()?
     {
         state.last_used = Some(Instant::now());
     }
+    Ok(())
 }
 
 /// Shut down the managed browser (if any) and remove its profile directory.
 /// Returns `true` when a running browser was closed.
 pub fn shutdown_local_browser() -> Result<bool, CrawlError> {
-    let mut state = LOCAL_BROWSER
-        .lock()
-        .map_err(|_| CrawlError::InvalidInput("local browser mutex poisoned".to_string()))?;
-    let running = state
-        .browser
-        .as_mut()
-        .is_some_and(ManagedBrowser::is_running);
+    let mut state = LOCAL_BROWSER.lock().map_err(|error| {
+        CrawlError::InvalidInput(agena_failure::diagnostic::format_error_chain_with_context(
+            "local browser registry mutex is poisoned",
+            &error,
+        ))
+    })?;
+    let running = match state.browser.as_mut() {
+        Some(browser) => browser.is_running()?,
+        None => false,
+    };
     if running {
         tracing::debug!(target: "agena::web", "shutting down managed local browser");
     }
-    // Taking the value out of the option drops it while the lock is held;
-    // `ManagedBrowser::drop` kills the child and removes the profile dir.
-    state.browser = None;
+    // Move the browser out so process shutdown does not hold the registry
+    // lock. Explicit shutdown returns cleanup failures to the caller; Drop is
+    // only the logged last-resort retry.
+    let browser = state.browser.take();
     state.last_used = None;
     state.idle_timeout = None;
+    drop(state);
+    if let Some(mut browser) = browser {
+        browser.shutdown()?;
+    }
     Ok(running)
 }
 
-fn kill_browser_tree(child: &mut Child) {
-    // Best effort: signal the main process first, then the process group on
-    // Unix / the process tree on Windows so helper processes do not survive.
-    let _ = child.kill();
+fn kill_browser_tree(child: &mut Child) -> Result<(), CrawlError> {
+    // Signal the main process first, then the process group on Unix / the
+    // process tree on Windows so helper processes do not survive.
+    let mut failures = Vec::new();
+    if let Err(error) = child.kill() {
+        failures.push(agena_failure::diagnostic::format_error_chain_with_context(
+            "failed to kill the local browser process",
+            &error,
+        ));
+    }
     #[cfg(unix)]
     {
-        let _ = Command::new("kill")
+        match Command::new("kill")
             .arg("-9")
             .arg(format!("-{}", child.id()))
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
-            .status();
+            .status()
+        {
+            Ok(status) if status.success() => {}
+            Ok(status) => failures.push(format!(
+                "failed to kill local browser process group {}: kill exited with status {status}",
+                child.id()
+            )),
+            Err(error) => {
+                failures.push(agena_failure::diagnostic::format_error_chain_with_context(
+                    "failed to invoke kill for the local browser process group",
+                    &error,
+                ))
+            }
+        }
     }
     #[cfg(windows)]
     {
-        let _ = Command::new("taskkill")
+        match Command::new("taskkill")
             .arg("/PID")
             .arg(child.id().to_string())
             .arg("/T")
@@ -238,8 +301,42 @@ fn kill_browser_tree(child: &mut Child) {
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
-            .status();
+            .status()
+        {
+            Ok(status) if status.success() => {}
+            Ok(status) => failures.push(format!(
+                "failed to kill local browser process tree {}: taskkill exited with status {status}",
+                child.id()
+            )),
+            Err(error) => failures.push(
+                agena_failure::diagnostic::format_error_chain_with_context(
+                    "failed to invoke taskkill for the local browser process tree",
+                    &error,
+                ),
+            ),
+        }
     }
+    if failures.is_empty() {
+        Ok(())
+    } else if matches!(child.try_wait(), Ok(Some(_))) {
+        // Natural exit can race with shutdown and make the kill commands
+        // report "not found" even though the desired state was reached.
+        Ok(())
+    } else {
+        Err(CrawlError::InvalidInput(failures.join("; ")))
+    }
+}
+
+fn shutdown_browser_process(child: &mut Child) -> Result<(), CrawlError> {
+    // Do not block forever in wait if every termination strategy failed.
+    // Drop will retry and log once the owner leaves scope.
+    kill_browser_tree(child)?;
+    child.wait().map(|_| ()).map_err(|error| {
+        CrawlError::InvalidInput(agena_failure::diagnostic::format_error_chain_with_context(
+            "failed to wait for the managed local browser process to exit",
+            &error,
+        ))
+    })
 }
 
 fn wait_for_devtools_endpoint(
@@ -250,19 +347,41 @@ fn wait_for_devtools_endpoint(
     let started = Instant::now();
     let active_port = profile_dir.join("DevToolsActivePort");
     loop {
-        if let Ok(Some(status)) = child.try_wait() {
-            return Err(CrawlError::InvalidInput(format!(
-                "local browser exited before DevTools endpoint was ready: {status}"
-            )));
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                return Err(CrawlError::InvalidInput(format!(
+                    "local browser exited before DevTools endpoint was ready: {status}"
+                )));
+            }
+            Ok(None) => {}
+            Err(error) => {
+                return Err(CrawlError::InvalidInput(
+                    agena_failure::diagnostic::format_error_chain_with_context(
+                        "failed to inspect the local browser while waiting for its DevTools endpoint",
+                        &error,
+                    ),
+                ));
+            }
         }
-        if let Ok(contents) = fs::read_to_string(&active_port) {
-            let mut lines = contents.lines();
-            if let (Some(port), Some(path)) = (lines.next(), lines.next()) {
-                let port = port.trim();
-                let path = path.trim();
-                if !port.is_empty() && !path.is_empty() {
-                    return Ok(format!("ws://127.0.0.1:{port}{path}"));
+        match fs::read_to_string(&active_port) {
+            Ok(contents) => {
+                let mut lines = contents.lines();
+                if let (Some(port), Some(path)) = (lines.next(), lines.next()) {
+                    let port = port.trim();
+                    let path = path.trim();
+                    if !port.is_empty() && !path.is_empty() {
+                        return Ok(format!("ws://127.0.0.1:{port}{path}"));
+                    }
                 }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(CrawlError::InvalidInput(
+                    agena_failure::diagnostic::format_error_chain_with_context(
+                        "failed to read the local browser DevTools endpoint file",
+                        &error,
+                    ),
+                ));
             }
         }
         if started.elapsed() >= timeout {
@@ -286,21 +405,38 @@ fn ensure_idle_janitor() {
             const CHECK_INTERVAL: Duration = Duration::from_secs(15);
             loop {
                 thread::sleep(CHECK_INTERVAL);
-                let should_shutdown = LOCAL_BROWSER
-                    .lock()
-                    .ok()
-                    .and_then(|state| {
-                        let timeout = state.idle_timeout?;
-                        let last_used = state.last_used?;
-                        Some(last_used.elapsed() >= timeout)
-                    })
-                    .unwrap_or(false);
+                let should_shutdown = match LOCAL_BROWSER.lock() {
+                    Ok(state) => match (state.idle_timeout, state.last_used) {
+                        (Some(timeout), Some(last_used)) => {
+                            Some(last_used.elapsed() >= timeout)
+                        }
+                        _ => None,
+                    },
+                    Err(error) => {
+                        tracing::error!(
+                            target: "agena::web",
+                            diagnostic = %error,
+                            "failed to inspect idle managed local browser because the registry mutex is poisoned"
+                        );
+                        None
+                    }
+                }
+                .unwrap_or(false);
                 if should_shutdown {
                     tracing::debug!(
                         target: "agena::web",
                         "closing idle managed local browser"
                     );
-                    let _ = shutdown_local_browser();
+                    if let Err(error) = shutdown_local_browser() {
+                        tracing::error!(
+                            target: "agena::web",
+                            error = %agena_failure::diagnostic::format_error_chain_with_context(
+                                "failed to shut down the idle managed local browser",
+                                &error,
+                            ),
+                            "idle managed local browser cleanup failed"
+                        );
+                    }
                 }
             }
         });
@@ -318,10 +454,18 @@ fn find_browser_executable(configured: Option<&Path>) -> Result<PathBuf, CrawlEr
         )));
     }
 
-    if let Ok(path) = std::env::var("AGENA_CHROME_PATH") {
-        let path = PathBuf::from(path);
-        if is_executable_candidate(&path) {
-            return Ok(path);
+    match std::env::var("AGENA_CHROME_PATH") {
+        Ok(path) => {
+            let path = PathBuf::from(path);
+            if is_executable_candidate(&path) {
+                return Ok(path);
+            }
+        }
+        Err(std::env::VarError::NotPresent) => {}
+        Err(error) => {
+            return Err(CrawlError::InvalidInput(format!(
+                "failed to read AGENA_CHROME_PATH: {error}"
+            )));
         }
     }
 
@@ -401,9 +545,9 @@ mod tests {
             return;
         };
         assert!(!endpoint.is_empty());
-        assert!(local_browser_running());
+        assert!(local_browser_running().expect("inspect running browser"));
         assert!(shutdown_local_browser().unwrap_or_default());
-        assert!(!local_browser_running());
+        assert!(!local_browser_running().expect("inspect stopped browser"));
         // Shutting down again is a no-op and reports nothing was closed.
         assert!(!shutdown_local_browser().unwrap_or_default());
     }

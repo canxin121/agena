@@ -135,9 +135,18 @@ impl AmazonBedrockAdapter {
     }
 
     pub(super) fn update_prompt_cache_sigv4_runtime_shape(&self, credentials: &Credentials) {
-        if let Ok(mut runtime_shape) = self.resolved_sigv4_shape.lock() {
-            *runtime_shape = Self::prompt_cache_sigv4_runtime_shape_from_credentials(credentials);
-        }
+        let mut runtime_shape = match self.resolved_sigv4_shape.lock() {
+            Ok(runtime_shape) => runtime_shape,
+            Err(error) => {
+                tracing::error!(
+                    operation = "update Bedrock prompt-cache SigV4 shape",
+                    error = %error,
+                    "recovering poisoned Bedrock prompt-cache lock"
+                );
+                error.into_inner()
+            }
+        };
+        *runtime_shape = Self::prompt_cache_sigv4_runtime_shape_from_credentials(credentials);
     }
 
     pub(super) fn resolve_model(&self, model: &str) -> String {
@@ -475,8 +484,20 @@ impl AmazonBedrockAdapter {
             .anthropic_thinking_blocks
             .iter()
             .filter_map(|block| {
-                let block =
-                    serde_json::from_value::<BedrockAnthropicTextBlock>(block.clone()).ok()?;
+                let block = match serde_json::from_value::<BedrockAnthropicTextBlock>(block.clone())
+                {
+                    Ok(block) => block,
+                    Err(error) => {
+                        tracing::warn!(
+                            diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                                "decode a persisted Bedrock Anthropic thinking block",
+                                &error,
+                            ),
+                            "malformed Bedrock Anthropic thinking block was not replayed"
+                        );
+                        return None;
+                    }
+                };
                 match block.kind.as_str() {
                     "thinking"
                         if block

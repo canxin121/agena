@@ -47,7 +47,7 @@ impl SnapshotPlugin {
     async fn status(&self) -> SdkResult<ToolInvokeOutput> {
         let response = self.inner.host()?.snapshot_list().await?;
         let payload = serde_json::to_value(&response)
-            .map_err(|error| agena_plugin_host::PluginError::internal(error.to_string()))?;
+            .map_err(|error| agena_plugin_host::PluginError::internal_error(&error))?;
         let output = if response.snapshots.is_empty() {
             "No active snapshots.".to_owned()
         } else {

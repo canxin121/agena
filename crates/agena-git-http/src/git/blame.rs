@@ -7,7 +7,10 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-use super::{DirectoryQuery, is_safe_repo_rel_path, require_directory, spawn_libgit2};
+use super::{
+    DirectoryQuery, git_task_error_response, is_safe_repo_rel_path, require_directory,
+    spawn_libgit2,
+};
 
 #[derive(Debug, Deserialize)]
 /// Query for git blame.
@@ -53,22 +56,49 @@ fn build_uncommitted_blame_lines_from_content(content: &str) -> Vec<GitBlameLine
 }
 
 fn load_blame(directory: PathBuf, absolute_path: PathBuf) -> Result<Vec<GitBlameLine>, String> {
-    let repository = git2::Repository::discover(&directory).map_err(|error| error.to_string())?;
+    let repository = git2::Repository::discover(&directory).map_err(|error| {
+        agena_failure::diagnostic::format_error_chain_with_context(
+            "failed to discover a Git repository for blame",
+            &error,
+        )
+    })?;
     let workdir = repository
         .workdir()
         .ok_or_else(|| "git blame requires a non-bare worktree".to_owned())?;
-    let canonical_workdir = workdir.canonicalize().map_err(|error| error.to_string())?;
-    let canonical_path = absolute_path
-        .canonicalize()
-        .map_err(|error| error.to_string())?;
+    let canonical_workdir = workdir.canonicalize().map_err(|error| {
+        agena_failure::diagnostic::format_error_chain_with_context(
+            "failed to canonicalize the Git blame worktree",
+            &error,
+        )
+    })?;
+    let canonical_path = absolute_path.canonicalize().map_err(|error| {
+        agena_failure::diagnostic::format_error_chain_with_context(
+            "failed to canonicalize the Git blame target",
+            &error,
+        )
+    })?;
     let relative_path = canonical_path
         .strip_prefix(&canonical_workdir)
         .map_err(|_| "path resolves outside the repository worktree".to_owned())?;
-    let bytes = std::fs::read(&canonical_path).map_err(|error| error.to_string())?;
-    let content =
-        std::str::from_utf8(&bytes).map_err(|_| "git blame target is not UTF-8 text".to_owned())?;
+    let bytes = std::fs::read(&canonical_path).map_err(|error| {
+        agena_failure::diagnostic::format_error_chain_with_context(
+            "failed to read the Git blame target",
+            &error,
+        )
+    })?;
+    let content = std::str::from_utf8(&bytes).map_err(|error| {
+        agena_failure::diagnostic::format_error_chain_with_context(
+            "Git blame target is not UTF-8 text",
+            &error,
+        )
+    })?;
 
-    if repository.is_empty().map_err(|error| error.to_string())? {
+    if repository.is_empty().map_err(|error| {
+        agena_failure::diagnostic::format_error_chain_with_context(
+            "failed to determine whether the Git repository has commits",
+            &error,
+        )
+    })? {
         return Ok(build_uncommitted_blame_lines_from_content(content));
     }
 
@@ -77,11 +107,19 @@ fn load_blame(directory: PathBuf, absolute_path: PathBuf) -> Result<Vec<GitBlame
         Err(error) if error.code() == git2::ErrorCode::NotFound => {
             return Ok(build_uncommitted_blame_lines_from_content(content));
         }
-        Err(error) => return Err(error.to_string()),
+        Err(error) => {
+            return Err(agena_failure::diagnostic::format_error_chain_with_context(
+                "failed to compute Git blame information",
+                &error,
+            ));
+        }
     };
-    let blame = committed
-        .blame_buffer(&bytes)
-        .map_err(|error| error.to_string())?;
+    let blame = committed.blame_buffer(&bytes).map_err(|error| {
+        agena_failure::diagnostic::format_error_chain_with_context(
+            "failed to apply the working-tree buffer to Git blame information",
+            &error,
+        )
+    })?;
     let mut lines = Vec::new();
     for hunk in blame.iter() {
         let oid = hunk.final_commit_id();
@@ -94,6 +132,16 @@ fn load_blame(directory: PathBuf, absolute_path: PathBuf) -> Result<Vec<GitBlame
             )
         } else {
             let signature = hunk.final_signature();
+            let summary = hunk
+                .summary()
+                .map_err(|error| {
+                    agena_failure::diagnostic::format_error_chain_with_context(
+                        "decode a Git blame commit summary",
+                        &error,
+                    )
+                })?
+                .unwrap_or_default()
+                .to_owned();
             (
                 signature
                     .as_ref()
@@ -104,7 +152,7 @@ fn load_blame(directory: PathBuf, absolute_path: PathBuf) -> Result<Vec<GitBlame
                     .map(|value| String::from_utf8_lossy(value.email_bytes()).into_owned())
                     .unwrap_or_default(),
                 signature.map(|value| value.when().seconds()).unwrap_or(0),
-                hunk.summary().ok().flatten().unwrap_or_default().to_owned(),
+                summary,
             )
         };
         for line in
@@ -168,19 +216,19 @@ pub async fn git_blame(Query(q): Query<GitBlameQuery>) -> Response {
 
     match spawn_libgit2(move || load_blame(dir, abs)).await {
         Ok(Ok(lines)) => Json(GitBlameResponse { lines }).into_response(),
-        Ok(Err(error)) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": error, "code": "git_blame_failed"})),
-        )
-            .into_response(),
-        Err(error) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({
-                "error": format!("git blame worker failed: {error}"),
-                "code": "git_blame_worker_failed"
-            })),
-        )
-            .into_response(),
+        Ok(Err(error)) => {
+            tracing::error!(diagnostic = %error, "Git blame operation failed");
+            let public = agena_failure::diagnostic::user_message_with_context(&error, 400);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "error": if public.is_empty() { "Git blame failed" } else { public.as_str() },
+                    "code": "git_blame_failed"
+                })),
+            )
+                .into_response()
+        }
+        Err(error) => git_task_error_response("run the Git blame worker", &error),
     }
 }
 

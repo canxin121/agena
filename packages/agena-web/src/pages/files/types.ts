@@ -16,7 +16,12 @@ export type ListResponse = {
   nextOffset?: number
 }
 export type SearchFile = { name: string; path: string; relative_path?: string }
-export type SearchResponse = { root: string; count: number; files: SearchFile[] }
+export type SearchResponse = {
+  root: string
+  count: number
+  files: SearchFile[]
+  truncated: boolean
+}
 
 export type FileNode = {
   name: string

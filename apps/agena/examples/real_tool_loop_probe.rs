@@ -17,6 +17,7 @@ async fn main() -> anyhow::Result<()> {
     let probe_root = PathBuf::from("/tmp/agena-tool-e2e.zrCBcK");
     let runtime = bootstrap_application_services(RuntimeBootstrapRequest {
         workspace_root: Some(PathBuf::from("/Volumes/Rc20/Projects/agena")),
+        config_path: None,
         config_override_expressions: Vec::new(),
         database_url: None,
         database_path: Some(probe_root.join("probe-trace.db")),

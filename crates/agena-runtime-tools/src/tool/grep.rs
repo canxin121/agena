@@ -248,8 +248,15 @@ fn collect_matches(
 
         let entry = match entry {
             Ok(entry) => entry,
-            Err(_) => {
+            Err(error) => {
                 stats.skipped_io_errors += 1;
+                tracing::warn!(
+                    diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                        "grep scan skipped an unreadable workspace entry",
+                        &error,
+                    ),
+                    "grep result is partial"
+                );
                 continue;
             }
         };
@@ -264,13 +271,25 @@ fn collect_matches(
                 .map(Path::new)
                 .unwrap_or_else(|| Path::new(""))
         } else {
-            entry.path().strip_prefix(base_path).unwrap_or_else(|_| {
-                entry
-                    .path()
-                    .file_name()
-                    .map(Path::new)
-                    .unwrap_or_else(|| Path::new(""))
-            })
+            match entry.path().strip_prefix(base_path) {
+                Ok(relative) => relative,
+                Err(error) => {
+                    tracing::warn!(
+                        path = %entry.path().display(),
+                        base_path = %base_path.display(),
+                        diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                            "grep scan could not construct a workspace-relative path and will use the file name",
+                            &error,
+                        ),
+                        "grep path normalization fell back to a file name"
+                    );
+                    entry
+                        .path()
+                        .file_name()
+                        .map(Path::new)
+                        .unwrap_or_else(|| Path::new(""))
+                }
+            }
         };
         let relative_norm = normalize_path_for_display(relative);
         if include
@@ -286,8 +305,16 @@ fn collect_matches(
         }
         let metadata = match entry.metadata() {
             Ok(metadata) => metadata,
-            Err(_) => {
+            Err(error) => {
                 stats.skipped_io_errors += 1;
+                tracing::warn!(
+                    path = %entry.path().display(),
+                    diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                        "grep scan could not read file metadata",
+                        &error,
+                    ),
+                    "grep result is partial"
+                );
                 continue;
             }
         };

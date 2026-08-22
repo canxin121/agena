@@ -70,7 +70,7 @@ pub(super) fn execute(
     } else {
         matches.join("\n")
     };
-    if let Some(reason) = stop_reason {
+    if let Some(reason) = stop_reason.as_deref() {
         output_text.push_str("\n...glob scan truncated: ");
         output_text.push_str(reason);
         output_text.push_str(". Narrow `path` or `pattern` and retry.");
@@ -101,7 +101,7 @@ pub(super) fn execute(
         .insert("include_ignored".to_string(), include_ignored.to_string());
     view.metadata
         .insert("truncated".to_string(), truncated.to_string());
-    if let Some(reason) = stop_reason {
+    if let Some(reason) = stop_reason.as_deref() {
         view.metadata
             .insert("stop_reason".to_string(), reason.to_string());
     }
@@ -115,21 +115,47 @@ fn collect_matches(
     offset: usize,
     limit: usize,
     include_ignored: bool,
-) -> Result<(Vec<std::path::PathBuf>, Option<&'static str>), ToolError> {
+) -> Result<(Vec<std::path::PathBuf>, Option<String>), ToolError> {
     let started = Instant::now();
     let mut matches = Vec::with_capacity(limit.min(DEFAULT_MATCHES));
     let mut skipped_matches = 0_usize;
+    let mut skipped_errors = 0_usize;
+    let mut first_skipped_error = None;
 
     for (entry_index, entry) in walk_builder(base_path, include_ignored).build().enumerate() {
         if entry_index >= MAX_VISITED_ENTRIES {
-            return Ok((matches, Some("workspace entry limit reached")));
+            return Ok((
+                matches,
+                Some(glob_stop_reason(
+                    "workspace entry limit reached",
+                    skipped_errors,
+                    first_skipped_error.as_deref(),
+                )),
+            ));
         }
         if started.elapsed() >= MAX_SCAN_DURATION {
-            return Ok((matches, Some("10-second scan deadline reached")));
+            return Ok((
+                matches,
+                Some(glob_stop_reason(
+                    "10-second scan deadline reached",
+                    skipped_errors,
+                    first_skipped_error.as_deref(),
+                )),
+            ));
         }
         let entry = match entry {
             Ok(entry) => entry,
-            Err(_) => continue,
+            Err(error) => {
+                skipped_errors = skipped_errors.saturating_add(1);
+                if first_skipped_error.is_none() {
+                    first_skipped_error =
+                        Some(agena_failure::diagnostic::format_error_chain_with_context(
+                            "glob scan could not read a workspace entry",
+                            &error,
+                        ));
+                }
+                continue;
+            }
         };
         if entry.path() == base_path {
             continue;
@@ -149,13 +175,39 @@ fn collect_matches(
                 continue;
             }
             if matches.len() >= limit {
-                return Ok((matches, Some("result page limit reached")));
+                return Ok((
+                    matches,
+                    Some(glob_stop_reason(
+                        "result page limit reached",
+                        skipped_errors,
+                        first_skipped_error.as_deref(),
+                    )),
+                ));
             }
             matches.push(entry.into_path());
         }
     }
 
-    Ok((matches, None))
+    let stop_reason = (skipped_errors > 0).then(|| {
+        glob_stop_reason(
+            "workspace entries were skipped because they could not be read",
+            skipped_errors,
+            first_skipped_error.as_deref(),
+        )
+    });
+    Ok((matches, stop_reason))
+}
+
+fn glob_stop_reason(base: &str, skipped_errors: usize, first_error: Option<&str>) -> String {
+    if skipped_errors == 0 {
+        return base.to_owned();
+    }
+    match first_error {
+        Some(first_error) => format!(
+            "{base}; {skipped_errors} workspace entries were unreadable; first error: {first_error}"
+        ),
+        None => format!("{base}; {skipped_errors} workspace entries were unreadable"),
+    }
 }
 
 #[cfg(test)]
@@ -198,7 +250,10 @@ mod tests {
                 std::path::Path::new("src/b.rs")
             ]
         );
-        assert_eq!(first_stop_reason, Some("result page limit reached"));
+        assert_eq!(
+            first_stop_reason.as_deref(),
+            Some("result page limit reached")
+        );
         assert_eq!(
             second
                 .iter()

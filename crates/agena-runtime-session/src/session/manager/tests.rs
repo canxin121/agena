@@ -111,6 +111,19 @@ async fn create(manager: &SessionManager, title: &str) -> Session {
         .expect("create session")
 }
 
+async fn create_with_model(
+    manager: &SessionManager,
+    title: &str,
+    provider_id: &str,
+    model_id: &str,
+) -> Session {
+    let session = create(manager, title).await;
+    manager
+        .set_session_model_override(session.id, ModelRef::new(provider_id, model_id))
+        .await
+        .expect("persist explicit test model selection")
+}
+
 #[tokio::test]
 async fn cancellation_force_aborts_unresponsive_operation_and_releases_registry() {
     let manager = test_manager().await;
@@ -420,7 +433,7 @@ async fn session_model_selection_survives_a_store_reload() {
     );
 
     // The bug: the selection was only mutated in memory, so a reload from the
-    // store dropped it and the next turn resolved the default model. It must
+    // store dropped it and the next turn lost the selected model. It must
     // be persisted to `sessions.config_json` and restored on load.
     let reloaded = manager
         .get_session(session.id)
@@ -1329,7 +1342,13 @@ async fn opening_a_new_subtask_at_running_publication_cannot_mark_it_interrupted
         finish_reason: Some(CompletionFinishReason::Stop),
     });
     let manager = manager_with_provider(provider).await;
-    let parent = create(&manager, "subtask launch reconciliation race").await;
+    let parent = create_with_model(
+        &manager,
+        "subtask launch reconciliation race",
+        "fake",
+        "fake-model",
+    )
+    .await;
     let observer_manager = manager.background_handle();
     let (observed_tx, observed_rx) = std::sync::mpsc::sync_channel(1);
     let observed_tx = Arc::new(std::sync::Mutex::new(Some(observed_tx)));
@@ -1399,7 +1418,13 @@ async fn subtask_timeout_persists_a_complete_timeout_failure_even_when_cleanup_i
         model: ModelId::new("hanging-model"),
     });
     let manager = manager_with_provider(provider).await;
-    let parent = create(&manager, "subtask timeout parent").await;
+    let parent = create_with_model(
+        &manager,
+        "subtask timeout parent",
+        "hanging",
+        "hanging-model",
+    )
+    .await;
 
     let response = manager
         .run_subtask(SessionSubtaskRequest {
@@ -3098,7 +3123,13 @@ async fn non_host_user_input_reply_persists_on_tool_call() {
         finish_reason: Some(CompletionFinishReason::Stop),
     });
     let manager = manager_with_provider(provider).await;
-    let session = create(&manager, "non-host ask_user reply durability").await;
+    let session = create_with_model(
+        &manager,
+        "non-host ask_user reply durability",
+        "fake",
+        "fake-model",
+    )
+    .await;
 
     // An assistant run marker carrying the canonical turn/reply identity, so
     // the reply continuation can resolve the conversation after the answer is
@@ -4561,7 +4592,8 @@ async fn background_completion_notification_is_committed_once_per_operation() {
         finish_reason: Some(CompletionFinishReason::Stop),
     });
     let manager = manager_with_provider(provider).await;
-    let session = create(&manager, "background notification").await;
+    let session =
+        create_with_model(&manager, "background notification", "fake", "fake-model").await;
     let session_id = session.id;
 
     // A completed launch receipt. The launched process has its own durable
@@ -4681,7 +4713,13 @@ async fn terminal_task_is_reconciled_from_durable_child_state_without_observer_e
         finish_reason: Some(CompletionFinishReason::Stop),
     });
     let manager = manager_with_provider(provider).await;
-    let parent = create(&manager, "durable task reconciliation").await;
+    let parent = create_with_model(
+        &manager,
+        "durable task reconciliation",
+        "fake",
+        "fake-model",
+    )
+    .await;
     let run_id = manager
         .store
         .start_run(
@@ -4781,7 +4819,8 @@ async fn committed_notification_is_woken_and_consumed_after_dispatcher_restart_r
         finish_reason: Some(CompletionFinishReason::Stop),
     });
     let manager = manager_with_provider(provider).await;
-    let session = create(&manager, "delivery crash recovery").await;
+    let session =
+        create_with_model(&manager, "delivery crash recovery", "fake", "fake-model").await;
     let run_id = manager
         .store
         .start_run(
@@ -4871,7 +4910,13 @@ async fn non_retryable_background_wake_is_terminalized_instead_of_requeued_forev
         model: ModelId::new("failure-model"),
     }))
     .await;
-    let session = create(&manager, "non-retryable delivery").await;
+    let session = create_with_model(
+        &manager,
+        "non-retryable delivery",
+        "startup-failure",
+        "failure-model",
+    )
+    .await;
     let run_id = manager
         .store
         .start_run(
@@ -4965,7 +5010,13 @@ async fn recovery_consumes_a_delivery_whose_response_committed_before_the_outbox
         model: ModelId::new("startup-failure-model"),
     });
     let manager = manager_with_provider(provider).await;
-    let session = create(&manager, "post-response delivery recovery").await;
+    let session = create_with_model(
+        &manager,
+        "post-response delivery recovery",
+        "startup-failure",
+        "startup-failure-model",
+    )
+    .await;
     let launch_run_id = manager
         .store
         .start_run(
@@ -5145,7 +5196,8 @@ async fn restarted_running_task_without_live_child_lease_becomes_interrupted() {
         finish_reason: Some(CompletionFinishReason::Stop),
     });
     let manager = manager_with_provider(provider).await;
-    let parent = create(&manager, "interrupted task recovery").await;
+    let parent =
+        create_with_model(&manager, "interrupted task recovery", "fake", "fake-model").await;
     let run_id = manager
         .store
         .start_run(
@@ -5224,7 +5276,8 @@ async fn expired_process_owner_without_registry_entry_becomes_interrupted() {
         finish_reason: Some(CompletionFinishReason::Stop),
     });
     let manager = manager_with_provider(provider).await;
-    let session = create(&manager, "orphan process recovery").await;
+    let session =
+        create_with_model(&manager, "orphan process recovery", "fake", "fake-model").await;
     let run_id = manager
         .store
         .start_run(
@@ -5395,7 +5448,8 @@ async fn monitor_events_append_assistant_hooks_without_terminalizing_the_operati
         finish_reason: Some(CompletionFinishReason::Stop),
     });
     let manager = manager_with_provider(provider).await;
-    let session = create(&manager, "monitor event notification").await;
+    let session =
+        create_with_model(&manager, "monitor event notification", "fake", "fake-model").await;
     let session_id = session.id;
 
     // A completed monitor launch receipt backed by a Running aggregate.
@@ -5576,7 +5630,13 @@ async fn assistant_created_scheduled_deliveries_reuse_the_launch_run_without_run
         finish_reason: Some(CompletionFinishReason::Stop),
     });
     let manager = manager_with_provider(provider).await;
-    let session = create(&manager, "assistant scheduled delivery").await;
+    let session = create_with_model(
+        &manager,
+        "assistant scheduled delivery",
+        "fake",
+        "fake-model",
+    )
+    .await;
     let run_id = manager
         .store
         .start_run(
@@ -5677,7 +5737,7 @@ async fn scheduled_delivery_creates_a_chronological_runtime_ingress() {
         finish_reason: Some(CompletionFinishReason::Stop),
     });
     let manager = manager_with_provider(provider).await;
-    let session = create(&manager, "scheduled delivery").await;
+    let session = create_with_model(&manager, "scheduled delivery", "fake", "fake-model").await;
     let session_id = session.id;
 
     // A completed final assistant reply already exists. The scheduled prompt
@@ -5817,7 +5877,13 @@ async fn scheduled_delivery_works_in_a_session_with_no_prior_run() {
         finish_reason: Some(CompletionFinishReason::Stop),
     });
     let manager = manager_with_provider(provider).await;
-    let session = create(&manager, "scheduled delivery empty session").await;
+    let session = create_with_model(
+        &manager,
+        "scheduled delivery empty session",
+        "fake",
+        "fake-model",
+    )
+    .await;
     let session_id = session.id;
 
     let delivered = manager
@@ -5875,7 +5941,13 @@ async fn concurrent_scheduled_redelivery_commits_one_operation_event() {
         finish_reason: Some(CompletionFinishReason::Stop),
     });
     let manager = Arc::new(manager_with_provider(provider).await);
-    let session = create(&manager, "concurrent scheduled delivery").await;
+    let session = create_with_model(
+        &manager,
+        "concurrent scheduled delivery",
+        "fake",
+        "fake-model",
+    )
+    .await;
     let left = Arc::clone(&manager);
     let right = Arc::clone(&manager);
     let (first, second) = tokio::join!(
@@ -5930,7 +6002,7 @@ async fn a_settle_whose_steer_reaches_a_turn_that_never_drains_it_still_wakes_th
         finish_reason: Some(CompletionFinishReason::Stop),
     });
     let manager = manager_with_provider(provider).await;
-    let session = create(&manager, "steer-drop regression").await;
+    let session = create_with_model(&manager, "steer-drop regression", "fake", "fake-model").await;
     let session_id = session.id;
 
     // A completed launch receipt backed by a Running shell aggregate.

@@ -166,7 +166,7 @@ impl ApplicationService {
             .workspace_repository
             .path_by_id(workspace_id)
             .await
-            .map_err(|error| ApplicationError::internal(error.to_string()))?
+            .map_err(|error| ApplicationError::internal_error(&error))?
             .is_some();
         if exists {
             Ok(())
@@ -190,7 +190,7 @@ impl ApplicationService {
             .session_store
             .get_session_summary(session_id)
             .await
-            .map_err(|error| ApplicationError::internal(error.to_string()))?
+            .map_err(|error| ApplicationError::internal_error(&error))?
             .ok_or_else(|| {
                 ApplicationError::not_found_with_diagnostic(
                     "The session was not found.",
@@ -210,7 +210,7 @@ impl ApplicationService {
         self.workspace_repository
             .lookup_id(path)
             .await
-            .map_err(|error| ApplicationError::internal(error.to_string()))
+            .map_err(|error| ApplicationError::internal_error(&error))
     }
 
     async fn workspace_session_counts(
@@ -220,7 +220,7 @@ impl ApplicationService {
         self.session_store
             .session_counts_by_workspace(workspace_ids)
             .await
-            .map_err(|error| ApplicationError::internal(error.to_string()))?
+            .map_err(|error| ApplicationError::internal_error(&error))?
             .into_iter()
             .map(|(workspace_id, count)| {
                 Ok((

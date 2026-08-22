@@ -492,9 +492,12 @@ impl FsPlugin {
             };
             let modified_at_ms = metadata
                 .modified()
-                .ok()
-                .and_then(|value| value.duration_since(UNIX_EPOCH).ok())
-                .and_then(|value| i64::try_from(value.as_millis()).ok());
+                .map_err(fs_error)?
+                .duration_since(UNIX_EPOCH)
+                .map_err(|error| PluginError::internal_error(&error))?
+                .as_millis();
+            let modified_at_ms = i64::try_from(modified_at_ms)
+                .map_err(|error| PluginError::internal_error(&error))?;
             let hash_skipped =
                 input.hash && metadata.is_file() && metadata.len() > MAX_STAT_HASH_BYTES;
             let hash = if input.hash && metadata.is_file() && !hash_skipped {
@@ -502,12 +505,16 @@ impl FsPlugin {
             } else {
                 None
             };
-            let symlink_target = metadata
-                .file_type()
-                .is_symlink()
-                .then(|| std::fs::read_link(&target).ok())
-                .flatten()
-                .map(|path| path.display().to_string());
+            let symlink_target = if metadata.file_type().is_symlink() {
+                Some(
+                    std::fs::read_link(&target)
+                        .map_err(fs_error)?
+                        .display()
+                        .to_string(),
+                )
+            } else {
+                None
+            };
             let payload = serde_json::json!({
                 "path": input.path,
                 "kind": file_type,
@@ -522,7 +529,7 @@ impl FsPlugin {
                 format!("stat {}", input.path),
                 format!("{file_type} · {} bytes", metadata.len()),
                 serde_json::to_string_pretty(&payload)
-                    .map_err(|error| PluginError::internal(error.to_string()))?,
+                    .map_err(|error| PluginError::internal_error(&error))?,
                 Some(payload),
                 std::collections::BTreeMap::new(),
                 Vec::new(),
@@ -636,13 +643,23 @@ where
     let worker_permit = crate::BLOCKING_PLUGIN_WORKERS
         .acquire()
         .await
-        .map_err(|_| PluginError::internal("filesystem worker pool is unavailable"))?;
+        .map_err(|error| {
+            PluginError::internal(agena_failure::diagnostic::format_error_chain_with_context(
+                "acquire a filesystem plugin worker",
+                &error,
+            ))
+        })?;
     tokio::task::spawn_blocking(move || {
         let _worker_permit = worker_permit;
         operation()
     })
     .await
-    .map_err(|error| PluginError::internal(format!("filesystem worker failed: {error}")))?
+    .map_err(|error| {
+        PluginError::internal(agena_failure::diagnostic::format_error_chain_with_context(
+            "filesystem plugin worker failed",
+            &error,
+        ))
+    })?
 }
 
 fn permission_paths_internal<T: Serialize + ?Sized>(
@@ -654,7 +671,7 @@ fn permission_paths_internal<T: Serialize + ?Sized>(
 }
 
 fn json_input<T: Serialize>(input: T) -> SdkResult<serde_json::Value> {
-    serde_json::to_value(input).map_err(|err| PluginError::invalid_params(err.to_string()))
+    serde_json::to_value(input).map_err(|err| PluginError::invalid_params_error(&err))
 }
 
 fn resolve_path(workspace_root: &str, path: &str) -> PathBuf {
@@ -686,12 +703,20 @@ fn sha256_file(path: &Path) -> SdkResult<String> {
 
 fn read_file_bounded(path: &Path, max_bytes: u64, operation: &str) -> SdkResult<Vec<u8>> {
     let file = File::open(path).map_err(fs_error)?;
-    let mut bytes = Vec::with_capacity(
-        file.metadata()
-            .ok()
-            .and_then(|metadata| usize::try_from(metadata.len().min(max_bytes)).ok())
-            .unwrap_or_default(),
-    );
+    let capacity = match file.metadata() {
+        Ok(metadata) => usize::try_from(metadata.len().min(max_bytes)).unwrap_or_default(),
+        Err(error) => {
+            tracing::warn!(
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "read metadata used to preallocate a bounded file read",
+                    &error,
+                ),
+                "bounded file read is continuing without a preallocated buffer"
+            );
+            0
+        }
+    };
+    let mut bytes = Vec::with_capacity(capacity);
     file.take(max_bytes.saturating_add(1))
         .read_to_end(&mut bytes)
         .map_err(fs_error)?;
@@ -721,10 +746,14 @@ fn read_utf8_prefix(
     let valid_bytes = match std::str::from_utf8(&bytes) {
         Ok(_) => bytes.as_slice(),
         Err(error) if truncated && error.error_len().is_none() => &bytes[..error.valid_up_to()],
-        Err(_) => {
-            return Err(PluginError::invalid_params(format!(
-                "read_many target is not UTF-8 text: {display_path}"
-            )));
+        Err(error) => {
+            return Err(PluginError::invalid_params_with_public_detail(
+                agena_failure::diagnostic::format_error_chain_with_context(
+                    format!("read_many target is not UTF-8 text: {display_path}"),
+                    &error,
+                ),
+                format!("The requested file is not UTF-8 text: {display_path}"),
+            ));
         }
     };
     let text = std::str::from_utf8(valid_bytes)
@@ -765,7 +794,10 @@ fn verify_expected_hash(path: &Path, expected: &str) -> SdkResult<()> {
 }
 
 fn fs_error(error: std::io::Error) -> PluginError {
-    PluginError::internal(format!("filesystem operation failed: {error}"))
+    PluginError::internal(agena_failure::diagnostic::format_error_chain_with_context(
+        "filesystem operation failed",
+        &error,
+    ))
 }
 
 #[cfg(test)]

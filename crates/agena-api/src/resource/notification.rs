@@ -249,7 +249,22 @@ impl NotificationStreamEvent {
     /// JSON `data:` payload for this message.
     pub fn payload(&self) -> serde_json::Value {
         match self {
-            Self::Notification(n) => serde_json::to_value(n).unwrap_or(serde_json::Value::Null),
+            Self::Notification(n) => match serde_json::to_value(n) {
+                Ok(payload) => payload,
+                Err(error) => {
+                    tracing::error!(
+                        notification_id = %n.id,
+                        diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                            "serialize a notification stream payload",
+                            &error,
+                        ),
+                        "notification stream payload could not be encoded"
+                    );
+                    serde_json::json!({
+                        "projection_error": "The notification payload could not be encoded."
+                    })
+                }
+            },
             Self::Lagged { skipped } => serde_json::json!({ "skipped": skipped }),
             Self::Resumed { up_to_ms } => serde_json::json!({ "up_to_ms": up_to_ms }),
             Self::SubscriptionClosed { reason } => serde_json::json!({ "reason": reason }),

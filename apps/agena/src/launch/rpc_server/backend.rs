@@ -49,7 +49,7 @@ pub(crate) async fn run(request: RpcServerRequest) -> Result<(), AgenaProcessErr
     match request.args.transport {
         RpcServerTransport::Stdio => jsonrpc::serve_stdio(backend)
             .await
-            .map_err(|err| AgenaProcessError::Configuration(err.to_string())),
+            .map_err(|err| AgenaProcessError::configuration_error(&err)),
     }
 }
 
@@ -134,14 +134,9 @@ impl AgenaAppServerBackend {
                     "invalid model reference `{target}`; expected provider/model"
                 )));
             }
-            let adapter_id = self
-                .providers
-                .iter()
-                .find(|provider| provider.provider_id == provider_id.trim())
-                .and_then(|provider| provider.defaults.adapter.clone());
             return Ok(ModelRef {
                 provider_id: provider_id.trim().to_owned(),
-                adapter_id,
+                adapter_id: None,
                 model_id: model_id.trim().to_owned(),
             });
         }
@@ -153,11 +148,10 @@ impl AgenaAppServerBackend {
             .ok_or_else(|| {
                 AppServerError::InvalidParams(format!("provider not found: {target}"))
             })?;
-        Ok(ModelRef {
-            provider_id: provider.provider_id.clone(),
-            adapter_id: provider.defaults.adapter.clone(),
-            model_id: provider.defaults.model.clone(),
-        })
+        let _ = provider;
+        Err(AppServerError::InvalidParams(format!(
+            "model is required for provider `{target}`; pass an explicit provider/model target"
+        )))
     }
 
     async fn paginated_sessions(
@@ -330,14 +324,12 @@ impl jsonrpc::AppServerBackend for AgenaAppServerBackend {
 }
 
 fn process_client_error(context: &str, error: &ClientError) -> AgenaProcessError {
-    let detail = error
-        .diagnostic_message()
-        .unwrap_or_else(|| error.to_string());
+    let detail = error.operator_diagnostic();
     AgenaProcessError::Configuration(format!("{context}: {detail}"))
 }
 
 fn client_backend_error(error: ClientError) -> AppServerError {
-    AppServerError::Backend(error.to_string())
+    AppServerError::Backend(error.operator_diagnostic())
 }
 
 fn latest_run_parts(parts: &[SessionTranscriptPart]) -> (Option<i64>, Vec<SessionTranscriptPart>) {
@@ -392,7 +384,7 @@ fn app_permission_scope(scope: PermissionRememberScope) -> PermissionScope {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agena_api::resource::{ProviderDefaultsResource, SessionTranscriptPart};
+    use agena_api::resource::SessionTranscriptPart;
 
     fn backend_with_public_provider_metadata() -> AgenaAppServerBackend {
         AgenaAppServerBackend {
@@ -400,10 +392,6 @@ mod tests {
             workspace_id: 7,
             providers: vec![ProviderSummaryResource {
                 provider_id: "example".to_owned(),
-                defaults: ProviderDefaultsResource {
-                    adapter: Some("openai".to_owned()),
-                    model: "default-model".to_owned(),
-                },
                 adapters: Vec::new(),
             }],
         }
@@ -425,28 +413,22 @@ mod tests {
     }
 
     #[test]
-    fn rpc_backend_resolves_models_from_public_provider_metadata() {
+    fn rpc_backend_requires_explicit_model_targets() {
         let backend = backend_with_public_provider_metadata();
-        assert_eq!(
-            backend
-                .resolve_model_target("example")
-                .expect("provider default"),
-            ModelRef {
-                provider_id: "example".to_owned(),
-                adapter_id: Some("openai".to_owned()),
-                model_id: "default-model".to_owned(),
-            }
-        );
         assert_eq!(
             backend
                 .resolve_model_target("example/override-model")
                 .expect("qualified model"),
             ModelRef {
                 provider_id: "example".to_owned(),
-                adapter_id: Some("openai".to_owned()),
+                adapter_id: None,
                 model_id: "override-model".to_owned(),
             }
         );
+        assert!(matches!(
+            backend.resolve_model_target("example"),
+            Err(AppServerError::InvalidParams(_))
+        ));
         assert!(matches!(
             backend.resolve_model_target("missing"),
             Err(AppServerError::InvalidParams(_))

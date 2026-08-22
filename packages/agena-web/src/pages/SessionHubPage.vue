@@ -133,9 +133,8 @@ async function newSession() {
   creating.value = true
   try {
     const created = await chat.createSession()
-    if (created?.id) {
-      await chat.selectSession(String(created.id))
-    }
+    if (!created?.id) return
+    await chat.selectSession(String(created.id))
     router.push('/chat')
   } catch (err) {
     toasts.push('error', err instanceof Error ? err.message : String(err))

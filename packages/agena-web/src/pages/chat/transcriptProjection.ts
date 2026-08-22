@@ -136,21 +136,12 @@ function toolCallView(part: MessagePartLike): JsonRecord {
 function operationTitle(part: MessagePartLike): string {
   const content = durablePartContent(part)
   const operation = toolCallView(part)
-  return (
-    firstText(operation, ['title']) ||
-    firstText(content, ['name']) ||
-    text(part.tool) ||
-    'Operation'
-  )
+  return firstText(operation, ['title']) || firstText(content, ['name']) || text(part.tool) || 'Operation'
 }
 
 function operationSummary(part: MessagePartLike): string {
   const operation = toolCallView(part)
-  return (
-    firstText(operation, ['summary']) ||
-    text(part.agenaSummary) ||
-    firstText(record(part.state), ['title'])
-  )
+  return firstText(operation, ['summary']) || text(part.agenaSummary) || firstText(record(part.state), ['title'])
 }
 
 function operationCopyText(part: MessagePartLike): string {

@@ -548,7 +548,17 @@ impl GitlabProvider {
     }
 
     fn prompt_cache_direct_access_shape(&self) -> Option<agena_provider::PromptCacheShape> {
-        let cached = self.direct_access_cache.lock().ok()?.clone()?;
+        let cached = match self.direct_access_cache.lock() {
+            Ok(cache) => cache.clone(),
+            Err(error) => {
+                tracing::error!(
+                    operation = "read GitLab direct-access prompt-cache shape",
+                    error = %error,
+                    "recovering poisoned GitLab direct-access cache lock"
+                );
+                error.into_inner().clone()
+            }
+        }?;
         if cached.expires_at_ms <= now_ms() {
             return None;
         }

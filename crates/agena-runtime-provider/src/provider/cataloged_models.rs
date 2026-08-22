@@ -491,7 +491,7 @@ mod tests {
     }
 
     #[test]
-    fn catalog_refresh_never_replaces_provider_route_defaults() {
+    fn catalog_refresh_never_replaces_adapter_runtime_route_metadata() {
         let target: Arc<dyn ModelRuntime> = Arc::new(ToolModeRuntime {
             default_model: ModelId::new("configured-default"),
         });

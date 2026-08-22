@@ -3,8 +3,9 @@ import { computed } from 'vue'
 
 import MarkdownRenderer from '@/components/markdown/MarkdownRenderer.vue'
 import CodeBlock from '@/components/ui/CodeBlock.vue'
+import AgenaAttachmentPreview from '@/components/chat/AgenaAttachmentPreview.vue'
 import AgenaOperationPart from '@/components/chat/AgenaOperationPart.vue'
-import type { AttentionLike, TranscriptDisplayPart } from '@/components/chat/messageList.types'
+import type { TranscriptDisplayPart } from '@/components/chat/messageList.types'
 import { durablePartContent, transcriptPartText } from '@/pages/chat/transcriptProjection'
 import {
   attachmentPresentations,
@@ -13,7 +14,6 @@ import {
   prettyJson,
   skillPresentations,
 } from '@/pages/chat/transcriptPartPresentation'
-import { buildWorkspaceRawFileUrl } from '@/lib/workspaceLinks'
 import { useDirectoryStore } from '@/stores/directory'
 import { useUiStore } from '@/stores/ui'
 
@@ -24,7 +24,6 @@ const props = defineProps<{
   streaming?: boolean
   sourcePath?: string
   sessionId?: string | null
-  attention?: AttentionLike
 }>()
 
 const emit = defineEmits<{
@@ -46,14 +45,6 @@ function toggle() {
   emit('toggle')
 }
 
-function attachmentUrl(path: string, url: string): string {
-  const workspace = String(directory.currentDirectory || '').trim()
-  if (workspace && path && !path.startsWith('http://') && !path.startsWith('https://') && !path.startsWith('data:')) {
-    return buildWorkspaceRawFileUrl(workspace, path)
-  }
-  return url || path
-}
-
 function openAttachment(path: string, url: string) {
   const workspace = String(directory.currentDirectory || '').trim()
   if (workspace && path) {
@@ -61,18 +52,6 @@ function openAttachment(path: string, url: string) {
     return
   }
   if (url) window.open(url, '_blank', 'noopener,noreferrer')
-}
-
-function isImage(mime: string, label: string): boolean {
-  return mime.startsWith('image/') || /\.(png|jpe?g|gif|webp|avif|svg)$/i.test(label)
-}
-
-function isVideo(mime: string, label: string): boolean {
-  return mime.startsWith('video/') || /\.(mp4|webm|mov|m4v)$/i.test(label)
-}
-
-function isAudio(mime: string, label: string): boolean {
-  return mime.startsWith('audio/') || /\.(mp3|wav|m4a|ogg|flac)$/i.test(label)
 }
 </script>
 
@@ -83,7 +62,6 @@ function isAudio(mime: string, label: string): boolean {
     :expanded="expanded"
     :collapse-signal="collapseSignal"
     :session-id="sessionId"
-    :attention="attention"
     @toggle="$emit('toggle')"
     @select="$emit('select')"
   />
@@ -165,38 +143,13 @@ function isAudio(mime: string, label: string): boolean {
       >
 
       <div v-else-if="part.kind === 'resource'" class="space-y-2 py-1">
-        <div v-for="attachment in attachments" :key="attachment.key" class="min-w-0">
-          <button
-            type="button"
-            class="flex w-full min-w-0 items-center gap-2 rounded-md px-1 py-1 text-left font-mono text-xs hover:bg-muted/40 hover:text-primary"
-            @click="openAttachment(attachment.path, attachment.url)"
-          >
-            <span aria-hidden="true">›</span>
-            <span class="min-w-0 flex-1 truncate">{{ attachment.label }}</span>
-            <span v-if="attachment.mime" class="text-[10px] text-muted-foreground">{{ attachment.mime }}</span>
-          </button>
-          <img
-            v-if="isImage(attachment.mime, attachment.label) && attachmentUrl(attachment.path, attachment.url)"
-            :src="attachmentUrl(attachment.path, attachment.url)"
-            :alt="attachment.label"
-            class="mt-1 max-h-96 max-w-full cursor-zoom-in rounded-md object-contain"
-            @click="openAttachment(attachment.path, attachment.url)"
-          />
-          <video
-            v-else-if="isVideo(attachment.mime, attachment.label) && attachmentUrl(attachment.path, attachment.url)"
-            :src="attachmentUrl(attachment.path, attachment.url)"
-            controls
-            preload="metadata"
-            class="mt-1 max-h-96 max-w-full rounded-md"
-          />
-          <audio
-            v-else-if="isAudio(attachment.mime, attachment.label) && attachmentUrl(attachment.path, attachment.url)"
-            :src="attachmentUrl(attachment.path, attachment.url)"
-            controls
-            preload="metadata"
-            class="mt-1 w-full"
-          />
-        </div>
+        <AgenaAttachmentPreview
+          v-for="attachment in attachments"
+          :key="attachment.key"
+          :attachment="attachment"
+          :workspace-root="String(directory.currentDirectory || '')"
+          @open="openAttachment"
+        />
       </div>
 
       <div v-else-if="part.kind === 'skill'" class="divide-y divide-border/50 py-1">

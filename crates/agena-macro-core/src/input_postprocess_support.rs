@@ -186,7 +186,7 @@ pub fn expand_input_root_default_insert_tokens(
         return quote! {
             if matches!(input, ::agena_plugin_sdk::serde_json::Value::Null) {
                 input = ::agena_plugin_sdk::serde_json::to_value(#default_expr)
-                    .map_err(|err| ::agena_plugin_sdk::PluginError::invalid_params(err.to_string()))?;
+                    .map_err(|err| ::agena_plugin_sdk::PluginError::invalid_params_error(&err))?;
             }
         };
     }
@@ -194,7 +194,7 @@ pub fn expand_input_root_default_insert_tokens(
         return quote! {
             if matches!(input, ::agena_plugin_sdk::serde_json::Value::Null) {
                 input = ::agena_plugin_sdk::serde_json::to_value(<Self as ::core::default::Default>::default())
-                    .map_err(|err| ::agena_plugin_sdk::PluginError::invalid_params(err.to_string()))?;
+                    .map_err(|err| ::agena_plugin_sdk::PluginError::invalid_params_error(&err))?;
             }
         };
     }
@@ -261,7 +261,7 @@ pub fn expand_input_default_insert_tokens(
                 ::agena_plugin_sdk::serde_json::to_value(
                     <#ty as ::core::default::Default>::default(),
                 )
-                .map_err(|err| ::agena_plugin_sdk::PluginError::invalid_params(err.to_string()))?
+                .map_err(|err| ::agena_plugin_sdk::PluginError::invalid_params_error(&err))?
             }
         };
         quote! {

@@ -39,6 +39,7 @@ pub struct SearchResponse {
     pub root: String,
     pub count: usize,
     pub files: Vec<SearchFile>,
+    pub truncated: bool,
 }
 
 pub(super) fn default_respect_gitignore() -> bool {
@@ -136,18 +137,34 @@ pub async fn fs_search(Query(q): Query<SearchQuery>) -> ApiResult<Json<SearchRes
         resolved_root
     } else {
         std::env::current_dir()
-            .unwrap_or_else(|_| PathBuf::from("."))
+            .map_err(|error| {
+                AppError::internal_error_with_context(
+                    "resolve the current directory for filesystem search",
+                    &error,
+                )
+            })?
             .join(resolved_root)
     };
 
     let stats = tokio::fs::metadata(&abs_root)
         .await
         .map_err(|err| match err.kind() {
-            std::io::ErrorKind::NotFound => AppError::not_found("Directory not found"),
-            std::io::ErrorKind::PermissionDenied => {
-                AppError::forbidden("Access to directory denied")
+            std::io::ErrorKind::NotFound => {
+                tracing::warn!(
+                    diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                        "read filesystem search root metadata",
+                        &err,
+                    ),
+                    "filesystem search root was not found"
+                );
+                AppError::not_found("Directory not found")
             }
-            _ => AppError::internal("Failed to search files"),
+            std::io::ErrorKind::PermissionDenied => {
+                AppError::forbidden_error("read filesystem search root metadata", &err)
+            }
+            _ => {
+                AppError::internal_error_with_context("read filesystem search root metadata", &err)
+            }
         })?;
     if !stats.is_dir() {
         return Err(AppError::bad_request("Specified root is not a directory"));
@@ -176,6 +193,7 @@ pub async fn fs_search(Query(q): Query<SearchQuery>) -> ApiResult<Json<SearchRes
     builder.follow_links(false);
 
     let mut candidates: Vec<(SearchFile, i32)> = Vec::new();
+    let mut truncated = false;
 
     for result in builder
         .filter_entry(move |entry| {
@@ -200,7 +218,17 @@ pub async fn fs_search(Query(q): Query<SearchQuery>) -> ApiResult<Json<SearchRes
     {
         let entry = match result {
             Ok(e) => e,
-            Err(_) => continue,
+            Err(error) => {
+                truncated = true;
+                tracing::warn!(
+                    diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                        "filesystem search skipped an unreadable workspace entry",
+                        &error,
+                    ),
+                    "filesystem search result is partial"
+                );
+                continue;
+            }
         };
 
         if !entry.file_type().map(|ft| ft.is_file()).unwrap_or(false) {
@@ -243,6 +271,7 @@ pub async fn fs_search(Query(q): Query<SearchQuery>) -> ApiResult<Json<SearchRes
         ));
 
         if candidates.len() >= collect_limit {
+            truncated = true;
             break;
         }
     }
@@ -255,6 +284,9 @@ pub async fn fs_search(Query(q): Query<SearchQuery>) -> ApiResult<Json<SearchRes
         });
     }
 
+    if candidates.len() > limit {
+        truncated = true;
+    }
     let files = candidates
         .into_iter()
         .take(limit)
@@ -273,5 +305,6 @@ pub async fn fs_search(Query(q): Query<SearchQuery>) -> ApiResult<Json<SearchRes
         root: to_api_path(&abs_root),
         count: files.len(),
         files,
+        truncated,
     }))
 }

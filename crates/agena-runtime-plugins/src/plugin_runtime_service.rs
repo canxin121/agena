@@ -166,7 +166,7 @@ pub async fn dispatch_plugin_rpc(
                     error: ErrorObject {
                         code: codes::PLUGIN_GENERIC,
                         message: error.to_string(),
-                        data: serde_json::to_value(&error).ok(),
+                        data: error.rpc_error_data(),
                     },
                 },
             });
@@ -188,7 +188,7 @@ pub async fn dispatch_plugin_rpc(
                 error: ErrorObject {
                     code: codes::PLUGIN_GENERIC,
                     message: error.to_string(),
-                    data: serde_json::to_value(&error).ok(),
+                    data: error.rpc_error_data(),
                 },
             },
         }),

@@ -45,9 +45,12 @@ pub(super) fn decode_data_image(source: &str) -> Result<Vec<u8>, String> {
         return Err("only base64-encoded image data URLs are supported".to_string());
     }
     validate_base64_image_payload_size(payload)?;
-    let bytes = BASE64_STANDARD
-        .decode(payload)
-        .map_err(|_| "invalid base64 image data".to_string())?;
+    let bytes = BASE64_STANDARD.decode(payload).map_err(|error| {
+        agena_failure::diagnostic::format_error_chain_with_context(
+            "invalid base64 image data",
+            &error,
+        )
+    })?;
     Ok(bytes)
 }
 
@@ -79,9 +82,9 @@ pub(super) fn read_workspace_image(source: &str) -> Result<Vec<u8>, String> {
         .ok_or_else(|| "workspace image loading is not configured".to_string())?;
     let base_url = url::Url::from_directory_path(workspace.as_path())
         .map_err(|()| "workspace path cannot be represented as a file URL".to_string())?;
-    let url = base_url
-        .join(source)
-        .map_err(|_| "invalid image URL".to_string())?;
+    let url = base_url.join(source).map_err(|error| {
+        agena_failure::diagnostic::format_error_chain_with_context("invalid image URL", &error)
+    })?;
     match url.scheme() {
         "http" | "https" => {
             return Err("remote images are not loaded automatically".to_string());
@@ -92,18 +95,24 @@ pub(super) fn read_workspace_image(source: &str) -> Result<Vec<u8>, String> {
     let path = url
         .to_file_path()
         .map_err(|()| "invalid local image path".to_string())?;
-    let path = fs::canonicalize(path).map_err(|error| format!("cannot open image: {error}"))?;
+    let path = fs::canonicalize(path).map_err(|error| {
+        agena_failure::diagnostic::format_error_chain_with_context("cannot open image", &error)
+    })?;
     if !path.starts_with(workspace.as_path()) {
         return Err("local image is outside the active workspace".to_string());
     }
-    let metadata = fs::metadata(&path).map_err(|error| format!("cannot inspect image: {error}"))?;
+    let metadata = fs::metadata(&path).map_err(|error| {
+        agena_failure::diagnostic::format_error_chain_with_context("cannot inspect image", &error)
+    })?;
     if !metadata.is_file() {
         return Err("local image is not a regular file".to_string());
     }
     if metadata.len() > MAX_MARKDOWN_IMAGE_BYTES as u64 {
         return Err("image exceeds the encoded byte safety limit".to_string());
     }
-    let bytes = fs::read(path).map_err(|error| format!("cannot read image: {error}"))?;
+    let bytes = fs::read(path).map_err(|error| {
+        agena_failure::diagnostic::format_error_chain_with_context("cannot read image", &error)
+    })?;
     Ok(bytes)
 }
 
@@ -122,8 +131,9 @@ fn validate_encoded_image_size(bytes: &[u8]) -> Result<(), String> {
     if bytes.len() > MAX_MARKDOWN_IMAGE_BYTES {
         return Err("image exceeds the encoded byte safety limit".to_string());
     }
-    let dimensions =
-        imagesize::blob_size(bytes).map_err(|_| "unsupported image data".to_string())?;
+    let dimensions = imagesize::blob_size(bytes).map_err(|error| {
+        agena_failure::diagnostic::format_error_chain_with_context("unsupported image data", &error)
+    })?;
     let width = u64::try_from(dimensions.width).unwrap_or(u64::MAX);
     let height = u64::try_from(dimensions.height).unwrap_or(u64::MAX);
     if width > u64::from(MAX_IMAGE_DIMENSION) || height > u64::from(MAX_IMAGE_DIMENSION) {
@@ -150,7 +160,12 @@ pub(super) fn image_artifact(bytes: &[u8]) -> Result<Arc<MathArtifact>, String> 
     {
         return Ok(artifact);
     }
-    let image = image::load_from_memory(bytes).map_err(|error| error.to_string())?;
+    let image = image::load_from_memory(bytes).map_err(|error| {
+        agena_failure::diagnostic::format_error_chain_with_context(
+            "failed to decode image data",
+            &error,
+        )
+    })?;
     cache_dynamic_image(id, image, config)
 }
 

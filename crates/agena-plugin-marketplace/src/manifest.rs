@@ -226,7 +226,7 @@ impl PluginReleaseManifest {
             )));
         }
         agena_plugin_contracts::validate_plugin_identity(self.id.as_str())
-            .map_err(|error| MarketplaceError::Index(error.to_string()))?;
+            .map_err(|error| MarketplaceError::index_error(&error))?;
         semver::Version::parse(self.version.trim_start_matches('v')).map_err(|error| {
             MarketplaceError::Index(format!(
                 "plugin `{}` has invalid release version `{}`: {error}",
@@ -472,11 +472,11 @@ fn resolve_relative_source(base: Option<&str>, relative: &str) -> Result<String,
             .ok_or_else(|| MarketplaceError::InvalidUrl(base.to_string()))?;
         return Ok(format!("file://{}", parent.join(relative).display()));
     }
-    let base =
-        reqwest::Url::parse(base).map_err(|_| MarketplaceError::InvalidUrl(base.to_string()))?;
+    let base = reqwest::Url::parse(base)
+        .map_err(|error| MarketplaceError::InvalidUrl(format!("{base}: {error}")))?;
     base.join(relative)
         .map(|url| url.to_string())
-        .map_err(|_| MarketplaceError::InvalidUrl(relative.to_string()))
+        .map_err(|error| MarketplaceError::InvalidUrl(format!("{relative}: {error}")))
 }
 
 fn validate_relative_asset_path(value: &str, label: &str) -> Result<(), MarketplaceError> {
@@ -513,7 +513,7 @@ fn sort_versions(versions: &mut [PluginVersion]) {
 impl PluginRecord {
     pub fn validate(&self) -> Result<(), MarketplaceError> {
         agena_plugin_contracts::validate_plugin_identity(self.id.as_str())
-            .map_err(|error| MarketplaceError::Index(error.to_string()))?;
+            .map_err(|error| MarketplaceError::index_error(&error))?;
         if self.versions.is_empty() {
             return Err(MarketplaceError::Index(format!(
                 "plugin `{}` has no versions",
@@ -653,7 +653,7 @@ impl RegistryIndex {
     /// targets are rejected by the same method used by validation and install.
     pub fn resolve_plugin_id(&self, requested: &str) -> Result<String, MarketplaceError> {
         agena_plugin_contracts::validate_plugin_identity(requested)
-            .map_err(|error| MarketplaceError::Index(error.to_string()))?;
+            .map_err(|error| MarketplaceError::index_error(&error))?;
         let mut current = requested.to_string();
         let mut seen = std::collections::BTreeSet::new();
         while let Some(next) = self.renames.get(&current) {

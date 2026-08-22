@@ -43,7 +43,7 @@ impl App {
                 choice_item_with_value(
                     ui_text::t(&self.i18n, "value-default"),
                     "",
-                    ui_text::t(&self.i18n, "settings-provider-default-mode-inherit-detail"),
+                    ui_text::t(&self.i18n, "settings-model-default-mode-inherit-detail"),
                 ),
             );
         }
@@ -169,7 +169,7 @@ impl App {
             choice_item_with_value(
                 ui_text::t(&self.i18n, "value-default"),
                 "",
-                ui_text::t(&self.i18n, "settings-provider-default-mode-inherit-detail"),
+                ui_text::t(&self.i18n, "settings-model-default-mode-inherit-detail"),
             ),
         );
         Ok(items)

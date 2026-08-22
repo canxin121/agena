@@ -112,9 +112,12 @@ pub async fn fetch_page_with_spider(
 
     website.crawl().await;
     website.unsubscribe();
-    let pages = collector
-        .await
-        .map_err(|err| CrawlError::InvalidInput(err.to_string()))?;
+    let pages = collector.await.map_err(|error| {
+        CrawlError::InvalidInput(agena_failure::diagnostic::format_error_chain_with_context(
+            "spider page collector task failed",
+            &error,
+        ))
+    })?;
     let page = pages
         .into_iter()
         .next()

@@ -504,14 +504,23 @@ where
 {
     let work: agena_runtime::RuntimeBackgroundTaskWork = Box::new(move |_| {
         Box::pin(async move {
-            tokio::task::spawn_blocking(move || task().map_err(|error| error.to_string()))
-                .await
-                .map_err(|error| {
-                    agena_runtime::RuntimeControlServiceError::new(format!(
-                        "{task_error_context}: {error}"
-                    ))
-                })?
-                .map_err(agena_runtime::RuntimeControlServiceError::new)
+            tokio::task::spawn_blocking(move || {
+                task().map_err(|error| agena_failure::diagnostic::format_error_chain(&error))
+            })
+            .await
+            .map_err(|error| {
+                agena_runtime::RuntimeControlServiceError::new(
+                    agena_failure::diagnostic::format_error_chain_with_context(
+                        task_error_context,
+                        &error,
+                    ),
+                )
+            })?
+            .map_err(|diagnostic| {
+                agena_runtime::RuntimeControlServiceError::new(format!(
+                    "{task_error_context}: {diagnostic}"
+                ))
+            })
         })
     });
     let start = state

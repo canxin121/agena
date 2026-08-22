@@ -73,6 +73,22 @@ impl ApplicationError {
         )
     }
 
+    /// Build an invalid-input failure from a typed error while retaining its
+    /// complete operator chain and showing the scrubbed, actionable cause to
+    /// the user instead of a static "operation failed" wrapper.
+    pub fn bad_request_error(error: &(dyn std::error::Error + 'static)) -> Self {
+        let diagnostic = agena_failure::diagnostic::format_error_chain(error);
+        let mut result = Self::bad_request(
+            "The request diagnostic contained no safely displayable details; review the diagnostic log.",
+        );
+        result.failure.user = UserPresentation::validated_with_context(
+            "request-invalid-diagnostic",
+            diagnostic.as_str(),
+        );
+        result.diagnostic = Some(diagnostic);
+        result
+    }
+
     pub fn not_found_with_diagnostic(
         message: &'static str,
         diagnostic: impl std::fmt::Display,
@@ -129,6 +145,22 @@ impl ApplicationError {
             )),
             diagnostic: Some(diagnostic),
         }
+    }
+
+    /// Build an internal application failure from a typed error without
+    /// truncating its source chain at this transport-neutral boundary.
+    pub fn internal_error(error: &(dyn std::error::Error + 'static)) -> Self {
+        Self::internal(agena_failure::diagnostic::format_error_chain(error))
+    }
+
+    /// Add an operation label while retaining every typed source.
+    pub fn internal_error_with_context(
+        context: impl AsRef<str>,
+        error: &(dyn std::error::Error + 'static),
+    ) -> Self {
+        Self::internal(agena_failure::diagnostic::format_error_chain_with_context(
+            context, error,
+        ))
     }
 
     pub fn diagnostic_message(&self) -> Option<&str> {
@@ -231,5 +263,34 @@ mod tests {
     fn expected_input_message_remains_actionable() {
         let error = ApplicationError::bad_request("The model field is required.");
         assert_eq!(error.to_string(), "The model field is required.");
+    }
+
+    #[test]
+    fn typed_internal_error_keeps_nested_sources_in_the_diagnostic_channel() {
+        #[derive(Debug)]
+        struct Outer {
+            source: std::io::Error,
+        }
+
+        impl std::fmt::Display for Outer {
+            fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("failed to save session")
+            }
+        }
+
+        impl std::error::Error for Outer {
+            fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+                Some(&self.source)
+            }
+        }
+
+        let error = ApplicationError::internal_error(&Outer {
+            source: std::io::Error::new(std::io::ErrorKind::StorageFull, "disk full"),
+        });
+        let diagnostic = error.diagnostic_message().expect("diagnostic");
+
+        assert!(diagnostic.contains("failed to save session"));
+        assert!(diagnostic.contains("disk full"));
+        assert!(error.to_string().contains("disk full"));
     }
 }

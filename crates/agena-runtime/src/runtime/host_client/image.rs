@@ -55,9 +55,7 @@ async fn prepare_attachment_image(
     }
     match &attachment.source {
         AttachmentSource::LocalPath { path } => {
-            prepare_path_image(executor, path, capabilities)
-                .await
-                .map_err(|error| error.to_string())
+            prepare_path_image(executor, path, capabilities).await
         }
         AttachmentSource::Base64 { data } => prepare_image_bytes(
             data,
@@ -299,7 +297,7 @@ pub(super) async fn persist_provider_image_artifacts(
             artifact.uri.as_str(),
         )
         .await
-        .map_err(|error| PluginError::internal(error.to_string()))?
+        .map_err(|error| PluginError::internal_error(&error))?
         .ok_or_else(|| {
             PluginError::internal("provider image artifact could not be persisted as managed media")
         })?;

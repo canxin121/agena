@@ -4,9 +4,19 @@ fn decode_url_encoded_path_component(input: &str) -> String {
     if !input.as_bytes().contains(&b'%') {
         return input.to_string();
     }
-    urlencoding::decode(input)
-        .map(|v| v.into_owned())
-        .unwrap_or_else(|_| input.to_string())
+    match urlencoding::decode(input) {
+        Ok(value) => value.into_owned(),
+        Err(error) => {
+            tracing::warn!(
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "decode a URL-encoded filesystem path component",
+                    &error,
+                ),
+                "filesystem path contained invalid percent encoding; preserving its literal form"
+            );
+            input.to_string()
+        }
+    }
 }
 
 pub(crate) fn home_dir_env() -> Option<String> {

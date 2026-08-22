@@ -9,6 +9,7 @@ import {
   partStatusPresentation,
   structuredValueMarkdown,
 } from '../src/pages/chat/transcriptPartPresentation'
+import { projectTranscriptBlocks } from '../src/pages/chat/transcriptProjection'
 
 function operationPart(
   content: Record<string, unknown>,
@@ -82,6 +83,105 @@ describe('TUI-parity part presentation', () => {
     expect(projected.durationMs).toBe(25)
   })
 
+  test('projects operation attachments without losing source-specific media facts', () => {
+    const projected = operationPresentation(
+      operationPart({
+        name: 'image.generate',
+        output: {
+          attachments: [
+            {
+              kind: 'image',
+              mime: 'image/png',
+              source: { source: 'local_path', path: 'artifacts/chart.png' },
+              filename: 'chart.png',
+              size_bytes: 2048,
+              width: 640,
+              height: 480,
+            },
+            {
+              kind: 'audio',
+              mime: 'audio/mpeg',
+              source: { source: 'url', url: 'https://example.test/audio.mp3' },
+              title: 'Audio preview',
+              duration_ms: 2500,
+            },
+            {
+              kind: 'image',
+              mime: 'image/png',
+              source: { source: 'base64', data: 'aGVsbG8=' },
+              filename: 'inline.png',
+            },
+          ],
+        },
+      }),
+    )
+    expect(projected.attachments).toHaveLength(3)
+    expect(projected.attachments[0]).toMatchObject({
+      label: 'chart.png',
+      path: 'artifacts/chart.png',
+      url: 'artifacts/chart.png',
+      width: 640,
+      height: 480,
+    })
+    expect(projected.attachments[1]).toMatchObject({
+      label: 'Audio preview',
+      url: 'https://example.test/audio.mp3',
+      durationMs: 2500,
+    })
+    expect(projected.attachments[2]?.url).toBe('data:image/png;base64,aGVsbG8=')
+  })
+
+  test('keeps completed permission decisions and their reply reason in the part projection', () => {
+    const projected = operationPresentation(
+      operationPart({
+        authorization: {
+          permissions: [
+            {
+              request: {
+                request_id: 'permission-1',
+                action: { kind: 'path_access', access_kind: 'read', target_path: 'notes.md' },
+              },
+              reply: { kind: 'deny_once', reason: 'The file contains private notes.' },
+            },
+            {
+              request: {
+                request_id: 'permission-2',
+                action: { kind: 'network_access', host: 'example.test' },
+              },
+              reply: { kind: 'auto_approve' },
+            },
+            {
+              request: {
+                request_id: 'permission-3',
+                action: { kind: 'tool', tool_name: 'legacy.tool' },
+              },
+              reply: { kind: 'legacy_decision' },
+            },
+          ],
+        },
+      }),
+    )
+    expect(projected.permissions).toMatchObject([
+      { pending: false, status: 'Denied once', replyReason: 'The file contains private notes.' },
+      { pending: false, status: 'Approved automatically', replyReason: '' },
+      { pending: false, status: 'Replied (legacy_decision)', replyReason: '' },
+    ])
+
+    const pending = operationPresentation(
+      operationPart({
+        authorization: {
+          permissions: [
+            {
+              request: { request_id: 'permission-pending', action: { kind: 'path_access', target_path: 'notes.md' } },
+              reply: null,
+            },
+          ],
+        },
+      }),
+    )
+    expect(pending.permissions[0]).toMatchObject({ pending: true, status: 'Awaiting user approval' })
+  })
+
   test('projects operation-owned user input as the interaction part', () => {
     const projected = operationPresentation(
       operationPart({
@@ -111,6 +211,51 @@ describe('TUI-parity part presentation', () => {
     expect(projected.userInputs[0]?.requestId).toBe('request-1')
     expect(projected.userInputs[0]?.questions[0]?.options[0]?.label).toBe('Workspace')
     expect(projected.userInputs[0]?.pending).toBe(false)
+  })
+
+  test('keeps review body, input kind, question ids, and completed decisions', () => {
+    const projected = operationPresentation(
+      operationPart({
+        name: 'plan.review',
+        user_input: {
+          requests: [
+            {
+              request: {
+                request_id: 'review-1',
+                title: 'Review proposed plan',
+                input_kind: 'review',
+                body_markdown: '## Plan\n\n1. Update the renderer.\n2. Run tests.',
+                questions: [
+                  {
+                    question_id: 'decision',
+                    question: 'How should this plan proceed?',
+                    options: [
+                      { label: 'Approve', description: 'Run the plan' },
+                      { label: 'Request changes', description: 'Send feedback' },
+                    ],
+                    allow_custom: true,
+                  },
+                ],
+              },
+              reply: { kind: 'submit', answers: { decision: ['Approve'] } },
+            },
+          ],
+        },
+      }),
+    )
+    const review = projected.userInputs[0]
+    expect(review).toMatchObject({
+      requestId: 'review-1',
+      title: 'Review proposed plan',
+      kind: 'review',
+      bodyMarkdown: '## Plan\n\n1. Update the renderer.\n2. Run tests.',
+      pending: false,
+    })
+    expect(review?.questions[0]).toMatchObject({
+      questionId: 'decision',
+      allowCustom: true,
+    })
+    expect(review?.reply).toEqual({ kind: 'submit', answers: { decision: ['Approve'] } })
   })
 
   test('matches TUI lifecycle glyphs for denied and unavailable parts', () => {
@@ -163,6 +308,34 @@ describe('TUI-parity part presentation', () => {
       },
     })
     expect(partInteractionRequestIds(part)).toEqual(['input-1', 'permission-1'])
+  })
+
+  test('auto-expands a pending interaction operation as one transcript Part', () => {
+    const [block] = projectTranscriptBlocks(
+      [
+        {
+          info: { id: 'message-1', role: 'assistant' },
+          parts: [
+            {
+              id: 'operation-1',
+              type: 'tool',
+              partState: 'in_progress',
+              agenaKind: 'tool_call',
+              agenaRole: 'assistant',
+              agenaContent: {
+                name: 'plan.review',
+                user_input: {
+                  requests: [{ request: { request_id: 'review-1', kind: 'review', questions: [] }, reply: null }],
+                },
+              },
+            },
+          ],
+        },
+      ],
+      { showReasoning: true, revert: null },
+    )
+    expect(block?.kind).toBe('message')
+    if (block?.kind === 'message') expect(block.displayParts[0]?.defaultExpanded).toBe(true)
   })
 
   test('extracts explicit stdout logs and removes duplicate primary output', () => {
@@ -232,5 +405,41 @@ describe('TUI-parity part presentation', () => {
     expect(source).toContain('const outputExpanded = ref(false)')
     expect(source).toContain('const stdoutExpanded = ref(true)')
     expect(source).toContain('<MarkdownRenderer :content="operation.stdout" mode="markdown" :stream="false" />')
+    expect(source).toContain('AgenaInteractionPart')
+    expect(source).not.toContain('AttentionPanel')
+
+    const interactionSource = readFileSync(
+      new URL('../src/components/chat/AgenaInteractionPart.vue', import.meta.url),
+      'utf8',
+    )
+    expect(interactionSource).toContain('data-transcript-interaction-part="true"')
+    expect(interactionSource).toContain('v-for="(question, questionIndex) in questions"')
+    expect(interactionSource).not.toContain('questionPage')
+    expect(interactionSource).toContain('permission.replyReason')
+    expect(interactionSource).toContain('isReviewDecision')
+
+    const planViewerSource = readFileSync(
+      new URL('../src/components/chat/PlanViewerDialog.vue', import.meta.url),
+      'utf8',
+    )
+    expect(planViewerSource).toContain('data-plan-state-viewer="true"')
+    expect(planViewerSource).toContain('Plan approval decisions')
+    expect(planViewerSource).not.toContain('replyQuestion')
+    expect(planViewerSource).not.toContain('replyPermission')
+
+    const chatPageViewSource = readFileSync(new URL('../src/pages/chat/ChatPageView.vue', import.meta.url), 'utf8')
+    const messageListSource = readFileSync(new URL('../src/components/chat/MessageList.vue', import.meta.url), 'utf8')
+    expect(chatPageViewSource).not.toContain('AttentionPanel')
+    expect(messageListSource).not.toContain('AttentionPanel')
+
+    const attachmentSource = readFileSync(
+      new URL('../src/components/chat/AgenaAttachmentPreview.vue', import.meta.url),
+      'utf8',
+    )
+    expect(attachmentSource).toContain('buildWorkspaceRawFileUrl')
+    expect(attachmentSource).toContain('data:')
+
+    const headerSource = readFileSync(new URL('../src/components/chat/ChatHeader.vue', import.meta.url), 'utf8')
+    expect(headerSource).not.toContain('AttentionPanel')
   })
 })

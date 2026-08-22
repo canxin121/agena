@@ -1,3 +1,19 @@
+fn workflow_json_text<T: serde::Serialize>(value: &T, context: &'static str) -> String {
+    match serde_json::to_string(value) {
+        Ok(value) => value,
+        Err(error) => {
+            tracing::error!(
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    context,
+                    &error,
+                ),
+                "workflow guidance could not serialize a JSON value"
+            );
+            "[value could not be serialized]".to_owned()
+        }
+    }
+}
+
 impl WorkflowPlugin {
     pub(in crate::plugins::provided::workflow) fn plan_lock_active(plan: &WorkflowPlan) -> bool {
         plan.phase == WorkflowPlanPhase::Planning
@@ -171,7 +187,13 @@ impl WorkflowPlugin {
             // No active plan for this session: clear any stale display
             // contribution so the composer chip never keeps showing a plan
             // that no longer exists.
-            let _ = self.sync_plan_display(None).await;
+            if let Err(error) = self.sync_plan_display(None).await {
+                tracing::warn!(
+                    target: "agena::workflow",
+                    diagnostic = %error.diagnostic_message(),
+                    "stale plan display could not be cleared while reading the plan"
+                );
+            }
             let payload = serde_json::json!({
                 "plan": serde_json::Value::Null,
                 "view": view,
@@ -196,7 +218,8 @@ impl WorkflowPlugin {
             tracing::warn!(
                 target: "agena::workflow",
                 plan = %plan.title,
-                "plan display sync failed during plan.get: {error}"
+                diagnostic = %error.diagnostic_message(),
+                "plan display sync failed during plan.get"
             );
         }
         let payload = Self::plan_get_payload(&plan, view);
@@ -464,7 +487,7 @@ impl WorkflowPlugin {
         &self,
         input: &AskUserToolInput,
     ) -> SdkResult<ToolInvokeOutput> {
-        ask_user::validate(input).map_err(|err| PluginError::invalid_params(err.to_string()))?;
+        ask_user::validate(input).map_err(|err| PluginError::invalid_params_error(&err))?;
         let host = self.host()?;
         let response = host
             .ask_user(AskUserRequest {
@@ -649,7 +672,7 @@ impl WorkflowPlugin {
             let (results, total, offset) = Self::paginate(&results, input.offset, Some(limit));
             let mut lines = vec![format!(
                 "Matching tools for {}: returned {} of {} starting at offset {}.",
-                serde_json::to_string(query).unwrap_or_else(|_| "\"\"".to_owned()),
+                workflow_json_text(query, "serialize a workflow tool-search query"),
                 results.len(),
                 total,
                 offset,
@@ -909,7 +932,7 @@ impl WorkflowPlugin {
             let (results, total, offset) = Self::paginate(&results, input.offset, Some(limit));
             let mut lines = vec![format!(
                 "Matching plugins for {}: returned {} of {} starting at offset {}.",
-                serde_json::to_string(query).unwrap_or_else(|_| "\"\"".to_owned()),
+                workflow_json_text(query, "serialize a workflow plugin-search query"),
                 results.len(),
                 total,
                 offset,
@@ -1131,7 +1154,10 @@ impl WorkflowPlugin {
         lines.push(format!(
             "- Call Tool API function `{}` with arguments shaped exactly like {}.",
             agena_runtime_tools::tool::tools_call_function_name(),
-            serde_json::to_string(&routing_arguments_example).unwrap_or_else(|_| "{}".to_owned()),
+            workflow_json_text(
+                &routing_arguments_example,
+                "serialize a workflow execution-tool routing example",
+            ),
         ));
         lines.push(
             "- Replace example placeholders with the user's exact task values. Make one complete call with every supplied key; never make a preliminary, empty, or default-input call."

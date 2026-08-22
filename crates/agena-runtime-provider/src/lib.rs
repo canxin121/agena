@@ -94,13 +94,13 @@ impl ProviderError {
 
 impl From<agena_provider::ToolStreamError> for ProviderError {
     fn from(error: agena_provider::ToolStreamError) -> Self {
-        Self::Provider(error.to_string())
+        Self::Provider(agena_failure::diagnostic::format_error_chain(&error))
     }
 }
 
 impl From<agena_provider::ProviderToolModeViolation> for ProviderError {
     fn from(error: agena_provider::ProviderToolModeViolation) -> Self {
-        Self::Provider(error.to_string())
+        Self::Provider(agena_failure::diagnostic::format_error_chain(&error))
     }
 }
 
@@ -126,7 +126,7 @@ impl From<ProviderJsonStreamError> for ProviderError {
 
 impl From<agena_runtime_config::ConfigError> for ProviderError {
     fn from(error: agena_runtime_config::ConfigError) -> Self {
-        Self::Config(error.to_string())
+        Self::Config(agena_failure::diagnostic::format_error_chain(&error))
     }
 }
 

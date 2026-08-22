@@ -168,12 +168,24 @@ pub(crate) async fn matches_scope(
         Scope::Session {
             session_id: expected,
         } => session_id == *expected,
-        Scope::Workspace { workspace_id } => store
-            .get_session_summary(session_id)
-            .await
-            .ok()
-            .flatten()
-            .is_some_and(|summary| summary.workspace_id == *workspace_id),
+        Scope::Workspace { workspace_id } => match store.get_session_summary(session_id).await {
+            Ok(summary) => summary.is_some_and(|summary| summary.workspace_id == *workspace_id),
+            Err(error) => {
+                // Scope filtering is an authorization boundary. A lookup
+                // failure must deny the event, but it must not disappear as
+                // though the session simply belonged to another workspace.
+                tracing::error!(
+                    session_id,
+                    workspace_id,
+                    diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                        "load a session summary while applying a live workspace scope",
+                        &error,
+                    ),
+                    "live event was denied because its workspace scope could not be verified"
+                );
+                false
+            }
+        },
     }
 }
 
@@ -185,7 +197,7 @@ pub(crate) async fn session_parts(
     let view = store
         .load(session_id)
         .await
-        .map_err(|error| ServerError::internal(error.to_string()))?;
+        .map_err(|error| ServerError::internal_error(&error))?;
     let visible = view
         .parts
         .into_iter()
@@ -245,8 +257,30 @@ async fn project_tool_presentation(
     if part.kind != ToolCallContent::kind() {
         return None;
     }
-    let content = ToolCallContent::try_from(&part.content).ok()?;
-    let input = agena_domain::StructuredObject::try_from(content.input).ok()?;
+    let content = match ToolCallContent::try_from(&part.content) {
+        Ok(content) => content,
+        Err(error) => {
+            tracing::warn!(
+                part_id = part.part_id,
+                diagnostic = %error,
+                "tool presentation skipped malformed persisted tool-call content"
+            );
+            return None;
+        }
+    };
+    let input = match agena_domain::StructuredObject::try_from(content.input) {
+        Ok(input) => input,
+        Err(error) => {
+            tracing::warn!(
+                part_id = part.part_id,
+                diagnostic = %format!(
+                    "decode persisted tool-call input for user presentation: {error}"
+                ),
+                "tool presentation skipped malformed persisted tool-call input"
+            );
+            return None;
+        }
+    };
     let invocation = agena_domain::ToolInvocation {
         tool_api_call: content.tool_api_call,
         name: content.name,
@@ -306,12 +340,33 @@ async fn project_change(state: &AppState, change: SessionChange) -> Option<Sessi
     })
 }
 
+fn live_signal_payload<T: serde::Serialize>(value: &T, context: &'static str) -> serde_json::Value {
+    match serde_json::to_value(value) {
+        Ok(payload) => payload,
+        Err(error) => {
+            tracing::error!(
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    context,
+                    &error,
+                ),
+                "runtime live signal payload could not be serialized"
+            );
+            serde_json::json!({
+                "projection_error": "The runtime signal payload could not be encoded."
+            })
+        }
+    }
+}
+
 fn project_signal(signal: RuntimeLiveSignal) -> RuntimeSignalResource {
     match signal {
         RuntimeLiveSignal::Activity(activity) => RuntimeSignalResource {
             kind: "activity".to_owned(),
             session_id: activity.activity.session_id,
-            payload: serde_json::to_value(&*activity).unwrap_or(serde_json::Value::Null),
+            payload: live_signal_payload(
+                &*activity,
+                "serialize a runtime activity live signal payload",
+            ),
         },
         RuntimeLiveSignal::Plugin {
             session_id,
@@ -330,7 +385,10 @@ fn project_signal(signal: RuntimeLiveSignal) -> RuntimeSignalResource {
         RuntimeLiveSignal::ToolRegistryChanged(change) => RuntimeSignalResource {
             kind: "tool_registry_changed".to_owned(),
             session_id: None,
-            payload: serde_json::to_value(&*change).unwrap_or(serde_json::Value::Null),
+            payload: live_signal_payload(
+                &*change,
+                "serialize a runtime tool-registry live signal payload",
+            ),
         },
     }
 }

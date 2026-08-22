@@ -7,6 +7,7 @@
 
 use crate::error::AgenaProcessError;
 use agena_cli::{AgenaCli, AgenaCommand, PluginSubcommand};
+use anyhow::Context as _;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 pub(crate) async fn run_command(mut cli: AgenaCli) -> Result<(), AgenaProcessError> {
@@ -59,18 +60,26 @@ pub(crate) async fn run_command(mut cli: AgenaCli) -> Result<(), AgenaProcessErr
                 ..Default::default()
             },
         )
-        .ok()
         .map(|preflight| preflight.tracing)
-        .unwrap_or_default()
+        .map_err(|error| {
+            AgenaProcessError::from_anyhow(
+                anyhow::Error::new(error)
+                    .context("failed to resolve command tracing configuration"),
+            )
+        })?
     };
     cli.server = Some(super::super::server_client::resolve_server_url(
         cli.server.take(),
     ));
 
-    let initial_filter = agena_runtime::runtime_env_filter(&tracing).unwrap_or_else(|_| {
-        agena_runtime::runtime_env_filter(&agena_runtime::RuntimeTracingConfiguration::default())
-            .expect("default tracing filter should parse")
-    });
+    let initial_filter = agena_runtime::runtime_env_filter(&tracing).map_err(|error| {
+        AgenaProcessError::Configuration(
+            agena_failure::diagnostic::format_error_chain_with_context(
+                "invalid command tracing configuration",
+                &error,
+            ),
+        )
+    })?;
     tracing_subscriber::registry()
         .with(initial_filter)
         .with(
@@ -79,9 +88,13 @@ pub(crate) async fn run_command(mut cli: AgenaCli) -> Result<(), AgenaProcessErr
                 .compact()
                 .with_writer(std::io::stderr),
         )
-        .init();
+        .try_init()
+        .map_err(|error| {
+            AgenaProcessError::Internal(agena_failure::diagnostic::format_error_chain_with_context(
+                "failed to install the command tracing subscriber",
+                &error,
+            ))
+        })?;
 
-    cli.run_command()
-        .await
-        .map_err(|error| AgenaProcessError::Internal(error.to_string()))
+    cli.run_command().await.map_err(AgenaProcessError::from_cli)
 }

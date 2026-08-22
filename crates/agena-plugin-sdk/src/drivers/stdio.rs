@@ -10,6 +10,7 @@
 
 use portable_atomic::AtomicI64;
 use std::collections::HashMap;
+use std::io;
 use std::sync::{Arc, Mutex as StdMutex, atomic::Ordering};
 use std::time::Duration;
 
@@ -83,10 +84,9 @@ pub async fn serve_stdio<P: Plugin>(plugin: P) -> std::io::Result<()> {
         );
         let mut rx = rx;
         while let Some(payload) = rx.recv().await {
-            if stdout.send(payload).await.is_err() {
-                break;
-            }
+            stdout.send(payload).await.map_err(io::Error::other)?;
         }
+        Ok::<(), io::Error>(())
     });
 
     // The reader must never wait for a dispatch slot: responses to plugin ->
@@ -101,47 +101,69 @@ pub async fn serve_stdio<P: Plugin>(plugin: P) -> std::io::Result<()> {
         tokio::io::stdin(),
         ContentLengthCodec::new(STDIO_MAX_FRAME_BYTES),
     );
-    let read_result = async {
-        loop {
-            while dispatch_tasks.try_join_next().is_some() {}
+    let (read_result, writer_finished) = {
+        let read_loop = async {
+            loop {
+                while let Some(result) = dispatch_tasks.try_join_next() {
+                    if let Err(error) = result {
+                        tracing::error!(
+                            diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                                "a stdio plugin dispatch task failed",
+                                &error,
+                            ),
+                            "stdio plugin dispatch task did not complete normally"
+                        );
+                    }
+                }
 
-            let Some(body) = reader.next().await else {
-                return Ok(());
-            };
-            let body = body.map_err(std::io::Error::other)?;
+                let Some(body) = reader.next().await else {
+                    return Ok(());
+                };
+                let body = body.map_err(std::io::Error::other)?;
 
-            let frame: Frame = match serde_json::from_slice(&body) {
-                Ok(f) => f,
-                Err(_) => continue,
-            };
+                let frame: Frame = match serde_json::from_slice(&body) {
+                    Ok(f) => f,
+                    Err(error) => {
+                        tracing::warn!(
+                            diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                                "failed to decode an inbound stdio plugin JSON-RPC frame",
+                                &error,
+                            ),
+                            frame_bytes = body.len(),
+                            "ignoring malformed stdio plugin frame"
+                        );
+                        continue;
+                    }
+                };
 
-            match frame {
-                Frame::Request(req) => {
-                    let dispatch_slot = Arc::clone(&dispatch_slots).try_acquire_owned();
-                    let Ok(dispatch_slot) = dispatch_slot else {
-                        if !send_response(
-                            &tx,
-                            Response {
-                                jsonrpc: JsonRpcVersion,
-                                id: req.id,
-                                payload: ResponsePayload::Err {
-                                    error: ErrorObject {
-                                        code: codes::INTERNAL_ERROR,
-                                        message: "plugin dispatch capacity exhausted".to_string(),
-                                        data: None,
+                match frame {
+                    Frame::Request(req) => {
+                        let dispatch_slot = Arc::clone(&dispatch_slots).try_acquire_owned();
+                        let Ok(dispatch_slot) = dispatch_slot else {
+                            if !send_response(
+                                &tx,
+                                Response {
+                                    jsonrpc: JsonRpcVersion,
+                                    id: req.id,
+                                    payload: ResponsePayload::Err {
+                                        error: ErrorObject {
+                                            code: codes::INTERNAL_ERROR,
+                                            message: "plugin dispatch capacity exhausted"
+                                                .to_string(),
+                                            data: None,
+                                        },
                                     },
                                 },
-                            },
-                        )
-                        .await
-                        {
-                            return Ok(());
-                        }
-                        continue;
-                    };
-                    let dispatcher = Arc::clone(&dispatcher);
-                    let tx = tx.clone();
-                    dispatch_tasks.spawn(async move {
+                            )
+                            .await
+                            {
+                                return Ok(());
+                            }
+                            continue;
+                        };
+                        let dispatcher = Arc::clone(&dispatcher);
+                        let tx = tx.clone();
+                        dispatch_tasks.spawn(async move {
                         let _dispatch_slot = dispatch_slot;
                         let id = req.id.clone();
                         let params = req.params.unwrap_or(serde_json::Value::Null);
@@ -159,19 +181,37 @@ pub async fn serve_stdio<P: Plugin>(plugin: P) -> std::io::Result<()> {
                                         dispatcher.dispatch_stream(input)
                                     };
                                     let stream_id = handle.stream_id.clone();
+                                    let stream_handle = match serde_json::to_value(
+                                        ToolInvokeStreamHandle {
+                                            stream_id: stream_id.clone(),
+                                            title: None,
+                                        },
+                                    ) {
+                                        Ok(value) => value,
+                                        Err(error) => {
+                                            let _sent = send_response(
+                                                &tx,
+                                                Response {
+                                                    jsonrpc: JsonRpcVersion,
+                                                    id,
+                                                    payload: ResponsePayload::Err {
+                                                        error: error_object_from(
+                                                            PluginError::internal_error(&error),
+                                                        ),
+                                                    },
+                                                },
+                                            )
+                                            .await;
+                                            return;
+                                        }
+                                    };
                                     if !send_response(
                                         &tx,
                                         Response {
                                             jsonrpc: JsonRpcVersion,
                                             id,
                                             payload: ResponsePayload::Ok {
-                                                result: serde_json::to_value(
-                                                    ToolInvokeStreamHandle {
-                                                        stream_id: stream_id.clone(),
-                                                        title: None,
-                                                    },
-                                                )
-                                                .expect("stream handle serialize"),
+                                                result: stream_handle,
                                             },
                                         },
                                     )
@@ -192,45 +232,57 @@ pub async fn serve_stdio<P: Plugin>(plugin: P) -> std::io::Result<()> {
                                     }
                                     match handle.end.await {
                                         Ok(Ok(end)) => {
-                                            let _ = send_notification(
+                                            if !send_notification(
                                                 &tx,
                                                 method::TOOL_STREAM_END,
                                                 &end,
                                             )
-                                            .await;
+                                            .await
+                                            {
+                                                return;
+                                            }
                                         }
                                         Ok(Err(error)) => {
-                                            let _ = send_notification(
+                                            if !send_notification(
                                                 &tx,
                                                 method::TOOL_STREAM_ERROR,
                                                 &ToolStreamError { stream_id, error },
                                             )
-                                            .await;
+                                            .await
+                                            {
+                                                return;
+                                            }
                                         }
-                                        Err(_) => {
-                                            let _ = send_notification(
-                                            &tx,
-                                            method::TOOL_STREAM_ERROR,
-                                            &ToolStreamError {
-                                                stream_id,
-                                                error: PluginError::internal(
-                                                    "stream terminated before sending final frame",
-                                                ),
-                                            },
-                                        )
-                                        .await;
+                                        Err(error) => {
+                                            if !send_notification(
+                                                &tx,
+                                                method::TOOL_STREAM_ERROR,
+                                                &ToolStreamError {
+                                                    stream_id,
+                                                    error: PluginError::internal(
+                                                        agena_failure::diagnostic::format_error_chain_with_context(
+                                                            "tool stream terminated before sending its final frame",
+                                                            &error,
+                                                        ),
+                                                    ),
+                                                },
+                                            )
+                                            .await
+                                            {
+                                                return;
+                                            }
                                         }
                                     }
                                 }
                                 Err(err) => {
-                                    let _ = send_response(
+                                    let _sent = send_response(
                                         &tx,
                                         Response {
                                             jsonrpc: JsonRpcVersion,
                                             id,
                                             payload: ResponsePayload::Err {
                                                 error: error_object_from(
-                                                    PluginError::invalid_params(err.to_string()),
+                                                    PluginError::invalid_params_error(&err),
                                                 ),
                                             },
                                         },
@@ -260,60 +312,186 @@ pub async fn serve_stdio<P: Plugin>(plugin: P) -> std::io::Result<()> {
                                 },
                             },
                         };
-                        let _ = send_response(&tx, resp).await;
+                        let _sent = send_response(&tx, resp).await;
                     });
-                }
-                Frame::Notification(notif) => {
-                    // Plugins can receive notifications (like `hooks/event`).
-                    let Ok(dispatch_slot) = Arc::clone(&dispatch_slots).try_acquire_owned() else {
-                        continue;
-                    };
-                    let dispatcher = Arc::clone(&dispatcher);
-                    dispatch_tasks.spawn(async move {
-                        let _dispatch_slot = dispatch_slot;
-                        let _ = dispatcher
-                            .dispatch(
-                                &notif.method,
-                                notif.params.unwrap_or(serde_json::Value::Null),
-                            )
-                            .await;
-                    });
-                }
-                Frame::Response(resp) => {
-                    if let Some(slot) = pending
-                        .lock()
-                        .unwrap_or_else(|poisoned| poisoned.into_inner())
-                        .remove(&resp.id)
-                    {
-                        let _ = slot.send(resp);
+                    }
+                    Frame::Notification(notif) => {
+                        // Plugins can receive notifications (like `hooks/event`).
+                        let Ok(dispatch_slot) = Arc::clone(&dispatch_slots).try_acquire_owned()
+                        else {
+                            tracing::warn!(
+                                method = %notif.method,
+                                "stdio plugin notification was dropped because the dispatch limit was exhausted"
+                            );
+                            continue;
+                        };
+                        let dispatcher = Arc::clone(&dispatcher);
+                        dispatch_tasks.spawn(async move {
+                            let _dispatch_slot = dispatch_slot;
+                            if let Err(error) = dispatcher
+                                .dispatch(
+                                    &notif.method,
+                                    notif.params.unwrap_or(serde_json::Value::Null),
+                                )
+                                .await
+                            {
+                                tracing::warn!(
+                                    method = %notif.method,
+                                    diagnostic = %error.diagnostic.message,
+                                    "stdio plugin notification dispatch failed"
+                                );
+                            }
+                        });
+                    }
+                    Frame::Response(resp) => {
+                        let mut pending = pending.lock().unwrap_or_else(|error| {
+                            tracing::error!(
+                                diagnostic = %error,
+                                "recovering the poisoned stdio plugin response registry"
+                            );
+                            error.into_inner()
+                        });
+                        if let Some(slot) = pending.remove(&resp.id)
+                            && slot.send(resp).is_err()
+                        {
+                            tracing::debug!(
+                                "stdio plugin response arrived after its receiver was dropped"
+                            );
+                        }
                     }
                 }
             }
-        }
-    }
-    .await;
+        };
+        tokio::pin!(read_loop);
+        let mut writer_finished = false;
+        let read_result = tokio::select! {
+            result = &mut read_loop => result,
+            result = &mut writer => {
+                writer_finished = true;
+                match result {
+                    Ok(Ok(())) => Err(io::Error::new(
+                        io::ErrorKind::BrokenPipe,
+                        "stdio plugin writer stopped while the reader was still active",
+                    )),
+                    Ok(Err(error)) => Err(io::Error::other(
+                        agena_failure::diagnostic::format_error_chain_with_context(
+                            "stdio plugin writer failed while the reader was still active",
+                            &error,
+                        ),
+                    )),
+                    Err(error) => Err(io::Error::other(
+                        agena_failure::diagnostic::format_error_chain_with_context(
+                            "stdio plugin writer task terminated while the reader was still active",
+                            &error,
+                        ),
+                    )),
+                }
+            }
+        };
+        (read_result, writer_finished)
+    };
 
     dispatch_tasks.abort_all();
-    while dispatch_tasks.join_next().await.is_some() {}
+    while let Some(result) = dispatch_tasks.join_next().await {
+        if let Err(error) = result
+            && !error.is_cancelled()
+        {
+            tracing::error!(
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "a stdio plugin dispatch task failed during shutdown",
+                    &error,
+                ),
+                "stdio plugin dispatch shutdown failed"
+            );
+        }
+    }
     drop(dispatcher);
     drop(tx);
 
-    if tokio::time::timeout(STDIO_WRITER_SHUTDOWN_TIMEOUT, &mut writer)
-        .await
-        .is_err()
-    {
-        writer.abort();
-        let _ = writer.await;
-    }
+    let writer_result = if writer_finished {
+        Ok(())
+    } else {
+        match tokio::time::timeout(STDIO_WRITER_SHUTDOWN_TIMEOUT, &mut writer).await {
+            Ok(Ok(result)) => result,
+            Ok(Err(error)) => Err(io::Error::other(
+                agena_failure::diagnostic::format_error_chain_with_context(
+                    "stdio plugin writer task failed",
+                    &error,
+                ),
+            )),
+            Err(timeout_error) => {
+                writer.abort();
+                match writer.await {
+                    Err(join_error) if join_error.is_cancelled() => {}
+                    Err(join_error) => tracing::error!(
+                        diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                            "stdio plugin writer task failed while being aborted after a shutdown timeout",
+                            &join_error,
+                        ),
+                        "stdio plugin writer abort failed"
+                    ),
+                    Ok(Err(writer_error)) => tracing::error!(
+                        diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                            "stdio plugin writer also returned an I/O error after its shutdown timed out",
+                            &writer_error,
+                        ),
+                        "stdio plugin writer timed out and failed"
+                    ),
+                    Ok(Ok(())) => {}
+                }
+                Err(io::Error::other(
+                    agena_failure::diagnostic::format_error_chain_with_context(
+                        format!(
+                            "stdio plugin writer did not stop within {}ms",
+                            STDIO_WRITER_SHUTDOWN_TIMEOUT.as_millis()
+                        ),
+                        &timeout_error,
+                    ),
+                ))
+            }
+        }
+    };
 
-    read_result
+    match (read_result, writer_result) {
+        (Ok(()), result) | (result, Ok(())) => result,
+        (Err(read_error), Err(writer_error)) => {
+            tracing::error!(
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "stdio plugin writer also failed while the reader was failing",
+                    &writer_error,
+                ),
+                "returning the primary stdio plugin reader failure"
+            );
+            Err(read_error)
+        }
+    }
 }
 
 async fn send_response(tx: &mpsc::Sender<Bytes>, response: Response) -> bool {
-    if let Ok(body) = serde_json::to_vec(&response) {
-        return tx.send(body.into()).await.is_ok();
+    let body = match serde_json::to_vec(&response) {
+        Ok(body) => body,
+        Err(error) => {
+            tracing::error!(
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "failed to serialize a stdio plugin JSON-RPC response",
+                    &error,
+                ),
+                "stdio plugin response was not sent"
+            );
+            return false;
+        }
+    };
+    if let Err(error) = tx.send(body.into()).await {
+        tracing::debug!(
+            diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                "failed to enqueue a stdio plugin JSON-RPC response because the writer was closed",
+                &error,
+            ),
+            "stdio plugin response receiver is unavailable"
+        );
+        return false;
     }
-    false
+    true
 }
 
 async fn send_notification<T: serde::Serialize>(
@@ -323,17 +501,49 @@ async fn send_notification<T: serde::Serialize>(
 ) -> bool {
     let params = match serde_json::to_value(params) {
         Ok(params) => params,
-        Err(_) => return false,
+        Err(error) => {
+            tracing::error!(
+                method = method_name,
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "failed to serialize stdio plugin notification parameters",
+                    &error,
+                ),
+                "stdio plugin notification was not sent"
+            );
+            return false;
+        }
     };
     let notification = Notification {
         jsonrpc: JsonRpcVersion,
         method: method_name.to_string(),
         params: Some(params),
     };
-    if let Ok(body) = serde_json::to_vec(&notification) {
-        return tx.send(body.into()).await.is_ok();
+    let body = match serde_json::to_vec(&notification) {
+        Ok(body) => body,
+        Err(error) => {
+            tracing::error!(
+                method = method_name,
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "failed to serialize a stdio plugin notification envelope",
+                    &error,
+                ),
+                "stdio plugin notification was not sent"
+            );
+            return false;
+        }
+    };
+    if let Err(error) = tx.send(body.into()).await {
+        tracing::debug!(
+            method = method_name,
+            diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                "failed to enqueue a stdio plugin notification because the writer was closed",
+                &error,
+            ),
+            "stdio plugin notification receiver is unavailable"
+        );
+        return false;
     }
-    false
+    true
 }
 
 #[macro_export]
@@ -371,8 +581,9 @@ impl StdioHostClient {
             params: Some(params),
             context: None,
         };
-        let body =
-            serde_json::to_vec(&req).map_err(|e| PluginError::invalid_params(e.to_string()))?;
+        let body = serde_json::to_vec(&req).map_err(|error| {
+            PluginError::invalid_params_error(&error).with_hook(method.to_owned())
+        })?;
         let (slot_tx, slot_rx) = oneshot::channel();
         self.pending
             .lock()
@@ -382,15 +593,30 @@ impl StdioHostClient {
             pending: Arc::clone(&self.pending),
             request_id: req_id,
         };
-        self.tx.send(body.into()).await.map_err(|_| {
-            PluginError::from_kind(PluginErrorKind::Disconnected, "host writer closed")
+        self.tx.send(body.into()).await.map_err(|error| {
+            PluginError::from_kind(
+                PluginErrorKind::Disconnected,
+                agena_failure::diagnostic::format_error_chain_with_context(
+                    format!("host writer closed while sending callback `{method}`"),
+                    &error,
+                ),
+            )
+            .with_hook(method.to_owned())
         })?;
-        let resp = slot_rx.await.map_err(|_| {
-            PluginError::from_kind(PluginErrorKind::Disconnected, "host closed connection")
+        let resp = slot_rx.await.map_err(|error| {
+            PluginError::from_kind(
+                PluginErrorKind::Disconnected,
+                agena_failure::diagnostic::format_error_chain_with_context(
+                    format!("host closed callback `{method}` before returning a response"),
+                    &error,
+                ),
+            )
+            .with_hook(method.to_owned())
         })?;
         match resp.payload {
-            ResponsePayload::Ok { result } => serde_json::from_value(result)
-                .map_err(|e| PluginError::invalid_params(e.to_string())),
+            ResponsePayload::Ok { result } => {
+                serde_json::from_value(result).map_err(|e| PluginError::invalid_params_error(&e))
+            }
             ResponsePayload::Err { error } => {
                 let mut plugin_error =
                     PluginError::from_kind(PluginErrorKind::Internal, error.message);
@@ -406,11 +632,19 @@ impl StdioHostClient {
             method: method.to_string(),
             params: Some(params),
         };
-        if let Ok(body) = serde_json::to_vec(&n) {
-            self.tx.send(body.into()).await.map_err(|_| {
-                PluginError::from_kind(PluginErrorKind::Disconnected, "host writer closed")
-            })?;
-        }
+        let body = serde_json::to_vec(&n).map_err(|error| {
+            PluginError::invalid_params_error(&error).with_hook(method.to_owned())
+        })?;
+        self.tx.send(body.into()).await.map_err(|error| {
+            PluginError::from_kind(
+                PluginErrorKind::Disconnected,
+                agena_failure::diagnostic::format_error_chain_with_context(
+                    format!("host writer closed while sending notification `{method}`"),
+                    &error,
+                ),
+            )
+            .with_hook(method.to_owned())
+        })?;
         Ok(())
     }
 }
@@ -432,18 +666,24 @@ impl Drop for PendingCallGuard {
 #[async_trait::async_trait]
 impl HostClient for StdioHostClient {
     async fn log(&self, level: LogLevel, message: String, fields: serde_json::Value) {
-        let _ = self
+        if let Err(error) = self
             .notify(
                 method::HOST_LOG,
                 serde_json::json!({ "level": level, "message": message, "fields": fields }),
             )
-            .await;
+            .await
+        {
+            tracing::warn!(
+                diagnostic = %error.diagnostic_message(),
+                "failed to deliver a plugin log record to the stdio host"
+            );
+        }
     }
 
     async fn publish_event(&self, env: EventEnvelope) -> crate::error::Result<()> {
         self.notify(
             method::HOST_EVENT_PUBLISH,
-            serde_json::to_value(env).map_err(|e| PluginError::invalid_params(e.to_string()))?,
+            serde_json::to_value(env).map_err(|e| PluginError::invalid_params_error(&e))?,
         )
         .await
     }
@@ -1104,7 +1344,7 @@ fn error_object_from(e: PluginError) -> ErrorObject {
     ErrorObject {
         code,
         message: e.to_string(),
-        data: serde_json::to_value(&e).ok(),
+        data: e.rpc_error_data(),
     }
 }
 

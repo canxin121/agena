@@ -24,6 +24,10 @@ impl ModelCatalogRefreshError {
             message: message.into(),
         }
     }
+
+    pub fn from_error(error: &(dyn std::error::Error + 'static)) -> Self {
+        Self::new(agena_failure::diagnostic::format_error_chain(error))
+    }
 }
 
 /// Stable catalog operations exposed by an already-composed runtime.

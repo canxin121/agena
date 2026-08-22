@@ -676,8 +676,6 @@ pub struct ProviderDraftAuthActionResult {
 pub enum ProviderStudioSaveResult {
     ProviderDraftSaved {
         provider_id: String,
-        default_adapter: String,
-        default_model: Option<String>,
     },
     AdapterMatchesSaved {
         provider_id: String,
@@ -709,7 +707,6 @@ pub enum ProviderStudioSaveResult {
 /// Field that failed to save in the provider studio.
 pub enum ProviderStudioSaveField {
     ProviderId,
-    DefaultAdapter,
     AdapterId,
     ModelId,
     AuthMode,
@@ -721,11 +718,6 @@ pub enum ProviderStudioSaveField {
 /// Validation error when saving a provider studio draft.
 pub enum ProviderStudioSaveValidationError {
     FieldRequired(ProviderStudioSaveField),
-    UnsupportedDefaultAdapter {
-        auth_kind: ProviderDraftAuthKind,
-        adapter: String,
-        supported: String,
-    },
     UnsupportedAdapters {
         auth_kind: ProviderDraftAuthKind,
         adapters: Vec<String>,
@@ -762,6 +754,14 @@ impl ProviderStudioSaveError {
             error,
         ))
     }
+
+    /// Preserve every `anyhow` context/source layer before projecting the
+    /// diagnostic into the user-safe Provider Studio failure channel.
+    pub(crate) fn other_anyhow(error: anyhow::Error) -> Self {
+        Self::other(agena_failure::diagnostic::format_error_chain(
+            error.as_ref(),
+        ))
+    }
 }
 
 impl From<agena_runtime::RuntimeConfigSettingsError> for ProviderStudioSaveError {
@@ -779,12 +779,14 @@ impl From<agena_runtime::RuntimeConfigSettingsError> for ProviderStudioSaveError
 fn provider_backend_problem(
     code: &'static str,
     fallback: &'static str,
-    _diagnostic: impl std::fmt::Display,
+    diagnostic: impl std::fmt::Display,
 ) -> agena_failure::UserProblem {
-    // The original TUI backend logged the diagnostic via `tracing::error!`.
-    // agena-application does not depend on `tracing`, so the structured failure
-    // is projected without the diagnostic log line; the user-facing message and
-    // reference id are unchanged.
+    let diagnostic = diagnostic.to_string();
+    let mut presentation =
+        agena_failure::UserPresentation::validated_with_context(code, diagnostic.as_str());
+    if presentation.fallback == "The request is invalid. Review the input and try again." {
+        presentation = agena_failure::UserPresentation::new(code, fallback);
+    }
     let failure = agena_failure::Failure::new(
         agena_failure::FailureCode::new(code),
         agena_failure::FailureCategory::Internal,
@@ -792,7 +794,7 @@ fn provider_backend_problem(
         agena_failure::RetryDirective::Unknown,
         agena_failure::RecoveryDirective::Retry,
         agena_failure::FailureImpact::RequestRejected,
-        agena_failure::UserPresentation::new(code, fallback),
+        presentation,
     );
     failure.into()
 }

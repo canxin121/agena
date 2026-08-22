@@ -359,12 +359,21 @@ where
         match rmcp::serve_server(BackendHandler::new(backend), rmcp::transport::stdio()).await {
             Ok(running) => running,
             Err(rmcp::service::ServerInitializeError::ConnectionClosed(_)) => return Ok(()),
-            Err(error) => return Err(McpServerError::Backend(error.to_string())),
+            Err(error) => {
+                return Err(McpServerError::Backend(
+                    agena_failure::diagnostic::format_error_chain_with_context(
+                        "failed to initialize the MCP stdio server",
+                        &error,
+                    ),
+                ));
+            }
         };
-    running
-        .waiting()
-        .await
-        .map_err(|err| McpServerError::Backend(err.to_string()))?;
+    running.waiting().await.map_err(|error| {
+        McpServerError::Backend(agena_failure::diagnostic::format_error_chain_with_context(
+            "MCP stdio server terminated with an error",
+            &error,
+        ))
+    })?;
     Ok(())
 }
 
@@ -385,12 +394,21 @@ where
     {
         Ok(running) => running,
         Err(rmcp::service::ServerInitializeError::ConnectionClosed(_)) => return Ok(()),
-        Err(error) => return Err(McpServerError::Backend(error.to_string())),
+        Err(error) => {
+            return Err(McpServerError::Backend(
+                agena_failure::diagnostic::format_error_chain_with_context(
+                    "failed to initialize the tools-only MCP stdio server",
+                    &error,
+                ),
+            ));
+        }
     };
-    running
-        .waiting()
-        .await
-        .map_err(|err| McpServerError::Backend(err.to_string()))?;
+    running.waiting().await.map_err(|error| {
+        McpServerError::Backend(agena_failure::diagnostic::format_error_chain_with_context(
+            "tools-only MCP stdio server terminated with an error",
+            &error,
+        ))
+    })?;
     Ok(())
 }
 
@@ -638,7 +656,16 @@ fn convert_content_block(block: ContentBlock) -> Result<Option<RmcpContentBlock>
         }
         ContentBlock::Unknown { raw } => match serde_json::from_value(raw) {
             Ok(block) => block,
-            Err(_) => return Ok(None),
+            Err(error) => {
+                tracing::warn!(
+                    diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                        "failed to decode an unknown MCP content block; omitting the unsupported block",
+                        &error,
+                    ),
+                    "unsupported MCP content block was omitted"
+                );
+                return Ok(None);
+            }
         },
     };
     Ok(Some(output))

@@ -17,6 +17,7 @@ async fn main() -> anyhow::Result<()> {
     let probe_root = PathBuf::from("/tmp/agena-session-model-probe.rpHqxW");
     let runtime = bootstrap_application_services(RuntimeBootstrapRequest {
         workspace_root: Some(PathBuf::from("/Volumes/Rc20/Projects/agena")),
+        config_path: None,
         config_override_expressions: Vec::new(),
         database_url: None,
         database_path: Some(probe_root.join("probe.db")),
@@ -50,9 +51,8 @@ async fn main() -> anyhow::Result<()> {
         .clone()
         .ok_or_else(|| anyhow::anyhow!("session tool execution unavailable"))?;
 
-    // Create a session with NO model override — the exact broken scenario
-    // where `execution.selection` is empty and `session.model` must still
-    // return the effective non-null model fields.
+    // Create a session with no model override; the explicit model supplied to
+    // the subsequent run is what makes the execution model available.
     let created = commands
         .create_session(SessionCreateRequest {
             title: "session.model default-model probe".to_owned(),
@@ -62,7 +62,7 @@ async fn main() -> anyhow::Result<()> {
     let session_id = created.session_id;
 
     // Submitting a run is required so the session reaches an execution-ready
-    // state (default model resolution) before the tool runs.
+    // state before the tool runs.
     let accepted = commands
         .submit_user_run(SessionUserRunRequest::new(
             session_id,

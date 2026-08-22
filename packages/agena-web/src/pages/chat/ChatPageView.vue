@@ -35,7 +35,6 @@ import ToolbarChipButton from '@/components/ui/ToolbarChipButton.vue'
 import type { ChatPageViewContext } from './chatPageViewContext'
 import { hasDisplayableAssistantError } from './assistantError'
 import { resolveComposerToolbarLayout } from './composerToolbarLayout'
-import { attentionRequestId, partInteractionRequestIds } from './transcriptPartPresentation'
 
 // This view is template-only: it takes a context bag from ChatPage.
 // Keep it "dumb" so we can aggressively split ChatPage logic into composables.
@@ -196,7 +195,6 @@ const {
   thinkingModeChipLabel,
   speedModeHint,
   speedModeChipLabel,
-  composerTopRightStatus,
   composerBottomLeftStatus,
   composerBottomRightStatus,
   composerStatusExtra,
@@ -330,19 +328,6 @@ const timelineSessionError = computed(() => {
   return chat.selectedSessionError
 })
 
-const attentionRenderedInline = computed(() => {
-  const requestId = attentionRequestId(chat.selectedAttention?.payload)
-  if (!requestId) return false
-  const blocks = unref(renderBlocks)
-  return blocks.some(
-    (block) =>
-      block.kind === 'message' &&
-      block.displayParts.some((part) => partInteractionRequestIds(part).includes(requestId)),
-  )
-})
-
-const headerAttention = computed(() => (attentionRenderedInline.value ? null : chat.selectedAttention))
-
 // `ref="..."` in templates doesn't count as usage for TS.
 void pageRef
 void scrollEl
@@ -462,7 +447,6 @@ void sessionActionsMenuRef
                 :optimistic-user="optimisticUser"
                 :show-optimistic-user="showOptimisticUser"
                 :open-mobile-sidebar="() => ui.setSessionSwitcherOpen(true)"
-                :attention="chat.selectedAttention"
                 @fork="handleForkFromMessage"
                 @revert="handleRevertFromMessage"
                 @copy="handleCopyMessage"
@@ -566,12 +550,10 @@ void sessionActionsMenuRef
             <div class="relative flex flex-1 flex-col min-h-0">
               <ChatHeader
                 :session-id="chat.selectedSessionId"
-                :session-ended="sessionEnded"
                 :can-abort="canAbort"
                 :retry-status="retryStatus"
                 :retry-countdown-label="retryCountdownLabel"
                 :retry-next-label="retryNextLabel"
-                :attention="headerAttention"
                 :mobile-pointer="ui.isMobilePointer"
                 @abort="abortRun"
               />
@@ -647,11 +629,6 @@ void sessionActionsMenuRef
                       <span class="text-muted-foreground/50">|</span>
                       <span class="text-muted-foreground">{{ composerStatusExtra }}</span>
                     </template>
-                  </span>
-                </template>
-                <template #topRight>
-                  <span class="flex items-center gap-1 text-muted-foreground">
-                    <span v-if="composerTopRightStatus">{{ composerTopRightStatus }}</span>
                   </span>
                 </template>
                 <template #bottomLeft>

@@ -352,7 +352,7 @@ impl WorkflowPlugin {
         session: HostSession,
     ) -> SdkResult<serde_json::Value> {
         serde_json::to_value(SessionToolResponse { session })
-            .map_err(|err| PluginError::internal(err.to_string()))
+            .map_err(|err| PluginError::internal_error(&err))
     }
 
     pub(in crate::plugins::provided::workflow) fn session_summary(session: &HostSession) -> String {
@@ -446,8 +446,8 @@ impl WorkflowPlugin {
         &self,
         plan: &WorkflowPlan,
     ) -> SdkResult<()> {
-        let value = serde_json::to_string_pretty(plan)
-            .map_err(|err| PluginError::internal(err.to_string()))?;
+        let value =
+            serde_json::to_string_pretty(plan).map_err(|err| PluginError::internal_error(&err))?;
         let host = self.host()?;
         host.storage_set(HostStorageSetRequest {
             scope: HostStorageScope::Session,
@@ -515,7 +515,7 @@ impl WorkflowPlugin {
         plan: &WorkflowPlan,
     ) -> SdkResult<serde_json::Value> {
         serde_json::to_value(serde_json::json!({ "plan": Self::plan_without_legacy_ids(plan) }))
-            .map_err(|err| PluginError::internal(err.to_string()))
+            .map_err(|err| PluginError::internal_error(&err))
     }
 
     /// Clone the plan with any legacy step/check identifiers stripped so tool

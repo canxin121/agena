@@ -462,9 +462,11 @@ impl App {
             UiAction::CopyText { text, success } => {
                 let context = terminal.context().clone();
                 match set_clipboard_text(text.as_str(), &context, |sequence| {
-                    terminal
-                        .write_protocol(sequence)
-                        .map_err(|error| ClipboardTextError(error.to_string()))
+                    terminal.write_protocol(sequence).map_err(|error| {
+                        ClipboardTextError(agena_failure::diagnostic::format_error_chain(
+                            error.as_ref(),
+                        ))
+                    })
                 }) {
                     Ok(method) => self.flash_clipboard_copy_success(method, success),
                     Err(error) => self.flash_error(self.i18n.text_args(
@@ -579,7 +581,15 @@ impl TemporaryDownloadCleanup {
 impl Drop for TemporaryDownloadCleanup {
     fn drop(&mut self) {
         if let Some(path) = self.0.take() {
-            let _ = std::fs::remove_file(path);
+            if let Err(error) = std::fs::remove_file(&path)
+                && error.kind() != std::io::ErrorKind::NotFound
+            {
+                tracing::warn!(
+                    path = %path.display(),
+                    diagnostic = %agena_failure::diagnostic::format_error_chain(&error),
+                    "failed to remove a temporary TUI download"
+                );
+            }
         }
     }
 }

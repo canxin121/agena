@@ -9,15 +9,23 @@ use tokio::runtime::Runtime;
 use crate::error::PluginError;
 
 #[doc(hidden)]
-pub fn runtime() -> &'static Runtime {
-    static RT: OnceLock<Runtime> = OnceLock::new();
-    RT.get_or_init(|| {
+pub fn runtime() -> crate::error::Result<&'static Runtime> {
+    static RT: OnceLock<Result<Runtime, String>> = OnceLock::new();
+    match RT.get_or_init(|| {
         tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
             .enable_all()
             .build()
-            .expect("agena cdylib runtime")
-    })
+            .map_err(|error| {
+                agena_failure::diagnostic::format_error_chain_with_context(
+                    "failed to build the Agena cdylib plugin runtime",
+                    &error,
+                )
+            })
+    }) {
+        Ok(runtime) => Ok(runtime),
+        Err(diagnostic) => Err(PluginError::internal(diagnostic)),
+    }
 }
 
 #[doc(hidden)]
@@ -27,16 +35,55 @@ pub fn into_abi_result(
     match value {
         Ok(v) => match serde_json::to_string(&v) {
             Ok(s) => RResult::ROk(RString::from(s)),
-            Err(e) => RResult::RErr(encode_error(PluginError::invalid_params(e.to_string()))),
+            Err(e) => RResult::RErr(encode_error(PluginError::invalid_params_error(&e))),
         },
         Err(e) => RResult::RErr(encode_error(e)),
     }
 }
 
 fn encode_error(err: PluginError) -> RString {
-    serde_json::to_string(&err)
-        .unwrap_or_else(|_| "{\"code\":\"generic\",\"message\":\"<encode failed>\"}".into())
-        .into()
+    match serde_json::to_string(&err) {
+        Ok(encoded) => encoded.into(),
+        Err(error) => {
+            tracing::error!(
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "failed to encode a cdylib plugin error for the ABI boundary",
+                    &error,
+                ),
+                original_plugin_diagnostic = %err.diagnostic_message(),
+                "using the fixed cdylib ABI error fallback"
+            );
+            "{\"kind\":\"internal\",\"failure\":{\"code\":\"plugin.internal\"},\"diagnostic\":{\"message\":\"cdylib error encoding failed; inspect the plugin log\"}}"
+                .into()
+        }
+    }
+}
+
+#[doc(hidden)]
+pub fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> String {
+    if let Some(message) = payload.downcast_ref::<&str>() {
+        (*message).to_owned()
+    } else if let Some(message) = payload.downcast_ref::<String>() {
+        message.clone()
+    } else {
+        format!("non-string panic payload of type {:?}", payload.type_id())
+    }
+}
+
+#[doc(hidden)]
+pub fn report_shutdown_error(error: &PluginError) {
+    tracing::error!(
+        diagnostic = %error.diagnostic_message(),
+        "cdylib plugin shutdown failed"
+    );
+}
+
+#[doc(hidden)]
+pub fn report_shutdown_panic(payload: &(dyn std::any::Any + Send)) {
+    tracing::error!(
+        panic = %panic_payload_message(payload),
+        "cdylib plugin panicked during shutdown"
+    );
 }
 
 /// Export a [`Plugin`] impl as a cdylib. The impl must be `Default + Plugin`.
@@ -51,7 +98,10 @@ macro_rules! export_cdylib {
             use ::std::sync::OnceLock;
             use $crate::abi_stable_reexport as abi_stable;
             use $crate::cdylib_abi::{ABI_VERSION, AgenaPluginCdylib, AgenaPluginCdylib_Ref};
-            use $crate::drivers::cdylib::{into_abi_result, runtime};
+            use $crate::drivers::cdylib::{
+                into_abi_result, panic_payload_message, report_shutdown_error,
+                report_shutdown_panic, runtime,
+            };
             use $crate::drivers::dispatch::PluginDispatcher;
 
             fn dispatcher() -> &'static PluginDispatcher<$plugin_ty> {
@@ -69,7 +119,8 @@ macro_rules! export_cdylib {
                 $crate::abi_stable_reexport::std_types::RString,
             > {
                 let result = ::std::panic::catch_unwind(|| {
-                    runtime().block_on(async move {
+                    let runtime = runtime()?;
+                    runtime.block_on(async move {
                         let method_str: ::std::string::String = method.into();
                         let params_str: ::std::string::String = params.into();
                         let value: $crate::serde_json::Value = if params_str.is_empty() {
@@ -79,7 +130,7 @@ macro_rules! export_cdylib {
                                 Ok(v) => v,
                                 Err(e) => {
                                     return ::std::result::Result::Err(
-                                        $crate::error::PluginError::invalid_params(e.to_string()),
+                                        $crate::error::PluginError::invalid_params_error(&e),
                                     );
                                 }
                             }
@@ -89,24 +140,35 @@ macro_rules! export_cdylib {
                 });
                 match result {
                     Ok(value) => into_abi_result(value),
-                    Err(_) => into_abi_result(::std::result::Result::Err(
+                    Err(payload) => into_abi_result(::std::result::Result::Err(
                         $crate::error::PluginError::from_kind(
                             $crate::error::PluginErrorKind::Panicked,
-                            "plugin panicked",
+                            format_args!(
+                                "plugin panicked: {}",
+                                panic_payload_message(payload.as_ref())
+                            ),
                         ),
                     )),
                 }
             }
 
             extern "C" fn shutdown() {
-                let _ = runtime().block_on(async {
-                    dispatcher()
-                        .dispatch(
-                            $crate::rpc::method::META_SHUTDOWN,
-                            $crate::serde_json::Value::Null,
-                        )
-                        .await
+                let result = ::std::panic::catch_unwind(|| {
+                    let runtime = runtime()?;
+                    runtime.block_on(async {
+                        dispatcher()
+                            .dispatch(
+                                $crate::rpc::method::META_SHUTDOWN,
+                                $crate::serde_json::Value::Null,
+                            )
+                            .await
+                    })
                 });
+                match result {
+                    Ok(Ok(_)) => {}
+                    Ok(Err(error)) => report_shutdown_error(&error),
+                    Err(payload) => report_shutdown_panic(payload.as_ref()),
+                }
             }
 
             #[::abi_stable::export_root_module]

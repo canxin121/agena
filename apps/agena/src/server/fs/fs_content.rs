@@ -123,6 +123,7 @@ pub struct ContentReplaceResponse {
     pub file_count: usize,
     pub replacement_count: usize,
     pub skipped: usize,
+    pub truncated: bool,
     pub files: Vec<ContentReplaceFileResult>,
 }
 
@@ -189,7 +190,7 @@ fn walk_workspace_files(
     include_hidden: bool,
     respect_gitignore: bool,
     max_files: usize,
-) -> Vec<PathBuf> {
+) -> (Vec<PathBuf>, bool) {
     let excluded: HashSet<&'static str> = FILE_SEARCH_EXCLUDED_DIRS.iter().copied().collect();
     let root_for_filter = root.to_path_buf();
 
@@ -204,6 +205,7 @@ fn walk_workspace_files(
     builder.follow_links(false);
 
     let mut files = Vec::new();
+    let mut truncated = false;
 
     for result in builder
         .filter_entry(move |entry| {
@@ -229,7 +231,17 @@ fn walk_workspace_files(
     {
         let entry = match result {
             Ok(entry) => entry,
-            Err(_) => continue,
+            Err(error) => {
+                truncated = true;
+                tracing::warn!(
+                    diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                        "filesystem content discovery skipped an unreadable workspace entry",
+                        &error,
+                    ),
+                    "filesystem content discovery result is partial"
+                );
+                continue;
+            }
         };
 
         if !entry.file_type().map(|ft| ft.is_file()).unwrap_or(false) {
@@ -238,11 +250,12 @@ fn walk_workspace_files(
 
         files.push(entry.path().to_path_buf());
         if files.len() >= max_files {
+            truncated = true;
             break;
         }
     }
 
-    files
+    (files, truncated)
 }
 
 async fn normalize_content_scope_paths(
@@ -250,9 +263,10 @@ async fn normalize_content_scope_paths(
     paths: &[String],
     include_hidden: bool,
     respect_gitignore: bool,
-) -> ApiResult<Vec<PathBuf>> {
+) -> ApiResult<(Vec<PathBuf>, bool)> {
     let mut out = Vec::new();
     let mut seen = HashSet::new();
+    let mut truncated = paths.len() > MAX_CONTENT_REPLACE_PATHS;
 
     for raw in paths.iter().take(MAX_CONTENT_REPLACE_PATHS) {
         let resolved = resolve_path_within_workspace(root, raw)?;
@@ -260,8 +274,13 @@ async fn normalize_content_scope_paths(
         let meta = match tokio::fs::metadata(&resolved).await {
             Ok(meta) => meta,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => continue,
-            Err(err) => return Err(AppError::internal(err.to_string())),
+            Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
+                return Err(AppError::forbidden_error(
+                    "inspect an explicitly selected content-search path",
+                    &err,
+                ));
+            }
+            Err(err) => return Err(AppError::internal_error(&err)),
         };
 
         if meta.is_file() {
@@ -276,12 +295,13 @@ async fn normalize_content_scope_paths(
             continue;
         }
 
-        let nested = walk_workspace_files(
+        let (nested, nested_truncated) = walk_workspace_files(
             &resolved,
             include_hidden,
             respect_gitignore,
             MAX_CONTENT_REPLACE_PATHS.saturating_sub(out.len()),
         );
+        truncated |= nested_truncated;
         for file in nested {
             if !file.starts_with(root) {
                 continue;
@@ -291,26 +311,58 @@ async fn normalize_content_scope_paths(
                 out.push(file);
             }
             if out.len() >= MAX_CONTENT_REPLACE_PATHS {
-                return Ok(out);
+                return Ok((out, true));
             }
         }
     }
 
-    Ok(out)
+    Ok((out, truncated))
 }
 
-async fn read_searchable_text(path: &Path) -> Option<String> {
-    let meta = tokio::fs::metadata(path).await.ok()?;
+async fn read_searchable_text(path: &Path) -> ApiResult<Option<String>> {
+    let meta = match tokio::fs::metadata(path).await {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+            return Err(AppError::forbidden_error(
+                "inspect a file for content search",
+                &error,
+            ));
+        }
+        Err(error) => return Err(AppError::internal_error(&error)),
+    };
     if !meta.is_file() || meta.len() > MAX_CONTENT_SEARCH_FILE_BYTES {
-        return None;
+        return Ok(None);
     }
 
-    let bytes = tokio::fs::read(path).await.ok()?;
+    let bytes = match tokio::fs::read(path).await {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+            return Err(AppError::forbidden_error(
+                "read a file for content search",
+                &error,
+            ));
+        }
+        Err(error) => return Err(AppError::internal_error(&error)),
+    };
     if bytes.contains(&0) {
-        return None;
+        return Ok(None);
     }
 
-    String::from_utf8(bytes).ok()
+    match String::from_utf8(bytes) {
+        Ok(content) => Ok(Some(content)),
+        Err(error) => {
+            tracing::debug!(
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "decode a content-search candidate as UTF-8",
+                    &error,
+                ),
+                "content-search candidate is not searchable text"
+            );
+            Ok(None)
+        }
+    }
 }
 
 fn line_starts(content: &str) -> Vec<usize> {
@@ -464,7 +516,7 @@ pub async fn fs_content_search(
     let regex = build_content_regex(&query, body.is_regex, body.case_sensitive, body.whole_word)?;
     let started = Instant::now();
 
-    let candidates = if body.paths.is_empty() {
+    let (candidates, discovery_truncated) = if body.paths.is_empty() {
         walk_workspace_files(
             &root,
             body.include_hidden,
@@ -483,7 +535,7 @@ pub async fn fs_content_search(
 
     let mut files = Vec::new();
     let mut total_matches = 0usize;
-    let mut truncated = false;
+    let mut truncated = discovery_truncated;
 
     for path in candidates {
         if total_matches >= max_results {
@@ -491,7 +543,7 @@ pub async fn fs_content_search(
             break;
         }
 
-        let Some(content) = read_searchable_text(&path).await else {
+        let Some(content) = read_searchable_text(&path).await? else {
             continue;
         };
 
@@ -580,7 +632,7 @@ pub async fn fs_content_replace(
         }
 
         let resolved = resolve_path_within_workspace(&root, path)?;
-        let Some(content) = read_searchable_text(&resolved).await else {
+        let Some(content) = read_searchable_text(&resolved).await? else {
             return Err(AppError::bad_request(
                 "Target file is not a searchable text file",
             ));
@@ -610,7 +662,7 @@ pub async fn fs_content_replace(
             .await
             .map_err(|err| match err.kind() {
                 std::io::ErrorKind::PermissionDenied => AppError::forbidden("Access denied"),
-                _ => AppError::internal(err.to_string()),
+                _ => AppError::internal_error(&err),
             })?;
 
         publish_fs_changed_event(&root, "replace-content", [resolved.as_path()], None, None);
@@ -621,6 +673,7 @@ pub async fn fs_content_replace(
             file_count: 1,
             replacement_count: 1,
             skipped: 0,
+            truncated: false,
             files: vec![ContentReplaceFileResult {
                 path: to_api_path(&resolved),
                 relative_path,
@@ -639,7 +692,7 @@ pub async fn fs_content_replace(
     let regex = build_content_regex(query, body.is_regex, body.case_sensitive, body.whole_word)?;
     let started = Instant::now();
 
-    let candidates = if body.paths.is_empty() {
+    let (candidates, discovery_truncated) = if body.paths.is_empty() {
         walk_workspace_files(
             &root,
             body.include_hidden,
@@ -656,7 +709,7 @@ pub async fn fs_content_replace(
     let mut skipped = 0usize;
 
     for path in candidates {
-        let Some(content) = read_searchable_text(&path).await else {
+        let Some(content) = read_searchable_text(&path).await? else {
             skipped += 1;
             continue;
         };
@@ -674,13 +727,30 @@ pub async fn fs_content_replace(
         }
 
         if let Err(err) = tokio::fs::write(&path, updated).await {
-            skipped += 1;
-            tracing::warn!(
-                "fs_content_replace failed to write {}: {}",
-                path.to_string_lossy(),
-                err
+            if !changed_paths.is_empty() {
+                publish_fs_changed_event(
+                    &root,
+                    "replace-content",
+                    changed_paths.iter(),
+                    None,
+                    None,
+                );
+            }
+            tracing::error!(
+                completed_files = changed_paths.len(),
+                completed_replacements = total_replacements,
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "write a file during bulk content replacement",
+                    &err,
+                ),
+                "bulk content replacement stopped after a partial write"
             );
-            continue;
+            return Err(match err.kind() {
+                std::io::ErrorKind::PermissionDenied => {
+                    AppError::forbidden_error("write a file during bulk content replacement", &err)
+                }
+                _ => AppError::internal_error(&err),
+            });
         }
 
         total_replacements += replacements;
@@ -714,6 +784,7 @@ pub async fn fs_content_replace(
         file_count: files.len(),
         replacement_count: total_replacements,
         skipped,
+        truncated: discovery_truncated,
         files,
     }))
 }

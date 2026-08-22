@@ -19,13 +19,21 @@ pub enum GoogleAdcError {
 /// provider adapters.
 #[cfg(not(all(target_arch = "aarch64", target_endian = "big")))]
 pub async fn access_token() -> Result<String, GoogleAdcError> {
-    let provider = gcp_auth::provider()
-        .await
-        .map_err(|error| GoogleAdcError::Provider(error.to_string()))?;
+    let provider = gcp_auth::provider().await.map_err(|error| {
+        GoogleAdcError::Provider(agena_failure::diagnostic::format_error_chain_with_context(
+            "failed to initialize the Google ADC provider",
+            &error,
+        ))
+    })?;
     let token = provider
         .token(&[GOOGLE_CLOUD_PLATFORM_SCOPE])
         .await
-        .map_err(|error| GoogleAdcError::Token(error.to_string()))?;
+        .map_err(|error| {
+            GoogleAdcError::Token(agena_failure::diagnostic::format_error_chain_with_context(
+                "failed to obtain a Google ADC access token",
+                &error,
+            ))
+        })?;
     Ok(token.as_str().to_owned())
 }
 

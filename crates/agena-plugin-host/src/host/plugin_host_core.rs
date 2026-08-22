@@ -1,3 +1,38 @@
+fn parse_plugin_key_for_lookup(plugin_id: &str, operation: &str) -> Option<PluginKey> {
+    match plugin_id.parse() {
+        Ok(key) => Some(key),
+        Err(error) => {
+            tracing::warn!(
+                operation,
+                plugin_id,
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "parse plugin identifier",
+                    &error,
+                ),
+                "plugin lookup rejected an invalid identifier"
+            );
+            None
+        }
+    }
+}
+
+fn plugin_tool_registry_read<'a>(
+    registry: &'a RwLock<PluginToolRegistry>,
+    operation: &str,
+) -> std::sync::RwLockReadGuard<'a, PluginToolRegistry> {
+    match registry.read() {
+        Ok(registry) => registry,
+        Err(error) => {
+            tracing::error!(
+                operation,
+                diagnostic = %error,
+                "plugin tool-registry lock was poisoned; recovering its inner state"
+            );
+            error.into_inner()
+        }
+    }
+}
+
 impl PluginHost {
     pub fn new_empty() -> Arc<Self> {
         let tool_registry = Arc::new(RwLock::new(PluginToolRegistry::new()));
@@ -71,7 +106,20 @@ impl PluginHost {
         canonical_name: &str,
         scope: Option<&PluginScopeKey>,
     ) -> Option<RegisteredTool> {
-        let key: ToolKey = canonical_name.parse().ok()?;
+        let key: ToolKey = match canonical_name.parse() {
+            Ok(key) => key,
+            Err(error) => {
+                tracing::warn!(
+                    canonical_name,
+                    diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                        "parse canonical tool name for lookup",
+                        &error,
+                    ),
+                    "plugin tool lookup rejected an invalid canonical name"
+                );
+                return None;
+            }
+        };
         if let Some(value) = self
             ._host_handle
             .scoped_tool_registry()
@@ -79,9 +127,7 @@ impl PluginHost {
         {
             return Some(value.value);
         }
-        self.tool_registry
-            .read()
-            .ok()?
+        plugin_tool_registry_read(&self.tool_registry, "look up plugin tool")
             .lookup_tool_by_key(&key)
             .cloned()
     }
@@ -97,16 +143,10 @@ impl PluginHost {
         &self,
         scope: Option<&PluginScopeKey>,
     ) -> Vec<RegisteredTool> {
-        let mut tools = self
-            .tool_registry
-            .read()
-            .map(|registry| {
-                registry
-                    .registered_tools()
-                    .map(|tool| (tool.tool_key().clone(), tool.clone()))
-                    .collect::<BTreeMap<_, _>>()
-            })
-            .unwrap_or_default();
+        let mut tools = plugin_tool_registry_read(&self.tool_registry, "list registered tools")
+            .registered_tools()
+            .map(|tool| (tool.tool_key().clone(), tool.clone()))
+            .collect::<BTreeMap<_, _>>();
         for (key, value) in self._host_handle.scoped_tool_registry().visible(scope) {
             tools.insert(key, value.value);
         }
@@ -124,10 +164,7 @@ impl PluginHost {
     }
 
     pub fn tool_registry_generation(&self) -> u64 {
-        self.tool_registry
-            .read()
-            .map(|reg| reg.generation())
-            .unwrap_or(0)
+        plugin_tool_registry_read(&self.tool_registry, "read tool registry generation").generation()
     }
 
     pub fn status_registry(&self) -> Arc<crate::status::StatusRegistry> {
@@ -135,7 +172,7 @@ impl PluginHost {
     }
 
     pub fn plugin_status(&self, plugin_id: &str) -> Option<crate::status::PluginStatus> {
-        let plugin_key: PluginKey = plugin_id.parse().ok()?;
+        let plugin_key = parse_plugin_key_for_lookup(plugin_id, "read plugin status")?;
         self.statuses.get(&plugin_key)
     }
 
@@ -172,7 +209,7 @@ impl PluginHost {
         fields: serde_json::Value,
     ) -> Option<PluginLogRecord> {
         let plugin_id = plugin_id.into();
-        let plugin_key = plugin_id.parse().ok()?;
+        let plugin_key = parse_plugin_key_for_lookup(plugin_id.as_str(), "append plugin log")?;
         Some(
             self.logs
                 .append(&plugin_key, level, source, message, fields),
@@ -249,7 +286,10 @@ impl PluginHost {
                     .filter_map(|(_, binding)| {
                         Some(PluginDependencyEdge {
                             consumer_id: plugin_key.clone(),
-                            provider_id: binding.provider.parse().ok()?,
+                            provider_id: parse_plugin_key_for_lookup(
+                                binding.provider.as_str(),
+                                "inspect plugin service dependency",
+                            )?,
                             kind: if binding.optional {
                                 PluginDependencyKind::OptionalService
                             } else {
@@ -332,7 +372,7 @@ impl PluginHost {
 
     pub fn plugin_inspect(&self, plugin_id: &str) -> Option<PluginInspect> {
         let status = self.plugin_status(plugin_id)?;
-        let plugin_key: PluginKey = plugin_id.parse().ok()?;
+        let plugin_key = parse_plugin_key_for_lookup(plugin_id, "inspect plugin")?;
         let plugin = self.plugins_by_id.get(&plugin_key);
         let manifest = plugin
             .as_ref()
@@ -440,7 +480,7 @@ impl PluginHost {
                 cancellation,
             })
             .await
-            .map_err(|error| PluginError::internal(error.to_string()))?;
+            .map_err(|error| PluginError::internal_error(&error))?;
         match report.outcome {
             crate::event_pipeline::PluginTransformBailOutcome::Continue(dispatch) => {
                 Ok(dispatch.input)
@@ -467,7 +507,7 @@ impl PluginHost {
                 cancellation,
             })
             .await
-            .map_err(|error| PluginError::internal(error.to_string()))?;
+            .map_err(|error| PluginError::internal_error(&error))?;
         Ok(report.value.input)
     }
 
@@ -491,7 +531,7 @@ impl PluginHost {
             })?;
         input.tool_name = registered_tool.tool_name().to_owned();
         let params = serde_json::to_value(&input)
-            .map_err(|error| PluginError::invalid_params(error.to_string()))?;
+            .map_err(|error| PluginError::invalid_params_error(&error))?;
         let value = call_with_timeout(
             &plugin,
             method::HOOK_TOOL_RENDER,
@@ -500,8 +540,7 @@ impl PluginHost {
         )
         .await
         .map_err(transport_to_plugin_error)?;
-        serde_json::from_value(value)
-            .map_err(|error| PluginError::invalid_params(error.to_string()))
+        serde_json::from_value(value).map_err(|error| PluginError::invalid_params_error(&error))
     }
 
     /// Native asynchronous tool invocation. This is the canonical runtime
@@ -532,7 +571,7 @@ impl PluginHost {
         let workspace_root = input.workspace_root.clone();
         let tool_name = registered_tool.tool_name().to_string();
         let params =
-            serde_json::to_value(&input).map_err(|e| PluginError::invalid_params(e.to_string()))?;
+            serde_json::to_value(&input).map_err(|e| PluginError::invalid_params_error(&e))?;
         let plugin_key = plugin.key();
         let invoke = self._host_handle.run_in_authorized_callback_context(
             &plugin_key,
@@ -554,7 +593,7 @@ impl PluginHost {
             None => invoke.await,
         };
         let value = result.map_err(transport_to_plugin_error)?;
-        serde_json::from_value(value).map_err(|e| PluginError::invalid_params(e.to_string()))
+        serde_json::from_value(value).map_err(|e| PluginError::invalid_params_error(&e))
     }
 
     pub fn register_operation_middleware<F, Fut>(
@@ -590,7 +629,7 @@ impl PluginHost {
         })?;
         self.operation_pipeline
             .register(&scope, priority, label, handler)
-            .map_err(|error| PluginError::internal(error.to_string()))
+            .map_err(|error| PluginError::internal_error(&error))
     }
 
     pub async fn invoke_plugin_operation_async(
@@ -645,7 +684,7 @@ impl PluginHost {
                 .validate_value(&input.input)
                 .map(|()| input.input.clone())
         }
-        .map_err(|error| PluginError::invalid_params(error.to_string()))?;
+        .map_err(|error| PluginError::invalid_params_error(&error))?;
 
         let timeout = self.timeouts.fast_or(Duration::from_secs(10));
         let contract = definition.input.clone();
@@ -663,12 +702,12 @@ impl PluginHost {
                     let input = dispatch.into_input();
                     contract
                         .validate_value(&input.input)
-                        .map_err(|error| PluginError::invalid_params(error.to_string()))?;
+                        .map_err(|error| PluginError::invalid_params_error(&error))?;
                     let session_id = input.session_id;
                     let call_id = input.call_id;
                     let workspace_root = input.workspace_root.clone();
                     let params = serde_json::to_value(&input)
-                        .map_err(|error| PluginError::invalid_params(error.to_string()))?;
+                        .map_err(|error| PluginError::invalid_params_error(&error))?;
                     let value = host_handle
                         .run_in_authorized_callback_context(
                             &plugin_key,
@@ -738,7 +777,7 @@ impl PluginHost {
         let mut input = input;
         input.tool_name = registered_tool.tool_name().to_string();
         let params =
-            serde_json::to_value(&input).map_err(|e| PluginError::invalid_params(e.to_string()))?;
+            serde_json::to_value(&input).map_err(|e| PluginError::invalid_params_error(&e))?;
         let tool_name = registered_tool.tool_name().to_string();
         let workspace_root = input.workspace_root.clone();
         let result = await_transport_with_cancellation(
@@ -755,7 +794,7 @@ impl PluginHost {
         )
         .await;
         let value = result.map_err(transport_to_plugin_error)?;
-        serde_json::from_value(value).map_err(|e| PluginError::invalid_params(e.to_string()))
+        serde_json::from_value(value).map_err(|e| PluginError::invalid_params_error(&e))
     }
 
     pub async fn dispatch_tool_permission_networks(
@@ -778,7 +817,7 @@ impl PluginHost {
         let mut input = input;
         input.tool_name = registered_tool.tool_name().to_string();
         let params =
-            serde_json::to_value(&input).map_err(|e| PluginError::invalid_params(e.to_string()))?;
+            serde_json::to_value(&input).map_err(|e| PluginError::invalid_params_error(&e))?;
         let tool_name = registered_tool.tool_name().to_string();
         let workspace_root = input.workspace_root.clone();
         let result = await_transport_with_cancellation(
@@ -800,7 +839,7 @@ impl PluginHost {
         )
         .await;
         let value = result.map_err(transport_to_plugin_error)?;
-        serde_json::from_value(value).map_err(|e| PluginError::invalid_params(e.to_string()))
+        serde_json::from_value(value).map_err(|e| PluginError::invalid_params_error(&e))
     }
 
     /// Streaming variant: returns a receiver of [`ToolStreamChunk`]s plus a
@@ -847,6 +886,7 @@ impl PluginHost {
             let chunks = stream.chunks;
             let native_end = stream.end;
             let (end_tx, end_rx) = tokio::sync::oneshot::channel();
+            let stream_id_for_task = stream_id.clone();
             tokio::spawn(async move {
                 // Keep callback authority until the transport reports a
                 // terminal stream result; chunk consumers may stop earlier.
@@ -856,7 +896,12 @@ impl PluginHost {
                         "plugin stream ended without a terminal result: {error}"
                     )))
                 });
-                let _ = end_tx.send(result);
+                if end_tx.send(result).is_err() {
+                    tracing::debug!(
+                        stream_id = %stream_id_for_task,
+                        "plugin transport stream terminal-result receiver was dropped"
+                    );
+                }
             });
             return Ok(ToolInvokeStream {
                 stream_id,
@@ -867,7 +912,7 @@ impl PluginHost {
 
         let timeout = self.tool_invoke_timeout(registered_tool);
         let params =
-            serde_json::to_value(&input).map_err(|e| PluginError::invalid_params(e.to_string()))?;
+            serde_json::to_value(&input).map_err(|e| PluginError::invalid_params_error(&e))?;
         let invoke_result = host_api::run_in_host_callback_context(
             context,
             call_with_timeout(&plugin, method::HOOK_TOOL_INVOKE, params, timeout),
@@ -875,7 +920,7 @@ impl PluginHost {
         .await
         .map_err(transport_to_plugin_error)?;
         let result: ToolInvokeOutput = serde_json::from_value(invoke_result)
-            .map_err(|e| PluginError::invalid_params(e.to_string()))?;
+            .map_err(|e| PluginError::invalid_params_error(&e))?;
 
         let (tx, rx) = tokio::sync::mpsc::channel::<ToolStreamChunk>(8);
         let (end_tx, end_rx) = tokio::sync::oneshot::channel();
@@ -885,17 +930,31 @@ impl PluginHost {
             text_delta: Some(result.output_text.clone()),
             metadata: result.metadata.clone(),
         };
-        let _ = tx.send(chunk).await;
+        if let Err(error) = tx.send(chunk).await {
+            tracing::debug!(
+                stream_id,
+                diagnostic = %error,
+                "emulated plugin stream chunk receiver was dropped"
+            );
+        }
         drop(tx);
-        let _ = end_tx.send(Ok(ToolStreamEnd {
-            stream_id: stream_id.clone(),
-            title: result.title,
-            summary: result.summary,
-            output_text: result.output_text,
-            payload: result.payload,
-            metadata: result.metadata,
-            attachments: result.attachments,
-        }));
+        if end_tx
+            .send(Ok(ToolStreamEnd {
+                stream_id: stream_id.clone(),
+                title: result.title,
+                summary: result.summary,
+                output_text: result.output_text,
+                payload: result.payload,
+                metadata: result.metadata,
+                attachments: result.attachments,
+            }))
+            .is_err()
+        {
+            tracing::debug!(
+                stream_id,
+                "emulated plugin stream terminal-result receiver was dropped"
+            );
+        }
         Ok(ToolInvokeStream {
             stream_id,
             chunks: rx,
@@ -927,7 +986,7 @@ impl PluginHost {
                 continue;
             }
             let patch: Option<ShellEnvPatch> = serde_json::from_value(result)
-                .map_err(|error| PluginError::invalid_params(error.to_string()))?;
+                .map_err(|error| PluginError::invalid_params_error(&error))?;
             if let Some(p) = patch {
                 for (k, v) in p.set {
                     set.insert(k, v);
@@ -1109,15 +1168,48 @@ impl PluginHost {
             let input = input.clone();
             let plugin = plugin.clone();
             notifications.push(async move {
+                let plugin_id = plugin.key();
                 let params = match serde_json::to_value(&input) {
                     Ok(v) => v,
-                    Err(_) => return,
+                    Err(error) => {
+                        tracing::error!(
+                            plugin_id = %plugin_id,
+                            hook = method::HOOK_NOTIFICATION,
+                            diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                                "failed to serialize plugin notification hook payload",
+                                &error,
+                            ),
+                            "plugin notification hook payload serialization failed"
+                        );
+                        return;
+                    }
                 };
-                let _ = tokio::time::timeout(
+                match tokio::time::timeout(
                     timeout,
                     plugin.transport.notify(method::HOOK_NOTIFICATION, params),
                 )
-                .await;
+                .await
+                {
+                    Ok(Ok(())) => {}
+                    Ok(Err(error)) => tracing::warn!(
+                        plugin_id = %plugin_id,
+                        hook = method::HOOK_NOTIFICATION,
+                        diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                            "plugin notification hook delivery failed",
+                            &error,
+                        ),
+                        "best-effort plugin notification was not delivered"
+                    ),
+                    Err(error) => tracing::warn!(
+                        plugin_id = %plugin_id,
+                        hook = method::HOOK_NOTIFICATION,
+                        diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                            "plugin notification hook timed out after 5 seconds",
+                            &error,
+                        ),
+                        "best-effort plugin notification timed out"
+                    ),
+                }
             });
         }
         futures_util::future::join_all(notifications).await;
@@ -1136,7 +1228,7 @@ impl PluginHost {
             }
             let plugin_id = plugin.key().to_string();
             let params = serde_json::to_value(&current)
-                .map_err(|e| PluginError::invalid_params(e.to_string()))?;
+                .map_err(|e| PluginError::invalid_params_error(&e))?;
             let context = HostCallbackContext {
                 plugin_id: Some(plugin_id.clone()),
                 session_id: current.session_id,
@@ -1165,8 +1257,8 @@ impl PluginHost {
                 // No-op run; not recorded as transcript activity.
                 continue;
             }
-            let resp: Option<CommandBeforeResponse> = serde_json::from_value(v)
-                .map_err(|e| PluginError::invalid_params(e.to_string()))?;
+            let resp: Option<CommandBeforeResponse> =
+                serde_json::from_value(v).map_err(|e| PluginError::invalid_params_error(&e))?;
             match resp {
                 Some(CommandBeforeResponse::Abort { reason }) => {
                     self.push_hook_runs(vec![HookRunRecord::new(
@@ -1218,8 +1310,8 @@ impl PluginHost {
                 continue;
             }
             let plugin_id = plugin.key().to_string();
-            let params = serde_json::to_value(&input)
-                .map_err(|e| PluginError::invalid_params(e.to_string()))?;
+            let params =
+                serde_json::to_value(&input).map_err(|e| PluginError::invalid_params_error(&e))?;
             let v = match call_with_timeout(plugin, method::HOOK_AUTH, params, timeout).await {
                 Ok(v) => v,
                 Err(err) => {
@@ -1233,8 +1325,8 @@ impl PluginHost {
                 // No-op run (no credentials supplied); not recorded.
                 continue;
             }
-            let out: Option<AuthOutput> = serde_json::from_value(v)
-                .map_err(|e| PluginError::invalid_params(e.to_string()))?;
+            let out: Option<AuthOutput> =
+                serde_json::from_value(v).map_err(|e| PluginError::invalid_params_error(&e))?;
             if out.is_some() {
                 self.push_hook_runs(vec![HookRunRecord::new(
                     "auth",
@@ -1262,8 +1354,8 @@ impl PluginHost {
                 continue;
             }
             let plugin_id = plugin.key().to_string();
-            let params = serde_json::to_value(&input)
-                .map_err(|e| PluginError::invalid_params(e.to_string()))?;
+            let params =
+                serde_json::to_value(&input).map_err(|e| PluginError::invalid_params_error(&e))?;
             let v = match call_with_timeout(plugin, method::HOOK_PROVIDER_LIST, params, timeout)
                 .await
             {
@@ -1282,8 +1374,8 @@ impl PluginHost {
                 // No-op run; not recorded as transcript activity.
                 continue;
             }
-            let patch: Option<ProviderListPatch> = serde_json::from_value(v)
-                .map_err(|e| PluginError::invalid_params(e.to_string()))?;
+            let patch: Option<ProviderListPatch> =
+                serde_json::from_value(v).map_err(|e| PluginError::invalid_params_error(&e))?;
             if let Some(p) = patch {
                 self.push_hook_runs(vec![HookRunRecord::new(
                     "provider.list",
@@ -1351,12 +1443,43 @@ impl PluginHost {
             let input = input.clone();
             let plugin = plugin.clone();
             notifications.push(async move {
+                let plugin_id = plugin.key();
                 let params = match serde_json::to_value(&input) {
                     Ok(v) => v,
-                    Err(_) => return,
+                    Err(error) => {
+                        tracing::error!(
+                            plugin_id = %plugin_id,
+                            hook = method,
+                            diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                                "failed to serialize best-effort plugin hook payload",
+                                &error,
+                            ),
+                            "best-effort plugin hook payload serialization failed"
+                        );
+                        return;
+                    }
                 };
-                let _ =
-                    tokio::time::timeout(timeout, plugin.transport.notify(method, params)).await;
+                match tokio::time::timeout(timeout, plugin.transport.notify(method, params)).await {
+                    Ok(Ok(())) => {}
+                    Ok(Err(error)) => tracing::warn!(
+                        plugin_id = %plugin_id,
+                        hook = method,
+                        diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                            "best-effort plugin hook delivery failed",
+                            &error,
+                        ),
+                        "best-effort plugin hook was not delivered"
+                    ),
+                    Err(error) => tracing::warn!(
+                        plugin_id = %plugin_id,
+                        hook = method,
+                        diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                            "best-effort plugin hook timed out after 5 seconds",
+                            &error,
+                        ),
+                        "best-effort plugin hook timed out"
+                    ),
+                }
             });
         }
         futures_util::future::join_all(notifications).await;
@@ -1377,8 +1500,8 @@ impl PluginHost {
                 continue;
             }
             let plugin_id = plugin.key().to_string();
-            let params = serde_json::to_value(&input)
-                .map_err(|e| PluginError::invalid_params(e.to_string()))?;
+            let params =
+                serde_json::to_value(&input).map_err(|e| PluginError::invalid_params_error(&e))?;
             let v = match call_with_timeout(plugin, method::HOOK_SESSION_START, params, timeout)
                 .await
             {
@@ -1398,8 +1521,8 @@ impl PluginHost {
                 // as transcript activity.
                 continue;
             }
-            let patch: Option<SessionStartPatch> = serde_json::from_value(v)
-                .map_err(|e| PluginError::invalid_params(e.to_string()))?;
+            let patch: Option<SessionStartPatch> =
+                serde_json::from_value(v).map_err(|e| PluginError::invalid_params_error(&e))?;
             if let Some(p) = patch {
                 self.push_hook_runs(vec![HookRunRecord::new(
                     "session.start",
@@ -1519,7 +1642,7 @@ impl PluginHost {
             }
             let plugin_id = plugin.key().to_string();
             let params = serde_json::to_value(&current)
-                .map_err(|e| PluginError::invalid_params(e.to_string()))?;
+                .map_err(|e| PluginError::invalid_params_error(&e))?;
             let v = match await_transport_with_cancellation(
                 cancellation.clone(),
                 call_with_timeout(plugin, method::HOOK_USER_PROMPT_SUBMIT, params, timeout),
@@ -1542,8 +1665,8 @@ impl PluginHost {
                 // are recorded as transcript activity.
                 continue;
             }
-            let patch: Option<UserPromptSubmitPatch> = serde_json::from_value(v)
-                .map_err(|e| PluginError::invalid_params(e.to_string()))?;
+            let patch: Option<UserPromptSubmitPatch> =
+                serde_json::from_value(v).map_err(|e| PluginError::invalid_params_error(&e))?;
             if let Some(p) = patch {
                 if let Some(r) = p.block_reason {
                     self.push_hook_runs(vec![HookRunRecord::new(
@@ -1588,15 +1711,48 @@ impl PluginHost {
             let input = input.clone();
             let plugin = plugin.clone();
             notifications.push(async move {
+                let plugin_id = plugin.key();
                 let params = match serde_json::to_value(&input) {
                     Ok(v) => v,
-                    Err(_) => return,
+                    Err(error) => {
+                        tracing::error!(
+                            plugin_id = %plugin_id,
+                            hook = method::HOOK_TOOL_FAILURE,
+                            diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                                "failed to serialize plugin tool-failure hook payload",
+                                &error,
+                            ),
+                            "plugin tool-failure hook payload serialization failed"
+                        );
+                        return;
+                    }
                 };
-                let _ = tokio::time::timeout(
+                match tokio::time::timeout(
                     timeout,
                     plugin.transport.notify(method::HOOK_TOOL_FAILURE, params),
                 )
-                .await;
+                .await
+                {
+                    Ok(Ok(())) => {}
+                    Ok(Err(error)) => tracing::warn!(
+                        plugin_id = %plugin_id,
+                        hook = method::HOOK_TOOL_FAILURE,
+                        diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                            "plugin tool-failure hook delivery failed",
+                            &error,
+                        ),
+                        "best-effort plugin tool-failure notification was not delivered"
+                    ),
+                    Err(error) => tracing::warn!(
+                        plugin_id = %plugin_id,
+                        hook = method::HOOK_TOOL_FAILURE,
+                        diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                            "plugin tool-failure hook timed out after 5 seconds",
+                            &error,
+                        ),
+                        "best-effort plugin tool-failure notification timed out"
+                    ),
+                }
             });
         }
         futures_util::future::join_all(notifications).await;
@@ -1671,10 +1827,17 @@ impl PluginHost {
         };
         match tokio::time::timeout(CATALOG_DEADLINE, dispatch).await {
             Ok(outputs) => outputs,
-            Err(_) => (0..input_count)
+            Err(error) => (0..input_count)
                 .map(|_| {
-                    Err(PluginError::internal(
-                        "tool.definition catalog pass did not complete within 5s",
+                    Err(PluginError::timeout_with_public_detail(
+                        agena_failure::diagnostic::format_error_chain_with_context(
+                            format!(
+                                "tool.definition catalog pass for {input_count} inputs did not complete within {}ms",
+                                CATALOG_DEADLINE.as_millis()
+                            ),
+                            &error,
+                        ),
+                        "Plugin tool definitions could not be loaded in time. Retry after the plugin finishes starting.",
                     ))
                 })
                 .collect(),
@@ -1707,8 +1870,8 @@ impl PluginHost {
                 continue;
             }
             let plugin_id = plugin.key().to_string();
-            let params = serde_json::to_value(&input)
-                .map_err(|e| PluginError::invalid_params(e.to_string()))?;
+            let params =
+                serde_json::to_value(&input).map_err(|e| PluginError::invalid_params_error(&e))?;
             let context = HostCallbackContext {
                 session_id: Some(input.session_id),
                 ..Default::default()
@@ -1764,8 +1927,8 @@ impl PluginHost {
                 runs.push(AgentStopHookRun::ran(plugin_id, "agent.stop"));
                 continue;
             }
-            let patch: Option<AgentStopPatch> = serde_json::from_value(v)
-                .map_err(|e| PluginError::invalid_params(e.to_string()))?;
+            let patch: Option<AgentStopPatch> =
+                serde_json::from_value(v).map_err(|e| PluginError::invalid_params_error(&e))?;
             if let Some(p) = patch {
                 let has_effect = p.continue_with_message.is_some() || p.reason.is_some();
                 if has_effect {
@@ -1961,15 +2124,48 @@ impl PluginHost {
             let env = env.clone();
             let plugin = plugin.clone();
             notifications.push(async move {
+                let plugin_id = plugin.key();
                 let params = match serde_json::to_value(&env) {
                     Ok(v) => v,
-                    Err(_) => return,
+                    Err(error) => {
+                        tracing::error!(
+                            plugin_id = %plugin_id,
+                            hook = method::HOOK_EVENT,
+                            diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                                "failed to serialize plugin event hook payload",
+                                &error,
+                            ),
+                            "plugin event hook payload serialization failed"
+                        );
+                        return;
+                    }
                 };
-                let _ = tokio::time::timeout(
+                match tokio::time::timeout(
                     timeout,
                     plugin.transport.notify(method::HOOK_EVENT, params),
                 )
-                .await;
+                .await
+                {
+                    Ok(Ok(())) => {}
+                    Ok(Err(error)) => tracing::warn!(
+                        plugin_id = %plugin_id,
+                        hook = method::HOOK_EVENT,
+                        diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                            "plugin event hook delivery failed",
+                            &error,
+                        ),
+                        "best-effort plugin event notification was not delivered"
+                    ),
+                    Err(error) => tracing::warn!(
+                        plugin_id = %plugin_id,
+                        hook = method::HOOK_EVENT,
+                        diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                            "plugin event hook timed out after 2 seconds",
+                            &error,
+                        ),
+                        "best-effort plugin event notification timed out"
+                    ),
+                }
             });
         }
         futures_util::future::join_all(notifications).await;
@@ -1990,7 +2186,10 @@ impl PluginHost {
                     &plugin_id,
                     "error",
                     "shutdown",
-                    format!("plugin shutdown did not reach quiescence: {error}"),
+                    agena_failure::diagnostic::format_error_chain_with_context(
+                        "plugin shutdown did not reach quiescence",
+                        &error,
+                    ),
                     serde_json::Value::Null,
                 );
             }
@@ -2055,7 +2254,12 @@ impl PluginHost {
                 let changed = self.operation_registry.parent(&scope).as_ref() != Some(&parent);
                 self.operation_registry
                     .set_parent(scope, parent)
-                    .map_err(|error| error.to_string())?;
+                    .map_err(|error| {
+                        agena_failure::diagnostic::format_error_chain_with_context(
+                            "failed to declare the plugin operation scope parent",
+                            &error,
+                        )
+                    })?;
                 Ok(changed)
             }
             None => Ok(self.operation_registry.clear_parent(&scope).is_some()),
@@ -2135,7 +2339,7 @@ impl PluginHost {
         plugin_id: &str,
         operation_id: &str,
     ) -> Option<PluginOperationDefinition> {
-        let plugin_key: PluginKey = plugin_id.parse().ok()?;
+        let plugin_key = parse_plugin_key_for_lookup(plugin_id, "resolve plugin operation")?;
         let name = operation_registry_name(&plugin_key, operation_id);
         self.operation_registry
             .resolve(None, &name)
@@ -2163,13 +2367,47 @@ impl PluginHost {
         plugin_id: &str,
         tool_name: &str,
     ) -> Option<RegisteredTool> {
-        let plugin_key: PluginKey = plugin_id.parse().ok()?;
-        let registry = self.tool_registry.read().ok()?;
+        let plugin_key: PluginKey = match plugin_id.parse() {
+            Ok(plugin_key) => plugin_key,
+            Err(error) => {
+                tracing::warn!(
+                    diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                        "parse plugin id while resolving registered tool",
+                        &error,
+                    ),
+                    "registered plugin tool lookup rejected an invalid plugin id"
+                );
+                return None;
+            }
+        };
+        let registry = match self.tool_registry.read() {
+            Ok(registry) => registry,
+            Err(error) => {
+                tracing::error!(
+                    operation = "resolve registered plugin tool",
+                    error = %error,
+                    "recovering poisoned plugin tool-registry lock"
+                );
+                error.into_inner()
+            }
+        };
         registry
             .lookup_for_plugin(&plugin_key, tool_name)
             .cloned()
             .or_else(|| {
-                let tool_key: ToolKey = tool_name.parse().ok()?;
+                let tool_key: ToolKey = match tool_name.parse() {
+                    Ok(tool_key) => tool_key,
+                    Err(error) => {
+                        tracing::debug!(
+                            diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                                "parse canonical tool name during registered-tool fallback",
+                                &error,
+                            ),
+                            "registered plugin tool fallback skipped a non-canonical tool name"
+                        );
+                        return None;
+                    }
+                };
                 (tool_key.plugin() == &plugin_key)
                     .then(|| registry.lookup_tool_by_key(&tool_key).cloned())
                     .flatten()
@@ -2186,10 +2424,16 @@ impl PluginHost {
     /// claims). Runs belonging to other sessions stay queued for their own
     /// consumption.
     pub fn drain_hook_runs(&self, session_id: i64) -> Vec<HookRunRecord> {
-        let mut pending = self
-            .hook_runs
-            .lock()
-            .expect("hook run queue mutex poisoned");
+        let mut pending = match self.hook_runs.lock() {
+            Ok(pending) => pending,
+            Err(error) => {
+                tracing::error!(
+                    diagnostic = %error,
+                    "plugin hook-run queue lock was poisoned; recovering queued hook diagnostics"
+                );
+                error.into_inner()
+            }
+        };
         let mut taken = Vec::new();
         let mut remaining = Vec::new();
         for run in pending.drain(..) {

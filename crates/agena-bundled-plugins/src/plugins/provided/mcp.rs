@@ -693,7 +693,19 @@ const fn default_mcp_search_limit() -> u32 {
 }
 
 fn mcp_tool_index_fingerprint(results: &[serde_json::Value]) -> String {
-    let encoded = serde_json::to_vec(results).unwrap_or_default();
+    let encoded = match serde_json::to_vec(results) {
+        Ok(encoded) => encoded,
+        Err(error) => {
+            tracing::error!(
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "serialize MCP tool-search index fingerprint",
+                    &error,
+                ),
+                "MCP tool-search index fingerprint is using a debug fallback"
+            );
+            format!("{results:?}").into_bytes()
+        }
+    };
     hex::encode(Sha256::digest(encoded))
 }
 

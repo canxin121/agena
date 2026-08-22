@@ -23,12 +23,11 @@ struct LayeredValidation {
 }
 
 pub fn parse_settings_path(path: &str) -> Result<Vec<String>, ConfigError> {
-    agena_domain::parse_json_path(path).map_err(|error| ConfigError::Validation(error.to_string()))
+    agena_domain::parse_json_path(path).map_err(|error| ConfigError::validation_error(&error))
 }
 
 pub fn get_json_path(value: &JsonValue, path: Option<&str>) -> Result<JsonValue, ConfigError> {
-    agena_domain::get_json_path(value, path)
-        .map_err(|error| ConfigError::Validation(error.to_string()))
+    agena_domain::get_json_path(value, path).map_err(|error| ConfigError::validation_error(&error))
 }
 
 pub fn list_json_path(
@@ -593,9 +592,7 @@ mod tests {
             &global_path,
             r#"{
                 "providers": {
-                    "default": "local",
                     "local": {
-                        "defaults": { "adapter": "ollama", "model": "qwen3" },
                         "adapters": {
                             "ollama": {
                                 "enabled": true,
@@ -746,11 +743,9 @@ mod tests {
     }
 
     #[test]
-    fn deleting_a_referenced_provider_clears_its_references_in_one_atomic_patch() {
-        // Mirrors `delete_provider`: a single patch to the `providers` root
-        // removes the provider key and every reference to it (default +
-        // default_selection) as null-valued deletions. The patch must validate
-        // atomically and the written file must still resolve.
+    fn deleting_a_provider_validates_in_one_atomic_patch() {
+        // Removing a provider is a single patch to the `providers` root. There
+        // are no global model references to clear anymore.
         let root = test_root();
         let global_path = root.join("agena/agena.json");
         let workspace_path = root.join("workspace/.agena/agena.json");
@@ -762,15 +757,7 @@ mod tests {
             &global_path,
             r#"{
                 "providers": {
-                    "default": "opencode",
-                    "default_selection": {
-                        "provider": "opencode",
-                        "adapter": "openai_responses",
-                        "model": "deepseek-v4-flash",
-                        "thinking_mode": "max"
-                    },
                     "opencode": {
-                        "defaults": { "adapter": "anthropic" },
                         "auth": {
                             "mode": "api",
                             "subtype": "custom",
@@ -783,7 +770,6 @@ mod tests {
                         }
                     },
                     "chatgpt": {
-                        "defaults": { "adapter": "openai_responses", "model": "gpt-5" },
                         "auth": { "mode": "credential", "issuer": "openai_chatgpt" },
                         "adapters": {
                             "openai_responses": {
@@ -807,11 +793,10 @@ mod tests {
                 target: ConfigSettingsPathInput {
                     path: Some("providers".to_owned()),
                 },
-                changes: JsonValue::Object(JsonMap::from_iter([
-                    ("opencode".to_owned(), JsonValue::Null),
-                    ("default".to_owned(), JsonValue::Null),
-                    ("default_selection".to_owned(), JsonValue::Null),
-                ])),
+                changes: JsonValue::Object(JsonMap::from_iter([(
+                    "opencode".to_owned(),
+                    JsonValue::Null,
+                )])),
                 options: edit_options(false),
             },
             &TestEnvironment,
@@ -825,8 +810,6 @@ mod tests {
                 .unwrap()
                 .contains_key("opencode")
         );
-        assert!(patched.current.get("default").is_none());
-        assert!(patched.current.get("default_selection").is_none());
         assert!(patched.current.get("chatgpt").is_some());
 
         validate_layered_file_settings_with_env(
@@ -889,11 +872,8 @@ mod tests {
     }
 
     #[test]
-    fn default_and_default_selection_persist_in_one_atomic_patch() {
+    fn provider_routes_persist_in_one_atomic_patch() {
         use serde_json::json;
-        // Mirrors `set_provider_default_selection`: `providers.default` and
-        // `providers.default_selection` are written by a single patch so a
-        // validation failure cannot leave only the default provider persisted.
         let root = test_root();
         let global_path = root.join("agena/agena.json");
         let workspace_path = root.join("workspace/.agena/agena.json");
@@ -913,14 +893,7 @@ mod tests {
                     path: Some("providers".to_owned()),
                 },
                 changes: json!({
-                    "default": "opencode",
-                    "default_selection": {
-                        "provider": "opencode",
-                        "adapter": "anthropic",
-                        "model": "claude"
-                    },
                     "opencode": {
-                        "defaults": { "adapter": "anthropic" },
                         "auth": {
                             "mode": "api",
                             "subtype": "custom",
@@ -936,11 +909,12 @@ mod tests {
             },
             &TestEnvironment,
         )
-        .expect("atomic default + default_selection patch must validate");
+        .expect("provider route patch must validate");
 
-        assert_eq!(patched.current["default"], "opencode");
-        assert_eq!(patched.current["default_selection"]["provider"], "opencode");
-        assert_eq!(patched.current["default_selection"]["adapter"], "anthropic");
+        assert_eq!(
+            patched.current["opencode"]["adapters"]["anthropic"]["enabled"],
+            true
+        );
         validate_layered_file_settings_with_env(
             &global_path,
             &workspace_path,

@@ -112,7 +112,7 @@ pub async fn list_session_transcript_run_parts(
     let page = store
         .load_run_page(session_id, run_id, cursor, limit as i64)
         .await
-        .map_err(|error| ServerError::internal(error.to_string()))?;
+        .map_err(|error| ServerError::internal_error(&error))?;
     let next_cursor = page
         .parts
         .last()
@@ -170,7 +170,7 @@ pub async fn list_session_transcript_fold_parts(
         let page = store
             .load_run_page(session_id, *run_id, before, limit as i64)
             .await
-            .map_err(|error| ServerError::internal(error.to_string()))?;
+            .map_err(|error| ServerError::internal_error(&error))?;
         has_more |= page.has_more;
         candidates.extend(page.parts);
     }
@@ -199,7 +199,7 @@ pub async fn list_session_transcript_fold_parts(
         version: store
             .load_page(session_id, None, 1)
             .await
-            .map_err(|error| ServerError::internal(error.to_string()))?
+            .map_err(|error| ServerError::internal_error(&error))?
             .meta
             .version,
         parts: projected,
@@ -236,7 +236,7 @@ async fn load_visible_page(
         let page = store
             .load_page(session_id, raw_before, RAW_SCAN_PAGE_SIZE)
             .await
-            .map_err(|error| ServerError::internal(error.to_string()))?;
+            .map_err(|error| ServerError::internal_error(&error))?;
         version = page.meta.version;
         raw_has_more = page.has_more;
         let oldest = page.parts.last().map(|part| PartCursor {
@@ -290,7 +290,7 @@ async fn load_visible_page(
         }
     }
 
-    let projection = project_visible_blocks(session_id, &selected);
+    let projection = project_visible_blocks(session_id, &selected)?;
     Ok(VisiblePage {
         version,
         parts: projection.parts,
@@ -311,7 +311,7 @@ async fn load_all_run_parts(
         let page = store
             .load_run_page(session_id, run_id, before, RAW_SCAN_PAGE_SIZE)
             .await
-            .map_err(|error| ServerError::internal(error.to_string()))?;
+            .map_err(|error| ServerError::internal_error(&error))?;
         let next_before = page.parts.last().map(|part| PartCursor {
             created_at_ms: part.created_at_ms,
             part_id: part.part_id,
@@ -382,7 +382,10 @@ fn logical_blocks(parts: &[Part]) -> Vec<LogicalBlock> {
     blocks
 }
 
-fn project_visible_blocks(session_id: i64, blocks: &[LogicalBlock]) -> VisibleProjection {
+fn project_visible_blocks(
+    session_id: i64,
+    blocks: &[LogicalBlock],
+) -> Result<VisibleProjection, ServerError> {
     let mut parts = Vec::new();
     let mut folds = Vec::new();
     for block in blocks {
@@ -394,14 +397,14 @@ fn project_visible_blocks(session_id: i64, blocks: &[LogicalBlock]) -> VisiblePr
             }
         }
         if block.role == "assistant" {
-            let (visible, unit_folds) = visible_assistant_block(session_id, block);
+            let (visible, unit_folds) = visible_assistant_block(session_id, block)?;
             parts.extend(visible);
             folds.extend(unit_folds);
         }
     }
     parts = parts.into_iter().map(compact_presentation_part).collect();
     parts.sort_by_key(|part| (part.created_at_ms, part.part_id));
-    VisibleProjection { parts, folds }
+    Ok(VisibleProjection { parts, folds })
 }
 
 /// Run markers may carry provider-internal round/history arrays that are
@@ -435,7 +438,7 @@ fn compact_presentation_part(mut part: Part) -> Part {
 fn visible_assistant_block(
     session_id: i64,
     block: &LogicalBlock,
-) -> (Vec<Part>, Vec<SessionTranscriptFoldResource>) {
+) -> Result<(Vec<Part>, Vec<SessionTranscriptFoldResource>), ServerError> {
     let run_ids = block
         .units
         .iter()
@@ -460,22 +463,21 @@ fn visible_assistant_block(
     visible.extend(activities[visible_start..].iter().cloned());
     visible.sort_by_key(|part| (part.created_at_ms, part.part_id));
     if hidden_count == 0 || run_ids.is_empty() {
-        return (visible, Vec::new());
+        return Ok((visible, Vec::new()));
     }
     let anchor = &activities[visible_start];
     let Some(anchor_run_id) = anchor.run_id else {
-        return (visible, Vec::new());
+        return Ok((visible, Vec::new()));
     };
-    let next_cursor = encode_fold_cursor(
+    let next_cursor = Some(encode_fold_cursor(
         session_id,
         &run_ids,
         PartCursor {
             created_at_ms: anchor.created_at_ms,
             part_id: anchor.part_id,
         },
-    )
-    .ok();
-    (
+    )?);
+    Ok((
         visible,
         vec![SessionTranscriptFoldResource {
             run_id: anchor_run_id,
@@ -484,7 +486,7 @@ fn visible_assistant_block(
             hidden_count: hidden_count as u64,
             next_cursor,
         }],
-    )
+    ))
 }
 
 fn decode_cursor(value: Option<&str>, session_id: i64) -> Result<Option<PartCursor>, ServerError> {
@@ -614,7 +616,7 @@ mod tests {
                 parts,
             }],
         };
-        let (visible, folds) = visible_assistant_block(1, &block);
+        let (visible, folds) = visible_assistant_block(1, &block).unwrap();
 
         assert_eq!(
             visible.iter().map(|part| part.part_id).collect::<Vec<_>>(),

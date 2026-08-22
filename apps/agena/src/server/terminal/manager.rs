@@ -1,8 +1,9 @@
 use std::{
     collections::{BTreeMap, VecDeque},
+    error::Error as _,
     io::{Read, Write},
     path::Path,
-    sync::{Arc, LazyLock, Mutex},
+    sync::{Arc, LazyLock, Mutex, MutexGuard},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -43,12 +44,39 @@ const TERMINAL_HISTORY_MAX_BYTES: usize = 512 * 1024;
 // upward before settling at the current prompt/screen.
 const TERMINAL_INITIAL_SNAPSHOT_MAX_BYTES: usize = 32 * 1024;
 
+fn recover_terminal_mutex<'a, T>(mutex: &'a Mutex<T>, name: &str) -> MutexGuard<'a, T> {
+    match mutex.lock() {
+        Ok(guard) => guard,
+        Err(error) => {
+            tracing::error!(
+                lock = name,
+                diagnostic = %error,
+                "terminal state lock was poisoned; recovering its inner state"
+            );
+            error.into_inner()
+        }
+    }
+}
+
+fn body_error_contains_length_limit(error: &(dyn std::error::Error + 'static)) -> bool {
+    let mut current = Some(error);
+    while let Some(cause) = current {
+        if cause.is::<http_body_util::LengthLimitError>() {
+            return true;
+        }
+        current = cause.source();
+    }
+    false
+}
+
 #[derive(Debug, Error)]
 pub enum TerminalError {
     #[error("Maximum terminal sessions reached")]
     LimitReached,
     #[error("Invalid working directory")]
     InvalidWorkingDirectory,
+    #[error("Failed to inspect the terminal working directory")]
+    WorkingDirectory(#[source] std::io::Error),
     #[error("Terminal session not found")]
     NotFound,
     #[error("Failed to create terminal session")]
@@ -118,13 +146,22 @@ impl From<PersistedTerminalBackend> for TerminalBackend {
     }
 }
 
-static TMUX_AVAILABLE: LazyLock<bool> = LazyLock::new(|| {
-    std::process::Command::new("tmux")
-        .arg("-V")
-        .output()
-        .map(|output| output.status.success())
-        .unwrap_or(false)
-});
+static TMUX_AVAILABLE: LazyLock<bool> =
+    LazyLock::new(
+        || match std::process::Command::new("tmux").arg("-V").output() {
+            Ok(output) => output.status.success(),
+            Err(error) => {
+                tracing::debug!(
+                    diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                        "probe tmux availability",
+                        &error,
+                    ),
+                    "tmux is unavailable"
+                );
+                false
+            }
+        },
+    );
 
 fn now_millis() -> u64 {
     SystemTime::now()
@@ -134,7 +171,18 @@ fn now_millis() -> u64 {
 }
 
 fn terminal_idle_timeout() -> Option<Duration> {
-    let raw = std::env::var(TERMINAL_IDLE_TIMEOUT_ENV).ok()?;
+    let raw = match std::env::var(TERMINAL_IDLE_TIMEOUT_ENV) {
+        Ok(raw) => raw,
+        Err(std::env::VarError::NotPresent) => return None,
+        Err(error) => {
+            tracing::warn!(
+                variable = TERMINAL_IDLE_TIMEOUT_ENV,
+                diagnostic = %error,
+                "terminal idle timeout environment variable could not be decoded"
+            );
+            return None;
+        }
+    };
 
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -161,23 +209,47 @@ fn tmux_session_name(session_id: &str) -> String {
 }
 
 fn tmux_has_session(session_name: &str) -> bool {
-    std::process::Command::new("tmux")
+    match std::process::Command::new("tmux")
         .arg("has-session")
         .arg("-t")
         .arg(session_name)
         .output()
-        .map(|output| output.status.success())
-        .unwrap_or(false)
+    {
+        Ok(output) => output.status.success(),
+        Err(error) => {
+            tracing::warn!(
+                tmux_session = session_name,
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "query a tmux terminal session",
+                    &error,
+                ),
+                "tmux terminal session availability could not be determined"
+            );
+            false
+        }
+    }
 }
 
-fn tmux_kill_session(session_name: &str) -> bool {
-    std::process::Command::new("tmux")
+fn tmux_kill_session(session_name: &str) -> anyhow::Result<()> {
+    let output = std::process::Command::new("tmux")
         .arg("kill-session")
         .arg("-t")
         .arg(session_name)
         .output()
-        .map(|output| output.status.success())
-        .unwrap_or(false)
+        .map_err(|error| {
+            anyhow::anyhow!(
+                "failed to execute tmux while stopping terminal session `{session_name}`: {}",
+                agena_failure::diagnostic::format_error_chain(&error)
+            )
+        })?;
+    if output.status.success() {
+        return Ok(());
+    }
+    Err(anyhow::anyhow!(
+        "tmux could not stop terminal session `{session_name}` (status {}): {}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr).trim()
+    ))
 }
 
 fn normalize_persisted_registry(
@@ -192,22 +264,35 @@ fn normalize_persisted_registry(
 async fn load_session_registry_from_store(
     db: &crate::server::persistence::db::ServerStateDb,
 ) -> PersistedTerminalRegistry {
-    if let Ok(Some(registry)) = db
+    match db
         .get_json::<PersistedTerminalRegistry>(
             crate::server::persistence::db::KV_KEY_TERMINAL_SESSION_REGISTRY,
         )
         .await
     {
-        return normalize_persisted_registry(registry);
+        Ok(Some(registry)) => return normalize_persisted_registry(registry),
+        Ok(None) => {}
+        Err(error) => {
+            tracing::error!(
+                diagnostic = %error,
+                "failed to load the persisted terminal session registry; starting with an empty registry"
+            );
+        }
     }
 
     let registry = PersistedTerminalRegistry::default();
-    let _ = db
+    if let Err(error) = db
         .set_json(
             crate::server::persistence::db::KV_KEY_TERMINAL_SESSION_REGISTRY,
             &registry,
         )
-        .await;
+        .await
+    {
+        tracing::error!(
+            diagnostic = %error,
+            "failed to initialize the persisted terminal session registry"
+        );
+    }
     registry
 }
 
@@ -258,13 +343,19 @@ impl TerminalManager {
 
     fn queue_registry_flush(&self, registry: PersistedTerminalRegistry) {
         let mut should_spawn = false;
-        if let Ok(mut queue) = self.registry_flush_queue.lock() {
-            queue.pending = Some(registry);
-            if !queue.worker_running {
-                queue.worker_running = true;
-                should_spawn = true;
-            }
+        let mut queue = self.registry_flush_queue.lock().unwrap_or_else(|error| {
+            tracing::error!(
+                diagnostic = %error,
+                "terminal registry flush queue lock is poisoned; recovering queued persistence state"
+            );
+            error.into_inner()
+        });
+        queue.pending = Some(registry);
+        if !queue.worker_running {
+            queue.worker_running = true;
+            should_spawn = true;
         }
+        drop(queue);
 
         if !should_spawn {
             return;
@@ -276,21 +367,31 @@ impl TerminalManager {
             loop {
                 tokio::time::sleep(TERMINAL_REGISTRY_FLUSH_DEBOUNCE).await;
 
-                let pending = if let Ok(mut q) = queue.lock() {
-                    q.pending.take()
-                } else {
-                    None
-                };
+                let pending = queue
+                    .lock()
+                    .unwrap_or_else(|error| {
+                        tracing::error!(
+                            diagnostic = %error,
+                            "terminal registry flush queue lock is poisoned; recovering pending persistence state"
+                        );
+                        error.into_inner()
+                    })
+                    .pending
+                    .take();
 
                 let Some(candidate) = pending else {
-                    if let Ok(mut q) = queue.lock() {
-                        if q.pending.is_none() {
-                            q.worker_running = false;
-                            break;
-                        }
-                        continue;
+                    let mut q = queue.lock().unwrap_or_else(|error| {
+                        tracing::error!(
+                            diagnostic = %error,
+                            "terminal registry flush queue lock is poisoned while stopping the worker; recovering state"
+                        );
+                        error.into_inner()
+                    });
+                    if q.pending.is_none() {
+                        q.worker_running = false;
+                        break;
                     }
-                    break;
+                    continue;
                 };
 
                 if let Err(error) = db
@@ -306,10 +407,17 @@ impl TerminalManager {
                         "failed to persist terminal session registry; will retry"
                     );
 
-                    if let Ok(mut q) = queue.lock()
-                        && q.pending.is_none()
                     {
-                        q.pending = Some(candidate);
+                        let mut q = queue.lock().unwrap_or_else(|lock_error| {
+                            tracing::error!(
+                                diagnostic = %lock_error,
+                                "terminal registry flush queue lock is poisoned while scheduling a retry; recovering state"
+                            );
+                            lock_error.into_inner()
+                        });
+                        if q.pending.is_none() {
+                            q.pending = Some(candidate);
+                        }
                     }
 
                     tokio::time::sleep(TERMINAL_REGISTRY_FLUSH_RETRY_DELAY).await;
@@ -324,7 +432,13 @@ impl TerminalManager {
         F: FnOnce(&mut PersistedTerminalRegistry) -> bool,
     {
         let snapshot = {
-            let mut guard = self.session_registry.lock().unwrap();
+            let mut guard = self.session_registry.lock().unwrap_or_else(|error| {
+                tracing::error!(
+                    diagnostic = %error,
+                    "terminal session registry lock is poisoned; recovering persisted state"
+                );
+                error.into_inner()
+            });
             if !mutator(&mut guard) {
                 return false;
             }
@@ -344,7 +458,7 @@ impl TerminalManager {
         if sid.is_empty() {
             return None;
         }
-        let guard = self.session_registry.lock().unwrap();
+        let guard = recover_terminal_mutex(&self.session_registry, "persisted session registry");
         guard.sessions.get(sid).cloned()
     }
 
@@ -435,7 +549,7 @@ impl TerminalManager {
             return None;
         }
 
-        let _restore_guard = self.restore_lock.lock().unwrap();
+        let _restore_guard = recover_terminal_mutex(&self.restore_lock, "session restore");
 
         if let Some(existing) = self.sessions.get(sid) {
             return Some(existing.value().clone());
@@ -444,9 +558,20 @@ impl TerminalManager {
         let persisted = self.persisted_session(sid)?;
         let cwd = persisted.cwd.clone();
 
-        let Ok(cwd_meta) = std::fs::metadata(&cwd) else {
-            self.remove_persisted_session(sid);
-            return None;
+        let cwd_meta = match std::fs::metadata(&cwd) {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                tracing::warn!(
+                    session_id = sid,
+                    diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                        "inspect a persisted terminal working directory during restore",
+                        &error,
+                    ),
+                    "persisted terminal session could not be restored and will be removed"
+                );
+                self.remove_persisted_session(sid);
+                return None;
+            }
         };
         if !cwd_meta.is_dir() {
             self.remove_persisted_session(sid);
@@ -497,7 +622,10 @@ impl TerminalManager {
                 let mut to_remove = Vec::new();
                 for entry in manager.sessions.iter() {
                     let idle = {
-                        let last = entry.value().last_activity.lock().unwrap();
+                        let last = recover_terminal_mutex(
+                            &entry.value().last_activity,
+                            "session last activity",
+                        );
                         now.duration_since(*last)
                     };
                     if idle > idle_timeout {
@@ -508,7 +636,13 @@ impl TerminalManager {
                 for id in to_remove {
                     if let Some((_, session)) = manager.sessions.remove(&id) {
                         tracing::info!("Cleaning up idle terminal session: {}", id);
-                        let _ = session.kill();
+                        if let Err(error) = session.kill() {
+                            tracing::error!(
+                                session_id = id,
+                                diagnostic = %agena_failure::diagnostic::format_error_chain(error.as_ref()),
+                                "failed to stop an idle terminal session"
+                            );
+                        }
                         manager.remove_persisted_session(&id);
                     }
                 }
@@ -540,14 +674,24 @@ impl TerminalManager {
         }
 
         let persisted = self.persisted_session(sid)?;
-        if let Ok(meta) = std::fs::metadata(&persisted.cwd) {
-            if !meta.is_dir() {
+        match std::fs::metadata(&persisted.cwd) {
+            Ok(meta) if !meta.is_dir() => {
                 self.remove_persisted_session(sid);
                 return None;
             }
-        } else {
-            self.remove_persisted_session(sid);
-            return None;
+            Ok(_) => {}
+            Err(error) => {
+                tracing::warn!(
+                    session_id = sid,
+                    diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                        "inspect a persisted terminal working directory for session metadata",
+                        &error,
+                    ),
+                    "persisted terminal metadata is unavailable and will be removed"
+                );
+                self.remove_persisted_session(sid);
+                return None;
+            }
         }
 
         Some((persisted.cwd, false))
@@ -565,7 +709,7 @@ impl TerminalManager {
 
         let meta = tokio::fs::metadata(&cwd)
             .await
-            .map_err(|_| TerminalError::InvalidWorkingDirectory)?;
+            .map_err(TerminalError::WorkingDirectory)?;
         if !meta.is_dir() {
             return Err(TerminalError::InvalidWorkingDirectory);
         }
@@ -634,7 +778,7 @@ impl TerminalManager {
         };
 
         if persisted.backend == PersistedTerminalBackend::Tmux {
-            let _ = tmux_kill_session(&tmux_session_name(sid));
+            tmux_kill_session(&tmux_session_name(sid)).map_err(TerminalError::Kill)?;
         }
 
         self.remove_persisted_session(sid);
@@ -819,11 +963,13 @@ impl TerminalSession {
                     Ok(0) => break,
                     Ok(n) => {
                         let chunk = String::from_utf8_lossy(&buf[..n]).to_string();
-                        *session.last_activity.lock().unwrap() = Instant::now();
+                        *recover_terminal_mutex(&session.last_activity, "session last activity") =
+                            Instant::now();
 
                         let seq = session.seq.fetch_add(1, Ordering::Relaxed) + 1;
                         {
-                            let mut hist = session.history.lock().unwrap();
+                            let mut hist =
+                                recover_terminal_mutex(&session.history, "session history");
                             hist.bytes += chunk.len();
                             hist.chunks.push_back((seq, chunk.clone()));
                             while hist.bytes > TERMINAL_HISTORY_MAX_BYTES {
@@ -835,16 +981,35 @@ impl TerminalSession {
                             }
                         }
 
-                        let _ = session.tx.send(TerminalEvent::Data { seq, data: chunk });
+                        if session
+                            .tx
+                            .send(TerminalEvent::Data { seq, data: chunk })
+                            .is_err()
+                        {
+                            tracing::debug!(
+                                terminal_cwd = %session.cwd,
+                                "terminal output had no active event subscribers; it remains available in history"
+                            );
+                        }
                     }
-                    Err(_) => break,
+                    Err(error) => {
+                        tracing::error!(
+                            terminal_cwd = %session.cwd,
+                            diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                                "failed to read from the terminal PTY",
+                                &error,
+                            ),
+                            "terminal PTY reader stopped after an I/O failure"
+                        );
+                        break;
+                    }
                 }
             }
         });
     }
 
     fn snapshot_history_chunks(&self) -> Vec<(u64, String)> {
-        let hist = self.history.lock().unwrap();
+        let hist = recover_terminal_mutex(&self.history, "session history");
         hist.chunks.iter().cloned().collect()
     }
 
@@ -858,10 +1023,34 @@ impl TerminalSession {
                     // signal details across platforms; keep it null.
                     (Some(status.exit_code() as i32), None)
                 }
-                Err(_) => (None, None),
+                Err(error) => {
+                    tracing::error!(
+                        terminal_cwd = %session.cwd,
+                        diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                            "failed to wait for the terminal child process",
+                            &error,
+                        ),
+                        "terminal child wait failed"
+                    );
+                    (None, None)
+                }
             };
-            let _ = session.exit_state.send(true);
-            let _ = session.tx.send(TerminalEvent::Exit { exit_code, signal });
+            if session.exit_state.send(true).is_err() {
+                tracing::debug!(
+                    terminal_cwd = %session.cwd,
+                    "terminal exit state had no active receivers"
+                );
+            }
+            if session
+                .tx
+                .send(TerminalEvent::Exit { exit_code, signal })
+                .is_err()
+            {
+                tracing::debug!(
+                    terminal_cwd = %session.cwd,
+                    "terminal exit event had no active subscribers"
+                );
+            }
         });
     }
 
@@ -869,19 +1058,29 @@ impl TerminalSession {
         let permit = Arc::clone(&self.blocking_io)
             .acquire_owned()
             .await
-            .map_err(|_| anyhow::anyhow!("terminal I/O queue is closed"))?;
+            .map_err(|error| {
+                anyhow::anyhow!(agena_failure::diagnostic::format_error_chain_with_context(
+                    "acquire terminal write worker",
+                    &error,
+                ))
+            })?;
         let session = Arc::clone(self);
         tokio::task::spawn_blocking(move || {
             let _permit = permit;
             session.write_blocking(data)
         })
         .await
-        .map_err(|error| anyhow::anyhow!("terminal write worker failed: {error}"))?
+        .map_err(|error| {
+            anyhow::anyhow!(agena_failure::diagnostic::format_error_chain_with_context(
+                "terminal write worker failed",
+                &error,
+            ))
+        })?
     }
 
     fn write_blocking(&self, data: Bytes) -> Result<(), anyhow::Error> {
-        *self.last_activity.lock().unwrap() = Instant::now();
-        let mut writer = self.writer.lock().unwrap();
+        *recover_terminal_mutex(&self.last_activity, "session last activity") = Instant::now();
+        let mut writer = recover_terminal_mutex(&self.writer, "PTY writer");
         writer.write_all(&data)?;
         writer.flush()?;
         Ok(())
@@ -891,19 +1090,29 @@ impl TerminalSession {
         let permit = Arc::clone(&self.blocking_io)
             .acquire_owned()
             .await
-            .map_err(|_| anyhow::anyhow!("terminal I/O queue is closed"))?;
+            .map_err(|error| {
+                anyhow::anyhow!(agena_failure::diagnostic::format_error_chain_with_context(
+                    "acquire terminal resize worker",
+                    &error,
+                ))
+            })?;
         let session = Arc::clone(self);
         tokio::task::spawn_blocking(move || {
             let _permit = permit;
             session.resize_blocking(cols, rows)
         })
         .await
-        .map_err(|error| anyhow::anyhow!("terminal resize worker failed: {error}"))?
+        .map_err(|error| {
+            anyhow::anyhow!(agena_failure::diagnostic::format_error_chain_with_context(
+                "terminal resize worker failed",
+                &error,
+            ))
+        })?
     }
 
     fn resize_blocking(&self, cols: u16, rows: u16) -> Result<(), anyhow::Error> {
-        *self.last_activity.lock().unwrap() = Instant::now();
-        let master = self.master.lock().unwrap();
+        *recover_terminal_mutex(&self.last_activity, "session last activity") = Instant::now();
+        let master = recover_terminal_mutex(&self.master, "PTY master");
         master.resize(PtySize {
             rows,
             cols,
@@ -915,18 +1124,21 @@ impl TerminalSession {
 
     pub fn kill(&self) -> Result<(), anyhow::Error> {
         if let Some(name) = self.tmux_session_name.as_deref() {
-            let _ = tmux_kill_session(name);
+            tmux_kill_session(name)?;
         }
 
-        // portable-pty kill is best-effort.
-        let _ = self.killer.lock().unwrap().kill();
+        recover_terminal_mutex(&self.killer, "PTY child killer")
+            .kill()
+            .map_err(anyhow::Error::from)?;
         Ok(())
     }
 
     pub fn stop_runtime(&self) -> Result<(), anyhow::Error> {
         // Stop the attached runtime process. For tmux-backed sessions this terminates the
         // client while leaving the tmux session alive.
-        let _ = self.killer.lock().unwrap().kill();
+        recover_terminal_mutex(&self.killer, "PTY child killer")
+            .kill()
+            .map_err(anyhow::Error::from)?;
         Ok(())
     }
 
@@ -1101,7 +1313,20 @@ pub async fn terminal_create(
         Err(TerminalError::InvalidWorkingDirectory) => Err(AppError::bad_request(
             TerminalError::InvalidWorkingDirectory.to_string(),
         )),
-        Err(err) => Err(AppError::internal(err.to_string())),
+        Err(TerminalError::WorkingDirectory(error)) => {
+            let diagnostic = agena_failure::diagnostic::format_error_chain_with_context(
+                "inspect the terminal working directory",
+                &error,
+            );
+            tracing::warn!(%diagnostic, "terminal creation rejected an unreadable working directory");
+            let public = agena_failure::diagnostic::user_message_with_context(&diagnostic, 240);
+            Err(AppError::bad_request(if public.is_empty() {
+                "The terminal working directory could not be accessed.".to_owned()
+            } else {
+                public
+            }))
+        }
+        Err(err) => Err(AppError::internal_error(&err)),
     }
 }
 
@@ -1116,7 +1341,7 @@ pub async fn terminal_stream(
         .get(&session_id)
         .ok_or_else(|| AppError::not_found("Terminal session not found"))?;
 
-    *session.last_activity.lock().unwrap() = Instant::now();
+    *recover_terminal_mutex(&session.last_activity, "session last activity") = Instant::now();
     let mut rx = session.subscribe();
     let snapshot_chunks = session.snapshot_history_chunks();
     let snapshot_last_seq = snapshot_chunks.last().map(|(seq, _)| *seq).unwrap_or(0);
@@ -1263,15 +1488,33 @@ pub async fn terminal_input(
         .get(&session_id)
         .ok_or_else(|| AppError::not_found("Terminal session not found"))?;
 
-    let bytes = match axum::body::to_bytes(body, 1024 * 1024).await {
+    const MAX_TERMINAL_INPUT_BYTES: usize = 1024 * 1024;
+    let bytes = match axum::body::to_bytes(body, MAX_TERMINAL_INPUT_BYTES).await {
         Ok(bytes) => bytes,
-        Err(_) => return Err(AppError::payload_too_large("Input too large")),
+        Err(error) => {
+            let diagnostic = agena_failure::diagnostic::format_error_chain_with_context(
+                "failed to read terminal input request body",
+                &error,
+            );
+            if body_error_contains_length_limit(&error) {
+                tracing::warn!(
+                    terminal_session_id = %session_id,
+                    max_bytes = MAX_TERMINAL_INPUT_BYTES,
+                    %diagnostic,
+                    "rejected oversized terminal input"
+                );
+                return Err(AppError::payload_too_large(format!(
+                    "Terminal input exceeds the {MAX_TERMINAL_INPUT_BYTES}-byte limit: {diagnostic}"
+                )));
+            }
+            return Err(AppError::internal(diagnostic));
+        }
     };
 
     session
         .write(bytes)
         .await
-        .map_err(|err| AppError::internal(err.to_string()))?;
+        .map_err(|err| AppError::internal(format!("{err:#}")))?;
 
     Ok(Json(TerminalSuccessResponse { success: true }))
 }
@@ -1293,7 +1536,7 @@ pub async fn terminal_resize(
     session
         .resize(cols, rows)
         .await
-        .map_err(|err| AppError::internal(err.to_string()))?;
+        .map_err(|err| AppError::internal(format!("{err:#}")))?;
     state.terminal.remember_dimensions(&session_id, cols, rows);
 
     Ok(Json(TerminalResizeResponse {
@@ -1310,7 +1553,7 @@ pub async fn terminal_delete(
     match state.terminal.kill_session(&session_id) {
         Ok(()) => Ok(Json(TerminalSuccessResponse { success: true })),
         Err(TerminalError::NotFound) => Err(AppError::not_found("Terminal session not found")),
-        Err(err) => Err(AppError::internal(err.to_string())),
+        Err(err) => Err(AppError::internal_error(&err)),
     }
 }
 
@@ -1359,7 +1602,7 @@ pub async fn terminal_stop(
     match state.terminal.stop_session(&session_id) {
         Ok(()) => Ok(Json(TerminalSuccessResponse { success: true })),
         Err(TerminalError::NotFound) => Err(AppError::not_found("Terminal session not found")),
-        Err(err) => Err(AppError::internal(err.to_string())),
+        Err(err) => Err(AppError::internal_error(&err)),
     }
 }
 
@@ -1378,8 +1621,14 @@ pub async fn terminal_restart(
     let cols = body.cols.unwrap_or(80);
     let rows = body.rows.unwrap_or(24);
 
-    // Kill old session if it exists.
-    let _ = state.terminal.kill_session(&old_session_id);
+    // A missing old id is acceptable for an idempotent restart. Every actual
+    // stop failure must abort the restart so the server never reports two
+    // overlapping terminals as a successful replacement.
+    if let Err(error) = state.terminal.kill_session(&old_session_id)
+        && !matches!(error, TerminalError::NotFound)
+    {
+        return Err(AppError::internal_error(&error));
+    }
 
     match state.terminal.create(cwd, cols, rows).await {
         Ok(resp) => Ok(Json(resp)),
@@ -1389,6 +1638,19 @@ pub async fn terminal_restart(
         Err(TerminalError::InvalidWorkingDirectory) => Err(AppError::bad_request(
             TerminalError::InvalidWorkingDirectory.to_string(),
         )),
-        Err(err) => Err(AppError::internal(err.to_string())),
+        Err(TerminalError::WorkingDirectory(error)) => {
+            let diagnostic = agena_failure::diagnostic::format_error_chain_with_context(
+                "inspect the terminal working directory",
+                &error,
+            );
+            tracing::warn!(%diagnostic, "terminal creation rejected an unreadable working directory");
+            let public = agena_failure::diagnostic::user_message_with_context(&diagnostic, 240);
+            Err(AppError::bad_request(if public.is_empty() {
+                "The terminal working directory could not be accessed.".to_owned()
+            } else {
+                public
+            }))
+        }
+        Err(err) => Err(AppError::internal_error(&err)),
     }
 }

@@ -15,7 +15,6 @@ pub struct RuntimeConfigurationSnapshot {
     pub project_config_path: PathBuf,
     pub project_config_found: bool,
     pub applied_layers: Vec<String>,
-    pub default_provider: Option<String>,
     pub ui: RuntimeUiConfiguration,
     /// The resolved effective configuration is intentionally a JSON document:
     /// configuration is user-extensible and its public settings API is path
@@ -70,6 +69,10 @@ impl RuntimeConfigurationError {
         Self {
             message: message.into(),
         }
+    }
+
+    pub fn from_error(error: &(dyn std::error::Error + 'static)) -> Self {
+        Self::new(agena_failure::diagnostic::format_error_chain(error))
     }
 }
 

@@ -141,13 +141,10 @@ pub(crate) fn provider_studio_save_result_message(
     match result {
         agena_application::provider_studio::ProviderStudioSaveResult::ProviderDraftSaved {
             provider_id,
-            default_adapter,
-            ..
         } => i18n.text_args(
             "flash-provider-save-draft",
             &agena_tui::fl_args!(
                 "provider" => provider_id.clone(),
-                "adapter" => default_adapter.clone(),
             ),
         ),
         agena_application::provider_studio::ProviderStudioSaveResult::AdapterMatchesSaved {
@@ -250,18 +247,6 @@ pub(crate) fn provider_studio_save_validation_error_message(
                 "flash-provider-save-error-required-field",
                 &agena_tui::fl_args!("field" => provider_studio_save_field_label(i18n, field)),
             ),
-        agena_application::provider_studio::ProviderStudioSaveValidationError::UnsupportedDefaultAdapter {
-            auth_kind,
-            adapter,
-            supported,
-        } => i18n.text_args(
-            "flash-provider-save-error-unsupported-default-adapter",
-            &agena_tui::fl_args!(
-                "auth" => provider_draft_auth_kind_label(i18n, auth_kind),
-                "adapter" => adapter.clone(),
-                "supported" => supported.clone(),
-            ),
-        ),
         agena_application::provider_studio::ProviderStudioSaveValidationError::UnsupportedAdapters {
             auth_kind,
             adapters,
@@ -311,9 +296,6 @@ pub(crate) fn provider_studio_save_field_label(
         match field {
             agena_application::provider_studio::ProviderStudioSaveField::ProviderId => {
                 "provider-field-provider-id"
-            }
-            agena_application::provider_studio::ProviderStudioSaveField::DefaultAdapter => {
-                "provider-field-default-adapter"
             }
             agena_application::provider_studio::ProviderStudioSaveField::AdapterId => {
                 "provider-field-adapter-id"

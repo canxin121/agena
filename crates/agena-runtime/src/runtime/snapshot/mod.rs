@@ -309,18 +309,6 @@ impl RuntimeSnapshot {
         &self.state.resolution().plugins
     }
 
-    pub(crate) fn default_provider(&self) -> Option<&str> {
-        self.state
-            .resolution()
-            .default_selection
-            .provider
-            .as_deref()
-    }
-
-    pub(crate) fn default_selection(&self) -> agena_domain::ExecutionSelection {
-        self.state.resolution().default_selection.clone()
-    }
-
     pub(crate) fn ui_config(&self) -> UiConfig {
         self.state.resolution().ui.clone()
     }
@@ -447,14 +435,6 @@ impl RuntimeSnapshot {
             .services()
             .providers
             .resolve_model_target(target, model)?)
-    }
-
-    pub(crate) fn resolve_default_model(&self) -> Result<Option<ModelRef>, AppError> {
-        Ok(self
-            .state
-            .services()
-            .providers
-            .resolve_default_model_selection(&self.state.resolution().default_selection)?)
     }
 
     pub(crate) fn plugin_manager(&self) -> Arc<PluginHost> {

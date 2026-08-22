@@ -8,8 +8,8 @@ use serde::Deserialize;
 use std::sync::Arc;
 
 use super::super::{
-    DirectoryQuery, abs_path, git_strict_patch_validation, is_safe_repo_rel_path, map_git_failure,
-    require_locked_directory, run_git, run_git_with_input,
+    DirectoryQuery, abs_path, git_command_transport_error_response, git_strict_patch_validation,
+    is_safe_repo_rel_path, map_git_failure, require_locked_directory, run_git, run_git_with_input,
 };
 use super::unified::{parse_unified_diff_meta, patch_paths_are_safe, validate_unified_patch_hunks};
 
@@ -33,7 +33,10 @@ pub async fn git_diff(Query(q): Query<GitDiffQuery>) -> Response {
         )
             .into_response();
     };
-    let dir = abs_path(dir_raw);
+    let dir = match abs_path(dir_raw) {
+        Ok(dir) => dir,
+        Err(response) => return *response,
+    };
     let Some(path) = q
         .path
         .as_deref()
@@ -67,18 +70,29 @@ pub async fn git_diff(Query(q): Query<GitDiffQuery>) -> Response {
     // (libgit2's line callbacks do not include +/-/space prefixes in `content()`.)
     let mut untracked = false;
     if !staged {
-        let (c, o, _e) = run_git(
+        let (c, o, error) = match run_git(
             &dir,
             &["ls-files", "--others", "--exclude-standard", "--", path],
         )
         .await
-        .unwrap_or((1, "".to_string(), "".to_string()));
+        {
+            Ok(result) => result,
+            Err(error) => {
+                return git_command_transport_error_response(
+                    "check whether Git diff target is untracked",
+                    &error,
+                    Some("git_diff_track_check_process_failed"),
+                );
+            }
+        };
         if c == 0 {
             let listed = o
                 .lines()
                 .map(|l| l.trim())
                 .any(|l| !l.is_empty() && l == path);
             untracked = listed;
+        } else if let Some(response) = map_git_failure(c, &o, &error) {
+            return response;
         }
     }
 
@@ -100,10 +114,16 @@ pub async fn git_diff(Query(q): Query<GitDiffQuery>) -> Response {
         args.push(path.to_string());
     }
     let args_ref: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-    let (code, out, err) =
-        run_git(&dir, &args_ref)
-            .await
-            .unwrap_or((1, "".to_string(), "".to_string()));
+    let (code, out, err) = match run_git(&dir, &args_ref).await {
+        Ok(result) => result,
+        Err(error) => {
+            return git_command_transport_error_response(
+                "render Git file diff",
+                &error,
+                Some("git_diff_process_failed"),
+            );
+        }
+    };
 
     // `git diff --no-index` returns 1 when differences exist. Treat that as success.
     let ok = if untracked {
@@ -332,9 +352,9 @@ pub async fn git_apply_patch<S: crate::GitHttpState + 'static>(
 
     let explicit_target = match parse_patch_target(body.target.as_deref()) {
         Ok(v) => v,
-        Err(_) => {
+        Err(error_code) => {
             return invalid_patch_response(
-                "invalid_patch_target",
+                error_code,
                 "Invalid patch target",
                 Some("Use one of: file, hunk, selected."),
             );
@@ -414,11 +434,16 @@ pub async fn git_apply_patch<S: crate::GitHttpState + 'static>(
         format!("{}\n", raw)
     };
 
-    let (code, out, err) = run_git_with_input(&dir, &args, &patch).await.unwrap_or((
-        1,
-        "".to_string(),
-        "".to_string(),
-    ));
+    let (code, out, err) = match run_git_with_input(&dir, &args, &patch).await {
+        Ok(result) => result,
+        Err(error) => {
+            return git_command_transport_error_response(
+                "apply Git patch",
+                &error,
+                Some("git_apply_process_failed"),
+            );
+        }
+    };
     if code != 0 {
         if let Some(resp) = map_git_failure(code, &out, &err) {
             return resp;

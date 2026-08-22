@@ -36,7 +36,6 @@ pub(super) fn build_or_reconfigure_session_manager(
     });
     let processor = SessionProcessor::new(Arc::clone(&plugins));
     let config = agena_runtime::RuntimeSessionManagerConfig {
-        default_selection: build_config.default_selection.clone(),
         permission: build_config.permission.clone(),
         auto_compaction: build_config.auto_compaction,
         cache_limits: build_config.cache_limits,
@@ -137,7 +136,7 @@ pub(super) async fn build_model_catalog_services(
     );
     let model_catalog = agena_runtime::ModelCatalogService::compose_default_optional(database)
         .await
-        .map_err(|error| crate::AppError::Config(error.to_string()))?;
+        .map_err(|error| crate::AppError::config_error(&error))?;
     Ok((catalog_source_providers, model_catalog))
 }
 

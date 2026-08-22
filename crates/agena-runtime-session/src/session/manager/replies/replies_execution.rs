@@ -6,12 +6,12 @@ use super::{
     StreamingToolExecution, ToolError, ToolInvocationExecution, ToolPermissionCheck, Utc,
     assistant_message_id, background_operation_from_execution, background_operation_id,
     completed_lifecycle, execution_control_to_app_error, inherit_operation_context,
-    operation_authorization, operation_from_part, operation_permission_approved_actions,
-    pending_operation_for_resolved, pending_tool_part_not_found_error, permission_action_key,
-    permission_request_id, plugin_user_input_request_id, push_unique_permission_action,
-    requested_background_kind, reserve_background_external_id, resolve_pending_tool,
-    responses_api_request_metadata, run_abort_reason, should_execute_pending_tools_concurrently,
-    update_resolved_tool_message,
+    operation_authorization, operation_content_value, operation_from_part,
+    operation_permission_approved_actions, pending_operation_for_resolved,
+    pending_tool_part_not_found_error, permission_action_key, permission_request_id,
+    plugin_user_input_request_id, push_unique_permission_action, requested_background_kind,
+    reserve_background_external_id, resolve_pending_tool, responses_api_request_metadata,
+    run_abort_reason, should_execute_pending_tools_concurrently, update_resolved_tool_message,
 };
 use crate::session::Session;
 use crate::session::prompt_window;
@@ -26,7 +26,7 @@ use agena_domain::{
     PromptCompactionTrigger, RunAbortReason,
 };
 use agena_domain::{UserInputKind, UserInputRequest, UserInputSource};
-use agena_runtime_contracts::part_content::{TypedContent, operation_from_tool_call};
+use agena_runtime_contracts::part_content::TypedContent;
 use agena_storage::store::{
     BackgroundOperationPhase, BackgroundOperationTransition, NewBackgroundOperation, Part,
     PartDelta, PartRole, PartState,
@@ -1088,12 +1088,12 @@ impl SessionManager {
         error: &AppError,
         retry_backoff_ms: &mut u64,
     ) -> Result<Option<(Session, Option<i64>, bool)>, AppError> {
-        let run_error = error.public_message();
+        let failure = error.failure();
         let stop_input = agena_plugin_host::AgentStopInput {
             session_id: session.id,
             stop_hook_active: false,
             last_assistant_message: None,
-            run_error: Some(run_error.to_string()),
+            run_error: Some(failure.user.fallback),
         };
         session = self.store.load_session(session.id).await?;
         match state
@@ -1204,12 +1204,26 @@ impl SessionManager {
             // Appending `"\n\n" + text` keeps the continuation visually
             // separated from the reply body; the flat content replacement
             // commits on the direct path (never buffered, never lost).
-            let mut content = part.content.clone();
-            let existing = content
-                .get("text")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or_default();
-            content["text"] = serde_json::Value::String(format!("{existing}\n\n{text}"));
+            let content = typed_content_from_value(&part.kind, &part.content).map_err(|error| {
+                AppError::Internal(format!(
+                    "decode assistant text part {} before appending hook output: {error}",
+                    part.part_id
+                ))
+            })?;
+            let TypedContent::Text(mut content) = content else {
+                return Err(AppError::Internal(format!(
+                    "assistant text part {} decoded as a different content kind",
+                    part.part_id
+                )));
+            };
+            content.text = format!("{}\n\n{text}", content.text);
+            let content =
+                typed_content_to_value(&TypedContent::Text(content)).map_err(|error| {
+                    AppError::Internal(format!(
+                        "serialize assistant text part {} after appending hook output: {error}",
+                        part.part_id
+                    ))
+                })?;
             let updated = self
                 .store
                 .update_part(
@@ -2003,10 +2017,8 @@ impl SessionManager {
             if let Some(existing) = existing {
                 inherit_operation_context(&mut operation, existing);
             }
-            tool_part.content = typed_content_to_value(&TypedContent::ToolCall(Box::new(
-                tool_call_from_operation(&operation),
-            )))
-            .expect("operation content is always JSON serializable");
+            tool_part.content =
+                operation_content_value(&operation).map_err(PendingToolPreflightError::Session)?;
             session_changed = true;
         }
         Ok(PreparedToolPreflight {
@@ -2973,19 +2985,18 @@ impl SessionManager {
     ) -> Result<Session, AppError> {
         let resolved = resolve_pending_tool(&session, pending_tool)?;
         let request_id = permission_request_id(session.id, &resolved);
-        let existing_permission_replied = session
+        let mut permission_operation = session
             .part(&resolved.pending.part)
-            .and_then(|part| typed_content_from_value(&part.kind, &part.content).ok())
-            .and_then(|content| match content {
-                TypedContent::ToolCall(tool_call) => {
-                    let operation = operation_from_tool_call(&tool_call);
-                    operation
-                        .authorization
-                        .find(request_id.as_str())
-                        .map(|permission| permission.reply.is_some())
-                }
-                _ => None,
-            });
+            .and_then(operation_from_part)
+            .ok_or_else(|| {
+                AppError::Internal(format!(
+                    "permission request {request_id} could not decode its persisted tool operation"
+                ))
+            })?;
+        let existing_permission_replied = permission_operation
+            .authorization
+            .find(request_id.as_str())
+            .map(|permission| permission.reply.is_some());
         if existing_permission_replied == Some(true) {
             return Box::pin(self.apply_tool_error(
                 session,
@@ -3014,17 +3025,10 @@ impl SessionManager {
         };
 
         update_resolved_tool_message(&mut session, &resolved, |tool_part| {
-            let Ok(TypedContent::ToolCall(tool_call)) =
-                typed_content_from_value(&tool_part.kind, &tool_part.content)
-            else {
-                return;
-            };
-            let mut operation = operation_from_tool_call(&tool_call);
-            operation.authorization.push_pending(request.clone());
-            tool_part.content = typed_content_to_value(&TypedContent::ToolCall(Box::new(
-                tool_call_from_operation(&operation),
-            )))
-            .expect("operation content is always JSON serializable");
+            permission_operation
+                .authorization
+                .push_pending(request.clone());
+            tool_part.content = operation_content_value(&permission_operation)?;
             // The part lifecycle is forward-only (17.2): a tool that has
             // already started executing is InProgress and must stay that way
             // while it waits on the host — the store rejects `in_progress ->
@@ -3035,6 +3039,7 @@ impl SessionManager {
             if !matches!(tool_part.state, PartState::InProgress) {
                 tool_part.state = PartState::Pending;
             }
+            Ok(())
         })?;
         self.persist_session_changes(
             session,
@@ -3090,10 +3095,7 @@ impl SessionManager {
                 inherit_operation_context(&mut operation, existing);
             }
             operation.user_input.push_pending(request.clone());
-            tool_part.content = typed_content_to_value(&TypedContent::ToolCall(Box::new(
-                tool_call_from_operation(&operation),
-            )))
-            .expect("operation content is always JSON serializable");
+            tool_part.content = operation_content_value(&operation)?;
             // Same forward-only lifecycle rule as permission requests: an
             // executing tool (InProgress) that suspends on a host ask_user
             // stays InProgress — the store rejects `in_progress -> pending`.
@@ -3105,6 +3107,7 @@ impl SessionManager {
                 1 => "Waiting for answer".to_string(),
                 count => format!("Waiting for {count} answers"),
             });
+            Ok(())
         })?;
         self.persist_session_changes(
             session,
@@ -3143,13 +3146,9 @@ impl SessionManager {
         // P5 re-homes onto the facade notification bus).
         let initial_title = session
             .part(&pending_tool.part)
-            .and_then(|part| typed_content_from_value(&part.kind, &part.content).ok())
-            .and_then(|content| match content {
-                TypedContent::ToolCall(tool_call) => {
-                    let operation = operation_from_tool_call(&tool_call);
-                    (!operation.invocation.name.is_empty()).then_some(operation.invocation.name)
-                }
-                _ => None,
+            .and_then(operation_from_part)
+            .and_then(|operation| {
+                (!operation.invocation.name.is_empty()).then_some(operation.invocation.name)
             })
             .unwrap_or_else(|| "tool".to_owned());
         let mut activity_handler = streaming_activity_id.map(|activity_id| {
@@ -3281,14 +3280,20 @@ impl SessionManager {
                     .apply_tool_error(session, pending_tool, err, None, state)
                     .await;
             }
-            Err(_) => {
+            Err(error) => {
                 let session = self.store.load_session(session.id).await?;
                 return self
                     .apply_tool_error(
                         session,
                         pending_tool,
                         ToolError::plugin(format!(
-                            "tool stream ended without terminal result: {stream_id}"
+                            "{}",
+                            agena_failure::diagnostic::format_error_chain_with_context(
+                                format!(
+                                    "tool stream `{stream_id}` ended without a terminal result"
+                                ),
+                                &error,
+                            )
                         )),
                         None,
                         state,
@@ -3328,19 +3333,18 @@ impl SessionManager {
     ) -> Result<Session, AppError> {
         let resolved = resolve_pending_tool(&session, pending_tool)?;
         let _run_marker_id = update_resolved_tool_message(&mut session, &resolved, |part| {
-            if let Ok(TypedContent::ToolCall(tool_call)) =
-                typed_content_from_value(&part.kind, &part.content)
-            {
-                let mut operation = operation_from_tool_call(&tool_call);
-                operation.state = agena_domain::ToolResultState::Cancelled;
-                operation.lifecycle = completed_lifecycle(&resolved.lifecycle);
-                part.content = typed_content_to_value(&TypedContent::ToolCall(Box::new(
-                    tool_call_from_operation(&operation),
-                )))
-                .expect("operation content is always JSON serializable");
-            }
+            let mut operation = operation_from_part(part).ok_or_else(|| {
+                AppError::Internal(format!(
+                    "cancel tool operation {}: persisted tool-call content is malformed",
+                    resolved.operation_id
+                ))
+            })?;
+            operation.state = agena_domain::ToolResultState::Cancelled;
+            operation.lifecycle = completed_lifecycle(&resolved.lifecycle);
+            part.content = operation_content_value(&operation)?;
             part.state = PartState::Cancelled;
             part.summary = Some("Execution cancelled".to_string());
+            Ok(())
         })?;
 
         self.persist_tool_completion(session, &resolved, Vec::new(), state)
@@ -3388,11 +3392,6 @@ impl SessionManager {
                 .ok_or_else(|| pending_tool_part_not_found_error(&pending_tool.part))?;
             if matches!(tool_part.state, PartState::Pending | PartState::InProgress) {
                 tool_part.state = PartState::InProgress;
-            }
-            if let Ok(TypedContent::ToolCall(tool_call)) =
-                typed_content_from_value(&tool_part.kind, &tool_part.content)
-            {
-                let _ = tool_call;
             }
         };
         // Persist the refreshed title as a part delta checkpoint (v2 D10):
@@ -3519,11 +3518,9 @@ impl SessionManager {
             if let Some(existing) = operation_from_part(tool_part) {
                 inherit_operation_context(&mut operation, existing);
             }
-            tool_part.content = typed_content_to_value(&TypedContent::ToolCall(Box::new(
-                tool_call_from_operation(&operation),
-            )))
-            .expect("operation content is always JSON serializable");
+            tool_part.content = operation_content_value(&operation)?;
             tool_part.state = PartState::Completed;
+            Ok(())
         })?;
         // Mirror the v1 message usage attribution into the owning run marker's
         // `content["usage"]` (the v2 projection `aggregate_usage()` sums it).
@@ -3540,27 +3537,32 @@ impl SessionManager {
                 part_index: marker_index,
                 part_id: run_marker_id,
             };
-            let marker_content = session
+            let marker = session
                 .part(&marker_ref)
-                .map(|marker| {
-                    let mut merged = marker
-                        .content
-                        .get("usage")
-                        .cloned()
-                        .and_then(|usage| {
-                            serde_json::from_value::<agena_provider::CompletionUsage>(usage).ok()
-                        })
-                        .unwrap_or_default();
-                    merged.add_assign(&agena_provider::CompletionUsage {
-                        attributed_usage: vec![attributed_usage],
-                        ..Default::default()
-                    });
-                    let mut content = marker.content.clone();
-                    content["usage"] =
-                        serde_json::to_value(&merged).expect("usage is always JSON serializable");
-                    content
-                })
                 .ok_or_else(|| pending_tool_part_not_found_error(&resolved.pending.part))?;
+            let mut merged = match marker.content.get("usage").cloned() {
+                Some(usage) => serde_json::from_value::<agena_provider::CompletionUsage>(usage)
+                    .map_err(|error| {
+                        AppError::Internal(
+                            agena_failure::diagnostic::format_error_chain_with_context(
+                                "decode existing run-marker usage before attributing tool usage",
+                                &error,
+                            ),
+                        )
+                    })?,
+                None => Default::default(),
+            };
+            merged.add_assign(&agena_provider::CompletionUsage {
+                attributed_usage: vec![attributed_usage],
+                ..Default::default()
+            });
+            let mut marker_content = marker.content.clone();
+            marker_content["usage"] = serde_json::to_value(&merged).map_err(|error| {
+                AppError::Internal(agena_failure::diagnostic::format_error_chain_with_context(
+                    "serialize attributed run-marker usage",
+                    &error,
+                ))
+            })?;
             self.store
                 .update_part(
                     session.id,

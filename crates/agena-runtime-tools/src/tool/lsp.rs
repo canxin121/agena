@@ -293,19 +293,35 @@ async fn sync_document(
     path: &Path,
     uri: &Uri,
 ) -> Result<agena_lsp::DocumentSyncStatus, agena_lsp::LspError> {
-    let file = match tokio::fs::File::open(path).await {
-        Ok(file) => file,
-        // Unreadable file: let the server keep whatever it had. There is no
-        // new document version to wait for before issuing navigation.
-        Err(_) => return Ok(agena_lsp::DocumentSyncStatus::Unchanged),
+    let file = tokio::fs::File::open(path).await?;
+    let initial_capacity = match file.metadata().await {
+        Ok(metadata) => match usize::try_from(metadata.len().min(MAX_LSP_DOCUMENT_BYTES)) {
+            Ok(capacity) => capacity,
+            Err(error) => {
+                tracing::warn!(
+                    path = %path.display(),
+                    diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                        "failed to convert the bounded LSP document size to a memory capacity",
+                        &error,
+                    ),
+                    "LSP document capacity hint was unavailable"
+                );
+                0
+            }
+        },
+        Err(error) => {
+            tracing::warn!(
+                path = %path.display(),
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "failed to read LSP document metadata; continuing without a capacity hint",
+                    &error,
+                ),
+                "LSP document metadata was unavailable"
+            );
+            0
+        }
     };
-    let mut bytes = Vec::with_capacity(
-        file.metadata()
-            .await
-            .ok()
-            .and_then(|metadata| usize::try_from(metadata.len().min(MAX_LSP_DOCUMENT_BYTES)).ok())
-            .unwrap_or_default(),
-    );
+    let mut bytes = Vec::with_capacity(initial_capacity);
     file.take(MAX_LSP_DOCUMENT_BYTES.saturating_add(1))
         .read_to_end(&mut bytes)
         .await?;

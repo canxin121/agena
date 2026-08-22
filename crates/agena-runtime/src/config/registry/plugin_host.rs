@@ -21,11 +21,16 @@ pub async fn build_provider_registry_from_inputs(
     let current = agena_runtime::provider_descriptors_from_ids(registry.provider_ids());
     let Some(patch) = agena_runtime::dispatch_provider_list_patch(plugins, current)
         .await
-        .map_err(|err| ConfigError::Validation(format!("plugin provider.list: {err}")))?
+        .map_err(|error| {
+            ConfigError::Validation(format!(
+                "plugin provider.list: {}",
+                error.diagnostic_message()
+            ))
+        })?
     else {
         return Ok(registry);
     };
     agena_runtime::apply_provider_list_patch(&mut registry, patch)
-        .map_err(|error| ConfigError::Validation(error.to_string()))?;
+        .map_err(|error| ConfigError::validation_error(&error))?;
     Ok(registry)
 }

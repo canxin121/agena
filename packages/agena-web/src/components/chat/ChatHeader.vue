@@ -3,23 +3,18 @@ import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 
 import Button from '@/components/ui/Button.vue'
-import AttentionPanel from '@/components/chat/AttentionPanel.vue'
-import type { JsonValue } from '@/types/json'
 
 type RetryStatus = { type: 'retry'; attempt: number; message: string; next: number }
-type Attention = { kind: 'permission' | 'question'; payload: JsonValue }
 
 const { t } = useI18n()
 
 const props = withDefaults(
   defineProps<{
     sessionId: string | null
-    sessionEnded: boolean
     canAbort: boolean
     retryStatus: RetryStatus | null
     retryCountdownLabel: string
     retryNextLabel: string
-    attention: Attention | null
     mobilePointer?: boolean
   }>(),
   {
@@ -32,8 +27,7 @@ defineEmits<{
 }>()
 
 const hasRetry = computed(() => Boolean(props.retryStatus && props.sessionId))
-const hasAttention = computed(() => Boolean(props.attention && props.sessionId && !props.sessionEnded))
-const showOverlay = computed(() => hasRetry.value || hasAttention.value)
+const showOverlay = computed(() => hasRetry.value)
 
 const overlayStackClass = computed(() =>
   props.mobilePointer
@@ -42,8 +36,6 @@ const overlayStackClass = computed(() =>
 )
 
 const mobileTitle = computed(() => {
-  if (props.attention?.kind === 'permission') return String(t('chat.headerOverlay.title.permissionRequired'))
-  if (props.attention?.kind === 'question') return String(t('chat.headerOverlay.title.question'))
   if (props.retryStatus) return String(t('chat.headerOverlay.title.retrying'))
   return String(t('chat.headerOverlay.title.actionRequired'))
 })
@@ -81,13 +73,6 @@ const mobileTitle = computed(() => {
             </div>
           </div>
         </div>
-
-        <AttentionPanel
-          v-if="hasAttention && attention && sessionId"
-          :kind="attention.kind"
-          :sessionId="sessionId"
-          :payload="attention.payload"
-        />
       </div>
     </div>
   </template>

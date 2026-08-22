@@ -9,7 +9,6 @@ import MobileSidebarEmptyState from '@/components/ui/MobileSidebarEmptyState.vue
 import MessageItem from '@/components/chat/MessageItem.vue'
 import AgenaTranscriptPart from '@/components/chat/AgenaTranscriptPart.vue'
 import type {
-  AttentionLike,
   MessageLike,
   RenderBlock,
   RetryStatusLike,
@@ -48,7 +47,6 @@ const props = defineProps<{
   optimisticUser: OptimisticUserMessage | null
   showOptimisticUser: boolean
   openMobileSidebar?: () => void | Promise<void>
-  attention?: AttentionLike
 }>()
 
 const emit = defineEmits<{
@@ -248,7 +246,6 @@ function forwardFoldExpand(fold: MessageFold, all: boolean) {
           :is-node-selected="isNodeSelected"
           :is-node-search-match="isNodeSearchMatch"
           :session-id="selectedSessionId"
-          :attention="attention"
           @fork="$emit('fork', $event)"
           @revert="$emit('revert', $event)"
           @copy="$emit('copy', $event)"

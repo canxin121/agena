@@ -242,7 +242,9 @@ impl Inner {
     async fn spawn_child_inner(self: Arc<Self>, is_restart: bool) -> Result<(), TransportError> {
         let _spawn_guard = self.spawn_lock.lock().await;
         if self.closed.load(Ordering::SeqCst) {
-            return Err(TransportError::Disconnected);
+            return Err(TransportError::disconnected(
+                "stdio plugin transport is already closed",
+            ));
         }
         if is_restart {
             let attempt = self.restart_attempts.fetch_add(1, Ordering::SeqCst) + 1;
@@ -262,7 +264,10 @@ impl Inner {
                     "restart budget exhausted",
                     serde_json::Value::Null,
                 );
-                return Err(TransportError::Disconnected);
+                return Err(TransportError::disconnected(format!(
+                    "stdio plugin exhausted its restart budget after {attempt} attempts (maximum {})",
+                    self.restart_policy.max_retries
+                )));
             }
             let min = self.restart_policy.min_backoff.0;
             let max = self.restart_policy.max_backoff.0;
@@ -275,11 +280,15 @@ impl Inner {
             );
             tokio::select! {
                 biased;
-                _ = self.shutdown.cancelled() => return Err(TransportError::Disconnected),
+                _ = self.shutdown.cancelled() => return Err(TransportError::disconnected(
+                    "stdio plugin transport was shut down during restart backoff",
+                )),
                 _ = tokio::time::sleep(backoff) => {}
             }
             if self.closed.load(Ordering::SeqCst) {
-                return Err(TransportError::Disconnected);
+                return Err(TransportError::disconnected(
+                    "stdio plugin transport closed before restart could spawn the child",
+                ));
             }
         }
 
@@ -352,10 +361,30 @@ impl Inner {
                 };
                 let result = tokio::time::timeout(WRITE_TIMEOUT, write)
                     .await
-                    .map_err(|_| "plugin stdin write timed out".to_string())
-                    .and_then(|result| result.map_err(|error| error.to_string()));
+                    .map_err(|error| {
+                        agena_failure::diagnostic::format_error_chain_with_context(
+                            format!(
+                                "plugin stdin write timed out after {}ms",
+                                WRITE_TIMEOUT.as_millis()
+                            ),
+                            &error,
+                        )
+                    })
+                    .and_then(|result| {
+                        result.map_err(|error| {
+                            agena_failure::diagnostic::format_error_chain_with_context(
+                                "failed to write a frame to plugin stdin",
+                                &error,
+                            )
+                        })
+                    });
                 let failed = result.is_err();
-                let _ = request.completion.send(result);
+                if request.completion.send(result).is_err() {
+                    tracing::debug!(
+                        target: "agena_plugin_host::stdio",
+                        "plugin stdin write-result receiver was dropped"
+                    );
+                }
                 if failed {
                     break;
                 }
@@ -464,12 +493,21 @@ impl Inner {
             let mut handles_lock = self.handles.lock().await;
             match handles_lock.as_mut() {
                 Some(handles) if handles.generation == generation => {
-                    let exit_code = handles
-                        .child
-                        .try_wait()
-                        .ok()
-                        .flatten()
-                        .and_then(|status| status.code());
+                    let exit_code = match handles.child.try_wait() {
+                        Ok(status) => status.and_then(|status| status.code()),
+                        Err(error) => {
+                            self.record_log(
+                                "error",
+                                "host",
+                                agena_failure::diagnostic::format_error_chain_with_context(
+                                    "inspect the exited stdio plugin process",
+                                    &error,
+                                ),
+                                serde_json::Value::Null,
+                            );
+                            None
+                        }
+                    };
                     *handles_lock = None;
                     Some(exit_code)
                 }
@@ -528,7 +566,12 @@ impl Inner {
         match frame {
             Frame::Response(resp) => {
                 if let Some((_, tx)) = self.pending.remove(&resp.id) {
-                    let _ = tx.send(resp);
+                    if tx.send(resp).is_err() {
+                        tracing::debug!(
+                            target: "agena_plugin_host::stdio",
+                            "plugin response receiver was dropped before delivery"
+                        );
+                    }
                 }
             }
             Frame::Request(req) => {
@@ -545,8 +588,29 @@ impl Inner {
                             },
                         },
                     };
-                    if let Ok(body) = serde_json::to_vec(&response) {
-                        let _ = self.write_frame(&body).await;
+                    match serde_json::to_vec(&response) {
+                        Ok(body) => {
+                            if let Err(error) = self.write_frame(&body).await {
+                                tracing::warn!(
+                                    target: "agena_plugin_host::stdio",
+                                    diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                                        "write the plugin host-capacity error response",
+                                        &error,
+                                    ),
+                                    "plugin host-capacity error response could not be delivered"
+                                );
+                            }
+                        }
+                        Err(error) => {
+                            tracing::error!(
+                                target: "agena_plugin_host::stdio",
+                                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                                    "serialize the plugin host-capacity error response",
+                                    &error,
+                                ),
+                                "plugin host-capacity error response could not be encoded"
+                            );
+                        }
                     }
                     return;
                 };
@@ -583,13 +647,33 @@ impl Inner {
                                 error: ErrorObject {
                                     code: crate::sdk::rpc::codes::PLUGIN_GENERIC,
                                     message: e.to_string(),
-                                    data: serde_json::to_value(&e).ok(),
+                                    data: e.rpc_error_data(),
                                 },
                             },
                         },
                     };
-                    let body = serde_json::to_vec(&resp).expect("response serialize");
-                    let _ = inner.write_frame(&body).await;
+                    let body = match serde_json::to_vec(&resp) {
+                        Ok(body) => body,
+                        Err(error) => {
+                            tracing::error!(
+                                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                                    "serialize host callback response for stdio plugin",
+                                    &error,
+                                ),
+                                "stdio plugin host callback response was not sent"
+                            );
+                            return;
+                        }
+                    };
+                    if let Err(error) = inner.write_frame(&body).await {
+                        tracing::error!(
+                            diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                                "write host callback response to stdio plugin",
+                                &error,
+                            ),
+                            "stdio plugin host callback response write failed"
+                        );
+                    }
                 });
             }
             Frame::Notification(notif) => {
@@ -619,7 +703,9 @@ impl Inner {
             handles
                 .as_ref()
                 .map(|handles| handles.writer.clone())
-                .ok_or(TransportError::Disconnected)?
+                .ok_or_else(|| {
+                    TransportError::disconnected("stdio plugin child has no active stdin writer")
+                })?
         };
         let (completion, result) = oneshot::channel();
         let write = async {
@@ -629,17 +715,39 @@ impl Inner {
                     completion,
                 })
                 .await
-                .map_err(|_| TransportError::Disconnected)?;
+                .map_err(|error| {
+                    TransportError::disconnected_error(
+                        "stdio plugin stdin writer queue closed before accepting a frame",
+                        &error,
+                    )
+                })?;
             result
                 .await
-                .map_err(|_| TransportError::Disconnected)?
+                .map_err(|error| {
+                    TransportError::disconnected_error(
+                        "stdio plugin stdin writer exited before confirming a frame",
+                        &error,
+                    )
+                })?
                 .map_err(TransportError::Io)
         };
         tokio::select! {
             biased;
-            _ = self.shutdown.cancelled() => Err(TransportError::Disconnected),
+            _ = self.shutdown.cancelled() => Err(TransportError::disconnected(
+                "stdio plugin transport was shut down while writing a frame",
+            )),
             result = tokio::time::timeout(WRITE_TIMEOUT, write) => {
-                result.map_err(|_| TransportError::Io("plugin frame write timed out".to_string()))?
+                result.map_err(|error| {
+                    TransportError::Io(
+                        agena_failure::diagnostic::format_error_chain_with_context(
+                            format!(
+                                "stdio plugin frame write timed out after {}ms",
+                                WRITE_TIMEOUT.as_millis()
+                            ),
+                            &error,
+                        ),
+                    )
+                })?
             }
         }
     }
@@ -656,17 +764,25 @@ impl Inner {
             .collect::<Vec<_>>();
         for id in pending {
             if let Some((_, slot)) = self.pending.remove(&id) {
-                let _ = slot.send(Response {
-                    jsonrpc: JsonRpcVersion,
-                    id,
-                    payload: ResponsePayload::Err {
-                        error: ErrorObject {
-                            code: crate::sdk::rpc::codes::PLUGIN_DISCONNECTED,
-                            message: message.to_string(),
-                            data: None,
+                if slot
+                    .send(Response {
+                        jsonrpc: JsonRpcVersion,
+                        id,
+                        payload: ResponsePayload::Err {
+                            error: ErrorObject {
+                                code: crate::sdk::rpc::codes::PLUGIN_DISCONNECTED,
+                                message: message.to_string(),
+                                data: None,
+                            },
                         },
-                    },
-                });
+                    })
+                    .is_err()
+                {
+                    tracing::debug!(
+                        target: "agena_plugin_host::stdio",
+                        "disconnected plugin request receiver was already dropped"
+                    );
+                }
             }
         }
     }
@@ -751,9 +867,19 @@ impl Inner {
                     };
                     if let Some(state) = state {
                         state.monitor_stop.cancel();
-                        let _ = state.end.send(Err(PluginError::internal(
-                            "plugin stream consumer exceeded the 64-chunk buffer",
-                        )));
+                        if state
+                            .end
+                            .send(Err(PluginError::internal(
+                                "plugin stream consumer exceeded the 64-chunk buffer",
+                            )))
+                            .is_err()
+                        {
+                            tracing::debug!(
+                                target: "agena_plugin_host::stdio",
+                                stream_id,
+                                "overflowed stdio plugin stream terminal receiver was already dropped"
+                            );
+                        }
                     }
                 }
             }
@@ -789,7 +915,13 @@ impl Inner {
         };
         if let Some(state) = state {
             state.monitor_stop.cancel();
-            let _ = state.end.send(result);
+            if state.end.send(result).is_err() {
+                tracing::debug!(
+                    target: "agena_plugin_host::stdio",
+                    stream_id,
+                    "stdio plugin stream terminal-result receiver was dropped"
+                );
+            }
             return;
         }
         let event = match result {
@@ -869,7 +1001,12 @@ impl Inner {
         }
         for state in active {
             state.monitor_stop.cancel();
-            let _ = state.end.send(Err(error.clone()));
+            if state.end.send(Err(error.clone())).is_err() {
+                tracing::debug!(
+                    target: "agena_plugin_host::stdio",
+                    "failed stdio plugin stream receiver was already dropped during transport shutdown"
+                );
+            }
         }
     }
 
@@ -895,7 +1032,21 @@ impl Inner {
 }
 
 fn parse_notification<T: serde::de::DeserializeOwned>(notif: &Notification) -> Option<T> {
-    serde_json::from_value(notif.params.clone().unwrap_or(serde_json::Value::Null)).ok()
+    match serde_json::from_value(notif.params.clone().unwrap_or(serde_json::Value::Null)) {
+        Ok(value) => Some(value),
+        Err(error) => {
+            tracing::warn!(
+                method = %notif.method,
+                notification_type = %std::any::type_name::<T>(),
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "decode a stdio plugin notification",
+                    &error,
+                ),
+                "malformed stdio plugin notification was rejected"
+            );
+            None
+        }
+    }
 }
 
 fn exp_backoff(min: Duration, max: Duration, attempt: u32) -> Duration {
@@ -927,19 +1078,18 @@ impl PluginTransport for StdioTransport {
         self.inner.pending.insert(req_id.clone(), tx);
         let _pending_guard = PendingRequestGuard::new(Arc::clone(&self.inner), req_id.clone());
         self.inner.write_frame(&body).await?;
-        let resp = rx.await.map_err(|_| TransportError::Disconnected)?;
+        let resp = rx.await.map_err(|error| {
+            TransportError::disconnected_error(
+                format!(
+                    "stdio plugin response channel closed before method `{method}` request {id} completed"
+                ),
+                &error,
+            )
+        })?;
         match resp.payload {
             ResponsePayload::Ok { result } => Ok(result),
             ResponsePayload::Err { error } => {
-                let pe: Option<PluginError> = error
-                    .data
-                    .as_ref()
-                    .and_then(|d| serde_json::from_value(d.clone()).ok());
-                let pe = pe.unwrap_or_else(|| {
-                    let mut plugin_error = PluginError::internal(error.message);
-                    plugin_error.diagnostic.data = error.data;
-                    plugin_error
-                });
+                let pe = super::plugin_error_from_rpc(error, "decode stdio plugin dispatch error");
                 Err(TransportError::Plugin(pe))
             }
         }
@@ -973,21 +1123,23 @@ impl PluginTransport for StdioTransport {
         self.inner.pending.insert(req_id.clone(), tx);
         let _pending_guard = PendingRequestGuard::new(Arc::clone(&self.inner), req_id.clone());
         self.inner.write_frame(&body).await?;
-        let resp = rx.await.map_err(|_| TransportError::Disconnected)?;
+        let resp = rx.await.map_err(|error| {
+            TransportError::disconnected_error(
+                format!(
+                    "stdio plugin response channel closed before streaming request {id} completed"
+                ),
+                &error,
+            )
+        })?;
         let handle: ToolInvokeStreamHandle = match resp.payload {
             ResponsePayload::Ok { result } => {
-                serde_json::from_value(result).map_err(|e| TransportError::Rpc(e.to_string()))?
+                serde_json::from_value(result).map_err(TransportError::from)?
             }
             ResponsePayload::Err { error } => {
-                let pe: Option<PluginError> = error
-                    .data
-                    .as_ref()
-                    .and_then(|d| serde_json::from_value(d.clone()).ok());
-                let pe = pe.unwrap_or_else(|| {
-                    let mut plugin_error = PluginError::internal(error.message);
-                    plugin_error.diagnostic.data = error.data;
-                    plugin_error
-                });
+                let pe = super::plugin_error_from_rpc(
+                    error,
+                    "decode stdio plugin streaming-dispatch error",
+                );
                 return Err(TransportError::Plugin(pe));
             }
         };
@@ -1018,7 +1170,7 @@ impl PluginTransport for StdioTransport {
         let _spawn_guard = self.inner.spawn_lock.lock().await;
         let handles = { self.inner.handles.lock().await.take() };
         if let Some(mut h) = handles {
-            let _ = h.child.start_kill();
+            h.child.start_kill().map_err(TransportError::from)?;
         }
         self.inner.record_status(|sink, plugin_id| {
             sink.record_stopped(plugin_id);
@@ -1041,7 +1193,15 @@ impl Drop for StdioTransport {
         if let Ok(mut handles) = self.inner.handles.try_lock()
             && let Some(handles) = handles.as_mut()
         {
-            let _ = handles.child.start_kill();
+            if let Err(error) = handles.child.start_kill() {
+                tracing::error!(
+                    diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                        "failed to kill the stdio plugin process tree while dropping its transport",
+                        &error,
+                    ),
+                    "stdio plugin transport cleanup failed"
+                );
+            }
         }
     }
 }

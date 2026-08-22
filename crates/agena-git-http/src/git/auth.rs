@@ -36,7 +36,12 @@ async fn create_git_askpass_script() -> Result<TempGitAskpass, String> {
         .prefix("agena-git-http-askpass-")
         .suffix(".sh")
         .tempfile()
-        .map_err(|error| error.to_string())?
+        .map_err(|error| {
+            agena_failure::diagnostic::format_error_chain_with_context(
+                "failed to create the temporary Git askpass script",
+                &error,
+            )
+        })?
         .into_temp_path();
 
     let body = "#!/usr/bin/env sh\n\
@@ -47,9 +52,12 @@ case \"$prompt\" in\n\
   *) printf '%s' \"${OC_GIT_ASKPASS_PASSWORD:-}\" ;;\n\
 esac\n";
 
-    tokio::fs::write(&*path, body)
-        .await
-        .map_err(|e| e.to_string())?;
+    tokio::fs::write(&*path, body).await.map_err(|error| {
+        agena_failure::diagnostic::format_error_chain_with_context(
+            "failed to write the temporary Git askpass script",
+            &error,
+        )
+    })?;
 
     #[cfg(unix)]
     {
@@ -57,7 +65,12 @@ esac\n";
         let perms = std::fs::Permissions::from_mode(0o700);
         tokio::fs::set_permissions(&*path, perms)
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|error| {
+                agena_failure::diagnostic::format_error_chain_with_context(
+                    "failed to secure the temporary Git askpass script",
+                    &error,
+                )
+            })?;
     }
 
     Ok(TempGitAskpass { path })

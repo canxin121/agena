@@ -8,6 +8,7 @@ use crate::session::model::{
 };
 use crate::session::store::{
     OPERATION_ID_METADATA_KEY, tool_call_from_operation, typed_content_from_value,
+    typed_content_to_value,
 };
 use agena_domain::UserInputReply;
 use agena_provider::ResponsesApiRequestMetadata;
@@ -191,15 +192,28 @@ pub(super) fn run_marker_externally_initiated_tool(
 pub(super) fn update_resolved_tool_message(
     session: &mut Session,
     resolved: &ResolvedPendingTool,
-    update: impl FnOnce(&mut Part),
+    update: impl FnOnce(&mut Part) -> Result<(), AppError>,
 ) -> Result<i64, AppError> {
     {
         let tool_part = session
             .part_mut(&resolved.pending.part)
             .ok_or_else(|| pending_tool_part_not_found_error(&resolved.pending.part))?;
-        update(tool_part);
+        update(tool_part)?;
     }
     assistant_message_id(session, &resolved.pending.part)
+}
+
+pub(super) fn operation_content_value(
+    operation: &OperationPart,
+) -> Result<serde_json::Value, AppError> {
+    typed_content_to_value(
+        &agena_runtime_contracts::part_content::TypedContent::ToolCall(Box::new(
+            tool_call_from_operation(operation),
+        )),
+    )
+    .map_err(|error| {
+        AppError::Internal(format!("serialize durable tool operation content: {error}"))
+    })
 }
 
 fn pending_operation_for_resolved(
@@ -252,7 +266,21 @@ fn operation_authorization(
 /// Decode the [`OperationPart`] projection from a strict flat `tool_call`.
 /// Returns `None` for non-tool parts or incompatible payloads.
 pub(super) fn operation_from_part(part: &Part) -> Option<OperationPart> {
-    let content = typed_content_from_value(&part.kind, &part.content).ok()?;
+    let content = match typed_content_from_value(&part.kind, &part.content) {
+        Ok(content) => content,
+        Err(error) => {
+            tracing::warn!(
+                part_id = part.part_id,
+                part_kind = %part.kind,
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "decode a persisted operation part",
+                    &error,
+                ),
+                "persisted operation projection is unavailable"
+            );
+            return None;
+        }
+    };
     match content {
         agena_runtime_contracts::part_content::TypedContent::ToolCall(tool_call) => {
             Some(operation_from_tool_call(&tool_call))
@@ -1509,7 +1537,13 @@ impl SessionManager {
                 .await
                 .remove(request_id.as_str())
             {
-                let _ = waiter.response.send(response);
+                if waiter.response.send(response).is_err() {
+                    tracing::debug!(
+                        session_id = request.session_id,
+                        request_id = %request_id,
+                        "durable host user-input reply could not be delivered because the waiter closed"
+                    );
+                }
                 return Ok(ReplyDispatch::Completed(Box::new(session)));
             }
             tracing::info!(

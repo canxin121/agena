@@ -906,20 +906,38 @@ impl OperationPart {
     /// the spinner) while `status()` still reports terminal via the lifecycle
     /// end — the provider pairing and the running spinner are independent.
     pub fn set_background_operation(&mut self, background: &BackgroundOperation) {
-        self.metadata.insert(
-            BACKGROUND_OPERATION_METADATA_KEY.to_string(),
-            serde_json::to_value(background)
-                .expect("background marker is always JSON serializable"),
-        );
+        match serde_json::to_value(background) {
+            Ok(value) => {
+                self.metadata
+                    .insert(BACKGROUND_OPERATION_METADATA_KEY.to_string(), value);
+            }
+            Err(error) => tracing::error!(
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "serialize a background-operation marker",
+                    &error,
+                ),
+                "background-operation marker was not persisted"
+            ),
+        }
     }
 
     /// The background-work correlation marker, when this operation was
     /// launched into the background and has not been terminalized yet.
     pub fn background_operation(&self) -> Option<BackgroundOperation> {
-        self.metadata
-            .get(BACKGROUND_OPERATION_METADATA_KEY)
-            .cloned()
-            .and_then(|value| serde_json::from_value::<BackgroundOperation>(value).ok())
+        let value = self.metadata.get(BACKGROUND_OPERATION_METADATA_KEY)?;
+        match serde_json::from_value::<BackgroundOperation>(value.clone()) {
+            Ok(operation) => Some(operation),
+            Err(error) => {
+                tracing::warn!(
+                    diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                        "decode a persisted background-operation marker",
+                        &error,
+                    ),
+                    "persisted background-operation marker is malformed"
+                );
+                None
+            }
+        }
     }
 
     /// Atomically claim that this operation's completion has been notified to

@@ -25,8 +25,6 @@ pub struct ProviderConfigDraft {
     pub auth_kind: ProviderDraftAuthKind,
     pub auth: ProviderDraftAuthDetails,
     pub credential_drafts: ProviderCredentialDraftBundle,
-    pub default_adapter: String,
-    pub default_model: String,
     pub request_timeout_secs: u64,
     pub connect_timeout_secs: u64,
 }
@@ -39,8 +37,6 @@ impl ProviderConfigDraft {
             auth_kind: ProviderDraftAuthKind::Unset,
             auth: ProviderDraftAuthDetails::default(),
             credential_drafts: ProviderCredentialDraftBundle::default(),
-            default_adapter: String::new(),
-            default_model: String::new(),
             request_timeout_secs: agena_provider::ProviderNetworkConfig::default()
                 .request_timeout_secs,
             connect_timeout_secs: agena_provider::ProviderNetworkConfig::default()
@@ -52,14 +48,7 @@ impl ProviderConfigDraft {
         auth_kind: &ProviderDraftAuthKind,
         mut auth: ProviderDraftAuthDetails,
         mut credential_drafts: ProviderCredentialDraftBundle,
-        mut default_adapter: String,
-        mut default_model: String,
-    ) -> (
-        ProviderDraftAuthDetails,
-        ProviderCredentialDraftBundle,
-        String,
-        String,
-    ) {
+    ) -> (ProviderDraftAuthDetails, ProviderCredentialDraftBundle) {
         credential_drafts.normalize_shape();
         auth.credential_issuer = auth_kind
             .credential_issuer()
@@ -167,29 +156,17 @@ impl ProviderConfigDraft {
             }
         }
 
-        if !default_adapter.trim().is_empty()
-            && !auth_kind.supports_adapter(default_adapter.as_str())
-        {
-            default_adapter.clear();
-        }
-        if default_adapter.trim().is_empty() {
-            default_model.clear();
-        }
-        (auth, credential_drafts, default_adapter, default_model)
+        (auth, credential_drafts)
     }
 
     pub fn normalize_shape(&mut self) {
-        let (auth, credential_drafts, default_adapter, default_model) = Self::normalized_shape(
+        let (auth, credential_drafts) = Self::normalized_shape(
             &self.auth_kind,
             std::mem::take(&mut self.auth),
             std::mem::take(&mut self.credential_drafts),
-            std::mem::take(&mut self.default_adapter),
-            std::mem::take(&mut self.default_model),
         );
         self.auth = auth;
         self.credential_drafts = credential_drafts;
-        self.default_adapter = default_adapter;
-        self.default_model = default_model;
     }
 
     pub fn from_configured_editor(provider: agena_provider::ProviderConfiguredEditor) -> Self {
@@ -333,7 +310,7 @@ impl ProviderConfigDraft {
                 ProviderCredentialDraftBundle::default(),
             ),
         };
-        let (auth, credential_drafts, default_adapter, default_model) = Self::normalized_shape(
+        let (auth, credential_drafts) = Self::normalized_shape(
             &auth_kind,
             ProviderDraftAuthDetails {
                 base_url,
@@ -349,8 +326,6 @@ impl ProviderConfigDraft {
                 service_key_env,
             },
             credential_drafts,
-            provider.default_adapter.unwrap_or_default(),
-            provider.default_model.unwrap_or_default(),
         );
         Self {
             source_provider_id: Some(provider.provider_id.clone()),
@@ -358,8 +333,6 @@ impl ProviderConfigDraft {
             auth_kind,
             auth,
             credential_drafts,
-            default_adapter,
-            default_model,
             request_timeout_secs: provider.request_timeout_secs,
             connect_timeout_secs: provider.connect_timeout_secs,
         }
@@ -367,18 +340,10 @@ impl ProviderConfigDraft {
 
     pub(crate) fn to_provider_overlay_for_save(
         &self,
-        default_adapter: &str,
-        default_model: Option<&str>,
         adapters: std::collections::BTreeMap<String, ProviderAdapterOverlay>,
-        include_defaults: bool,
     ) -> std::result::Result<ProviderOverlay, ProviderStudioSaveError> {
         Ok(ProviderOverlay {
             enabled: Some(true),
-            defaults: include_defaults.then(|| agena_provider::ProviderDefaultsOverlay {
-                adapter: Some(default_adapter.to_owned()),
-                model: default_model.map(ToOwned::to_owned),
-                ..Default::default()
-            }),
             auth: Some(self.to_auth_overlay_for_save()?),
             adapters,
             network: Some(agena_provider::ProviderNetworkOverlay {

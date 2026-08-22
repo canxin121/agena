@@ -34,6 +34,8 @@ enum RenderBehavior {
     Project,
     Delegate,
     Fail,
+    EmptyHuman,
+    JsonOnlyHuman,
 }
 
 struct RenderingFixture {
@@ -71,6 +73,25 @@ impl agena_plugin_host::sdk::Plugin for RenderingFixture {
             RenderBehavior::Fail => Err(agena_plugin_host::sdk::PluginError::internal(
                 "renderer failed",
             )),
+            RenderBehavior::EmptyHuman => Ok(Some(agena_plugin_host::sdk::ToolRenderOutput {
+                model: None,
+                human: Some(agena_plugin_host::sdk::ToolHumanPresentation {
+                    title: "Plugin fallback title".to_owned(),
+                    summary: "Plugin fallback summary".to_owned(),
+                    blocks: Vec::new(),
+                }),
+            })),
+            RenderBehavior::JsonOnlyHuman => Ok(Some(agena_plugin_host::sdk::ToolRenderOutput {
+                model: None,
+                human: Some(agena_plugin_host::sdk::ToolHumanPresentation {
+                    title: "Plugin JSON title".to_owned(),
+                    summary: "Plugin JSON summary".to_owned(),
+                    blocks: vec![agena_domain::ViewBlock::Json {
+                        id: Some("opaque".to_owned()),
+                        value: serde_json::json!({"machine_only": true}),
+                    }],
+                }),
+            })),
         }
     }
 }
@@ -274,6 +295,48 @@ async fn delegated_or_failed_plugin_render_uses_runtime_fallback() {
         let human = projected.human.expect("runtime human fallback");
         assert_eq!(human.title, "test.renderer.render");
         assert_eq!(human.summary, "raw result");
+    }
+}
+
+#[tokio::test]
+async fn empty_or_json_only_plugin_human_render_uses_readable_fallback() {
+    for (behavior, title, summary) in [
+        (
+            RenderBehavior::EmptyHuman,
+            "Plugin fallback title",
+            "Plugin fallback summary",
+        ),
+        (
+            RenderBehavior::JsonOnlyHuman,
+            "Plugin JSON title",
+            "Plugin JSON summary",
+        ),
+    ] {
+        let executor = rendering_executor(behavior).await;
+        let projected = executor
+            .render_tool_result(
+                &rendering_invocation(),
+                &agena_domain::RawOutput {
+                    text: "raw result".to_owned(),
+                    payload: Some(serde_json::json!({
+                        "items": [{"name": "visible", "status": "ready"}]
+                    })),
+                    ..Default::default()
+                },
+            )
+            .await;
+
+        let human = projected.human.expect("runtime human fallback");
+        assert_eq!(human.title, title);
+        assert_eq!(human.summary, summary);
+        assert!(
+            human
+                .blocks
+                .iter()
+                .any(|block| !matches!(block, agena_domain::ViewBlock::Json { .. })),
+            "fallback should expose readable blocks: {:?}",
+            human.blocks
+        );
     }
 }
 

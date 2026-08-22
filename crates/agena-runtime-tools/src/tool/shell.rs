@@ -18,14 +18,25 @@ use tokio::process::Command;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
+use super::ToolError;
+
 const OUTPUT_CHUNK_QUEUE_CAPACITY: usize = 128;
 const MAX_CAPTURE_BYTES_PER_STREAM: usize = 8 * 1024 * 1024;
 const MAX_CONCURRENT_SHELL_WORKERS: usize = 16;
 static SHELL_WORKERS: LazyLock<Arc<tokio::sync::Semaphore>> =
     LazyLock::new(|| Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_SHELL_WORKERS)));
 
-pub(crate) async fn acquire_worker_permit() -> Option<tokio::sync::OwnedSemaphorePermit> {
-    Arc::clone(&SHELL_WORKERS).acquire_owned().await.ok()
+pub(crate) async fn acquire_worker_permit() -> Result<tokio::sync::OwnedSemaphorePermit, ToolError>
+{
+    Arc::clone(&SHELL_WORKERS)
+        .acquire_owned()
+        .await
+        .map_err(|error| {
+            ToolError::plugin(agena_failure::diagnostic::format_error_chain_with_context(
+                "acquire a shell worker permit",
+                &error,
+            ))
+        })
 }
 
 pub async fn execute(
@@ -120,8 +131,8 @@ pub async fn execute_with_callback(
 
     // The direct command may exit while a detached descendant still owns an
     // inherited pipe. `process-wrap` targets the complete group/job here.
-    let _ = child.start_kill();
-    let (stdout, stderr) = collect_drains(stdout_handle, stderr_handle).await;
+    child.start_kill().map_err(ShellError::Wait)?;
+    let (stdout, stderr) = collect_drains(stdout_handle, stderr_handle).await?;
     while let Ok(chunk) = chunk_rx.try_recv() {
         emit_chunk(chunk, output_callback, &mut output_sequence);
     }
@@ -254,6 +265,7 @@ where
     tokio::spawn(async move {
         let mut captured_output = Vec::new();
         let mut truncated = false;
+        let mut live_delivery_partial = false;
         let mut chunk = [0_u8; 8 * 1024];
         loop {
             let read = reader.read(&mut chunk).await?;
@@ -264,10 +276,18 @@ where
             let captured = remaining.min(read);
             captured_output.extend_from_slice(&chunk[..captured]);
             truncated |= captured < read;
-            let _ = sender.try_send(OutputChunk {
+            if let Err(error) = sender.try_send(OutputChunk {
                 stream: stream.clone(),
                 bytes: chunk[..read].to_vec(),
-            });
+            }) && !live_delivery_partial
+            {
+                live_delivery_partial = true;
+                tracing::warn!(
+                    output_stream = ?stream,
+                    diagnostic = %error,
+                    "live shell output chunk was not delivered; the terminal stream is partial but captured output remains available"
+                );
+            }
         }
         if truncated {
             captured_output.extend_from_slice(b"\n[output truncated after 8 MiB]\n");
@@ -288,40 +308,112 @@ fn emit_chunk(
     output_callback(chunk.stream, chunk.bytes.as_slice());
 }
 
-async fn collect_drain(handle: Option<tokio::task::JoinHandle<io::Result<String>>>) -> String {
-    let Some(handle) = handle else {
-        return String::new();
-    };
-    handle.await.ok().and_then(Result::ok).unwrap_or_default()
-}
-
 async fn collect_drains(
-    stdout_handle: Option<tokio::task::JoinHandle<io::Result<String>>>,
-    stderr_handle: Option<tokio::task::JoinHandle<io::Result<String>>>,
-) -> (String, String) {
+    mut stdout_handle: Option<tokio::task::JoinHandle<io::Result<String>>>,
+    mut stderr_handle: Option<tokio::task::JoinHandle<io::Result<String>>>,
+) -> Result<(String, String), ShellError> {
     let stdout_abort = stdout_handle
         .as_ref()
         .map(tokio::task::JoinHandle::abort_handle);
     let stderr_abort = stderr_handle
         .as_ref()
         .map(tokio::task::JoinHandle::abort_handle);
-    match tokio::time::timeout(Duration::from_secs(2), async move {
-        tokio::join!(collect_drain(stdout_handle), collect_drain(stderr_handle))
+    match tokio::time::timeout(Duration::from_secs(2), async {
+        let stdout = async {
+            match stdout_handle.as_mut() {
+                Some(handle) => handle.await,
+                None => Ok(Ok(String::new())),
+            }
+        };
+        let stderr = async {
+            match stderr_handle.as_mut() {
+                Some(handle) => handle.await,
+                None => Ok(Ok(String::new())),
+            }
+        };
+        tokio::join!(stdout, stderr)
     })
     .await
     {
-        Ok(output) => output,
-        Err(_) => {
+        Ok((stdout, stderr)) => {
+            let mut failures = Vec::new();
+            let stdout = match stdout {
+                Ok(Ok(output)) => Some(output),
+                Ok(Err(error)) => {
+                    failures.push(agena_failure::diagnostic::format_error_chain_with_context(
+                        "failed to drain shell stdout",
+                        &error,
+                    ));
+                    None
+                }
+                Err(error) => {
+                    failures.push(agena_failure::diagnostic::format_error_chain_with_context(
+                        "shell stdout drain task failed",
+                        &error,
+                    ));
+                    None
+                }
+            };
+            let stderr = match stderr {
+                Ok(Ok(output)) => Some(output),
+                Ok(Err(error)) => {
+                    failures.push(agena_failure::diagnostic::format_error_chain_with_context(
+                        "failed to drain shell stderr",
+                        &error,
+                    ));
+                    None
+                }
+                Err(error) => {
+                    failures.push(agena_failure::diagnostic::format_error_chain_with_context(
+                        "shell stderr drain task failed",
+                        &error,
+                    ));
+                    None
+                }
+            };
+            if failures.is_empty() {
+                Ok((
+                    stdout.expect("stdout is present when no drain failure was recorded"),
+                    stderr.expect("stderr is present when no drain failure was recorded"),
+                ))
+            } else {
+                Err(ShellError::Wait(io::Error::other(
+                    failures.join("; additionally, "),
+                )))
+            }
+        }
+        Err(timeout_error) => {
             if let Some(abort) = stdout_abort {
                 abort.abort();
             }
             if let Some(abort) = stderr_abort {
                 abort.abort();
             }
-            (
-                "[stdout drain stopped after process termination timeout]".to_string(),
-                "[stderr drain stopped after process termination timeout]".to_string(),
-            )
+            let mut diagnostic = agena_failure::diagnostic::format_error_chain_with_context(
+                "shell output drains did not stop within 2 seconds after process termination",
+                &timeout_error,
+            );
+            for (stream, task) in [
+                ("stdout", stdout_handle.take()),
+                ("stderr", stderr_handle.take()),
+            ] {
+                if let Some(task) = task
+                    && let Err(error) = task.await
+                    && !error.is_cancelled()
+                {
+                    diagnostic.push_str("; additionally, ");
+                    diagnostic.push_str(
+                        &agena_failure::diagnostic::format_error_chain_with_context(
+                            format!("shell {stream} drain did not stop cleanly after abort"),
+                            &error,
+                        ),
+                    );
+                }
+            }
+            Err(ShellError::Wait(io::Error::new(
+                io::ErrorKind::TimedOut,
+                diagnostic,
+            )))
         }
     }
 }

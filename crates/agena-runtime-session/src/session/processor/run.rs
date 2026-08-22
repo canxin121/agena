@@ -719,7 +719,11 @@ impl SessionProcessor {
                         tracing::warn!(
                             target: "agena::session::processor",
                             run_id = assistant_message_id,
-                            "failed to serialize run provider state: {error}"
+                            diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                                "serialize durable run provider state",
+                                &error,
+                            ),
+                            "failed to serialize run provider state"
                         );
                     })
                     .ok()

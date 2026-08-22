@@ -21,16 +21,16 @@ use super::{
     PermissionsSubcommand, PermissionsWriteArgs, PluginArchitectureArgs, PluginInspectArgs,
     PluginInspectOutput, PluginLogOutputFormat, PluginLogsArgs, PluginLogsOutput, PluginStatusArgs,
     PluginStatusOutput, PrArgs, PrOutput, ProviderCapabilitiesOutput, ProviderCommand,
-    ProviderDefaultsSummary, ProviderListArgs, ProviderListOutput, ProviderModelsOutput,
-    ProviderSubcommand, ProviderSummary, ResumeArgs, ReviewArgs, SessionDetail, SessionForkOutput,
-    SessionImportOutput, SessionListArgs, SessionListOutput, SessionListView, SessionOutput,
-    SessionSummary, SessionsCommand, SessionsSubcommand, SnapshotArgs,
-    SnapshotBackendSupportOutput, SnapshotCapabilitiesOutput, SnapshotOutput, ToolDescriptor,
-    UsageArgs, WorkflowState, async_trait, browser_login_redirect_uri,
-    filter_session_summaries_by_view, format_apply_output, format_debug_session_output,
-    format_plugin_logs_output, memory_type_label, normalize_login_provider,
-    paginate_session_summaries, permission_rule_output, prompt_browser_login, prompt_device_login,
-    render_serialized, review_prompt, title_from_prompt, usage_stats_query_from_args,
+    ProviderListArgs, ProviderListOutput, ProviderModelsOutput, ProviderSubcommand,
+    ProviderSummary, ResumeArgs, ReviewArgs, SessionDetail, SessionForkOutput, SessionImportOutput,
+    SessionListArgs, SessionListOutput, SessionListView, SessionOutput, SessionSummary,
+    SessionsCommand, SessionsSubcommand, SnapshotArgs, SnapshotBackendSupportOutput,
+    SnapshotCapabilitiesOutput, SnapshotOutput, ToolDescriptor, UsageArgs, WorkflowState,
+    async_trait, browser_login_redirect_uri, filter_session_summaries_by_view, format_apply_output,
+    format_debug_session_output, format_plugin_logs_output, memory_type_label,
+    normalize_login_provider, paginate_session_summaries, permission_rule_output,
+    prompt_browser_login, prompt_device_login, render_serialized, review_prompt, title_from_prompt,
+    usage_stats_query_from_args,
 };
 use agena_api::{
     commands::{
@@ -100,7 +100,7 @@ impl McpServerBackend for ServerMcpBackend {
             .client
             .operator_tools()
             .await
-            .map_err(|error| McpServerError::Backend(error.to_string()))?;
+            .map_err(|error| McpServerError::Backend(error.user_message()))?;
         let tools: Vec<OperatorToolResource> = serde_json::from_value(value)?;
         Ok(tools
             .into_iter()
@@ -130,7 +130,7 @@ impl McpServerBackend for ServerMcpBackend {
             .client
             .operator_tools()
             .await
-            .map_err(|error| McpServerError::Backend(error.to_string()))?;
+            .map_err(|error| McpServerError::Backend(error.user_message()))?;
         let tools: Vec<OperatorToolResource> = serde_json::from_value(value)?;
         if !mcp_tool_is_callable(&tools, params.name.as_str()) {
             return Err(McpServerError::NotFound(format!(
@@ -154,7 +154,10 @@ impl McpServerBackend for ServerMcpBackend {
                 };
                 Ok(agena_mcp_server::text_result(text))
             }
-            Err(error) => Ok(agena_mcp_server::text_error(error.to_string())),
+            // MCP tool output crosses a user/model boundary. Keep the raw
+            // diagnostic in ClientError's operator channel and return only
+            // its scrubbed, root-cause-preserving presentation here.
+            Err(error) => Ok(agena_mcp_server::text_error(error.user_message())),
         }
     }
 }
@@ -1362,10 +1365,6 @@ impl AgenaCli {
                 let mut providers = providers
                     .into_iter()
                     .map(|provider| ProviderSummary {
-                        defaults: ProviderDefaultsSummary {
-                            adapter: provider.defaults.adapter,
-                            model: provider.defaults.model,
-                        },
                         provider_id: provider.provider_id,
                     })
                     .collect::<Vec<_>>();
@@ -1944,11 +1943,15 @@ fn resolve_provider_model_target(
     let model_id = model
         .map(str::trim)
         .filter(|model| !model.is_empty())
-        .unwrap_or(provider.defaults.model.as_str())
+        .ok_or_else(|| {
+            AppError::Config(format!(
+                "model is required for provider `{target}`; pass --model explicitly"
+            ))
+        })?
         .to_owned();
     Ok(WireModelRef {
         provider_id: provider.provider_id.clone(),
-        adapter_id: provider.defaults.adapter.clone(),
+        adapter_id: None,
         model_id,
     })
 }
@@ -2367,7 +2370,7 @@ fn mcp_servers_mut(
 }
 
 fn client_error(context: &str, error: ClientError) -> AppError {
-    AppError::Config(format!("{context}: {error}"))
+    AppError::Config(format!("{context}: {}", error.operator_diagnostic()))
 }
 
 fn resolve_model_target(
@@ -2386,13 +2389,9 @@ fn resolve_model_target(
                 "invalid model reference `{target}`; expected provider/model"
             )));
         }
-        let adapter_id = providers
-            .iter()
-            .find(|provider| provider.provider_id == provider_id.trim())
-            .and_then(|provider| provider.defaults.adapter.clone());
         return Ok(WireModelRef {
             provider_id: provider_id.trim().to_owned(),
-            adapter_id,
+            adapter_id: None,
             model_id: model_id.trim().to_owned(),
         });
     }
@@ -2400,11 +2399,10 @@ fn resolve_model_target(
         .iter()
         .find(|provider| provider.provider_id == target)
         .ok_or_else(|| AppError::Config(format!("provider not found: {target}")))?;
-    Ok(WireModelRef {
-        provider_id: provider.provider_id.clone(),
-        adapter_id: provider.defaults.adapter.clone(),
-        model_id: provider.defaults.model.clone(),
-    })
+    let _ = provider;
+    Err(AppError::Config(format!(
+        "model is required for provider `{target}`; pass --model explicitly"
+    )))
 }
 
 fn session_summary_from_resource(resource: SessionResource) -> Result<SessionSummary, AppError> {
@@ -2478,7 +2476,6 @@ fn run_visible_text(parts: &[SessionTranscriptPart], run_id: i64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agena_api::resource::ProviderDefaultsResource;
 
     #[test]
     fn workspace_guard_accepts_the_same_canonical_path_and_rejects_its_parent() {
@@ -2618,26 +2615,14 @@ mod tests {
     fn cli_model_targets_are_resolved_from_public_provider_summaries() {
         let providers = vec![ProviderSummaryResource {
             provider_id: "example".to_owned(),
-            defaults: ProviderDefaultsResource {
-                adapter: Some("openai".to_owned()),
-                model: "default-model".to_owned(),
-            },
             adapters: Vec::new(),
         }];
         assert_eq!(
-            resolve_model_target(&providers, "example").expect("provider default"),
+            resolve_model_target(&providers, "example/explicit-model").expect("qualified model"),
             WireModelRef {
                 provider_id: "example".to_owned(),
-                adapter_id: Some("openai".to_owned()),
-                model_id: "default-model".to_owned(),
-            }
-        );
-        assert_eq!(
-            resolve_model_target(&providers, "example/other").expect("qualified model"),
-            WireModelRef {
-                provider_id: "example".to_owned(),
-                adapter_id: Some("openai".to_owned()),
-                model_id: "other".to_owned(),
+                adapter_id: None,
+                model_id: "explicit-model".to_owned(),
             }
         );
     }

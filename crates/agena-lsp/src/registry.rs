@@ -158,7 +158,13 @@ impl LspRegistry {
             )
             .await
         {
-            let _ = client.close_transport().await;
+            if let Err(cleanup_error) = client.close_transport().await {
+                tracing::warn!(
+                    server = server_name,
+                    diagnostic = %agena_failure::diagnostic::format_error_chain(&cleanup_error),
+                    "LSP initialization failed and closing its transport also failed"
+                );
+            }
             return Err(error);
         }
         let mut spawned = self.spawned.write().await;
@@ -191,11 +197,22 @@ impl LspRegistry {
                 .collect::<Vec<_>>()
         };
         let mut shutdowns = tokio::task::JoinSet::new();
-        for client in clients {
-            shutdowns.spawn(async move {
-                let _ = client.shutdown().await;
-            });
+        for (index, client) in clients.into_iter().enumerate() {
+            shutdowns.spawn(async move { (index, client.shutdown().await) });
         }
-        while shutdowns.join_next().await.is_some() {}
+        while let Some(result) = shutdowns.join_next().await {
+            match result {
+                Ok((_, Ok(()))) => {}
+                Ok((index, Err(error))) => tracing::warn!(
+                    client_index = index,
+                    diagnostic = %agena_failure::diagnostic::format_error_chain(&error),
+                    "failed to shut down an LSP client"
+                ),
+                Err(error) => tracing::error!(
+                    diagnostic = %agena_failure::diagnostic::format_error_chain(&error),
+                    "an LSP shutdown task failed"
+                ),
+            }
+        }
     }
 }

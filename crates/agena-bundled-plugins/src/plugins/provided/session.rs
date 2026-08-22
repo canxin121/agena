@@ -29,7 +29,7 @@ struct GitFacts {
     dirty: bool,
 }
 
-fn run_git(workspace: &Path, args: &[&str]) -> Option<String> {
+fn run_git(workspace: &Path, args: &[&str]) -> SdkResult<Option<String>> {
     const MAX_GIT_FACT_BYTES: usize = 4 * 1024 * 1024;
     let child = std::process::Command::new("git")
         .arg("-C")
@@ -42,9 +42,14 @@ fn run_git(workspace: &Path, args: &[&str]) -> Option<String> {
         .env("GPG_TTY", "")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .spawn()
-        .ok()?;
+        .map_err(|error| {
+            PluginError::internal(agena_failure::diagnostic::format_error_chain_with_context(
+                "start Git while inspecting the session environment",
+                &error,
+            ))
+        })?;
     let mut retained = 0_usize;
     let output = child
         .controlled_with_output()
@@ -60,24 +65,51 @@ fn run_git(workspace: &Path, args: &[&str]) -> Option<String> {
         .time_limit(Duration::from_secs(15))
         .terminate_for_timeout()
         .wait()
-        .ok()??;
-    output
-        .status
-        .success()
-        .then(|| String::from_utf8_lossy(&output.stdout).trim().to_string())
+        .map_err(|error| {
+            PluginError::internal(agena_failure::diagnostic::format_error_chain_with_context(
+                "wait for Git while inspecting the session environment",
+                &error,
+            ))
+        })?
+        .ok_or_else(|| {
+            PluginError::timeout_with_public_detail(
+                "Git session environment inspection timed out after 15 seconds",
+                "Git inspection timed out after 15 seconds.",
+            )
+        })?;
+    if !output.status.success() {
+        tracing::debug!(
+            arguments = ?args,
+            status = %output.status,
+            stderr = %String::from_utf8_lossy(&output.stderr),
+            "Git session environment probe exited unsuccessfully"
+        );
+        return Ok(None);
+    }
+    let stdout = String::from_utf8(output.stdout).map_err(|error| {
+        PluginError::internal(agena_failure::diagnostic::format_error_chain_with_context(
+            "decode Git session environment output as UTF-8",
+            &error,
+        ))
+    })?;
+    Ok(Some(stdout.trim().to_string()))
 }
 
-fn git_facts(workspace: &Path) -> Option<GitFacts> {
-    let branch = run_git(workspace, &["rev-parse", "--abbrev-ref", "HEAD"])?;
-    let short_sha = run_git(workspace, &["rev-parse", "--short", "HEAD"]);
-    let dirty = run_git(workspace, &["status", "--porcelain"])
+fn git_facts(workspace: &Path) -> SdkResult<Option<GitFacts>> {
+    let Some(branch) = run_git(workspace, &["rev-parse", "--abbrev-ref", "HEAD"])? else {
+        return Ok(None);
+    };
+    let short_sha = run_git(workspace, &["rev-parse", "--short", "HEAD"])?;
+    let status = run_git(workspace, &["status", "--porcelain"])?;
+    let dirty = status
+        .as_deref()
         .map(|status| !status.trim().is_empty())
         .unwrap_or(false);
-    Some(GitFacts {
+    Ok(Some(GitFacts {
         branch: Some(branch),
         short_sha,
         dirty,
-    })
+    }))
 }
 
 #[agena_plugin_host::sdk::agena_plugin(
@@ -132,13 +164,23 @@ impl SessionPlugin {
         let worker_permit = crate::BLOCKING_PLUGIN_WORKERS
             .acquire()
             .await
-            .map_err(|_| PluginError::internal("session worker pool is unavailable"))?;
+            .map_err(|error| {
+                PluginError::internal(agena_failure::diagnostic::format_error_chain_with_context(
+                    "acquire a session environment worker",
+                    &error,
+                ))
+            })?;
         let facts = tokio::task::spawn_blocking(move || {
             let _worker_permit = worker_permit;
             git_facts(Path::new(&git_workspace))
         })
         .await
-        .map_err(|error| PluginError::internal(format!("git inspection failed: {error}")))?;
+        .map_err(|error| {
+            PluginError::internal(agena_failure::diagnostic::format_error_chain_with_context(
+                "Git session environment inspection task failed",
+                &error,
+            ))
+        })??;
         if let Some(facts) = facts {
             git_branch = facts.branch;
             git_short_sha = facts.short_sha;

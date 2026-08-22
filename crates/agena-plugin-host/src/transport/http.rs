@@ -102,10 +102,12 @@ impl HttpTransport {
             builder = builder.header("authorization", h);
         }
         let request = async {
-            let response = builder
-                .send()
-                .await
-                .map_err(|error| TransportError::Io(error.to_string()))?;
+            let response = builder.send().await.map_err(|error| {
+                TransportError::Io(agena_failure::diagnostic::format_error_chain_with_context(
+                    "plugin HTTP transport request failed",
+                    &error,
+                ))
+            })?;
             if response.content_length().is_some_and(|length| {
                 length > u64::try_from(MAX_HTTP_RESPONSE_BYTES).unwrap_or(u64::MAX)
             }) {
@@ -116,7 +118,12 @@ impl HttpTransport {
             let mut body = Vec::new();
             let mut stream = response.bytes_stream();
             while let Some(chunk) = stream.next().await {
-                let chunk = chunk.map_err(|error| TransportError::Rpc(error.to_string()))?;
+                let chunk = chunk.map_err(|error| {
+                    TransportError::Rpc(agena_failure::diagnostic::format_error_chain_with_context(
+                        "failed to read the plugin HTTP transport response body",
+                        &error,
+                    ))
+                })?;
                 if body.len().saturating_add(chunk.len()) > MAX_HTTP_RESPONSE_BYTES {
                     return Err(TransportError::Rpc(format!(
                         "plugin HTTP response exceeds the {MAX_HTTP_RESPONSE_BYTES}-byte limit"
@@ -128,7 +135,9 @@ impl HttpTransport {
         };
         tokio::select! {
             biased;
-            _ = self.shutdown.cancelled() => Err(TransportError::Disconnected),
+            _ = self.shutdown.cancelled() => Err(TransportError::disconnected(
+                "HTTP plugin transport was shut down while a request was active",
+            )),
             result = request => result,
         }
     }
@@ -153,9 +162,18 @@ impl HttpTransport {
                     let state = self.active_streams.lock().await.remove(stream_id.as_str());
                     if let Some(state) = state {
                         state.monitor_stop.cancel();
-                        let _ = state.end.send(Err(PluginError::internal(
-                            "plugin stream consumer exceeded the 64-chunk buffer",
-                        )));
+                        if state
+                            .end
+                            .send(Err(PluginError::internal(
+                                "plugin stream consumer exceeded the 64-chunk buffer",
+                            )))
+                            .is_err()
+                        {
+                            tracing::debug!(
+                                stream_id,
+                                "overflowed HTTP plugin stream terminal receiver was already dropped"
+                            );
+                        }
                     }
                 }
             }
@@ -163,6 +181,10 @@ impl HttpTransport {
         }
         let mut buffered = self.buffered_streams.lock().await;
         if !buffered.contains_key(stream_id.as_str()) && buffered.len() >= MAX_BUFFERED_STREAMS {
+            tracing::warn!(
+                stream_id,
+                "dropping an HTTP plugin stream event because the pre-registration buffer is full"
+            );
             return;
         }
         let events = buffered.entry(stream_id.clone()).or_default();
@@ -186,7 +208,12 @@ impl HttpTransport {
         };
         if let Some(state) = state {
             state.monitor_stop.cancel();
-            let _ = state.end.send(result);
+            if state.end.send(result).is_err() {
+                tracing::debug!(
+                    stream_id,
+                    "HTTP plugin stream terminal-result receiver was dropped"
+                );
+            }
             return;
         }
         let event = match result {
@@ -198,6 +225,10 @@ impl HttpTransport {
         };
         let mut buffered = self.buffered_streams.lock().await;
         if !buffered.contains_key(stream_id.as_str()) && buffered.len() >= MAX_BUFFERED_STREAMS {
+            tracing::warn!(
+                stream_id,
+                "dropping an HTTP plugin stream terminal event because the pre-registration buffer is full"
+            );
             return;
         }
         let events = buffered.entry(stream_id).or_default();
@@ -285,7 +316,11 @@ impl HttpTransport {
         }
         for state in active {
             state.monitor_stop.cancel();
-            let _ = state.end.send(Err(error.clone()));
+            if state.end.send(Err(error.clone())).is_err() {
+                tracing::debug!(
+                    "failed HTTP plugin stream receiver was already dropped during transport shutdown"
+                );
+            }
         }
     }
 }
@@ -308,15 +343,7 @@ impl PluginTransport for HttpTransport {
         match resp.payload {
             ResponsePayload::Ok { result } => Ok(result),
             ResponsePayload::Err { error } => {
-                let pe: Option<PluginError> = error
-                    .data
-                    .as_ref()
-                    .and_then(|d| serde_json::from_value(d.clone()).ok());
-                let pe = pe.unwrap_or_else(|| {
-                    let mut plugin_error = PluginError::internal(error.message);
-                    plugin_error.diagnostic.data = error.data;
-                    plugin_error
-                });
+                let pe = super::plugin_error_from_rpc(error, "decode HTTP plugin dispatch error");
                 Err(TransportError::Plugin(pe))
             }
         }
@@ -339,18 +366,13 @@ impl PluginTransport for HttpTransport {
         let resp = self.send(&req).await?;
         let handle: ToolInvokeStreamHandle = match resp.payload {
             ResponsePayload::Ok { result } => {
-                serde_json::from_value(result).map_err(|e| TransportError::Rpc(e.to_string()))?
+                serde_json::from_value(result).map_err(TransportError::from)?
             }
             ResponsePayload::Err { error } => {
-                let pe: Option<PluginError> = error
-                    .data
-                    .as_ref()
-                    .and_then(|d| serde_json::from_value(d.clone()).ok());
-                let pe = pe.unwrap_or_else(|| {
-                    let mut plugin_error = PluginError::internal(error.message);
-                    plugin_error.diagnostic.data = error.data;
-                    plugin_error
-                });
+                let pe = super::plugin_error_from_rpc(
+                    error,
+                    "decode HTTP plugin streaming-dispatch error",
+                );
                 return Err(TransportError::Plugin(pe));
             }
         };
@@ -373,20 +395,20 @@ impl PluginTransport for HttpTransport {
     ) -> Result<bool, TransportError> {
         match method {
             method::TOOL_STREAM_CHUNK => {
-                let chunk: ToolStreamChunk = serde_json::from_value(params)
-                    .map_err(|e| TransportError::Rpc(e.to_string()))?;
+                let chunk: ToolStreamChunk =
+                    serde_json::from_value(params).map_err(TransportError::from)?;
                 self.deliver_stream_chunk(chunk).await;
                 Ok(true)
             }
             method::TOOL_STREAM_END => {
-                let end: ToolStreamEnd = serde_json::from_value(params)
-                    .map_err(|e| TransportError::Rpc(e.to_string()))?;
+                let end: ToolStreamEnd =
+                    serde_json::from_value(params).map_err(TransportError::from)?;
                 self.finish_stream(end.stream_id.clone(), Ok(end)).await;
                 Ok(true)
             }
             method::TOOL_STREAM_ERROR => {
-                let err: ToolStreamError = serde_json::from_value(params)
-                    .map_err(|e| TransportError::Rpc(e.to_string()))?;
+                let err: ToolStreamError =
+                    serde_json::from_value(params).map_err(TransportError::from)?;
                 self.finish_stream(err.stream_id.clone(), Err(err.error))
                     .await;
                 Ok(true)

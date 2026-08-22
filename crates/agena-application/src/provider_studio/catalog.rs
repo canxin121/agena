@@ -157,7 +157,7 @@ pub(crate) fn provider_model_json_for_model_id(
     catalog_entries: &[crate::dto::CatalogModelResource],
     model_id: &str,
     provider_model: Option<&agena_api::resource::ProviderModelResource>,
-) -> JsonValue {
+) -> Result<JsonValue, serde_json::Error> {
     provider_model_overlay_to_json(provider_model_overlay_for_model_id(
         catalog_entries,
         model_id,
@@ -191,16 +191,16 @@ pub(crate) fn provider_model_overlay_for_model_id(
 
 pub(crate) fn provider_model_overlay_to_json(
     overlay: agena_provider::ResolvedProviderModelConfig,
-) -> JsonValue {
+) -> Result<JsonValue, serde_json::Error> {
     match serde_json::to_value(overlay) {
         Ok(JsonValue::Object(mut value)) => {
             if matches!(value.get("enabled"), Some(JsonValue::Bool(true))) {
                 value.remove("enabled");
             }
-            JsonValue::Object(value)
+            Ok(JsonValue::Object(value))
         }
-        Ok(other) => other,
-        Err(_) => JsonValue::Object(JsonMap::new()),
+        Ok(other) => Ok(other),
+        Err(error) => Err(error),
     }
 }
 
@@ -547,26 +547,6 @@ pub(crate) fn dedupe_vec<T: PartialEq>(values: &mut Vec<T>) {
     }
 }
 
-pub(crate) fn ensure_provider_model_entry(
-    adapter_value: &mut JsonValue,
-    model_id: &str,
-    model_value: JsonValue,
-) -> anyhow::Result<()> {
-    let adapter = adapter_value
-        .as_object_mut()
-        .ok_or_else(|| anyhow!("adapter patch must be an object"))?;
-    adapter.insert("enabled".to_owned(), JsonValue::Bool(true));
-    if !adapter.contains_key("models") {
-        adapter.insert("models".to_owned(), JsonValue::Object(JsonMap::new()));
-    }
-    let models = adapter
-        .get_mut("models")
-        .and_then(JsonValue::as_object_mut)
-        .ok_or_else(|| anyhow!("adapter models patch must be an object"))?;
-    models.insert(model_id.to_owned(), model_value);
-    Ok(())
-}
-
 pub(crate) fn supported_provider_draft_adapter_list(auth_kind: &ProviderDraftAuthKind) -> String {
     let supported = auth_kind
         .adapter_rules()
@@ -594,10 +574,7 @@ pub(crate) fn parse_oauth_expires_at_ms(value: &str) -> anyhow::Result<i64> {
 
 pub(crate) fn build_provider_patch_value_for_save(
     draft: &ProviderConfigDraft,
-    default_adapter: &str,
-    default_model: Option<&str>,
     adapters: JsonValue,
-    include_defaults: bool,
 ) -> std::result::Result<JsonValue, ProviderStudioSaveError> {
     let adapters = serde_json::from_value::<
         std::collections::BTreeMap<String, ProviderAdapterOverlay>,
@@ -605,12 +582,7 @@ pub(crate) fn build_provider_patch_value_for_save(
     .map_err(ProviderStudioSaveError::other)?;
     let mut adapters = adapters;
     apply_provider_auth_required_adapter_defaults_to_overlay_adapters(draft, &mut adapters);
-    let overlay = draft.to_provider_overlay_for_save(
-        default_adapter,
-        default_model,
-        adapters,
-        include_defaults,
-    )?;
+    let overlay = draft.to_provider_overlay_for_save(adapters)?;
     serde_json::to_value(overlay).map_err(ProviderStudioSaveError::other)
 }
 
@@ -742,6 +714,55 @@ pub(crate) fn provider_model_settings_path(
     )
 }
 
+/// Return the stable model id used by Agena for one adapter route.
+///
+/// Anthropic model discovery can return CPA's reversible `claude-fable-5-dd-`
+/// aliases. Runtime config normalizes those aliases, so Provider Studio must
+/// use the same key when reading and writing legacy file settings.
+pub(crate) fn canonical_provider_model_id(adapter_id: &str, model_id: &str) -> String {
+    if adapter_id == "anthropic" {
+        agena_provider::normalize_anthropic_model_id(model_id)
+    } else {
+        model_id.to_owned()
+    }
+}
+
+/// Return canonical-first keys that may contain a configured model overlay.
+/// The raw alias is retained as a fallback for settings written by older
+/// versions before Anthropic model discovery was normalized.
+pub(crate) fn provider_model_id_candidates(adapter_id: &str, model_id: &str) -> Vec<String> {
+    let canonical = canonical_provider_model_id(adapter_id, model_id);
+    let mut candidates = vec![canonical.clone()];
+    if canonical != model_id {
+        candidates.push(model_id.to_owned());
+    }
+    candidates
+}
+
+/// Canonicalize model keys in an adapter settings object while preserving an
+/// explicitly canonical value when both a legacy alias and canonical key are
+/// present.
+pub(crate) fn canonicalize_provider_model_settings(
+    adapter_id: &str,
+    models: &mut JsonMap<String, JsonValue>,
+) {
+    let current = std::mem::take(models);
+    let mut canonical = JsonMap::new();
+    let mut aliases = Vec::new();
+    for (model_id, value) in current {
+        let normalized = canonical_provider_model_id(adapter_id, model_id.as_str());
+        if normalized == model_id {
+            canonical.insert(normalized, value);
+        } else {
+            aliases.push((normalized, value));
+        }
+    }
+    for (model_id, value) in aliases {
+        canonical.entry(model_id).or_insert(value);
+    }
+    *models = canonical;
+}
+
 pub(crate) fn provider_adapter_settings_path(provider_id: &str, adapter_id: &str) -> String {
     format!(
         "providers.{}.adapters.{}",
@@ -756,6 +777,7 @@ pub(crate) fn provider_settings_path(provider_id: &str) -> String {
 
 pub(crate) fn merge_provider_model_adapter_patch_for_save(
     existing_adapter: Option<JsonValue>,
+    adapter_id: &str,
     model_id: &str,
     model_value: JsonValue,
 ) -> std::result::Result<JsonValue, ProviderStudioSaveError> {
@@ -773,29 +795,12 @@ pub(crate) fn merge_provider_model_adapter_patch_for_save(
     let Some(models_object) = models.as_object_mut() else {
         return Err(ProviderStudioSaveError::ConfiguredProviderAdapterModelsMustBeObject);
     };
-    models_object.insert(model_id.to_owned(), model_value);
+    canonicalize_provider_model_settings(adapter_id, models_object);
+    models_object.insert(
+        canonical_provider_model_id(adapter_id, model_id),
+        model_value,
+    );
     Ok(JsonValue::Object(adapter))
-}
-
-pub(crate) fn provider_defaults_point_to(
-    provider: &JsonMap<String, JsonValue>,
-    adapter_id: &str,
-    model_id: &str,
-) -> bool {
-    let Some(defaults) = provider.get("defaults").and_then(JsonValue::as_object) else {
-        return false;
-    };
-    defaults.get("adapter").and_then(JsonValue::as_str) == Some(adapter_id)
-        && defaults.get("model").and_then(JsonValue::as_str) == Some(model_id)
-}
-
-pub(crate) fn provider_defaults_adapter(provider: &JsonMap<String, JsonValue>) -> Option<&str> {
-    provider
-        .get("defaults")
-        .and_then(JsonValue::as_object)
-        .and_then(|defaults| defaults.get("adapter"))
-        .and_then(JsonValue::as_str)
-        .filter(|value| !value.trim().is_empty())
 }
 
 pub(crate) fn provider_model_selection_contains(
@@ -806,76 +811,11 @@ pub(crate) fn provider_model_selection_contains(
     selected_model_keys.contains(format!("{adapter_id}\u{1f}{model_id}").as_str())
 }
 
-/// Whether an adapter value is enabled, defaulting to enabled when the key is
-/// absent (matching how the runtime treats a provider adapter without an
-/// explicit `enabled` flag).
-fn provider_adapter_enabled(adapter_value: &JsonValue) -> bool {
-    adapter_value
-        .as_object()
-        .and_then(|adapter| adapter.get("enabled"))
-        .and_then(JsonValue::as_bool)
-        .unwrap_or(true)
-}
-
-/// Resolve the effective default adapter for a provider being written.
-///
-/// The requested default must both exist and be enabled. When the requested
-/// default was just unchecked in Provider Studio (or otherwise disabled), the
-/// next enabled adapter becomes the default so the saved provider still
-/// validates. This mirrors the runtime's `RawProviderConfig` resolution, which
-/// rejects a `defaults.adapter` that points at a disabled adapter.
-pub(crate) fn resolve_provider_defaults_from_value_for_save(
-    adapters: &JsonMap<String, JsonValue>,
-    requested_default_adapter: Option<&str>,
-    requested_default_model: Option<&str>,
-) -> std::result::Result<(String, Option<String>), ProviderStudioSaveError> {
-    let requested = requested_default_adapter
-        .filter(|default_adapter| adapters.contains_key(*default_adapter))
-        .filter(|default_adapter| {
-            adapters
-                .get(*default_adapter)
-                .is_some_and(provider_adapter_enabled)
-        });
-    let default_adapter = requested
-        .map(ToOwned::to_owned)
-        .or_else(|| {
-            adapters
-                .iter()
-                .filter(|(_, value)| provider_adapter_enabled(value))
-                .map(|(adapter_id, _)| adapter_id.clone())
-                .next()
-        })
-        .ok_or(ProviderStudioSaveError::Validation(
-            ProviderStudioSaveValidationError::FieldRequired(
-                ProviderStudioSaveField::DefaultAdapter,
-            ),
-        ))?;
-
-    if let Some(default_model) = requested_default_model
-        && provider_value_contains_model(adapters, default_adapter.as_str(), default_model)
-    {
-        return Ok((default_adapter, Some(default_model.to_owned())));
-    }
-    Ok((default_adapter, None))
-}
-
 pub(crate) fn required_provider_save_field(
     value: &str,
     field: ProviderStudioSaveField,
 ) -> std::result::Result<&str, ProviderStudioSaveValidationError> {
     optional_non_empty(value).ok_or(ProviderStudioSaveValidationError::FieldRequired(field))
-}
-
-pub(crate) fn provider_value_contains_model(
-    adapters: &JsonMap<String, JsonValue>,
-    adapter_id: &str,
-    model_id: &str,
-) -> bool {
-    adapters
-        .get(adapter_id)
-        .and_then(|adapter| adapter.get("models"))
-        .and_then(JsonValue::as_object)
-        .is_some_and(|models| models.contains_key(model_id))
 }
 
 pub(crate) fn quoted_settings_segment(value: &str) -> String {
@@ -982,7 +922,8 @@ mod tests {
     fn unmatched_live_model_overlay_preserves_modes_and_capabilities() {
         let model = live_model_with_modes_and_capabilities();
         let value =
-            provider_model_overlay_to_json(provider_model_to_provider_model_overlay(&model));
+            provider_model_overlay_to_json(provider_model_to_provider_model_overlay(&model))
+                .expect("serialize provider model overlay");
         let overlay: ResolvedProviderModelConfig = serde_json::from_value(value).unwrap();
 
         let selectors = overlay

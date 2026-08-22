@@ -33,7 +33,10 @@ pub(crate) async fn run(request: ServerLaunchRequest) -> Result<(), AgenaProcess
         Some(agena_cli::ServerLifecycleAction::Install) => lifecycle::install(request.args).await,
         Some(agena_cli::ServerLifecycleAction::Uninstall) => lifecycle::uninstall().await,
     };
-    result.map_err(|error| AgenaProcessError::Internal(error.to_string()))
+    // Preserve and classify the complete anyhow chain at the executable
+    // boundary. In particular, a Runtime configuration/database/I/O failure
+    // must not be flattened into an opaque `Internal` message.
+    result.map_err(AgenaProcessError::from_anyhow)
 }
 
 pub(crate) fn issue_token() -> String {

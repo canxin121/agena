@@ -89,6 +89,10 @@ impl RuntimeAuthenticationError {
             message: message.into(),
         }
     }
+
+    pub fn internal_error(error: &(dyn std::error::Error + 'static)) -> Self {
+        Self::internal(agena_failure::diagnostic::format_error_chain(error))
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

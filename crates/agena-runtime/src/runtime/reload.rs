@@ -25,7 +25,7 @@ pub(crate) async fn run(runtime: AgenaRuntime) {
                         RuntimeBackgroundTaskOrigin::System,
                     )
                     .map(|_| ())
-                    .map_err(|error| error.to_string())
+                    .map_err(|error| agena_failure::diagnostic::format_error_chain(&error))
             }
         },
     )

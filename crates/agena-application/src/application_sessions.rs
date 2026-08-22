@@ -94,7 +94,7 @@ impl Application {
             .session_store_facade()?
             .session_states(session_ids.as_slice())
             .await
-            .map_err(|error| ApplicationError::internal(error.to_string()))?;
+            .map_err(|error| ApplicationError::internal_error(&error))?;
         let mut resources = Vec::with_capacity(summaries.len());
         for summary in summaries {
             let mut resource = crate::session::session_resource_from_summary(summary);
@@ -121,7 +121,7 @@ impl Application {
             .session_store_facade()?
             .session_state(session_id)
             .await
-            .map_err(|error| ApplicationError::internal(error.to_string()))?
+            .map_err(|error| ApplicationError::internal_error(&error))?
             .state;
         Ok(session_state_resource(state))
     }

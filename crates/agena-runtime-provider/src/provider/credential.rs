@@ -1,7 +1,10 @@
 use std::{
     fmt,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 use serde::Deserialize;
@@ -20,6 +23,7 @@ use agena_provider::{AuthData, AuthRefreshStrategy, AuthSecretSelector, SapAiCor
 use agena_provider_google_auth::{GoogleAdcError, access_token as google_adc_access_token};
 
 const EAGER_REFRESH_BUFFER_MS: i64 = 5 * 60 * 1_000;
+static CREDENTIAL_IDENTITY_FAILURE_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone)]
 /// A managed provider credential.
@@ -448,7 +452,7 @@ fn google_adc_default_credentials_path() -> Option<std::path::PathBuf> {
             .and_then(normalize_optional_text)?;
         let mut path = std::path::PathBuf::from(home);
         path.push(".config/gcloud/application_default_credentials.json");
-        path.exists().then_some(path)
+        prompt_cache_existing_credential_path(path)
     }
 
     #[cfg(target_family = "windows")]
@@ -458,14 +462,71 @@ fn google_adc_default_credentials_path() -> Option<std::path::PathBuf> {
             .and_then(normalize_optional_text)?;
         let mut path = std::path::PathBuf::from(app_data);
         path.push("gcloud/application_default_credentials.json");
-        path.exists().then_some(path)
+        prompt_cache_existing_credential_path(path)
+    }
+}
+
+fn prompt_cache_existing_credential_path(path: std::path::PathBuf) -> Option<std::path::PathBuf> {
+    match path.try_exists() {
+        Ok(true) => Some(path),
+        Ok(false) => None,
+        Err(error) => {
+            tracing::error!(
+                path = %path.display(),
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "inspect provider credential path for prompt-cache identity",
+                    &error,
+                ),
+                "provider credential path could not be inspected"
+            );
+            // Keep the path in the identity flow so the subsequent read emits
+            // a one-use failure fingerprint instead of collapsing to a shared
+            // cache shape.
+            Some(path)
+        }
     }
 }
 
 fn prompt_cache_json_identity(path: &std::path::Path) -> Option<(String, Vec<String>)> {
-    let payload = std::fs::read_to_string(path).ok()?;
+    let payload = match std::fs::read_to_string(path) {
+        Ok(payload) => payload,
+        Err(error) => {
+            let sequence = CREDENTIAL_IDENTITY_FAILURE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+            tracing::error!(
+                path = %path.display(),
+                sequence,
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "read provider credential JSON for prompt-cache identity",
+                    &error,
+                ),
+                "provider credential identity is using a one-use fingerprint"
+            );
+            return Some((
+                format!("credential-read-failure-{sequence}"),
+                vec!["credential_json_unreadable=true".to_owned()],
+            ));
+        }
+    };
     let fingerprint = utils::request_shape_fingerprint(&payload);
-    let json: serde_json::Value = serde_json::from_str(payload.as_str()).ok()?;
+    let json: serde_json::Value = match serde_json::from_str(payload.as_str()) {
+        Ok(json) => json,
+        Err(error) => {
+            let sequence = CREDENTIAL_IDENTITY_FAILURE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+            tracing::error!(
+                path = %path.display(),
+                sequence,
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "decode provider credential JSON for prompt-cache identity",
+                    &error,
+                ),
+                "provider credential identity is using a one-use fingerprint"
+            );
+            return Some((
+                format!("credential-decode-failure-{sequence}"),
+                vec!["credential_json_invalid=true".to_owned()],
+            ));
+        }
+    };
 
     let mut fields = Vec::new();
     if let Some(project_id) = json
@@ -588,7 +649,7 @@ async fn resolve_inline_auth_credential(
             oauth_refresh_token(&current).is_some()
                 && match selected.as_ref() {
                     Ok(selected) => force_refresh || !selected.is_fresh(now_ms),
-                    Err(_) => true,
+                    Err(..) => true,
                 }
         }
         AuthRefreshStrategy::None | AuthRefreshStrategy::ReloadFromStore => false,

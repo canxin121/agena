@@ -32,6 +32,27 @@ use agena_plugin_host::sdk::{
 
 pub(crate) const WEB_PLUGIN_ID: &str = "agena.web";
 
+fn plugin_internal_error_with_context(
+    context: &str,
+    error: &(dyn std::error::Error + 'static),
+) -> PluginError {
+    PluginError::internal(agena_failure::diagnostic::format_error_chain_with_context(
+        context, error,
+    ))
+}
+
+fn plugin_internal_failure_with_context(context: &str, error: &PluginError) -> PluginError {
+    PluginError::internal(format!("{context}: {}", error.diagnostic_message()))
+}
+
+fn log_secondary_plugin_failure(operation: &str, error: &PluginError) {
+    tracing::warn!(
+        operation,
+        diagnostic = %error.diagnostic_message(),
+        "secondary browser plugin operation failed"
+    );
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct WebConfig {
@@ -637,21 +658,24 @@ impl BrowserActivityState {
         // releasing it. The command can wait on the browser's reader task,
         // which must remain free to update browser state.
         let root = self.root.lock().await.clone();
-        let closed = match root {
+        let close_result = match root {
             Some(root) => root
                 .command(
                     "Target.closeTarget",
                     serde_json::json!({ "targetId": target_id }),
                 )
                 .await
-                .map(|value| {
+                .and_then(|value| {
                     value
                         .get("success")
                         .and_then(serde_json::Value::as_bool)
-                        .unwrap_or(false)
-                })
-                .unwrap_or(false),
-            None => false,
+                        .ok_or_else(|| {
+                            PluginError::internal(
+                                "browser Target.closeTarget response had no boolean success field",
+                            )
+                        })
+                }),
+            None => Ok(false),
         };
         self.clients.lock().await.remove(target_id);
         let finished_at_ms = chrono::Utc::now().timestamp_millis();
@@ -676,9 +700,11 @@ impl BrowserActivityState {
             Some(finished_at_ms),
             Some(message.to_string()),
         );
-        let _ = host.publish_activity(activity).await;
+        if let Err(error) = host.publish_activity(activity).await {
+            log_secondary_plugin_failure("publish stopped browser activity", &error);
+        }
         self.logs.lock().await.remove(target_id);
-        Ok(closed)
+        close_result
     }
 }
 
@@ -721,7 +747,7 @@ impl ActivitySourceAdapter for BrowserActivitySource {
             .strip_prefix("browser_")
             .unwrap_or(activity_id)
             .to_string();
-        let _ = self
+        let closed = self
             .state
             .close_session(
                 &target_id,
@@ -729,6 +755,11 @@ impl ActivitySourceAdapter for BrowserActivitySource {
                 self.host.as_ref(),
             )
             .await?;
+        if !closed {
+            return Err(PluginError::invalid_params(format!(
+                "browser session '{target_id}' could not be closed"
+            )));
+        }
         Ok(())
     }
 }
@@ -1034,9 +1065,15 @@ impl WebPlugin {
             state: Arc::clone(&self.browser_state),
             host: host.clone(),
         };
-        let _ = host
+        if let Err(error) = host
             .register_activity_source(BackgroundActivityKind::Browser, Arc::new(source))
-            .await;
+            .await
+        {
+            // Activity sources were added after the first host protocol. Keep
+            // older hosts compatible, but never hide why browser activities
+            // cannot be tailed or stopped through the shared activity API.
+            log_secondary_plugin_failure("register browser activity source", &error);
+        }
         Ok(agena_plugin_host::sdk::InitOutcome::ack(
             agena_plugin_host::sdk::Plugin::manifest(self),
         ))
@@ -1071,13 +1108,17 @@ impl WebPlugin {
         let worker_permit = crate::BLOCKING_PLUGIN_WORKERS
             .acquire()
             .await
-            .map_err(|_| PluginError::internal("browser worker pool is unavailable"))?;
+            .map_err(|error| {
+                plugin_internal_error_with_context("acquire browser shutdown worker", &error)
+            })?;
         tokio::task::spawn_blocking(move || {
             let _worker_permit = worker_permit;
             shutdown_local_browser()
         })
         .await
-        .map_err(|error| PluginError::internal(format!("browser shutdown task failed: {error}")))?
+        .map_err(|error| {
+            plugin_internal_error_with_context("browser shutdown task failed", &error)
+        })?
         .map_err(crawl_error_to_plugin)?;
         Ok(())
     }
@@ -1105,13 +1146,13 @@ impl WebPlugin {
     /// first-class `HostClient::publish_activity` capability.
     async fn publish_browser_activity(&self, activity: BackgroundActivity) -> SdkResult<()> {
         let host = self.state()?.host.clone();
-        host.publish_activity(activity)
-            .await
-            .map_err(|error| PluginError::internal(format!("publish browser activity: {error}")))
+        host.publish_activity(activity).await.map_err(|error| {
+            plugin_internal_failure_with_context("publish browser activity", &error)
+        })
     }
 
     async fn publish_browser_running(&self, session_id: &str, meta: &BrowserSessionMeta) {
-        let _ = self
+        if let Err(error) = self
             .publish_browser_activity(browser_activity(
                 format!("browser_{session_id}"),
                 meta.title.clone(),
@@ -1121,7 +1162,10 @@ impl WebPlugin {
                 None,
                 None,
             ))
-            .await;
+            .await
+        {
+            log_secondary_plugin_failure("publish running browser activity", &error);
+        }
     }
 
     async fn publish_browser_terminal(
@@ -1132,7 +1176,7 @@ impl WebPlugin {
         message: String,
     ) {
         let now = chrono::Utc::now().timestamp_millis();
-        let _ = self
+        if let Err(error) = self
             .publish_browser_activity(browser_activity(
                 format!("browser_{session_id}"),
                 meta.map(|meta| meta.title.clone())
@@ -1144,7 +1188,10 @@ impl WebPlugin {
                 Some(finished_at_ms),
                 Some(message),
             ))
-            .await;
+            .await
+        {
+            log_secondary_plugin_failure("publish terminal browser activity", &error);
+        }
     }
 
     fn store(&self) -> SdkResult<CrawlStore> {
@@ -1205,7 +1252,10 @@ impl WebPlugin {
             .timeout(timeout)
             .build()
             .map_err(|error| {
-                PluginError::internal(format!("browser redirect preflight setup failed: {error}"))
+                plugin_internal_error_with_context(
+                    "browser redirect preflight setup failed",
+                    &error,
+                )
             })?;
         let mut current = initial.clone();
         let mut checked = Vec::new();
@@ -1213,9 +1263,10 @@ impl WebPlugin {
             self.validate_network_target(&current).await?;
             checked.push(current.to_string());
             let response = client.head(current.clone()).send().await.map_err(|error| {
-                PluginError::internal(format!(
-                    "browser redirect preflight failed for {current}: {error}"
-                ))
+                plugin_internal_error_with_context(
+                    format!("browser redirect preflight failed for {current}").as_str(),
+                    &error,
+                )
             })?;
             if !response.status().is_redirection() {
                 return Ok(checked);
@@ -1223,11 +1274,18 @@ impl WebPlugin {
             let location = response
                 .headers()
                 .get(reqwest::header::LOCATION)
-                .and_then(|value| value.to_str().ok())
                 .ok_or_else(|| {
                     PluginError::internal(format!(
-                        "browser redirect from {current} had no valid Location header"
+                        "browser redirect from {current} had no Location header"
                     ))
+                })?
+                .to_str()
+                .map_err(|error| {
+                    plugin_internal_error_with_context(
+                        format!("browser redirect from {current} had an invalid Location header")
+                            .as_str(),
+                        &error,
+                    )
                 })?;
             current = resolve_browser_redirect(&current, location)?;
         }
@@ -1257,13 +1315,15 @@ impl WebPlugin {
         let worker_permit = crate::BLOCKING_PLUGIN_WORKERS
             .acquire()
             .await
-            .map_err(|_| PluginError::internal("browser worker pool is unavailable"))?;
+            .map_err(|error| {
+                plugin_internal_error_with_context("acquire browser launcher worker", &error)
+            })?;
         tokio::task::spawn_blocking(move || {
             let _worker_permit = worker_permit;
             local_browser_endpoint(&options)
         })
         .await
-        .map_err(|error| PluginError::internal(format!("browser launcher failed: {error}")))?
+        .map_err(|error| plugin_internal_error_with_context("browser launcher failed", &error))?
         .map_err(crawl_error_to_plugin)
     }
 
@@ -1393,7 +1453,7 @@ impl WebPlugin {
                         state
                             .append_log(&session_id, "event", format!("Navigated to {url_text}."))
                             .await;
-                        let _ = host
+                        if let Err(error) = host
                             .publish_activity(browser_activity(
                                 format!("browser_{session_id}"),
                                 title,
@@ -1403,7 +1463,13 @@ impl WebPlugin {
                                 None,
                                 None,
                             ))
-                            .await;
+                            .await
+                        {
+                            log_secondary_plugin_failure(
+                                "publish browser navigation activity",
+                                &error,
+                            );
+                        }
                     }
                     "Runtime.consoleAPICalled" => {
                         let level = event
@@ -1518,7 +1584,7 @@ impl WebPlugin {
                     .await
                     .map_err(crawl_error_to_plugin)?;
                 let final_url = url::Url::parse(page.canonical_url.as_str()).map_err(|error| {
-                    PluginError::internal(format!("invalid final fetch URL: {error}"))
+                    plugin_internal_error_with_context("invalid final fetch URL", &error)
                 })?;
                 // Spider follows HTTP redirects internally. Do not return a response
                 // whose final destination would fail the same network policy.
@@ -1547,7 +1613,7 @@ impl WebPlugin {
         let render_js = input.render_js.unwrap_or(config.browser.enabled);
         let page = self.fetch_page(&url, input.use_cache, render_js).await?;
         let payload =
-            serde_json::to_value(&page).map_err(|err| PluginError::internal(err.to_string()))?;
+            serde_json::to_value(&page).map_err(|err| PluginError::internal_error(&err))?;
         let text = format_fetched_page(&page, input.prompt.as_deref());
         Ok(ToolInvokeOutput::from_parts(
             format!("web fetch {}", url),
@@ -1612,7 +1678,7 @@ impl WebPlugin {
             report.stored_count, report.cached_count, report.failure_count
         );
         let payload =
-            serde_json::to_value(report).map_err(|err| PluginError::internal(err.to_string()))?;
+            serde_json::to_value(report).map_err(|err| PluginError::internal_error(&err))?;
         Ok(ToolInvokeOutput::from_parts(
             format!("web crawl {}", start_url),
             summary,
@@ -1686,7 +1752,7 @@ impl WebPlugin {
         let text = format_web_search(&output);
         let summary = format!("{} results · {}", output.results.len(), output.engine);
         let payload =
-            serde_json::to_value(output).map_err(|err| PluginError::internal(err.to_string()))?;
+            serde_json::to_value(output).map_err(|err| PluginError::internal_error(&err))?;
         Ok(ToolInvokeOutput::from_parts(
             format!("web search {query}"),
             summary,
@@ -1727,19 +1793,44 @@ impl WebPlugin {
         {
             Ok(page) => page,
             Err(error) => {
-                let _ = browser
+                if let Err(cleanup_error) = browser
                     .command(
                         "Target.closeTarget",
-                        serde_json::json!({ "targetId": target_id }),
+                        serde_json::json!({ "targetId": &target_id }),
                     )
-                    .await;
+                    .await
+                {
+                    log_secondary_plugin_failure(
+                        "close browser target after target attachment failed",
+                        &cleanup_error,
+                    );
+                }
                 return Err(error);
             }
         };
-        page.command("Page.enable", serde_json::json!({})).await?;
-        page.command("Runtime.enable", serde_json::json!({}))
-            .await?;
-        page.command("Log.enable", serde_json::json!({})).await?;
+        if let Err(error) = async {
+            page.command("Page.enable", serde_json::json!({})).await?;
+            page.command("Runtime.enable", serde_json::json!({}))
+                .await?;
+            page.command("Log.enable", serde_json::json!({})).await?;
+            SdkResult::Ok(())
+        }
+        .await
+        {
+            if let Err(cleanup_error) = browser
+                .command(
+                    "Target.closeTarget",
+                    serde_json::json!({ "targetId": &target_id }),
+                )
+                .await
+            {
+                log_secondary_plugin_failure(
+                    "close browser target after page initialization failed",
+                    &cleanup_error,
+                );
+            }
+            return Err(error);
+        }
         let title_target = browser_title_target(&url);
         let started_at_ms = chrono::Utc::now().timestamp_millis();
         let meta = BrowserSessionMeta {
@@ -1768,7 +1859,7 @@ impl WebPlugin {
             self.browser_state.meta.lock().await.remove(&target_id);
             self.browser_state.logs.lock().await.remove(&target_id);
             let finished_at_ms = chrono::Utc::now().timestamp_millis();
-            let _ = self
+            if let Err(activity_error) = self
                 .publish_browser_activity(browser_activity(
                     format!("browser_{target_id}"),
                     meta.title.clone(),
@@ -1778,13 +1869,25 @@ impl WebPlugin {
                     Some(finished_at_ms),
                     Some(format!("Navigation to {url} failed.")),
                 ))
-                .await;
-            let _ = browser
+                .await
+            {
+                log_secondary_plugin_failure(
+                    "publish failed browser navigation activity",
+                    &activity_error,
+                );
+            }
+            if let Err(cleanup_error) = browser
                 .command(
                     "Target.closeTarget",
-                    serde_json::json!({ "targetId": target_id }),
+                    serde_json::json!({ "targetId": &target_id }),
                 )
-                .await;
+                .await
+            {
+                log_secondary_plugin_failure(
+                    "close browser target after navigation failed",
+                    &cleanup_error,
+                );
+            }
             return Err(error);
         }
         self.wait_for_browser_condition(target_id.as_str(), None, None, input.timeout_ms)
@@ -1818,13 +1921,21 @@ impl WebPlugin {
         let worker_permit = crate::BLOCKING_PLUGIN_WORKERS
             .acquire()
             .await
-            .map_err(|_| PluginError::internal("browser worker pool is unavailable"))?;
+            .map_err(|error| {
+                plugin_internal_error_with_context("acquire browser shutdown worker", &error)
+            })?;
         let running = tokio::task::spawn_blocking(move || {
             let _worker_permit = worker_permit;
             local_browser_running()
         })
         .await
-        .map_err(|error| PluginError::internal(format!("browser status task failed: {error}")))?;
+        .map_err(|error| {
+            PluginError::internal(agena_failure::diagnostic::format_error_chain_with_context(
+                "browser status task failed",
+                &error,
+            ))
+        })?
+        .map_err(crawl_error_to_plugin)?;
         if !running {
             return Ok(ToolInvokeOutput::from_parts(
                 "browser list",
@@ -1936,13 +2047,17 @@ impl WebPlugin {
         let worker_permit = crate::BLOCKING_PLUGIN_WORKERS
             .acquire()
             .await
-            .map_err(|_| PluginError::internal("browser worker pool is unavailable"))?;
+            .map_err(|error| {
+                plugin_internal_error_with_context("acquire browser shutdown worker", &error)
+            })?;
         let closed = tokio::task::spawn_blocking(move || {
             let _worker_permit = worker_permit;
             shutdown_local_browser()
         })
         .await
-        .map_err(|error| PluginError::internal(format!("browser shutdown task failed: {error}")))?
+        .map_err(|error| {
+            plugin_internal_error_with_context("browser shutdown task failed", &error)
+        })?
         .map_err(crawl_error_to_plugin)?;
         Ok(ToolInvokeOutput::from_parts(
             "browser shutdown",
@@ -2090,7 +2205,9 @@ impl WebPlugin {
             .ok_or_else(|| PluginError::internal("browser screenshot returned no image data"))?;
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(encoded)
-            .map_err(|error| PluginError::internal(format!("invalid screenshot data: {error}")))?;
+            .map_err(|error| {
+                plugin_internal_error_with_context("invalid screenshot data", &error)
+            })?;
         let relative = input
             .path
             .clone()
@@ -2156,7 +2273,10 @@ impl WebPlugin {
         tokio::fs::create_dir_all(&download_dir)
             .await
             .map_err(|error| {
-                PluginError::internal(format!("cannot create browser download directory: {error}"))
+                plugin_internal_error_with_context(
+                    "cannot create browser download directory",
+                    &error,
+                )
             })?;
 
         // Chromium's download behavior is browser-global. Serialize this
@@ -2184,12 +2304,16 @@ impl WebPlugin {
         let mut last_candidate: Option<(PathBuf, u64)> = None;
         loop {
             let mut entries = tokio::fs::read_dir(&download_dir).await.map_err(|error| {
-                PluginError::internal(format!(
-                    "cannot inspect browser download directory: {error}"
-                ))
+                plugin_internal_error_with_context(
+                    "cannot inspect browser download directory",
+                    &error,
+                )
             })?;
             while let Some(entry) = entries.next_entry().await.map_err(|error| {
-                PluginError::internal(format!("cannot inspect browser download artifact: {error}"))
+                plugin_internal_error_with_context(
+                    "cannot inspect browser download artifact",
+                    &error,
+                )
             })? {
                 let path = entry.path();
                 let partial = path
@@ -2200,7 +2324,7 @@ impl WebPlugin {
                     || !entry
                         .file_type()
                         .await
-                        .map_err(|error| PluginError::internal(error.to_string()))?
+                        .map_err(|error| PluginError::internal_error(&error))?
                         .is_file()
                 {
                     continue;
@@ -2208,7 +2332,7 @@ impl WebPlugin {
                 let size = entry
                     .metadata()
                     .await
-                    .map_err(|error| PluginError::internal(error.to_string()))?
+                    .map_err(|error| PluginError::internal_error(&error))?
                     .len();
                 if size > MAX_DOWNLOAD_BYTES {
                     return Err(PluginError::internal(format!(
@@ -2283,11 +2407,11 @@ impl WebPlugin {
         let selector = selector
             .map(serde_json::to_string)
             .transpose()
-            .map_err(|error| PluginError::invalid_params(error.to_string()))?;
+            .map_err(|error| PluginError::invalid_params_error(&error))?;
         let text = text
             .map(serde_json::to_string)
             .transpose()
-            .map_err(|error| PluginError::invalid_params(error.to_string()))?;
+            .map_err(|error| PluginError::invalid_params_error(&error))?;
         loop {
             let expression = if let Some(selector) = selector.as_deref() {
                 format!("Boolean(document.querySelector({selector}))")
@@ -2319,7 +2443,7 @@ impl WebPlugin {
         input: &CrawlWebSearchInput,
     ) -> SdkResult<Vec<WebSearchResult>> {
         let engine_url = url::Url::parse(engine.permission_url())
-            .map_err(|err| PluginError::internal(err.to_string()))?;
+            .map_err(|err| PluginError::internal_error(&err))?;
         let state = self.state()?;
         state.fetch_coordinator.wait_for_url_host(&engine_url).await;
         self.validate_network_target(&engine_url).await?;
@@ -2357,7 +2481,9 @@ async fn validate_public_network_target(url: &url::Url) -> SdkResult<()> {
 
     let addresses = tokio::net::lookup_host((host, port))
         .await
-        .map_err(|error| PluginError::internal(format!("failed to resolve {host}: {error}")))?
+        .map_err(|error| {
+            plugin_internal_error_with_context(format!("failed to resolve {host}").as_str(), &error)
+        })?
         .map(|address| address.ip())
         .collect::<BTreeSet<_>>();
     if addresses.is_empty() {
@@ -2422,9 +2548,11 @@ impl CdpClient {
             tokio_tungstenite::connect_async(endpoint),
         )
         .await
-        .map_err(|_| PluginError::internal("timed out connecting to browser CDP"))?
         .map_err(|error| {
-            PluginError::internal(format!("cannot connect to browser CDP: {error}"))
+            plugin_internal_error_with_context("timed out connecting to browser CDP", &error)
+        })?
+        .map_err(|error| {
+            plugin_internal_error_with_context("cannot connect to browser CDP", &error)
         })?;
 
         let (session_id, next_id) = if let Some(target_id) = target_id {
@@ -2433,7 +2561,9 @@ impl CdpClient {
                 cdp_attach_target(&mut socket, target_id),
             )
             .await
-            .map_err(|_| PluginError::internal("timed out attaching browser CDP target"))??;
+            .map_err(|error| {
+                plugin_internal_error_with_context("timed out attaching browser CDP target", &error)
+            })??;
             let session_id = result
                 .get("sessionId")
                 .and_then(serde_json::Value::as_str)
@@ -2480,7 +2610,11 @@ impl CdpClient {
             }),
         )
         .await?;
-        let _ = self.navigation_interception_enabled.set(());
+        if self.navigation_interception_enabled.set(()).is_err() {
+            tracing::debug!(
+                "browser navigation interception was concurrently enabled by another task"
+            );
+        }
         Ok(())
     }
 
@@ -2501,7 +2635,7 @@ impl CdpClient {
     ) -> SdkResult<serde_json::Value> {
         // Every CDP exchange is browser activity: restart the idle auto-close
         // timer so a session mid-flight is never torn down underneath us.
-        local_browser_touch();
+        local_browser_touch().map_err(crawl_error_to_plugin)?;
         if let Some(error) = self.take_navigation_error() {
             return Err(PluginError::internal(error));
         }
@@ -2515,17 +2649,28 @@ impl CdpClient {
                     response,
                 })
                 .await
-                .map_err(|_| PluginError::internal("browser CDP connection ended"))?;
-            receiver
-                .await
-                .map_err(|_| PluginError::internal("browser CDP connection ended"))
+                .map_err(|error| {
+                    PluginError::internal(format!(
+                        "browser CDP connection ended while sending `{method}`: {error}"
+                    ))
+                })?;
+            receiver.await.map_err(|error| {
+                plugin_internal_error_with_context(
+                    format!("browser CDP connection ended while awaiting `{method}`").as_str(),
+                    &error,
+                )
+            })
         })
         .await
-        .map_err(|_| {
-            PluginError::internal(format!(
-                "browser CDP command `{method}` timed out after {}s",
-                command_timeout.as_secs_f64()
-            ))
+        .map_err(|error| {
+            plugin_internal_error_with_context(
+                format!(
+                    "browser CDP command `{method}` timed out after {}s",
+                    command_timeout.as_secs_f64()
+                )
+                .as_str(),
+                &error,
+            )
         })??;
 
         if let Some(error) = self.take_navigation_error() {
@@ -2557,10 +2702,15 @@ impl CdpClient {
     }
 
     fn take_navigation_error(&self) -> Option<String> {
-        self.navigation_errors
-            .lock()
-            .ok()
-            .and_then(|mut errors| errors.pop_front())
+        match self.navigation_errors.lock() {
+            Ok(mut errors) => errors.pop_front(),
+            Err(poisoned) => {
+                tracing::error!(
+                    "browser navigation error queue lock was poisoned; recovering queued safety diagnostics"
+                );
+                poisoned.into_inner().pop_front()
+            }
+        }
     }
 
     fn is_closed(&self) -> bool {
@@ -2585,11 +2735,12 @@ async fn cdp_attach_target(
             request.to_string().into(),
         ))
         .await
-        .map_err(|error| PluginError::internal(format!("browser CDP send failed: {error}")))?;
+        .map_err(|error| plugin_internal_error_with_context("browser CDP send failed", &error))?;
 
     while let Some(message) = socket.next().await {
-        let message = message
-            .map_err(|error| PluginError::internal(format!("browser CDP read failed: {error}")))?;
+        let message = message.map_err(|error| {
+            plugin_internal_error_with_context("browser CDP read failed", &error)
+        })?;
         let Some(value) = cdp_message_value(socket, message).await? else {
             continue;
         };
@@ -2617,14 +2768,14 @@ async fn cdp_message_value(
         tokio_tungstenite::tungstenite::Message::Text(text) => text.to_string(),
         tokio_tungstenite::tungstenite::Message::Binary(bytes) => String::from_utf8(bytes.to_vec())
             .map_err(|error| {
-                PluginError::internal(format!("browser CDP returned non-UTF-8 data: {error}"))
+                plugin_internal_error_with_context("browser CDP returned non-UTF-8 data", &error)
             })?,
         tokio_tungstenite::tungstenite::Message::Ping(payload) => {
             socket
                 .send(tokio_tungstenite::tungstenite::Message::Pong(payload))
                 .await
                 .map_err(|error| {
-                    PluginError::internal(format!("browser CDP pong failed: {error}"))
+                    plugin_internal_error_with_context("browser CDP pong failed", &error)
                 })?;
             return Ok(None);
         }
@@ -2636,7 +2787,7 @@ async fn cdp_message_value(
     };
     serde_json::from_str(text.as_str())
         .map(Some)
-        .map_err(|error| PluginError::internal(format!("invalid browser CDP response: {error}")))
+        .map_err(|error| plugin_internal_error_with_context("invalid browser CDP response", &error))
 }
 
 async fn run_cdp_connection(
@@ -2658,7 +2809,15 @@ async fn run_cdp_connection(
         tokio::select! {
             command = commands.recv() => {
                 let Some(command) = command else {
-                    let _ = sink.close().await;
+                    if let Err(error) = sink.close().await {
+                        tracing::warn!(
+                            diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                                "failed to close the managed browser CDP connection after its command channel closed",
+                                &error,
+                            ),
+                            "managed browser CDP connection did not close cleanly"
+                        );
+                    }
                     break;
                 };
                 let id = next_id;
@@ -2682,7 +2841,12 @@ async fn run_cdp_connection(
                         );
                     }
                     Err(error) => {
-                        let _ = command.response.send(Err(error));
+                        if command.response.send(Err(error)).is_err() {
+                            tracing::debug!(
+                                command_id = id,
+                                "browser CDP command response receiver closed before send failure could be delivered"
+                            );
+                        }
                     }
                 }
             }
@@ -2787,13 +2951,21 @@ async fn run_cdp_connection(
                     && let Some(method) =
                         value.get("method").and_then(serde_json::Value::as_str)
                 {
-                    let _ = events.try_send(CdpEvent {
+                    let event = CdpEvent {
                         method: method.to_string(),
                         params: value
                             .get("params")
                             .cloned()
                             .unwrap_or(serde_json::Value::Null),
-                    });
+                    };
+                    if let Err(error) = events.try_send(event) {
+                        let event = error.into_inner();
+                        tracing::warn!(
+                            event_method = %event.method,
+                            queue_state = if events.is_closed() { "closed" } else { "full" },
+                            "browser CDP activity event was dropped before projection"
+                        );
+                    }
                 }
 
                 if value.get("method").and_then(serde_json::Value::as_str)
@@ -2865,13 +3037,21 @@ async fn run_cdp_connection(
                     } else {
                         authorize_browser_document_request(url.as_str()).await
                     };
-                    let _ = decisions
+                    if let Err(error) = decisions
                         .send(NavigationDecision {
                             request_id,
                             url,
                             result,
                         })
-                        .await;
+                        .await
+                    {
+                        let decision = error.0;
+                        tracing::warn!(
+                            request_id = %decision.request_id,
+                            url = %decision.url,
+                            "browser navigation authorization decision could not be delivered because the CDP connection ended"
+                        );
+                    }
                 });
             }
         }
@@ -2888,7 +3068,7 @@ async fn authorize_browser_document_request(raw_url: &str) -> Result<(), String>
     }
     validate_public_network_target(&url)
         .await
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.diagnostic_message().to_owned())
 }
 
 async fn send_cdp_request(
@@ -2935,7 +3115,13 @@ fn complete_cdp_command(
                     .cloned()
                     .unwrap_or(serde_json::Value::Null))
             };
-            let _ = tx.send(result);
+            if tx.send(result).is_err() {
+                tracing::debug!(
+                    command_id = id,
+                    command_method = %method,
+                    "browser CDP command response receiver closed before delivery"
+                );
+            }
         }
         PendingCdpCommand::Interception { method } => {
             if let Some(error) = response.get("error") {
@@ -2949,20 +3135,34 @@ fn complete_cdp_command(
 }
 
 fn fail_pending_commands(pending: &mut BTreeMap<u64, PendingCdpCommand>, error: &str) {
-    for (_, command) in std::mem::take(pending) {
+    for (command_id, command) in std::mem::take(pending) {
         if let PendingCdpCommand::Caller { response, .. } = command {
-            let _ = response.send(Err(error.to_string()));
+            if response.send(Err(error.to_string())).is_err() {
+                tracing::debug!(
+                    command_id,
+                    "browser CDP failure response receiver closed before delivery"
+                );
+            }
         }
     }
 }
 
 fn push_navigation_error(errors: &Arc<std::sync::Mutex<VecDeque<String>>>, error: String) {
-    if let Ok(mut errors) = errors.lock() {
-        if errors.len() >= 32 {
-            errors.pop_front();
+    let mut errors = match errors.lock() {
+        Ok(errors) => errors,
+        Err(poisoned) => {
+            tracing::error!(
+                operation = "record browser navigation error",
+                error = %poisoned,
+                "recovering poisoned browser navigation-error queue"
+            );
+            poisoned.into_inner()
         }
-        errors.push_back(error);
+    };
+    if errors.len() >= 32 {
+        errors.pop_front();
     }
+    errors.push_back(error);
 }
 
 fn ensure_browser_action(result: &serde_json::Value) -> SdkResult<()> {
@@ -2995,7 +3195,7 @@ fn browser_element_expression(
     ) {
         (Some(selector), None) => serde_json::to_string(selector)
             .map(|selector| format!("document.querySelector({selector})"))
-            .map_err(|error| PluginError::invalid_params(error.to_string())),
+            .map_err(|error| PluginError::invalid_params_error(&error)),
         (None, Some(element_ref)) => Ok(format!(
             "Array.from(document.querySelectorAll('a,button,input,textarea,select,[role],[contenteditable=\"true\"]'))[{element_ref}] || null"
         )),
@@ -3015,8 +3215,8 @@ fn browser_type_expression(
     press_enter: bool,
 ) -> SdkResult<String> {
     let target = browser_element_expression(selector, element_ref)?;
-    let text = serde_json::to_string(text)
-        .map_err(|error| PluginError::invalid_params(error.to_string()))?;
+    let text =
+        serde_json::to_string(text).map_err(|error| PluginError::invalid_params_error(&error))?;
     let enter = if press_enter {
         "el.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',code:'Enter',bubbles:true})); el.dispatchEvent(new KeyboardEvent('keypress',{key:'Enter',code:'Enter',bubbles:true})); el.dispatchEvent(new KeyboardEvent('keyup',{key:'Enter',code:'Enter',bubbles:true}));"
     } else {
@@ -3164,7 +3364,7 @@ fn resolve_browser_redirect(base: &url::Url, location: &str) -> SdkResult<url::U
 }
 
 fn crawl_error_to_plugin(err: agena_web::CrawlError) -> PluginError {
-    PluginError::internal(err.to_string())
+    PluginError::internal_error(&err)
 }
 
 fn search_network_targets(engine: Option<WebSearchEngineSelection>) -> Vec<String> {
@@ -3189,7 +3389,9 @@ impl CrawlPageFetcher for PluginPageFetcher<'_> {
             self.plugin
                 .fetch_page(url, use_cache, render_js)
                 .await
-                .map_err(|err| agena_web::CrawlError::InvalidInput(err.to_string()))
+                .map_err(|error| {
+                    agena_web::CrawlError::InvalidInput(error.diagnostic_message().to_owned())
+                })
         })
     }
 }
@@ -3204,8 +3406,9 @@ fn parse_web_config(value: serde_json::Value) -> SdkResult<WebConfig> {
     let config = if value.is_null() {
         WebConfig::default()
     } else {
-        serde_json::from_value(value)
-            .map_err(|err| PluginError::internal(format!("invalid web plugin config: {err}")))?
+        serde_json::from_value(value).map_err(|error| {
+            plugin_internal_error_with_context("invalid web plugin config", &error)
+        })?
     };
     validate_web_config(&config)?;
     Ok(config)
@@ -3778,9 +3981,10 @@ mod tests {
         );
         // Never leak the managed browser from tests: shut it down explicitly
         // (Rust statics are not dropped at process exit).
-        let _ = tokio::task::spawn_blocking(agena_web::shutdown_local_browser)
+        tokio::task::spawn_blocking(agena_web::shutdown_local_browser)
             .await
-            .expect("browser shutdown task");
+            .expect("browser shutdown task")
+            .expect("shut down managed browser");
     }
 
     #[test]

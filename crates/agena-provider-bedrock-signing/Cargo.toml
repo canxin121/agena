@@ -7,6 +7,7 @@ rust-version.workspace = true
 description = "AWS SigV4 signing leaf adapter for Amazon Bedrock"
 
 [dependencies]
+agena-failure = { workspace = true }
 agena-provider-bedrock-auth = { workspace = true }
 aws-sigv4 = { workspace = true }
 http = { workspace = true }

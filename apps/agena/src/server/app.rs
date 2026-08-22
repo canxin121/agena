@@ -421,7 +421,10 @@ fn server_api_router() -> Router<Arc<AppState>> {
 /// status, while the server had no visible request breadcrumb to correlate it
 /// with. Keep this process-level setup here so `2>&1 | tee ...` captures MCP
 /// diagnostics as soon as the listener starts.
-fn init_server_tracing(args: &crate::server::ServerArgs, workspace_root: &Path) {
+fn init_server_tracing(
+    args: &crate::server::ServerArgs,
+    workspace_root: &Path,
+) -> std::result::Result<(), agena_runtime::RuntimeBootstrapError> {
     let tracing = agena_runtime::resolve_runtime_bootstrap_preflight(
         &agena_runtime::RuntimeBootstrapRequest {
             workspace_root: Some(workspace_root.to_owned()),
@@ -429,13 +432,15 @@ fn init_server_tracing(args: &crate::server::ServerArgs, workspace_root: &Path) 
             ..Default::default()
         },
     )
-    .map(|preflight| preflight.tracing)
-    .unwrap_or_default();
-    let filter = agena_runtime::runtime_env_filter(&tracing).unwrap_or_else(|_| {
-        agena_runtime::runtime_env_filter(&agena_runtime::RuntimeTracingConfiguration::default())
-            .expect("default tracing filter should parse")
-    });
-    let _ = tracing_subscriber::registry()
+    .map(|preflight| preflight.tracing)?;
+    let filter = agena_runtime::runtime_env_filter(&tracing).map_err(|error| {
+        agena_runtime::RuntimeBootstrapError::from_error_with_context(
+            agena_runtime::RuntimeBootstrapErrorKind::Configuration,
+            "invalid server tracing configuration",
+            &error,
+        )
+    })?;
+    tracing_subscriber::registry()
         .with(filter)
         .with(
             tracing_subscriber::fmt::layer()
@@ -444,7 +449,30 @@ fn init_server_tracing(args: &crate::server::ServerArgs, workspace_root: &Path) 
                 .compact()
                 .with_writer(std::io::stderr),
         )
-        .try_init();
+        .try_init()
+        .map_err(|error| {
+            agena_runtime::RuntimeBootstrapError::from_error_with_context(
+                agena_runtime::RuntimeBootstrapErrorKind::Internal,
+                "failed to install the server tracing subscriber",
+                &error,
+            )
+        })?;
+    Ok(())
+}
+
+/// Application errors deliberately expose scrubbed user text through
+/// `Display` and keep the operator diagnostic in a separate channel. Startup
+/// is an operator boundary, so retain that diagnostic instead of wrapping the
+/// generic user projection in another `failed to ...` message.
+fn application_startup_error(
+    context: &str,
+    error: agena_application::ApplicationError,
+) -> anyhow::Error {
+    let detail = error
+        .diagnostic_message()
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| error.to_string());
+    anyhow!("{context}: {detail}")
 }
 
 pub(crate) async fn run(args: crate::server::ServerArgs) -> Result<()> {
@@ -452,10 +480,12 @@ pub(crate) async fn run(args: crate::server::ServerArgs) -> Result<()> {
         .workspace_root
         .clone()
         .unwrap_or(env::current_dir().context("failed to resolve current working directory")?);
-    init_server_tracing(&args, workspace_root.as_path());
+    init_server_tracing(&args, workspace_root.as_path())
+        .context("failed to initialize server diagnostics")?;
     let ui_dir = crate::server::web_ui::resolve_ui_dir(args.ui_dir.as_deref(), &workspace_root)?;
     let runtime = bootstrap_application_services(agena_runtime::RuntimeBootstrapRequest {
         workspace_root: Some(workspace_root),
+        config_path: None,
         config_override_expressions: args.overrides.clone(),
         database_url: args.database_url.clone(),
         database_path: args.database_path.clone(),
@@ -486,9 +516,10 @@ pub(crate) async fn run(args: crate::server::ServerArgs) -> Result<()> {
         ),
     );
 
-    let application =
-        Application::from_composed_runtime_services(runtime.application_services())
-            .map_err(|error| anyhow!("failed to compose application services: {error}"))?;
+    let application = Application::from_composed_runtime_services(runtime.application_services())
+        .map_err(|error| {
+        application_startup_error("failed to compose application services", error)
+    })?;
     let mcp_workspace = application
         .service()
         .resolve_workspace(agena_application::dto::WorkspaceResolveRequest {
@@ -498,7 +529,7 @@ pub(crate) async fn run(args: crate::server::ServerArgs) -> Result<()> {
             create_if_missing: true,
         })
         .await
-        .map_err(|error| anyhow!("failed to resolve the MCP workspace: {error}"))?;
+        .map_err(|error| application_startup_error("failed to resolve the MCP workspace", error))?;
     let addr: SocketAddr = format!("{}:{}", args.host, args.port)
         .parse()
         .map_err(|error| anyhow!("invalid bind address {}:{}: {error}", args.host, args.port))?;
@@ -596,13 +627,28 @@ pub(crate) async fn run(args: crate::server::ServerArgs) -> Result<()> {
         crate::server::server_record::publish_record(endpoint_url.clone(), &server_identity)?;
 
     tracing::info!(server_id = %server_identity.id, "Agena listening on {endpoint_url}");
+    let (shutdown_error_tx, mut shutdown_error_rx) = tokio::sync::mpsc::channel(1);
     let result = axum::serve(listener, app)
         .with_graceful_shutdown(async move {
-            let _ = tokio::signal::ctrl_c().await;
+            if let Err(error) = tokio::signal::ctrl_c().await {
+                // The serve future cannot return an error from its shutdown
+                // signal future, so carry it through a side channel and check
+                // it immediately after the server exits.
+                if let Err(send_error) = shutdown_error_tx.send(error).await {
+                    tracing::error!(
+                        diagnostic = %agena_failure::diagnostic::format_error_chain(&send_error.0),
+                        "failed to deliver the server shutdown-signal registration error to the serve boundary"
+                    );
+                }
+            }
             runtime.shutdown();
         })
         .await
         .context("server exited unexpectedly");
     drop(server_record);
-    result
+    result?;
+    if let Ok(error) = shutdown_error_rx.try_recv() {
+        return Err(error).context("failed to listen for the server shutdown signal");
+    }
+    Ok(())
 }

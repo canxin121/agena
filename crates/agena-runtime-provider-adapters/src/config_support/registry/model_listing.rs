@@ -233,26 +233,18 @@ pub(crate) fn resolve_adapter_default_models(
         .map(|(adapter_id, _)| adapter_id)
     {
         let default_model = resolved
-            .defaults
-            .model
-            .clone()
-            .or_else(|| {
-                resolved
-                    .models
-                    .iter()
-                    .filter(|(route, config)| {
-                        config.enabled
-                            && parse_adapter_model_ref(provider_id, route)
-                                .ok()
-                                .is_some_and(|(route_adapter_id, _)| {
-                                    route_adapter_id == *adapter_id
-                                })
-                    })
-                    .find_map(|(route, _)| {
-                        parse_adapter_model_ref(provider_id, route)
-                            .ok()
-                            .map(|(_, model_id)| model_id)
-                    })
+            .models
+            .iter()
+            .filter(|(route, config)| {
+                config.enabled
+                    && parse_adapter_model_ref(provider_id, route)
+                        .ok()
+                        .is_some_and(|(route_adapter_id, _)| route_adapter_id == *adapter_id)
+            })
+            .find_map(|(route, _)| {
+                parse_adapter_model_ref(provider_id, route)
+                    .ok()
+                    .map(|(_, model_id)| model_id)
             })
             .unwrap_or_else(|| LIST_MODELS_DEFAULT_MODEL_ID.to_owned());
         defaults.insert(adapter_id.clone(), default_model);

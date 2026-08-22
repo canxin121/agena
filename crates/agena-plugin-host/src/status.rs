@@ -98,30 +98,59 @@ impl StatusRegistry {
     }
 
     pub fn set(&self, status: PluginStatus) {
-        if let Ok(mut guard) = self.inner.write() {
-            guard.insert(status.key(), status);
-        }
+        let mut guard = self.inner.write().unwrap_or_else(|error| {
+            tracing::error!(
+                diagnostic = %error,
+                "plugin status registry lock is poisoned while setting status; recovering state"
+            );
+            error.into_inner()
+        });
+        guard.insert(status.key(), status);
     }
 
     pub fn remove(&self, plugin_id: &PluginKey) {
-        if let Ok(mut guard) = self.inner.write() {
-            guard.remove(plugin_id);
-        }
+        self.inner
+            .write()
+            .unwrap_or_else(|error| {
+                tracing::error!(
+                    plugin = %plugin_id,
+                    diagnostic = %error,
+                    "plugin status registry lock is poisoned while removing status; recovering state"
+                );
+                error.into_inner()
+            })
+            .remove(plugin_id);
     }
 
     pub fn get(&self, plugin_id: &PluginKey) -> Option<PluginStatus> {
         self.inner
             .read()
-            .ok()
-            .and_then(|guard| guard.get(plugin_id).cloned())
+            .unwrap_or_else(|error| {
+                tracing::error!(
+                    plugin = %plugin_id,
+                    diagnostic = %error,
+                    "plugin status registry lock is poisoned while reading status; recovering state"
+                );
+                error.into_inner()
+            })
+            .get(plugin_id)
+            .cloned()
     }
 
     pub fn list(&self) -> Vec<PluginStatus> {
         let mut entries = self
             .inner
             .read()
-            .map(|guard| guard.values().cloned().collect::<Vec<_>>())
-            .unwrap_or_default();
+            .unwrap_or_else(|error| {
+                tracing::error!(
+                    diagnostic = %error,
+                    "plugin status registry lock is poisoned while listing statuses; recovering state"
+                );
+                error.into_inner()
+            })
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
         entries.sort_by(|a, b| a.plugin_id.cmp(&b.plugin_id));
         entries
     }
@@ -130,9 +159,15 @@ impl StatusRegistry {
     where
         F: FnOnce(&mut PluginStatus),
     {
-        if let Ok(mut guard) = self.inner.write()
-            && let Some(status) = guard.get_mut(plugin_id)
-        {
+        let mut guard = self.inner.write().unwrap_or_else(|error| {
+            tracing::error!(
+                plugin = %plugin_id,
+                diagnostic = %error,
+                "plugin status registry lock is poisoned while updating status; recovering state"
+            );
+            error.into_inner()
+        });
+        if let Some(status) = guard.get_mut(plugin_id) {
             mutator(status);
         }
     }

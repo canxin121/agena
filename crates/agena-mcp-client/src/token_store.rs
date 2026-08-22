@@ -187,14 +187,37 @@ impl KeyringTokenStore {
 
 impl TokenStore for KeyringTokenStore {
     fn bearer(&self, server: &str) -> Option<String> {
-        self.bearer_result(server).ok().flatten()
+        match self.bearer_result(server) {
+            Ok(token) => token,
+            Err(error) => {
+                tracing::warn!(
+                    server,
+                    diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                        "failed to read the MCP bearer token from the system keyring",
+                        &error,
+                    ),
+                    "MCP bearer token is unavailable"
+                );
+                None
+            }
+        }
     }
 
     fn credential_state(&self, server: &str) -> McpCredentialState {
         match self.bearer_result(server) {
             Ok(Some(_)) => McpCredentialState::Configured,
             Ok(None) => McpCredentialState::Missing,
-            Err(_) => McpCredentialState::Unreadable,
+            Err(error) => {
+                tracing::warn!(
+                    server,
+                    diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                        "failed to inspect the MCP bearer-token credential state",
+                        &error,
+                    ),
+                    "MCP bearer-token credential is unreadable"
+                );
+                McpCredentialState::Unreadable
+            }
         }
     }
 }
@@ -255,11 +278,31 @@ impl KeyringOAuthCredentialStore {
         {
             Ok(Some(value)) if !value.trim().is_empty() => value,
             Ok(Some(_)) | Ok(None) => return OAuthCredentialHealth::missing(),
-            Err(_) => return OAuthCredentialHealth::unreadable(),
+            Err(error) => {
+                tracing::warn!(
+                    server = %self.server,
+                    diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                        "failed to inspect MCP OAuth credentials in the system keyring",
+                        &error,
+                    ),
+                    "MCP OAuth credential is unreadable"
+                );
+                return OAuthCredentialHealth::unreadable();
+            }
         };
         let credentials = match serde_json::from_str::<StoredCredentials>(raw.as_str()) {
             Ok(credentials) => credentials,
-            Err(_) => return OAuthCredentialHealth::unreadable(),
+            Err(error) => {
+                tracing::warn!(
+                    server = %self.server,
+                    diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                        "failed to decode MCP OAuth credentials from the system keyring",
+                        &error,
+                    ),
+                    "MCP OAuth credential is unreadable"
+                );
+                return OAuthCredentialHealth::unreadable();
+            }
         };
         let Some(token) = credentials.token_response.as_ref() else {
             return OAuthCredentialHealth {
@@ -401,15 +444,17 @@ impl FileTokenStore {
     }
 
     pub fn open(path: &Path) -> Result<Self, TokenStoreError> {
-        let inner = if path.exists() {
-            let raw = fs::read_to_string(path)?;
-            if raw.trim().is_empty() {
-                StoreFile::default()
-            } else {
-                serde_json::from_str(&raw)?
+        let inner = match fs::metadata(path) {
+            Ok(_) => {
+                let raw = fs::read_to_string(path)?;
+                if raw.trim().is_empty() {
+                    StoreFile::default()
+                } else {
+                    serde_json::from_str(&raw)?
+                }
             }
-        } else {
-            StoreFile::default()
+            Err(error) if error.kind() == io::ErrorKind::NotFound => StoreFile::default(),
+            Err(error) => return Err(TokenStoreError::Io(error)),
         };
         Ok(Self {
             path: path.to_path_buf(),
@@ -481,14 +526,24 @@ impl FileTokenStore {
         staged.flush()?;
         staged.as_file().sync_all()?;
         staged.persist(&self.path).map_err(|error| error.error)?;
-        chmod_user_only(&self.path);
+        chmod_user_only(&self.path)?;
         Ok(())
     }
 }
 
 impl TokenStore for FileTokenStore {
     fn bearer(&self, server: &str) -> Option<String> {
-        let guard = self.inner.lock().ok()?;
+        let guard = match self.inner.lock() {
+            Ok(guard) => guard,
+            Err(error) => {
+                tracing::error!(
+                    operation = "read MCP bearer token",
+                    error = %error,
+                    "recovering poisoned MCP file token-store lock"
+                );
+                error.into_inner()
+            }
+        };
         guard
             .servers
             .get(server)
@@ -497,8 +552,16 @@ impl TokenStore for FileTokenStore {
     }
 
     fn credential_state(&self, server: &str) -> McpCredentialState {
-        let Ok(guard) = self.inner.lock() else {
-            return McpCredentialState::Unreadable;
+        let guard = match self.inner.lock() {
+            Ok(guard) => guard,
+            Err(error) => {
+                tracing::error!(
+                    operation = "inspect MCP credential state",
+                    error = %error,
+                    "recovering poisoned MCP file token-store lock"
+                );
+                error.into_inner()
+            }
         };
         if guard
             .servers
@@ -567,17 +630,18 @@ fn default_path() -> PathBuf {
 }
 
 #[cfg(unix)]
-fn chmod_user_only(path: &Path) {
+fn chmod_user_only(path: &Path) -> io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
-    if let Ok(meta) = fs::metadata(path) {
-        let mut perms = meta.permissions();
-        perms.set_mode(0o600);
-        let _ = fs::set_permissions(path, perms);
-    }
+    let meta = fs::metadata(path)?;
+    let mut perms = meta.permissions();
+    perms.set_mode(0o600);
+    fs::set_permissions(path, perms)
 }
 
 #[cfg(not(unix))]
-fn chmod_user_only(_: &Path) {}
+fn chmod_user_only(_: &Path) -> io::Result<()> {
+    Ok(())
+}
 
 #[cfg(test)]
 mod tests {

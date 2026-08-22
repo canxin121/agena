@@ -25,7 +25,22 @@ pub fn build_plugin_workbench_plugin(
     let configured_plugin_value = inspect
         .as_ref()
         .and_then(|inspect| inspect.configured_plugin.as_ref())
-        .and_then(|configured_plugin| serde_json::to_value(configured_plugin).ok())
+        .and_then(
+            |configured_plugin| match serde_json::to_value(configured_plugin) {
+                Ok(configured_plugin) => Some(configured_plugin),
+                Err(error) => {
+                    tracing::error!(
+                        plugin_id,
+                        diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                            "serialize configured plugin data for the TUI workbench",
+                            &error,
+                        ),
+                        "TUI plugin workbench will fall back to the effective configuration source"
+                    );
+                    None
+                }
+            },
+        )
         .or_else(|| {
             plugin_get_json_path(
                 &sources.effective,

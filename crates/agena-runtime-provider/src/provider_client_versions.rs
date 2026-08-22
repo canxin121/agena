@@ -100,7 +100,10 @@ pub async fn fetch_latest_provider_client_versions()
         .build()
         .map_err(|error| ProviderClientVersionFetchError::Fetch {
             package: "npm registry",
-            message: error.to_string(),
+            message: agena_failure::diagnostic::format_error_chain_with_context(
+                "failed to build the provider client-version HTTP client",
+                &error,
+            ),
         })?;
     let (codex, claude, gemini) = tokio::join!(
         fetch_npm_package_version(&client, CODEX_VERSION_URL),
@@ -131,13 +134,28 @@ async fn fetch_npm_package_version(client: &reqwest::Client, url: &str) -> Resul
         .get(url)
         .send()
         .await
-        .map_err(|error| error.to_string())?
+        .map_err(|error| {
+            agena_failure::diagnostic::format_error_chain_with_context(
+                "failed to request the provider client version from the npm registry",
+                &error,
+            )
+        })?
         .error_for_status()
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| {
+            agena_failure::diagnostic::format_error_chain_with_context(
+                "the npm registry rejected the provider client-version request",
+                &error,
+            )
+        })?;
     let payload = response
         .json::<NpmPackageVersion>()
         .await
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| {
+            agena_failure::diagnostic::format_error_chain_with_context(
+                "failed to decode the provider client-version response from the npm registry",
+                &error,
+            )
+        })?;
     let version = payload.version.trim();
     if !valid_client_version(version) {
         return Err("registry returned an invalid version".to_owned());

@@ -385,6 +385,10 @@ export const useUiStore = defineStore('ui', () => {
     const title = String(source.title || '').trim()
     const routePath = normalizeMainTabPath(mainTab, String(source.routePath || ''))
     const routeQuery = normalizeRouteQueryRecord(source.routeQuery)
+    // A chat workspace is a persisted view of a real session.  Drop legacy
+    // tabs that represented the old blank chat surface so they cannot be
+    // resurrected on the next boot.
+    if (mainTab === 'chat' && !readMatchQueryValue(routeQuery, 'sessionId')) return null
     const routeHashRaw = String(source.routeHash || '').trim()
     const routeHash = routeHashRaw && !routeHashRaw.startsWith('#') ? `#${routeHashRaw}` : routeHashRaw
 
@@ -1431,6 +1435,10 @@ export const useUiStore = defineStore('ui', () => {
       workspaceGroups.value[0] ||
       getWorkspaceGroupById(getWorkspaceWindowGroupId(activeWorkspaceWindowId.value))
     const query = normalizeRouteQueryRecord(opts?.query)
+    // Chat tabs must always point at a session, which is what gives them a
+    // directory/workspace owner.  The unscoped chat surface is the session
+    // hub at `/`, not a workspace window.
+    if (tab === 'chat' && !readMatchQueryValue(query, 'sessionId')) return ''
     const path = normalizeMainTabPath(tab, opts?.path)
     const hashRaw = String(opts?.hash || '').trim()
     const hash = hashRaw && !hashRaw.startsWith('#') ? `#${hashRaw}` : hashRaw

@@ -9,6 +9,7 @@ authors.workspace = true
 [dependencies]
 portable-atomic = { workspace = true }
 agena-domain = { workspace = true }
+agena-failure = { workspace = true }
 async-trait = { workspace = true }
 serde_json = { workspace = true }
 schemars = { workspace = true }

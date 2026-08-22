@@ -223,7 +223,12 @@ impl MemoryPlugin {
         let worker_permit = crate::BLOCKING_PLUGIN_WORKERS
             .acquire()
             .await
-            .map_err(|_| PluginError::internal("memory worker pool is unavailable"))?;
+            .map_err(|error| {
+                PluginError::internal(agena_failure::diagnostic::format_error_chain_with_context(
+                    "acquire a memory index worker",
+                    &error,
+                ))
+            })?;
         tokio::task::spawn_blocking(move || {
             let _worker_permit = worker_permit;
             let _guard = guard;
@@ -239,14 +244,25 @@ impl MemoryPlugin {
             }
             let index = MemoryIndex::for_workspace(&workspace_root);
             index.replace_documents(&documents).map_err(|error| {
-                PluginError::internal(format!("failed to rebuild memory index: {error}"))
+                PluginError::internal(agena_failure::diagnostic::format_error_chain_with_context(
+                    "failed to rebuild memory index",
+                    &error,
+                ))
             })?;
-            index
-                .search(query.as_str(), limit)
-                .map_err(|error| PluginError::internal(format!("memory search failed: {error}")))
+            index.search(query.as_str(), limit).map_err(|error| {
+                PluginError::internal(agena_failure::diagnostic::format_error_chain_with_context(
+                    "memory search failed",
+                    &error,
+                ))
+            })
         })
         .await
-        .map_err(|error| PluginError::internal(format!("memory index worker failed: {error}")))?
+        .map_err(|error| {
+            PluginError::internal(agena_failure::diagnostic::format_error_chain_with_context(
+                "memory index worker failed",
+                &error,
+            ))
+        })?
     }
 
     async fn search_documents(
@@ -314,7 +330,7 @@ impl MemoryPlugin {
                 .get(name.as_str())
                 .map_err(memory_error_to_plugin)?;
             let payload = serde_json::to_value(memory_record_output(&entry))
-                .map_err(|err| PluginError::internal(err.to_string()))?;
+                .map_err(|err| PluginError::internal_error(&err))?;
             Ok(ToolInvokeOutput::from_parts(
                 format!("Read memory · {}", memory_name(&entry)),
                 format!("Loaded {}", memory_name(&entry)),
@@ -415,7 +431,7 @@ impl MemoryPlugin {
                 })
                 .map_err(memory_error_to_plugin)?;
             let payload = serde_json::to_value(memory_record_output(&entry))
-                .map_err(|err| PluginError::internal(err.to_string()))?;
+                .map_err(|err| PluginError::internal_error(&err))?;
             Ok(ToolInvokeOutput::from_parts(
                 format!("Write memory · {}", memory_name(&entry)),
                 format!("Saved {}", memory_name(&entry)),
@@ -543,7 +559,7 @@ fn parse_memory_config(value: serde_json::Value) -> SdkResult<MemoryConfig> {
 }
 
 fn memory_error_to_plugin(err: MemoryError) -> PluginError {
-    PluginError::internal(err.to_string())
+    PluginError::internal_error(&err)
 }
 
 fn memory_document_from_entry(entry: MemoryRecord) -> MemorySearchDocument {
@@ -664,13 +680,23 @@ where
     let worker_permit = crate::BLOCKING_PLUGIN_WORKERS
         .acquire()
         .await
-        .map_err(|_| PluginError::internal("memory worker pool is unavailable"))?;
+        .map_err(|error| {
+            PluginError::internal(agena_failure::diagnostic::format_error_chain_with_context(
+                "acquire a memory plugin worker",
+                &error,
+            ))
+        })?;
     tokio::task::spawn_blocking(move || {
         let _worker_permit = worker_permit;
         operation()
     })
     .await
-    .map_err(|error| PluginError::internal(format!("memory blocking task failed: {error}")))?
+    .map_err(|error| {
+        PluginError::internal(agena_failure::diagnostic::format_error_chain_with_context(
+            "memory plugin worker failed",
+            &error,
+        ))
+    })?
 }
 
 #[cfg(test)]

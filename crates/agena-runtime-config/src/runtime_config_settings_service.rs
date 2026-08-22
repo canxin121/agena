@@ -219,6 +219,10 @@ impl RuntimeConfigSettingsError {
         }
     }
 
+    pub fn invalid_input_error(error: &(dyn std::error::Error + 'static)) -> Self {
+        Self::invalid_input(agena_failure::diagnostic::format_error_chain(error))
+    }
+
     pub fn invalid_input_with_diagnostic(
         message: impl AsRef<str>,
         diagnostic: impl std::fmt::Display,
@@ -239,6 +243,17 @@ impl RuntimeConfigSettingsError {
     }
 
     pub fn internal(diagnostic: impl Into<String>) -> Self {
+        let diagnostic = diagnostic.into();
+        let mut presentation = agena_failure::UserPresentation::validated_with_context(
+            "settings-internal",
+            diagnostic.as_str(),
+        );
+        if presentation.fallback == "The request is invalid. Review the input and try again." {
+            presentation = agena_failure::UserPresentation::new(
+                "settings-internal",
+                "The settings update failed; review the diagnostic log for the recorded failure id.",
+            );
+        }
         Self {
             kind: RuntimeConfigSettingsErrorKind::Internal,
             failure: Box::new(agena_failure::Failure::new(
@@ -248,13 +263,23 @@ impl RuntimeConfigSettingsError {
                 agena_failure::RetryDirective::Unknown,
                 agena_failure::RecoveryDirective::Retry,
                 agena_failure::FailureImpact::OperationFailed,
-                agena_failure::UserPresentation::new(
-                    "settings-internal",
-                    "Couldn’t update the settings.",
-                ),
+                presentation,
             )),
-            diagnostic: diagnostic.into(),
+            diagnostic,
         }
+    }
+
+    pub fn internal_error(error: &(dyn std::error::Error + 'static)) -> Self {
+        Self::internal(agena_failure::diagnostic::format_error_chain(error))
+    }
+
+    pub fn internal_error_with_context(
+        context: impl AsRef<str>,
+        error: &(dyn std::error::Error + 'static),
+    ) -> Self {
+        Self::internal(agena_failure::diagnostic::format_error_chain_with_context(
+            context, error,
+        ))
     }
 
     pub fn kind(&self) -> RuntimeConfigSettingsErrorKind {
@@ -465,7 +490,7 @@ pub fn validate_runtime_file_settings(
     let config_path = config_path.into();
     let (config_found, document) = read_runtime_settings_document(&config_path)?;
     let text = serde_json::to_string_pretty(&document)
-        .map_err(|error| RuntimeConfigSettingsError::internal(error.to_string()))?;
+        .map_err(|error| RuntimeConfigSettingsError::internal_error(&error))?;
     validator(&config_path, &text)?;
     Ok(ConfigSettingsValidateResponse {
         config_path,
@@ -488,7 +513,7 @@ fn finish_runtime_settings_edit(
     validator: Option<&RuntimeSettingsDocumentValidator>,
 ) -> Result<ConfigSettingsEditResponse, RuntimeConfigSettingsError> {
     let text = serde_json::to_string_pretty(&document)
-        .map_err(|error| RuntimeConfigSettingsError::internal(error.to_string()))?;
+        .map_err(|error| RuntimeConfigSettingsError::internal_error(&error))?;
     if options.validate {
         let validator = validator.ok_or_else(|| {
             RuntimeConfigSettingsError::internal(
@@ -696,7 +721,7 @@ pub fn get_json_path(
     path: Option<&str>,
 ) -> Result<JsonValue, RuntimeConfigSettingsError> {
     agena_domain::get_json_path(value, path)
-        .map_err(|error| RuntimeConfigSettingsError::invalid_input(error.to_string()))
+        .map_err(|error| RuntimeConfigSettingsError::invalid_input_error(&error))
 }
 
 pub fn list_json_path(
@@ -723,7 +748,7 @@ fn default_true() -> bool {
 /// concrete Runtime configuration schema.
 pub fn parse_runtime_settings_path(path: &str) -> Result<Vec<String>, RuntimeConfigSettingsError> {
     agena_domain::parse_json_path(path)
-        .map_err(|error| RuntimeConfigSettingsError::invalid_input(error.to_string()))
+        .map_err(|error| RuntimeConfigSettingsError::invalid_input_error(&error))
 }
 
 fn collect_list_entries(

@@ -411,8 +411,6 @@ settings-runtime-verbosity-label = ヴェルボシティ
 
 settings-runtime-verbosity-description = 現在のセッションの動詞オーバーライド
 
-settings-field-default-provider-label = デフォルトモデル
-
 settings-field-permission-approval-model-label = 自動承認モデル
 
 settings-field-ui-locale-label = 言語
@@ -547,7 +545,6 @@ settings-field-parse-float = {$field} 数値の値が期待される
 
 settings-choice-adapter-fallback = アダプター
 
-settings-choice-default-provider-detail = {$adapter}/{$model}
 
 settings-plugin-workbench-label = プラグイン設定ワークベンチ
 
@@ -637,7 +634,7 @@ settings-provider-workbench-label = プロバイダーリスト
 
 settings-provider-workbench-value = {$count} プロバイダー
 
-settings-provider-default-mode-inherit-detail = このモードのモデル/provider デフォルトを使用してください。
+settings-model-default-mode-inherit-detail = 選択したモデルのネイティブなデフォルトモードを使用します。
 
 settings-provider-new-label = + 新しいプロバイダー
 
@@ -811,7 +808,7 @@ permission-studio-error-empty-value = {$field} 空にすることはできませ
 
 overlay-providers-title = プロバイダー
 
-overlay-providers-prompt = デフォルトモデルを使用するプロバイダを選ぶ
+overlay-providers-prompt = 設定するプロバイダーを選択
 
 overlay-provider-list-title = プロバイダーリスト
 
@@ -1167,13 +1164,12 @@ overlay-settings-help-integer = 整数を入力してください。空のまま
 overlay-settings-help-float = 数字を入力してください。空のままにするか、`clear` と入力してオーバーライドを削除します。
 overlay-choice-clear-value = クリア値
 overlay-settings-section-plugins-description = プラグインを構成し、そのツールと診断を検査し、ブラウザー、シェル、エディターのハーネスを管理します。
-overlay-settings-section-providers-description = デフォルトのモデル ルートを選択し、プロバイダーとそのネットワーク動作を構成し、モデル カタログを検査します。
+overlay-settings-section-providers-description = プロバイダーとそのネットワーク動作を構成し、モデル カタログを検査します。
 overlay-settings-section-model-catalog-description = 解決されたモデル カタログを参照し、モデルのメタデータを検査し、ローカル キャッシュを更新します。
 overlay-settings-section-permissions-description = グローバル、ワークスペース、現在のセッションの権限を個別に編集します。
 overlay-settings-section-runtime-session-description = 互換性のあるクライアントのバージョンと自動セッション圧縮動作を構成します。
 settings-permission-effective-detail = 読み取り専用 · グローバル、ワークスペース、セッションからマージされます。
 settings-permission-effective-read-only = 有効な権限は読み取り専用です。代わりにセッション、ワークスペース、またはグローバル ソースを編集してください。
-settings-field-default-provider-description = セッションオーバーライドがアクティブでない場合に使用されるプロバイダー、アダプター、およびモデルルート
 settings-field-permission-approval-model-description = 自動許可決定に使用されるモデルと思考/速度のバリアント。利用できない選択は「Ask」にフォールバックします
 settings-field-tui-color-scheme-description = 端末の背景を自動的に検出するか、明るいパレットまたは暗いパレットを強制します
 settings-field-tui-graphics-description = サポートされている場合は、Kitty、Sixel、または iTerm2 を使用して画像とタイプセット式を表示します。変更は TUI を再起動した後に有効になります
@@ -1201,7 +1197,7 @@ settings-client-versions-refresh-description = npm から互換性のある最�
 settings-client-versions-entry-detail = プロバイダー要求 ID ヘッダーで使用されている正確な互換性バージョンを開きます。
 settings-client-versions-section-description = プロバイダー要求 ID ヘッダーで使用される正確な互換性バージョン。各値を編集するか、Ctrl+R を押して npm から更新します。
 settings-provider-workbench-detail = 認証、アダプター、モデルルーティング、または新しいプロバイダーを構成する前に、検索可能なプロバイダーのリストを開きます。
-settings-provider-new-detail = 新しいプロバイダーを作成し、ライブアダプターモデルをリストし、プロバイダーアダプター構成を編集します。グローバルモデルを別途選択してください。
+settings-provider-new-detail = 新しいプロバイダーを作成し、ライブアダプターモデルをリストし、プロバイダーアダプター構成を編集します。モデルは別途選択してください。
 settings-model-catalog-open-detail = 解決されたモデル メタデータを検査し、ローカル モデル カタログ キャッシュを更新します。
 permission-studio-command-rules-shell-only = コマンド ルールは標準シェル ツール (agena.shell.run) にのみ適用されます。名前ルールまたは他のツールのデフォルトを使用します。
 permission-studio-detail-editable = Enter を押すと、この権限スライスの複数行の JSON エディターが開きます。
@@ -1271,7 +1267,6 @@ provider-field-access-key-id = アクセスキーID
 provider-field-secret-access-key = シークレットアクセスキー
 provider-field-session-token = セッショントークン
 provider-field-service-key-env = サービスキー環境
-provider-field-default-adapter = デフォルトのアダプター
 provider-field-request-timeout = リクエストのタイムアウト (秒)
 provider-field-connect-timeout = 接続タイムアウト (秒)
 provider-field-adapter-id = アダプターID
@@ -1411,10 +1406,7 @@ permission-rule-error-session-id-required = セッションスコープにはセ
 flash-server-config-edit-in-settings = 設定ファイルはサーバーに属します。クライアントローカルのパスを開く代わりに、設定で値を編集します。
 flash-command-requires-session = このアクションには開いたセッションが必要です
 flash-session-busy = セッションがビジーです
-flash-provider-selected = 選択されたプロバイダー: { $provider } (デフォルトは { $model })
-flash-provider-cleared = プロバイダー/モデルのオーバーライドがクリアされました
 flash-provider-not-found = プロバイダーが見つかりません: { $provider }
-flash-provider-default-updated = デフォルトのプロバイダルートが更新されました: { $provider }/{ $model }
 flash-permission-approval-model-updated = 自動承認モデルが更新されました: { $provider }/{ $model }
 flash-provider-studio-adapter-required = 最初にアダプターを選択してください
 flash-provider-studio-adapter-not-enabled = モデルを追加する前に、選択したアダプターを確認してください
@@ -1453,7 +1445,6 @@ flash-provider-delete-adapter = 構成済みアダプター { $provider }/{ $ada
 flash-provider-delete-model = 構成済みモデル { $provider }/{ $adapter }/{ $model } を削除しました。
 flash-provider-studio-adapter-delete-empty = 削除するアダプター設定が選択されていません。
 flash-provider-save-error-required-field = { $field } は必須です
-flash-provider-save-error-unsupported-default-adapter = auth { $auth } は、defaults.adapter `{ $adapter }` をサポートしていません。 { $supported } のいずれかが予想されます
 flash-provider-save-error-unsupported-adapters = 認証 { $auth } はアダプターをサポートしていません: { $adapters }; { $supported } のいずれかが予想されます
 flash-provider-save-error-api-base-url = OpenAI プロトコル、Anthropic、または Gemini アダプターを使用する場合、API 認証にはbase_url が必要です
 flash-provider-save-error-gitlab-token = gitlab_api 認証には API キー ソースが必要です

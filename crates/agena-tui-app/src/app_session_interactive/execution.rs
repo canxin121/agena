@@ -12,7 +12,12 @@ impl App {
         let focus = self.focus.label().to_string();
         tokio::spawn(async move {
             let output = run_status_line_command(command, session_id, focus).await;
-            let _ = tx.try_send(AppMessage::StatusLineUpdated { output });
+            if let Err(error) = tx.try_send(AppMessage::StatusLineUpdated { output }) {
+                tracing::debug!(
+                    diagnostic = %error,
+                    "TUI status-line update was superseded because the UI queue was unavailable"
+                );
+            }
         });
     }
 

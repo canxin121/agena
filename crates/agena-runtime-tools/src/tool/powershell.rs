@@ -45,9 +45,7 @@ pub(super) async fn execute_async(
     };
     let session_id = context.session_id;
     let call_id = context.call_id;
-    let _worker_permit = super::shell::acquire_worker_permit()
-        .await
-        .ok_or_else(|| ToolError::plugin("shell worker pool is unavailable".to_string()))?;
+    let _worker_permit = super::shell::acquire_worker_permit().await?;
     let execution = executor
         .execute_shell_command(&request, input.command.as_str(), session_id, call_id)
         .await?;

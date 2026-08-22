@@ -292,13 +292,28 @@ struct BreakerState {
     open_until: Option<Instant>,
 }
 
+fn breaker_states<'a>(
+    breaker: &'a Arc<Mutex<HashMap<String, BreakerState>>>,
+    context: &str,
+) -> std::sync::MutexGuard<'a, HashMap<String, BreakerState>> {
+    match breaker.lock() {
+        Ok(states) => states,
+        Err(error) => {
+            tracing::error!(
+                operation = context,
+                error = %error,
+                "recovering poisoned provider circuit-breaker lock"
+            );
+            error.into_inner()
+        }
+    }
+}
+
 /// Whether the circuit for this provider is currently open. Lock failure is
 /// treated as closed (fail-open is safer than suppressing traffic on a lock
 /// hiccup).
 fn breaker_open(breaker: &Arc<Mutex<HashMap<String, BreakerState>>>, provider_id: &str) -> bool {
-    let Ok(breaker) = breaker.lock() else {
-        return false;
-    };
+    let breaker = breaker_states(breaker, "read provider circuit-breaker state");
     let Some(state) = breaker.get(provider_id) else {
         return false;
     };
@@ -310,9 +325,7 @@ fn breaker_open(breaker: &Arc<Mutex<HashMap<String, BreakerState>>>, provider_id
 /// Record a request-level failure for a provider. Trips the circuit once the
 /// consecutive-failure threshold is reached; a later success resets.
 fn breaker_record_failure(breaker: &Arc<Mutex<HashMap<String, BreakerState>>>, provider_id: &str) {
-    let Ok(mut breaker) = breaker.lock() else {
-        return;
-    };
+    let mut breaker = breaker_states(breaker, "record provider circuit-breaker failure");
     let state = breaker.entry(provider_id.to_owned()).or_default();
     state.consecutive_failures = state.consecutive_failures.saturating_add(1);
     if state.consecutive_failures >= BREAKER_TRIP_THRESHOLD {
@@ -329,9 +342,7 @@ fn breaker_record_failure(breaker: &Arc<Mutex<HashMap<String, BreakerState>>>, p
 /// Record a successful request for a provider; closes an open circuit and
 /// resets the consecutive-failure counter.
 fn breaker_record_success(breaker: &Arc<Mutex<HashMap<String, BreakerState>>>, provider_id: &str) {
-    let Ok(mut breaker) = breaker.lock() else {
-        return;
-    };
+    let mut breaker = breaker_states(breaker, "record provider circuit-breaker success");
     let state = breaker.entry(provider_id.to_owned()).or_default();
     if state.open_until.is_some() {
         tracing::info!(

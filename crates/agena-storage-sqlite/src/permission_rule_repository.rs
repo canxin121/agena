@@ -284,12 +284,12 @@ async fn upsert_rule<C: ConnectionTrait>(
         // 2) Subject already exists: update it in place (created = false).
         //    `UPDATE ... RETURNING id` yields the row's id in one statement.
         let update_values = update_rule_values(rule, &scope, now)?;
-        let id = db
+        let row = db
             .query_one(statement(update_sql, update_values))
             .await
             .map_err(map_error)?
-            .and_then(|row| row.try_get("", "id").ok())
             .ok_or_else(missing_row)?;
+        let id = row.try_get("", "id").map_err(map_error)?;
         (id, false)
     };
 
@@ -471,8 +471,8 @@ fn scope_from_string(value: &str) -> Option<PermissionScope> {
         _ => None,
     }
 }
-fn map_error(error: impl std::fmt::Display) -> PermissionRuleRepositoryError {
-    PermissionRuleRepositoryError::Backend(error.to_string())
+fn map_error(error: impl std::error::Error + 'static) -> PermissionRuleRepositoryError {
+    PermissionRuleRepositoryError::Backend(agena_failure::diagnostic::format_error_chain(&error))
 }
 
 #[cfg(test)]

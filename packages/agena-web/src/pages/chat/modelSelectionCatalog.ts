@@ -1,4 +1,4 @@
-import { computed, ref } from 'vue'
+import { ref } from 'vue'
 
 import { apiJson } from '../../lib/api'
 import type { JsonValue } from '../../types/json'
@@ -41,19 +41,7 @@ export type ProviderModel = {
 export type Provider = {
   id: string
   name: string
-  defaultAdapter: string
-  defaultModel: string
   models: ProviderModel[]
-}
-
-export type RuntimeDefaultSelection = {
-  provider: string
-  adapter: string
-  model: string
-  thinkingMode: string
-  speedMode: string
-  verbosity: string
-  parallelToolCalls?: boolean
 }
 
 export type ModelMetaRecord = ProviderModel
@@ -67,7 +55,6 @@ export type ModelModeOption = {
 
 type ProviderSummary = {
   provider_id?: string
-  defaults?: { adapter?: string | null; model?: string | null }
   adapters?: Array<{ adapter_id?: string; enabled?: boolean; configured_model_count?: number }>
 }
 
@@ -76,18 +63,6 @@ type ProviderAdapterModels = {
   enabled?: boolean
   models?: ProviderModel[]
   failure?: JsonValue
-}
-
-type RuntimeStatus = {
-  default_selection?: {
-    provider?: string | null
-    adapter?: string | null
-    model?: string | null
-    thinking_mode?: string | null
-    speed_mode?: string | null
-    verbosity?: string | null
-    parallel_tool_calls?: boolean | null
-  } | null
 }
 
 function readString(value: unknown): string {
@@ -205,46 +180,9 @@ export function modeOptionDisplayLabel(options: ModelModeOption[], value: string
 
 export function useModelSelectionCatalog() {
   const providers = ref<Provider[]>([])
-  const runtimeDefaultSelection = ref<RuntimeDefaultSelection>({
-    provider: '',
-    adapter: '',
-    model: '',
-    thinkingMode: '',
-    speedMode: '',
-    verbosity: '',
-  })
   const catalogLoading = ref(false)
   const catalogError = ref('')
   let loadPromise: Promise<void> | null = null
-
-  const fallbackProviderModel = computed(() => {
-    const configured = runtimeDefaultSelection.value
-    if (configured.provider && configured.model) {
-      return { provider: configured.provider, adapter: configured.adapter, model: configured.model }
-    }
-
-    for (const provider of providers.value) {
-      const defaultModel = provider.models.find((model) => {
-        if (model.id !== provider.defaultModel) return false
-        return !provider.defaultAdapter || readString(model.adapter_id) === provider.defaultAdapter
-      })
-      if (defaultModel) {
-        return {
-          provider: provider.id,
-          adapter: readString(defaultModel.adapter_id),
-          model: defaultModel.id,
-        }
-      }
-    }
-
-    const firstProvider = providers.value.find((provider) => provider.models.length > 0)
-    const firstModel = firstProvider?.models[0]
-    return {
-      provider: firstProvider?.id || '',
-      adapter: readString(firstModel?.adapter_id),
-      model: firstModel?.id || '',
-    }
-  })
 
   function modelMetaFor(providerId: string, modelId: string, adapterId?: string): ProviderModel | null {
     const provider = providers.value.find((item) => item.id === readString(providerId))
@@ -266,23 +204,7 @@ export function useModelSelectionCatalog() {
       catalogLoading.value = true
       catalogError.value = ''
       try {
-        const [runtime, summaries] = await Promise.all([
-          apiJson<RuntimeStatus>('/api/v1/runtime'),
-          apiJson<ProviderSummary[]>('/api/v1/providers'),
-        ])
-
-        const selection = runtime?.default_selection || null
-        runtimeDefaultSelection.value = {
-          provider: readString(selection?.provider),
-          adapter: readString(selection?.adapter),
-          model: readString(selection?.model),
-          thinkingMode: readString(selection?.thinking_mode),
-          speedMode: readString(selection?.speed_mode),
-          verbosity: readString(selection?.verbosity),
-          ...(typeof selection?.parallel_tool_calls === 'boolean'
-            ? { parallelToolCalls: selection.parallel_tool_calls }
-            : {}),
-        }
+        const summaries = await apiJson<ProviderSummary[]>('/api/v1/providers')
 
         const summaryList = Array.isArray(summaries) ? summaries : []
         const results = await Promise.allSettled(
@@ -304,8 +226,6 @@ export function useModelSelectionCatalog() {
             return {
               id: providerId,
               name: providerId,
-              defaultAdapter: readString(summary.defaults?.adapter),
-              defaultModel: readString(summary.defaults?.model),
               models,
             } satisfies Provider
           }),
@@ -324,38 +244,7 @@ export function useModelSelectionCatalog() {
             next.push({
               id: providerId,
               name: providerId,
-              defaultAdapter: readString(summary?.defaults?.adapter),
-              defaultModel: readString(summary?.defaults?.model),
               models: [],
-            })
-          }
-        }
-
-        const configuredDefault = runtimeDefaultSelection.value
-        if (configuredDefault.provider && configuredDefault.model) {
-          let provider = next.find((item) => item.id === configuredDefault.provider)
-          if (!provider) {
-            provider = {
-              id: configuredDefault.provider,
-              name: configuredDefault.provider,
-              defaultAdapter: configuredDefault.adapter,
-              defaultModel: configuredDefault.model,
-              models: [],
-            }
-            next.push(provider)
-          }
-          const exists = provider.models.some(
-            (model) =>
-              model.id === configuredDefault.model &&
-              (!configuredDefault.adapter || readString(model.adapter_id) === configuredDefault.adapter),
-          )
-          if (!exists) {
-            provider.models.push({
-              provider_id: configuredDefault.provider,
-              adapter_id: configuredDefault.adapter || undefined,
-              id: configuredDefault.model,
-              thinking_modes: [],
-              speed_modes: {},
             })
           }
         }
@@ -378,8 +267,6 @@ export function useModelSelectionCatalog() {
 
   return {
     providers,
-    runtimeDefaultSelection,
-    fallbackProviderModel,
     catalogLoading,
     catalogError,
     modelMetaFor,

@@ -461,9 +461,19 @@ pub fn completion_input_provider_state(
     value: &serde_json::Value,
 ) -> Option<CompletionInputProviderState> {
     let mut state: CompletionInputProviderState =
-        serde_json::from_value::<PartProviderState>(value.clone())
-            .ok()?
-            .into();
+        match serde_json::from_value::<PartProviderState>(value.clone()) {
+            Ok(state) => state.into(),
+            Err(error) => {
+                tracing::warn!(
+                    diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                        "decode persisted provider state for prompt replay",
+                        &error,
+                    ),
+                    "malformed persisted provider state was omitted from prompt replay"
+                );
+                return None;
+            }
+        };
     state.response_id = normalize_optional_text(state.response_id);
     state.gemini_thought_signatures = std::mem::take(&mut state.gemini_thought_signatures)
         .into_iter()
@@ -764,21 +774,64 @@ pub fn attachment_text(item: &AttachmentItem) -> Option<String> {
     }
 
     let bytes = match &item.source {
-        AttachmentSource::Base64 { data } => base64::engine::general_purpose::STANDARD
-            .decode(data.trim())
-            .ok()?,
+        AttachmentSource::Base64 { data } => {
+            match base64::engine::general_purpose::STANDARD.decode(data.trim()) {
+                Ok(bytes) => bytes,
+                Err(error) => {
+                    tracing::warn!(
+                        attachment_name = ?item.filename,
+                        diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                            "decode a text attachment from base64",
+                            &error,
+                        ),
+                        "attachment text projection was omitted"
+                    );
+                    return None;
+                }
+            }
+        }
         AttachmentSource::DataUrl { url } => {
-            let (_, encoded) = url.split_once(',')?;
-            base64::engine::general_purpose::STANDARD
-                .decode(encoded.trim())
-                .ok()?
+            let Some((_, encoded)) = url.split_once(',') else {
+                tracing::warn!(
+                    attachment_name = ?item.filename,
+                    "attachment text projection was omitted because its data URL has no payload separator"
+                );
+                return None;
+            };
+            match base64::engine::general_purpose::STANDARD.decode(encoded.trim()) {
+                Ok(bytes) => bytes,
+                Err(error) => {
+                    tracing::warn!(
+                        attachment_name = ?item.filename,
+                        diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                            "decode a text attachment data URL",
+                            &error,
+                        ),
+                        "attachment text projection was omitted"
+                    );
+                    return None;
+                }
+            }
         }
         AttachmentSource::Url { .. }
         | AttachmentSource::FileId { .. }
         | AttachmentSource::LocalPath { .. } => return None,
     };
 
-    String::from_utf8(bytes).ok()
+    match String::from_utf8(bytes) {
+        Ok(text) => Some(text),
+        Err(error) => {
+            tracing::warn!(
+                attachment_name = ?item.filename,
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "decode a text attachment as UTF-8",
+                    &error,
+                ),
+                "attachment text projection was omitted"
+            );
+            None
+        }
+    }
 }
 
 /// Serialize one [`AttachmentItem`] to an OpenAI Chat content-part JSON value.
@@ -824,16 +877,37 @@ pub fn parts_to_openai_content_array(parts: &[WirePart]) -> serde_json::Value {
 // ─── Private helpers ──────────────────────────────────────────────────────────
 
 fn invocation_name_and_args(invocation: &ToolInvocation) -> Option<(ModelToolFunction, String)> {
-    let function = model_tool_function_for_invocation(invocation).ok()?;
+    let function = match model_tool_function_for_invocation(invocation) {
+        Ok(function) => function,
+        Err(error) => {
+            tracing::error!(
+                tool = %invocation.name,
+                diagnostic = %error,
+                "tool invocation was omitted from provider wire projection because its function identity is invalid"
+            );
+            return None;
+        }
+    };
     let json_value: serde_json::Value = invocation
         .tool_api_call
         .as_ref()
         .map(|call| call.arguments.clone())?
         .into();
-    Some((
-        function,
-        serde_json::to_string(&json_value).unwrap_or_else(|_| "{}".to_owned()),
-    ))
+    let arguments = match serde_json::to_string(&json_value) {
+        Ok(arguments) => arguments,
+        Err(error) => {
+            tracing::error!(
+                tool = %invocation.name,
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "serialize tool invocation arguments for provider wire projection",
+                    &error,
+                ),
+                "tool invocation was omitted from provider wire projection"
+            );
+            return None;
+        }
+    };
+    Some((function, arguments))
 }
 
 pub fn tool_api_function_for_invocation(
@@ -943,9 +1017,29 @@ fn structured_operation_output(exec: &OperationPart) -> Option<String> {
     structured_web_search_output(exec).or_else(|| structured_web_crawl_output(exec))
 }
 
+fn serialize_structured_operation_value(
+    value: &serde_json::Value,
+    context: &str,
+) -> Option<String> {
+    match serde_json::to_string(value) {
+        Ok(value) => Some(value),
+        Err(error) => {
+            tracing::error!(
+                operation = context,
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    context,
+                    &error,
+                ),
+                "structured operation output could not be serialized for the model"
+            );
+            None
+        }
+    }
+}
+
 fn generic_structured_operation_output(exec: &OperationPart) -> Option<String> {
     let payload = exec.raw_output()?.payload.clone()?;
-    serde_json::to_string(&payload).ok()
+    serialize_structured_operation_value(&payload, "serialize generic structured tool output")
 }
 
 fn managed_operation_output(exec: &OperationPart) -> Option<String> {
@@ -962,24 +1056,45 @@ fn managed_operation_output(exec: &OperationPart) -> Option<String> {
         object.insert("structured".to_string(), payload);
     }
     if !raw.managed_outputs.is_empty() {
+        let mut managed_outputs = Vec::with_capacity(raw.managed_outputs.len());
+        for output in &raw.managed_outputs {
+            match serde_json::to_value(output) {
+                Ok(output) => managed_outputs.push(output),
+                Err(error) => {
+                    tracing::error!(
+                        diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                            "serialize managed tool output for model projection",
+                            &error,
+                        ),
+                        "managed tool output was omitted from the model projection"
+                    );
+                }
+            }
+        }
         object.insert(
             "managed_outputs".to_string(),
-            serde_json::Value::Array(
-                raw.managed_outputs
-                    .iter()
-                    .cloned()
-                    .filter_map(|output| serde_json::to_value(output).ok())
-                    .collect(),
-            ),
+            serde_json::Value::Array(managed_outputs),
         );
     }
     object.insert("truncated".to_string(), serde_json::Value::Bool(true));
-    serde_json::to_string(&serde_json::Value::Object(object)).ok()
+    serialize_structured_operation_value(
+        &serde_json::Value::Object(object),
+        "serialize managed tool output",
+    )
 }
 
 fn structured_web_search_output(exec: &OperationPart) -> Option<String> {
     let output =
-        agena_domain::ToolOutput::from_json_payload(exec.raw_output()?.payload.as_ref()).ok()?;
+        match agena_domain::ToolOutput::from_json_payload(exec.raw_output()?.payload.as_ref()) {
+            Ok(output) => output,
+            Err(error) => {
+                tracing::debug!(
+                    error = %error,
+                    "tool output is not a typed web-search payload; using generic projection"
+                );
+                return None;
+            }
+        };
     let agena_runtime_tools::tool::ToolPayloadOutput::WebSearch {
         query,
         backend,
@@ -1004,12 +1119,14 @@ fn structured_web_search_output(exec: &OperationPart) -> Option<String> {
         })
         .collect::<Vec<_>>();
 
-    serde_json::to_string(&serde_json::json!({
-        "query": query,
-        "backend": backend,
-        "results": results,
-    }))
-    .ok()
+    serialize_structured_operation_value(
+        &serde_json::json!({
+            "query": query,
+            "backend": backend,
+            "results": results,
+        }),
+        "serialize web-search output for model projection",
+    )
 }
 
 fn structured_web_crawl_output(exec: &OperationPart) -> Option<String> {
@@ -1021,7 +1138,19 @@ fn structured_web_crawl_output(exec: &OperationPart) -> Option<String> {
     }
 
     let payload = exec.raw_output()?.payload.clone()?;
-    let report: ModelWebCrawlReport = serde_json::from_value(payload).ok()?;
+    let report: ModelWebCrawlReport = match serde_json::from_value(payload) {
+        Ok(report) => report,
+        Err(error) => {
+            tracing::debug!(
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "decode typed web-crawl output for model projection",
+                    &error,
+                ),
+                "tool output is not a typed web-crawl report; using generic projection"
+            );
+            return None;
+        }
+    };
     let document_count = report.documents.len();
     let failure_count = report.failures.len();
     let documents = report
@@ -1044,22 +1173,24 @@ fn structured_web_crawl_output(exec: &OperationPart) -> Option<String> {
         .map(|failure| truncate_text(failure.as_str(), MAX_MODEL_WEB_RESULT_SNIPPET_CHARS))
         .collect::<Vec<_>>();
 
-    serde_json::to_string(&serde_json::json!({
-        "start_url": report.start_url,
-        "engine": report.engine,
-        "rendered": report.rendered,
-        "stored_count": report.stored_count,
-        "cached_count": report.cached_count,
-        "duplicate_count": report.duplicate_count,
-        "near_duplicate_count": report.near_duplicate_count,
-        "failure_count": report.failure_count,
-        "total_documents": report.total_documents,
-        "documents_truncated": document_count > MAX_MODEL_WEB_CRAWL_DOCUMENTS,
-        "documents": documents,
-        "failures_truncated": failure_count > MAX_MODEL_WEB_CRAWL_FAILURES,
-        "failures": failures,
-    }))
-    .ok()
+    serialize_structured_operation_value(
+        &serde_json::json!({
+            "start_url": report.start_url,
+            "engine": report.engine,
+            "rendered": report.rendered,
+            "stored_count": report.stored_count,
+            "cached_count": report.cached_count,
+            "duplicate_count": report.duplicate_count,
+            "near_duplicate_count": report.near_duplicate_count,
+            "failure_count": report.failure_count,
+            "total_documents": report.total_documents,
+            "documents_truncated": document_count > MAX_MODEL_WEB_CRAWL_DOCUMENTS,
+            "documents": documents,
+            "failures_truncated": failure_count > MAX_MODEL_WEB_CRAWL_FAILURES,
+            "failures": failures,
+        }),
+        "serialize web-crawl output for model projection",
+    )
 }
 
 fn compact_optional_text(value: Option<String>, max_chars: usize) -> Option<String> {

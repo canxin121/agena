@@ -27,8 +27,24 @@ pub(crate) use server::{ApiResult, AppError, AppState};
 
 use agena_cli::{AgenaCli, LaunchMode};
 use clap::Parser;
+use std::process::ExitCode;
 
-fn main() -> error::Result<()> {
+fn main() -> ExitCode {
+    match run() {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            // Returning `Result` directly from `main` makes Rust's blanket
+            // `Termination` implementation print `Debug`, which exposes enum
+            // wrappers such as `Internal("...")`. Render the deliberate
+            // process-level Display text instead; every conversion into this
+            // type has already retained the complete diagnostic chain.
+            eprintln!("Error: {error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn run() -> error::Result<()> {
     agena_runtime::ensure_default_thread_stack();
     // `crw-extract` enables jsonschema's `rustls-no-provider` feature. Cargo
     // feature unification therefore puts the process-wide reqwest instance in

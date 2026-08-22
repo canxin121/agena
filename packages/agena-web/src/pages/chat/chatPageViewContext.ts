@@ -226,7 +226,6 @@ export type ChatPageViewContext = {
   thinkingModeChipLabel: MaybeRef<string>
   speedModeHint: MaybeRef<string>
   speedModeChipLabel: MaybeRef<string>
-  composerTopRightStatus: MaybeRef<string>
   composerBottomLeftStatus: MaybeRef<string>
   composerBottomRightStatus: MaybeRef<string>
   composerStatusExtra: MaybeRef<string>

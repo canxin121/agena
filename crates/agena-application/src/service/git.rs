@@ -17,17 +17,19 @@ async fn snapshot_counts(
     let Some(control) = control else {
         return Ok((0, 0));
     };
-    let permit = SNAPSHOT_WORKERS
-        .acquire()
-        .await
-        .map_err(|_| ApplicationError::internal("snapshot worker pool is unavailable"))?;
+    let permit = SNAPSHOT_WORKERS.acquire().await.map_err(|error| {
+        ApplicationError::internal_error_with_context(
+            "acquire a Git snapshot status worker",
+            &error,
+        )
+    })?;
     let status = tokio::task::spawn_blocking(move || {
         let _permit = permit;
         control.snapshot_status(&workspace_root)
     })
     .await
     .map_err(|error| {
-        ApplicationError::internal(format!("snapshot status worker failed: {error}"))
+        ApplicationError::internal_error_with_context("Git snapshot status worker failed", &error)
     })?;
     Ok(status
         .map(|status| (status.active.len() as u64, status.managed.len() as u64))
@@ -170,7 +172,7 @@ impl ApplicationService {
         }
 
         let branch = git_output(&workspace_root, ["branch", "--show-current"]).await?;
-        let upstream = git_output(
+        let upstream = match git_output(
             &workspace_root,
             [
                 "rev-parse",
@@ -180,19 +182,35 @@ impl ApplicationService {
             ],
         )
         .await
-        .ok()
-        .and_then(|value| non_empty(Some(value.as_str())).map(ToOwned::to_owned));
+        {
+            Ok(value) => non_empty(Some(value.as_str())).map(ToOwned::to_owned),
+            Err(error) => {
+                let diagnostic = error
+                    .diagnostic_message()
+                    .unwrap_or("Git upstream lookup failed");
+                if diagnostic
+                    .to_ascii_lowercase()
+                    .contains("no upstream configured")
+                {
+                    tracing::debug!(diagnostic, "current Git branch has no upstream");
+                    None
+                } else {
+                    return Err(error);
+                }
+            }
+        };
         let ahead_behind = if upstream.is_some() {
-            git_output(
-                &workspace_root,
-                ["rev-list", "--left-right", "--count", "HEAD...@{upstream}"],
+            Some(
+                git_output(
+                    &workspace_root,
+                    ["rev-list", "--left-right", "--count", "HEAD...@{upstream}"],
+                )
+                .await?,
             )
-            .await
-            .ok()
         } else {
             None
         };
-        let (ahead, behind) = parse_ahead_behind(ahead_behind.as_deref());
+        let (ahead, behind) = parse_ahead_behind(ahead_behind.as_deref())?;
         let status = git_output(&workspace_root, ["status", "--porcelain"]).await?;
         let (staged_files, unstaged_files, untracked_files, changed_files) =
             summarize_git_status(status.as_str());
@@ -476,7 +494,7 @@ impl ApplicationService {
             .workspace_repository
             .path_by_id(workspace_id)
             .await
-            .map_err(|error| ApplicationError::internal(error.to_string()))?
+            .map_err(|error| ApplicationError::internal_error(&error))?
             .ok_or_else(|| {
                 ApplicationError::not_found_with_diagnostic(
                     "The workspace was not found.",
@@ -658,11 +676,14 @@ async fn run_command_output_with_limit(
         })
     })
     .await
-    .map_err(|_| {
-        ApplicationError::internal(format!(
-            "{description} timed out after {} seconds",
-            timeout.as_secs_f64()
-        ))
+    .map_err(|error| {
+        ApplicationError::internal_error_with_context(
+            format!(
+                "{description} timed out after {} seconds",
+                timeout.as_secs_f64()
+            ),
+            &error,
+        )
     })?
 }
 
@@ -744,14 +765,37 @@ async fn git_untracked_patch(workspace_root: &Path, file: &str) -> ApplicationRe
     .await
 }
 
-fn parse_ahead_behind(value: Option<&str>) -> (Option<u64>, Option<u64>) {
+fn parse_ahead_behind(value: Option<&str>) -> ApplicationResult<(Option<u64>, Option<u64>)> {
     let Some(value) = value else {
-        return (None, None);
+        return Ok((None, None));
     };
     let mut parts = value.split_whitespace();
-    let behind = parts.next().and_then(|part| part.parse::<u64>().ok());
-    let ahead = parts.next().and_then(|part| part.parse::<u64>().ok());
-    (ahead, behind)
+    let behind = parts
+        .next()
+        .ok_or_else(|| ApplicationError::internal("Git ahead/behind output omitted behind"))?
+        .parse::<u64>()
+        .map_err(|error| {
+            ApplicationError::internal_error_with_context(
+                "decode the Git behind commit count",
+                &error,
+            )
+        })?;
+    let ahead = parts
+        .next()
+        .ok_or_else(|| ApplicationError::internal("Git ahead/behind output omitted ahead"))?
+        .parse::<u64>()
+        .map_err(|error| {
+            ApplicationError::internal_error_with_context(
+                "decode the Git ahead commit count",
+                &error,
+            )
+        })?;
+    if parts.next().is_some() {
+        return Err(ApplicationError::internal(
+            "Git ahead/behind output contained unexpected extra fields",
+        ));
+    }
+    Ok((Some(ahead), Some(behind)))
 }
 
 fn summarize_git_status(status: &str) -> (u64, u64, u64, u64) {

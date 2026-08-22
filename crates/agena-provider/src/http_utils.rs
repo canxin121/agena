@@ -1,7 +1,10 @@
 use std::collections::{BTreeMap, HashMap};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde::Serialize;
 use sha2::{Digest, Sha256};
+
+static REQUEST_SHAPE_SERIALIZATION_FAILURE_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 pub fn prompt_cache_header_entries(headers: &HashMap<String, String>) -> Vec<(String, String)> {
     let mut entries = headers
@@ -40,7 +43,23 @@ pub fn prompt_cache_ignores_header(key: &str) -> bool {
 }
 
 pub fn request_shape_fingerprint<T: Serialize>(value: &T) -> String {
-    let bytes = serde_json::to_vec(value).unwrap_or_default();
+    let bytes = match serde_json::to_vec(value) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            let sequence =
+                REQUEST_SHAPE_SERIALIZATION_FAILURE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+            tracing::error!(
+                serialized_type = std::any::type_name::<T>(),
+                sequence,
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "serialize provider request-shape fingerprint",
+                    &error,
+                ),
+                "provider request shape received a one-use fingerprint after serialization failure"
+            );
+            format!("__agena_request_shape_serialization_failure_{sequence}").into_bytes()
+        }
+    };
     let mut hasher = Sha256::new();
     hasher.update(bytes.as_slice());
     hex::encode(hasher.finalize())

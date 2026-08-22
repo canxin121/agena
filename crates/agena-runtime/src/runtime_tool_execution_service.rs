@@ -5,7 +5,11 @@
 //! session executor or a bootstrap fallback) remains inside the runtime
 //! composition adapter.
 
+use std::path::PathBuf;
+
 use agena_domain::{RawOutput, ToolInvocation, ViewBlock};
+use agena_runtime_tools::tool::human_view::BuiltinHumanRenderer;
+use agena_tool::ToolHumanRenderer;
 use async_trait::async_trait;
 
 /// Ephemeral human projection of a raw tool result. This value is produced on
@@ -67,6 +71,10 @@ impl RuntimeToolExecutionError {
             message: message.into(),
         }
     }
+
+    pub fn from_error(error: &(dyn std::error::Error + 'static)) -> Self {
+        Self::new(agena_failure::diagnostic::format_error_chain(error))
+    }
 }
 
 #[async_trait]
@@ -87,36 +95,47 @@ pub trait RuntimeToolExecutionService: Send + Sync {
     ) -> Result<crate::SessionToolExecutionOutcome, RuntimeToolExecutionError>;
 
     /// Render one invocation/result pair at the read boundary. Concrete
-    /// runtimes delegate to the owning plugin/tool first. The default keeps
-    /// lightweight test/service implementations useful and is the Agena
-    /// system fallback when no owner-specific renderer is available.
+    /// runtimes delegate to the owning plugin/tool first. The default uses
+    /// the same built-in renderer as the concrete executor, so lightweight
+    /// runtime adapters do not regress to an opaque JSON card.
     async fn render_tool_result(
         &self,
         invocation: &ToolInvocation,
         output: &RawOutput,
     ) -> RuntimeToolResultProjection {
         let model = match output.payload.as_ref() {
-            Some(payload) => serde_json::to_string(payload).unwrap_or_else(|_| output.text.clone()),
+            Some(payload) => match serde_json::to_string(payload) {
+                Ok(payload) => payload,
+                Err(error) => {
+                    tracing::error!(
+                        tool = %invocation.name,
+                        diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                            "serialize the default runtime tool result payload for model projection",
+                            &error,
+                        ),
+                        "default runtime tool result projection fell back to its text representation"
+                    );
+                    if output.text.is_empty() {
+                        "[tool result payload could not be serialized]".to_owned()
+                    } else {
+                        output.text.clone()
+                    }
+                }
+            },
             None => output.text.clone(),
         };
-        let mut blocks = Vec::new();
-        if let Some(payload) = output.payload.as_ref() {
-            blocks.push(ViewBlock::Json {
-                id: Some("payload".to_owned()),
-                value: payload.clone(),
-            });
-        }
-        if !output.text.is_empty() {
-            blocks.push(ViewBlock::Log {
-                id: Some("text".to_owned()),
-                stream: agena_domain::CommandOutputStream::Stdout,
-                text: output.text.clone(),
-            });
-        }
+        let renderer = BuiltinHumanRenderer::new(invocation.name.as_str());
+        let context = agena_tool::RenderContext {
+            workspace_root: PathBuf::new(),
+            command: None,
+        };
+        let blocks = renderer
+            .render_human(&context, output)
+            .unwrap_or_else(|_| Vec::new());
         RuntimeToolResultProjection {
             human: RuntimeToolHumanPresentation {
                 title: invocation.name.clone(),
-                summary: agena_tool::normalize_tool_summary(model.as_str()),
+                summary: BuiltinHumanRenderer::human_summary(output),
                 blocks,
             },
             model,

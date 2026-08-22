@@ -7,6 +7,7 @@ rust-version.workspace = true
 [dependencies]
 portable-atomic = { workspace = true }
 agena-process = { workspace = true }
+agena-failure = { workspace = true }
 agena-stdio-codec = { workspace = true }
 async-trait = { workspace = true }
 bytes = { workspace = true }

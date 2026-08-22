@@ -411,8 +411,6 @@ settings-runtime-verbosity-label = 언어 선택
 
 settings-runtime-verbosity-description = 현재 세션 동사성 override
 
-settings-field-default-provider-label = 기본 모델
-
 settings-field-permission-approval-model-label = 자동 승인 모델
 
 settings-field-ui-locale-label = 언어
@@ -547,7 +545,6 @@ settings-field-parse-float = {$field}는 숫자값을 기대합니다.
 
 settings-choice-adapter-fallback = 어댑터
 
-settings-choice-default-provider-detail = {$adapter}/{$model}
 
 settings-plugin-workbench-label = 플러그인 설정 워크벤치
 
@@ -637,7 +634,7 @@ settings-provider-workbench-label = 공급자 명부
 
 settings-provider-workbench-value = {$count} 공급자 (s)
 
-settings-provider-default-mode-inherit-detail = 이 모드에 대한 model/provider 기본값을 사용합니다.
+settings-model-default-mode-inherit-detail = 선택한 모델의 네이티브 기본 모드를 사용합니다.
 
 settings-provider-new-label = + 새로운 공급자
 
@@ -811,7 +808,7 @@ permission-studio-error-empty-value = {$field}는 비어있을 수 없습니다.
 
 overlay-providers-title = 회사 소개
 
-overlay-providers-prompt = 기본 모델을 사용하여 공급자를 선택합니다.
+overlay-providers-prompt = 구성할 공급자를 선택합니다.
 
 overlay-provider-list-title = 공급자 명부
 
@@ -1167,13 +1164,12 @@ overlay-settings-help-integer = 정수를 입력하세요. 파일 재정의를 �
 overlay-settings-help-float = 숫자를 입력하세요. 재정의를 제거하려면 비워 두거나 `clear`을 입력하세요.
 overlay-choice-clear-value = 명확한 가치
 overlay-settings-section-plugins-description = 플러그인을 구성하고, 도구 및 진단을 검사하고, 브라우저, 셸 및 편집기 하네스를 관리하세요.
-overlay-settings-section-providers-description = 기본 모델 경로를 선택하고, 공급자와 해당 네트워크 동작을 구성하고, 모델 카탈로그를 검사합니다.
+overlay-settings-section-providers-description = 공급자와 해당 네트워크 동작을 구성하고, 모델 카탈로그를 검사합니다.
 overlay-settings-section-model-catalog-description = 확인된 모델 카탈로그를 찾아보고, 모델 메타데이터를 검사하고, 로컬 캐시를 새로 고칩니다.
 overlay-settings-section-permissions-description = 전역, 작업 공간 및 현재 세션 권한을 별도로 편집합니다.
 overlay-settings-section-runtime-session-description = 호환성 클라이언트 버전 및 자동 세션 압축 동작을 구성합니다.
 settings-permission-effective-detail = 읽기 전용 · 전역, 작업 공간 및 세션에서 병합되었습니다.
 settings-permission-effective-read-only = 유효 권한은 읽기 전용입니다. 대신 세션, 작업공간 또는 전역 소스를 편집하세요.
-settings-field-default-provider-description = 세션 재정의가 활성화되지 않은 경우 사용되는 공급자, 어댑터 및 모델 경로
 settings-field-permission-approval-model-description = 자동 권한 결정에 사용되는 모델 및 사고/속도 변형. 사용할 수 없는 선택 항목은 질문으로 대체됩니다.
 settings-field-tui-color-scheme-description = 터미널 배경을 자동으로 감지하거나 밝거나 어두운 팔레트를 강제 적용합니다.
 settings-field-tui-graphics-description = 지원되는 경우 Kitty, Sixel 또는 iTerm2를 사용하여 이미지 및 조판 수식을 표시합니다. TUI를 다시 시작하면 변경 사항이 적용됩니다.
@@ -1201,7 +1197,7 @@ settings-client-versions-refresh-description = npm에서 최신 호환 패키지
 settings-client-versions-entry-detail = 공급자 요청 ID 헤더에 사용된 정확한 호환성 버전을 엽니다.
 settings-client-versions-section-description = 공급자 요청 ID 헤더에 사용되는 정확한 호환성 버전입니다. 각 값을 편집하거나 Ctrl+R을 눌러 npm에서 새로고침하세요.
 settings-provider-workbench-detail = 인증, 어댑터, 모델 라우팅 또는 새 공급자를 구성하기 전에 검색 가능한 공급자 목록을 엽니다.
-settings-provider-new-detail = 새 공급자를 만들고, 라이브 어댑터 모델을 나열하고, 공급자 어댑터 구성을 편집합니다. 글로벌 모델을 별도로 선택하십시오.
+settings-provider-new-detail = 새 공급자를 만들고, 라이브 어댑터 모델을 나열하고, 공급자 어댑터 구성을 편집합니다. 모델을 별도로 선택하십시오.
 settings-model-catalog-open-detail = 확인된 모델 메타데이터를 검사하고 로컬 모델 카탈로그 캐시를 새로 고칩니다.
 permission-studio-command-rules-shell-only = 명령 규칙은 표준 셸 도구(agena.shell.run)에만 적용됩니다. 다른 도구의 경우 이름 규칙이나 기본값을 사용하세요.
 permission-studio-detail-editable = Enter를 누르면 이 권한 슬라이스에 대한 여러 줄 JSON 편집기가 열립니다.
@@ -1271,7 +1267,6 @@ provider-field-access-key-id = 액세스 키 ID
 provider-field-secret-access-key = 비밀 액세스 키
 provider-field-session-token = 세션 토큰
 provider-field-service-key-env = 서비스 키 환경
-provider-field-default-adapter = 기본 어댑터
 provider-field-request-timeout = 요청 시간 초과(초)
 provider-field-connect-timeout = 연결 시간 초과(초)
 provider-field-adapter-id = 어댑터 ID
@@ -1411,10 +1406,7 @@ permission-rule-error-session-id-required = 세션 범위에는 세션 ID가 필
 flash-server-config-edit-in-settings = 구성 파일은 서버에 속합니다. 클라이언트-로컬 경로를 여는 대신 설정에서 해당 값을 편집하세요.
 flash-command-requires-session = 이 작업을 수행하려면 공개 세션이 필요합니다.
 flash-session-busy = 세션이 바빠요
-flash-provider-selected = 선택한 제공업체: { $provider }(기본값 { $model })
-flash-provider-cleared = 공급자/모델 재정의가 지워졌습니다.
 flash-provider-not-found = 공급자를 찾을 수 없습니다: { $provider }
-flash-provider-default-updated = 기본 공급자 경로 업데이트됨: { $provider }/{ $model }
 flash-permission-approval-model-updated = 자동 승인 모델 업데이트됨: { $provider }/{ $model }
 flash-provider-studio-adapter-required = 먼저 어댑터를 선택하세요
 flash-provider-studio-adapter-not-enabled = 모델을 추가하기 전에 선택한 어댑터를 확인하세요
@@ -1453,7 +1445,6 @@ flash-provider-delete-adapter = 구성된 어댑터 { $provider }/{ $adapter }�
 flash-provider-delete-model = 구성된 모델 { $provider }/{ $adapter }/{ $model }을 삭제했습니다.
 flash-provider-studio-adapter-delete-empty = 삭제할 어댑터 설정을 선택하지 않았습니다.
 flash-provider-save-error-required-field = { $field }이 필요합니다
-flash-provider-save-error-unsupported-default-adapter = 인증 { $auth }은 defaults.adapter `{ $adapter }`을 지원하지 않습니다. { $supported } 중 하나가 필요합니다.
 flash-provider-save-error-unsupported-adapters = 인증 { $auth }은 어댑터를 지원하지 않습니다: { $adapters }; { $supported } 중 하나가 필요합니다.
 flash-provider-save-error-api-base-url = OpenAI 프로토콜, Anthropic 또는 Gemini 어댑터를 사용할 때 API 인증에는 base_url이 필요합니다.
 flash-provider-save-error-gitlab-token = gitlab_api 인증에는 API 키 소스가 필요합니다

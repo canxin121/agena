@@ -21,7 +21,13 @@ pub(crate) fn default_draft_store_path() -> PathBuf {
     let mut base = env::var("HOME")
         .or_else(|_| env::var("USERPROFILE"))
         .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("."));
+        .unwrap_or_else(|error| {
+            tracing::error!(
+                diagnostic = %error,
+                "TUI draft-store home is unavailable; using the current-directory compatibility path"
+            );
+            PathBuf::from(".")
+        });
     base.push("agena");
     base.push("tui-drafts.json");
     base
@@ -31,7 +37,13 @@ pub(crate) fn default_prompt_history_path() -> PathBuf {
     let mut base = env::var("HOME")
         .or_else(|_| env::var("USERPROFILE"))
         .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("."));
+        .unwrap_or_else(|error| {
+            tracing::error!(
+                diagnostic = %error,
+                "TUI prompt-history home is unavailable; using the current-directory compatibility path"
+            );
+            PathBuf::from(".")
+        });
     base.push("agena");
     base.push("tui-prompt-history.jsonl");
     base

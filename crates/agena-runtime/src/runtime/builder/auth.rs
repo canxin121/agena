@@ -166,7 +166,18 @@ pub(super) fn auth_provider_projection(
         Ok(Some(crate::config::ProviderDeviceAuthTarget::Copilot)) => {
             Some(agena_runtime::RuntimeAuthLoginKind::GithubCopilot)
         }
-        Ok(None) | Err(_) => None,
+        Ok(None) => None,
+        Err(error) => {
+            tracing::warn!(
+                provider_id,
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "failed to resolve the provider device-auth target while building its runtime auth summary",
+                    &error,
+                ),
+                "provider device-auth target is unavailable"
+            );
+            None
+        }
     };
     Ok(agena_runtime::RuntimeAuthProvider {
         provider_id: provider_id.to_owned(),

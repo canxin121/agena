@@ -13,14 +13,44 @@ pub fn capture_watch_path_stamps(paths: &[PathBuf]) -> HashMap<PathBuf, WatchPat
         .cloned()
         .map(|path| {
             let stamp = match fs::metadata(&path) {
-                Ok(metadata) => WatchPathStamp {
-                    exists: true,
-                    modified: metadata.modified().ok(),
-                },
-                Err(_) => WatchPathStamp {
+                Ok(metadata) => {
+                    let modified = match metadata.modified() {
+                        Ok(modified) => Some(modified),
+                        Err(error) => {
+                            tracing::warn!(
+                                path = %path.display(),
+                                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                                    "failed to read a watched path's modification time",
+                                    &error,
+                                ),
+                                "watched path modification time is unavailable"
+                            );
+                            None
+                        }
+                    };
+                    WatchPathStamp {
+                        exists: true,
+                        modified,
+                    }
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => WatchPathStamp {
                     exists: false,
                     modified: None,
                 },
+                Err(error) => {
+                    tracing::warn!(
+                        path = %path.display(),
+                        diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                            "failed to inspect a watched path",
+                            &error,
+                        ),
+                        "watched path metadata is unavailable"
+                    );
+                    WatchPathStamp {
+                        exists: false,
+                        modified: None,
+                    }
+                }
             };
             (path, stamp)
         })

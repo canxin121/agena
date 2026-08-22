@@ -95,7 +95,7 @@ impl Application {
             .execute_runtime_tool(&invocation, call_id)
             .await
             .map(agena_runtime::SessionToolExecutionOutcome::into_summary)
-            .map_err(|error| ApplicationError::internal(error.to_string()))
+            .map_err(|error| ApplicationError::internal_error(&error))
     }
 
     async fn ensure_operator_workspace(&self, workspace_id: i64) -> Result<(), ApplicationError> {

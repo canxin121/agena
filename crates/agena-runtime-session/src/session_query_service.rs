@@ -178,6 +178,10 @@ impl SessionQueryError {
             )),
         }
     }
+
+    pub fn internal_error(error: &(dyn std::error::Error + 'static)) -> Self {
+        Self::internal(agena_failure::diagnostic::format_error_chain(error))
+    }
 }
 
 impl std::fmt::Display for SessionQueryError {

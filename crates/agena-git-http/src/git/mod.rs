@@ -73,7 +73,7 @@ pub(crate) fn require_directory_raw(dir: Option<&str>) -> Result<PathBuf, Box<Re
                 .into_response(),
         ));
     };
-    Ok(abs_path(dir))
+    abs_path(dir)
 }
 
 pub(crate) fn require_directory(q: &DirectoryQuery) -> Result<PathBuf, Box<Response>> {
@@ -94,8 +94,9 @@ pub(crate) use auth::{TempGitAskpass, git_http_auth_env, normalize_http_auth};
 pub use blame::*;
 
 pub(crate) use exec::{
-    git_success_response, lock_repo, run_git, run_git_checked, run_git_checked_with_status,
-    run_git_env, run_git_with_input, run_locked_git_checked, run_locked_git_checked_with_status,
+    git_command_result_or_log, git_command_transport_error_response, git_success_response,
+    lock_repo, run_git, run_git_checked, run_git_checked_with_status, run_git_env,
+    run_git_with_input, run_locked_git_checked, run_locked_git_checked_with_status,
     run_locked_git_env_checked, run_locked_git_env_checked_with_status,
 };
 pub(crate) use policy::{
@@ -104,8 +105,9 @@ pub(crate) use policy::{
 };
 
 pub(crate) use utils::{
-    abs_path, git_config_get, git2_open_error_response, is_safe_repo_rel_path, map_git_failure,
-    path_slash, redact_git_output, rel_path_slash, truncate_for_payload,
+    abs_path, git_config_get, git_io_error_response, git_task_error_response,
+    git2_open_error_response, is_safe_repo_rel_path, map_git_failure, path_slash,
+    redact_git_output, rel_path_slash, truncate_for_payload,
 };
 
 // Public HTTP handlers.

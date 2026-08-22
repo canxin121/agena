@@ -370,6 +370,7 @@ const explorerSearchMode = ref<ExplorerSearchMode>(readStoredSearchMode())
 const searchQuery = ref('')
 const searching = ref(false)
 const searchResults = ref<FileNode[]>([])
+const searchTruncated = ref(false)
 
 const contentSearchQuery = ref('')
 const contentSearchReplace = ref('')
@@ -2454,6 +2455,7 @@ async function runSearch() {
   const q = searchQuery.value.trim()
   if (!rootPath || !q) {
     searchResults.value = []
+    searchTruncated.value = false
     searching.value = false
     return
   }
@@ -2466,6 +2468,7 @@ async function runSearch() {
       limit: 200,
       respectGitignore: respectGitignore.value,
     })) as SearchResponse
+    searchTruncated.value = resp.truncated === true
 
     const includeHidden = showHidden.value
     const includeGitignored = showGitignored.value
@@ -2494,6 +2497,7 @@ async function runSearch() {
     }))
   } catch {
     searchResults.value = []
+    searchTruncated.value = false
   } finally {
     searching.value = false
   }
@@ -2502,6 +2506,7 @@ async function runSearch() {
 function clearFileSearch() {
   searchQuery.value = ''
   searchResults.value = []
+  searchTruncated.value = false
   searching.value = false
 }
 
@@ -3877,6 +3882,7 @@ async function restoreForRoot(next: string) {
   selection.value = null
   commentText.value = ''
   searchResults.value = []
+  searchTruncated.value = false
   searchQuery.value = ''
   contentSearchQuery.value = ''
   contentSearchReplace.value = ''
@@ -4081,6 +4087,7 @@ watch(
   (q) => {
     if (!q.trim()) {
       searchResults.value = []
+      searchTruncated.value = false
       searching.value = false
     }
   },
@@ -4327,6 +4334,9 @@ onMounted(async () => {
                             <div class="px-0.5 text-[11px] text-muted-foreground">
                               <span v-if="!hasFileSearch">{{ t('files.search.files.hint') }}</span>
                               <span v-else-if="searching">{{ t('common.searching') }}</span>
+                              <span v-else-if="searchTruncated">{{
+                                t('files.search.files.truncatedResults', { count: searchResults.length })
+                              }}</span>
                               <span v-else>{{ t('files.search.files.results', { count: searchResults.length }) }}</span>
                             </div>
                           </template>

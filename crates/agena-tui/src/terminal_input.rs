@@ -65,7 +65,7 @@ impl TerminalInput {
             match tokio::time::timeout(RESIZE_RECHECK_INTERVAL, self.readiness.readable()).await {
                 Ok(Ok(mut readiness)) => readiness.clear_ready(),
                 Ok(Err(error)) => return Err(error),
-                Err(_) => {
+                Err(..) => {
                     // Crossterm also observes SIGWINCH through an internal
                     // signal source, which is not represented by stdin
                     // readiness. The bounded recheck picks up resize events.

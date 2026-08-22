@@ -10,8 +10,9 @@ use std::sync::Arc;
 use super::super::remote::git_current_branch;
 use super::super::{
     DirectoryQuery, GitAuthInput, GitBranchProtectionPrompt, TempGitAskpass, git_allow_force_push,
-    git_branch_protection_for_branch, git_enforce_branch_protection, git_http_auth_env,
-    map_git_failure, normalize_http_auth, require_locked_directory, run_git_env,
+    git_branch_protection_for_branch, git_command_transport_error_response,
+    git_enforce_branch_protection, git_http_auth_env, map_git_failure, normalize_http_auth,
+    require_locked_directory, run_git_env,
 };
 
 #[derive(Debug, Deserialize)]
@@ -238,10 +239,16 @@ pub async fn git_push<S: crate::GitHttpState + 'static>(
         .iter()
         .map(|(k, v)| (k.as_str(), v.as_str()))
         .collect();
-    let (code, out, err) =
-        run_git_env(&dir, &args_ref, &env_ref)
-            .await
-            .unwrap_or((1, "".to_string(), "".to_string()));
+    let (code, out, err) = match run_git_env(&dir, &args_ref, &env_ref).await {
+        Ok(result) => result,
+        Err(error) => {
+            return git_command_transport_error_response(
+                "push Git repository",
+                &error,
+                Some("git_push_process_failed"),
+            );
+        }
+    };
     if code != 0 {
         // If git suggests an upstream is missing, try publishing the current branch.
         if branch.is_none() && git_output_suggests_no_upstream(&out, &err) {
@@ -273,11 +280,16 @@ pub async fn git_push<S: crate::GitHttpState + 'static>(
                 .iter()
                 .map(|(k, v)| (k.as_str(), v.as_str()))
                 .collect();
-            let (c2, o2, e2) = run_git_env(&dir, &args2_ref, &env2_ref).await.unwrap_or((
-                1,
-                "".to_string(),
-                "".to_string(),
-            ));
+            let (c2, o2, e2) = match run_git_env(&dir, &args2_ref, &env2_ref).await {
+                Ok(result) => result,
+                Err(error) => {
+                    return git_command_transport_error_response(
+                        "publish current Git branch",
+                        &error,
+                        Some("git_publish_process_failed"),
+                    );
+                }
+            };
             if c2 != 0 {
                 if let Some(resp) = map_git_failure(c2, &o2, &e2) {
                     return resp;

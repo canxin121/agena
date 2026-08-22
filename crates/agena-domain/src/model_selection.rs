@@ -3,8 +3,8 @@ use serde::{Deserialize, Serialize};
 /// Optional provider, model, and inference-mode selection.
 ///
 /// This value is independent of Agena's identity, tool capability boundary,
-/// and permission policy. It can be used for provider defaults or an explicit
-/// delegated-run override without creating a new kind of agent.
+/// and permission policy. It is used for an explicit delegated-run override
+/// without creating a new kind of agent.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ModelSelectionConfig {

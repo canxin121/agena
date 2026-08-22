@@ -2151,6 +2151,7 @@ export default {
         rejectQuestion: 'Reject question',
         sendAnswers: 'Send answers',
         permissionLabel: 'Permission',
+        replyReasonLabel: 'Reply reason',
         patternsLabel: 'Patterns',
         rememberedForLabel: 'Will be remembered for',
         previousQuestion: 'Previous question',
@@ -2160,6 +2161,9 @@ export default {
         single: 'single',
         custom: 'Custom',
         typeYourOwnAnswer: 'Type your own answer',
+        answerLabel: 'Answer',
+        answered: 'Answered',
+        awaitingUserInput: 'Awaiting user input',
         customOnlySentHint: 'Only sent when the custom option is selected.',
         noQuestionsAvailable: 'No questions available.',
       },
@@ -2202,8 +2206,6 @@ export default {
         availableCount: '{count} available',
       },
       model: {
-        autoDefault: 'Agena runtime default',
-        autoDefaultDescription: 'Use the default model configured on the Agena server',
         defaultThinkingDescription: 'Use the thinking mode configured for this model',
         defaultSpeedDescription: 'Use the speed mode configured for this model',
       },
@@ -2225,8 +2227,6 @@ export default {
       status: {
         loading: 'loading',
         slash: 'slash',
-        pendingInput: 'input {count} pending (Ctrl+R)',
-        pendingApproval: 'approval {count} pending (Ctrl+L)',
       },
     },
 
@@ -3783,6 +3783,7 @@ export default {
         noQuery: 'No search query.',
         noFilesFound: 'No files found.',
         results: '{count} results',
+        truncatedResults: '{count} results shown · search was partial or truncated',
       },
       content: {
         placeholder: 'Search',

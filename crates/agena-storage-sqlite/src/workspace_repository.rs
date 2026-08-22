@@ -187,8 +187,8 @@ fn is_windows_drive_root(path: &str) -> bool {
     let bytes = path.as_bytes();
     bytes.len() == 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && bytes[2] == b'/'
 }
-fn map_error(error: impl std::fmt::Display) -> WorkspaceRepositoryError {
-    let message = error.to_string();
+fn map_error(error: impl std::error::Error + 'static) -> WorkspaceRepositoryError {
+    let message = agena_failure::diagnostic::format_error_chain(&error);
     if message.contains("workspace path cannot be empty") {
         WorkspaceRepositoryError::InvalidPath(message)
     } else {

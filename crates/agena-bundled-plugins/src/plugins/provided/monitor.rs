@@ -105,7 +105,7 @@ fn ws_url_targets(args: &MonitorStartInput) -> SdkResult<Vec<String>> {
 }
 
 fn json_input<T: Serialize>(input: T) -> SdkResult<serde_json::Value> {
-    serde_json::to_value(input).map_err(|err| PluginError::invalid_params(err.to_string()))
+    serde_json::to_value(input).map_err(|err| PluginError::invalid_params_error(&err))
 }
 
 #[cfg(test)]

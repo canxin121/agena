@@ -143,6 +143,20 @@ pub fn decode_prompt_tool_calls(body: &str) -> Option<Vec<CompletionToolCall>> {
             if name.is_empty() || !call.arguments.is_object() {
                 return None;
             }
+            let arguments_json = match serde_json::to_string(&call.arguments) {
+                Ok(arguments) => arguments,
+                Err(error) => {
+                    tracing::error!(
+                        tool_name = %name,
+                        diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                            "serialize a decoded prompt-tool call argument object",
+                            &error,
+                        ),
+                        "decoded prompt-tool call was omitted because its arguments could not be serialized"
+                    );
+                    return None;
+                }
+            };
             Some(CompletionToolCall::Function {
                 id: call
                     .id
@@ -150,7 +164,7 @@ pub fn decode_prompt_tool_calls(body: &str) -> Option<Vec<CompletionToolCall>> {
                     .filter(|id| !id.is_empty())
                     .unwrap_or_default(),
                 name,
-                arguments_json: serde_json::to_string(&call.arguments).ok()?,
+                arguments_json,
             })
         })
         .collect()

@@ -18,6 +18,22 @@ struct InvocationScope {
 static ACTIVE: LazyLock<Mutex<HashMap<InvocationScope, HashSet<String>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
+fn active_invocations(
+    context: &str,
+) -> std::sync::MutexGuard<'static, HashMap<InvocationScope, HashSet<String>>> {
+    match ACTIVE.lock() {
+        Ok(active) => active,
+        Err(error) => {
+            tracing::error!(
+                operation = context,
+                error = %error,
+                "recovering poisoned invocation guard registry"
+            );
+            error.into_inner()
+        }
+    }
+}
+
 /// RAII lease held while a target participates in one logical invocation.
 pub struct InvocationGuard {
     scope: InvocationScope,
@@ -26,9 +42,7 @@ pub struct InvocationGuard {
 
 impl Drop for InvocationGuard {
     fn drop(&mut self) {
-        let Ok(mut active) = ACTIVE.lock() else {
-            return;
-        };
+        let mut active = active_invocations("release invocation guard");
         let Some(targets) = active.get_mut(&self.scope) else {
             return;
         };
@@ -54,7 +68,7 @@ pub fn try_enter_invocation(
         call_id,
     };
     let target = target.into();
-    let mut active = ACTIVE.lock().ok()?;
+    let mut active = active_invocations("enter invocation guard");
     let targets = active.entry(scope).or_default();
     if !targets.insert(target.clone()) {
         return None;
@@ -68,10 +82,9 @@ fn is_active(session_id: i64, call_id: i64, target: &str) -> bool {
         session_id,
         call_id,
     };
-    ACTIVE
-        .lock()
-        .ok()
-        .and_then(|active| active.get(&scope).cloned())
+    active_invocations("inspect invocation guard in test")
+        .get(&scope)
+        .cloned()
         .is_some_and(|targets| targets.contains(target))
 }
 

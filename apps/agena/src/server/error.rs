@@ -50,6 +50,23 @@ impl AppError {
         }
     }
 
+    pub fn forbidden_error(
+        context: impl AsRef<str>,
+        error: &(dyn std::error::Error + 'static),
+    ) -> Self {
+        let diagnostic = agena_failure::diagnostic::format_error_chain_with_context(context, error);
+        tracing::error!(
+            diagnostic,
+            "legacy server request was denied by an I/O boundary"
+        );
+        let public = agena_failure::diagnostic::user_message_with_context(&diagnostic, 240);
+        Self::forbidden(if public.is_empty() {
+            "Access was denied by the operating system.".to_owned()
+        } else {
+            public
+        })
+    }
+
     pub fn not_found(message: impl Into<String>) -> Self {
         Self::NotFound {
             message: message.into(),
@@ -80,6 +97,20 @@ impl AppError {
         }
     }
 
+    pub fn internal_error(error: &(dyn std::error::Error + 'static)) -> Self {
+        Self::internal(agena_failure::diagnostic::format_error_chain(error))
+    }
+
+    pub fn internal_error_with_context(
+        context: impl AsRef<str>,
+        error: &(dyn std::error::Error + 'static),
+    ) -> Self {
+        Self::internal(agena_failure::diagnostic::format_error_chain_with_context(
+            context.as_ref(),
+            error,
+        ))
+    }
+
     fn status_code(&self) -> StatusCode {
         match self {
             Self::BadRequest { .. } => StatusCode::BAD_REQUEST,
@@ -98,11 +129,36 @@ impl AppError {
             | Self::Forbidden { message }
             | Self::NotFound { message }
             | Self::PayloadTooLarge { message }
-            | Self::TooManyRequests { message }
-            | Self::BadGateway { message }
-            | Self::Internal { message } => ErrorBody {
-                error: message.clone(),
-            },
+            | Self::TooManyRequests { message } => {
+                let safe = agena_failure::diagnostic::scrubbed_preserve(message, 240);
+                ErrorBody {
+                    error: if safe.is_empty() {
+                        "The request was rejected because its details could not be displayed safely."
+                            .to_owned()
+                    } else {
+                        safe
+                    },
+                }
+            }
+            Self::BadGateway { message } | Self::Internal { message } => {
+                let failure_id = agena_failure::FailureId::new();
+                tracing::error!(
+                    %failure_id,
+                    diagnostic = %message,
+                    "legacy server request failed"
+                );
+                let safe =
+                    agena_failure::diagnostic::user_message_with_context(message.as_str(), 240);
+                ErrorBody {
+                    error: if safe.is_empty() {
+                        format!(
+                            "The request failed; review the server diagnostic log for reference {failure_id}."
+                        )
+                    } else {
+                        safe
+                    },
+                }
+            }
         }
     }
 }
@@ -112,5 +168,22 @@ impl IntoResponse for AppError {
         let status = self.status_code();
         let body = self.body();
         (status, Json(body)).into_response()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AppError;
+
+    #[test]
+    fn internal_http_body_keeps_a_scrubbed_root_cause() {
+        let error = AppError::internal(
+            "failed to load terminal registry: token=secret /private/agena.sqlite: disk full",
+        );
+        let body = error.body();
+
+        assert!(body.error.contains("disk full"));
+        assert!(!body.error.contains("token=secret"));
+        assert!(!body.error.contains("/private/agena.sqlite"));
     }
 }

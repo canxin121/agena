@@ -504,8 +504,15 @@ impl SettingsNode {
         )?;
         self.constraints.validate(&self.kind, &self.path)?;
         if let Some(default) = &self.default {
-            let bytes = serde_json::to_vec(default)
-                .map_err(|error| SettingsContractError::at(self.path.clone(), error.to_string()))?;
+            let bytes = serde_json::to_vec(default).map_err(|error| {
+                SettingsContractError::at(
+                    self.path.clone(),
+                    agena_failure::diagnostic::format_error_chain_with_context(
+                        "failed to encode the settings default value",
+                        &error,
+                    ),
+                )
+            })?;
             if bytes.len() > MAX_SETTINGS_DEFAULT_BYTES {
                 return Err(SettingsContractError::at(
                     self.path.clone(),
@@ -1202,9 +1209,14 @@ impl PluginOperationDefinition {
                 ));
             }
         }
-        self.input
-            .validate()
-            .map_err(|error| OperationDefinitionError::new(error.to_string()))?;
+        self.input.validate().map_err(|error| {
+            OperationDefinitionError::new(
+                agena_failure::diagnostic::format_error_chain_with_context(
+                    "invalid plugin operation input contract",
+                    &error,
+                ),
+            )
+        })?;
         match &self.target {
             PluginOperationTarget::Method { handler }
             | PluginOperationTarget::Tool { tool: handler } => {
@@ -1730,8 +1742,15 @@ fn validate_value_at(
             max_bytes,
             max_depth,
         } => {
-            let bytes = serde_json::to_vec(value)
-                .map_err(|error| SettingsValueError::at(path, error.to_string()))?;
+            let bytes = serde_json::to_vec(value).map_err(|error| {
+                SettingsValueError::at(
+                    path,
+                    agena_failure::diagnostic::format_error_chain_with_context(
+                        "failed to encode the bounded JSON settings value",
+                        &error,
+                    ),
+                )
+            })?;
             if bytes.len() > *max_bytes as usize || json_depth(value) > *max_depth as usize {
                 return Err(SettingsValueError::at(
                     path,

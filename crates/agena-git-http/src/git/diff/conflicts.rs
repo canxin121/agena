@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::io::ErrorKind;
 
 use axum::{
     Json,
@@ -9,8 +10,8 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 use super::super::{
-    DirectoryQuery, is_safe_repo_rel_path, require_directory, require_directory_raw,
-    require_locked_directory, run_git, run_git_checked, run_git_checked_with_status,
+    DirectoryQuery, git_io_error_response, is_safe_repo_rel_path, require_directory,
+    require_directory_raw, require_locked_directory, run_git_checked, run_git_checked_with_status,
 };
 
 use super::file_diff::GitFileDiffQuery;
@@ -77,11 +78,14 @@ pub struct GitConflictFileResponse {
     pub is_unmerged: bool,
 }
 
-async fn git_path_is_unmerged(dir: &std::path::Path, path: &str) -> bool {
-    let (code, out, _) = run_git(dir, &["ls-files", "-u", "--", path])
-        .await
-        .unwrap_or((1, "".to_string(), "".to_string()));
-    code == 0 && out.lines().any(|line| !line.trim().is_empty())
+async fn git_path_is_unmerged(dir: &std::path::Path, path: &str) -> Result<bool, Response> {
+    let (out, _) = run_git_checked(
+        dir,
+        &["ls-files", "-u", "--", path],
+        Some("conflict_state_failed"),
+    )
+    .await?;
+    Ok(out.lines().any(|line| !line.trim().is_empty()))
 }
 
 fn parse_conflict_markers(text: &str) -> Vec<ConflictBlock> {
@@ -180,12 +184,22 @@ pub async fn git_conflict_file(Query(q): Query<GitFileDiffQuery>) -> Response {
     }
 
     let full = dir.join(path);
-    let Ok(meta) = tokio::fs::metadata(&full).await else {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "File not found", "code": "not_found"})),
-        )
-            .into_response();
+    let meta = match tokio::fs::metadata(&full).await {
+        Ok(meta) => meta,
+        Err(error) if error.kind() == ErrorKind::NotFound => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({"error": "File not found", "code": "not_found"})),
+            )
+                .into_response();
+        }
+        Err(error) => {
+            return git_io_error_response(
+                "failed to inspect conflicted file",
+                &error,
+                "conflict_file_metadata_failed",
+            );
+        }
     };
     if !meta.is_file() || meta.len() > (512 * 1024) {
         return (
@@ -195,8 +209,27 @@ pub async fn git_conflict_file(Query(q): Query<GitFileDiffQuery>) -> Response {
             .into_response();
     }
 
-    let is_unmerged = git_path_is_unmerged(&dir, path).await;
-    let text = tokio::fs::read_to_string(&full).await.unwrap_or_default();
+    let is_unmerged = match git_path_is_unmerged(&dir, path).await {
+        Ok(is_unmerged) => is_unmerged,
+        Err(response) => return response,
+    };
+    let text = match tokio::fs::read_to_string(&full).await {
+        Ok(text) => text,
+        Err(error) if error.kind() == ErrorKind::NotFound => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({"error": "File not found", "code": "not_found"})),
+            )
+                .into_response();
+        }
+        Err(error) => {
+            return git_io_error_response(
+                "failed to read conflicted file",
+                &error,
+                "conflict_file_read_failed",
+            );
+        }
+    };
     let blocks = parse_conflict_markers(&text);
     let has_markers = !blocks.is_empty()
         && text.contains("<<<<<<<")
@@ -344,7 +377,23 @@ pub async fn git_conflict_resolve(
         }
     } else {
         let full = dir.join(path);
-        let text = tokio::fs::read_to_string(&full).await.unwrap_or_default();
+        let text = match tokio::fs::read_to_string(&full).await {
+            Ok(text) => text,
+            Err(error) if error.kind() == ErrorKind::NotFound => {
+                return (
+                    StatusCode::NOT_FOUND,
+                    Json(serde_json::json!({"error": "File not found", "code": "not_found"})),
+                )
+                    .into_response();
+            }
+            Err(error) => {
+                return git_io_error_response(
+                    "failed to read conflicted file before resolution",
+                    &error,
+                    "conflict_file_read_failed",
+                );
+            }
+        };
         if !text.contains("<<<<<<<") {
             return (
                 StatusCode::BAD_REQUEST,

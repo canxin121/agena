@@ -224,7 +224,19 @@ pub(super) fn oauth_error_message(body: &str) -> Option<String> {
         return None;
     }
 
-    let json = serde_json::from_str::<Value>(body).ok();
+    let json = match serde_json::from_str::<Value>(body) {
+        Ok(json) => Some(json),
+        Err(error) => {
+            tracing::debug!(
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "decode an OAuth error response as JSON",
+                    &error,
+                ),
+                "OAuth error response is plain text"
+            );
+            None
+        }
+    };
     if let Some(json) = json.as_ref() {
         if let Some(error) = json.get("error") {
             match error {
@@ -267,7 +279,21 @@ pub(super) fn oauth_error_code(body: &str) -> Option<String> {
         return None;
     }
 
-    let Value::Object(map) = serde_json::from_str::<Value>(body).ok()? else {
+    let json = match serde_json::from_str::<Value>(body) {
+        Ok(json) => json,
+        Err(error) => {
+            tracing::debug!(
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "decode an OAuth error code response as JSON",
+                    &error,
+                ),
+                "OAuth response did not contain a structured error code"
+            );
+            return None;
+        }
+    };
+    let Value::Object(map) = json else {
+        tracing::debug!("OAuth JSON response was not an object and had no structured error code");
         return None;
     };
 

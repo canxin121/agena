@@ -744,8 +744,19 @@ fn trust_status_for_level(level: &str) -> &'static str {
 }
 
 fn manifest_hash(manifest: &PluginManifest) -> Option<String> {
-    let bytes = serde_json::to_vec(manifest).ok()?;
-    Some(blake3::hash(&bytes).to_hex().to_string())
+    match serde_json::to_vec(manifest) {
+        Ok(bytes) => Some(blake3::hash(&bytes).to_hex().to_string()),
+        Err(error) => {
+            tracing::error!(
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "serialize plugin manifest for trust hash",
+                    &error,
+                ),
+                "plugin manifest trust hash could not be computed"
+            );
+            None
+        }
+    }
 }
 
 fn unix_timestamp_ms() -> i64 {
@@ -1253,15 +1264,24 @@ fn tool_registry_event_visible_in_scope(
 }
 
 fn callback_context_from_params(params: &serde_json::Value) -> Option<HostCallbackContext> {
-    params
-        .as_object()?
-        .get("context")
-        .cloned()
-        .and_then(|value| serde_json::from_value(value).ok())
+    let value = params.as_object()?.get("context")?.clone();
+    match serde_json::from_value(value) {
+        Ok(context) => Some(context),
+        Err(error) => {
+            tracing::warn!(
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "decode plugin host callback context",
+                    &error,
+                ),
+                "plugin callback omitted malformed host context"
+            );
+            None
+        }
+    }
 }
 
 fn parse<T: DeserializeOwned>(v: serde_json::Value) -> Result<T, PluginError> {
-    serde_json::from_value(v).map_err(|e| PluginError::invalid_params(e.to_string()))
+    serde_json::from_value(v).map_err(|e| PluginError::invalid_params_error(&e))
 }
 
 struct ScopedHostClient {

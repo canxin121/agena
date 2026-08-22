@@ -506,11 +506,6 @@ impl App {
                 );
                 false
             }
-            SettingsPickerAction::OpenProviderDefaultModelChooser => {
-                self.route_stack.push(Route::SettingsStudio(dialog.clone()));
-                self.open_provider_default_model_chooser();
-                false
-            }
             SettingsPickerAction::OpenPermissionApprovalModelChooser => {
                 self.route_stack.push(Route::SettingsStudio(dialog.clone()));
                 self.open_permission_approval_model_chooser();

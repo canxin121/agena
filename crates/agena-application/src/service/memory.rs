@@ -121,7 +121,7 @@ fn memory_api_error(error: MemoryError) -> ApplicationError {
         MemoryError::Malformed { .. } | MemoryError::Yaml(_) => {
             ApplicationError::bad_request_with_diagnostic("The memory file is invalid.", error)
         }
-        MemoryError::Io(_) => ApplicationError::internal(error.to_string()),
+        MemoryError::Io(_) => ApplicationError::internal_error(&error),
     }
 }
 

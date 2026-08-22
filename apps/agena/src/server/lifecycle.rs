@@ -11,6 +11,26 @@ use anyhow::{Context, Result, anyhow, bail};
 
 use super::server_record;
 
+fn is_not_found(error: &anyhow::Error) -> bool {
+    error
+        .downcast_ref::<std::io::Error>()
+        .is_some_and(|error| error.kind() == std::io::ErrorKind::NotFound)
+}
+
+fn read_optional_server_record() -> Result<Option<ServerEndpointRecord>> {
+    let path = server_record::record_path();
+    match server_record::read_record(&path) {
+        Ok(record) => Ok(Some(record)),
+        Err(error) if is_not_found(&error) => Ok(None),
+        Err(error) => Err(error).with_context(|| {
+            format!(
+                "failed to inspect the existing Agena server record at {}",
+                path.display()
+            )
+        }),
+    }
+}
+
 pub(crate) async fn start(mut args: ServerArgs) -> Result<()> {
     args.action = None;
     if super::user_service::is_installed() {
@@ -32,16 +52,37 @@ pub(crate) async fn start(mut args: ServerArgs) -> Result<()> {
             );
         }
         let record_path = server_record::record_path();
-        if let Ok(record) = server_record::read_record(record_path.as_path())
-            && let Ok(client) = AgenaClient::new(record.url.as_str())
-            && let Ok(identity) = client.server_identity().await
-            && ensure_record_matches(&record, &identity).is_ok()
-        {
-            println!(
-                "Installed Agena server is already running at {} (pid {}, id {}).",
-                record.url, identity.pid, identity.id
-            );
-            return Ok(());
+        match server_record::read_record(record_path.as_path()) {
+            Ok(record) => match AgenaClient::new(record.url.as_str()) {
+                Ok(client) => match client.server_identity().await {
+                    Ok(identity) => match ensure_record_matches(&record, &identity) {
+                        Ok(()) => {
+                            println!(
+                                "Installed Agena server is already running at {} (pid {}, id {}).",
+                                record.url, identity.pid, identity.id
+                            );
+                            return Ok(());
+                        }
+                        Err(error) => tracing::warn!(
+                            diagnostic = %agena_failure::diagnostic::format_error_chain(error.as_ref()),
+                            "installed server record did not match the live endpoint; starting the service"
+                        ),
+                    },
+                    Err(error) => tracing::debug!(
+                        diagnostic = %error.operator_diagnostic(),
+                        "installed server record endpoint is not currently ready"
+                    ),
+                },
+                Err(error) => tracing::warn!(
+                    diagnostic = %agena_failure::diagnostic::format_error_chain(&error),
+                    "installed server record URL is invalid; starting the service"
+                ),
+            },
+            Err(error) if is_not_found(&error) => {}
+            Err(error) => tracing::warn!(
+                diagnostic = %agena_failure::diagnostic::format_error_chain(error.as_ref()),
+                "installed server record could not be read; starting the service and waiting for a replacement"
+            ),
         }
         super::user_service::start()?;
         let (record, identity) = wait_for_installed_service().await?;
@@ -52,15 +93,21 @@ pub(crate) async fn start(mut args: ServerArgs) -> Result<()> {
         return Ok(());
     }
     let intended_url = intended_url(&args)?;
-    if let Ok(identity) = AgenaClient::new(intended_url.as_str())?
+    match AgenaClient::new(intended_url.as_str())?
         .server_identity()
         .await
     {
-        println!(
-            "Agena server is already running at {intended_url} (pid {}, id {}).",
-            identity.pid, identity.id
-        );
-        return Ok(());
+        Ok(identity) => {
+            println!(
+                "Agena server is already running at {intended_url} (pid {}, id {}).",
+                identity.pid, identity.id
+            );
+            return Ok(());
+        }
+        Err(error) => tracing::debug!(
+            diagnostic = %error.operator_diagnostic(),
+            "no detached Agena server identity was available before start"
+        ),
     }
 
     let executable = std::env::current_exe().context("failed to resolve the Agena executable")?;
@@ -214,8 +261,17 @@ pub(crate) async fn status() -> Result<()> {
 
 pub(crate) async fn stop() -> Result<()> {
     if super::user_service::is_installed() {
-        let record = server_record::read_record(server_record::record_path().as_path()).ok();
-        super::user_service::stop()?;
+        let record = read_optional_server_record();
+        if let Err(primary) = super::user_service::stop() {
+            if let Err(secondary) = record {
+                tracing::error!(
+                    diagnostic = %agena_failure::diagnostic::format_error_chain(secondary.as_ref()),
+                    "server record inspection also failed before the user service stop failed"
+                );
+            }
+            return Err(primary);
+        }
+        let record = record?;
         if let Some(record) = record {
             wait_until_identity_stops(&record).await?;
             println!(
@@ -238,10 +294,19 @@ pub(crate) async fn stop() -> Result<()> {
 
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
-        let still_same = AgenaClient::new(record.url.as_str())?
+        let still_same = match AgenaClient::new(record.url.as_str())?
             .server_identity()
             .await
-            .is_ok_and(|current| current.id == identity.id && current.pid == identity.pid);
+        {
+            Ok(current) => current.id == identity.id && current.pid == identity.pid,
+            Err(error) => {
+                tracing::debug!(
+                    diagnostic = %error.operator_diagnostic(),
+                    "server identity endpoint became unavailable after SIGINT"
+                );
+                false
+            }
+        };
         if !still_same {
             println!(
                 "Stopped Agena server pid {} (id {}).",
@@ -259,16 +324,21 @@ pub(crate) async fn stop() -> Result<()> {
 pub(crate) async fn install(mut args: ServerArgs) -> Result<()> {
     args.action = None;
     let intended_url = intended_url(&args)?;
-    if !super::user_service::is_installed()
-        && let Ok(identity) = AgenaClient::new(intended_url.as_str())?
+    if !super::user_service::is_installed() {
+        match AgenaClient::new(intended_url.as_str())?
             .server_identity()
             .await
-    {
-        bail!(
-            "a detached server is already running at {intended_url} (pid {}, id {}); stop it before installing the user service",
-            identity.pid,
-            identity.id
-        );
+        {
+            Ok(identity) => bail!(
+                "a detached server is already running at {intended_url} (pid {}, id {}); stop it before installing the user service",
+                identity.pid,
+                identity.id
+            ),
+            Err(error) => tracing::debug!(
+                diagnostic = %error.operator_diagnostic(),
+                "no detached Agena server identity was available before service installation"
+            ),
+        }
     }
     let path = super::user_service::install(&args)?;
     let (record, identity) = wait_for_installed_service().await?;
@@ -288,8 +358,20 @@ pub(crate) async fn install(mut args: ServerArgs) -> Result<()> {
 }
 
 pub(crate) async fn uninstall() -> Result<()> {
-    let record = server_record::read_record(server_record::record_path().as_path()).ok();
-    let path = super::user_service::uninstall()?;
+    let record = read_optional_server_record();
+    let path = match super::user_service::uninstall() {
+        Ok(path) => path,
+        Err(primary) => {
+            if let Err(secondary) = record {
+                tracing::error!(
+                    diagnostic = %agena_failure::diagnostic::format_error_chain(secondary.as_ref()),
+                    "server record inspection also failed before user service uninstall failed"
+                );
+            }
+            return Err(primary);
+        }
+    };
+    let record = record?;
     if let Some(record) = record {
         wait_until_identity_stops(&record).await?;
     }
@@ -304,17 +386,23 @@ async fn wait_for_installed_service() -> Result<(ServerEndpointRecord, ServerIde
     let path = server_record::record_path();
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
-        if let Ok(record) = server_record::read_record(&path)
-            && let Ok(client) = AgenaClient::new(record.url.as_str())
-            && let Ok(identity) = client.server_identity().await
-            && ensure_record_matches(&record, &identity).is_ok()
-        {
-            return Ok((record, identity));
-        }
+        let last_diagnostic = match server_record::read_record(&path) {
+            Ok(record) => match AgenaClient::new(record.url.as_str()) {
+                Ok(client) => match client.server_identity().await {
+                    Ok(identity) => match ensure_record_matches(&record, &identity) {
+                        Ok(()) => return Ok((record, identity)),
+                        Err(error) => agena_failure::diagnostic::format_error_chain(error.as_ref()),
+                    },
+                    Err(error) => error.operator_diagnostic(),
+                },
+                Err(error) => agena_failure::diagnostic::format_error_chain(&error),
+            },
+            Err(error) => agena_failure::diagnostic::format_error_chain(error.as_ref()),
+        };
         if Instant::now() >= deadline {
             bail!(
-                "installed server did not become ready; inspect the user service and {}",
-                path.display()
+                "installed server did not become ready; last readiness failure: {last_diagnostic}; inspect the user service and {}",
+                path.display(),
             );
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -324,10 +412,19 @@ async fn wait_for_installed_service() -> Result<(ServerEndpointRecord, ServerIde
 async fn wait_until_identity_stops(record: &ServerEndpointRecord) -> Result<()> {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
-        let still_same = AgenaClient::new(record.url.as_str())?
+        let still_same = match AgenaClient::new(record.url.as_str())?
             .server_identity()
             .await
-            .is_ok_and(|current| current.id == record.server_id && current.pid == record.pid);
+        {
+            Ok(current) => current.id == record.server_id && current.pid == record.pid,
+            Err(error) => {
+                tracing::debug!(
+                    diagnostic = %error.operator_diagnostic(),
+                    "installed server identity endpoint became unavailable after service stop"
+                );
+                false
+            }
+        };
         if !still_same {
             return Ok(());
         }

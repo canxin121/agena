@@ -254,15 +254,28 @@ pub fn search_ast(
 ) -> Result<StructuralSearchResult, CodeSearchError> {
     let root = resolve_input_path(workspace_root, request.path.as_path());
     let language = resolve_code_language(&root, request.language, "search_ast")?;
-    let pattern = Pattern::try_new(request.pattern.as_str(), language)
-        .map_err(|error| CodeSearchError::InvalidParameters(error.to_string()))?;
+    let pattern = Pattern::try_new(request.pattern.as_str(), language).map_err(|error| {
+        CodeSearchError::InvalidParameters(
+            agena_failure::diagnostic::format_error_chain_with_context(
+                "invalid structural search pattern",
+                &error,
+            ),
+        )
+    })?;
     let limit = request.limit.unwrap_or(20).clamp(1, 100) as usize;
     let started_at = Instant::now();
     let discovery = collect_language_files(&root, language, started_at);
     let mut scanned_files = 0;
     let mut skipped_files = discovery.skipped_entries;
     let mut searched_bytes = 0_u64;
-    let mut truncation_reason = discovery.truncation_reason;
+    let mut truncation_reason = discovery.truncation_reason.or_else(|| {
+        discovery.first_skipped_error.map(|error| {
+            format!(
+                "structural discovery skipped {} unreadable entries; first error: {error}",
+                discovery.skipped_entries
+            )
+        })
+    });
     let mut matches = Vec::new();
 
     for path in discovery.files {
@@ -275,8 +288,14 @@ pub fn search_ast(
         }
         let source = match read_source_bounded(&path) {
             Ok(source) => source,
-            Err(_) if root.is_dir() => {
+            Err(error) if root.is_dir() => {
                 skipped_files += 1;
+                if truncation_reason.is_none() {
+                    truncation_reason = Some(format!(
+                        "structural search skipped unreadable files; first error: {}",
+                        agena_failure::diagnostic::format_error_chain(&error)
+                    ));
+                }
                 continue;
             }
             Err(error) => return Err(error),
@@ -422,6 +441,7 @@ fn infer_support_lang(path: &Path) -> Option<SupportLang> {
 struct FileDiscovery {
     files: Vec<PathBuf>,
     skipped_entries: usize,
+    first_skipped_error: Option<String>,
     truncation_reason: Option<String>,
 }
 
@@ -434,6 +454,7 @@ fn collect_language_files(
         return FileDiscovery {
             files: vec![path.to_path_buf()],
             skipped_entries: 0,
+            first_skipped_error: None,
             truncation_reason: None,
         };
     }
@@ -462,6 +483,7 @@ fn collect_language_files(
         });
     let mut files = Vec::new();
     let mut skipped_entries = 0;
+    let mut first_skipped_error = None;
     let mut truncation_reason = None;
     for (entry_index, entry) in builder.build().enumerate() {
         if entry_index >= MAX_DISCOVERY_ENTRIES {
@@ -479,8 +501,15 @@ fn collect_language_files(
         }
         let entry = match entry {
             Ok(entry) => entry,
-            Err(_) => {
+            Err(error) => {
                 skipped_entries += 1;
+                if first_skipped_error.is_none() {
+                    first_skipped_error =
+                        Some(agena_failure::diagnostic::format_error_chain_with_context(
+                            "structural discovery could not read a workspace entry",
+                            &error,
+                        ));
+                }
                 continue;
             }
         };
@@ -501,6 +530,7 @@ fn collect_language_files(
     FileDiscovery {
         files,
         skipped_entries,
+        first_skipped_error,
         truncation_reason,
     }
 }
@@ -510,12 +540,22 @@ fn read_source_bounded(path: &Path) -> Result<String, CodeSearchError> {
         path: path.display().to_string(),
         source,
     })?;
-    let mut bytes = Vec::with_capacity(
-        file.metadata()
-            .ok()
-            .and_then(|metadata| usize::try_from(metadata.len().min(MAX_SOURCE_FILE_BYTES)).ok())
-            .unwrap_or_default(),
-    );
+    let metadata = file.metadata().map_err(|source| CodeSearchError::Read {
+        path: path.display().to_string(),
+        source,
+    })?;
+    let capacity = usize::try_from(metadata.len().min(MAX_SOURCE_FILE_BYTES)).map_err(|error| {
+        CodeSearchError::InvalidParameters(
+            agena_failure::diagnostic::format_error_chain_with_context(
+                format!(
+                    "source file size cannot be represented on this platform: {}",
+                    path.display()
+                ),
+                &error,
+            ),
+        )
+    })?;
+    let mut bytes = Vec::with_capacity(capacity);
     file.take(MAX_SOURCE_FILE_BYTES.saturating_add(1))
         .read_to_end(&mut bytes)
         .map_err(|source| CodeSearchError::Read {
@@ -529,11 +569,13 @@ fn read_source_bounded(path: &Path) -> Result<String, CodeSearchError> {
             path.display()
         )));
     }
-    String::from_utf8(bytes).map_err(|_| {
-        CodeSearchError::InvalidParameters(format!(
-            "source file is not UTF-8 text: {}",
-            path.display()
-        ))
+    String::from_utf8(bytes).map_err(|error| {
+        CodeSearchError::InvalidParameters(
+            agena_failure::diagnostic::format_error_chain_with_context(
+                format!("source file is not UTF-8 text: {}", path.display()),
+                &error,
+            ),
+        )
     })
 }
 

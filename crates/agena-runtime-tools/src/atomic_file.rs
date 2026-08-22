@@ -51,7 +51,17 @@ pub fn canonicalize_mutation_path(path: &Path) -> PathBuf {
                 missing.push(name);
                 current = parent.to_path_buf();
             }
-            Err(_) => return original,
+            Err(error) => {
+                tracing::warn!(
+                    path = %current.display(),
+                    diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                        "failed to canonicalize an existing ancestor for the atomic-file lock key; using the original path",
+                        &error,
+                    ),
+                    "atomic-file lock key canonicalization fell back to the original path"
+                );
+                return original;
+            }
         }
     }
 }

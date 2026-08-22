@@ -319,8 +319,5 @@ use super::{
 };
 
 fn activity_command_error(error: agena_runtime::ActivityControlError) -> ApplicationError {
-    ApplicationError::bad_request_with_diagnostic(
-        "The background activity operation failed.",
-        error.to_string(),
-    )
+    ApplicationError::bad_request_error(&error)
 }

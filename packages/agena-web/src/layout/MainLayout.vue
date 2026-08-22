@@ -515,12 +515,20 @@ onMounted(() => {
 
   if (!ui.workspaceWindows.length) {
     const tab = mainTabFromPath(route.path)
-    ui.openWorkspaceWindow(tab, {
-      activate: true,
-      path: route.path === '/' ? mainTabPath(tab) : route.path,
-      query: route.query,
-      hash: route.hash,
-    })
+    const sessionId = Array.isArray(route.query.sessionId)
+      ? String(route.query.sessionId.find((value) => String(value || '').trim()) || '').trim()
+      : String(route.query.sessionId || '').trim()
+    // `/` is the session hub.  Only create a chat workspace when the route
+    // already identifies a real session; otherwise booting would fabricate a
+    // chat tab that belongs to no directory.
+    if (route.path !== '/' && (tab !== 'chat' || sessionId)) {
+      ui.openWorkspaceWindow(tab, {
+        activate: true,
+        path: route.path,
+        query: route.query,
+        hash: route.hash,
+      })
+    }
   }
   void syncRouteToActiveWorkspaceWindow()
 })
@@ -860,6 +868,10 @@ watch(
                   </span>
                 </div>
               </div>
+            </div>
+
+            <div v-else-if="!ui.workspaceWindows.length" class="relative h-full min-h-0">
+              <WorkspacePrimaryPaneView :window-id="activePrimaryWindowId" />
             </div>
 
             <div v-else-if="ui.isCompactLayout" class="relative h-full min-h-0">

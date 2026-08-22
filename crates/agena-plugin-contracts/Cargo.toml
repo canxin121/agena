@@ -7,6 +7,7 @@ rust-version.workspace = true
 description = "Dependency-safe, host-neutral contracts for Agena plugin settings and operations"
 
 [dependencies]
+agena-failure = { workspace = true }
 regex = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

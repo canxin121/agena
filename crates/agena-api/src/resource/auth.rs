@@ -9,18 +9,9 @@ pub struct ProviderAdapterSummaryResource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-/// Default adapter and model of a provider.
-pub struct ProviderDefaultsResource {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub adapter: Option<String>,
-    pub model: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-/// Summary of a provider: defaults plus its adapters.
+/// Summary of a provider and its adapters.
 pub struct ProviderSummaryResource {
     pub provider_id: String,
-    pub defaults: ProviderDefaultsResource,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub adapters: Vec<ProviderAdapterSummaryResource>,
 }

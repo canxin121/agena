@@ -23,8 +23,12 @@ pub enum SkillError {
     #[error("skill resource exceeds the {limit} byte limit: {path}")]
     ResourceTooLarge { path: String, limit: usize },
 
-    #[error("skill resource is not UTF-8 text: {0}")]
-    ResourceNotText(String),
+    #[error("skill resource is not UTF-8 text: {path}: {source}")]
+    ResourceNotText {
+        path: String,
+        #[source]
+        source: std::string::FromUtf8Error,
+    },
 }
 
 /// Result alias for skills operations.

@@ -34,7 +34,7 @@ impl<'a> PluginOperationContext<'a> {
         T: DeserializeOwned,
     {
         serde_json::from_value(input.input.clone())
-            .map_err(|err| crate::PluginError::invalid_params(err.to_string()))
+            .map_err(|err| crate::PluginError::invalid_params_error(&err))
     }
 }
 

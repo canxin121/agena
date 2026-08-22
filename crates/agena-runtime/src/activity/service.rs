@@ -55,6 +55,10 @@ impl ActivityControlError {
     pub fn internal(message: impl Into<String>) -> Self {
         Self::new(message)
     }
+
+    pub fn internal_error(error: &(dyn std::error::Error + 'static)) -> Self {
+        Self::internal(agena_failure::diagnostic::format_error_chain(error))
+    }
 }
 
 /// Control surface for the unified background-member projection. Durable

@@ -13,6 +13,7 @@ export type PartStatusPresentation = {
 
 export type OperationPermissionPresentation = {
   requestId: string
+  pending: boolean
   status: string
   action: string
   reason: string
@@ -41,10 +42,15 @@ export type OperationPresentation = {
 export type AttachmentPresentation = {
   key: string
   label: string
+  kind: string
   mime: string
   url: string
   path: string
   sizeBytes: number | null
+  width: number | null
+  height: number | null
+  durationMs: number | null
+  pageCount: number | null
 }
 
 export type SkillPresentation = {
@@ -57,6 +63,7 @@ export type SkillPresentation = {
 
 export type InteractionOptionPresentation = { label: string; description: string }
 export type InteractionQuestionPresentation = {
+  questionId: string
   header: string
   question: string
   multiple: boolean
@@ -290,19 +297,28 @@ function attachmentFromRecord(value: JsonValue, index: number): AttachmentPresen
   const item = jsonRecord(value)
   if (!Object.keys(item).length) return null
   const source = jsonRecord(item.source)
+  const sourceKind = firstString(source, ['source'])
   const mime = firstString(item, ['mime'])
   const path = firstString(source, ['path']) || firstString(item, ['path'])
   const directUrl = firstString(source, ['data_url', 'url']) || firstString(item, ['data_url', 'url'])
-  const base64 = firstString(source, ['base64', 'data']) || firstString(item, ['base64'])
+  const base64 =
+    (sourceKind === 'base64' ? firstString(source, ['data']) : firstString(source, ['base64'])) ||
+    firstString(item, ['base64'])
+  const fileId = firstString(source, ['file_id']) || firstString(item, ['file_id'])
   const url = directUrl || (base64 && mime ? `data:${mime};base64,${base64}` : '') || path
-  const label = firstString(item, ['title', 'filename', 'name']) || path || mime || `attachment-${index + 1}`
+  const label = firstString(item, ['title', 'filename', 'name']) || path || fileId || mime || `attachment-${index + 1}`
   return {
     key: firstString(item, ['sha256']) || url || `${label}:${index}`,
     label,
+    kind: firstString(item, ['kind']),
     mime,
     url,
     path,
     sizeBytes: numericValue(item.size_bytes),
+    width: numericValue(item.width),
+    height: numericValue(item.height),
+    durationMs: numericValue(item.duration_ms),
+    pageCount: numericValue(item.page_count),
   }
 }
 
@@ -340,8 +356,7 @@ export function operationPresentation(part: TranscriptDisplayPart): OperationPre
   const canonicalInput = jsonRecord(content.input)
   const encodedInput = Object.keys(canonicalInput).length ? canonicalInput : jsonRecord(invocation.input)
   const input = Object.keys(encodedInput).length ? decodeStructuredValue(encodedInput) : null
-  const toolName =
-    firstString(content, ['name']) || firstString(invocation, ['name']) || stringValue(part.source.tool)
+  const toolName = firstString(content, ['name']) || firstString(invocation, ['name']) || stringValue(part.source.tool)
   const rawStructured = output.payload ?? null
   const projectedBlocks = jsonArray(operation.blocks)
     .map(jsonRecord)
@@ -378,6 +393,7 @@ export function operationPresentation(part: TranscriptDisplayPart): OperationPre
   const permissions = jsonArray(authorization.permissions).map((raw) => {
     const permission = jsonRecord(raw)
     const request = jsonRecord(permission.request)
+    const hasReply = permission.reply !== null && permission.reply !== undefined
     const reply = jsonRecord(permission.reply)
     const action = jsonRecord(request.action)
     const actionKind = firstString(action, ['kind'])
@@ -397,13 +413,18 @@ export function operationPresentation(part: TranscriptDisplayPart): OperationPre
         ? 'Allowed once'
         : replyKind === 'allow_always'
           ? 'Allowed persistently'
-          : replyKind === 'deny_once'
-            ? 'Denied once'
-            : replyKind === 'deny_always'
-              ? 'Denied persistently'
-              : 'Awaiting user approval'
+          : replyKind === 'auto_approve'
+            ? 'Approved automatically'
+            : replyKind === 'deny_once' || replyKind === 'reject'
+              ? 'Denied once'
+              : replyKind === 'deny_always' || replyKind === 'reject_always'
+                ? 'Denied persistently'
+                : replyKind
+                  ? `Replied (${replyKind})`
+                  : 'Awaiting user approval'
     return {
       requestId: firstString(request, ['request_id']),
+      pending: !hasReply,
       status,
       action: actionLabel,
       reason: firstString(request, ['reason']),
@@ -456,7 +477,21 @@ export function attachmentPresentations(part: TranscriptDisplayPart): Attachment
   const url = stringValue(part.source.url) || path
   const label =
     stringValue(part.source.filename) || firstString(content, ['name', 'title']) || path || mime || 'attachment'
-  return [{ key: url || label, label, mime, url, path, sizeBytes: null }]
+  return [
+    {
+      key: url || label,
+      label,
+      kind: firstString(content, ['kind']),
+      mime,
+      url,
+      path,
+      sizeBytes: null,
+      width: null,
+      height: null,
+      durationMs: null,
+      pageCount: null,
+    },
+  ]
 }
 
 export function skillPresentations(part: TranscriptDisplayPart): SkillPresentation[] {
@@ -479,11 +514,12 @@ export function skillPresentations(part: TranscriptDisplayPart): SkillPresentati
     .filter((item): item is SkillPresentation => Boolean(item))
 }
 
-function interactionQuestion(value: JsonValue): InteractionQuestionPresentation | null {
+function interactionQuestion(value: JsonValue, index: number): InteractionQuestionPresentation | null {
   const question = jsonRecord(value)
   const label = firstString(question, ['question', 'title'])
   if (!label) return null
   return {
+    questionId: firstString(question, ['question_id', 'id']) || String(index),
     header: firstString(question, ['header']),
     question: label,
     multiple: question.multiple === true,
@@ -507,11 +543,11 @@ function userInputPresentationFromRequest(
     requestId: firstString(request, ['request_id']),
     title: firstString(request, ['title']) || fallbackTitle,
     bodyMarkdown: firstString(request, ['body_markdown']),
-    kind: firstString(request, ['kind']),
+    kind: firstString(request, ['kind', 'input_kind']),
     pending: reply === null,
     reply,
     questions: jsonArray(request.questions)
-      .map(interactionQuestion)
+      .map((value, index) => interactionQuestion(value, index))
       .filter((item): item is InteractionQuestionPresentation => Boolean(item)),
   }
 }

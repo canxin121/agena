@@ -37,6 +37,12 @@ pub enum ExecutionControlError {
     InvalidTransition(String),
 }
 
+impl ExecutionControlError {
+    fn invalid_transition_error(error: &(dyn std::error::Error + 'static)) -> Self {
+        Self::InvalidTransition(agena_failure::diagnostic::format_error_chain(error))
+    }
+}
+
 #[derive(Debug)]
 /// Handle to control one execution.
 pub struct ExecutionControl<T> {
@@ -150,7 +156,7 @@ impl<T> ExecutionControl<T> {
             .lock()
             .await
             .transition(phase)
-            .map_err(|error| ExecutionControlError::InvalidTransition(error.to_string()))
+            .map_err(|error| ExecutionControlError::invalid_transition_error(&error))
     }
 
     pub async fn finish(&self, outcome: ExecutionOutcome) -> Result<(), ExecutionControlError> {
@@ -158,7 +164,7 @@ impl<T> ExecutionControl<T> {
             .lock()
             .await
             .finish(outcome)
-            .map_err(|error| ExecutionControlError::InvalidTransition(error.to_string()))
+            .map_err(|error| ExecutionControlError::invalid_transition_error(&error))
     }
 
     pub async fn lifecycle(&self) -> ExecutionLifecycle {
@@ -406,7 +412,13 @@ impl<T: Send + 'static> ExecutionRegistry<T> {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(&(session_id, part_id))
         {
-            let _ = tx.send(());
+            if tx.send(()).is_err() {
+                tracing::debug!(
+                    session_id,
+                    part_id,
+                    "notification acknowledgement waiter was already dropped"
+                );
+            }
         }
     }
 

@@ -29,7 +29,12 @@ pub fn provider_model_config_field_label_key(field: ProviderModelConfigField) ->
 pub fn provider_model_overlay_to_json_local(
     overlay: agena_provider::ResolvedProviderModelConfig,
 ) -> std::result::Result<JsonValue, String> {
-    match serde_json::to_value(overlay).map_err(|error| error.to_string())? {
+    match serde_json::to_value(overlay).map_err(|error| {
+        agena_failure::diagnostic::format_error_chain_with_context(
+            "failed to serialize the provider model overlay",
+            &error,
+        )
+    })? {
         JsonValue::Object(mut object) => {
             if matches!(object.get("enabled"), Some(JsonValue::Bool(true))) {
                 object.remove("enabled");
@@ -72,10 +77,15 @@ pub fn parse_optional_model_lifecycle(
 }
 
 pub fn model_lifecycle_token(value: agena_domain::ModelLifecycle) -> String {
-    serde_json::to_value(value)
-        .ok()
-        .and_then(|value| value.as_str().map(str::to_owned))
-        .unwrap_or_default()
+    match value {
+        agena_domain::ModelLifecycle::Active => "active",
+        agena_domain::ModelLifecycle::Preview => "preview",
+        agena_domain::ModelLifecycle::Beta => "beta",
+        agena_domain::ModelLifecycle::Alpha => "alpha",
+        agena_domain::ModelLifecycle::Experimental => "experimental",
+        agena_domain::ModelLifecycle::Deprecated => "deprecated",
+    }
+    .to_owned()
 }
 
 pub fn split_csv_tokens(value: &str) -> Vec<String> {

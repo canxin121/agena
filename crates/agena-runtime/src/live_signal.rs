@@ -70,7 +70,9 @@ impl LiveSignalHub {
     /// oldest unread signals are dropped and subscribers observe `Lagged`
     /// (14.4); the signal itself is never persisted.
     pub(crate) fn emit(&self, signal: RuntimeLiveSignal) {
-        let _ = self.tx.send(signal);
+        if self.tx.send(signal).is_err() {
+            tracing::debug!("runtime live signal had no active subscribers");
+        }
     }
 
     /// Subscribe to the stream. Returns `None` when no Tokio runtime is

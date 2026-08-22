@@ -10,7 +10,10 @@ use std::sync::Arc;
 use agena_domain::ApprovalModelSelection;
 use agena_permission::DenialBudget;
 
-use super::{AppError, ModelRef, Session, SessionManager, SessionManagerState, SessionRunOptions};
+use super::{
+    AppError, ModelRef, Session, SessionManager, SessionManagerState, SessionRunOptions,
+    recover_mutex, recover_read, recover_write,
+};
 use crate::session::prompt_window;
 use agena_domain::Role;
 
@@ -62,10 +65,14 @@ impl SessionManager {
         state: &SessionManagerState,
         session_id: Option<i64>,
     ) -> Result<Arc<RuleSnapshot>, AppError> {
-        if let Ok(snapshots) = state.rule_snapshots.read()
-            && let Some(snapshot) = snapshots.get(&session_id)
+        if let Some(snapshot) = recover_read(
+            state.rule_snapshots.as_ref(),
+            "read cached permission-rule snapshot",
+        )
+        .get(&session_id)
+        .cloned()
         {
-            return Ok(Arc::clone(snapshot));
+            return Ok(snapshot);
         }
         let workspace_id = self.current_workspace_id().await?;
         let stored = self
@@ -78,39 +85,47 @@ impl SessionManager {
         let snapshot = Arc::new(RuleSnapshot {
             rules: group_snapshot_rules(stored.as_slice()),
         });
-        if let Ok(mut snapshots) = state.rule_snapshots.write() {
-            snapshots.insert(session_id, Arc::clone(&snapshot));
-        }
+        recover_write(
+            state.rule_snapshots.as_ref(),
+            "cache resolved permission-rule snapshot",
+        )
+        .insert(session_id, Arc::clone(&snapshot));
         Ok(snapshot)
     }
 
     pub(crate) fn invalidate_rule_snapshots(&self) {
-        if let Ok(mut snapshots) = self.execution_state().rule_snapshots.write() {
-            snapshots.clear();
-        }
+        let state = self.execution_state();
+        recover_write(
+            state.rule_snapshots.as_ref(),
+            "invalidate permission-rule snapshots",
+        )
+        .clear();
     }
 
     pub(crate) fn auto_budget(&self, session_id: Option<i64>) -> DenialBudget {
-        self.execution_state()
-            .auto_approval
-            .lock()
-            .ok()
-            .and_then(|budgets| budgets.get(&session_id).cloned())
-            .unwrap_or_default()
+        let state = self.execution_state();
+        recover_mutex(
+            state.auto_approval.as_ref(),
+            "read automatic-approval denial budget",
+        )
+        .get(&session_id)
+        .cloned()
+        .unwrap_or_default()
     }
 
     pub(crate) fn record_auto_decision(&self, session_id: Option<i64>, allowed: bool) {
-        if let Ok(mut budgets) = self.execution_state().auto_approval.lock() {
-            budgets
-                .entry(session_id)
-                .or_default()
-                .record_decision(allowed);
-        }
+        let state = self.execution_state();
+        recover_mutex(
+            state.auto_approval.as_ref(),
+            "record automatic-approval decision",
+        )
+        .entry(session_id)
+        .or_default()
+        .record_decision(allowed);
     }
 
     /// Resolve the approval model: the configured `approval_model`, falling
-    /// back to the session model, then the default model. `None` only when
-    /// no model exists anywhere.
+    /// back to the session model. `None` only when no model exists anywhere.
     pub(in crate::session::manager) fn resolve_approval_model(
         &self,
         session: Option<&Session>,
@@ -124,11 +139,11 @@ impl SessionManager {
                 .approval_model
                 .clone(),
             None => {
-                let mut permission = state
-                    .shared_permission
-                    .read()
-                    .map(|value| value.clone())
-                    .unwrap_or_else(|_| state.config.permission.clone());
+                let mut permission = recover_read(
+                    state.shared_permission.as_ref(),
+                    "read shared automatic-approval permission",
+                )
+                .clone();
                 permission.merge_from(super::replies::managed_project_state_permission(
                     state.tool_executor.workspace_root(),
                 ));
@@ -141,11 +156,9 @@ impl SessionManager {
                 .map(|model| Some((model, Some(selection)))),
             None => match session {
                 Some(session) => self
-                    .model_from_session_or_default(session, state)
+                    .model_from_session_or_error(session, state)
                     .map(|model| Some((model, None))),
-                None => self
-                    .default_model_from_config(state)
-                    .map(|model| model.map(|model| (model, None))),
+                None => Ok(None),
             },
         }
     }
@@ -193,7 +206,7 @@ impl SessionManager {
             Ok(Some(resolved)) => Some(resolved),
             Ok(None) => {
                 let reason =
-                    "no approval model is configured and no session/default model could be resolved"
+                    "no approval model is configured and no session model could be resolved"
                         .to_owned();
                 return candidates
                     .into_iter()
@@ -273,18 +286,21 @@ impl SessionManager {
             // the cache key).
             let parts = session.active_window_parts();
             let part_count = parts.len();
-            let cached = state
-                .auto_projection
-                .lock()
-                .ok()
-                .and_then(|cache| cache.get(&session_id).cloned());
+            let cached = recover_mutex(
+                state.auto_projection.as_ref(),
+                "read automatic-approval transcript projection cache",
+            )
+            .get(&session_id)
+            .cloned();
             match cached {
                 Some((len, text)) if len == part_count => text,
                 _ => {
                     let text = prompt_window::project_transcript(parts, transcript_budget_chars);
-                    if let Ok(mut cache) = state.auto_projection.lock() {
-                        cache.insert(session_id, (part_count, text.clone()));
-                    }
+                    recover_mutex(
+                        state.auto_projection.as_ref(),
+                        "cache automatic-approval transcript projection",
+                    )
+                    .insert(session_id, (part_count, text.clone()));
                     text
                 }
             }

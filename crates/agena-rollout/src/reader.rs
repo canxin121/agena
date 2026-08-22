@@ -84,7 +84,16 @@ impl Iterator for FrameIter {
 pub fn list_sessions(root: impl AsRef<Path>) -> Vec<PathBuf> {
     WalkDir::new(root)
         .into_iter()
-        .filter_map(|e| e.ok())
+        .filter_map(|result| match result {
+            Ok(entry) => Some(entry),
+            Err(error) => {
+                tracing::warn!(
+                    diagnostic = %error,
+                    "rollout session discovery is partial because a filesystem entry was unreadable"
+                );
+                None
+            }
+        })
         .filter(|e| e.file_type().is_file())
         .filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("jsonl"))
         .map(|e| e.into_path())

@@ -251,12 +251,7 @@
     }
   },
   "providers": {
-    "default": "openai",
     "openai": {
-      "defaults": {
-        "adapter": "openai_responses",
-        "model": "gpt-5.5"
-      },
       "auth": {
         "mode": "api",
         "subtype": "custom",
@@ -297,10 +292,6 @@
       }
     },
     "anthropic": {
-      "defaults": {
-        "adapter": "anthropic",
-        "model": "claude-sonnet-4-6"
-      },
       "auth": {
         "mode": "api",
         "subtype": "custom",
@@ -324,10 +315,6 @@
       }
     },
     "openai_chatgpt": {
-      "defaults": {
-        "adapter": "openai_responses",
-        "model": "gpt-5.3-codex"
-      },
       "auth": {
         "mode": "credential",
         "issuer": "openai_chatgpt",
@@ -348,10 +335,6 @@
       }
     },
     "github-copilot": {
-      "defaults": {
-        "adapter": "openai_chat_completions",
-        "model": "gpt-4o-mini"
-      },
       "auth": {
         "mode": "credential",
         "issuer": "github_copilot",
@@ -379,10 +362,6 @@
       }
     },
     "ollama": {
-      "defaults": {
-        "adapter": "ollama",
-        "model": "qwen3:14b"
-      },
       "adapters": {
         "ollama": {
           "enabled": true,
@@ -391,10 +370,6 @@
       }
     },
     "gitlab": {
-      "defaults": {
-        "adapter": "gitlab",
-        "model": "claude-sonnet-4-5"
-      },
       "auth": {
         "mode": "credential",
         "issuer": "gitlab",
@@ -415,10 +390,6 @@
       }
     },
     "shared-gateway": {
-      "defaults": {
-        "adapter": "openai_chat_completions",
-        "model": "gpt-4.1-mini"
-      },
       "auth": {
         "mode": "api",
         "subtype": "custom",
@@ -455,10 +426,6 @@
       }
     },
     "cline_api": {
-      "defaults": {
-        "adapter": "openai_chat_completions",
-        "model": "cline-pass/qwen3.7-max"
-      },
       "auth": {
         "mode": "api",
         "subtype": "cline_api",
@@ -478,10 +445,6 @@
       }
     },
     "google-vertex": {
-      "defaults": {
-        "adapter": "openai_chat_completions",
-        "model": "google/gemini-2.5-flash"
-      },
       "auth": {
         "mode": "api",
         "subtype": "custom",
@@ -502,10 +465,6 @@
       }
     },
     "google-ai": {
-      "defaults": {
-        "adapter": "gemini",
-        "model": "gemini-2.5-pro"
-      },
       "auth": {
         "mode": "api",
         "subtype": "custom",

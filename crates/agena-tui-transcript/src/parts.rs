@@ -403,12 +403,22 @@ fn part_content(part: &SessionTranscriptPart) -> TranscriptPartContent<'static> 
         }
         "error" => match serde_json::from_value::<ErrorPartResource>(part.content.clone()) {
             Ok(error) => TranscriptPartContent::Activity(TranscriptActivityContent::Error(error)),
-            Err(_) => TranscriptPartContent::Text(TextPartResource {
-                text: string_field(content, "message")
-                    .or_else(|| string_field(content, "summary"))
-                    .unwrap_or_else(|| fallback_json_text(content)),
-                synthetic: false,
-            }),
+            Err(error) => {
+                tracing::warn!(
+                    part_id = part.part_id,
+                    diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                        "failed to decode a persisted transcript error part",
+                        &error,
+                    ),
+                    "rendering malformed transcript error content as plain text"
+                );
+                TranscriptPartContent::Text(TextPartResource {
+                    text: string_field(content, "message")
+                        .or_else(|| string_field(content, "summary"))
+                        .unwrap_or_else(|| fallback_json_text(content)),
+                    synthetic: false,
+                })
+            }
         },
         _ => TranscriptPartContent::Text(TextPartResource {
             text: fallback_json_text(content),
@@ -420,7 +430,17 @@ fn part_content(part: &SessionTranscriptPart) -> TranscriptPartContent<'static> 
 /// Decode the canonical `tool_call` facts and keep the human presentation in
 /// its native `ViewBlock` form. No API envelope or flattened mirror is built.
 fn tool_call_view_from_part(part: &SessionTranscriptPart) -> Option<ToolCallView> {
-    let content = ToolCallContent::try_from(&part.content).ok()?;
+    let content = match ToolCallContent::try_from(&part.content) {
+        Ok(content) => content,
+        Err(error) => {
+            tracing::warn!(
+                part_id = part.part_id,
+                diagnostic = %error,
+                "malformed persisted tool call could not be rendered as an operation"
+            );
+            return None;
+        }
+    };
     let operation = operation_from_tool_call(&content);
     Some(ToolCallView::from_operation(
         operation,

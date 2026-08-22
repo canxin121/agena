@@ -36,7 +36,7 @@ impl ApplicationService {
                 before: cursor,
             })
             .await
-            .map_err(|error| ApplicationError::internal(error.to_string()))?;
+            .map_err(|error| ApplicationError::internal_error(&error))?;
         let (slice, has_more) = trim_page(rows, limit)?;
         let next_cursor = slice.last().map(|row| SessionCursor {
             updated_at_ms: row.updated_at_ms,
@@ -47,7 +47,7 @@ impl ApplicationService {
             .session_store
             .session_states(session_ids.as_slice())
             .await
-            .map_err(|error| ApplicationError::internal(error.to_string()))?;
+            .map_err(|error| ApplicationError::internal_error(&error))?;
         let mut resources = Vec::with_capacity(slice.len());
         for summary in slice {
             let state = states.get(&summary.id).copied().ok_or_else(|| {
@@ -67,7 +67,7 @@ impl ApplicationService {
             .session_store
             .get_session_summary(session_id)
             .await
-            .map_err(|error| ApplicationError::internal(error.to_string()))?
+            .map_err(|error| ApplicationError::internal_error(&error))?
         else {
             return Ok(None);
         };
@@ -78,7 +78,7 @@ impl ApplicationService {
             .session_store
             .session_state(session_id)
             .await
-            .map_err(|error| ApplicationError::internal(error.to_string()))?
+            .map_err(|error| ApplicationError::internal_error(&error))?
             .state;
         Ok(Some(session_resource_from_storage_summary(
             &summary, state,
@@ -117,7 +117,7 @@ impl ApplicationService {
                 provider_anchors_json: None,
             })
             .await
-            .map_err(|error| ApplicationError::internal(error.to_string()))?;
+            .map_err(|error| ApplicationError::internal_error(&error))?;
         session_resource_from_storage_meta(&created, agena_storage::store::SessionState::Ready)
     }
 
@@ -154,12 +154,12 @@ impl ApplicationService {
                 },
             )
             .await
-            .map_err(|error| ApplicationError::internal(error.to_string()))?;
+            .map_err(|error| ApplicationError::internal_error(&error))?;
         let state = self
             .session_store
             .session_state(session_id)
             .await
-            .map_err(|error| ApplicationError::internal(error.to_string()))?
+            .map_err(|error| ApplicationError::internal_error(&error))?
             .state;
         session_resource_from_storage_meta(&updated, state)
     }
@@ -170,13 +170,13 @@ impl ApplicationService {
             .session_store
             .session_state(session_id)
             .await
-            .map_err(|error| ApplicationError::internal(error.to_string()))?
+            .map_err(|error| ApplicationError::internal_error(&error))?
             .state;
         let resource = session_resource_from_storage_summary(&summary, state)?;
         self.session_store
             .delete(session_id)
             .await
-            .map_err(|error| ApplicationError::internal(error.to_string()))?;
+            .map_err(|error| ApplicationError::internal_error(&error))?;
         Ok(resource)
     }
 }

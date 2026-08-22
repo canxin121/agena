@@ -20,41 +20,63 @@ const PATH_PRIORITY_EMPTY_FILE: u8 = 2;
 const PATH_PRIORITY_NON_EMPTY_DIR: u8 = 3;
 const PATH_PRIORITY_NON_EMPTY_FILE: u8 = 4;
 
-fn existing_path_priority(path: &Path) -> u8 {
-    let Ok(meta) = std::fs::metadata(path) else {
-        return PATH_PRIORITY_MISSING;
+fn existing_path_priority(path: &Path) -> Result<u8, String> {
+    let meta = match std::fs::metadata(path) {
+        Ok(meta) => meta,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(PATH_PRIORITY_MISSING);
+        }
+        Err(error) => {
+            return Err(agena_failure::diagnostic::format_error_chain_with_context(
+                format!(
+                    "failed to inspect server-state path candidate {}",
+                    path.display()
+                ),
+                &error,
+            ));
+        }
     };
 
     if meta.is_file() {
-        return if meta.len() > 0 {
+        return Ok(if meta.len() > 0 {
             PATH_PRIORITY_NON_EMPTY_FILE
         } else {
             PATH_PRIORITY_EMPTY_FILE
-        };
+        });
     }
 
     if meta.is_dir() {
-        return match std::fs::read_dir(path) {
-            Ok(mut entries) => {
-                if entries.next().is_some() {
-                    PATH_PRIORITY_NON_EMPTY_DIR
-                } else {
-                    PATH_PRIORITY_EMPTY_DIR
-                }
-            }
-            Err(_) => PATH_PRIORITY_EMPTY_DIR,
+        let mut entries = std::fs::read_dir(path).map_err(|error| {
+            agena_failure::diagnostic::format_error_chain_with_context(
+                format!(
+                    "failed to read server-state directory candidate {}",
+                    path.display()
+                ),
+                &error,
+            )
+        })?;
+        return match entries.next() {
+            Some(Ok(_)) => Ok(PATH_PRIORITY_NON_EMPTY_DIR),
+            None => Ok(PATH_PRIORITY_EMPTY_DIR),
+            Some(Err(error)) => Err(agena_failure::diagnostic::format_error_chain_with_context(
+                format!(
+                    "failed to inspect an entry in server-state directory candidate {}",
+                    path.display()
+                ),
+                &error,
+            )),
         };
     }
 
-    PATH_PRIORITY_EMPTY_FILE
+    Ok(PATH_PRIORITY_EMPTY_FILE)
 }
 
-fn select_existing_path(candidates: Vec<PathBuf>) -> PathBuf {
+fn select_existing_path(candidates: Vec<PathBuf>) -> Result<PathBuf, String> {
     let mut best_priority = PATH_PRIORITY_MISSING;
     let mut best: Option<PathBuf> = None;
 
     for path in &candidates {
-        let priority = existing_path_priority(path);
+        let priority = existing_path_priority(path)?;
         if priority <= best_priority {
             continue;
         }
@@ -65,7 +87,7 @@ fn select_existing_path(candidates: Vec<PathBuf>) -> PathBuf {
         }
     }
 
-    best.unwrap_or_else(|| candidates.into_iter().next().unwrap_or_default())
+    Ok(best.unwrap_or_else(|| candidates.into_iter().next().unwrap_or_default()))
 }
 
 pub(crate) fn server_data_dir_candidates() -> Vec<PathBuf> {
@@ -101,6 +123,6 @@ pub(crate) fn server_state_db_path_candidates() -> Vec<PathBuf> {
     dedupe_paths(candidates)
 }
 
-pub(crate) fn server_state_db_path() -> PathBuf {
+pub(crate) fn server_state_db_path() -> Result<PathBuf, String> {
     select_existing_path(server_state_db_path_candidates())
 }

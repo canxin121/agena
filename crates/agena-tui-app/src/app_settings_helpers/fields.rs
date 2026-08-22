@@ -42,17 +42,6 @@ pub(crate) fn settings_choice_adapter_fallback(i18n: &I18n) -> String {
     ui_text::t(i18n, "settings-choice-adapter-fallback")
 }
 
-pub(crate) fn settings_choice_default_provider_detail(
-    i18n: &I18n,
-    adapter: &str,
-    model: &str,
-) -> String {
-    i18n.text_args(
-        "settings-choice-default-provider-detail",
-        &agena_tui::fl_args!("adapter" => adapter, "model" => model),
-    )
-}
-
 pub(crate) fn runtime_setting_choice_supported_model_detail(i18n: &I18n) -> String {
     ui_text::t(i18n, "runtime-setting-choice-supported-model")
 }
@@ -379,61 +368,9 @@ pub(crate) fn settings_studio_provider_items(
     items.extend(
         settings_studio_field_items(i18n, sources, SettingsStudioSectionId::ModelsProviders)
             .into_iter()
-            .map(|item| {
-                if item.path.as_deref() == Some("providers.default") {
-                    settings_studio_provider_default_item(i18n, sources, providers)
-                } else {
-                    item
-                }
-            }),
+            .collect::<Vec<_>>(),
     );
     items
-}
-
-pub(crate) fn settings_studio_provider_default_item(
-    i18n: &I18n,
-    sources: &ConfigJsonSources,
-    providers: &[ProviderSummaryResource],
-) -> SettingsStudioItem<SettingsPickerAction> {
-    let field = settings_fields()
-        .into_iter()
-        .find(|field| field.path == "providers.default")
-        .expect("providers.default settings field must exist");
-    let file_provider_value =
-        get_json_path(&sources.file, Some(field.path.as_str())).unwrap_or(JsonValue::Null);
-    let effective_provider_value =
-        get_json_path(&sources.effective, Some(field.path.as_str())).unwrap_or(JsonValue::Null);
-    let file_value = get_json_path(&sources.file, Some("providers.default_selection"))
-        .ok()
-        .filter(|value| !value.is_null())
-        .unwrap_or_else(|| file_provider_value.clone());
-    let effective_value = get_json_path(&sources.effective, Some("providers.default_selection"))
-        .ok()
-        .filter(|value| !value.is_null())
-        .unwrap_or(effective_provider_value);
-    let effective_summary = provider_default_selection_summary(i18n, providers, &effective_value);
-    let current_summary = if file_provider_value.is_null() && file_value.is_null() {
-        ui_text::t(i18n, "settings-source-unset")
-    } else {
-        provider_default_selection_summary(i18n, providers, &file_value)
-    };
-    let source_rows = settings_source_rows_for_config_path(
-        i18n,
-        sources,
-        field.path.as_str(),
-        current_summary.clone(),
-        effective_summary.clone(),
-    );
-    SettingsStudioItem::from_parts(
-        settings_field_display_label(i18n, &field),
-        effective_summary.clone(),
-        settings_field_display_description(i18n, &field),
-        Some(field.path.clone()),
-        Some(current_summary),
-        Some(effective_summary),
-        source_rows,
-        SettingsPickerAction::OpenProviderDefaultModelChooser,
-    )
 }
 
 pub(crate) fn settings_studio_provider_approval_model_item(
@@ -497,97 +434,6 @@ fn approval_model_selection_summary(selection: &agena_domain::ApprovalModelSelec
     route.join(" / ")
 }
 
-pub(crate) fn provider_default_selection_summary(
-    i18n: &I18n,
-    providers: &[ProviderSummaryResource],
-    value: &JsonValue,
-) -> String {
-    if let Ok(selection) =
-        serde_json::from_value::<agena_domain::ModelSelectionConfig>(value.clone())
-        && selection
-            .provider
-            .as_deref()
-            .is_some_and(|provider| !provider.trim().is_empty())
-        && selection
-            .model
-            .as_deref()
-            .is_some_and(|model| !model.trim().is_empty())
-    {
-        return model_selection_summary(&selection);
-    }
-    let Some(provider_id) = value
-        .as_str()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    else {
-        return format_setting_value_inline(value);
-    };
-    providers
-        .iter()
-        .find(|provider| provider.provider_id == provider_id)
-        .map(|provider| provider_default_route_summary(i18n, provider))
-        .unwrap_or_else(|| provider_id.to_owned())
-}
-
-fn model_selection_summary(selection: &agena_domain::ModelSelectionConfig) -> String {
-    let mut route = Vec::new();
-    if let Some(provider) = selection
-        .provider
-        .as_deref()
-        .filter(|value| !value.trim().is_empty())
-    {
-        route.push(provider.trim().to_owned());
-    }
-    if let Some(adapter) = selection
-        .adapter
-        .as_deref()
-        .filter(|value| !value.trim().is_empty())
-    {
-        route.push(adapter.trim().to_owned());
-    }
-    if let Some(model) = selection
-        .model
-        .as_deref()
-        .filter(|value| !value.trim().is_empty())
-    {
-        route.push(model.trim().to_owned());
-    }
-    let mut variants = Vec::new();
-    if let Some(value) = selection.thinking_mode.as_deref() {
-        variants.push(format!("think={value}"));
-    }
-    if let Some(value) = selection.speed_mode.as_deref() {
-        variants.push(format!("speed={value}"));
-    }
-    if let Some(value) = selection.verbosity.as_deref() {
-        variants.push(format!("verbosity={value}"));
-    }
-    if !variants.is_empty() {
-        route.push(variants.join(", "));
-    }
-    join_inline_segments(vec![route.join(" / ")])
-}
-
-pub(crate) fn provider_default_route_summary(
-    _i18n: &I18n,
-    provider: &ProviderSummaryResource,
-) -> String {
-    let mut route = vec![provider.provider_id.clone()];
-    if let Some(adapter) = provider
-        .defaults
-        .adapter
-        .as_deref()
-        .filter(|value| !value.trim().is_empty())
-    {
-        route.push(adapter.trim().to_owned());
-    }
-    if !provider.defaults.model.trim().is_empty() {
-        route.push(provider.defaults.model.trim().to_owned());
-    }
-
-    join_inline_segments(vec![route.join(" / ")])
-}
-
 pub(crate) fn settings_studio_harness_items(
     i18n: &I18n,
     sources: &ConfigJsonSources,
@@ -642,8 +488,7 @@ pub(crate) fn settings_config_path_display_label(i18n: &I18n, path: &str) -> Str
 use super::{
     ConfigJsonSources, I18n, JsonValue, ProviderSummaryResource, SessionModelModeStep,
     SettingsFieldKind, SettingsFieldSpec, SettingsPickerAction, SettingsStudioItem,
-    SettingsStudioSectionId, SettingsStudioSourceRow, get_json_path, join_inline_segments,
-    settings_fields,
+    SettingsStudioSectionId, SettingsStudioSourceRow, get_json_path, settings_fields,
 };
 use crate::ui_text;
 use crate::{format_setting_value_inline, settings_studio_provider_workbench_item};

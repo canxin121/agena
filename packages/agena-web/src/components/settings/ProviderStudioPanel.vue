@@ -22,7 +22,6 @@ type LooseRecord = Record<string, any>
 
 type ProviderSummary = {
   provider_id: string
-  defaults?: { adapter?: string | null; model?: string | null }
   adapters?: Array<{ adapter_id: string; enabled: boolean; configured_model_count: number }>
 }
 
@@ -52,8 +51,6 @@ type ProviderConfigDraft = LooseRecord & {
   auth_kind: JsonValue
   auth: LooseRecord
   credential_drafts: LooseRecord
-  default_adapter: string
-  default_model: string
   request_timeout_secs: number
   connect_timeout_secs: number
 }
@@ -427,24 +424,6 @@ const awsProfileOptions = computed(() => {
   }))
 })
 
-const allModels = computed(() =>
-  adapterModels.value.flatMap((adapter) => adapter.models.map((model) => ({ adapter, model }))),
-)
-const selectedDefaultModelKey = computed(() => {
-  const adapter = String(draft.value?.default_adapter || '')
-  const model = String(draft.value?.default_model || '')
-  return adapter && model ? `${adapter}\u001f${model}` : ''
-})
-const defaultModelOptions = computed(() =>
-  allModels.value
-    .filter(({ adapter }) => supportedAdapterIds.value.has(adapter.adapter_id))
-    .map(({ adapter, model }) => ({
-      value: `${adapter.adapter_id}\u001f${model.id}`,
-      label: model.display_name || model.id,
-      description: st('{adapter_id} / {id}', { adapter_id: adapter.adapter_id, id: model.id }),
-    })),
-)
-
 const manualModelAdapterOptions = computed(() =>
   [...selectedAdapterIds.value]
     .map((adapterId) => ({
@@ -456,10 +435,7 @@ const manualModelAdapterOptions = computed(() =>
 )
 
 function providerLabel(provider: ProviderSummary): string {
-  const defaultLabel = [provider.defaults?.adapter, provider.defaults?.model].filter(Boolean).join(' / ')
-  return defaultLabel
-    ? st('{provider_id} · {defaultLabel}', { provider_id: provider.provider_id, defaultLabel: defaultLabel })
-    : provider.provider_id
+  return provider.provider_id
 }
 
 function modelKey(adapterId: string, modelId: string): string {
@@ -581,10 +557,8 @@ function selectedAdaptersAreSupported(): boolean {
 
 function syncManualModelAdapter() {
   if (manualModelAdapterId.value && selectedAdapterIds.value.has(manualModelAdapterId.value)) return
-  const preferred = String(draft.value?.default_adapter || '').trim()
-  manualModelAdapterId.value = selectedAdapterIds.value.has(preferred)
-    ? preferred
-    : [...selectedAdapterIds.value].sort((left, right) => left.localeCompare(right))[0] || ''
+  manualModelAdapterId.value =
+    [...selectedAdapterIds.value].sort((left, right) => left.localeCompare(right))[0] || ''
 }
 
 function clearModelStudioState() {
@@ -664,11 +638,8 @@ function normalizeDraftShape(value: ProviderConfigDraft): ProviderConfigDraft {
     }
   }
 
-  const supportedAdapters = next.auth_kind === 'ApiPending' ? [] : adapterRuleMap[subtype] || adapterRuleMap[mode] || []
-  next.default_adapter = String(next.default_adapter || '').trim()
-  next.default_model = String(next.default_model || '').trim()
-  if (next.default_adapter && !supportedAdapters.includes(next.default_adapter)) next.default_adapter = ''
-  if (!next.default_adapter) next.default_model = ''
+  delete next.default_adapter
+  delete next.default_model
   return next
 }
 
@@ -1163,28 +1134,6 @@ function setAuthSubtype(value: string) {
   syncManualModelAdapter()
 }
 
-function setDefaultAdapter(value: string) {
-  if (!draft.value) return
-  const next = clone(draft.value)
-  const adapter = String(value || '').trim()
-  if (next.default_adapter !== adapter) next.default_model = ''
-  next.default_adapter = adapter
-  const normalized = normalizeDraftShape(next)
-  if (JSON.stringify(normalized) !== JSON.stringify(draft.value)) invalidateModelListing()
-  draft.value = normalized
-}
-
-function setDefaultModel(value: string) {
-  if (!draft.value) return
-  const [adapter, model] = value.split('\u001f')
-  const next = clone(draft.value)
-  next.default_adapter = adapter || ''
-  next.default_model = model || ''
-  const normalized = normalizeDraftShape(next)
-  if (JSON.stringify(normalized) !== JSON.stringify(draft.value)) invalidateModelListing()
-  draft.value = normalized
-}
-
 async function saveDraft() {
   if (!draft.value || saving.value || mutationBusy.value || listingModels.value) return
   const draftSnapshot = clone(draft.value)
@@ -1378,7 +1327,7 @@ async function startAuth(action: 'start' | 'continue', silent = false) {
 
 function addManualModel() {
   if (mutationBusy.value || listingModels.value || saving.value) return
-  const adapterId = String(manualModelAdapterId.value || draft.value?.default_adapter || '').trim()
+  const adapterId = String(manualModelAdapterId.value || '').trim()
   const modelId = newModelId.value.trim()
   if (!draft.value || !adapterId || !modelId || !selectedAdapterIds.value.has(adapterId)) {
     error.value = st('Select an adapter before adding a model.')
@@ -1659,11 +1608,6 @@ async function deleteModel(adapterId: string, modelId: string) {
   const next = new Set(selectedModelKeys.value)
   next.delete(key)
   selectedModelKeys.value = next
-  if (draft.value.default_adapter === adapterId && draft.value.default_model === modelId) {
-    const nextDraft = clone(draft.value)
-    nextDraft.default_model = ''
-    draft.value = nextDraft
-  }
   toasts.push('success', st('Model removal staged; save the Provider to apply it'))
 }
 async function deleteAdapter(adapterId: string) {
@@ -1684,12 +1628,6 @@ async function deleteAdapter(adapterId: string) {
   for (const key of Object.keys(nextValues)) if (key.startsWith(`${adapterId}\u001f`)) delete nextValues[key]
   modelConfigValues.value = nextValues
   selectedModelKeys.value = new Set([...selectedModelKeys.value].filter((key) => !key.startsWith(`${adapterId}\u001f`)))
-  if (draft.value.default_adapter === adapterId) {
-    const nextDraft = clone(draft.value)
-    nextDraft.default_adapter = ''
-    nextDraft.default_model = ''
-    draft.value = nextDraft
-  }
   const nextExpanded = new Set(expandedAdapterIds.value)
   nextExpanded.delete(adapterId)
   expandedAdapterIds.value = nextExpanded
@@ -1875,7 +1813,7 @@ onBeforeUnmount(() => {
               <div class="mt-1 text-xs text-muted-foreground">
                 {{
                   $st(
-                    'Edit provider identity, authentication, defaults, adapters, and models, then save them together.',
+                    'Edit provider identity, authentication, adapters, and models, then save them together.',
                   )
                 }}
               </div>
@@ -1908,31 +1846,6 @@ onBeforeUnmount(() => {
                   :include-empty="false"
                   :title="$st('Auth subtype')"
                   @update:model-value="setAuthSubtype"
-                />
-              </label>
-              <label class="grid gap-1.5">
-                <span class="text-xs text-muted-foreground">{{ $st('Default adapter') }}</span>
-                <OptionPicker
-                  :model-value="draft.default_adapter"
-                  :options="adapterCandidates.map((value) => ({ value, label: value }))"
-                  :include-empty="true"
-                  :empty-label="$st('No default adapter')"
-                  :title="$st('Default adapter')"
-                  monospace
-                  @update:model-value="setDefaultAdapter"
-                />
-              </label>
-              <label class="grid gap-1.5">
-                <span class="text-xs text-muted-foreground">{{ $st('Default model') }}</span>
-                <OptionPicker
-                  :model-value="selectedDefaultModelKey"
-                  :options="defaultModelOptions"
-                  :include-empty="true"
-                  :empty-label="$st('No default model')"
-                  :title="$st('Default model')"
-                  monospace
-                  :disabled="defaultModelOptions.length === 0"
-                  @update:model-value="setDefaultModel"
                 />
               </label>
               <label class="grid gap-1.5">
@@ -2148,49 +2061,163 @@ onBeforeUnmount(() => {
                 {{ adapterFailure(adapter) }}
               </div>
               <div class="grid gap-1">
-                <div
+                <template
                   v-for="model in adapter.models"
                   :key="model.id"
-                  class="flex min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-xs hover:bg-muted/40"
                 >
-                  <input
-                    type="checkbox"
-                    :checked="selectedModelKeys.has(modelKey(adapter.adapter_id, model.id))"
-                    :disabled="mutationBusy || listingModels || !selectedAdapterIds.has(adapter.adapter_id)"
-                    @change="toggleModel(adapter.adapter_id, model.id)"
-                  />
-                  <button
-                    type="button"
-                    class="min-w-0 flex-1 truncate text-left"
-                    :disabled="mutationBusy || listingModels"
-                    @click="openModelEditor(adapter.adapter_id, model)"
+                  <div class="flex min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-xs hover:bg-muted/40">
+                    <input
+                      type="checkbox"
+                      :checked="selectedModelKeys.has(modelKey(adapter.adapter_id, model.id))"
+                      :disabled="mutationBusy || listingModels || !selectedAdapterIds.has(adapter.adapter_id)"
+                      @change="toggleModel(adapter.adapter_id, model.id)"
+                    />
+                    <button
+                      type="button"
+                      class="min-w-0 flex-1 truncate text-left"
+                      :disabled="mutationBusy || listingModels"
+                      @click.stop="openModelEditor(adapter.adapter_id, model)"
+                    >
+                      <span>{{ model.display_name || model.id }}</span>
+                      <code v-if="model.display_name" class="ml-2 font-mono text-[10px] text-muted-foreground">{{
+                        model.id
+                      }}</code>
+                    </button>
+                    <IconButton
+                      variant="ghost"
+                      size="sm"
+                      :tooltip="$st('Edit model')"
+                      :aria-label="$st('Edit model')"
+                      :disabled="mutationBusy || listingModels"
+                      @click.stop="openModelEditor(adapter.adapter_id, model)"
+                    >
+                      <RiEditLine class="h-3.5 w-3.5" />
+                    </IconButton>
+                    <IconButton
+                      variant="ghost"
+                      size="sm"
+                      :tooltip="$st('Delete model')"
+                      :aria-label="$st('Delete model')"
+                      :disabled="mutationBusy"
+                      @click.stop="deleteModel(adapter.adapter_id, model.id)"
+                    >
+                      <RiDeleteBinLine class="h-3.5 w-3.5 text-destructive" />
+                    </IconButton>
+                  </div>
+                  <div
+                    v-if="editingModel?.adapterId === adapter.adapter_id && editingModel?.modelId === model.id"
+                    class="ml-6 mt-1 grid gap-3 rounded-md border border-border/60 bg-muted/10 p-3"
                   >
-                    <span>{{ model.display_name || model.id }}</span>
-                    <code v-if="model.display_name" class="ml-2 font-mono text-[10px] text-muted-foreground">{{
-                      model.id
-                    }}</code>
-                  </button>
-                  <IconButton
-                    variant="ghost"
-                    size="sm"
-                    :tooltip="$st('Edit model')"
-                    :aria-label="$st('Edit model')"
-                    :disabled="mutationBusy || listingModels"
-                    @click="openModelEditor(adapter.adapter_id, model)"
-                  >
-                    <RiEditLine class="h-3.5 w-3.5" />
-                  </IconButton>
-                  <IconButton
-                    variant="ghost"
-                    size="sm"
-                    :tooltip="$st('Delete model')"
-                    :aria-label="$st('Delete model')"
-                    :disabled="mutationBusy"
-                    @click="deleteModel(adapter.adapter_id, model.id)"
-                  >
-                    <RiDeleteBinLine class="h-3.5 w-3.5 text-destructive" />
-                  </IconButton>
-                </div>
+                    <div class="flex flex-wrap items-start justify-between gap-2">
+                      <div>
+                        <div class="text-sm font-medium">
+                          {{ $st('Model ·') }} {{ editingModel.adapterId }}/{{ editingModel.modelId }}
+                        </div>
+                        <div class="mt-1 text-xs text-muted-foreground">
+                          {{ $st('The TUI exposes these 15 model configuration fields through its persisted JSON editor.') }}
+                        </div>
+                      </div>
+                      <Button variant="ghost" size="sm" @click.stop="closeModelEditor">{{ $st('Close') }}</Button>
+                    </div>
+                    <div v-if="modelLoading" class="text-sm text-muted-foreground">
+                      {{ $st('Loading model configuration…') }}
+                    </div>
+                    <div v-else-if="modelError" class="text-sm text-destructive">{{ modelError }}</div>
+                    <template v-else>
+                      <div class="grid gap-2 sm:grid-cols-2">
+                        <div
+                          v-for="field in modelFields"
+                          :key="field.key"
+                          class="rounded border border-border/50 px-3 py-2"
+                        >
+                          <div class="grid gap-1.5">
+                            <div class="flex items-center justify-between gap-2">
+                              <label
+                                :for="`provider-model-${field.key.replaceAll('.', '-')}`"
+                                class="text-[10px] uppercase tracking-wide text-muted-foreground"
+                                >{{ field.label }}</label
+                              >
+                              <span v-if="field.kind === 'readonly'" class="text-[10px] text-muted-foreground">{{
+                                $st('read-only')
+                              }}</span>
+                            </div>
+                            <div
+                              v-if="field.kind === 'readonly'"
+                              :id="`provider-model-${field.key.replaceAll('.', '-')}`"
+                              class="break-all font-mono text-xs"
+                            >
+                              {{ modelFieldValue(field.key) || '—' }}
+                            </div>
+                            <input
+                              v-else-if="field.kind === 'boolean'"
+                              :id="`provider-model-${field.key.replaceAll('.', '-')}`"
+                              type="checkbox"
+                              class="h-4 w-4 justify-self-start accent-primary"
+                              :checked="modelFieldBooleanValue(field.key)"
+                              @change="setModelFieldValue(field.key, ($event.target as HTMLInputElement).checked)"
+                            />
+                            <OptionPicker
+                              v-else-if="field.kind === 'select'"
+                              :id="`provider-model-${field.key.replaceAll('.', '-')}`"
+                              :model-value="modelFieldValue(field.key)"
+                              :options="field.options || []"
+                              :include-empty="field.key === 'lifecycle'"
+                              :empty-label="field.key === 'lifecycle' ? $st('Default / unset') : undefined"
+                              :title="field.label"
+                              @update:model-value="setModelFieldValue(field.key, $event)"
+                            />
+                            <textarea
+                              v-else-if="field.kind === 'textarea'"
+                              :id="`provider-model-${field.key.replaceAll('.', '-')}`"
+                              :value="modelFieldValue(field.key)"
+                              :placeholder="field.placeholder"
+                              rows="3"
+                              class="w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm outline-none focus:border-ring"
+                              @input="setModelFieldValue(field.key, ($event.target as HTMLTextAreaElement).value)"
+                            />
+                            <Input
+                              v-else
+                              :id="`provider-model-${field.key.replaceAll('.', '-')}`"
+                              :value="modelFieldValue(field.key)"
+                              :type="field.kind === 'number' ? 'number' : 'text'"
+                              :placeholder="field.placeholder"
+                              :class="field.kind === 'csv' || field.kind === 'number' ? 'font-mono' : ''"
+                              @input="
+                                field.kind === 'csv'
+                                  ? undefined
+                                  : setModelFieldValue(field.key, ($event.target as HTMLInputElement).value)
+                              "
+                              @change="
+                                field.kind === 'csv'
+                                  ? setModelFieldValue(field.key, ($event.target as HTMLInputElement).value)
+                                  : undefined
+                              "
+                            />
+                            <div v-if="field.help" class="text-[10px] text-muted-foreground">{{ field.help }}</div>
+                          </div>
+                        </div>
+                      </div>
+                      <label class="grid gap-1.5">
+                        <span class="text-xs text-muted-foreground">{{ $st('Persisted model JSON') }}</span>
+                        <textarea
+                          v-model="modelJson"
+                          rows="16"
+                          spellcheck="false"
+                          class="w-full rounded-md border border-input bg-transparent p-3 font-mono text-xs outline-none focus:border-ring"
+                        />
+                      </label>
+                      <div v-if="modelError" class="text-xs text-destructive">{{ modelError }}</div>
+                      <div class="flex flex-wrap items-center gap-2">
+                        <Button variant="outline" :disabled="mutationBusy" @click.stop="applyModelJson">{{
+                          $st('Apply JSON to provider draft')
+                        }}</Button>
+                        <span class="text-xs text-muted-foreground">{{
+                          $st('Model field changes are staged automatically and saved with the Provider.')
+                        }}</span>
+                      </div>
+                    </template>
+                  </div>
+                </template>
                 <div v-if="adapter.models.length === 0" class="px-2 py-3 text-xs text-muted-foreground">
                   {{ $st('No models listed.') }}
                 </div>
@@ -2229,112 +2256,6 @@ onBeforeUnmount(() => {
             </div>
           </section>
 
-          <section v-if="editingModel" class="grid gap-3 border-t border-border/60 pt-4">
-            <div class="flex flex-wrap items-start justify-between gap-2">
-              <div>
-                <div class="text-sm font-medium">
-                  {{ $st('Model ·') }} {{ editingModel.adapterId }}/{{ editingModel.modelId }}
-                </div>
-                <div class="mt-1 text-xs text-muted-foreground">
-                  {{ $st('The TUI exposes these 15 model configuration fields through its persisted JSON editor.') }}
-                </div>
-              </div>
-              <Button variant="ghost" size="sm" @click="closeModelEditor">{{ $st('Close') }}</Button>
-            </div>
-            <div v-if="modelLoading" class="text-sm text-muted-foreground">
-              {{ $st('Loading model configuration…') }}
-            </div>
-            <div v-else-if="modelError" class="text-sm text-destructive">{{ modelError }}</div>
-            <template v-else>
-              <div class="grid gap-2 sm:grid-cols-2">
-                <div v-for="field in modelFields" :key="field.key" class="rounded border border-border/50 px-3 py-2">
-                  <div class="grid gap-1.5">
-                    <div class="flex items-center justify-between gap-2">
-                      <label
-                        :for="`provider-model-${field.key.replaceAll('.', '-')}`"
-                        class="text-[10px] uppercase tracking-wide text-muted-foreground"
-                        >{{ field.label }}</label
-                      >
-                      <span v-if="field.kind === 'readonly'" class="text-[10px] text-muted-foreground">{{
-                        $st('read-only')
-                      }}</span>
-                    </div>
-                    <div
-                      v-if="field.kind === 'readonly'"
-                      :id="`provider-model-${field.key.replaceAll('.', '-')}`"
-                      class="break-all font-mono text-xs"
-                    >
-                      {{ modelFieldValue(field.key) || '—' }}
-                    </div>
-                    <input
-                      v-else-if="field.kind === 'boolean'"
-                      :id="`provider-model-${field.key.replaceAll('.', '-')}`"
-                      type="checkbox"
-                      class="h-4 w-4 justify-self-start accent-primary"
-                      :checked="modelFieldBooleanValue(field.key)"
-                      @change="setModelFieldValue(field.key, ($event.target as HTMLInputElement).checked)"
-                    />
-                    <OptionPicker
-                      v-else-if="field.kind === 'select'"
-                      :id="`provider-model-${field.key.replaceAll('.', '-')}`"
-                      :model-value="modelFieldValue(field.key)"
-                      :options="field.options || []"
-                      :include-empty="field.key === 'lifecycle'"
-                      :empty-label="field.key === 'lifecycle' ? $st('Default / unset') : undefined"
-                      :title="field.label"
-                      @update:model-value="setModelFieldValue(field.key, $event)"
-                    />
-                    <textarea
-                      v-else-if="field.kind === 'textarea'"
-                      :id="`provider-model-${field.key.replaceAll('.', '-')}`"
-                      :value="modelFieldValue(field.key)"
-                      :placeholder="field.placeholder"
-                      rows="3"
-                      class="w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm outline-none focus:border-ring"
-                      @input="setModelFieldValue(field.key, ($event.target as HTMLTextAreaElement).value)"
-                    />
-                    <Input
-                      v-else
-                      :id="`provider-model-${field.key.replaceAll('.', '-')}`"
-                      :value="modelFieldValue(field.key)"
-                      :type="field.kind === 'number' ? 'number' : 'text'"
-                      :placeholder="field.placeholder"
-                      :class="field.kind === 'csv' || field.kind === 'number' ? 'font-mono' : ''"
-                      @input="
-                        field.kind === 'csv'
-                          ? undefined
-                          : setModelFieldValue(field.key, ($event.target as HTMLInputElement).value)
-                      "
-                      @change="
-                        field.kind === 'csv'
-                          ? setModelFieldValue(field.key, ($event.target as HTMLInputElement).value)
-                          : undefined
-                      "
-                    />
-                    <div v-if="field.help" class="text-[10px] text-muted-foreground">{{ field.help }}</div>
-                  </div>
-                </div>
-              </div>
-              <label class="grid gap-1.5">
-                <span class="text-xs text-muted-foreground">{{ $st('Persisted model JSON') }}</span>
-                <textarea
-                  v-model="modelJson"
-                  rows="16"
-                  spellcheck="false"
-                  class="w-full rounded-md border border-input bg-transparent p-3 font-mono text-xs outline-none focus:border-ring"
-                />
-              </label>
-              <div v-if="modelError" class="text-xs text-destructive">{{ modelError }}</div>
-              <div class="flex flex-wrap items-center gap-2">
-                <Button variant="outline" :disabled="mutationBusy" @click="applyModelJson">{{
-                  $st('Apply JSON to provider draft')
-                }}</Button>
-                <span class="text-xs text-muted-foreground">{{
-                  $st('Model field changes are staged automatically and saved with the Provider.')
-                }}</span>
-              </div>
-            </template>
-          </section>
           <SettingsSaveBar
             :dirty="providerDirty"
             :saving="saving"

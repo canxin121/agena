@@ -64,12 +64,18 @@ impl PluginLogStore {
             message: message.into(),
             fields,
         };
-        if let Ok(mut guard) = self.inner.write() {
-            let bucket = guard.entry(plugin_id.clone()).or_default();
-            bucket.push_back(record.clone());
-            while bucket.len() > self.max_entries_per_plugin {
-                bucket.pop_front();
-            }
+        let mut guard = self.inner.write().unwrap_or_else(|error| {
+            tracing::error!(
+                plugin = %plugin_id,
+                diagnostic = %error,
+                "plugin log store lock is poisoned; recovering it so the diagnostic is not lost"
+            );
+            error.into_inner()
+        });
+        let bucket = guard.entry(plugin_id.clone()).or_default();
+        bucket.push_back(record.clone());
+        while bucket.len() > self.max_entries_per_plugin {
+            bucket.pop_front();
         }
         record
     }
@@ -87,8 +93,16 @@ impl PluginLogStore {
         };
         self.inner
             .read()
-            .ok()
-            .and_then(|guard| guard.get(plugin_id).cloned())
+            .unwrap_or_else(|error| {
+                tracing::error!(
+                    plugin = %plugin_id,
+                    diagnostic = %error,
+                    "plugin log store read lock is poisoned; recovering stored diagnostics"
+                );
+                error.into_inner()
+            })
+            .get(plugin_id)
+            .cloned()
             .map(|entries| {
                 entries
                     .into_iter()

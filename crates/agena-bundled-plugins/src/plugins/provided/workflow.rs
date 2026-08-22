@@ -258,7 +258,13 @@ impl WorkflowPlugin {
             return Ok(None);
         }
         let Some(plan) = self.load_active_plan().await? else {
-            let _ = self.sync_plan_display(None).await;
+            if let Err(error) = self.sync_plan_display(None).await {
+                tracing::warn!(
+                    target: "agena::workflow",
+                    diagnostic = %error.diagnostic_message(),
+                    "stale plan display could not be cleared during agent.stop"
+                );
+            }
             return Ok(None);
         };
         // The display sync is cosmetic. A failure here must not abort the
@@ -268,7 +274,8 @@ impl WorkflowPlugin {
             tracing::warn!(
                 target: "agena::workflow",
                 plan = %plan.title,
-                                "plan display sync failed during agent.stop: {error}"
+                diagnostic = %error.diagnostic_message(),
+                "plan display sync failed during agent.stop"
             );
         }
         if plan.phase != WorkflowPlanPhase::Active || !plan.autorun {

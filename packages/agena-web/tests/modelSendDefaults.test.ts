@@ -11,7 +11,6 @@ test('deriveSendRunConfig emits provider, adapter, model, thinking, and speed fi
       selectedModelId: 'claude-sonnet',
       selectedThinkingMode: 'high',
       selectedSpeedMode: 'fast',
-      effectiveDefaults: { provider: 'openai', adapter: 'responses', model: 'gpt-5' },
     }),
     {
       providerID: 'anthropic',
@@ -23,46 +22,22 @@ test('deriveSendRunConfig emits provider, adapter, model, thinking, and speed fi
   )
 })
 
-test('deriveSendRunConfig falls back to the complete runtime default', () => {
+test('deriveSendRunConfig emits no model when no explicit selection exists', () => {
   assert.deepEqual(
     deriveSendRunConfig({
-      effectiveDefaults: {
-        provider: 'openai',
-        adapter: 'responses',
-        model: 'gpt-5',
-        thinkingMode: 'high',
-        speedMode: 'fast',
-        verbosity: 'compact',
-        parallelToolCalls: false,
-      },
+      selectedThinkingMode: 'high',
+      selectedSpeedMode: 'fast',
     }),
-    {
-      providerID: 'openai',
-      adapterID: 'responses',
-      modelID: 'gpt-5',
-      thinkingMode: 'high',
-      speedMode: 'fast',
-      verbosity: 'compact',
-      parallelToolCalls: false,
-    },
+    {},
   )
 })
 
-test('deriveSendRunConfig does not leak default modes into a different model', () => {
+test('deriveSendRunConfig emits only modes explicitly selected for the model', () => {
   assert.deepEqual(
     deriveSendRunConfig({
       selectedProviderId: 'anthropic',
       selectedAdapterId: 'messages',
       selectedModelId: 'claude-sonnet',
-      effectiveDefaults: {
-        provider: 'openai',
-        adapter: 'responses',
-        model: 'gpt-5',
-        thinkingMode: 'high',
-        speedMode: 'fast',
-        verbosity: 'compact',
-        parallelToolCalls: true,
-      },
     }),
     { providerID: 'anthropic', adapterID: 'messages', modelID: 'claude-sonnet' },
   )
@@ -72,37 +47,7 @@ test('deriveSendRunConfig omits an incomplete model identity', () => {
   assert.deepEqual(deriveSendRunConfig({ selectedProviderId: 'openai' }), {})
 })
 
-test('deriveSendRunConfig never combines a partial selection with runtime defaults', () => {
-  const effectiveDefaults = {
-    provider: 'openai',
-    adapter: 'responses',
-    model: 'gpt-5',
-    thinkingMode: 'high',
-  }
-
-  assert.deepEqual(
-    deriveSendRunConfig({
-      selectedProviderId: 'anthropic',
-      effectiveDefaults,
-    }),
-    {
-      providerID: 'openai',
-      adapterID: 'responses',
-      modelID: 'gpt-5',
-      thinkingMode: 'high',
-    },
-  )
-
-  assert.deepEqual(
-    deriveSendRunConfig({
-      selectedModelId: 'claude-sonnet',
-      effectiveDefaults,
-    }),
-    {
-      providerID: 'openai',
-      adapterID: 'responses',
-      modelID: 'gpt-5',
-      thinkingMode: 'high',
-    },
-  )
+test('deriveSendRunConfig never combines a partial identity into a model route', () => {
+  assert.deepEqual(deriveSendRunConfig({ selectedProviderId: 'anthropic' }), {})
+  assert.deepEqual(deriveSendRunConfig({ selectedModelId: 'claude-sonnet' }), {})
 })

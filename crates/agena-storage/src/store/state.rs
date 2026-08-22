@@ -49,7 +49,19 @@ pub(crate) fn tool_call_first_awaiting_user_input(
 ) -> Option<agena_domain::UserInputRequest> {
     let user_input = content.get("user_input")?;
     let user_input: agena_domain::OperationUserInput =
-        serde_json::from_value(user_input.clone()).ok()?;
+        match serde_json::from_value(user_input.clone()) {
+            Ok(user_input) => user_input,
+            Err(error) => {
+                tracing::error!(
+                    diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                        "decode persisted tool-call user-input state",
+                        &error,
+                    ),
+                    "session state derivation skipped malformed user-input control data"
+                );
+                return None;
+            }
+        };
     user_input
         .awaiting()
         .next()

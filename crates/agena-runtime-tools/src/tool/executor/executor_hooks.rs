@@ -113,10 +113,33 @@ impl ToolExecutor {
         else {
             return;
         };
-        let input_value = invocation_input_json(invocation)
-            .ok()
-            .and_then(|j| serde_json::from_str::<serde_json::Value>(&j).ok())
-            .unwrap_or(serde_json::Value::Null);
+        let input_value = match invocation_input_json(invocation) {
+            Ok(json) => match serde_json::from_str::<serde_json::Value>(&json) {
+                Ok(value) => value,
+                Err(error) => {
+                    tracing::warn!(
+                        tool_name = %invocation.name,
+                        diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                            "decode serialized tool input for a plugin failure hook",
+                            &error,
+                        ),
+                        "plugin tool failure hook is receiving a null input projection"
+                    );
+                    serde_json::Value::Null
+                }
+            },
+            Err(error) => {
+                tracing::warn!(
+                    tool_name = %invocation.name,
+                    diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                        "serialize tool input for a plugin failure hook",
+                        &error,
+                    ),
+                    "plugin tool failure hook is receiving a null input projection"
+                );
+                serde_json::Value::Null
+            }
+        };
         let failure_input = PluginToolFailureInput {
             tool: hook_tool,
             session_id,
@@ -168,7 +191,15 @@ impl ToolExecutor {
                 .as_ref()
                 .map(|tool| &tool.definition.runtime.result_policy),
         );
-        if rendered.human.is_none() {
+        let plugin_human = rendered.human.take();
+        let needs_runtime_human_fallback = plugin_human.as_ref().is_none_or(|human| {
+            human.blocks.is_empty()
+                || human
+                    .blocks
+                    .iter()
+                    .all(|block| matches!(block, agena_domain::ViewBlock::Json { .. }))
+        });
+        if needs_runtime_human_fallback {
             let command = invocation
                 .input
                 .get("command")
@@ -194,17 +225,29 @@ impl ToolExecutor {
             let blocks = agena_tool::ToolHumanRenderer::render_human(&renderer, &context, output)
                 .unwrap_or_default();
             rendered.human = Some(agena_plugin_host::sdk::ToolHumanPresentation {
-                title: invocation.name.clone(),
-                summary: agena_tool::normalize_tool_summary(model.as_str()),
+                title: plugin_human
+                    .as_ref()
+                    .map(|human| human.title.clone())
+                    .filter(|title| !title.trim().is_empty())
+                    .unwrap_or_else(|| invocation.name.clone()),
+                summary: plugin_human
+                    .as_ref()
+                    .map(|human| human.summary.clone())
+                    .filter(|summary| !summary.trim().is_empty())
+                    .unwrap_or_else(|| {
+                        crate::tool::human_view::BuiltinHumanRenderer::human_summary(output)
+                    }),
                 blocks,
             });
-        } else if let Some(human) = rendered.human.as_mut() {
+        } else if let Some(mut human) = plugin_human {
             if human.title.trim().is_empty() {
                 human.title = invocation.name.clone();
             }
             if human.summary.trim().is_empty() {
-                human.summary = agena_tool::normalize_tool_summary(model.as_str());
+                human.summary =
+                    crate::tool::human_view::BuiltinHumanRenderer::human_summary(output);
             }
+            rendered.human = Some(human);
         }
         rendered
     }
@@ -233,7 +276,23 @@ impl ToolExecutor {
 
 fn raw_model_fallback(output: &agena_domain::RawOutput) -> String {
     match output.payload.as_ref() {
-        Some(payload) => serde_json::to_string(payload).unwrap_or_else(|_| output.text.clone()),
+        Some(payload) => match serde_json::to_string(payload) {
+            Ok(payload) => payload,
+            Err(error) => {
+                tracing::error!(
+                    diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                        "serialize a tool result payload for model projection",
+                        &error,
+                    ),
+                    "tool result model projection fell back to its text representation"
+                );
+                if output.text.is_empty() {
+                    "[tool result payload could not be serialized]".to_owned()
+                } else {
+                    output.text.clone()
+                }
+            }
+        },
         None => output.text.clone(),
     }
 }

@@ -145,7 +145,20 @@ impl TerminalUiStateStore {
     async fn load_from_disk(&self) -> TerminalUiState {
         let raw = match tokio::fs::read_to_string(&self.path).await {
             Ok(raw) => raw,
-            Err(_) => return TerminalUiState::default(),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return TerminalUiState::default();
+            }
+            Err(error) => {
+                tracing::error!(
+                    path = %self.path.display(),
+                    diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                        "failed to read persisted terminal UI state",
+                        &error,
+                    ),
+                    "persisted terminal UI state could not be loaded"
+                );
+                return TerminalUiState::default();
+            }
         };
 
         let trimmed = raw.trim();
@@ -153,9 +166,20 @@ impl TerminalUiStateStore {
             return TerminalUiState::default();
         }
 
-        serde_json::from_str::<TerminalUiState>(trimmed)
-            .map(sanitize_state)
-            .unwrap_or_default()
+        match serde_json::from_str::<TerminalUiState>(trimmed) {
+            Ok(state) => sanitize_state(state),
+            Err(error) => {
+                tracing::error!(
+                    path = %self.path.display(),
+                    diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                        "failed to decode persisted terminal UI state",
+                        &error,
+                    ),
+                    "persisted terminal UI state is invalid"
+                );
+                TerminalUiState::default()
+            }
+        }
     }
 
     async fn persist_to_disk(&self, state: &TerminalUiState) -> Result<(), String> {
@@ -183,7 +207,7 @@ impl TerminalUiStateStore {
 
     fn publish_state_replace(&self, state: &TerminalUiState) {
         let seq = self.next_seq.fetch_add(1, Ordering::SeqCst);
-        let payload = serde_json::to_string(&serde_json::json!({
+        let payload = match serde_json::to_string(&serde_json::json!({
             "type": "terminal-ui-state.patch",
             "seq": seq,
             "ts": now_millis(),
@@ -195,10 +219,28 @@ impl TerminalUiStateStore {
                     }
                 ]
             }
-        }))
-        .unwrap_or_else(|_| "{}".to_string());
+        })) {
+            Ok(payload) => payload,
+            Err(error) => {
+                tracing::error!(
+                    seq,
+                    diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                        "serialize a terminal UI state replacement event",
+                        &error,
+                    ),
+                    "terminal UI state event was not published"
+                );
+                return;
+            }
+        };
 
-        let _ = self.tx.send(SequencedTerminalUiStateEvent { seq, payload });
+        if self
+            .tx
+            .send(SequencedTerminalUiStateEvent { seq, payload })
+            .is_err()
+        {
+            tracing::debug!(seq, "terminal UI state event had no active subscribers");
+        }
     }
 }
 
@@ -400,12 +442,11 @@ fn sanitize_state(input: TerminalUiState) -> TerminalUiState {
     }
 }
 
-fn snapshot_payload(state: &TerminalUiState) -> String {
+fn snapshot_payload(state: &TerminalUiState) -> Result<String, serde_json::Error> {
     serde_json::to_string(&serde_json::json!({
         "type": "terminal-ui-state.snapshot",
         "state": state,
     }))
-    .unwrap_or_else(|_| "{}".to_string())
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -440,7 +481,31 @@ pub(crate) async fn terminal_ui_state_events(
     let _ = query.since;
     let store = store_for_workspace(state.application.workspace_root());
     let mut rx = store.subscribe();
-    let initial = snapshot_payload(&store.read().await);
+    let initial = match snapshot_payload(&store.read().await) {
+        Ok(initial) => initial,
+        Err(error) => {
+            let diagnostic = agena_failure::diagnostic::format_error_chain_with_context(
+                "serialize the initial terminal UI state snapshot",
+                &error,
+            );
+            tracing::error!(
+                diagnostic = %diagnostic,
+                "terminal UI state event stream could not be initialized"
+            );
+            let public = agena_failure::diagnostic::user_message_with_context(&diagnostic, 320);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "error": if public.is_empty() {
+                        "The terminal state stream could not be initialized. Try again."
+                    } else {
+                        public.as_str()
+                    }
+                })),
+            )
+                .into_response();
+        }
+    };
 
     let sse_stream = stream! {
         yield Ok::<Event, Infallible>(Event::default().data(initial));
@@ -454,8 +519,17 @@ pub(crate) async fn terminal_ui_state_events(
                             .data(event.payload),
                     );
                 }
-                Err(broadcast::error::RecvError::Lagged(_)) => break,
-                Err(broadcast::error::RecvError::Closed) => break,
+                Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                    tracing::warn!(
+                        skipped_events = skipped,
+                        "terminal UI state event stream lagged; closing it so the client reconnects with a fresh snapshot"
+                    );
+                    break;
+                }
+                Err(broadcast::error::RecvError::Closed) => {
+                    tracing::debug!("terminal UI state event publisher closed");
+                    break;
+                }
             }
         }
     };

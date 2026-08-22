@@ -150,11 +150,39 @@ fn rejected_calls_json(calls: &[RejectedToolApiCall]) -> String {
             })
         })
         .collect::<Vec<_>>();
-    let mut rendered = serde_json::to_string(&calls).unwrap_or_else(|_| "[]".to_owned());
+    let mut rendered = match serde_json::to_string(&calls) {
+        Ok(rendered) => rendered,
+        Err(error) => {
+            tracing::error!(
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "serialize rejected Tool API calls for repair guidance",
+                    &error,
+                ),
+                "Tool API repair guidance could not include rejected call details"
+            );
+            "[rejected call details could not be serialized]".to_owned()
+        }
+    };
     if omitted {
         rendered.push_str(" [additional rejected calls omitted]");
     }
     rendered
+}
+
+fn repair_arguments_json(arguments: &serde_json::Value, context: &'static str) -> String {
+    match serde_json::to_string(arguments) {
+        Ok(arguments) => arguments,
+        Err(error) => {
+            tracing::error!(
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    context,
+                    &error,
+                ),
+                "Tool API repair guidance could not serialize direct arguments"
+            );
+            "[arguments could not be serialized]".to_owned()
+        }
+    }
 }
 
 fn tool_name_repair_guidance(
@@ -165,10 +193,22 @@ fn tool_name_repair_guidance(
         .iter()
         .filter_map(|call| {
             if call.name == "tools_call" {
-                let arguments = serde_json::from_str::<serde_json::Value>(
+                let arguments = match serde_json::from_str::<serde_json::Value>(
                     call.arguments_json.as_str(),
-                )
-                .ok()?;
+                ) {
+                    Ok(arguments) => arguments,
+                    Err(error) => {
+                        tracing::warn!(
+                            rejected_tool = %call.name,
+                            diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                                "decode rejected tools_call arguments for repair guidance",
+                                &error,
+                            ),
+                            "Tool API repair guidance omitted malformed call details"
+                        );
+                        return None;
+                    }
+                };
                 let tool_name = arguments.get("tool")?.as_str()?;
                 let api_function =
                     agena_domain::ToolApiFunction::from_function_name(tool_name)?;
@@ -183,8 +223,10 @@ fn tool_name_repair_guidance(
                     .unwrap_or_else(|| serde_json::json!({}));
                 return Some(format!(
                     "- `{tool_name}` identifies Tool API function `{function_name}`, not an execution tool. Call function `{function_name}` directly with arguments {}; never put a Tool API function name inside `tools_call.arguments.tool`.",
-                    serde_json::to_string(&direct_arguments)
-                        .unwrap_or_else(|_| "{}".to_owned())
+                    repair_arguments_json(
+                        &direct_arguments,
+                        "serialize direct Tool API arguments from the tools_call repair path",
+                    )
                 ));
             }
             if let Some(api_function) = tool_api_identity(call.name.as_str()) {
@@ -201,8 +243,10 @@ fn tool_name_repair_guidance(
                 return Some(format!(
                     "- `{}` is an internal handler key for Tool API function `{function_name}`. Retry with function name `{function_name}` and arguments {}; never route a Tool API function through `tools_call`.",
                     call.name,
-                    serde_json::to_string(&direct_arguments)
-                        .unwrap_or_else(|_| "{}".to_owned())
+                    repair_arguments_json(
+                        &direct_arguments,
+                        "serialize direct Tool API arguments from an internal handler repair path",
+                    )
                 ));
             }
             None
@@ -451,7 +495,7 @@ fn validate_tool_api_arguments(
     let Some(arguments) = parse_tool_api_arguments_tolerant(arguments_json) else {
         let detail = serde_json::from_str::<serde_json::Value>(arguments_json)
             .err()
-            .map(|error| error.to_string())
+            .map(|error| agena_failure::diagnostic::format_error_chain(&error))
             .unwrap_or_else(|| "unparseable arguments".to_owned());
         return Err(ProviderError::Provider(format!(
             "provider `{provider_id}` returned invalid JSON arguments for Tool API function `{name}`: {detail}"
@@ -1068,7 +1112,7 @@ impl ProviderRegistry {
                             yield CompletionStreamEvent::ProviderRetry {
                                 provider_id: model_ref.provider_id.clone(),
                                 model: model_ref.model_id.clone(),
-                                message: err.to_string(),
+                                message: agena_failure::diagnostic::format_error_chain(&err),
                                 retry_index,
                                 attempt,
                                 max_retries: retry_policy.max_retries,
@@ -1483,7 +1527,7 @@ impl ProviderRegistry {
                                 yield CompletionStreamEvent::ProviderRetry {
                                     provider_id: model_ref.provider_id.clone(),
                                     model: model_ref.model_id.clone(),
-                                    message: err.to_string(),
+                                    message: agena_failure::diagnostic::format_error_chain(&err),
                                     retry_index,
                                     attempt,
                                     max_retries: retry_policy.max_retries,
@@ -1516,7 +1560,7 @@ impl ProviderRegistry {
                                 yield CompletionStreamEvent::ProviderRetry {
                                     provider_id: model_ref.provider_id.clone(),
                                     model: model_ref.model_id.clone(),
-                                    message: err.to_string(),
+                                    message: agena_failure::diagnostic::format_error_chain(&err),
                                     retry_index,
                                     attempt,
                                     max_retries: replay_policy.max_retries_after_output,

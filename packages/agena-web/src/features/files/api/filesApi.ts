@@ -23,6 +23,7 @@ export type FsSearchResponse = {
   root: string
   count: number
   files: Array<{ name: string; path: string; relative_path?: string }>
+  truncated: boolean
 }
 
 export type FsUploadResponse = { success: boolean; path: string; bytes: number }

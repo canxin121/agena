@@ -100,6 +100,7 @@ dependencies = [
  "agena-cli",
  "agena-client",
  "agena-domain",
+ "agena-failure",
  "agena-git-http",
  "agena-mcp-server",
  "agena-runtime",
@@ -119,6 +120,7 @@ dependencies = [
  "ed25519-dalek 3.0.0",
  "futures-util",
  "getrandom 0.4.3",
+ "http-body-util",
  "ignore",
  "jsonwebtoken",
  "libc",
@@ -158,6 +160,7 @@ dependencies = [
  "serde",
  "serde_json",
  "smol_str",
+ "tracing",
  "uuid",
 ]
 
@@ -229,6 +232,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+ "tracing",
  "uuid",
 ]
 
@@ -285,6 +289,7 @@ dependencies = [
  "agena-bundled-plugins",
  "agena-client",
  "agena-domain",
+ "agena-failure",
  "agena-mcp-client",
  "agena-mcp-server",
  "agena-plugin-host",
@@ -403,6 +408,7 @@ dependencies = [
 name = "agena-git-http"
 version = "0.1.0"
 dependencies = [
+ "agena-failure",
  "agena-process",
  "async-stream",
  "axum",
@@ -433,6 +439,7 @@ dependencies = [
 name = "agena-lsp"
 version = "0.1.0"
 dependencies = [
+ "agena-failure",
  "agena-process",
  "agena-stdio-codec",
  "arc-swap",
@@ -509,12 +516,14 @@ dependencies = [
 name = "agena-mcp-server"
 version = "0.1.0"
 dependencies = [
+ "agena-failure",
  "agena-mcp-client",
  "async-trait",
  "rmcp",
  "serde",
  "serde_json",
  "thiserror 2.0.20",
+ "tracing",
 ]
 
 [[package]]
@@ -567,6 +576,7 @@ dependencies = [
 name = "agena-plugin-contracts"
 version = "0.1.0"
 dependencies = [
+ "agena-failure",
  "regex",
  "serde",
  "serde_json",
@@ -620,6 +630,7 @@ dependencies = [
 name = "agena-plugin-marketplace"
 version = "0.1.0"
 dependencies = [
+ "agena-failure",
  "agena-plugin-contracts",
  "chrono",
  "ed25519-dalek 3.0.0",
@@ -676,6 +687,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tower-http 0.7.0",
+ "tracing",
  "tree-sitter",
  "trybuild",
  "url",
@@ -689,6 +701,7 @@ dependencies = [
  "libc",
  "process-wrap",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -708,12 +721,14 @@ dependencies = [
  "sha2 0.11.0",
  "thiserror 2.0.20",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
 name = "agena-provider-bedrock-auth"
 version = "0.1.0"
 dependencies = [
+ "agena-failure",
  "aws-config",
  "aws-credential-types",
  "aws-smithy-http-client",
@@ -728,6 +743,7 @@ dependencies = [
 name = "agena-provider-bedrock-signing"
 version = "0.1.0"
 dependencies = [
+ "agena-failure",
  "agena-provider-bedrock-auth",
  "aws-sigv4",
  "http 1.5.0",
@@ -756,6 +772,7 @@ dependencies = [
 name = "agena-provider-google-auth"
 version = "0.1.0"
 dependencies = [
+ "agena-failure",
  "gcp_auth",
  "thiserror 2.0.20",
 ]
@@ -843,6 +860,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "thiserror 2.0.20",
+ "tracing",
  "url",
 ]
 
@@ -884,6 +902,7 @@ dependencies = [
 name = "agena-runtime-plugins"
 version = "0.1.0"
 dependencies = [
+ "agena-failure",
  "agena-keyring-store",
  "agena-plugin-host",
  "agena-plugin-sdk",
@@ -1025,6 +1044,7 @@ dependencies = [
  "chrono",
  "serde",
  "serde_json",
+ "tracing",
 ]
 
 [[package]]
@@ -1126,6 +1146,7 @@ name = "agena-storage"
 version = "0.1.0"
 dependencies = [
  "agena-domain",
+ "agena-failure",
  "async-trait",
  "portable-atomic",
  "schemars",
@@ -1143,6 +1164,7 @@ name = "agena-storage-sqlite"
 version = "0.1.0"
 dependencies = [
  "agena-domain",
+ "agena-failure",
  "agena-provider",
  "agena-storage",
  "async-trait",
@@ -1152,6 +1174,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -1177,6 +1200,7 @@ dependencies = [
 name = "agena-tui"
 version = "0.1.0"
 dependencies = [
+ "agena-failure",
  "agena-tui-components",
  "anyhow",
  "crossterm",
@@ -1187,6 +1211,7 @@ dependencies = [
  "reqwest 0.13.4",
  "sys-locale",
  "tokio",
+ "tracing",
  "tui-markdown",
  "unic-langid",
  "unicode-width 0.2.2",
@@ -1253,6 +1278,7 @@ dependencies = [
 name = "agena-tui-media"
 version = "0.1.0"
 dependencies = [
+ "agena-failure",
  "agena-tui",
  "agena-tui-components",
  "base64 0.22.1",
@@ -1273,6 +1299,7 @@ dependencies = [
  "rust-latex-parser",
  "term-maths",
  "tokio",
+ "tracing",
  "unicode-width 0.2.2",
  "url",
 ]
@@ -1291,6 +1318,7 @@ dependencies = [
 name = "agena-tui-platform"
 version = "0.1.0"
 dependencies = [
+ "agena-failure",
  "agena-tui",
  "agena-tui-components",
  "agena-tui-media",
@@ -1316,6 +1344,7 @@ version = "0.1.0"
 dependencies = [
  "agena-application",
  "agena-domain",
+ "agena-failure",
  "agena-plugin-host",
  "agena-tui",
  "agena-tui-components",
@@ -1323,6 +1352,7 @@ dependencies = [
  "ratatui",
  "regex",
  "serde_json",
+ "tracing",
  "unicode-width 0.2.2",
  "url",
  "uuid",
@@ -1333,6 +1363,7 @@ name = "agena-tui-provider-studio"
 version = "0.1.0"
 dependencies = [
  "agena-domain",
+ "agena-failure",
  "agena-provider",
  "serde",
  "serde_json",
@@ -1382,6 +1413,7 @@ dependencies = [
  "serde_json",
  "syntect",
  "textwrap",
+ "tracing",
  "tui-markdown",
  "unicode-segmentation",
  "unicode-width 0.2.2",

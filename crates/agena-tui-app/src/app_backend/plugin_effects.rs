@@ -136,7 +136,12 @@ pub(crate) async fn invoke_plugin_slash_operation(
         .ok_or_else(|| anyhow!("server response omitted plugin operation result"))?;
     let result = serde_json::from_value::<agena_plugin_host::PluginOperationResult>(result)
         .context("the server returned an undecodable plugin operation result")?;
-    let _ = application.refresh_plugin_presentation_snapshot().await;
+    if let Err(error) = application.refresh_plugin_presentation_snapshot().await {
+        tracing::warn!(
+            diagnostic = %agena_failure::diagnostic::format_error_chain(error.as_ref()),
+            "plugin operation succeeded, but refreshing the TUI plugin presentation snapshot failed"
+        );
+    }
     Ok(result)
 }
 

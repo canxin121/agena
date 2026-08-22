@@ -17,29 +17,87 @@ use super::{
     publish_fs_changed_event, resolve_path, to_api_path,
 };
 
+fn absolute_fs_path(resolved: PathBuf, context: &'static str) -> ApiResult<PathBuf> {
+    if resolved.is_absolute() {
+        Ok(resolved)
+    } else {
+        std::env::current_dir()
+            .map(|directory| directory.join(resolved))
+            .map_err(|error| AppError::internal_error_with_context(context, &error))
+    }
+}
+
+fn mapped_fs_io_error(
+    context: &'static str,
+    error: std::io::Error,
+    not_found: &'static str,
+    permission_denied: &'static str,
+) -> AppError {
+    match error.kind() {
+        std::io::ErrorKind::NotFound => {
+            tracing::debug!(
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    context,
+                    &error,
+                ),
+                "filesystem request target was not found"
+            );
+            AppError::not_found(not_found)
+        }
+        std::io::ErrorKind::PermissionDenied => {
+            let diagnostic =
+                agena_failure::diagnostic::format_error_chain_with_context(context, &error);
+            tracing::warn!(%diagnostic, "filesystem request was denied by the operating system");
+            let public = agena_failure::diagnostic::user_message_with_context(&diagnostic, 240);
+            AppError::forbidden(if public.is_empty() {
+                permission_denied.to_owned()
+            } else {
+                public
+            })
+        }
+        _ => AppError::internal_error_with_context(context, &error),
+    }
+}
+
+fn permission_or_internal_fs_error(
+    context: &'static str,
+    error: std::io::Error,
+    permission_denied: &'static str,
+) -> AppError {
+    if error.kind() == std::io::ErrorKind::PermissionDenied {
+        let diagnostic =
+            agena_failure::diagnostic::format_error_chain_with_context(context, &error);
+        tracing::warn!(%diagnostic, "filesystem mutation was denied by the operating system");
+        let public = agena_failure::diagnostic::user_message_with_context(&diagnostic, 240);
+        AppError::forbidden(if public.is_empty() {
+            permission_denied.to_owned()
+        } else {
+            public
+        })
+    } else {
+        AppError::internal_error_with_context(context, &error)
+    }
+}
+
 pub(crate) async fn validate_directory(candidate: &str) -> ApiResult<PathBuf> {
     let resolved = resolve_path(candidate);
     if resolved.as_os_str().is_empty() {
         return Err(AppError::bad_request("Directory parameter is required"));
     }
 
-    let abs = if resolved.is_absolute() {
-        resolved
-    } else {
-        // Treat relative paths as relative to cwd.
-        std::env::current_dir()
-            .unwrap_or_else(|_| PathBuf::from("."))
-            .join(resolved)
-    };
+    let abs = absolute_fs_path(
+        resolved,
+        "resolve the current directory for directory validation",
+    )?;
 
-    let meta = tokio::fs::metadata(&abs)
-        .await
-        .map_err(|err| match err.kind() {
-            std::io::ErrorKind::NotFound => "Directory not found".to_string(),
-            std::io::ErrorKind::PermissionDenied => "Access to directory denied".to_string(),
-            _ => "Failed to validate directory".to_string(),
-        })
-        .map_err(AppError::bad_request)?;
+    let meta = tokio::fs::metadata(&abs).await.map_err(|error| {
+        mapped_fs_io_error(
+            "inspect a directory during validation",
+            error,
+            "Directory not found",
+            "Access to directory denied",
+        )
+    })?;
     if !meta.is_dir() {
         return Err(AppError::bad_request("Specified path is not a directory"));
     }
@@ -118,7 +176,9 @@ pub struct SuccessPathResponse {
 pub async fn fs_home() -> ApiResult<Json<FsHomeResponse>> {
     let home = home_dir_env().unwrap_or_default();
     if home.trim().is_empty() {
-        return Err(AppError::internal("Failed to resolve home directory"));
+        return Err(AppError::internal(
+            "the home directory is unavailable because neither HOME nor USERPROFILE is set",
+        ));
     }
     Ok(Json(FsHomeResponse { home }))
 }
@@ -149,13 +209,11 @@ pub async fn fs_mkdir(
     )
     .await?;
 
-    tokio::fs::create_dir_all(&resolved).await.map_err(|err| {
-        if err.kind() == std::io::ErrorKind::PermissionDenied {
-            AppError::forbidden("Access denied")
-        } else {
-            AppError::internal(err.to_string())
-        }
-    })?;
+    tokio::fs::create_dir_all(&resolved)
+        .await
+        .map_err(|error| {
+            permission_or_internal_fs_error("create a filesystem directory", error, "Access denied")
+        })?;
 
     publish_fs_changed_event(&base, "mkdir", [resolved.as_path()], None, None);
 
@@ -189,21 +247,16 @@ pub async fn fs_read(Query(q): Query<ReadQuery>) -> ApiResult<Response> {
         ));
     }
 
-    let abs = if resolved.is_absolute() {
-        resolved
-    } else {
-        std::env::current_dir()
-            .unwrap_or_else(|_| PathBuf::from("."))
-            .join(resolved)
-    };
+    let abs = absolute_fs_path(resolved, "resolve the current directory for a file read")?;
 
-    let meta = tokio::fs::metadata(&abs)
-        .await
-        .map_err(|err| match err.kind() {
-            std::io::ErrorKind::NotFound => AppError::not_found("File not found"),
-            std::io::ErrorKind::PermissionDenied => AppError::forbidden("Access to file denied"),
-            _ => AppError::internal("Failed to read file"),
-        })?;
+    let meta = tokio::fs::metadata(&abs).await.map_err(|error| {
+        mapped_fs_io_error(
+            "inspect a file before reading it",
+            error,
+            "File not found",
+            "Access to file denied",
+        )
+    })?;
 
     if !meta.is_file() {
         return Err(AppError::bad_request("Specified path is not a file"));
@@ -212,13 +265,14 @@ pub async fn fs_read(Query(q): Query<ReadQuery>) -> ApiResult<Response> {
         return Err(AppError::payload_too_large("File too large"));
     }
 
-    let content = tokio::fs::read_to_string(&abs)
-        .await
-        .map_err(|err| match err.kind() {
-            std::io::ErrorKind::NotFound => AppError::not_found("File not found"),
-            std::io::ErrorKind::PermissionDenied => AppError::forbidden("Access to file denied"),
-            _ => AppError::internal(err.to_string()),
-        })?;
+    let content = tokio::fs::read_to_string(&abs).await.map_err(|error| {
+        mapped_fs_io_error(
+            "read a UTF-8 file",
+            error,
+            "File not found",
+            "Access to file denied",
+        )
+    })?;
 
     Ok(Response::builder()
         .status(StatusCode::OK)
@@ -282,21 +336,19 @@ pub async fn fs_read_chunk(Query(q): Query<ReadChunkQuery>) -> ApiResult<Json<Re
         ));
     }
 
-    let abs = if resolved.is_absolute() {
-        resolved
-    } else {
-        std::env::current_dir()
-            .unwrap_or_else(|_| PathBuf::from("."))
-            .join(resolved)
-    };
+    let abs = absolute_fs_path(
+        resolved,
+        "resolve the current directory for a chunked file read",
+    )?;
 
-    let meta = tokio::fs::metadata(&abs)
-        .await
-        .map_err(|err| match err.kind() {
-            std::io::ErrorKind::NotFound => AppError::not_found("File not found"),
-            std::io::ErrorKind::PermissionDenied => AppError::forbidden("Access to file denied"),
-            _ => AppError::internal("Failed to read file"),
-        })?;
+    let meta = tokio::fs::metadata(&abs).await.map_err(|error| {
+        mapped_fs_io_error(
+            "inspect a file before reading a chunk",
+            error,
+            "File not found",
+            "Access to file denied",
+        )
+    })?;
 
     if !meta.is_file() {
         return Err(AppError::bad_request("Specified path is not a file"));
@@ -331,23 +383,28 @@ pub async fn fs_read_chunk(Query(q): Query<ReadChunkQuery>) -> ApiResult<Json<Re
         }));
     }
 
-    let mut file = tokio::fs::File::open(&abs)
-        .await
-        .map_err(|err| match err.kind() {
-            std::io::ErrorKind::NotFound => AppError::not_found("File not found"),
-            std::io::ErrorKind::PermissionDenied => AppError::forbidden("Access to file denied"),
-            _ => AppError::internal(err.to_string()),
-        })?;
+    let mut file = tokio::fs::File::open(&abs).await.map_err(|error| {
+        mapped_fs_io_error(
+            "open a file for a chunked read",
+            error,
+            "File not found",
+            "Access to file denied",
+        )
+    })?;
 
     file.seek(SeekFrom::Start(offset as u64))
         .await
-        .map_err(|err| AppError::internal(err.to_string()))?;
+        .map_err(|error| {
+            AppError::internal_error_with_context("seek within a chunked file read", &error)
+        })?;
 
     let mut buffer = Vec::with_capacity(limit);
     file.take(limit as u64)
         .read_to_end(&mut buffer)
         .await
-        .map_err(|err| AppError::internal(err.to_string()))?;
+        .map_err(|error| {
+            AppError::internal_error_with_context("read a bounded file chunk", &error)
+        })?;
 
     let (content, consumed_bytes) = decode_utf8_chunk(&buffer)?;
     let loaded_bytes = offset.saturating_add(consumed_bytes);
@@ -414,21 +471,19 @@ pub async fn fs_raw(Query(q): Query<ReadQuery>) -> ApiResult<Response> {
         ));
     }
 
-    let abs = if resolved.is_absolute() {
-        resolved
-    } else {
-        std::env::current_dir()
-            .unwrap_or_else(|_| PathBuf::from("."))
-            .join(resolved)
-    };
+    let abs = absolute_fs_path(
+        resolved,
+        "resolve the current directory for a raw file read",
+    )?;
 
-    let meta = tokio::fs::metadata(&abs)
-        .await
-        .map_err(|err| match err.kind() {
-            std::io::ErrorKind::NotFound => AppError::not_found("File not found"),
-            std::io::ErrorKind::PermissionDenied => AppError::forbidden("Access to file denied"),
-            _ => AppError::internal("Failed to read file"),
-        })?;
+    let meta = tokio::fs::metadata(&abs).await.map_err(|error| {
+        mapped_fs_io_error(
+            "inspect a file before reading its raw content",
+            error,
+            "File not found",
+            "Access to file denied",
+        )
+    })?;
 
     if !meta.is_file() {
         return Err(AppError::bad_request("Specified path is not a file"));
@@ -438,13 +493,14 @@ pub async fn fs_raw(Query(q): Query<ReadQuery>) -> ApiResult<Response> {
     }
 
     let mime = mime_for_ext(&abs);
-    let content = tokio::fs::read(&abs)
-        .await
-        .map_err(|err| match err.kind() {
-            std::io::ErrorKind::NotFound => AppError::not_found("File not found"),
-            std::io::ErrorKind::PermissionDenied => AppError::forbidden("Access to file denied"),
-            _ => AppError::internal(err.to_string()),
-        })?;
+    let content = tokio::fs::read(&abs).await.map_err(|error| {
+        mapped_fs_io_error(
+            "read raw file content",
+            error,
+            "File not found",
+            "Access to file denied",
+        )
+    })?;
 
     Ok(Response::builder()
         .status(StatusCode::OK)
@@ -512,13 +568,14 @@ pub async fn fs_download(
     )
     .await?;
 
-    let meta = tokio::fs::metadata(&abs)
-        .await
-        .map_err(|err| match err.kind() {
-            std::io::ErrorKind::NotFound => AppError::not_found("File not found"),
-            std::io::ErrorKind::PermissionDenied => AppError::forbidden("Access to file denied"),
-            _ => AppError::internal("Failed to read file"),
-        })?;
+    let meta = tokio::fs::metadata(&abs).await.map_err(|error| {
+        mapped_fs_io_error(
+            "inspect a file before downloading it",
+            error,
+            "File not found",
+            "Access to file denied",
+        )
+    })?;
 
     if !meta.is_file() {
         return Err(AppError::bad_request("Specified path is not a file"));
@@ -528,13 +585,14 @@ pub async fn fs_download(
     }
 
     let mime = mime_for_ext(&abs);
-    let content = tokio::fs::read(&abs)
-        .await
-        .map_err(|err| match err.kind() {
-            std::io::ErrorKind::NotFound => AppError::not_found("File not found"),
-            std::io::ErrorKind::PermissionDenied => AppError::forbidden("Access to file denied"),
-            _ => AppError::internal(err.to_string()),
-        })?;
+    let content = tokio::fs::read(&abs).await.map_err(|error| {
+        mapped_fs_io_error(
+            "read a file for download",
+            error,
+            "File not found",
+            "Access to file denied",
+        )
+    })?;
 
     Ok(Response::builder()
         .status(StatusCode::OK)
@@ -595,29 +653,40 @@ pub async fn fs_upload(
                 return Err(AppError::bad_request("File already exists"));
             }
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-            Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
-                return Err(AppError::forbidden("Access denied"));
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+                return Err(permission_or_internal_fs_error(
+                    "inspect an upload target",
+                    error,
+                    "Access denied",
+                ));
             }
-            Err(err) => return Err(AppError::internal(err.to_string())),
+            Err(error) => {
+                return Err(AppError::internal_error_with_context(
+                    "inspect an upload target",
+                    &error,
+                ));
+            }
         }
     }
 
     if let Some(parent) = resolved.parent() {
-        tokio::fs::create_dir_all(parent).await.map_err(|err| {
-            if err.kind() == std::io::ErrorKind::PermissionDenied {
-                AppError::forbidden("Access denied")
-            } else {
-                AppError::internal(err.to_string())
-            }
+        tokio::fs::create_dir_all(parent).await.map_err(|error| {
+            permission_or_internal_fs_error(
+                "create the parent directory for an uploaded file",
+                error,
+                "Access denied",
+            )
         })?;
     }
 
     tokio::fs::write(&resolved, payload.as_ref())
         .await
-        .map_err(|err| match err.kind() {
-            std::io::ErrorKind::PermissionDenied => AppError::forbidden("Access denied"),
+        .map_err(|error| match error.kind() {
+            std::io::ErrorKind::PermissionDenied => {
+                permission_or_internal_fs_error("write an uploaded file", error, "Access denied")
+            }
             std::io::ErrorKind::IsADirectory => AppError::bad_request("Target path is a directory"),
-            _ => AppError::internal(err.to_string()),
+            _ => AppError::internal_error_with_context("write an uploaded file", &error),
         })?;
 
     publish_fs_changed_event(&base, "upload", [resolved.as_path()], None, None);
@@ -664,22 +733,20 @@ pub async fn fs_write(
     .await?;
 
     if let Some(parent) = resolved.parent() {
-        tokio::fs::create_dir_all(parent).await.map_err(|err| {
-            if err.kind() == std::io::ErrorKind::PermissionDenied {
-                AppError::forbidden("Access denied")
-            } else {
-                AppError::internal(err.to_string())
-            }
+        tokio::fs::create_dir_all(parent).await.map_err(|error| {
+            permission_or_internal_fs_error(
+                "create the parent directory for a file write",
+                error,
+                "Access denied",
+            )
         })?;
     }
 
-    tokio::fs::write(&resolved, content).await.map_err(|err| {
-        if err.kind() == std::io::ErrorKind::PermissionDenied {
-            AppError::forbidden("Access denied")
-        } else {
-            AppError::internal(err.to_string())
-        }
-    })?;
+    tokio::fs::write(&resolved, content)
+        .await
+        .map_err(|error| {
+            permission_or_internal_fs_error("write a filesystem file", error, "Access denied")
+        })?;
 
     publish_fs_changed_event(&base, "write", [resolved.as_path()], None, None);
 
@@ -718,10 +785,19 @@ pub async fn fs_delete(
     let meta = match tokio::fs::symlink_metadata(&resolved).await {
         Ok(m) => Some(m),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
-        Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
-            return Err(AppError::forbidden("Access denied"));
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+            return Err(permission_or_internal_fs_error(
+                "inspect a filesystem delete target",
+                error,
+                "Access denied",
+            ));
         }
-        Err(err) => return Err(AppError::internal(err.to_string())),
+        Err(error) => {
+            return Err(AppError::internal_error_with_context(
+                "inspect a filesystem delete target",
+                &error,
+            ));
+        }
     };
 
     if meta.is_none() {
@@ -738,12 +814,8 @@ pub async fn fs_delete(
     } else {
         tokio::fs::remove_file(&resolved).await
     }
-    .map_err(|err| {
-        if err.kind() == std::io::ErrorKind::PermissionDenied {
-            AppError::forbidden("Access denied")
-        } else {
-            AppError::internal(err.to_string())
-        }
+    .map_err(|error| {
+        permission_or_internal_fs_error("delete a filesystem entry", error, "Access denied")
     })?;
 
     publish_fs_changed_event(&base, "delete", [resolved.as_path()], None, None);
@@ -804,10 +876,13 @@ pub async fn fs_rename(
 
     tokio::fs::rename(&resolved_old, &resolved_new)
         .await
-        .map_err(|err| match err.kind() {
-            std::io::ErrorKind::NotFound => AppError::not_found("Source path not found"),
-            std::io::ErrorKind::PermissionDenied => AppError::forbidden("Access denied"),
-            _ => AppError::internal(err.to_string()),
+        .map_err(|error| {
+            mapped_fs_io_error(
+                "rename a filesystem entry",
+                error,
+                "Source path not found",
+                "Access denied",
+            )
         })?;
 
     publish_fs_changed_event(
@@ -896,30 +971,26 @@ pub async fn fs_list(Query(q): Query<ListQuery>) -> ApiResult<Json<ListResponse>
         .map(|v| v.to_string())
         .unwrap_or_else(|| home_dir_env().unwrap_or_default());
     let resolved = resolve_path(&raw_path);
-    let abs = if resolved.is_absolute() {
-        resolved
-    } else {
-        std::env::current_dir()
-            .unwrap_or_else(|_| PathBuf::from("."))
-            .join(resolved)
-    };
+    let abs = absolute_fs_path(
+        resolved,
+        "resolve the current directory for a directory listing",
+    )?;
 
-    let meta = tokio::fs::metadata(&abs)
-        .await
-        .map_err(|err| match err.kind() {
-            std::io::ErrorKind::NotFound => AppError::not_found("Directory not found"),
-            std::io::ErrorKind::PermissionDenied => {
-                AppError::forbidden("Access to directory denied")
-            }
-            _ => AppError::internal("Failed to list directory"),
-        })?;
+    let meta = tokio::fs::metadata(&abs).await.map_err(|error| {
+        mapped_fs_io_error(
+            "inspect a directory before listing it",
+            error,
+            "Directory not found",
+            "Access to directory denied",
+        )
+    })?;
     if !meta.is_dir() {
         return Err(AppError::bad_request("Specified path is not a directory"));
     }
 
-    let mut rd = tokio::fs::read_dir(&abs)
-        .await
-        .map_err(|err| AppError::internal(err.to_string()))?;
+    let mut rd = tokio::fs::read_dir(&abs).await.map_err(|error| {
+        AppError::internal_error_with_context("open a directory listing", &error)
+    })?;
 
     let mut raw_entries = Vec::new();
     let mut names = Vec::new();
@@ -945,15 +1016,32 @@ pub async fn fs_list(Query(q): Query<ListQuery>) -> ApiResult<Json<ListResponse>
         let path = entry.path();
         let ft = match entry.file_type().await {
             Ok(ft) => ft,
-            Err(_) => continue,
+            Err(error) => {
+                tracing::warn!(
+                    path = %path.display(),
+                    diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                        "filesystem listing could not inspect a workspace entry",
+                        &error,
+                    ),
+                    "filesystem listing skipped an unreadable entry"
+                );
+                continue;
+            }
         };
         let is_symbolic_link = ft.is_symlink();
         let mut is_directory = ft.is_dir();
-        if !is_directory
-            && is_symbolic_link
-            && let Ok(st) = tokio::fs::metadata(&path).await
-        {
-            is_directory = st.is_dir();
+        if !is_directory && is_symbolic_link {
+            match tokio::fs::metadata(&path).await {
+                Ok(metadata) => is_directory = metadata.is_dir(),
+                Err(error) => tracing::warn!(
+                    path = %path.display(),
+                    diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                        "filesystem listing could not resolve a symbolic link",
+                        &error,
+                    ),
+                    "filesystem listing retained an unresolved symbolic link"
+                ),
+            }
         }
 
         entries.push(ListItem {

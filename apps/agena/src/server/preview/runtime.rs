@@ -194,7 +194,7 @@ impl WorkspacePreviewRuntime {
             })?;
         let stderr_file = if logs.stdout == logs.stderr {
             stdout_file.try_clone().map_err(|err| {
-                AppError::internal(format!("failed to clone logs file handle: {err}"))
+                AppError::internal_error_with_context("clone the preview logs file handle", &err)
             })?
         } else {
             OpenOptions::new()
@@ -253,7 +253,14 @@ impl WorkspacePreviewRuntime {
             .map(|current| *current == pid)
             .unwrap_or(false);
         if !still_running {
-            let _ = self.registry.mark_stopped_by_id(trimmed, None).await;
+            if let Err(error) = self.registry.mark_stopped_by_id(trimmed, None).await {
+                tracing::error!(
+                    session_id = trimmed,
+                    pid,
+                    diagnostic = %agena_failure::diagnostic::format_error_chain(&error),
+                    "failed to persist a preview session stop that raced with process startup"
+                );
+            }
         }
 
         let registry = self.registry.clone();
@@ -281,7 +288,14 @@ impl WorkspacePreviewRuntime {
             };
 
             if should_apply {
-                let _ = registry.mark_stopped_by_id(&session_id, exit_detail).await;
+                if let Err(error) = registry.mark_stopped_by_id(&session_id, exit_detail).await {
+                    tracing::error!(
+                        session_id,
+                        pid,
+                        diagnostic = %agena_failure::diagnostic::format_error_chain(&error),
+                        "failed to persist preview process exit state"
+                    );
+                }
             }
         });
 
@@ -295,7 +309,7 @@ impl WorkspacePreviewRuntime {
         }
 
         if let Some((_, pid)) = self.running_by_id.remove(trimmed) {
-            let _ = kill_pid(pid).await;
+            kill_pid(pid).await?;
             return self.registry.mark_stopped_by_id(trimmed, None).await;
         }
 
@@ -307,7 +321,7 @@ impl WorkspacePreviewRuntime {
         if let Some(pid) = session.pid
             && pid > 0
         {
-            let _ = kill_pid(pid).await;
+            kill_pid(pid).await?;
         }
 
         self.registry.mark_stopped_by_id(trimmed, None).await
@@ -321,29 +335,59 @@ async fn kill_pid(pid: u32) -> ApiResult<()> {
 
     #[cfg(unix)]
     {
-        // Best-effort graceful stop.
-        unsafe {
-            let _ = libc::kill(pid as i32, libc::SIGTERM);
-        }
+        signal_unix_process(pid, libc::SIGTERM, "SIGTERM")?;
         tokio::time::sleep(Duration::from_millis(650)).await;
-        unsafe {
-            let _ = libc::kill(pid as i32, libc::SIGKILL);
-        }
+        // ESRCH after the grace period means SIGTERM already did its job.
+        signal_unix_process(pid, libc::SIGKILL, "SIGKILL")?;
         return Ok(());
     }
 
     #[cfg(windows)]
     {
-        let _ = Command::new("taskkill")
+        let output = Command::new("taskkill")
             .args(["/PID", &pid.to_string(), "/T", "/F"])
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
+            .stderr(Stdio::piped())
             .output()
-            .await;
+            .await
+            .map_err(|error| {
+                AppError::internal(format!(
+                    "failed to execute taskkill for preview process {pid}: {}",
+                    agena_failure::diagnostic::format_error_chain(&error)
+                ))
+            })?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(AppError::internal(format!(
+                "taskkill failed for preview process {pid} with status {}: {}",
+                output.status,
+                stderr.trim()
+            )));
+        }
         return Ok(());
     }
 
     #[allow(unreachable_code)]
     Ok(())
+}
+
+#[cfg(unix)]
+fn signal_unix_process(pid: u32, signal: i32, signal_name: &str) -> ApiResult<()> {
+    // SAFETY: libc::kill does not dereference pointers; pid and signal are
+    // validated scalar values supplied by this process registry.
+    if unsafe { libc::kill(pid as i32, signal) } == 0 {
+        return Ok(());
+    }
+
+    let error = std::io::Error::last_os_error();
+    if error.raw_os_error() == Some(libc::ESRCH) {
+        // The process exited between registry lookup and signal delivery.
+        return Ok(());
+    }
+
+    Err(AppError::internal(format!(
+        "failed to send {signal_name} to preview process {pid}: {}",
+        agena_failure::diagnostic::format_error_chain(&error)
+    )))
 }

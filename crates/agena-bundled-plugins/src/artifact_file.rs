@@ -37,13 +37,21 @@ async fn persist(
         ))
     })?;
     tokio::fs::create_dir_all(parent).await.map_err(|error| {
-        PluginError::internal(format!("cannot create {purpose} directory: {error}"))
+        PluginError::internal(agena_failure::diagnostic::format_error_chain_with_context(
+            format!("cannot create {purpose} directory"),
+            &error,
+        ))
     })?;
     let display_path = path.display().to_string();
     let worker_permit = crate::BLOCKING_PLUGIN_WORKERS
         .acquire()
         .await
-        .map_err(|_| PluginError::internal("artifact worker pool is unavailable"))?;
+        .map_err(|error| {
+            PluginError::internal(agena_failure::diagnostic::format_error_chain_with_context(
+                format!("acquire a {purpose} artifact worker"),
+                &error,
+            ))
+        })?;
     tokio::task::spawn_blocking(move || {
         let _worker_permit = worker_permit;
         let path = agena_runtime_tools::canonicalize_mutation_path(&path);
@@ -56,10 +64,16 @@ async fn persist(
         })?
     })
     .await
-    .map_err(|error| PluginError::internal(format!("{purpose} worker failed: {error}")))?
     .map_err(|error| {
-        PluginError::internal(format!(
-            "cannot persist {purpose} '{display_path}': {error}"
+        PluginError::internal(agena_failure::diagnostic::format_error_chain_with_context(
+            format!("{purpose} worker failed"),
+            &error,
+        ))
+    })?
+    .map_err(|error| {
+        PluginError::internal(agena_failure::diagnostic::format_error_chain_with_context(
+            format!("cannot persist {purpose} '{display_path}'"),
+            &error,
         ))
     })
 }

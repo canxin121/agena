@@ -1521,34 +1521,68 @@ pub(crate) fn router(state: Arc<McpServerState>) -> Router {
         .with_state(state)
 }
 
-fn mcp_request_body_error(error: &impl std::fmt::Display) -> Response {
-    tracing::warn!(
-        target: "agena::server::mcp",
-        error = %error,
-        max_bytes = MAX_MCP_METADATA_BODY_BYTES,
-        "rejected unreadable or oversized MCP request body"
-    );
-    (
-        StatusCode::PAYLOAD_TOO_LARGE,
-        format!(
-            "MCP request body could not be read within the {MAX_MCP_METADATA_BODY_BYTES}-byte limit"
-        ),
-    )
-        .into_response()
+fn mcp_body_error_contains_length_limit(error: &(dyn std::error::Error + 'static)) -> bool {
+    let mut current = Some(error);
+    while let Some(cause) = current {
+        if cause.is::<http_body_util::LengthLimitError>() {
+            return true;
+        }
+        current = cause.source();
+    }
+    false
 }
 
-fn mcp_response_body_error(error: &impl std::fmt::Display) -> Response {
+fn mcp_request_body_error(error: &(dyn std::error::Error + 'static)) -> Response {
+    let diagnostic = agena_failure::diagnostic::format_error_chain_with_context(
+        "failed to read MCP request body",
+        error,
+    );
+    if mcp_body_error_contains_length_limit(error) {
+        tracing::warn!(
+            target: "agena::server::mcp",
+            diagnostic = %diagnostic,
+            max_bytes = MAX_MCP_METADATA_BODY_BYTES,
+            "rejected oversized MCP request body"
+        );
+        return (
+            StatusCode::PAYLOAD_TOO_LARGE,
+            format!("MCP request body exceeds the {MAX_MCP_METADATA_BODY_BYTES}-byte limit"),
+        )
+            .into_response();
+    }
+
+    tracing::warn!(
+        target: "agena::server::mcp",
+        diagnostic = %diagnostic,
+        "failed to read MCP request body"
+    );
+    let public = agena_failure::diagnostic::user_message_with_context(&diagnostic, 400);
+    let public = if public.is_empty() {
+        "MCP request body could not be read".to_owned()
+    } else {
+        public
+    };
+    (StatusCode::BAD_REQUEST, public).into_response()
+}
+
+fn mcp_response_body_error(error: &(dyn std::error::Error + 'static)) -> Response {
+    let diagnostic = agena_failure::diagnostic::format_error_chain_with_context(
+        "failed to read MCP tools/list response body",
+        error,
+    );
     tracing::error!(
         target: "agena::server::mcp",
-        error = %error,
+        diagnostic = %diagnostic,
         max_bytes = MAX_MCP_METADATA_BODY_BYTES,
-        "MCP tools/list response exceeded the rewrite boundary"
+        "MCP tools/list response could not be read for metadata rewriting"
     );
-    (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        "MCP tools/list response could not be serialized safely",
-    )
-        .into_response()
+    let public = agena_failure::diagnostic::user_message_with_context(&diagnostic, 400);
+    let public = if public.is_empty() {
+        "MCP tools/list response could not be read for metadata rewriting".to_owned()
+    } else {
+        public
+    };
+    (StatusCode::INTERNAL_SERVER_ERROR, public).into_response()
 }
 
 /// Log the MCP HTTP boundary without logging request bodies.
@@ -2050,9 +2084,35 @@ fn rewrite_tool_list_json(
     auth_mode: McpAuthMode,
     auth_requirements: &HashMap<String, bool>,
 ) -> Option<Vec<u8>> {
-    let payload = serde_json::from_slice::<serde_json::Value>(body).ok()?;
+    let payload = match serde_json::from_slice::<serde_json::Value>(body) {
+        Ok(payload) => payload,
+        Err(error) => {
+            tracing::warn!(
+                target: "agena::server::mcp",
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "decode MCP tools/list JSON response for metadata rewriting",
+                    &error,
+                ),
+                "MCP tools/list JSON metadata was not rewritten"
+            );
+            return None;
+        }
+    };
     let payload = add_tool_security_schemes(payload, auth_mode, auth_requirements)?;
-    serde_json::to_vec(&payload).ok()
+    match serde_json::to_vec(&payload) {
+        Ok(payload) => Some(payload),
+        Err(error) => {
+            tracing::error!(
+                target: "agena::server::mcp",
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "serialize rewritten MCP tools/list JSON response",
+                    &error,
+                ),
+                "rewritten MCP tools/list JSON response could not be serialized"
+            );
+            None
+        }
+    }
 }
 
 fn rewrite_tool_list_sse(
@@ -2060,7 +2120,20 @@ fn rewrite_tool_list_sse(
     auth_mode: McpAuthMode,
     auth_requirements: &HashMap<String, bool>,
 ) -> Option<Vec<u8>> {
-    let text = std::str::from_utf8(body).ok()?;
+    let text = match std::str::from_utf8(body) {
+        Ok(text) => text,
+        Err(error) => {
+            tracing::warn!(
+                target: "agena::server::mcp",
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "decode MCP tools/list SSE response as UTF-8",
+                    &error,
+                ),
+                "MCP tools/list SSE metadata was not rewritten"
+            );
+            return None;
+        }
+    };
     let mut changed = false;
     let mut output = String::with_capacity(text.len());
 
@@ -2069,16 +2142,45 @@ fn rewrite_tool_list_sse(
         let line_without_newline = line_without_newline
             .strip_suffix('\r')
             .unwrap_or(line_without_newline);
-        if let Some(data) = line_without_newline.strip_prefix("data:")
-            && let Ok(payload) = serde_json::from_str::<serde_json::Value>(data.trim_start())
-            && let Some(payload) = add_tool_security_schemes(payload, auth_mode, auth_requirements)
-        {
-            let newline = &line[line_without_newline.len()..];
-            output.push_str("data: ");
-            output.push_str(serde_json::to_string(&payload).ok()?.as_str());
-            output.push_str(newline);
-            changed = true;
-            continue;
+        if let Some(data) = line_without_newline.strip_prefix("data:") {
+            match serde_json::from_str::<serde_json::Value>(data.trim_start()) {
+                Ok(payload) => {
+                    if let Some(payload) =
+                        add_tool_security_schemes(payload, auth_mode, auth_requirements)
+                    {
+                        let payload = match serde_json::to_string(&payload) {
+                            Ok(payload) => payload,
+                            Err(error) => {
+                                tracing::error!(
+                                    target: "agena::server::mcp",
+                                    diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                                        "serialize rewritten MCP tools/list SSE event",
+                                        &error,
+                                    ),
+                                    "rewritten MCP tools/list SSE event could not be serialized"
+                                );
+                                return None;
+                            }
+                        };
+                        let newline = &line[line_without_newline.len()..];
+                        output.push_str("data: ");
+                        output.push_str(payload.as_str());
+                        output.push_str(newline);
+                        changed = true;
+                        continue;
+                    }
+                }
+                Err(error) => {
+                    tracing::debug!(
+                        target: "agena::server::mcp",
+                        diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                            "decode MCP tools/list SSE data event",
+                            &error,
+                        ),
+                        "non-JSON MCP SSE data event was preserved without metadata rewriting"
+                    );
+                }
+            }
         }
         output.push_str(line);
     }
@@ -2348,7 +2450,14 @@ async fn register_client(
     }
     let Json(request) = match request {
         Ok(request) => request,
-        Err(_) => {
+        Err(error) => {
+            tracing::warn!(
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "MCP dynamic client registration body is invalid",
+                    &error,
+                ),
+                "rejecting invalid MCP client registration request"
+            );
             return oauth_error(
                 StatusCode::BAD_REQUEST,
                 "invalid_client_metadata",
@@ -2454,9 +2563,9 @@ async fn register_client(
     json_no_store(StatusCode::CREATED, response)
 }
 
-async fn fetch_cimd_document(client_id: &str) -> Result<CimdClientMetadata, ()> {
+async fn fetch_cimd_document(client_id: &str) -> Result<CimdClientMetadata, String> {
     if !is_supported_cimd_client_id(client_id) {
-        return Err(());
+        return Err("CIMD client id is outside the supported metadata namespace".to_owned());
     }
 
     let client = reqwest::Client::builder()
@@ -2464,65 +2573,113 @@ async fn fetch_cimd_document(client_id: &str) -> Result<CimdClientMetadata, ()> 
         .connect_timeout(Duration::from_secs(3))
         .timeout(Duration::from_secs(8))
         .build()
-        .map_err(|_| ())?;
+        .map_err(|error| {
+            agena_failure::diagnostic::format_error_chain_with_context(
+                "build the CIMD metadata HTTP client",
+                &error,
+            )
+        })?;
     let response = client
         .get(client_id)
         .header(header::ACCEPT, "application/json")
         .send()
         .await
-        .map_err(|_| ())?;
+        .map_err(|error| {
+            agena_failure::diagnostic::format_error_chain_with_context(
+                "fetch the CIMD metadata document",
+                &error,
+            )
+        })?;
     if !response.status().is_success() {
-        return Err(());
+        return Err(format!(
+            "CIMD metadata endpoint returned HTTP {}",
+            response.status()
+        ));
     }
-    if response
-        .headers()
-        .get(header::CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
-        .is_some_and(|value| {
+    if let Some(value) = response.headers().get(header::CONTENT_TYPE) {
+        let value = value.to_str().map_err(|error| {
+            agena_failure::diagnostic::format_error_chain_with_context(
+                "decode the CIMD metadata Content-Type header",
+                &error,
+            )
+        })?;
+        if {
             let media_type = value.split(';').next().unwrap_or_default().trim();
             !media_type.eq_ignore_ascii_case("application/json") && !media_type.ends_with("+json")
-        })
-    {
-        return Err(());
+        } {
+            return Err(format!(
+                "CIMD metadata endpoint returned unsupported Content-Type {value:?}"
+            ));
+        }
     }
     if response
         .content_length()
         .is_some_and(|length| length > MAX_CIMD_DOCUMENT_BYTES as u64)
     {
-        return Err(());
+        return Err(format!(
+            "CIMD metadata document exceeded the {MAX_CIMD_DOCUMENT_BYTES}-byte limit"
+        ));
     }
 
     let mut body = Vec::new();
     let mut stream = response.bytes_stream();
     while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|_| ())?;
+        let chunk = chunk.map_err(|error| {
+            agena_failure::diagnostic::format_error_chain_with_context(
+                "read the CIMD metadata response body",
+                &error,
+            )
+        })?;
         if body.len().saturating_add(chunk.len()) > MAX_CIMD_DOCUMENT_BYTES {
-            return Err(());
+            return Err(format!(
+                "CIMD metadata document exceeded the {MAX_CIMD_DOCUMENT_BYTES}-byte limit while streaming"
+            ));
         }
         body.extend_from_slice(&chunk);
     }
-    serde_json::from_slice::<CimdClientMetadata>(&body).map_err(|_| ())
+    serde_json::from_slice::<CimdClientMetadata>(&body).map_err(|error| {
+        agena_failure::diagnostic::format_error_chain_with_context(
+            "decode the CIMD metadata document",
+            &error,
+        )
+    })
 }
 
-fn validate_cimd_document(client_id: &str, metadata: &CimdClientMetadata) -> Result<(), ()> {
-    if metadata.client_id.as_deref() != Some(client_id)
-        || metadata.redirect_uris.is_empty()
-        || metadata.redirect_uris.len() > 16
-        || metadata
-            .client_name
-            .as_deref()
-            .is_some_and(|name| name.trim().is_empty() || name.len() > MAX_OAUTH_LABEL_BYTES)
-        || metadata.redirect_uris.iter().any(|redirect_uri| {
-            redirect_uri.len() > MAX_OAUTH_URI_BYTES || validate_redirect_uri(redirect_uri).is_err()
-        })
-        || !client_metadata_supports_none(
-            metadata.token_endpoint_auth_method.as_deref(),
-            metadata.token_endpoint_auth_methods_supported.as_deref(),
-        )
-        || !client_metadata_supports_grants(metadata.grant_types.as_deref())
-        || !client_metadata_supports_code_response(metadata.response_types.as_deref())
+fn validate_cimd_document(client_id: &str, metadata: &CimdClientMetadata) -> Result<(), String> {
+    if metadata.client_id.as_deref() != Some(client_id) {
+        return Err("CIMD document client_id did not match its metadata URL".to_owned());
+    }
+    if metadata.redirect_uris.is_empty() || metadata.redirect_uris.len() > 16 {
+        return Err("CIMD document must declare between 1 and 16 redirect URIs".to_owned());
+    }
+    if metadata
+        .client_name
+        .as_deref()
+        .is_some_and(|name| name.trim().is_empty() || name.len() > MAX_OAUTH_LABEL_BYTES)
     {
-        return Err(());
+        return Err("CIMD document client_name is empty or too long".to_owned());
+    }
+    for (index, redirect_uri) in metadata.redirect_uris.iter().enumerate() {
+        if redirect_uri.len() > MAX_OAUTH_URI_BYTES {
+            return Err(format!(
+                "CIMD redirect URI {index} exceeds the length limit"
+            ));
+        }
+        if let Err(error) = validate_redirect_uri(redirect_uri) {
+            return Err(format!("CIMD redirect URI {index} is not allowed: {error}"));
+        }
+    }
+    if !client_metadata_supports_none(
+        metadata.token_endpoint_auth_method.as_deref(),
+        metadata.token_endpoint_auth_methods_supported.as_deref(),
+    ) {
+        return Err("CIMD document does not support token endpoint auth method none".to_owned());
+    }
+    if !client_metadata_supports_grants(metadata.grant_types.as_deref()) {
+        return Err("CIMD document does not support the required OAuth grant types".to_owned());
+    }
+    if !client_metadata_supports_code_response(metadata.response_types.as_deref()) {
+        return Err("CIMD document does not support the OAuth code response type".to_owned());
     }
     Ok(())
 }
@@ -2530,9 +2687,9 @@ fn validate_cimd_document(client_id: &str, metadata: &CimdClientMetadata) -> Res
 async fn load_cimd_client(
     state: &McpServerState,
     client_id: &str,
-) -> Result<CimdClientMetadata, ()> {
+) -> Result<CimdClientMetadata, String> {
     if !is_supported_cimd_client_id(client_id) {
-        return Err(());
+        return Err("CIMD client id is outside the supported metadata namespace".to_owned());
     }
     let now = Instant::now();
     state
@@ -2557,7 +2714,7 @@ async fn load_cimd_client(
         return Ok(cached.metadata.clone());
     }
     if state.oauth.cimd_clients.len() >= MAX_CACHED_CIMD_CLIENTS {
-        return Err(());
+        return Err("CIMD metadata cache capacity has been reached".to_owned());
     }
 
     let metadata = fetch_cimd_document(client_id).await?;
@@ -2678,7 +2835,12 @@ async fn validate_authorization_client(
         None
     };
     let cimd_client = if registered_client.is_none() {
-        Some(load_cimd_client(state, client_id).await.map_err(|_| {
+        Some(load_cimd_client(state, client_id).await.map_err(|error| {
+            tracing::warn!(
+                client_id,
+                diagnostic = %error,
+                "CIMD client metadata validation failed"
+            );
             OAuthRequestError::new(
                 "invalid_client",
                 "the CIMD client metadata document could not be validated",
@@ -2835,7 +2997,14 @@ async fn authorize_post(
     }
     let Form(request) = match request {
         Ok(request) => request,
-        Err(_) => {
+        Err(error) => {
+            tracing::warn!(
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "MCP OAuth authorization form is invalid",
+                    &error,
+                ),
+                "rejecting invalid MCP OAuth authorization request"
+            );
             return oauth_error(
                 StatusCode::BAD_REQUEST,
                 "invalid_request",
@@ -2908,7 +3077,14 @@ async fn authorize_post(
 
     let mut redirect = match Url::parse(validated.redirect_uri.as_str()) {
         Ok(redirect) => redirect,
-        Err(_) => {
+        Err(error) => {
+            tracing::error!(
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "failed to rebuild a previously validated MCP OAuth redirect URI",
+                    &error,
+                ),
+                "MCP OAuth redirect URI invariant failed"
+            );
             return oauth_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "server_error",
@@ -2942,7 +3118,16 @@ fn authorization_error_redirect(
 ) -> Response {
     let mut redirect = match Url::parse(redirect_uri) {
         Ok(redirect) => redirect,
-        Err(_) => return error.clone().into_response(),
+        Err(parse_error) => {
+            tracing::error!(
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "failed to rebuild an MCP OAuth error redirect URI",
+                    &parse_error,
+                ),
+                "returning MCP OAuth error without redirect"
+            );
+            return error.clone().into_response();
+        }
     };
     {
         let mut query = redirect.query_pairs_mut();
@@ -3317,7 +3502,14 @@ async fn token(
     }
     let Form(request) = match request {
         Ok(request) => request,
-        Err(_) => {
+        Err(error) => {
+            tracing::warn!(
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "MCP OAuth token form is invalid",
+                    &error,
+                ),
+                "rejecting invalid MCP OAuth token request"
+            );
             return oauth_error(
                 StatusCode::BAD_REQUEST,
                 "invalid_request",
@@ -3430,13 +3622,21 @@ async fn exchange_authorization_code(
             record.scope.as_str(),
             None,
         )
-        .map_err(|_| {
+        .map_err(|error| {
+            tracing::error!(
+                diagnostic = %error,
+                "MCP OAuth access-token issuance failed"
+            );
             OAuthTokenError::new(
                 "server_error",
                 "the authorization server could not issue an access token",
             )
         })?;
-    state.oauth.persist().await.map_err(|_| {
+    state.oauth.persist().await.map_err(|error| {
+        tracing::error!(
+            diagnostic = %error,
+            "MCP OAuth issued token could not be persisted"
+        );
         OAuthTokenError::new(
             "server_error",
             "the authorization server could not persist the issued token",
@@ -3504,7 +3704,17 @@ async fn refresh_access_token(
                 entry.revoked = true;
             }
         }
-        let _ = state.oauth.persist().await;
+        if let Err(error) = state.oauth.persist().await {
+            tracing::error!(
+                error = %error,
+                family_id = %family_id,
+                "failed to persist revoked MCP OAuth refresh-token family after replay detection"
+            );
+            return Err(OAuthTokenError::new(
+                "server_error",
+                "the authorization server could not persist the revoked token family",
+            ));
+        }
         return Err(OAuthTokenError::new(
             "invalid_grant",
             "refresh token replay detected; the token family has been revoked",
@@ -3530,13 +3740,21 @@ async fn refresh_access_token(
             record.scope.as_str(),
             Some(record.family_id.as_str()),
         )
-        .map_err(|_| {
+        .map_err(|error| {
+            tracing::error!(
+                diagnostic = %error,
+                "MCP OAuth refresh-token rotation failed during token issuance"
+            );
             OAuthTokenError::new(
                 "server_error",
                 "the authorization server could not issue an access token",
             )
         })?;
-    state.oauth.persist().await.map_err(|_| {
+    state.oauth.persist().await.map_err(|error| {
+        tracing::error!(
+            diagnostic = %error,
+            "MCP OAuth rotated refresh token could not be persisted"
+        );
         OAuthTokenError::new(
             "server_error",
             "the authorization server could not persist the rotated token",
@@ -3561,7 +3779,14 @@ async fn revoke(
     }
     let Form(request) = match request {
         Ok(request) => request,
-        Err(_) => {
+        Err(error) => {
+            tracing::warn!(
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "MCP OAuth revocation form is invalid",
+                    &error,
+                ),
+                "rejecting invalid MCP OAuth revocation request"
+            );
             return oauth_error(
                 StatusCode::BAD_REQUEST,
                 "invalid_request",
@@ -3764,16 +3989,41 @@ fn mcp_unauthorized(issuer: &str, resource: &str) -> Response {
         })),
     )
         .into_response();
-    if let Ok(value) = HeaderValue::try_from(value) {
-        response
-            .headers_mut()
-            .insert(header::WWW_AUTHENTICATE, value);
+    match HeaderValue::try_from(value) {
+        Ok(value) => {
+            response
+                .headers_mut()
+                .insert(header::WWW_AUTHENTICATE, value);
+        }
+        Err(error) => {
+            tracing::error!(
+                target: "agena::server::mcp",
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "construct MCP WWW-Authenticate response header",
+                    &error,
+                ),
+                "MCP unauthorized response omitted an invalid challenge header"
+            );
+        }
     }
     response
 }
 
 fn unauthorized_tool_call_id(body: &[u8]) -> Option<serde_json::Value> {
-    let request = serde_json::from_slice::<serde_json::Value>(body).ok()?;
+    let request = match serde_json::from_slice::<serde_json::Value>(body) {
+        Ok(request) => request,
+        Err(error) => {
+            tracing::debug!(
+                target: "agena::server::mcp",
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "decode unauthorized MCP request id",
+                    &error,
+                ),
+                "malformed unauthorized MCP request will receive a transport-level challenge"
+            );
+            return None;
+        }
+    };
     if request.get("method").and_then(serde_json::Value::as_str) != Some("tools/call") {
         return None;
     }
@@ -3967,23 +4217,30 @@ fn pkce_matches(verifier: &str, challenge: &str) -> bool {
     URL_SAFE_NO_PAD.encode(digest) == challenge
 }
 
-fn validate_redirect_uri(value: &str) -> Result<(), ()> {
-    let url = Url::parse(value).map_err(|_| ())?;
+fn validate_redirect_uri(value: &str) -> Result<(), String> {
+    let url = Url::parse(value).map_err(|error| format!("redirect URI is invalid: {error}"))?;
     if url.scheme() != "https" && !(url.scheme() == "http" && is_loopback_host(&url)) {
-        return Err(());
+        return Err("redirect URI must use HTTPS unless it targets a loopback host".to_owned());
     }
-    if url.host_str().is_none()
-        || !url.username().is_empty()
-        || url.password().is_some()
-        || url.fragment().is_some()
-        || url.query_pairs().any(|(key, _)| {
-            matches!(
-                key.as_ref(),
-                "code" | "state" | "iss" | "error" | "error_description"
-            )
-        })
-    {
-        return Err(());
+    if url.host_str().is_none() {
+        return Err("redirect URI must include a host".to_owned());
+    }
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err("redirect URI must not include user information".to_owned());
+    }
+    if url.fragment().is_some() {
+        return Err("redirect URI must not include a fragment".to_owned());
+    }
+    if let Some(parameter) = url.query_pairs().find_map(|(key, _)| {
+        matches!(
+            key.as_ref(),
+            "code" | "state" | "iss" | "error" | "error_description"
+        )
+        .then(|| key.into_owned())
+    }) {
+        return Err(format!(
+            "redirect URI must not pre-populate the reserved OAuth query parameter `{parameter}`"
+        ));
     }
     Ok(())
 }

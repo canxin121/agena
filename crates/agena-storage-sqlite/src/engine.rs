@@ -102,10 +102,17 @@ async fn run_write<T>(
             txn.commit().await.map_err(map_db_err)?;
             Ok(value)
         }
-        Err(error) => {
-            let _ = txn.rollback().await;
-            Err(error)
-        }
+        Err(error) => match txn.rollback().await {
+            Ok(()) => Err(error),
+            Err(rollback_error) => Err(StoreError::Database(format!(
+                "{}; additionally, {}",
+                agena_failure::diagnostic::format_error_chain(&error),
+                agena_failure::diagnostic::format_error_chain_with_context(
+                    "failed to roll back the SQLite write transaction",
+                    &rollback_error,
+                )
+            ))),
+        },
     }
 }
 
@@ -115,7 +122,7 @@ fn map_db_err(error: DbErr) -> StoreError {
     if is_sqlite_busy(&error) {
         StoreError::Busy
     } else {
-        StoreError::Database(error.to_string())
+        StoreError::Database(agena_failure::diagnostic::format_error_chain(&error))
     }
 }
 
@@ -2443,7 +2450,7 @@ impl PersistenceEngine for SqliteEngine {
                 // in-flight child remains, so the session returns to Ready
                 // instead of lingering in Running/Interrupted.
                 if run.state.is_in_flight() {
-                    let remaining: Option<i64> = txn
+                    let remaining_row = txn
                         .query_one(Statement::from_sql_and_values(
                             DatabaseBackend::Sqlite,
                             "SELECT part_id FROM agena_parts \
@@ -2453,8 +2460,11 @@ impl PersistenceEngine for SqliteEngine {
                             [session_id.into(), run_id.into(), run_id.into()],
                         ))
                         .await
-                        .map_err(map_db_err)?
-                        .and_then(|row| row.try_get("", "part_id").ok());
+                        .map_err(map_db_err)?;
+                    let remaining: Option<i64> = match remaining_row {
+                        Some(row) => Some(row.try_get("", "part_id").map_err(map_db_err)?),
+                        None => None,
+                    };
                     if remaining.is_none() {
                         let mut marker = run;
                         marker.state = PartState::Completed;
@@ -3317,7 +3327,7 @@ async fn submit_batch_tx(
 ) -> Result<SubmitOutcome, StoreError> {
     // Idempotency: a replay of the same key returns the prior run.
     if let Some(key) = idempotency_key.as_deref() {
-        let existing: Option<i64> = txn
+        let existing_row = txn
             .query_one(Statement::from_sql_and_values(
                 DatabaseBackend::Sqlite,
                 "SELECT run_id FROM agena_idempotency \
@@ -3325,8 +3335,11 @@ async fn submit_batch_tx(
                 [session_id.into(), key.into()],
             ))
             .await
-            .map_err(map_db_err)?
-            .and_then(|row| row.try_get("", "run_id").ok());
+            .map_err(map_db_err)?;
+        let existing: Option<i64> = match existing_row {
+            Some(row) => Some(row.try_get("", "run_id").map_err(map_db_err)?),
+            None => None,
+        };
         if let Some(run_id) = existing {
             let parts = run_parts_tx(txn, run_id).await?;
             return Ok(SubmitOutcome {

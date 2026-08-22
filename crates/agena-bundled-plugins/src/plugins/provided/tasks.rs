@@ -274,7 +274,7 @@ impl TasksPlugin {
             .lock()
             .map_err(|_| agena_plugin_host::PluginError::internal("tasks registry lock poisoned"))?
             .values()
-            .filter_map(|entry| entry.state.lock().ok().map(|state| state.clone()))
+            .map(|entry| recover_task_state(entry).clone())
             .filter(|state| state.parent_session_id == context.session_id)
             .filter(|state| {
                 input
@@ -546,7 +546,7 @@ impl TasksPlugin {
             .map_err(|_| agena_plugin_host::PluginError::internal("tasks registry lock poisoned"))?
             .values()
             .filter_map(|entry| {
-                let state = entry.state.lock().ok()?.clone();
+                let state = recover_task_state(entry).clone();
                 (state.parent_session_id == input.session_id && !is_terminal(&state.status))
                     .then(|| (Arc::clone(entry), state))
             })
@@ -579,12 +579,12 @@ impl TasksPlugin {
                 );
                 continue;
             }
-            if let Ok(mut mutable) = entry.state.lock()
-                && !is_terminal(&mutable.status)
-            {
+            let mut mutable = recover_task_state(&entry);
+            if !is_terminal(&mutable.status) {
                 mutable.status = "cancelling".to_string();
                 mutable.error = Some("parent session ended; cancellation requested".to_string());
             }
+            drop(mutable);
             entry.notify.notify_waiters();
             entry.notify.notify_one();
         }
@@ -703,7 +703,12 @@ async fn persist_task_state(
     state: &AsyncTaskState,
 ) -> SdkResult<()> {
     let value = serde_json::to_string(state).map_err(|error| {
-        agena_plugin_host::PluginError::internal(format!("serialize task state: {error}"))
+        agena_plugin_host::PluginError::internal(
+            agena_failure::diagnostic::format_error_chain_with_context(
+                "serialize background task state",
+                &error,
+            ),
+        )
     })?;
     run_in_host_callback_context(
         context,
@@ -726,7 +731,8 @@ fn spawn_task(host: Arc<dyn HostClient>, entry: Arc<AsyncTaskEntry>, request: Ru
         // needs the plugin identity granted by ScopedHostClient/transport.
         let context = detached_task_context();
         let result = run_in_host_callback_context(context.clone(), host.run_subtask(request)).await;
-        let persisted = if let Ok(mut state) = entry.state.lock() {
+        let persisted = {
+            let mut state = recover_task_state(&entry);
             state.finished_at_ms = Some(chrono::Utc::now().timestamp_millis());
             match result {
                 Ok(response) => {
@@ -739,18 +745,27 @@ fn spawn_task(host: Arc<dyn HostClient>, entry: Arc<AsyncTaskEntry>, request: Ru
                     state.response = Some(response);
                 }
                 Err(error) => {
+                    tracing::error!(
+                        target: "agena_tasks",
+                        diagnostic = %error.diagnostic.message,
+                        "background task execution failed"
+                    );
                     state.status = "failed".to_string();
-                    state.error = Some(error.to_string());
+                    state.error = Some(error.failure.user.fallback.clone());
                 }
             }
-            Some(state.clone())
-        } else {
-            None
+            state.clone()
         };
-        if let Some(state) = persisted
-            && let Err(error) = persist_task_state(&host, context, &state).await
-        {
-            tracing::warn!(target: "agena_tasks", %error, task_id = %state.task_id, "failed to persist terminal task state");
+        if let Err(error) = persist_task_state(&host, context, &persisted).await {
+            tracing::warn!(
+                target: "agena_tasks",
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "persist completed background task state",
+                    &error,
+                ),
+                task_id = %persisted.task_id,
+                "failed to persist terminal task state"
+            );
         }
         entry.notify.notify_waiters();
         // Preserve one permit for a waiter that checked state immediately
@@ -849,7 +864,7 @@ fn ensure_task_capacity(
         .lock()
         .map_err(|_| agena_plugin_host::PluginError::internal("tasks registry lock poisoned"))?
         .values()
-        .filter_map(|entry| entry.state.lock().ok().map(|state| state.clone()))
+        .map(|entry| recover_task_state(entry).clone())
         .filter(|state| {
             state.parent_session_id == parent_session_id
                 && !is_terminal(&state.status)
@@ -865,10 +880,21 @@ fn ensure_task_capacity(
 }
 
 fn lock_state(entry: &AsyncTaskEntry) -> SdkResult<std::sync::MutexGuard<'_, AsyncTaskState>> {
-    entry
-        .state
-        .lock()
-        .map_err(|_| agena_plugin_host::PluginError::internal("task state lock poisoned"))
+    Ok(recover_task_state(entry))
+}
+
+fn recover_task_state(entry: &AsyncTaskEntry) -> std::sync::MutexGuard<'_, AsyncTaskState> {
+    match entry.state.lock() {
+        Ok(state) => state,
+        Err(error) => {
+            tracing::error!(
+                operation = "access background task state",
+                error = %error,
+                "recovering poisoned background task state lock"
+            );
+            error.into_inner()
+        }
+    }
 }
 
 fn task_output(

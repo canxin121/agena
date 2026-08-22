@@ -17,7 +17,8 @@ use serde::{Deserialize, Serialize};
 use crate::git2_utils;
 
 use super::{
-    MAX_BLOB_BYTES, git2_open_error_response, require_directory_raw, run_git, spawn_libgit2,
+    MAX_BLOB_BYTES, git_command_result_or_log, git_io_error_response, git_task_error_response,
+    git2_open_error_response, require_directory_raw, run_git, run_git_checked, spawn_libgit2,
 };
 
 #[derive(Debug, Serialize)]
@@ -59,27 +60,54 @@ pub struct DiffStat {
     pub deletions: i32,
 }
 
-fn parse_numstat(raw: &str, map: &mut HashMap<String, DiffStat>) {
-    for line in raw.lines().map(|l| l.trim()).filter(|l| !l.is_empty()) {
+fn parse_numstat(raw: &str, map: &mut HashMap<String, DiffStat>) -> Result<(), String> {
+    for (line_index, line) in raw
+        .lines()
+        .map(|line| line.trim())
+        .enumerate()
+        .filter(|(_, line)| !line.is_empty())
+    {
         let parts: Vec<&str> = line.split('\t').collect();
         if parts.len() < 3 {
-            continue;
+            return Err(format!(
+                "invalid Git numstat record at line {}: expected at least three tab-separated fields",
+                line_index + 1
+            ));
         }
         let ins_raw = parts[0];
         let del_raw = parts[1];
         let path = parts[2..].join("\t");
         if path.is_empty() {
-            continue;
+            return Err(format!(
+                "invalid Git numstat record at line {}: file path is empty",
+                line_index + 1
+            ));
         }
         let ins = if ins_raw == "-" {
             0
         } else {
-            ins_raw.parse::<i32>().unwrap_or(0)
+            ins_raw.parse::<i32>().map_err(|error| {
+                agena_failure::diagnostic::format_error_chain_with_context(
+                    format!(
+                        "invalid insertion count in Git numstat record at line {}",
+                        line_index + 1
+                    ),
+                    &error,
+                )
+            })?
         };
         let del = if del_raw == "-" {
             0
         } else {
-            del_raw.parse::<i32>().unwrap_or(0)
+            del_raw.parse::<i32>().map_err(|error| {
+                agena_failure::diagnostic::format_error_chain_with_context(
+                    format!(
+                        "invalid deletion count in Git numstat record at line {}",
+                        line_index + 1
+                    ),
+                    &error,
+                )
+            })?
         };
         let entry = map.entry(path).or_insert(DiffStat {
             insertions: 0,
@@ -88,48 +116,162 @@ fn parse_numstat(raw: &str, map: &mut HashMap<String, DiffStat>) {
         entry.insertions += ins;
         entry.deletions += del;
     }
+    Ok(())
 }
 
-async fn estimate_new_file_lines(repo: &Path, file_rel: &str) -> Option<DiffStat> {
+async fn estimate_new_file_lines(repo: &Path, file_rel: &str) -> std::io::Result<Option<DiffStat>> {
     let full = repo.join(file_rel);
-    let meta = tokio::fs::metadata(&full).await.ok()?;
+    let meta = match tokio::fs::metadata(&full).await {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
     if !meta.is_file() || meta.len() > MAX_BLOB_BYTES as u64 {
-        return None;
+        return Ok(None);
     }
-    let data = tokio::fs::read(&full).await.ok()?;
+    let data = match tokio::fs::read(&full).await {
+        Ok(data) => data,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
     if data.contains(&0) {
-        return Some(DiffStat {
+        return Ok(Some(DiffStat {
             insertions: 0,
             deletions: 0,
-        });
+        }));
     }
     let s = String::from_utf8_lossy(&data).replace("\r\n", "\n");
     if s.is_empty() {
-        return Some(DiffStat {
+        return Ok(Some(DiffStat {
             insertions: 0,
             deletions: 0,
-        });
+        }));
     }
     let mut lines = s.split('\n').count() as i32;
     if s.ends_with('\n') {
         lines -= 1;
     }
-    Some(DiffStat {
+    Ok(Some(DiffStat {
         insertions: lines.max(0),
         deletions: 0,
-    })
+    }))
+}
+
+fn git_status_diagnostic_response(context: &str, diagnostic: &str, code: &'static str) -> Response {
+    tracing::error!(
+        operation = context,
+        error_code = code,
+        diagnostic,
+        "Git status failed"
+    );
+    let public = agena_failure::diagnostic::user_message_with_context(diagnostic, 400);
+    let public = if public.is_empty() {
+        "Git status could not be computed".to_owned()
+    } else {
+        public
+    };
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(serde_json::json!({"error": public, "code": code})),
+    )
+        .into_response()
+}
+
+fn serialize_git_watch_event(value: serde_json::Value, event_kind: &'static str) -> String {
+    match serde_json::to_string(&value) {
+        Ok(json) => json,
+        Err(error) => {
+            tracing::error!(
+                event_kind,
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "failed to serialize a Git watch SSE event",
+                    &error,
+                ),
+                "Git watch event serialization failed"
+            );
+            r#"{"type":"git.watch.error","message":"Git watch event serialization failed"}"#
+                .to_owned()
+        }
+    }
+}
+
+fn git2_other(context: &str, error: &git2::Error) -> git2_utils::Git2OpenError {
+    git2_utils::Git2OpenError::Other(git2_utils::git2_error_diagnostic(context, error))
+}
+
+fn read_branch_state(
+    repo: &git2::Repository,
+) -> Result<(String, Option<String>, i32, i32), git2_utils::Git2OpenError> {
+    use git2::{BranchType, ErrorCode};
+
+    let head = match repo.head() {
+        Ok(head) => head,
+        Err(error) if matches!(error.code(), ErrorCode::NotFound | ErrorCode::UnbornBranch) => {
+            return Ok((String::new(), None, 0, 0));
+        }
+        Err(error) => return Err(git2_other("failed to resolve Git HEAD", &error)),
+    };
+    if !head.is_branch() {
+        return Ok(("HEAD".to_owned(), None, 0, 0));
+    }
+
+    let current = head
+        .shorthand()
+        .map_err(|error| git2_other("Git HEAD branch name is not valid UTF-8", &error))?
+        .to_owned();
+    let branch = repo
+        .find_branch(&current, BranchType::Local)
+        .map_err(|error| git2_other("failed to resolve the current local Git branch", &error))?;
+    let upstream = match branch.upstream() {
+        Ok(upstream) => upstream,
+        Err(error) if error.code() == ErrorCode::NotFound => {
+            return Ok((current, None, 0, 0));
+        }
+        Err(error) => {
+            return Err(git2_other(
+                "failed to resolve the upstream Git branch",
+                &error,
+            ));
+        }
+    };
+    let tracking = upstream
+        .get()
+        .shorthand()
+        .map_err(|error| git2_other("upstream Git branch name is not valid UTF-8", &error))?
+        .to_owned();
+
+    let (ahead, behind) = match (head.target(), upstream.get().target()) {
+        (Some(head_id), Some(upstream_id)) => repo
+            .graph_ahead_behind(head_id, upstream_id)
+            .map_err(|error| {
+                git2_other(
+                    "failed to compute ahead/behind counts for the current Git branch",
+                    &error,
+                )
+            })?,
+        _ => (0, 0),
+    };
+    Ok((current, Some(tracking), ahead as i32, behind as i32))
 }
 
 async fn select_base_ref_for_unpublished(dir: &Path) -> Option<String> {
     let candidates = {
         let mut out = Vec::new();
-        if let Ok((code, stdout, _)) =
-            run_git(dir, &["symbolic-ref", "-q", "refs/remotes/origin/HEAD"]).await
-            && code == 0
-        {
-            let s = stdout.trim();
-            if !s.is_empty() {
-                out.push(s.replace("refs/remotes/", ""));
+        if let Some((code, stdout, stderr)) = git_command_result_or_log(
+            run_git(dir, &["symbolic-ref", "-q", "refs/remotes/origin/HEAD"]).await,
+            "resolve the default origin branch for unpublished-commit estimation",
+        ) {
+            if code == 0 {
+                let branch = stdout.trim();
+                if !branch.is_empty() {
+                    out.push(branch.replace("refs/remotes/", ""));
+                }
+            } else {
+                tracing::debug!(
+                    git_exit_code = code,
+                    git_stderr = %super::redact_git_output(&super::truncate_for_payload(&stderr, 4_000)),
+                    "default origin branch is unavailable for unpublished-commit estimation"
+                );
             }
         }
         out.extend(
@@ -141,11 +283,21 @@ async fn select_base_ref_for_unpublished(dir: &Path) -> Option<String> {
     };
 
     for r in candidates {
-        if let Ok((code, stdout, _)) = run_git(dir, &["rev-parse", "--verify", &r]).await
-            && code == 0
-            && !stdout.trim().is_empty()
-        {
+        let Some((code, stdout, stderr)) = git_command_result_or_log(
+            run_git(dir, &["rev-parse", "--verify", &r]).await,
+            "validate a Git base reference for unpublished-commit estimation",
+        ) else {
+            continue;
+        };
+        if code == 0 && !stdout.trim().is_empty() {
             return Some(r);
+        }
+        if code != 0 {
+            tracing::debug!(
+                git_exit_code = code,
+                git_stderr = %super::redact_git_output(&super::truncate_for_payload(&stderr, 4_000)),
+                "candidate Git base reference is unavailable"
+            );
         }
     }
     None
@@ -178,39 +330,14 @@ pub async fn git_status(Query(q): Query<GitStatusQuery>) -> Response {
     let snapshot = spawn_libgit2({
         let dir = dir.clone();
         move || {
-            use git2::{BranchType, Status, StatusOptions};
+            use git2::{Status, StatusOptions};
 
             let repo = match git2_utils::open_repo_discover(&dir) {
                 Ok(r) => r,
                 Err(e) => return Err(e),
             };
 
-            let mut current = String::new();
-            let mut tracking: Option<String> = None;
-            let mut ahead: i32 = 0;
-            let mut behind: i32 = 0;
-
-            // Current branch + upstream tracking.
-            if let Ok(head) = repo.head() {
-                if head.is_branch() {
-                    current = head.shorthand().unwrap_or("").to_string();
-                    if let Ok(cur_name) = head.shorthand()
-                        && let Ok(branch) = repo.find_branch(cur_name, BranchType::Local)
-                        && let Ok(up) = branch.upstream()
-                    {
-                        tracking = up.get().shorthand().ok().map(str::to_string);
-                        if let (Some(h), Some(u)) = (head.target(), up.get().target())
-                            && let Ok((a, b)) = repo.graph_ahead_behind(h, u)
-                        {
-                            ahead = a as i32;
-                            behind = b as i32;
-                        }
-                    }
-                } else {
-                    // Detached HEAD.
-                    current = "HEAD".to_string();
-                }
-            }
+            let (current, tracking, ahead, behind) = read_branch_state(&repo)?;
 
             let mut opts = StatusOptions::new();
             opts.include_untracked(true)
@@ -218,9 +345,12 @@ pub async fn git_status(Query(q): Query<GitStatusQuery>) -> Response {
                 .include_ignored(false)
                 .include_unmodified(false);
 
-            let statuses = repo
-                .statuses(Some(&mut opts))
-                .map_err(|e| git2_utils::Git2OpenError::Other(e.message().to_string()))?;
+            let statuses = repo.statuses(Some(&mut opts)).map_err(|error| {
+                git2_utils::Git2OpenError::Other(git2_utils::git2_error_diagnostic(
+                    "failed to inspect Git status",
+                    &error,
+                ))
+            })?;
 
             fn idx_code(st: Status) -> &'static str {
                 if st.is_conflicted() {
@@ -267,9 +397,9 @@ pub async fn git_status(Query(q): Query<GitStatusQuery>) -> Response {
 
             let mut files: Vec<GitStatusFile> = Vec::new();
             for entry in statuses.iter() {
-                let Ok(path) = entry.path() else {
-                    continue;
-                };
+                let path = entry
+                    .path()
+                    .map_err(|error| git2_other("Git status path is not valid UTF-8", &error))?;
                 let st = entry.status();
                 let x = idx_code(st).to_string();
                 let y = wt_code(st).to_string();
@@ -298,12 +428,16 @@ pub async fn git_status(Query(q): Query<GitStatusQuery>) -> Response {
     let (current, tracking, mut ahead, mut behind, files) = match snapshot {
         Ok(Ok(v)) => v,
         Ok(Err(e)) => return git2_open_error_response(e),
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": e.to_string(), "code": "git2_task_failed"})),
-            )
-                .into_response();
+        Err(error) => {
+            let diagnostic = agena_failure::diagnostic::format_error_chain_with_context(
+                "Git status worker task failed",
+                &error,
+            );
+            return git_status_diagnostic_response(
+                "join Git status worker task",
+                &diagnostic,
+                "git2_task_failed",
+            );
         }
     };
 
@@ -387,16 +521,41 @@ pub async fn git_status(Query(q): Query<GitStatusQuery>) -> Response {
             ];
             staged_args.extend(paths.iter().cloned());
             let staged_refs: Vec<&str> = staged_args.iter().map(|s| s.as_str()).collect();
-            if let Ok((_, staged, _)) = run_git(&dir, &staged_refs).await {
-                parse_numstat(&staged, &mut map);
+            let (staged, _) =
+                match run_git_checked(&dir, &staged_refs, Some("git_status_staged_numstat_failed"))
+                    .await
+                {
+                    Ok(output) => output,
+                    Err(response) => return response,
+                };
+            if let Err(diagnostic) = parse_numstat(&staged, &mut map) {
+                return git_status_diagnostic_response(
+                    "parse staged Git diff statistics",
+                    &diagnostic,
+                    "git_status_numstat_invalid",
+                );
             }
 
             let mut working_args: Vec<String> =
                 vec!["diff".into(), "--numstat".into(), "--".into()];
             working_args.extend(paths.iter().cloned());
             let working_refs: Vec<&str> = working_args.iter().map(|s| s.as_str()).collect();
-            if let Ok((_, working, _)) = run_git(&dir, &working_refs).await {
-                parse_numstat(&working, &mut map);
+            let (working, _) = match run_git_checked(
+                &dir,
+                &working_refs,
+                Some("git_status_worktree_numstat_failed"),
+            )
+            .await
+            {
+                Ok(output) => output,
+                Err(response) => return response,
+            };
+            if let Err(diagnostic) = parse_numstat(&working, &mut map) {
+                return git_status_diagnostic_response(
+                    "parse worktree Git diff statistics",
+                    &diagnostic,
+                    "git_status_numstat_invalid",
+                );
             }
         }
 
@@ -416,8 +575,18 @@ pub async fn git_status(Query(q): Query<GitStatusQuery>) -> Response {
             {
                 continue;
             }
-            if let Some(stat) = estimate_new_file_lines(&dir, &f.path).await {
-                map.insert(f.path.clone(), stat);
+            match estimate_new_file_lines(&dir, &f.path).await {
+                Ok(Some(stat)) => {
+                    map.insert(f.path.clone(), stat);
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    return git_io_error_response(
+                        "estimate diff statistics for a new worktree file",
+                        &error,
+                        "git_status_file_read_failed",
+                    );
+                }
             }
         }
 
@@ -431,13 +600,33 @@ pub async fn git_status(Query(q): Query<GitStatusQuery>) -> Response {
     if tracking.is_none()
         && !current.is_empty()
         && let Some(base) = select_base_ref_for_unpublished(&dir).await
-        && let Ok((c, out, _)) =
-            run_git(&dir, &["rev-list", "--count", &format!("{base}..HEAD")]).await
-        && c == 0
-        && let Ok(count) = out.trim().parse::<i32>()
     {
-        ahead = count;
-        behind = 0;
+        if let Some((code, stdout, stderr)) = git_command_result_or_log(
+            run_git(&dir, &["rev-list", "--count", &format!("{base}..HEAD")]).await,
+            "estimate unpublished Git commit count",
+        ) {
+            if code == 0 {
+                match stdout.trim().parse::<i32>() {
+                    Ok(count) => {
+                        ahead = count;
+                        behind = 0;
+                    }
+                    Err(error) => tracing::warn!(
+                        diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                            "Git returned an invalid unpublished commit count",
+                            &error,
+                        ),
+                        "unpublished Git commit estimation was unavailable"
+                    ),
+                }
+            } else {
+                tracing::debug!(
+                    git_exit_code = code,
+                    git_stderr = %super::redact_git_output(&super::truncate_for_payload(&stderr, 4_000)),
+                    "Git could not estimate unpublished commits"
+                );
+            }
+        }
     }
 
     let is_clean = total_files == 0;
@@ -501,13 +690,7 @@ pub async fn git_watch(Query(q): Query<GitWatchQuery>) -> Response {
     match probe {
         Ok(Ok(_)) => {}
         Ok(Err(e)) => return git2_open_error_response(e),
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": e.to_string(), "code": "git2_task_failed"})),
-            )
-                .into_response();
-        }
+        Err(error) => return git_task_error_response("validate the Git watch repository", &error),
     }
 
     let interval_ms = q.interval_ms.unwrap_or(1500).clamp(500, 10_000);
@@ -521,34 +704,11 @@ pub async fn git_watch(Query(q): Query<GitWatchQuery>) -> Response {
             let snapshot = spawn_libgit2({
                 let dir = dir.clone();
                 move || -> Result<GitWatchStatusPayload, git2_utils::Git2OpenError> {
-                    use git2::{BranchType, Status, StatusOptions};
+                    use git2::{Status, StatusOptions};
 
                     let repo = git2_utils::open_repo_discover(&dir)?;
 
-                    let mut current = String::new();
-                    let mut tracking: Option<String> = None;
-                    let mut ahead: i32 = 0;
-                    let mut behind: i32 = 0;
-
-                    if let Ok(head) = repo.head() {
-                        if head.is_branch() {
-                            current = head.shorthand().unwrap_or("").to_string();
-                            if let Ok(cur_name) = head.shorthand()
-                                && let Ok(branch) = repo.find_branch(cur_name, BranchType::Local)
-                                && let Ok(up) = branch.upstream()
-                            {
-                                tracking = up.get().shorthand().ok().map(str::to_string);
-                                if let (Some(h), Some(u)) = (head.target(), up.get().target())
-                                    && let Ok((a, b)) = repo.graph_ahead_behind(h, u)
-                                {
-                                    ahead = a as i32;
-                                    behind = b as i32;
-                                }
-                            }
-                        } else {
-                            current = "HEAD".to_string();
-                        }
-                    }
+                    let (current, tracking, ahead, behind) = read_branch_state(&repo)?;
 
                     let mut opts = StatusOptions::new();
                     opts.include_untracked(true)
@@ -556,8 +716,8 @@ pub async fn git_watch(Query(q): Query<GitWatchQuery>) -> Response {
                         .include_ignored(false)
                         .include_unmodified(false);
 
-                    let statuses = repo.statuses(Some(&mut opts)).map_err(|e| {
-                        git2_utils::Git2OpenError::Other(e.message().to_string())
+                    let statuses = repo.statuses(Some(&mut opts)).map_err(|error| {
+                        git2_other("failed to inspect Git status for the watch stream", &error)
                     })?;
 
                     fn idx_code(st: Status) -> &'static str {
@@ -619,9 +779,9 @@ pub async fn git_watch(Query(q): Query<GitWatchQuery>) -> Response {
                     let mut worktree_signature: u64 = 1469598103934665603;
 
                     for entry in statuses.iter() {
-                        let Ok(path) = entry.path() else {
-                            continue;
-                        };
+                        let path = entry.path().map_err(|error| {
+                            git2_other("Git watch status path is not valid UTF-8", &error)
+                        })?;
                         let st = entry.status();
                         let mut x = idx_code(st);
                         let mut y = wt_code(st);
@@ -683,21 +843,46 @@ pub async fn git_watch(Query(q): Query<GitWatchQuery>) -> Response {
             let payload = match snapshot {
                 Ok(Ok(v)) => v,
                 Ok(Err(e)) => {
-                    let msg = format!("git2 error: {e:?}");
-                    let payload = serde_json::to_string(&serde_json::json!({
+                    let diagnostic = e.message();
+                    tracing::error!(
+                        diagnostic,
+                        "Git watch snapshot failed"
+                    );
+                    let message = agena_failure::diagnostic::user_message_with_context(
+                        &diagnostic,
+                        400,
+                    );
+                    let message = if message.is_empty() {
+                        "Git watch snapshot failed".to_owned()
+                    } else {
+                        message
+                    };
+                    let payload = serialize_git_watch_event(serde_json::json!({
                         "type": "git.watch.error",
-                        "message": msg,
-                    }))
-                    .unwrap_or_else(|_| "{}".to_string());
+                        "message": message,
+                    }), "error");
                     yield Ok::<Event, Infallible>(Event::default().event("error").data(payload));
                     break;
                 }
-                Err(e) => {
-                    let payload = serde_json::to_string(&serde_json::json!({
+                Err(error) => {
+                    let diagnostic = agena_failure::diagnostic::format_error_chain_with_context(
+                        "Git watch worker task failed",
+                        &error,
+                    );
+                    tracing::error!(diagnostic, "Git watch worker task could not be joined");
+                    let message = agena_failure::diagnostic::user_message_with_context(
+                        &diagnostic,
+                        400,
+                    );
+                    let message = if message.is_empty() {
+                        "Git watch worker task failed".to_owned()
+                    } else {
+                        message
+                    };
+                    let payload = serialize_git_watch_event(serde_json::json!({
                         "type": "git.watch.error",
-                        "message": e.to_string(),
-                    }))
-                    .unwrap_or_else(|_| "{}".to_string());
+                        "message": message,
+                    }), "error");
                     yield Ok::<Event, Infallible>(Event::default().event("error").data(payload));
                     break;
                 }
@@ -708,11 +893,10 @@ pub async fn git_watch(Query(q): Query<GitWatchQuery>) -> Response {
             }
             last = Some(payload.clone());
 
-            let json = serde_json::to_string(&serde_json::json!({
+            let json = serialize_git_watch_event(serde_json::json!({
                 "type": "git.watch.status",
                 "properties": payload,
-            }))
-            .unwrap_or_else(|_| "{}".to_string());
+            }), "status");
             yield Ok::<Event, Infallible>(Event::default().event("status").data(json));
         }
     };

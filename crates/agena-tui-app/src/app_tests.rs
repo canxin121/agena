@@ -5373,25 +5373,6 @@ mod live_transcript_tests {
     use super::super::{PendingUserMessage, TranscriptState, Utc};
     use super::parts_fixtures;
 
-    fn event(kind: RuntimePresentationEventKind, seq: i64) -> RuntimePresentationEvent {
-        RuntimePresentationEvent {
-            meta: RuntimePresentationEventMeta {
-                id: Uuid::new_v4(),
-                seq_global: seq,
-                seq_session: Some(seq),
-                session_id: Some(7),
-                workspace_id: None,
-                created_at: Utc::now(),
-                causation_id: None,
-                correlation_id: None,
-                envelope_schema: 1,
-            },
-            invalidates_ancestor_projection: false,
-            durable: true,
-            kind,
-        }
-    }
-
     /// A completed assistant run carrying a tall multi-line body, used to
     /// exercise viewport follow/recovery across full parts refreshes. Each
     /// line is its own markdown paragraph so the v2 renderer keeps them as
@@ -5846,7 +5827,9 @@ mod live_transcript_tests {
 
 #[cfg(test)]
 mod new_session_model_stack_tests {
-    use agena_api::resource::{SessionLifecycleState, SessionRelationKind, SessionResource};
+    use agena_api::resource::{
+        SessionLifecycleState, SessionOverviewResource, SessionRelationKind, SessionResource,
+    };
     use chrono::Utc;
     use ratatui::layout::Rect;
 
@@ -5897,6 +5880,37 @@ mod new_session_model_stack_tests {
         app.bootstrap();
 
         assert!(matches!(app.current_route, Route::Hub(_)));
+        assert_eq!(app.transcript.session_id, None);
+    }
+
+    #[tokio::test]
+    async fn session_hub_selects_explicit_new_session_action_before_existing_sessions() {
+        let mut app = app_without_session().await;
+        app.bootstrap();
+        let request_id = match &app.current_route {
+            Route::Hub(state) => state.request_id,
+            route => panic!("bootstrap must land on the hub, got {route:?}"),
+        };
+
+        app.handle_hub_overview_loaded(
+            request_id,
+            Ok(SessionOverviewResource {
+                attention: Vec::new(),
+                running: Vec::new(),
+                recent: Vec::new(),
+                generated_at: Utc::now(),
+            }),
+        );
+
+        let Route::Hub(state) = &app.current_route else {
+            panic!("the hub must remain open until the user activates an item");
+        };
+        let selected = state
+            .presentation
+            .selected_item()
+            .expect("the hub must expose a selectable new-session action");
+        assert!(selected.is_new_session);
+        assert_eq!(selected.session_id, 0);
         assert_eq!(app.transcript.session_id, None);
     }
 

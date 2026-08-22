@@ -45,21 +45,57 @@ pub async fn shorten_url_for_display(url: &str) -> Option<String> {
     if !should_shorten_url(url) {
         return None;
     }
-    let parsed = Url::parse(url).ok()?;
+    let parsed = match Url::parse(url) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            tracing::debug!(
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "display URL could not be parsed before shortening",
+                    &error,
+                ),
+                url_bytes = url.len(),
+                "skipping URL shortening"
+            );
+            return None;
+        }
+    };
     if !matches!(parsed.scheme(), "http" | "https") {
         return None;
     }
-    let client = build_client().ok()?;
+    let client = match build_client() {
+        Ok(client) => client,
+        Err(error) => {
+            tracing::warn!(
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "failed to build the URL-shortening HTTP client",
+                    error.as_ref(),
+                ),
+                "URL shortening is unavailable"
+            );
+            return None;
+        }
+    };
     for backend in [
         ShortLinkBackend::TinyUrl,
         ShortLinkBackend::ClckRu,
         ShortLinkBackend::VGd,
         ShortLinkBackend::IsGd,
     ] {
-        if let Ok(short_url) = backend.shorten(&client, url).await
-            && should_use_short_url(url, short_url.as_str(), backend.expected_host())
-        {
-            return Some(short_url);
+        match backend.shorten(&client, url).await {
+            Ok(short_url)
+                if should_use_short_url(url, short_url.as_str(), backend.expected_host()) =>
+            {
+                return Some(short_url);
+            }
+            Ok(_) => tracing::debug!(
+                ?backend,
+                "URL shortener returned a response that failed safety or length validation"
+            ),
+            Err(error) => tracing::debug!(
+                ?backend,
+                diagnostic = %agena_failure::diagnostic::format_error_chain(error.as_ref()),
+                "URL shortener request failed; trying the next backend"
+            ),
         }
     }
     None
@@ -72,7 +108,17 @@ pub fn should_shorten_url(url: &str) -> bool {
 fn should_use_short_url(original: &str, short_url: &str, expected_host: &str) -> bool {
     let parsed = match Url::parse(short_url) {
         Ok(parsed) => parsed,
-        Err(_) => return false,
+        Err(error) => {
+            tracing::debug!(
+                expected_host,
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "URL shortener returned an invalid URL",
+                    &error,
+                ),
+                "rejecting URL shortener response"
+            );
+            return false;
+        }
     };
     let host_matches = parsed
         .host_str()

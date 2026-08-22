@@ -65,11 +65,6 @@ export type TranscriptPartKind =
   | 'error'
   | 'unknown'
 
-export type AttentionLike = {
-  kind: 'permission' | 'question'
-  payload: JsonValue
-} | null
-
 export type TranscriptDisplayPart = {
   key: string
   id: string

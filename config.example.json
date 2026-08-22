@@ -30,12 +30,7 @@
   },
   "plugins": {},
   "providers": {
-    "default": "anthropic",
     "anthropic": {
-      "defaults": {
-        "adapter": "anthropic",
-        "model": "claude-sonnet-4-6"
-      },
       "auth": {
         "mode": "api",
         "subtype": "custom",

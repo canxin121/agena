@@ -144,7 +144,7 @@ pub(crate) fn transport_failure_record(
     session_id: Option<i64>,
     err: &TransportError,
 ) -> HookRunRecord {
-    let (status, summary) = if matches!(err, TransportError::Timeout) {
+    let (status, summary) = if matches!(err, TransportError::Timeout(_)) {
         (HookRunStatus::TimedOut, format!("{hook} hook timed out"))
     } else {
         (HookRunStatus::Failed, format!("{hook} hook failed: {err}"))
@@ -196,14 +196,26 @@ pub async fn call_with_timeout(
             );
             Err(e)
         }
-        Err(_) => {
+        Err(error) => {
             tracing::warn!(
                 target: "agena_plugin_host::dispatch",
                 plugin = %plugin.manifest.name,
                 method = method_name,
+                timeout_ms = timeout.as_millis() as u64,
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    format!("plugin call timed out after {}ms", timeout.as_millis()),
+                    &error,
+                ),
                 "plugin call timed out"
             );
-            Err(TransportError::Timeout)
+            Err(TransportError::timeout_error(
+                format!(
+                    "plugin `{}` method `{method_name}` timed out after {}ms",
+                    plugin.manifest.name,
+                    timeout.as_millis()
+                ),
+                &error,
+            ))
         }
     }
 }

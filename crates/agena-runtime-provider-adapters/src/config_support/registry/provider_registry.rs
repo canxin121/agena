@@ -7,19 +7,18 @@ use agena_provider::{
 use super::{
     AmazonBedrockAdapter, AnthropicAdapter, AnthropicAdapterOptions, Arc, AuthData,
     CatalogedModelsProvider, ConfigEnvironment, ConfigError, GeminiAdapter, GeminiAdapterOptions,
-    GitlabProvider, GitlabRoutedAdapter, GitlabRoutedBackend, HttpAdapterKind,
-    LIST_MODELS_DEFAULT_MODEL_ID, ManagedCredential, ModelCatalogSnapshot, ModelId, ModelRuntime,
-    MultiAdapterProvider, OllamaAdapter, OpenAiChatCompletionsAdapter,
-    OpenAiChatCompletionsAdapterOptions, OpenAiRealtimeAdapter, OpenAiRealtimeAdapterOptions,
-    OpenAiResponsesAdapter, OpenAiResponsesAdapterOptions, Path, ProviderAdapterDefinition,
-    ProviderAuthConfig, ProviderModelRoute, ProviderRegistry, ResolvedProviderAdapterConfig,
-    ResolvedProviderConfig, api_auth_has_direct_source, api_auth_managed_credential,
-    copilot_base_url, gitlab_auth_managed_credential, gitlab_credential_instance_url,
-    gitlab_credential_runtime_config, gitlab_runtime_config, http_adapter_default_user_agent,
-    http_adapter_extra_headers, openai_adapter_api_credential, openai_adapter_capability_family,
-    parse_adapter_model_ref, require_provider_auth_credential, required_api_auth_credential,
-    resolve_adapter_default_models, resolve_http_adapter_base_url, runtime_adapter_provider_id,
-    static_bedrock_credentials, to_hash_map,
+    GitlabProvider, GitlabRoutedAdapter, GitlabRoutedBackend, HttpAdapterKind, ManagedCredential,
+    ModelCatalogSnapshot, ModelId, ModelRuntime, MultiAdapterProvider, OllamaAdapter,
+    OpenAiChatCompletionsAdapter, OpenAiChatCompletionsAdapterOptions, OpenAiRealtimeAdapter,
+    OpenAiRealtimeAdapterOptions, OpenAiResponsesAdapter, OpenAiResponsesAdapterOptions, Path,
+    ProviderAdapterDefinition, ProviderAuthConfig, ProviderModelRoute, ProviderRegistry,
+    ResolvedProviderAdapterConfig, ResolvedProviderConfig, api_auth_has_direct_source,
+    api_auth_managed_credential, copilot_base_url, gitlab_auth_managed_credential,
+    gitlab_credential_instance_url, gitlab_credential_runtime_config, gitlab_runtime_config,
+    http_adapter_default_user_agent, http_adapter_extra_headers, openai_adapter_api_credential,
+    openai_adapter_capability_family, parse_adapter_model_ref, require_provider_auth_credential,
+    required_api_auth_credential, resolve_adapter_default_models, resolve_http_adapter_base_url,
+    runtime_adapter_provider_id, static_bedrock_credentials, to_hash_map,
 };
 
 fn config_adapter_error(error: crate::ProviderError) -> ConfigError {
@@ -132,23 +131,17 @@ pub(crate) fn build_provider(
         .map(|(adapter_id, _)| adapter_id.clone())
         .collect();
 
+    let Some((default_adapter, default_model)) = adapter_defaults.iter().next() else {
+        return Err(ConfigError::InvalidProviderConfig {
+            provider_id: provider_id.to_owned(),
+            message: "provider must have at least one enabled adapter".to_owned(),
+        });
+    };
+
     let provider: Arc<dyn ModelRuntime> = Arc::new(MultiAdapterProvider::new(
         provider_id,
-        resolved
-            .defaults
-            .adapter
-            .clone()
-            .expect("resolved provider default adapter"),
-        adapter_defaults
-            .get(
-                resolved
-                    .defaults
-                    .adapter
-                    .as_deref()
-                    .expect("resolved provider default adapter"),
-            )
-            .cloned()
-            .unwrap_or_else(|| LIST_MODELS_DEFAULT_MODEL_ID.to_owned()),
+        default_adapter.clone(),
+        default_model.clone(),
         adapters,
         routes,
         configured_only_adapters,

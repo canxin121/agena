@@ -104,15 +104,21 @@ pub(crate) async fn run_status_line_command(
     if let Some(session_id) = session_id {
         cmd.env("AGENA_SESSION_ID", session_id);
     }
-    tokio::time::timeout(STATUS_COMMAND_TIMEOUT, async move {
-        let mut child = agena_process::spawn(cmd).ok()?;
-        let mut stdout = child.stdout().take()?;
+    let result = tokio::time::timeout(STATUS_COMMAND_TIMEOUT, async move {
+        let mut child = agena_process::spawn(cmd).context("failed to spawn TUI status command")?;
+        let mut stdout = child
+            .stdout()
+            .take()
+            .context("TUI status command stdout is unavailable")?;
         let read_output = async move {
             let mut output = Vec::new();
             let mut exceeded = false;
             let mut chunk = [0_u8; 8 * 1024];
             loop {
-                let read = stdout.read(&mut chunk).await.ok()?;
+                let read = stdout
+                    .read(&mut chunk)
+                    .await
+                    .context("failed to read TUI status command stdout")?;
                 if read == 0 {
                     break;
                 }
@@ -120,23 +126,47 @@ pub(crate) async fn run_status_line_command(
                 output.extend_from_slice(&chunk[..read.min(remaining)]);
                 exceeded |= read > remaining;
             }
-            Some((output, exceeded))
+            Ok::<_, anyhow::Error>((output, exceeded))
         };
         let (read, status) = tokio::join!(read_output, child.wait());
         let (output, exceeded) = read?;
         if exceeded {
-            return None;
+            anyhow::bail!(
+                "TUI status command output exceeded the {STATUS_COMMAND_OUTPUT_LIMIT}-byte limit"
+            );
         }
-        if !status.ok()?.success() {
-            return None;
+        let status = status.context("failed to wait for TUI status command")?;
+        if !status.success() {
+            anyhow::bail!("TUI status command exited with status {status}");
         }
         let text = String::from_utf8_lossy(&output);
         let line = text.lines().next().unwrap_or_default().trim();
-        (!line.is_empty()).then(|| line.to_string())
+        Ok::<_, anyhow::Error>((!line.is_empty()).then(|| line.to_string()))
     })
-    .await
-    .ok()
-    .flatten()
+    .await;
+    match result {
+        Ok(Ok(line)) => line,
+        Ok(Err(error)) => {
+            tracing::warn!(
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "TUI status command failed",
+                    error.as_ref(),
+                ),
+                "TUI status line command did not produce a value"
+            );
+            None
+        }
+        Err(error) => {
+            tracing::warn!(
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "TUI status command timed out after 2 seconds",
+                    &error,
+                ),
+                "TUI status line command timed out"
+            );
+            None
+        }
+    }
 }
 
 pub(crate) fn next_grapheme_boundary(text: &str, index: usize) -> usize {
@@ -203,6 +233,7 @@ use crate::{
     sanitize_terminal_text, ui_text,
 };
 use agena_tui::user_input::UserInputAnswerDraft;
+use anyhow::Context as _;
 use tokio::io::AsyncReadExt;
 
 #[cfg(test)]

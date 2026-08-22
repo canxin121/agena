@@ -1,6 +1,6 @@
 use super::{
     AppError, SessionCreateRequest, SessionListRequest, SessionManager, SessionManagerState,
-    SessionRunOptions, SessionSummary,
+    SessionRunOptions, SessionSummary, recover_write,
 };
 use crate::session::Session;
 use crate::session::prompt_window;
@@ -124,7 +124,7 @@ impl SessionManager {
             .store
             .maintenance()
             .await
-            .map_err(|error| AppError::Internal(error.to_string()))?;
+            .map_err(|error| AppError::internal_error(&error))?;
         if !outcome.reaped_sessions.is_empty() || outcome.gc_deleted_parts > 0 {
             tracing::info!(
                 target: "agena_session::maintenance",
@@ -279,12 +279,14 @@ impl SessionManager {
         // in-memory only — invisible to `selected_model()` and the TUI's
         // post-send sync after the next store load.
         let persisted = self.store.persist_execution_config(session).await?;
-        if let Ok(mut permissions) = state.shared_session_permissions.write() {
-            permissions.insert(
-                session_id,
-                persisted.runtime.execution.selection.permission.clone(),
-            );
-        }
+        recover_write(
+            state.shared_session_permissions.as_ref(),
+            "cache updated session model-selection permission",
+        )
+        .insert(
+            session_id,
+            persisted.runtime.execution.selection.permission.clone(),
+        );
         Ok(persisted)
     }
 
@@ -354,7 +356,7 @@ impl SessionManager {
         state: &SessionManagerState,
         scoped_executor: &crate::tool::ToolExecutor,
     ) -> Result<SessionRunOptions, AppError> {
-        let model = self.model_from_session_or_default(session, state)?;
+        let model = self.model_from_session_or_error(session, state)?;
         let mut options = SessionRunOptions {
             model,
             thinking_mode: None,
@@ -504,7 +506,7 @@ impl SessionManager {
         session: &Session,
     ) -> Result<agena_domain::ModelSelectionConfig, AppError> {
         let state = self.execution_state();
-        let model = self.model_from_session_or_default(session, &state)?;
+        let model = self.model_from_session_or_error(session, &state)?;
         let mut options = SessionRunOptions {
             model,
             thinking_mode: None,
@@ -535,11 +537,11 @@ impl SessionManager {
     ) -> Result<Session, AppError> {
         let state = self.execution_state();
         let mut session = self.store.load_session(session_id).await?;
-        let previous_shared_permission = state
-            .shared_session_permissions
-            .write()
-            .ok()
-            .and_then(|mut permissions| permissions.insert(session_id, permission.clone()));
+        let previous_shared_permission = recover_write(
+            state.shared_session_permissions.as_ref(),
+            "stage session permission update",
+        )
+        .insert(session_id, permission.clone());
         session.runtime.execution.selection.permission = permission;
         session.runtime.execution.effective_permission =
             self.resolve_effective_session_permission(&session, &state);
@@ -549,14 +551,16 @@ impl SessionManager {
         {
             Ok(persisted) => persisted,
             Err(error) => {
-                if let Ok(mut permissions) = state.shared_session_permissions.write() {
-                    match previous_shared_permission {
-                        Some(previous) => {
-                            permissions.insert(session_id, previous);
-                        }
-                        None => {
-                            permissions.remove(&session_id);
-                        }
+                let mut permissions = recover_write(
+                    state.shared_session_permissions.as_ref(),
+                    "roll back failed session permission update",
+                );
+                match previous_shared_permission {
+                    Some(previous) => {
+                        permissions.insert(session_id, previous);
+                    }
+                    None => {
+                        permissions.remove(&session_id);
                     }
                 }
                 return Err(error);
@@ -565,12 +569,14 @@ impl SessionManager {
         // An execution may already hold an older in-memory Session snapshot.
         // Keep the shared overlay in sync with the durable write so its next
         // permission preflight observes this update immediately.
-        if let Ok(mut permissions) = state.shared_session_permissions.write() {
-            permissions.insert(
-                session_id,
-                persisted.runtime.execution.selection.permission.clone(),
-            );
-        }
+        recover_write(
+            state.shared_session_permissions.as_ref(),
+            "publish persisted session permission update",
+        )
+        .insert(
+            session_id,
+            persisted.runtime.execution.selection.permission.clone(),
+        );
         Ok(persisted)
     }
 
@@ -678,9 +684,7 @@ impl agena_runtime::SessionExecutionControl for SessionManager {
     {
         SessionManager::cancel_execution_with_outcome(self, session_id, execution_id)
             .await
-            .map_err(|error| {
-                agena_runtime::SessionExecutionControlError::internal(error.to_string())
-            })
+            .map_err(|error| agena_runtime::SessionExecutionControlError::internal_error(&error))
     }
 
     async fn cancel_session_with_outcome(
@@ -690,9 +694,7 @@ impl agena_runtime::SessionExecutionControl for SessionManager {
     {
         SessionManager::cancel_active_execution_with_outcome(self, session_id)
             .await
-            .map_err(|error| {
-                agena_runtime::SessionExecutionControlError::internal(error.to_string())
-            })
+            .map_err(|error| agena_runtime::SessionExecutionControlError::internal_error(&error))
     }
 
     async fn list_scheduled_jobs(&self) -> Vec<agena_scheduler::ScheduledJob> {
@@ -712,9 +714,7 @@ impl agena_runtime::SessionExecutionControl for SessionManager {
     ) -> Result<Option<agena_domain::ModelRef>, agena_runtime::SessionExecutionControlError> {
         let session = SessionManager::get_session(self, session_id)
             .await
-            .map_err(|error| {
-                agena_runtime::SessionExecutionControlError::internal(error.to_string())
-            })?;
+            .map_err(|error| agena_runtime::SessionExecutionControlError::internal_error(&error))?;
         session.runtime().effective_model_ref().map_err(|error| {
             agena_runtime::SessionExecutionControlError::internal(format!(
                 "session {session_id} contains invalid persisted model reference: {error}"

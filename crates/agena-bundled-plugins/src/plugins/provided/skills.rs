@@ -708,16 +708,48 @@ fn create_skill_document(path: &Path, document: &str) -> SdkResult<()> {
 }
 
 fn skill_write_error(error: std::io::Error) -> PluginError {
-    PluginError::internal(format!(
-        "workspace Skill filesystem operation failed: {error}"
+    PluginError::internal(agena_failure::diagnostic::format_error_chain_with_context(
+        "workspace Skill filesystem operation failed",
+        &error,
     ))
 }
 
 fn workspace_managed_skill_path(workspace_root: &Path, name: &str) -> Option<PathBuf> {
-    validate_managed_skill_name(name).ok()?;
-    let workspace = workspace_root.canonicalize().ok()?;
+    if let Err(error) = validate_managed_skill_name(name) {
+        tracing::warn!(
+            skill_name = name,
+            diagnostic = %error.diagnostic_message(),
+            "discovered Skill has an invalid managed name"
+        );
+        return None;
+    }
+    let workspace = match workspace_root.canonicalize() {
+        Ok(workspace) => workspace,
+        Err(error) => {
+            tracing::warn!(
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "canonicalize workspace while classifying a managed Skill",
+                    &error,
+                ),
+                "managed Skill classification could not resolve the workspace"
+            );
+            return None;
+        }
+    };
     let root = workspace.join(".agena/skills");
-    let root = root.canonicalize().ok()?;
+    let root = match root.canonicalize() {
+        Ok(root) => root,
+        Err(error) => {
+            tracing::warn!(
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "canonicalize the managed Skill root while classifying a Skill",
+                    &error,
+                ),
+                "managed Skill classification could not resolve its root"
+            );
+            return None;
+        }
+    };
     root.starts_with(&workspace)
         .then(|| root.join(name).join("SKILL.md"))
 }
@@ -729,19 +761,55 @@ fn is_workspace_managed_skill(workspace_root: &Path, name: &str, tool: &Discover
     let Some(source) = tool.skill.source_path.as_ref() else {
         return false;
     };
-    match (expected.canonicalize(), source.canonicalize()) {
-        (Ok(expected), Ok(source)) => expected == source,
-        _ => false,
-    }
+    let expected = match expected.canonicalize() {
+        Ok(expected) => expected,
+        Err(error) => {
+            tracing::warn!(
+                skill_name = name,
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "canonicalize the expected managed Skill document",
+                    &error,
+                ),
+                "managed Skill classification could not resolve the expected document"
+            );
+            return false;
+        }
+    };
+    let source = match source.canonicalize() {
+        Ok(source) => source,
+        Err(error) => {
+            tracing::warn!(
+                skill_name = name,
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "canonicalize a discovered Skill source",
+                    &error,
+                ),
+                "managed Skill classification could not resolve the discovered source"
+            );
+            return false;
+        }
+    };
+    expected == source
 }
 
 fn format_skill_document(skill: &Skill) -> String {
-    let frontmatter = serde_yaml::to_string(&skill.frontmatter).unwrap_or_else(|_| {
-        format!(
-            "name: {}\ndescription: {}\naliases: []\n",
-            skill.frontmatter.name, skill.frontmatter.description
-        )
-    });
+    let frontmatter = match serde_yaml::to_string(&skill.frontmatter) {
+        Ok(frontmatter) => frontmatter,
+        Err(error) => {
+            tracing::error!(
+                skill_name = %skill.frontmatter.name,
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "serialize Skill frontmatter as YAML",
+                    &error,
+                ),
+                "Skill frontmatter serialization failed; using a minimal recoverable document"
+            );
+            format!(
+                "name: {}\ndescription: {}\naliases: []\n",
+                skill.frontmatter.name, skill.frontmatter.description
+            )
+        }
+    };
     format!("---\n{}---\n{}\n", frontmatter, skill.body.trim())
 }
 
@@ -933,13 +1001,23 @@ impl SkillsPlugin {
         let worker_permit = crate::BLOCKING_PLUGIN_WORKERS
             .acquire()
             .await
-            .map_err(|_| PluginError::internal("skills worker pool is unavailable"))?;
+            .map_err(|error| {
+                PluginError::internal(agena_failure::diagnostic::format_error_chain_with_context(
+                    "acquire a Skills plugin worker",
+                    &error,
+                ))
+            })?;
         tokio::task::spawn_blocking(move || {
             let _worker_permit = worker_permit;
             operation(plugin)
         })
         .await
-        .map_err(|error| PluginError::internal(format!("skills blocking task failed: {error}")))?
+        .map_err(|error| {
+            PluginError::internal(agena_failure::diagnostic::format_error_chain_with_context(
+                "Skills plugin worker failed",
+                &error,
+            ))
+        })?
     }
 
     #[hook(init)]
@@ -1026,7 +1104,7 @@ impl SkillsPlugin {
             ));
         }
         let document = read_skill_document(&canonical_path)
-            .map_err(|error| PluginError::invalid_params(error.to_string()))?;
+            .map_err(|error| PluginError::invalid_params_error(&error))?;
         Ok((document, canonical_path))
     }
 
@@ -1691,7 +1769,7 @@ impl SkillsPlugin {
             let body = discovered_tool.skill.body.trim();
             let document = match discovered_tool.skill.source_path.as_ref() {
                 Some(path) => read_skill_document(path)
-                    .map_err(|error| PluginError::invalid_params(error.to_string()))?,
+                    .map_err(|error| PluginError::invalid_params_error(&error))?,
                 None => format_skill_document(&discovered_tool.skill),
             };
             enforce_skill_document_size(document.as_str())?;
@@ -1816,7 +1894,7 @@ impl SkillsPlugin {
             let content = discovered_tool
                 .skill
                 .read_text_resource(Path::new(resource_path.as_str()), max_bytes as usize)
-                .map_err(|error| PluginError::invalid_params(error.to_string()))?;
+                .map_err(|error| PluginError::invalid_params_error(&error))?;
             Ok(ToolInvokeOutput::from_parts(
                 format!("skill resource {name}/{resource_path}"),
                 format!("{} bytes", content.len()),

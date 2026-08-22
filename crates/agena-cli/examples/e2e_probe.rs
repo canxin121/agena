@@ -13,6 +13,7 @@
 //! Usage:
 //!   AGENA_DATABASE_PATH=/tmp/agena-e2e/agena.db \
 //!   AGENA_SCHEDULER_DATABASE_PATH=/tmp/agena-e2e/scheduler.db \
+//!   AGENA_PROBE_MODEL=provider/explicit-model \
 //!   cargo run -p agena-cli --example e2e_probe -- "你是谁？"
 
 use std::time::Duration;
@@ -30,6 +31,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let request = RuntimeBootstrapRequest {
         workspace_root: None,
+        config_path: None,
         config_override_expressions: Vec::new(),
         database_url: None,
         database_path: std::env::var("AGENA_DATABASE_PATH")
@@ -62,9 +64,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .clone()
         .expect("session store present");
 
-    let model = providers
-        .default_model()?
-        .ok_or("no default model configured")?;
+    let model_target = std::env::var("AGENA_PROBE_MODEL").map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "AGENA_PROBE_MODEL is required and must name an explicit provider/model route",
+        )
+    })?;
+    let model = providers.resolve_model_target(model_target.as_str(), None)?;
     eprintln!("probe: model = {model:?}");
 
     // Optional deterministic mode: AGENA_PROBE_TEMPERATURE=0 pins sampling to

@@ -12,12 +12,19 @@ if ($TargetTriple -match "windows") {
   & "$PSScriptRoot/setup-windows-toolchain.ps1" -TargetTriple $TargetTriple
 }
 
+$RunnerWorkspace = if ($env:GITHUB_WORKSPACE) {
+  $env:GITHUB_WORKSPACE
+} else {
+  Split-Path -Parent $env:RUNNER_TEMP
+}
+$BuildTargetDir = Join-Path $RunnerWorkspace ".agena-target\$TargetTriple"
+
 $Args = @(
   "check",
   "--manifest-path", "Cargo.toml",
   "-p", "agena",
   "--target", $TargetTriple,
-  "--target-dir", (Join-Path $env:RUNNER_TEMP "agena-check-target\$TargetTriple"),
+  "--target-dir", $BuildTargetDir,
   "--locked"
 )
 
@@ -42,7 +49,6 @@ if ($BuildStd) {
   $OldBootstrap = $env:RUSTC_BOOTSTRAP
   $OldRustFlags = $env:RUSTFLAGS
   $OldTargetDir = $env:CARGO_TARGET_DIR
-  $BuildTargetDir = Join-Path $env:RUNNER_TEMP "agena-check-target\$TargetTriple"
   try {
     $env:RUSTC = $StableRustc
     $env:RUSTDOC = $StableRustdoc

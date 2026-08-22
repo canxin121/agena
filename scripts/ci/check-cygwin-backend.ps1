@@ -45,7 +45,12 @@ if ($NightlyCargoExit -ne 0 -or -not $NightlyCargo) {
 }
 
 $RepoRoot = Resolve-Path (Join-Path $PSScriptRoot "../..")
-$BuildTargetDir = Join-Path $env:RUNNER_TEMP "agena-check-target\$TargetTriple"
+$RunnerWorkspace = if ($env:GITHUB_WORKSPACE) {
+  $env:GITHUB_WORKSPACE
+} else {
+  Split-Path -Parent $env:RUNNER_TEMP
+}
+$BuildTargetDir = Join-Path $RunnerWorkspace ".agena-target\$TargetTriple"
 $BuildStdProfile = Join-Path $BuildTargetDir "$TargetTriple\debug"
 $RustcWrapperDir = Join-Path $env:RUNNER_TEMP "agena-rustc-build-std\$TargetTriple"
 $RustcWrapperSource = Join-Path $RepoRoot "scripts\ci\rustc-build-std-wrapper.rs"

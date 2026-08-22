@@ -27,6 +27,11 @@ function Get-HostTriple {
 $RepoRoot = Resolve-Path (Join-Path $PSScriptRoot "../..")
 $ServerManifest = Join-Path $RepoRoot "Cargo.toml"
 $ServerTargetDir = Join-Path $RepoRoot "target"
+$RunnerWorkspace = if ($env:GITHUB_WORKSPACE) {
+  $env:GITHUB_WORKSPACE
+} else {
+  Split-Path -Parent $env:RUNNER_TEMP
+}
 $ReleaseDir = Join-Path $RepoRoot "artifacts/agena"
 $WebDistDir = Join-Path $RepoRoot "packages/agena-web/dist"
 
@@ -73,6 +78,7 @@ if ($IsCygwinTarget) {
   }
 }
 $RuntimeReadmeLine = if ($IsCygwinTarget) { "- bin/cygwin1.dll (Cygwin runtime)" } else { "" }
+$BuildTargetDir = Join-Path $RunnerWorkspace ".agena-target\$TargetTriple"
 
 Write-Host "Building agena for $TargetTriple..."
 $BuildArgs = @(
@@ -82,9 +88,8 @@ $BuildArgs = @(
   "--release",
   "--target", "$TargetTriple",
   "--locked",
-  "--target-dir", (Join-Path $env:RUNNER_TEMP "agena-release-target\$TargetTriple")
+  "--target-dir", $BuildTargetDir
 )
-$BuildTargetDir = Join-Path $env:RUNNER_TEMP "agena-release-target\$TargetTriple"
 if ($BuildStd) {
   $StableToolchain = if ($env:AGENA_STABLE_TOOLCHAIN) { $env:AGENA_STABLE_TOOLCHAIN } else { "1.97.0" }
   $NightlyToolchain = if ($env:AGENA_NIGHTLY_TOOLCHAIN) { $env:AGENA_NIGHTLY_TOOLCHAIN } else { "nightly-2026-08-18" }

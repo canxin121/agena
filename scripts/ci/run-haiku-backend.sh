@@ -49,10 +49,14 @@ HAIKUPORTER_COMMIT=690d2215daffb4ff260b45be16192af94a98e034
 # bash_bootstrap 5.3 is enabled for x86/x86_64 and Python remains 3.10.19.
 HAIKUPORTS_CROSS_COMMIT=195374f9922eb6253783fd57ca4b8ea8ea03f13b
 HAIKUPORTS_COMMIT=ad4f7e86f917445bdc12ee9cb0003e9e6780700b
+HAIKUPORTS_PATCH_REV=haikuports-source-mirrors-v1
 PATCH_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/third_party"
 PATCH_FILES=(
   "$PATCH_ROOT/haiku-bootstrap-smbios.patch"
   "$PATCH_ROOT/haiku-bootstrap-ports.patch"
+)
+HAIKUPORTS_PATCH_FILES=(
+  "$PATCH_ROOT/haikuports-source-mirrors.patch"
 )
 ROOT="${RUNNER_TEMP:-/tmp}/agena-haiku/$HAIKU_ARCH"
 HAIKU="$ROOT/haiku"
@@ -74,6 +78,7 @@ valid_toolchain() {
     && grep -Fxq "haikuporter=$HAIKUPORTER_COMMIT" "$BOOTSTRAP_STAMP" \
     && grep -Fxq "haikuports.cross=$HAIKUPORTS_CROSS_COMMIT" "$BOOTSTRAP_STAMP" \
     && grep -Fxq "haikuports=$HAIKUPORTS_COMMIT" "$BOOTSTRAP_STAMP" \
+    && grep -Fxq "haikuports-patch=$HAIKUPORTS_PATCH_REV" "$BOOTSTRAP_STAMP" \
     && [[ -x "$TOOLBIN/$GNU_TARGET-gcc" ]] \
     && [[ -f "$PACKAGE_ROOT/develop/headers/posix/stdio.h" || -f "$PACKAGE_ROOT/develop/headers/stdio.h" ]] \
     && [[ -d "$PACKAGE_ROOT/develop/headers/c++" ]] \
@@ -117,6 +122,10 @@ if ! valid_toolchain; then
   checkout_repo "$HAIKUPORTER" https://github.com/haikuports/haikuporter.git "$HAIKUPORTER_COMMIT"
   checkout_repo "$HAIKUPORTS_CROSS" https://github.com/haikuports/haikuports.cross.git "$HAIKUPORTS_CROSS_COMMIT"
   checkout_repo "$HAIKUPORTS" https://github.com/haikuports/haikuports.git "$HAIKUPORTS_COMMIT"
+  for patch_file in "${HAIKUPORTS_PATCH_FILES[@]}"; do
+    git -C "$HAIKUPORTS" apply --check --unidiff-zero "$patch_file"
+    git -C "$HAIKUPORTS" apply --unidiff-zero "$patch_file"
+  done
   [[ -x "$HAIKUPORTER/haikuporter" ]] || {
     echo "ERROR: pinned HaikuPorter checkout does not contain an executable haikuporter" >&2
     exit 1
@@ -255,7 +264,8 @@ if ! valid_toolchain; then
     "buildtools=$BUILDTOOLS_COMMIT" \
     "haikuporter=$HAIKUPORTER_COMMIT" \
     "haikuports.cross=$HAIKUPORTS_CROSS_COMMIT" \
-    "haikuports=$HAIKUPORTS_COMMIT" > "$BOOTSTRAP_STAMP"
+    "haikuports=$HAIKUPORTS_COMMIT" \
+    "haikuports-patch=$HAIKUPORTS_PATCH_REV" > "$BOOTSTRAP_STAMP"
   valid_toolchain || { echo "ERROR: incomplete Haiku cross-tools/sysroot for $TARGET" >&2; exit 1; }
 fi
 

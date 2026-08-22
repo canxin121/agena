@@ -50,7 +50,9 @@ download_verified() {
   fi
   curl --fail --location --retry 8 --retry-all-errors --retry-delay 5 \
     --connect-timeout 30 --max-time 900 --output "$temporary" "$url"
-  printf '%s  %s\n' "$expected" "$temporary" | shasum -a 512 -c -
+  # Keep checksum diagnostics visible without contaminating the single path
+  # printed by this builder for callers using command substitution.
+  printf '%s  %s\n' "$expected" "$temporary" | shasum -a 512 -c - >&2
   mv "$temporary" "$destination"
 }
 

@@ -42,6 +42,7 @@ if ($BuildStd) {
   $OldBootstrap = $env:RUSTC_BOOTSTRAP
   $OldRustFlags = $env:RUSTFLAGS
   $OldTargetDir = $env:CARGO_TARGET_DIR
+  $OldCargoBuildJobs = $env:CARGO_BUILD_JOBS
   $BuildTargetDir = Join-Path $env:RUNNER_TEMP "agena-check-target\$TargetTriple"
   try {
     $env:RUSTC = $StableRustc
@@ -83,6 +84,12 @@ if ($BuildStd) {
       $env:AGENA_REAL_RUSTC = $StableRustc
       $env:AGENA_BUILD_STD_ROOT = $BuildStdProfile
       $env:RUSTC = $RustcWrapper
+      # Direct build-script rustc probes wait for the real target std artifacts.
+      # With Cargo's normal parallel scheduler those probes can occupy every
+      # jobserver slot before build-std finishes compiling std. Serialize this
+      # target build so the real core/alloc/std sequence completes first;
+      # never substitute the host sysroot or a synthetic artifact.
+      $env:CARGO_BUILD_JOBS = "1"
     }
     $env:RUSTFLAGS = ($RustFlags | Join-String -Separator " ")
     Write-Host "Using build-std driver: cargo=$NightlyCargo rustc=$StableRustc rustdoc=$StableRustdoc target-dir=$BuildTargetDir"
@@ -102,6 +109,11 @@ if ($BuildStd) {
     $env:RUSTC_BOOTSTRAP = $OldBootstrap
     $env:RUSTFLAGS = $OldRustFlags
     $env:CARGO_TARGET_DIR = $OldTargetDir
+    if ($null -eq $OldCargoBuildJobs) {
+      Remove-Item Env:CARGO_BUILD_JOBS -ErrorAction SilentlyContinue
+    } else {
+      $env:CARGO_BUILD_JOBS = $OldCargoBuildJobs
+    }
     if ($null -eq $OldAgenaRealRustc) {
       Remove-Item Env:AGENA_REAL_RUSTC -ErrorAction SilentlyContinue
     } else {

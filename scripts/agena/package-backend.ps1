@@ -101,6 +101,7 @@ if ($BuildStd) {
   $OldBootstrap = $env:RUSTC_BOOTSTRAP
   $OldRustFlags = $env:RUSTFLAGS
   $OldTargetDir = $env:CARGO_TARGET_DIR
+  $OldCargoBuildJobs = $env:CARGO_BUILD_JOBS
   $OldAgenaRealRustc = $env:AGENA_REAL_RUSTC
   $OldAgenaBuildStdRoot = $env:AGENA_BUILD_STD_ROOT
   try {
@@ -132,6 +133,10 @@ if ($BuildStd) {
       $env:AGENA_REAL_RUSTC = $StableRustc
       $env:AGENA_BUILD_STD_ROOT = $BuildStdProfile
       $env:RUSTC = $RustcWrapper
+      # Serialize Windows/Cygwin build-std so direct build-script probes cannot
+      # occupy every Cargo jobserver slot while real target std is compiling.
+      # The wrapper still injects only artifacts produced for this target.
+      $env:CARGO_BUILD_JOBS = "1"
     }
     $env:RUSTFLAGS = ($RustFlags | Join-String -Separator " ")
     & cargo "+$NightlyToolchain" @BuildArgs -Z "build-std=std,panic_abort,proc_macro"
@@ -142,6 +147,11 @@ if ($BuildStd) {
     $env:RUSTC_BOOTSTRAP = $OldBootstrap
     $env:RUSTFLAGS = $OldRustFlags
     $env:CARGO_TARGET_DIR = $OldTargetDir
+    if ($null -eq $OldCargoBuildJobs) {
+      Remove-Item Env:CARGO_BUILD_JOBS -ErrorAction SilentlyContinue
+    } else {
+      $env:CARGO_BUILD_JOBS = $OldCargoBuildJobs
+    }
     if ($null -eq $OldAgenaRealRustc) {
       Remove-Item Env:AGENA_REAL_RUSTC -ErrorAction SilentlyContinue
     } else {

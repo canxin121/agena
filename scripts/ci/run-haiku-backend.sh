@@ -49,7 +49,11 @@ HAIKUPORTER_COMMIT=690d2215daffb4ff260b45be16192af94a98e034
 # bash_bootstrap 5.3 is enabled for x86/x86_64 and Python remains 3.10.19.
 HAIKUPORTS_CROSS_COMMIT=195374f9922eb6253783fd57ca4b8ea8ea03f13b
 HAIKUPORTS_COMMIT=ad4f7e86f917445bdc12ee9cb0003e9e6780700b
-PATCH_FILE="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/third_party/haiku-bootstrap-smbios.patch"
+PATCH_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/third_party"
+PATCH_FILES=(
+  "$PATCH_ROOT/haiku-bootstrap-smbios.patch"
+  "$PATCH_ROOT/haiku-bootstrap-ports.patch"
+)
 ROOT="${RUNNER_TEMP:-/tmp}/agena-haiku/$HAIKU_ARCH"
 HAIKU="$ROOT/haiku"
 BUILDTOOLS="$ROOT/buildtools"
@@ -104,8 +108,10 @@ if ! valid_toolchain; then
   }
 
   checkout_repo "$HAIKU" https://github.com/haiku/haiku.git "$HAIKU_COMMIT"
-  git -C "$HAIKU" apply --check "$PATCH_FILE"
-  git -C "$HAIKU" apply "$PATCH_FILE"
+  for patch_file in "${PATCH_FILES[@]}"; do
+    git -C "$HAIKU" apply --check --unidiff-zero "$patch_file"
+    git -C "$HAIKU" apply --unidiff-zero "$patch_file"
+  done
 
   checkout_repo "$BUILDTOOLS" https://github.com/haiku/buildtools.git "$BUILDTOOLS_COMMIT"
   checkout_repo "$HAIKUPORTER" https://github.com/haikuports/haikuporter.git "$HAIKUPORTER_COMMIT"

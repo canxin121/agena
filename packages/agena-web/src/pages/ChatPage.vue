@@ -1751,13 +1751,6 @@ async function executeBuiltInCommand(command: BuiltInCommand, rawArgs = ''): Pro
     case 'sessions':
       ui.setSessionSwitcherOpen(true)
       return
-    case 'hub':
-      await router.push('/')
-      return
-    case 'lineage':
-      await router.push('/')
-      toasts.push('info', 'Open the session hub to browse this session lineage.')
-      return
     case 'rewind': {
       if (!sid) {
         toasts.push('error', 'A session is required for /rewind.')

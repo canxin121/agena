@@ -519,9 +519,9 @@ onMounted(() => {
     const sessionId = Array.isArray(route.query.sessionId)
       ? String(route.query.sessionId.find((value) => String(value || '').trim()) || '').trim()
       : String(route.query.sessionId || '').trim()
-    // `/` is the session hub.  Only create a chat workspace when the route
-    // already identifies a real session; otherwise booting would fabricate a
-    // chat tab that belongs to no directory.
+    // `/` is the unscoped empty workspace. Only create a chat workspace when
+    // the route already identifies a real session; otherwise booting would
+    // fabricate a chat tab that belongs to no directory.
     if (route.path !== '/' && (tab !== 'chat' || sessionId)) {
       ui.openWorkspaceWindow(tab, {
         activate: true,

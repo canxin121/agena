@@ -697,7 +697,7 @@ export const useUiStore = defineStore('ui', () => {
   // When the workspace is intentionally empty, the shell still needs a
   // concrete sidebar surface.  A persisted last tab such as files/settings
   // would otherwise leave the stable sidebar panel host empty on the session
-  // hub route.
+  // empty workspace route.
   const activeMainTabFallback = ref<MainTab>(workspaceWindows.value.length ? defaultMainTab : 'chat')
   const activeMainTab = computed<MainTab>(() => activeWorkspaceWindow.value?.mainTab || activeMainTabFallback.value)
   watch(
@@ -1441,7 +1441,7 @@ export const useUiStore = defineStore('ui', () => {
     const query = normalizeRouteQueryRecord(opts?.query)
     // Chat tabs must always point at a session, which is what gives them a
     // directory/workspace owner.  The unscoped chat surface is the session
-    // hub at `/`, not a workspace window.
+    // empty workspace at `/`, not a workspace window.
     if (tab === 'chat' && !readMatchQueryValue(query, 'sessionId')) return ''
     const path = normalizeMainTabPath(tab, opts?.path)
     const hashRaw = String(opts?.hash || '').trim()

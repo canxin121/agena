@@ -2238,8 +2238,6 @@ export default {
         commands: '打开命令面板',
         new: '创建新会话',
         sessions: '打开会话切换器',
-        hub: '打开会话中心',
-        lineage: '浏览当前会话谱系',
         rewind: '将会话回退到更早的消息',
         rename: '重命名当前会话',
         timeline: '打开运行活动历史',

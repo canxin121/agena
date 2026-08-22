@@ -1,0 +1,8 @@
+diff --git a/sys-libs/zlib_bootstrap/zlib_bootstrap-1.2.13.recipe b/sys-libs/zlib_bootstrap/zlib_bootstrap-1.2.13.recipe
+index 1e64fd2c8f..1e64fd2c8f 100644
+--- a/sys-libs/zlib_bootstrap/zlib_bootstrap-1.2.13.recipe
++++ b/sys-libs/zlib_bootstrap/zlib_bootstrap-1.2.13.recipe
+@@ -6 +6,2 @@
+-SOURCE_URI="https://zlib.net/fossils/zlib-$portVersion.tar.gz"
++SOURCE_URI="https://zlib.net/fossils/zlib-$portVersion.tar.gz
++	https://github.com/madler/zlib/releases/download/v$portVersion/zlib-$portVersion.tar.gz"

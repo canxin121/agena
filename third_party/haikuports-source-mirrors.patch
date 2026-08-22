@@ -5,4 +5,4 @@ index b9b93e257d..b9b93e257d 100644
 @@ -8 +8,2 @@
 -SOURCE_URI="http://ftpmirror.gnu.org/autoconf-archive/autoconf-archive-$portVersion.tar.xz"
 +SOURCE_URI="http://ftpmirror.gnu.org/autoconf-archive/autoconf-archive-$portVersion.tar.xz
-+\thttps://ftp.gnu.org/gnu/autoconf-archive/autoconf-archive-$portVersion.tar.xz"
++	https://ftp.gnu.org/gnu/autoconf-archive/autoconf-archive-$portVersion.tar.xz"

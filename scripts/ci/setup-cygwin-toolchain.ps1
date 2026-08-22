@@ -32,6 +32,7 @@ $Packages = @(
   "pkg-config",
   "python3",
   "git",
+  "zlib-devel",
   "unzip"
 ) -join ","
 

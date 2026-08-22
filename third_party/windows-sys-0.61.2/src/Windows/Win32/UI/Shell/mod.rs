@@ -1054,7 +1054,12 @@ impl Default for APPBARDATA {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(
+    target_arch = "aarch64",
+    target_arch = "arm",
+    target_arch = "arm64ec",
+    target_arch = "x86_64"
+))]
 #[derive(Clone, Copy)]
 pub struct APPBARDATA {
     pub cbSize: u32,
@@ -1064,7 +1069,12 @@ pub struct APPBARDATA {
     pub rc: super::super::Foundation::RECT,
     pub lParam: super::super::Foundation::LPARAM,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(
+    target_arch = "aarch64",
+    target_arch = "arm",
+    target_arch = "arm64ec",
+    target_arch = "x86_64"
+))]
 impl Default for APPBARDATA {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -4126,7 +4136,12 @@ impl Default for NOTIFYICONIDENTIFIER {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(
+    target_arch = "aarch64",
+    target_arch = "arm",
+    target_arch = "arm64ec",
+    target_arch = "x86_64"
+))]
 #[derive(Clone, Copy)]
 pub struct NOTIFYICONIDENTIFIER {
     pub cbSize: u32,
@@ -4134,7 +4149,12 @@ pub struct NOTIFYICONIDENTIFIER {
     pub uID: u32,
     pub guidItem: windows_sys::core::GUID,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(
+    target_arch = "aarch64",
+    target_arch = "arm",
+    target_arch = "arm64ec",
+    target_arch = "x86_64"
+))]
 impl Default for NOTIFYICONIDENTIFIER {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -5461,7 +5481,12 @@ impl Default for SHCREATEPROCESSINFOW {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(
+    target_arch = "aarch64",
+    target_arch = "arm",
+    target_arch = "arm64ec",
+    target_arch = "x86_64"
+))]
 #[cfg(all(feature = "Win32_Security", feature = "Win32_System_Threading"))]
 #[derive(Clone, Copy)]
 pub struct SHCREATEPROCESSINFOW {
@@ -5479,7 +5504,12 @@ pub struct SHCREATEPROCESSINFOW {
     pub lpStartupInfo: *mut super::super::System::Threading::STARTUPINFOW,
     pub lpProcessInformation: *mut super::super::System::Threading::PROCESS_INFORMATION,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(
+    target_arch = "aarch64",
+    target_arch = "arm",
+    target_arch = "arm64ec",
+    target_arch = "x86_64"
+))]
 #[cfg(all(feature = "Win32_Security", feature = "Win32_System_Threading"))]
 impl Default for SHCREATEPROCESSINFOW {
     fn default() -> Self {
@@ -5897,7 +5927,12 @@ impl Default for SHFILEOPSTRUCTA {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(
+    target_arch = "aarch64",
+    target_arch = "arm",
+    target_arch = "arm64ec",
+    target_arch = "x86_64"
+))]
 #[derive(Clone, Copy)]
 pub struct SHFILEOPSTRUCTA {
     pub hwnd: super::super::Foundation::HWND,
@@ -5909,7 +5944,12 @@ pub struct SHFILEOPSTRUCTA {
     pub hNameMappings: *mut core::ffi::c_void,
     pub lpszProgressTitle: windows_sys::core::PCSTR,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(
+    target_arch = "aarch64",
+    target_arch = "arm",
+    target_arch = "arm64ec",
+    target_arch = "x86_64"
+))]
 impl Default for SHFILEOPSTRUCTA {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -5935,7 +5975,12 @@ impl Default for SHFILEOPSTRUCTW {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(
+    target_arch = "aarch64",
+    target_arch = "arm",
+    target_arch = "arm64ec",
+    target_arch = "x86_64"
+))]
 #[derive(Clone, Copy)]
 pub struct SHFILEOPSTRUCTW {
     pub hwnd: super::super::Foundation::HWND,
@@ -5947,7 +5992,12 @@ pub struct SHFILEOPSTRUCTW {
     pub hNameMappings: *mut core::ffi::c_void,
     pub lpszProgressTitle: windows_sys::core::PCWSTR,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(
+    target_arch = "aarch64",
+    target_arch = "arm",
+    target_arch = "arm64ec",
+    target_arch = "x86_64"
+))]
 impl Default for SHFILEOPSTRUCTW {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -6142,7 +6192,12 @@ pub struct SHQUERYRBINFO {
     pub i64NumItems: i64,
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(
+    target_arch = "aarch64",
+    target_arch = "arm",
+    target_arch = "arm64ec",
+    target_arch = "x86_64"
+))]
 #[derive(Clone, Copy, Default)]
 pub struct SHQUERYRBINFO {
     pub cbSize: u32,

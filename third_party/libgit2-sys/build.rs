@@ -82,6 +82,13 @@ fn main() {
         )"
     );
 
+    // Build scripts execute across a Windows/Cygwin process boundary for the
+    // Cygwin backend. Relative source paths can then be interpreted by the
+    // compiler in the wrong namespace. Resolve the vendored tree once and
+    // pass absolute paths to cc so the real C sources and headers are used.
+    let crate_root = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap());
+    let libgit2_root = crate_root.join("libgit2");
+
     let https = env::var("CARGO_FEATURE_HTTPS").is_ok();
     let ssh = env::var("CARGO_FEATURE_SSH").is_ok();
     let vendored = env::var("CARGO_FEATURE_VENDORED").is_ok();
@@ -118,9 +125,10 @@ The build is now aborting. To disable, unset the variable or use `LIBGIT2_NO_VEN
 
     println!("cargo:rustc-cfg=libgit2_vendored");
 
-    if !Path::new("libgit2/src").exists() {
+    if !libgit2_root.join("src").exists() {
         let _ = Command::new("git")
             .args(&["submodule", "update", "--init", "libgit2"])
+            .current_dir(&crate_root)
             .status();
     }
 
@@ -132,11 +140,11 @@ The build is now aborting. To disable, unset the variable or use `LIBGIT2_NO_VEN
     fs::create_dir_all(&include).unwrap();
 
     // Copy over all header files
-    cp_r("libgit2/include", &include);
+    cp_r(libgit2_root.join("include"), &include);
 
     cfg.include(&include)
-        .include("libgit2/src/libgit2")
-        .include("libgit2/src/util")
+        .include(libgit2_root.join("src/libgit2"))
+        .include(libgit2_root.join("src/util"))
         .out_dir(dst.join("build"))
         .warnings(false);
 
@@ -146,27 +154,27 @@ The build is now aborting. To disable, unset the variable or use `LIBGIT2_NO_VEN
     }
 
     // Include all cross-platform C files
-    add_c_files(&mut cfg, "libgit2/src/libgit2");
-    add_c_files(&mut cfg, "libgit2/src/util");
+    add_c_files(&mut cfg, libgit2_root.join("src/libgit2"));
+    add_c_files(&mut cfg, libgit2_root.join("src/util"));
 
     // These are activated by features, but they're all unconditionally always
     // compiled apparently and have internal #define's to make sure they're
     // compiled correctly.
-    add_c_files(&mut cfg, "libgit2/src/libgit2/transports");
-    add_c_files(&mut cfg, "libgit2/src/libgit2/streams");
+    add_c_files(&mut cfg, libgit2_root.join("src/libgit2/transports"));
+    add_c_files(&mut cfg, libgit2_root.join("src/libgit2/streams"));
 
     // Always use bundled HTTP parser (llhttp) for now
-    cfg.include("libgit2/deps/llhttp");
-    add_c_files(&mut cfg, "libgit2/deps/llhttp");
+    cfg.include(libgit2_root.join("deps/llhttp"));
+    add_c_files(&mut cfg, libgit2_root.join("deps/llhttp"));
 
     // external/system xdiff is not yet supported
-    cfg.include("libgit2/deps/xdiff");
-    add_c_files(&mut cfg, "libgit2/deps/xdiff");
+    cfg.include(libgit2_root.join("deps/xdiff"));
+    add_c_files(&mut cfg, libgit2_root.join("deps/xdiff"));
 
     // Use the included PCRE2 regex backend.
     // Keep these settings aligned with libgit2's bundled PCRE2 configuration.
     cfg.define("GIT_REGEX_BUILTIN", "1")
-        .include("libgit2/deps/pcre2")
+        .include(libgit2_root.join("deps/pcre2"))
         .define("PCRE2_STATIC", None)
         .define("PCRE2_EXPORT", Some(""))
         .define("PCRE2_EXP_DECL", Some(""))
@@ -183,17 +191,17 @@ The build is now aborting. To disable, unset the variable or use `LIBGIT2_NO_VEN
         .define("PARENS_NEST_LIMIT", Some("250"))
         .define("MAX_NAME_SIZE", Some("128"))
         .define("MAX_NAME_COUNT", Some("10000"));
-    add_pcre2_files(&mut cfg);
+    add_pcre2_files(&mut cfg, &libgit2_root);
 
-    cfg.file("libgit2/src/util/allocators/failalloc.c");
-    cfg.file("libgit2/src/util/allocators/stdalloc.c");
+    cfg.file(libgit2_root.join("src/util/allocators/failalloc.c"));
+    cfg.file(libgit2_root.join("src/util/allocators/stdalloc.c"));
 
     if windows {
         if target.contains("msvc") {
             cfg.define("_CRT_SECURE_NO_DEPRECATE", None);
             cfg.define("_CRT_SECURE_NO_WARNINGS", None);
         }
-        add_c_files(&mut cfg, "libgit2/src/util/win32");
+        add_c_files(&mut cfg, libgit2_root.join("src/util/win32"));
         cfg.define("STRSAFE_NO_DEPRECATE", None);
         cfg.define("WIN32", None);
         cfg.define("_WIN32_WINNT", Some("0x0600"));
@@ -205,7 +213,7 @@ The build is now aborting. To disable, unset the variable or use `LIBGIT2_NO_VEN
             cfg.define("__USE_MINGW_ANSI_STDIO", "1");
         }
     } else {
-        add_c_files(&mut cfg, "libgit2/src/util/unix");
+        add_c_files(&mut cfg, libgit2_root.join("src/util/unix"));
         cfg.flag("-fvisibility=hidden");
     }
     if target.contains("solaris") || target.contains("illumos") {
@@ -273,25 +281,25 @@ The build is now aborting. To disable, unset the variable or use `LIBGIT2_NO_VEN
     cfg.define("SHA1DC_NO_STANDARD_INCLUDES", "1");
     cfg.define("SHA1DC_CUSTOM_INCLUDE_SHA1_C", "\"common.h\"");
     cfg.define("SHA1DC_CUSTOM_INCLUDE_UBC_CHECK_C", "\"common.h\"");
-    cfg.file("libgit2/src/util/hash/collisiondetect.c");
-    cfg.file("libgit2/src/util/hash/sha1dc/sha1.c");
-    cfg.file("libgit2/src/util/hash/sha1dc/ubc_check.c");
+    cfg.file(libgit2_root.join("src/util/hash/collisiondetect.c"));
+    cfg.file(libgit2_root.join("src/util/hash/sha1dc/sha1.c"));
+    cfg.file(libgit2_root.join("src/util/hash/sha1dc/ubc_check.c"));
 
     if https {
         if windows {
             features.push_str("#define GIT_SHA256_WIN32 1\n");
-            cfg.file("libgit2/src/util/hash/win32.c");
+            cfg.file(libgit2_root.join("src/util/hash/win32.c"));
         } else if target.contains("apple") {
             features.push_str("#define GIT_SHA256_COMMON_CRYPTO 1\n");
-            cfg.file("libgit2/src/util/hash/common_crypto.c");
+            cfg.file(libgit2_root.join("src/util/hash/common_crypto.c"));
         } else {
             features.push_str("#define GIT_SHA256_OPENSSL 1\n");
-            cfg.file("libgit2/src/util/hash/openssl.c");
+            cfg.file(libgit2_root.join("src/util/hash/openssl.c"));
         }
     } else {
         features.push_str("#define GIT_SHA256_BUILTIN 1\n");
-        cfg.file("libgit2/src/util/hash/builtin.c");
-        cfg.file("libgit2/src/util/hash/rfc6234/sha224-256.c");
+        cfg.file(libgit2_root.join("src/util/hash/builtin.c"));
+        cfg.file(libgit2_root.join("src/util/hash/rfc6234/sha224-256.c"));
     }
 
     if let Some(path) = env::var_os("DEP_Z_INCLUDE").or_else(|| {
@@ -327,9 +335,18 @@ The build is now aborting. To disable, unset the variable or use `LIBGIT2_NO_VEN
         println!("cargo:rustc-link-lib=framework=CoreFoundation");
     }
 
-    println!("cargo:rerun-if-changed=libgit2/include");
-    println!("cargo:rerun-if-changed=libgit2/src");
-    println!("cargo:rerun-if-changed=libgit2/deps");
+    println!(
+        "cargo:rerun-if-changed={}",
+        libgit2_root.join("include").display()
+    );
+    println!(
+        "cargo:rerun-if-changed={}",
+        libgit2_root.join("src").display()
+    );
+    println!(
+        "cargo:rerun-if-changed={}",
+        libgit2_root.join("deps").display()
+    );
 }
 
 fn cp_r(from: impl AsRef<Path>, to: impl AsRef<Path>) {
@@ -367,10 +384,10 @@ fn add_c_files(build: &mut cc::Build, path: impl AsRef<Path>) {
     }
 }
 
-fn add_pcre2_files(build: &mut cc::Build) {
+fn add_pcre2_files(build: &mut cc::Build, libgit2_root: &Path) {
     // Keep this list in sync with libgit2's PCRE2_SOURCES:
     // https://github.com/libgit2/libgit2/blob/f7a4071c766ceea3915415e22134cbe3e581c420/deps/pcre2/CMakeLists.txt#L65-L96
-    let root = Path::new("libgit2/deps/pcre2");
+    let root = libgit2_root.join("deps/pcre2");
     for file in &[
         "pcre2_auto_possess.c",
         "pcre2_chartables.c",

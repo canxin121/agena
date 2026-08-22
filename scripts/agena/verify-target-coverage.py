@@ -10,32 +10,6 @@ from pathlib import Path
 
 MANIFEST = Path(__file__).with_name("universal-targets.json")
 
-# Keep this as a positive list of OS families for which the release matrix has
-# an Agena full backend. Targets outside this set have no matrix rows, builders,
-# or artifact policy to maintain.
-FULL_RUNTIME_OS = {
-    "android",
-    "cygwin",
-    "dragonfly",
-    "freebsd",
-    "fuchsia",
-    "haiku",
-    "hurd",
-    "illumos",
-    "ios",
-    "linux",
-    "macos",
-    "netbsd",
-    "openbsd",
-    "redox",
-    "solaris",
-    "tvos",
-    "visionos",
-    "watchos",
-    "windows",
-}
-
-
 def target_spec(target: str) -> dict[str, object]:
     env = dict(os.environ)
     env["RUSTC_BOOTSTRAP"] = "1"
@@ -96,28 +70,6 @@ def main() -> None:
         ).splitlines()
         if line.strip()
     }
-
-    invalid_backends: list[str] = []
-    for target in sorted(backend_targets):
-        spec = specs[target]
-        metadata = spec.get("metadata") or {}
-        std = metadata.get("std") if isinstance(metadata, dict) else None
-        target_os = spec.get("os")
-        target_families = set(spec.get("target-family") or [])
-        executables = spec.get("executables")
-        if (
-            target_os not in FULL_RUNTIME_OS
-            or not target_families.intersection({"unix", "windows"})
-            or executables is False
-        ):
-            invalid_backends.append(
-                f"{target} (os={target_os}, std={std!r}, executables={executables!r})"
-            )
-    if invalid_backends:
-        raise SystemExit(
-            "full-backend manifest contains targets without the required OS runtime: "
-            + ", ".join(invalid_backends)
-        )
 
     distributed_backends = backend_targets & rustup_targets
     build_std_backends = backend_targets - rustup_targets

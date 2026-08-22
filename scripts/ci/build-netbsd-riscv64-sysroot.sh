@@ -103,7 +103,7 @@ if ! valid_sysroot; then
     cd "$SOURCE"
     env "${common_env[@]}" \
       bash ./build.sh -U -N 2 -O "$OBJ" -T "$TOOLDIR" -j"$JOBS" \
-        -m riscv -a riscv64 tools
+        -m riscv -a riscv64 tools >&2
   )
 
   echo "Building NetBSD ${NETBSD_SOURCE_ID} riscv64 distribution" >&2
@@ -111,7 +111,7 @@ if ! valid_sysroot; then
     cd "$SOURCE"
     env "${common_env[@]}" \
       bash ./build.sh -U -u -N 2 -O "$OBJ" -T "$TOOLDIR" -D "$DESTDIR" \
-        -j"$JOBS" -m riscv -a riscv64 distribution
+        -j"$JOBS" -m riscv -a riscv64 distribution >&2
   )
 
   # NetBSD's build.sh names the C++ driver c++ even when GCC commands are

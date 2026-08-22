@@ -34,7 +34,9 @@ BUILDTOOLS_COMMIT=8375c2dbeaf109c520798cb234d57f0895463201
 # generated compiler/sysroot for a release target.  The cross repository pin
 # contains the GCC 13.3 bootstrap recipe named by the pinned Haiku source.
 HAIKUPORTER_COMMIT=690d2215daffb4ff260b45be16192af94a98e034
-HAIKUPORTS_CROSS_COMMIT=056f1b6de5536478255f6abe8d51f94a57f5f119
+# This revision matches Haiku's pinned bootstrap repository definitions:
+# bash_bootstrap 5.3 is enabled for x86/x86_64 and Python remains 3.10.19.
+HAIKUPORTS_CROSS_COMMIT=195374f9922eb6253783fd57ca4b8ea8ea03f13b
 HAIKUPORTS_COMMIT=ad4f7e86f917445bdc12ee9cb0003e9e6780700b
 PATCH_FILE="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/third_party/haiku-bootstrap-smbios.patch"
 ROOT="${RUNNER_TEMP:-/tmp}/agena-haiku/$HAIKU_ARCH"

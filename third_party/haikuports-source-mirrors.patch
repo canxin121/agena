@@ -6,3 +6,12 @@ index b9b93e257d..b9b93e257d 100644
 -SOURCE_URI="http://ftpmirror.gnu.org/autoconf-archive/autoconf-archive-$portVersion.tar.xz"
 +SOURCE_URI="http://ftpmirror.gnu.org/autoconf-archive/autoconf-archive-$portVersion.tar.xz
 +	https://ftp.gnu.org/gnu/autoconf-archive/autoconf-archive-$portVersion.tar.xz"
+
+diff --git a/dev-libs/libiconv/libiconv-1.18.recipe b/dev-libs/libiconv/libiconv-1.18.recipe
+index 4fb5a4a46a..4fb5a4a46a 100644
+--- a/dev-libs/libiconv/libiconv-1.18.recipe
++++ b/dev-libs/libiconv/libiconv-1.18.recipe
+@@ -78 +78,2 @@
+-SOURCE_URI="https://ftpmirror.gnu.org/libiconv/libiconv-$portVersion.tar.gz"
++SOURCE_URI="https://ftpmirror.gnu.org/libiconv/libiconv-$portVersion.tar.gz
++	https://ftp.gnu.org/gnu/libiconv/libiconv-$portVersion.tar.gz"

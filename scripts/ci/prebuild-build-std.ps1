@@ -69,4 +69,60 @@ $StdArtifacts = @(
 if ($StdArtifacts.Count -eq 0) {
   throw "real build-std sysroot prebuild produced no std artifact below $ProfileDir"
 }
+
+# Direct build-script probes need the same private standard-library dependency
+# graph that Cargo passes to ordinary target crates.  Capture it before the
+# Agena dependency graph is built, while this target directory contains only
+# the real build-std probe and its target sysroot.  The wrapper consumes this
+# manifest instead of guessing between same-named application dependencies
+# (notably multiple hashbrown versions) later in the build.
+$BuildStdCrates = @(
+  "addr2line",
+  "alloc",
+  "cfg_if",
+  "compiler_builtins",
+  "core",
+  "hashbrown",
+  "libc",
+  "miniz_oxide",
+  "object",
+  "panic_abort",
+  "panic_unwind",
+  "proc_macro",
+  "rustc_demangle",
+  "rustc_std_workspace_alloc",
+  "rustc_std_workspace_core",
+  "std",
+  "std_detect",
+  "unwind",
+  "windows_link"
+)
+$ManifestLines = @(
+  foreach ($CrateName in $BuildStdCrates) {
+    $Candidates = @(
+      Get-ChildItem -LiteralPath $ProfileDir -Recurse -File -ErrorAction SilentlyContinue |
+        Where-Object {
+          $_.Name -match "^(lib)?$([regex]::Escape($CrateName))-[^/]+\.(rlib|rmeta)$"
+        }
+    )
+    if ($Candidates.Count -eq 0) {
+      continue
+    }
+    $Artifact = $Candidates |
+      Where-Object { $_.Extension -eq ".rlib" } |
+      Select-Object -First 1
+    if ($null -eq $Artifact) {
+      $Artifact = $Candidates | Select-Object -First 1
+    }
+    "$CrateName`t$($Artifact.FullName)"
+  }
+)
+$ManifestPath = Join-Path $ProfileDir "agena-build-std-artifacts.txt"
+Set-Content -LiteralPath $ManifestPath -Value $ManifestLines -Encoding utf8
+foreach ($RequiredCrate in @("compiler_builtins", "core", "std")) {
+  if (-not ($ManifestLines | Where-Object { $_ -like "$RequiredCrate`t*" })) {
+    throw "real build-std sysroot prebuild produced no $RequiredCrate artifact below $ProfileDir"
+  }
+}
+Write-Host "Real target build-std artifact manifest ready: $ManifestPath"
 Write-Host "Real target std artifact ready: $($StdArtifacts[0].FullName)"

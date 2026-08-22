@@ -7,14 +7,13 @@
 //! Windows build-std target specs, whose standard library is built in the
 //! target directory rather than being present in the host sysroot. This
 //! wrapper only augments an explicit Windows/Cygwin build-std target invocation
-//! and only with artifacts discovered below the target's real build directory.
+//! and only with artifact paths recorded by the target's real build-std prebuild.
 
 use std::env;
 use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::{Duration, Instant};
 
 fn target_argument(args: &[OsString]) -> Option<String> {
     for (index, arg) in args.iter().enumerate() {
@@ -132,90 +131,61 @@ fn is_rust_sysroot_build() -> bool {
         && manifest_dir.contains("library")
 }
 
-fn collect_artifacts(root: &Path, directories: &mut Vec<PathBuf>, artifacts: &mut Vec<PathBuf>) {
-    let Ok(entries) = fs::read_dir(root) else {
-        return;
-    };
-
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            collect_artifacts(&path, directories, artifacts);
-            continue;
-        }
-        let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
-            continue;
-        };
-        let standard_library_name = [
-            "alloc",
-            "compiler_builtins",
-            "core",
-            "panic_abort",
-            "panic_unwind",
-            "proc_macro",
-            "rustc_std_workspace_alloc",
-            "rustc_std_workspace_core",
-            "std",
-            "std_detect",
-            "unwind",
-        ]
-        .iter()
-        .any(|crate_name| {
-            name.starts_with(&format!("{crate_name}-"))
-                || name.starts_with(&format!("lib{crate_name}-"))
-        });
-        if (name.ends_with(".rlib") || name.ends_with(".rmeta")) && standard_library_name {
-            if let Some(parent) = path.parent() {
-                if !directories.iter().any(|candidate| candidate == parent) {
-                    directories.push(parent.to_owned());
-                }
-            }
-            artifacts.push(path);
-        }
-    }
-}
-
-fn discover_artifacts(root: &Path) -> (Vec<PathBuf>, Vec<PathBuf>) {
+fn build_std_artifacts(root: &Path) -> (Vec<PathBuf>, Vec<(String, PathBuf)>) {
+    let manifest = root.join("agena-build-std-artifacts.txt");
+    let contents = fs::read_to_string(&manifest).unwrap_or_else(|error| {
+        panic!(
+            "real build-std artifact manifest could not be read at {}: {}",
+            manifest.display(),
+            error
+        )
+    });
     let mut directories = Vec::new();
     let mut artifacts = Vec::new();
-    collect_artifacts(root, &mut directories, &mut artifacts);
+    for line in contents.lines().filter(|line| !line.trim().is_empty()) {
+        let Some((crate_name, artifact)) = line.split_once('\t') else {
+            panic!(
+                "invalid build-std artifact manifest line: {line:?}",
+                line = line
+            );
+        };
+        let artifact = PathBuf::from(artifact);
+        if !artifact.is_file() {
+            panic!(
+                "build-std artifact manifest points to a missing file: {}",
+                artifact.display()
+            );
+        }
+        if let Some(directory) = artifact.parent() {
+            if !directories.iter().any(|candidate| candidate == directory) {
+                directories.push(directory.to_owned());
+            }
+        }
+        artifacts.push((crate_name.to_owned(), artifact));
+    }
     directories.sort();
+    artifacts.sort_by(|left, right| left.0.cmp(&right.0));
     (directories, artifacts)
 }
 
-fn find_artifact(artifacts: &[PathBuf], crate_name: &str, extension: &str) -> Option<PathBuf> {
+fn manifest_artifact(
+    artifacts: &[(String, PathBuf)],
+    crate_name: &str,
+    extension: &str,
+) -> Option<PathBuf> {
+    let extension = extension.strip_prefix('.').unwrap_or(extension);
     artifacts
         .iter()
-        .filter(|path| {
-            path.file_name()
-                .and_then(|value| value.to_str())
-                .is_some_and(|name| {
-                    (name.starts_with(&format!("{crate_name}-"))
-                        || name.starts_with(&format!("lib{crate_name}-")))
-                        && name.ends_with(extension)
-                })
+        .filter(|(name, path)| {
+            name == crate_name
+                && path
+                    .extension()
+                    .and_then(|extension| extension.to_str())
+                    .is_some_and(|value| value == extension)
         })
+        .map(|(_, path)| path)
         .min_by(|left, right| left.as_os_str().cmp(right.as_os_str()))
         .cloned()
-}
-
-fn wait_for_artifact(root: &Path, crate_name: &str) -> Option<(Vec<PathBuf>, PathBuf)> {
-    // Cargo can start a build-script probe while build-std is still compiling
-    // core/std in a sibling job. Wait for the real artifact to be published,
-    // but keep a hard bound so a broken build-std invocation still fails.
-    let deadline = Instant::now() + Duration::from_secs(300);
-    loop {
-        let (directories, artifacts) = discover_artifacts(root);
-        if let Some(artifact) = find_artifact(&artifacts, crate_name, ".rlib")
-            .or_else(|| find_artifact(&artifacts, crate_name, ".rmeta"))
-        {
-            return Some((directories, artifact));
-        }
-        if Instant::now() >= deadline {
-            return None;
-        }
-        std::thread::sleep(Duration::from_millis(250));
-    }
 }
 
 fn main() {
@@ -255,29 +225,41 @@ fn main() {
             // of core and reports duplicate inherent methods (for example in hashbrown). A
             // direct build-script probe is identifiable by its stdin source (`rustc ... -`), so
             // augment only that narrow case.
-            let (directories, artifacts) = discover_artifacts(&build_root);
+            let (directories, artifacts) = build_std_artifacts(&build_root);
             for directory in directories {
                 command
                     .arg("-L")
                     .arg(format!("dependency={}", directory.display()));
             }
             let mut standard_artifacts = Vec::new();
-            for standard_crate in ["core", "std"] {
+            for standard_crate in [
+                "alloc",
+                "compiler_builtins",
+                "core",
+                "panic_abort",
+                "panic_unwind",
+                "proc_macro",
+                "std",
+            ] {
                 if standard_crate == "std" && is_no_std_crate(&args) {
                     continue;
                 }
                 if has_extern(&args, standard_crate) {
                     continue;
                 }
-                let found = find_artifact(&artifacts, standard_crate, ".rlib")
-                    .or_else(|| find_artifact(&artifacts, standard_crate, ".rmeta"))
-                    .map(|artifact| (Vec::new(), artifact))
-                    .or_else(|| wait_for_artifact(&build_root, standard_crate));
-                let Some((_, artifact)) = found else {
-                    panic!(
-                        "target build-std artifact for {standard_crate} was not found below {} after waiting 300 seconds",
-                        build_root.display()
-                    );
+                let Some(artifact) = manifest_artifact(&artifacts, standard_crate, ".rlib")
+                    .or_else(|| manifest_artifact(&artifacts, standard_crate, ".rmeta"))
+                else {
+                    if matches!(
+                        standard_crate,
+                        "alloc" | "compiler_builtins" | "core" | "std"
+                    ) {
+                        panic!(
+                            "target build-std artifact for {standard_crate} was not found in the real artifact manifest below {}",
+                            build_root.display()
+                        );
+                    }
+                    continue;
                 };
                 standard_artifacts.push((standard_crate, artifact));
             }

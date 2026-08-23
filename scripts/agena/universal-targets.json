@@ -809,14 +809,6 @@
       "zig_target": "mips64-linux-gnuabi64"
     },
     {
-      "target": "mipsisa64r6el-unknown-linux-gnuabi64",
-      "os": "linux",
-      "builder": "zig-linux",
-      "build_std": true,
-      "artifact_kind": "backend",
-      "zig_target": "mips64el-linux-gnuabi64"
-    },
-    {
       "target": "powerpc-unknown-linux-gnuspe",
       "os": "linux",
       "builder": "powerpc-spe-sysroot",

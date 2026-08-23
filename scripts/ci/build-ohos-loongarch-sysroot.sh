@@ -16,8 +16,11 @@ MUSL_URL="https://github.com/openharmony/third_party_musl/archive/${MUSL_COMMIT}
 MUSL_SHA256="fc483693f9081930d5986192ab90582154c43039d92ea6d18d2dedcb18faf67b"
 BUILDER_REV="zig-2"
 ZLIB_VERSION="1.3.2"
-ZLIB_URL="https://zlib.net/zlib-${ZLIB_VERSION}.tar.gz"
 ZLIB_SHA256="bb329a0a2cd0274d05519d61c667c062e06990d72e125ee2dfa8de64f0119d16"
+ZLIB_URLS=(
+  "https://zlib.net/zlib-${ZLIB_VERSION}.tar.gz"
+  "https://zlib.net/fossils/zlib-${ZLIB_VERSION}.tar.gz"
+)
 ROOT="${RUNNER_TEMP:-/tmp}/agena-ohos-loongarch-musl/${MUSL_COMMIT}-${BUILDER_REV}"
 ARCHIVE="$ROOT/third_party_musl.tar.gz"
 QUEUE_HEADER="$ROOT/freebsd-queue.h"
@@ -64,6 +67,41 @@ download_verified() {
     exit 1
   fi
   mv "$temporary" "$output"
+}
+
+download_zlib_verified() {
+  local output="$1"
+  local url actual temporary attempt
+
+  if [[ -f "$output" ]]; then
+    actual="$(sha256sum "$output" | awk '{print $1}')"
+    [[ "$actual" == "$ZLIB_SHA256" ]] && return 0
+    rm -f "$output"
+  fi
+
+  # zlib.net has occasionally returned a small transient error document with
+  # HTTP 200.  curl --fail cannot detect that response, so retry the hash
+  # failure and then use the official fossil URL before giving up.  Both URLs
+  # are required to produce the exact upstream release archive hash.
+  for url in "${ZLIB_URLS[@]}"; do
+    for attempt in 1 2 3; do
+      temporary="${output}.tmp"
+      rm -f "$temporary"
+      curl --fail --location --retry 5 --retry-all-errors \
+        --connect-timeout 30 --max-time 600 \
+        "$url" -o "$temporary" || continue
+      actual="$(sha256sum "$temporary" | awk '{print $1}')"
+      if [[ "$actual" == "$ZLIB_SHA256" ]]; then
+        mv "$temporary" "$output"
+        return 0
+      fi
+      echo "zlib archive hash mismatch from $url (attempt $attempt): expected $ZLIB_SHA256, got $actual" >&2
+      rm -f "$temporary"
+      sleep 2
+    done
+  done
+  echo "SHA256 mismatch for all official zlib ${ZLIB_VERSION} URLs: expected $ZLIB_SHA256" >&2
+  exit 1
 }
 
 prepare_source() {
@@ -240,7 +278,7 @@ if ! valid_sysroot; then
   install -m 0755 "$SOURCE/lib/libc.so" "$SYSROOT/lib/ld-musl-loongarch64.so.1"
 
   echo "OpenHarmony LoongArch sysroot: building zlib ${ZLIB_VERSION}" >&2
-  download_verified "$ZLIB_URL" "$ZLIB_SHA256" "$ZLIB_ARCHIVE"
+  download_zlib_verified "$ZLIB_ARCHIVE"
   rm -rf "$ZLIB_SOURCE"
   mkdir -p "$ZLIB_SOURCE"
   tar -xzf "$ZLIB_ARCHIVE" --strip-components=1 -C "$ZLIB_SOURCE"

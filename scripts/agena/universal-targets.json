@@ -526,14 +526,6 @@
       "artifact_kind": "backend"
     },
     {
-      "target": "arm64ec-pc-windows-msvc",
-      "runner": "windows-2022",
-      "shell": "pwsh",
-      "build_std": false,
-      "platform_family": "windows",
-      "artifact_kind": "backend"
-    },
-    {
       "target": "armv7k-apple-watchos",
       "runner": "macos-15",
       "shell": "bash",

@@ -672,14 +672,6 @@
   ],
   "linux_zig_backend": [
     {
-      "target": "aarch64_be-unknown-linux-gnu_ilp32",
-      "os": "linux",
-      "builder": "aarch64-ilp32-sysroot",
-      "build_std": true,
-      "artifact_kind": "backend",
-      "rustflags": "--cfg rustix_use_libc"
-    },
-    {
       "target": "aarch64_be-unknown-linux-musl",
       "os": "linux",
       "builder": "zig-linux",

@@ -771,13 +771,6 @@
       "rustflags": "--cfg rustix_use_libc --cfg rustix_no_linux_raw"
     },
     {
-      "target": "loongarch64-unknown-linux-ohos",
-      "os": "linux",
-      "builder": "ohos-ndk",
-      "build_std": true,
-      "artifact_kind": "backend"
-    },
-    {
       "target": "m68k-unknown-linux-gnu",
       "os": "linux",
       "builder": "m68k-gcc",

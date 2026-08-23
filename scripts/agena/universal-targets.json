@@ -800,14 +800,6 @@
       "rustflags": "--cfg rustix_use_experimental_asm"
     },
     {
-      "target": "mipsisa32r6-unknown-linux-gnu",
-      "os": "linux",
-      "builder": "zig-linux",
-      "build_std": true,
-      "artifact_kind": "backend",
-      "zig_target": "mips-linux-gnueabi"
-    },
-    {
       "target": "mipsisa32r6el-unknown-linux-gnu",
       "os": "linux",
       "builder": "zig-linux",

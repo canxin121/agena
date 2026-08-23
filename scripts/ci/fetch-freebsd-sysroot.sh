@@ -6,7 +6,6 @@ VERSION="${AGENA_FREEBSD_VERSION:-14.3}"
 
 case "$TARGET" in
   powerpc-unknown-freebsd) release_arch="powerpc/powerpc" ;;
-  powerpc64le-unknown-freebsd) release_arch="powerpc/powerpc64le" ;;
   riscv64gc-unknown-freebsd) release_arch="riscv/riscv64" ;;
   *)
     echo "ERROR: no base.txz FreeBSD sysroot mapping for $TARGET" >&2

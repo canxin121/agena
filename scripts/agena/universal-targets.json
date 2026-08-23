@@ -1069,13 +1069,6 @@
       "artifact_kind": "backend"
     },
     {
-      "target": "powerpc64le-unknown-freebsd",
-      "os": "freebsd",
-      "builder": "freebsd-sysroot",
-      "build_std": true,
-      "artifact_kind": "backend"
-    },
-    {
       "target": "riscv64gc-unknown-freebsd",
       "os": "freebsd",
       "builder": "freebsd-sysroot",

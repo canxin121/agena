@@ -45,7 +45,6 @@ openbsd_zig_target() {
 freebsd_zig_target() {
   case "$TARGET" in
     powerpc-unknown-freebsd) echo powerpc-freebsd ;;
-    powerpc64le-unknown-freebsd) echo powerpc64le-freebsd ;;
     riscv64gc-unknown-freebsd) echo riscv64-freebsd ;;
     *) return 1 ;;
   esac

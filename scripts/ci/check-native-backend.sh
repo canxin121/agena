@@ -27,15 +27,6 @@ case "$target" in
 esac
 
 args=(check --manifest-path Cargo.toml -p agena --target "$target" --locked)
-case "$target" in
-  mipsisa32r6el-unknown-linux-gnu)
-    # rustc 1.97 SIGTRAPs while codegening core in the dev/check profile for
-    # the MIPS32r6 built-ins. The same exact Rust 1.97 sources and target ABI
-    # compile cleanly under the optimized release profile, which is also what
-    # the release packaging path uses.
-    args=(check --release --manifest-path Cargo.toml -p agena --target "$target" --locked)
-    ;;
-esac
 if [[ "$build_std" == true ]]; then
   RUSTFLAGS="$combined_rustflags" \
     bash scripts/ci/run-build-std-cargo.sh "$target" "${args[@]}"

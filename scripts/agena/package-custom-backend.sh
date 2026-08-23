@@ -52,10 +52,6 @@ case "$BUILDER" in
     exec bash scripts/ci/run-zig-backend.sh "$TARGET" "$zig_target" -- \
       bash scripts/agena/package-backend.sh "$TARGET" "$BUILD_STD"
     ;;
-  haiku)
-    exec bash scripts/ci/run-haiku-backend.sh "$TARGET" -- \
-      bash scripts/agena/package-backend.sh "$TARGET" "$BUILD_STD"
-    ;;
   freebsd-image-sysroot)
     exec bash scripts/ci/run-freebsd-image-backend.sh "$TARGET" -- \
       bash scripts/agena/package-backend.sh "$TARGET" "$BUILD_STD"
@@ -78,10 +74,6 @@ case "$BUILDER" in
     ;;
   redox)
     exec bash scripts/ci/run-redox-backend.sh "$TARGET" -- \
-      bash scripts/agena/package-backend.sh "$TARGET" "$BUILD_STD"
-    ;;
-  netbsd-sysroot)
-    exec bash scripts/ci/run-netbsd-backend.sh "$TARGET" -- \
       bash scripts/agena/package-backend.sh "$TARGET" "$BUILD_STD"
     ;;
   illumos)

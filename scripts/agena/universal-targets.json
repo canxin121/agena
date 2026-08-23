@@ -1094,13 +1094,6 @@
       "artifact_kind": "backend"
     },
     {
-      "target": "i686-unknown-haiku",
-      "os": "haiku",
-      "builder": "haiku",
-      "build_std": true,
-      "artifact_kind": "backend"
-    },
-    {
       "target": "i686-unknown-hurd-gnu",
       "os": "hurd",
       "builder": "hurd",
@@ -1192,13 +1185,6 @@
       "artifact_kind": "backend"
     },
     {
-      "target": "riscv64gc-unknown-netbsd",
-      "os": "netbsd",
-      "builder": "netbsd-sysroot",
-      "build_std": true,
-      "artifact_kind": "backend"
-    },
-    {
       "target": "riscv64gc-unknown-openbsd",
       "os": "openbsd",
       "builder": "openbsd",
@@ -1240,13 +1226,6 @@
       "os": "fuchsia",
       "builder": "fuchsia",
       "build_std": false,
-      "artifact_kind": "backend"
-    },
-    {
-      "target": "x86_64-unknown-haiku",
-      "os": "haiku",
-      "builder": "haiku",
-      "build_std": true,
       "artifact_kind": "backend"
     },
     {

@@ -74,10 +74,6 @@ case "$BUILDER" in
     zig_target="$(netbsd_zig_target)"
     exec bash scripts/ci/run-zig-backend.sh "$TARGET" "$zig_target" -- bash "$0" "$TARGET" "$TARGET_OS" "$BUILD_STD" direct
     ;;
-  haiku)
-    exec bash scripts/ci/run-haiku-backend.sh "$TARGET" -- \
-      bash "$0" "$TARGET" "$TARGET_OS" "$BUILD_STD" direct
-    ;;
   freebsd-image-sysroot)
     exec bash scripts/ci/run-freebsd-image-backend.sh "$TARGET" -- \
       bash "$0" "$TARGET" "$TARGET_OS" "$BUILD_STD" direct
@@ -100,10 +96,6 @@ case "$BUILDER" in
     ;;
   redox)
     exec bash scripts/ci/run-redox-backend.sh "$TARGET" -- \
-      bash "$0" "$TARGET" "$TARGET_OS" "$BUILD_STD" direct
-    ;;
-  netbsd-sysroot)
-    exec bash scripts/ci/run-netbsd-backend.sh "$TARGET" -- \
       bash "$0" "$TARGET" "$TARGET_OS" "$BUILD_STD" direct
     ;;
   illumos)

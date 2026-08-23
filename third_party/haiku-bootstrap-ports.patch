@@ -1,8 +1,0 @@
-diff --git a/build/jam/RepositoryRules b/build/jam/RepositoryRules
-index c39a67a447a3c67904f3232b83484bfe0f67b6a4..2d63074ce2bfadb355c958a8ee67f319d3e77e8a 100644
---- a/build/jam/RepositoryRules
-+++ b/build/jam/RepositoryRules
-@@ -398,0 +399,3 @@
-+	if [ "$(HAIKU_PACKAGING_ARCH)" = "x86" ]; then
-+		echo 'ALLOW_UNTESTED="yes"' >> $(1)
-+	fi

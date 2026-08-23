@@ -32,3 +32,11 @@ diff --git a/sys-libs/glu/glu-9.0.0.recipe b/sys-libs/glu/glu-9.0.0.recipe
 -SOURCE_URI="https://archive.mesa3d.org/glu/glu-9.0.0.tar.gz"
 +SOURCE_URI="https://archive.mesa3d.org/glu/glu-9.0.0.tar.gz
 +	https://snapshot.debian.org/file/6c547b7c7d5dc0f169f96f1826d44799129bb0aa/libglu_9.0.0.orig.tar.gz"
+
+diff --git a/sys-devel/make/make-4.4.1.recipe b/sys-devel/make/make-4.4.1.recipe
+--- a/sys-devel/make/make-4.4.1.recipe
++++ b/sys-devel/make/make-4.4.1.recipe
+@@ -10 +10,2 @@
+-SOURCE_URI="http://ftpmirror.gnu.org/make/make-$portVersion.tar.gz"
++SOURCE_URI="http://ftpmirror.gnu.org/make/make-$portVersion.tar.gz
++	https://ftp.gnu.org/gnu/make/make-$portVersion.tar.gz"

@@ -49,7 +49,7 @@ HAIKUPORTER_COMMIT=690d2215daffb4ff260b45be16192af94a98e034
 # bash_bootstrap 5.3 is enabled for x86/x86_64 and Python remains 3.10.19.
 HAIKUPORTS_CROSS_COMMIT=195374f9922eb6253783fd57ca4b8ea8ea03f13b
 HAIKUPORTS_COMMIT=ad4f7e86f917445bdc12ee9cb0003e9e6780700b
-HAIKUPORTS_PATCH_REV=haikuports-source-mirrors-v5
+HAIKUPORTS_PATCH_REV=haikuports-source-mirrors-v6
 HAIKUPORTS_CROSS_PATCH_REV=haikuports-cross-source-mirrors-v1
 PATCH_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/third_party"
 PATCH_FILES=(

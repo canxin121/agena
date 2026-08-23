@@ -1085,13 +1085,6 @@
       "artifact_kind": "backend"
     },
     {
-      "target": "powerpc-unknown-netbsd",
-      "os": "netbsd",
-      "builder": "zig-netbsd",
-      "build_std": true,
-      "artifact_kind": "backend"
-    },
-    {
       "target": "powerpc-unknown-openbsd",
       "os": "openbsd",
       "builder": "openbsd",

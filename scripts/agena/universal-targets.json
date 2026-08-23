@@ -679,13 +679,6 @@
       "artifact_kind": "backend"
     },
     {
-      "target": "aarch64-unknown-linux-ohos",
-      "os": "linux",
-      "builder": "ohos-ndk",
-      "build_std": false,
-      "artifact_kind": "backend"
-    },
-    {
       "target": "aarch64_be-unknown-linux-gnu_ilp32",
       "os": "linux",
       "builder": "aarch64-ilp32-sysroot",

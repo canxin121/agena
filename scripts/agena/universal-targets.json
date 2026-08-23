@@ -1070,13 +1070,6 @@
       "artifact_kind": "backend"
     },
     {
-      "target": "powerpc64-unknown-freebsd",
-      "os": "freebsd",
-      "builder": "freebsd-sysroot",
-      "build_std": true,
-      "artifact_kind": "backend"
-    },
-    {
       "target": "powerpc64-unknown-openbsd",
       "os": "openbsd",
       "builder": "openbsd",

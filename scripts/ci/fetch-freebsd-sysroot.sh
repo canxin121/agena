@@ -6,7 +6,6 @@ VERSION="${AGENA_FREEBSD_VERSION:-14.3}"
 
 case "$TARGET" in
   powerpc-unknown-freebsd) release_arch="powerpc/powerpc" ;;
-  powerpc64-unknown-freebsd) release_arch="powerpc/powerpc64" ;;
   powerpc64le-unknown-freebsd) release_arch="powerpc/powerpc64le" ;;
   riscv64gc-unknown-freebsd) release_arch="riscv/riscv64" ;;
   *)

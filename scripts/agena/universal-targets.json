@@ -622,14 +622,6 @@
       "artifact_kind": "backend"
     },
     {
-      "target": "x86_64-apple-ios-macabi",
-      "runner": "macos-15-intel",
-      "shell": "bash",
-      "build_std": false,
-      "platform_family": "apple",
-      "artifact_kind": "backend"
-    },
-    {
       "target": "x86_64-apple-tvos",
       "runner": "macos-15-intel",
       "shell": "bash",

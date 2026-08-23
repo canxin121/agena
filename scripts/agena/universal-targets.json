@@ -1050,13 +1050,6 @@
       "artifact_kind": "backend"
     },
     {
-      "target": "i686-unknown-hurd-gnu",
-      "os": "hurd",
-      "builder": "hurd",
-      "build_std": true,
-      "artifact_kind": "backend"
-    },
-    {
       "target": "i686-unknown-netbsd",
       "os": "netbsd",
       "builder": "zig-netbsd",

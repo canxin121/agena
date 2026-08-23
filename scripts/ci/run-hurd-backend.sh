@@ -12,11 +12,6 @@ case "$(uname -s)-$(uname -m)" in
 esac
 
 case "$TARGET" in
-  i686-unknown-hurd-gnu)
-    deb_arch=hurd-i386
-    clang_target=i686-unknown-gnu
-    multiarch=i386-gnu
-    ;;
   x86_64-unknown-hurd-gnu)
     deb_arch=hurd-amd64
     clang_target=x86_64-unknown-gnu

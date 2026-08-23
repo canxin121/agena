@@ -33,12 +33,51 @@ if ! valid_sysroot; then
 import hashlib
 import pathlib
 import re
+import subprocess
 import sys
-import urllib.request
 
 base_url, root_path, suffix = sys.argv[1:]
 root = pathlib.Path(root_path)
-checksum_text = urllib.request.urlopen(base_url + "/SHA256", timeout=60).read().decode()
+
+
+def download(url: str, destination: pathlib.Path, timeout: int) -> None:
+    """Download an official OpenBSD file atomically with retryable transport errors."""
+    temporary = destination.with_name(destination.name + ".tmp")
+    temporary.unlink(missing_ok=True)
+    try:
+        subprocess.run(
+            [
+                "curl",
+                "--fail",
+                "--location",
+                "--retry",
+                "12",
+                "--retry-all-errors",
+                "--retry-delay",
+                "5",
+                "--retry-max-time",
+                "900",
+                "--connect-timeout",
+                "30",
+                "--max-time",
+                str(timeout),
+                "--user-agent",
+                "agena-openbsd-sysroot/1",
+                "--output",
+                str(temporary),
+                url,
+            ],
+            check=True,
+        )
+    except (OSError, subprocess.CalledProcessError) as error:
+        temporary.unlink(missing_ok=True)
+        raise SystemExit(f"OpenBSD download failed for {url}: {error}") from error
+    temporary.replace(destination)
+
+
+checksum_path = root / "SHA256"
+download(base_url + "/SHA256", checksum_path, timeout=120)
+checksum_text = checksum_path.read_text(encoding="utf-8")
 expected = {}
 for line in checksum_text.splitlines():
     match = re.match(r"SHA256 \(([^)]+)\) = ([0-9a-fA-F]{64})$", line.strip())
@@ -58,18 +97,11 @@ for name in (f"base{suffix}.tgz", f"comp{suffix}.tgz"):
     archive = root / name
     if archive.exists() and digest(archive) == expected[name]:
         continue
-    tmp = archive.with_suffix(archive.suffix + ".tmp")
-    with urllib.request.urlopen(f"{base_url}/{name}", timeout=300) as src, tmp.open("wb") as dst:
-        while True:
-            chunk = src.read(1024 * 1024)
-            if not chunk:
-                break
-            dst.write(chunk)
-    actual = digest(tmp)
+    download(f"{base_url}/{name}", archive, timeout=1800)
+    actual = digest(archive)
     if actual != expected[name]:
-        tmp.unlink(missing_ok=True)
+        archive.unlink(missing_ok=True)
         raise SystemExit(f"OpenBSD {name} SHA256 mismatch: expected {expected[name]}, got {actual}")
-    tmp.replace(archive)
 PY
   if [[ -e "$SYSROOT" ]]; then
     chmod -R u+rwX "$SYSROOT" 2>/dev/null || true

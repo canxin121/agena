@@ -60,10 +60,6 @@ case "$BUILDER" in
     exec bash scripts/ci/run-hurd-backend.sh "$TARGET" -- \
       bash scripts/agena/package-backend.sh "$TARGET" "$BUILD_STD"
     ;;
-  android-ndk)
-    exec bash scripts/ci/run-android-ndk-backend.sh "$TARGET" -- \
-      bash scripts/agena/package-backend.sh "$TARGET" "$BUILD_STD"
-    ;;
   fuchsia)
     exec bash scripts/ci/run-fuchsia-backend.sh "$TARGET" -- \
       bash scripts/agena/package-backend.sh "$TARGET" "$BUILD_STD"

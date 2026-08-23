@@ -42,11 +42,6 @@ case "$BUILDER" in
     exec bash scripts/ci/run-bootlin-backend.sh "$TARGET" "$category" "$toolchain" "$cflags" -- \
       bash scripts/agena/package-backend.sh "$TARGET" "$BUILD_STD" "$TARGET_RUSTFLAGS"
     ;;
-  m68k-gcc)
-    exec bash scripts/ci/run-bootlin-backend.sh \
-      "$TARGET" m68k-68xxx m68k-68xxx--glibc--stable-2025.08-1 '' -- \
-      bash scripts/agena/package-backend.sh "$TARGET" "$BUILD_STD" "$TARGET_RUSTFLAGS"
-    ;;
   sparc-gcc)
     # Use Debian's checksum-verified sparc64 cross compiler with its real
     # 32-bit multilib glibc.  This is the same ABI/sysroot builder used by the

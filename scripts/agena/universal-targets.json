@@ -757,13 +757,6 @@
       "rustflags": "--cfg rustix_use_libc --cfg rustix_no_linux_raw"
     },
     {
-      "target": "m68k-unknown-linux-gnu",
-      "os": "linux",
-      "builder": "m68k-gcc",
-      "build_std": true,
-      "artifact_kind": "backend"
-    },
-    {
       "target": "mips-unknown-linux-musl",
       "os": "linux",
       "builder": "musl-cross",
@@ -1102,13 +1095,6 @@
       "target": "powerpc64le-unknown-freebsd",
       "os": "freebsd",
       "builder": "freebsd-sysroot",
-      "build_std": true,
-      "artifact_kind": "backend"
-    },
-    {
-      "target": "riscv64-linux-android",
-      "os": "android",
-      "builder": "android-ndk",
       "build_std": true,
       "artifact_kind": "backend"
     },

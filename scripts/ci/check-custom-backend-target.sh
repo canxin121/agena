@@ -82,10 +82,6 @@ case "$BUILDER" in
     exec bash scripts/ci/run-hurd-backend.sh "$TARGET" -- \
       bash "$0" "$TARGET" "$TARGET_OS" "$BUILD_STD" direct
     ;;
-  android-ndk)
-    exec bash scripts/ci/run-android-ndk-backend.sh "$TARGET" -- \
-      bash "$0" "$TARGET" "$TARGET_OS" "$BUILD_STD" direct
-    ;;
   fuchsia)
     exec bash scripts/ci/run-fuchsia-backend.sh "$TARGET" -- \
       bash "$0" "$TARGET" "$TARGET_OS" "$BUILD_STD" direct

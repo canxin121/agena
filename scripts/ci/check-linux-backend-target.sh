@@ -46,11 +46,6 @@ case "$BUILDER" in
     exec bash scripts/ci/run-bootlin-backend.sh "$TARGET" "$category" "$toolchain" "$cflags" -- \
       bash scripts/ci/check-native-backend.sh "$TARGET" "$BUILD_STD" "$TARGET_RUSTFLAGS"
     ;;
-  m68k-gcc)
-    exec bash scripts/ci/run-bootlin-backend.sh \
-      "$TARGET" m68k-68xxx m68k-68xxx--glibc--stable-2025.08-1 '' -- \
-      bash scripts/ci/check-native-backend.sh "$TARGET" "$BUILD_STD" "$TARGET_RUSTFLAGS"
-    ;;
   sparc-gcc)
     # Debian's official sparc64 cross compiler is shipped with a real glibc
     # 32-bit multilib.  Use its explicit builder so cc-rs receives the exact

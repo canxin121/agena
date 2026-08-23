@@ -771,14 +771,6 @@
       "artifact_kind": "backend"
     },
     {
-      "target": "mips64-openwrt-linux-musl",
-      "os": "linux",
-      "builder": "zig-linux",
-      "build_std": true,
-      "artifact_kind": "backend",
-      "zig_target": "mips64-linux-muslabi64"
-    },
-    {
       "target": "mips64-unknown-linux-muslabi64",
       "os": "linux",
       "builder": "musl-cross",

@@ -15,3 +15,12 @@ index 4fb5a4a46a..4fb5a4a46a 100644
 -SOURCE_URI="https://ftpmirror.gnu.org/libiconv/libiconv-$portVersion.tar.gz"
 +SOURCE_URI="https://ftpmirror.gnu.org/libiconv/libiconv-$portVersion.tar.gz
 +	https://ftp.gnu.org/gnu/libiconv/libiconv-$portVersion.tar.gz"
+
+diff --git a/dev-libs/expat/expat-2.8.2.recipe b/dev-libs/expat/expat-2.8.2.recipe
+index 1f91c5a4c8..1f91c5a4c8 100644
+--- a/dev-libs/expat/expat-2.8.2.recipe
++++ b/dev-libs/expat/expat-2.8.2.recipe
+@@ -7 +7,2 @@
+-SOURCE_URI="https://downloads.sourceforge.net/expat/expat-$portVersion.tar.bz2"
++SOURCE_URI="https://downloads.sourceforge.net/expat/expat-$portVersion.tar.bz2
++	https://github.com/libexpat/libexpat/releases/download/R_${portVersion//./_}/expat-$portVersion.tar.bz2"

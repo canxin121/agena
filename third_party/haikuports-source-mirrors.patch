@@ -24,3 +24,11 @@ index 1f91c5a4c8..1f91c5a4c8 100644
 -SOURCE_URI="https://downloads.sourceforge.net/expat/expat-$portVersion.tar.bz2"
 +SOURCE_URI="https://downloads.sourceforge.net/expat/expat-$portVersion.tar.bz2
 +	https://github.com/libexpat/libexpat/releases/download/R_${portVersion//./_}/expat-$portVersion.tar.bz2"
+
+diff --git a/sys-libs/glu/glu-9.0.0.recipe b/sys-libs/glu/glu-9.0.0.recipe
+--- a/sys-libs/glu/glu-9.0.0.recipe
++++ b/sys-libs/glu/glu-9.0.0.recipe
+@@ -8 +8,2 @@
+-SOURCE_URI="https://archive.mesa3d.org/glu/glu-9.0.0.tar.gz"
++SOURCE_URI="https://archive.mesa3d.org/glu/glu-9.0.0.tar.gz
++	https://snapshot.debian.org/file/6c547b7c7d5dc0f169f96f1826d44799129bb0aa/libglu_9.0.0.orig.tar.gz"

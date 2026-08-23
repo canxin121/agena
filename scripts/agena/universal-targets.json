@@ -1010,13 +1010,6 @@
   ],
   "custom_backend": [
     {
-      "target": "aarch64-unknown-fuchsia",
-      "os": "fuchsia",
-      "builder": "fuchsia",
-      "build_std": false,
-      "artifact_kind": "backend"
-    },
-    {
       "target": "aarch64-unknown-illumos",
       "os": "illumos",
       "builder": "illumos",
@@ -1222,13 +1215,6 @@
       "artifact_kind": "backend"
     },
     {
-      "target": "x86_64-unknown-fuchsia",
-      "os": "fuchsia",
-      "builder": "fuchsia",
-      "build_std": false,
-      "artifact_kind": "backend"
-    },
-    {
       "target": "x86_64-unknown-hurd-gnu",
       "os": "hurd",
       "builder": "hurd",
@@ -1240,13 +1226,6 @@
       "os": "openbsd",
       "builder": "openbsd",
       "build_std": true,
-      "artifact_kind": "backend"
-    },
-    {
-      "target": "x86_64-unknown-redox",
-      "os": "redox",
-      "builder": "redox",
-      "build_std": false,
       "artifact_kind": "backend"
     }
   ]

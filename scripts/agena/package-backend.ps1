@@ -40,7 +40,6 @@ if (-not $TargetTriple) {
 }
 
 $IsWindowsTarget = $TargetTriple -match "windows"
-$IsCygwinTarget = $TargetTriple -match "-pc-cygwin$"
 if ($IsWindowsTarget) {
   & (Join-Path $RepoRoot "scripts/ci/setup-windows-toolchain.ps1") -TargetTriple $TargetTriple
 }
@@ -62,22 +61,12 @@ if (-not (Test-Path -LiteralPath (Join-Path $WebDistDir "index.html"))) {
 
 $Ext = ""
 $ArchiveExt = ".tar.gz"
-if ($IsWindowsTarget -or $IsCygwinTarget) {
+if ($IsWindowsTarget) {
   $Ext = ".exe"
   $ArchiveExt = ".zip"
 }
 
-if ($IsCygwinTarget) {
-  $CygwinRuntime = if ($env:AGENA_CYGWIN_ROOT) {
-    Join-Path $env:AGENA_CYGWIN_ROOT "bin/cygwin1.dll"
-  } else {
-    $null
-  }
-  if (-not $CygwinRuntime -or -not (Test-Path -LiteralPath $CygwinRuntime -PathType Leaf)) {
-    throw "Official Cygwin runtime cygwin1.dll is required at AGENA_CYGWIN_ROOT\\bin\\cygwin1.dll"
-  }
-}
-$RuntimeReadmeLine = if ($IsCygwinTarget) { "- bin/cygwin1.dll (Cygwin runtime)" } else { "" }
+$RuntimeReadmeLine = ""
 # Cargo creates the target-specific subdirectory below this short root. Keep
 # the triple out of the root so release rustc commands do not repeat it in
 # every dependency path.
@@ -122,7 +111,7 @@ if ($BuildStd) {
     $env:RUSTDOC = $StableRustdoc
     $env:RUSTC_BOOTSTRAP = "1"
     $env:CARGO_TARGET_DIR = $BuildTargetDir
-    if ($TargetTriple -match "-windows-(msvc|gnu)$" -or $IsCygwinTarget) {
+    if ($TargetTriple -match "-windows-(msvc|gnu)$") {
       # Keep release target dependency paths below Windows' CreateProcess
       # command-line limit. The new build-dir layout expands every --extern
       # path into build/<crate>/<hash>/out and can make the real Agena graph
@@ -130,7 +119,7 @@ if ($BuildStd) {
       $env:CARGO_UNSTABLE_BUILD_DIR_NEW_LAYOUT = "false"
     }
     $RustFlags = @($OldRustFlags, $TargetRustFlags) | Where-Object { $_ }
-    if ($TargetTriple -match "-windows-(msvc|gnu)$" -or $IsCygwinTarget) {
+    if ($TargetTriple -match "-windows-(msvc|gnu)$") {
       # Build scripts such as autocfg invoke rustc directly with --target. The
       # shared wrapper below supplies the real target standard-library artifacts
       # for those probes. Keep target-only search paths out of global RUSTFLAGS
@@ -213,9 +202,6 @@ New-Item -ItemType Directory -Force -Path $StageBinDir | Out-Null
 New-Item -ItemType Directory -Force -Path $StageWebDir | Out-Null
 
 Copy-Item -LiteralPath $BinPath -Destination (Join-Path $StageBinDir "agena$Ext") -Force
-if ($IsCygwinTarget) {
-  Copy-Item -LiteralPath $CygwinRuntime -Destination (Join-Path $StageBinDir "cygwin1.dll") -Force
-}
 Copy-Item -Path (Join-Path $WebDistDir "*") -Destination $StageWebDir -Recurse -Force
 
 $Readme = @"

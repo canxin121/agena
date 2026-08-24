@@ -40,8 +40,6 @@ def main() -> None:
     groups = {
         "cross_backend": data["cross_backend"],
         "native_backend": data["native_backend"],
-        "linux_zig_backend": data["linux_zig_backend"],
-        "custom_backend": data["custom_backend"],
     }
     backend_rows = [row for rows in groups.values() for row in rows]
     counts = Counter(row["target"] for row in backend_rows)
@@ -75,8 +73,6 @@ def main() -> None:
     print(f"Rust distributed full-backend targets: {len(distributed_backends)}")
     print(f"Cross backend targets: {len(groups['cross_backend'])}")
     print(f"Native/SDK backend targets: {len(groups['native_backend'])}")
-    print(f"Linux Zig backend targets: {len(groups['linux_zig_backend'])}")
-    print(f"Custom OS backend targets: {len(groups['custom_backend'])}")
     print(f"Build-std full backend targets: {len(build_std_backends)}")
     print(f"Full backend release target triples: {len(backend_targets)}")
 

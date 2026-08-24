@@ -32,15 +32,6 @@ if [[ -n "$TARGET_RUSTFLAGS" ]]; then
 fi
 VERSION="$(read_version)"
 
-case "$TARGET_TRIPLE" in
-  armv7s-apple-ios|i386-apple-ios)
-    export IPHONEOS_DEPLOYMENT_TARGET=10.0
-    ;;
-  i686-apple-darwin)
-    export CFLAGS_i686_apple_darwin="${CFLAGS_i686_apple_darwin:-} -D_Float16=float"
-    export CXXFLAGS_i686_apple_darwin="${CXXFLAGS_i686_apple_darwin:-} -D_Float16=float"
-    ;;
-esac
 
 if [[ -z "$VERSION" ]]; then
   echo "ERROR: failed to read agena version from $SERVER_MANIFEST" >&2

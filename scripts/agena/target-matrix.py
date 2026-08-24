@@ -13,7 +13,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "group",
-        choices=("cross-backend", "native-backend", "linux-zig-backend", "custom-backend"),
+        choices=("cross-backend", "native-backend"),
     )
     parser.add_argument("--compact", action="store_true")
     args = parser.parse_args()
@@ -23,10 +23,6 @@ def main() -> None:
         key = "cross_backend"
     elif args.group == "native-backend":
         key = "native_backend"
-    elif args.group == "linux-zig-backend":
-        key = "linux_zig_backend"
-    else:
-        key = "custom_backend"
     matrix = {"include": payload[key]}
     print(json.dumps(matrix, separators=(",", ":") if args.compact else None))
 

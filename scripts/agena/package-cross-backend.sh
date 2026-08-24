@@ -28,32 +28,6 @@ command -v cross >/dev/null 2>&1 || { echo "ERROR: cross is required" >&2; exit 
   exit 2
 }
 
-case "$TARGET_TRIPLE" in
-  i586-unknown-linux-*)
-    export RUSTFLAGS="${RUSTFLAGS:-} -C target-feature=+sse,+sse2"
-    ;;
-  mips-unknown-linux-gnu|mipsel-unknown-linux-gnu)
-    # Large Agena codegen can otherwise reach LLVM's integrated assembler with
-    # an out-of-range PC16 branch. Force the MIPS long-branch expansion pass.
-    export RUSTFLAGS="${RUSTFLAGS:-} -C llvm-args=--force-mips-long-branch"
-    ;;
-  mips64-unknown-linux-gnuabi64|mips64el-unknown-linux-gnuabi64)
-    # MIPS n64 PLT entries must remain in the signed 32-bit addressable range.
-    # The GNU linker otherwise places non-PIE executables above 4 GiB by
-    # default, which makes .got.plt unusable for the n64 PLT sequence.
-    export RUSTFLAGS="${RUSTFLAGS:-} -C relocation-model=static -C code-model=large -C llvm-args=--force-mips-long-branch -C link-arg=-Wl,-Ttext-segment=0x10000000"
-    ;;
-  sparcv9-sun-solaris|x86_64-pc-solaris)
-    # The pinned cross Solaris 10 images provide /compat.o to map the XPG7
-    # symbols used by modern Rust std back to the Solaris 10 ABI.
-    export RUSTFLAGS="${RUSTFLAGS:-} -C link-arg=/compat.o"
-    ;;
-  aarch64_be-unknown-linux-gnu)
-    # Rustix's linux_raw backend does not support big-endian AArch64. Force
-    # every transitive Rustix version onto its libc backend.
-    export RUSTFLAGS="${RUSTFLAGS:-} --cfg rustix_use_libc"
-    ;;
-esac
 
 PACKAGE="agena"
 BINARY_BASENAME="agena"

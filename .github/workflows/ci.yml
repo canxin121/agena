@@ -18,8 +18,6 @@ jobs:
     outputs:
       cross_backend: ${{ steps.matrix.outputs.cross_backend }}
       native: ${{ steps.matrix.outputs.native }}
-      linux_zig: ${{ steps.matrix.outputs.linux_zig }}
-      custom: ${{ steps.matrix.outputs.custom }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -38,19 +36,13 @@ jobs:
           set -euo pipefail
           cross_backend="$(python3 scripts/agena/target-matrix.py cross-backend --compact)"
           native="$(python3 scripts/agena/target-matrix.py native-backend --compact)"
-          linux_zig="$(python3 scripts/agena/target-matrix.py linux-zig-backend --compact)"
-          custom="$(python3 scripts/agena/target-matrix.py custom-backend --compact)"
           echo "cross_backend=$cross_backend" >> "$GITHUB_OUTPUT"
           echo "native=$native" >> "$GITHUB_OUTPUT"
-          echo "linux_zig=$linux_zig" >> "$GITHUB_OUTPUT"
-          echo "custom=$custom" >> "$GITHUB_OUTPUT"
           python3 - <<'PY_MATRIX'
           import json
           data = json.load(open("scripts/agena/universal-targets.json", encoding="utf-8"))
           print(f"Loaded {len(data['cross_backend'])} cross backend definitions")
           print(f"Loaded {len(data['native_backend'])} native/SDK backend definitions")
-          print(f"Loaded {len(data['linux_zig_backend'])} Linux Zig backend definitions")
-          print(f"Loaded {len(data['custom_backend'])} custom OS backend definitions")
           PY_MATRIX
 
   cross-tool:
@@ -146,70 +138,3 @@ jobs:
         if: matrix.shell == 'pwsh'
         shell: pwsh
         run: ./scripts/ci/check-native-backend.ps1 -TargetTriple '${{ matrix.target }}' -BuildStd $${{ matrix.build_std }}
-
-  linux-zig-targets:
-    name: check ${{ matrix.target }}
-    needs: targets
-    runs-on: ubuntu-latest
-    timeout-minutes: 90
-    strategy:
-      fail-fast: false
-      max-parallel: 20
-      matrix: ${{ fromJSON(needs.targets.outputs.linux_zig) }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
-        with:
-          toolchain: 1.97.0
-          components: rust-src
-      - name: Install nightly Cargo driver
-        if: matrix.build_std
-        run: rustup toolchain install nightly-2026-08-18 --profile minimal
-      - name: Check full Linux backend
-        run: >-
-          bash scripts/ci/check-linux-backend-target.sh
-          '${{ matrix.target }}'
-          '${{ matrix.build_std }}'
-          '${{ matrix.builder }}'
-          '${{ matrix.zig_target || '' }}'
-          '${{ matrix.rustflags || '' }}'
-
-  custom-targets:
-    name: check ${{ matrix.target }}
-    needs: targets
-    runs-on: ${{ matrix.runner || 'ubuntu-latest' }}
-    timeout-minutes: 180
-    strategy:
-      fail-fast: false
-      max-parallel: 20
-      matrix: ${{ fromJSON(needs.targets.outputs.custom) }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
-        with:
-          toolchain: 1.97.0
-          components: rust-src
-      - name: Install nightly Cargo driver
-        if: matrix.build_std
-        run: rustup toolchain install nightly-2026-08-18 --profile minimal
-      - name: Set up official Cygwin toolchain
-        if: matrix.builder == 'cygwin'
-        shell: pwsh
-        run: ./scripts/ci/setup-cygwin-toolchain.ps1
-      - name: Check full OS backend (Unix)
-        if: matrix.builder != 'cygwin'
-        shell: bash
-        run: >-
-          bash scripts/ci/check-custom-backend-target.sh
-          '${{ matrix.target }}'
-          '${{ matrix.os }}'
-          '${{ matrix.build_std }}'
-          '${{ matrix.builder }}'
-      - name: Check full OS backend (Cygwin)
-        if: matrix.builder == 'cygwin'
-        shell: pwsh
-        run: ./scripts/ci/check-cygwin-backend.ps1

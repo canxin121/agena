@@ -6,7 +6,7 @@
 //! and omit Cargo's `--extern` arguments. That is especially visible for
 //! Windows build-std target specs, whose standard library is built in the
 //! target directory rather than being present in the host sysroot. This
-//! wrapper only augments an explicit Windows/Cygwin build-std target invocation
+//! wrapper only augments an explicit Windows build-std target invocation
 //! and only with artifact paths recorded by the target's real build-std prebuild.
 
 use std::env;
@@ -197,18 +197,17 @@ fn main() {
     );
     let args: Vec<OsString> = env::args_os().skip(1).collect();
     let target = target_argument(&args);
-    let is_windows_or_cygwin_build_std = target.as_deref().is_some_and(|value| {
-        value.ends_with("-windows-msvc")
-            || value.ends_with("-windows-gnu")
-            || value.ends_with("-pc-cygwin")
-    });
+    let is_windows_build_std = target.as_deref().is_some_and(|value| {
+       value.ends_with("-windows-msvc")
+           || value.ends_with("-windows-gnu")
+   });
 
     let mut command = Command::new(real_rustc);
     command.args(&args);
 
-    if is_windows_or_cygwin_build_std {
-        // Cargo's own Windows/Cygwin build-std compilation already has its exact externs, and
-        // normal target compilation does too. Only direct probe crates need
+    if is_windows_build_std {
+        // Cargo's own Windows build-std compilation already has its exact externs, and
+       // normal target compilation does too. Only direct probe crates need
         // these additions. Never inject host or synthetic standard-library
         // artifacts, and never try to bootstrap core/std while they are being
         // built (their output does not exist yet).

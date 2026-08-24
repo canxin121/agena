@@ -96,9 +96,9 @@ const useChatStoreDefinition = defineStore('chat', () => {
   const messagesLoading = ref(false)
   const messagesError = ref<string | null>(null)
 
-  // The same preference controls the server-side visible activity tail, the
-  // local collapsed activity window, and each lazy fold request. Keeping it
-  // in the store means a background refresh cannot silently fall back to 5.
+  // Number of older parts revealed by one explicit user action. The initial
+  // visible tail is intentionally fixed at five and does not change when this
+  // input changes.
   const transcriptPartPageSize = ref(loadStoredTranscriptPartPageSize())
 
   const historyLimitBySession = ref<Record<string, number>>({})
@@ -517,7 +517,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
 
     try {
       const limit = sessionMessageLimit(sid)
-      const page = await chatApi.listMessages(sid, limit, undefined, transcriptPartPageSize.value)
+      const page = await chatApi.listMessages(sid, limit, undefined, DEFAULT_TRANSCRIPT_PART_PAGE_SIZE)
       if (!isLatestRefreshMessagesRequest(sid, requestSeq, generation)) return
       const ordered = normalizeMessageList(page.entries)
       const hasLoadedOlder = historyOlderLoadedBySession.value[sid] === true
@@ -644,7 +644,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
     historyLoadingBySession.value = { ...historyLoadingBySession.value, [sid]: true }
     try {
       const cursor = historyCursorBySession.value[sid] ?? null
-      const page = await chatApi.listMessages(sid, MESSAGE_PAGE_SIZE, cursor, transcriptPartPageSize.value)
+      const page = await chatApi.listMessages(sid, MESSAGE_PAGE_SIZE, cursor, DEFAULT_TRANSCRIPT_PART_PAGE_SIZE)
       if (generation !== transcriptCacheGeneration) return false
       const normalized = normalizeMessageList(page.entries)
       const merged = mergeMessageLists(normalized, ensureSessionMessages(sid))
@@ -748,14 +748,6 @@ const useChatStoreDefinition = defineStore('chat', () => {
     if (transcriptPartPageSize.value === next) return
     transcriptPartPageSize.value = next
     setLocalJson(localStorageKeys.chat.transcriptPartPageSize, next)
-
-    const sid = selectedSessionId.value
-    if (sid && messagesHydratedBySession.value[sid]) {
-      // Re-read the visible tail using the new preference. The refresh merge
-      // keeps already loaded parts and only changes how much is initially
-      // shown for still-folded runs.
-      void refreshMessages(sid, { silent: true, authoritativeFolds: true }).catch(() => {})
-    }
   }
 
   /** Drop transcript pages when the chat page is actually unmounted. */

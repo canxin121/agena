@@ -86,7 +86,6 @@ const {
 
   // Activity.
   activityCollapseSignal,
-  activityExpandAllSignal,
   transcriptPartExpanded,
   setTranscriptPartExpanded,
   loadFoldedActivity,
@@ -442,7 +441,6 @@ void sessionActionsMenuRef
                 :current-phase="currentPhase"
                 :awaiting-assistant="awaitingAssistant"
                 :activity-collapse-signal="activityCollapseSignal"
-                :activity-expand-all-signal="activityExpandAllSignal"
                 :is-part-expanded="transcriptPartExpanded"
                 :is-node-selected="isTranscriptNodeSelected"
                 :is-node-search-match="isTranscriptNodeSearchMatch"
@@ -460,8 +458,6 @@ void sessionActionsMenuRef
                 @unrevert-from-revert="handleUnrevertFromRevertMarker"
                 @copySessionError="handleCopySessionError"
                 @clearSessionError="chat.selectedSessionId ? chat.clearSessionError(chat.selectedSessionId) : undefined"
-                @expand-all="ctx.expandAllTranscriptParts"
-                @collapse-all="ctx.collapseAllTranscriptParts"
                 @set-activity-page-size="ctx.setTranscriptPartPageSize"
               />
 

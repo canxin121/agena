@@ -460,7 +460,7 @@ impl App {
                             .find(|fold| fold.run_ids.contains(&run_id))
                             .cloned()
                     {
-                        self.request_transcript_fold_parts(next_fold, true);
+                        self.request_transcript_fold_parts(next_fold, true, 50);
                     }
                 }
             }

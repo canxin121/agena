@@ -79,15 +79,16 @@ impl App {
                 self.yank_current_lines(width, height, 1, None);
             }
             Some(KeyAction::Toggle) => {
+                let reveal_count = self.transcript_motion_count_if_present();
                 self.clear_transcript_pending_command();
-                self.toggle_transcript_cursor_node();
+                self.toggle_transcript_cursor_node(reveal_count);
             }
             Some(KeyAction::ExpandAll) => {
                 self.clear_transcript_pending_command();
                 let folds = self.transcript.transcript_folds.clone();
                 self.transcript.expand_all_transcript_parts(width, height);
                 for fold in folds {
-                    self.request_transcript_fold_parts(fold, true);
+                    self.request_transcript_fold_parts(fold, true, 50);
                 }
             }
             Some(action @ (KeyAction::MoveLeft | KeyAction::MoveRight)) => {

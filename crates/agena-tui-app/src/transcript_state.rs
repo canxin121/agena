@@ -469,6 +469,21 @@ impl TranscriptState {
         if parts.is_empty() {
             return false;
         }
+        let fold_entry_id =
+            agena_tui_transcript::parts_entries_with_folds(&self.parts, &self.transcript_folds)
+                .into_iter()
+                .find(|entry| {
+                    entry.parts.iter().any(|part| match part.id {
+                        TranscriptContentId::TranscriptFold {
+                            run_id: candidate_run_id,
+                            anchor_part_id: candidate_anchor_part_id,
+                        } => {
+                            candidate_run_id == run_id && candidate_anchor_part_id == anchor_part_id
+                        }
+                        _ => false,
+                    })
+                })
+                .map(|entry| entry.id);
         let fetched_non_text = parts.iter().filter(|part| part.kind != "run").count();
         let mut by_id = self
             .parts
@@ -505,6 +520,38 @@ impl TranscriptState {
                     && (candidate.anchor_part_id == anchor_part_id
                         || candidate.anchor_part_id == next_anchor))
             });
+        }
+
+        // The server has already made these fetched parts explicitly visible.
+        // Keep the client-side count fold from hiding the same chunk again.
+        // The summary key follows the renderer's first-real-activity identity;
+        // each subsequent prepend records the newly stable key as well.
+        if let Some(entry_id) = fold_entry_id
+            && let Some(entry) =
+                agena_tui_transcript::parts_entries_with_folds(&self.parts, &self.transcript_folds)
+                    .into_iter()
+                    .find(|entry| entry.id == entry_id)
+        {
+            let activities = entry
+                .parts
+                .iter()
+                .filter(|part| {
+                    matches!(
+                        &part.content,
+                        agena_tui_transcript::TranscriptPartContent::Activity(content)
+                            if !matches!(content, agena_tui_transcript::TranscriptActivityContent::Fold { .. })
+                    )
+                })
+                .collect::<Vec<_>>();
+            if let Some(first) = activities.first() {
+                self.activity_summary_visible_counts.insert(
+                    TranscriptNodeKey::ActivitySummary {
+                        entry_id,
+                        first_content_id: first.id,
+                    },
+                    activities.len(),
+                );
+            }
         }
         self.invalidate_render();
         true
@@ -1356,7 +1403,7 @@ impl TranscriptState {
             (target_index != current_index).then(|| {
                 let message = message_nodes[target_index];
                 // A folded assistant reply begins with a synthetic activity
-                // summary ("N older activity blocks collapsed"). Message
+                // summary ("N older parts hidden"). Message
                 // jumps should land on the newest visible real part instead
                 // of making Ctrl+J/K stop on that expansion affordance.
                 let target_part = rendered.nodes.iter().rev().find(|node| {
@@ -3224,16 +3271,16 @@ impl TranscriptState {
         self.current_cursor_node(width).cloned()
     }
 
-    /// Toggle the activity under the cursor and keep the cursor attached to it.
-    ///
-    /// A cursor can be several rendered lines into an expanded activity. Once
-    /// that activity is collapsed, retaining the old absolute line would point
-    /// at an unrelated node later in the transcript. Preserve the cursor's
-    /// relative row when possible and clamp it to the node's new range.
-    pub(crate) fn toggle_cursor_node_expansion(
+    /// Toggle one ordinary part detail, or reveal a requested number of older
+    /// parts when the cursor is on a list fold marker. The count affects only
+    /// list visibility; it never changes any real part's detail expansion. A
+    /// cursor inside an ordinary expanded part remains attached to the same
+    /// part and relative row when that detail is collapsed.
+    pub(crate) fn toggle_cursor_node_expansion_by(
         &mut self,
         width: u16,
         height: u16,
+        reveal_count: Option<usize>,
     ) -> Option<(TranscriptNodeKind, bool)> {
         let node = self.current_cursor_node_cloned(width)?;
         if !node.toggleable {
@@ -3253,17 +3300,19 @@ impl TranscriptState {
             .unwrap_or(TranscriptMoveDirection::Down);
 
         if matches!(node.key, TranscriptNodeKey::ActivitySummary { .. }) {
+            let reveal_count = reveal_count
+                .unwrap_or(agena_tui_transcript::COLLAPSED_ACTIVITY_VISIBLE_COUNT)
+                .clamp(1, 50);
             let current = self
                 .activity_summary_visible_counts
                 .get(&node.key)
                 .copied()
                 .unwrap_or(agena_tui_transcript::COLLAPSED_ACTIVITY_VISIBLE_COUNT);
-            self.activity_summary_visible_counts.insert(
-                node.key.clone(),
-                current.saturating_add(agena_tui_transcript::COLLAPSED_ACTIVITY_VISIBLE_COUNT),
-            );
-            // A summary expansion is progressive. `Enter` on it reveals the
-            // next bounded chunk; Ctrl+Shift+Enter uses the all-expand path.
+            self.activity_summary_visible_counts
+                .insert(node.key.clone(), current.saturating_add(reveal_count));
+            // A summary action is progressive. `Enter` reveals five, a Vim
+            // count followed by Enter reveals that many, and the explicit
+            // show-all action uses the all-visible path below.
             self.node_expansions.remove(&node.key);
             self.invalidate_render();
             let total_lines = self.rendered(width).lines.len();
@@ -3276,6 +3325,20 @@ impl TranscriptState {
             self.install_cursor(width, height, target_line, block_cursor, true);
             self.refresh_cursor_screen_row(height);
             self.sync_follow_tail(width, height);
+            return Some((node.kind, true));
+        }
+
+        // A server fold is also a list-visibility control, not a real part
+        // detail. The app starts the requested page fetch after this returns;
+        // do not put the synthetic marker into the ordinary expansion map.
+        if matches!(
+            &node.key,
+            TranscriptNodeKey::Activity {
+                content_id: TranscriptContentId::TranscriptFold { .. },
+                ..
+            }
+        ) {
+            self.node_expansions.remove(&node.key);
             return Some((node.kind, true));
         }
 
@@ -3319,10 +3382,9 @@ impl TranscriptState {
         Some((node.kind, expanded))
     }
 
-    /// Reveal every currently folded activity and every folded run summary in
-    /// the loaded transcript. This is intentionally scoped to the in-memory
-    /// transcript; fetching older pages remains an explicit scroll/pagination
-    /// action rather than an unbounded request.
+    /// Reveal every currently loaded part without modifying the expansion
+    /// state of any part's own detail body. Remote fold pages are fetched by
+    /// the caller using the same show-all action.
     pub(crate) fn expand_all_transcript_parts(&mut self, width: u16, height: u16) {
         let summary_keys = self
             .rendered(width)
@@ -3332,19 +3394,7 @@ impl TranscriptState {
             .map(|node| node.key.clone())
             .collect::<Vec<_>>();
         for key in summary_keys {
-            self.node_expansions.insert(key, true);
-        }
-        self.activity_summary_visible_counts.clear();
-        self.invalidate_render();
-        let all_keys = self
-            .rendered(width)
-            .nodes
-            .iter()
-            .filter(|node| node.toggleable)
-            .map(|node| node.key.clone())
-            .collect::<Vec<_>>();
-        for key in all_keys {
-            self.node_expansions.insert(key, true);
+            self.activity_summary_visible_counts.insert(key, usize::MAX);
         }
         self.invalidate_render();
         self.ensure_visual_focus(width, height);

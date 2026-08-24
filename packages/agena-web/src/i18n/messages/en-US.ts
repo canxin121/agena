@@ -2384,10 +2384,6 @@ export default {
       loadingOlder: 'Loading older messages...',
       activity: {
         moreCount: '+{count} more...',
-        expandMoreCount: 'Show {count} more...',
-        expandAll: 'Show all',
-        collapseAll: 'Collapse all',
-        hide: 'Hide',
         toolInvocation: {
           toolNames: {
             bash: 'Run Command',
@@ -2448,15 +2444,9 @@ export default {
         },
       },
       controls: {
-        title: 'Part controls',
-        actionsTitle: 'Part controls',
-        menuTitle: 'Display options',
-        expandNextCount: 'Expand {count} parts',
-        collectAll: 'Load all parts',
-        pageSizeTitle: 'Parts per load',
-        pageSizeOption: '{count} parts at a time',
-        pageSizeInputLabel: 'Parts to load at a time (1–50)',
-        each: 'each',
+        expandNextCount: 'Show {count} more parts',
+        collectAll: 'Show all parts',
+        pageSizeInputLabel: 'Older parts to show (1–50)',
       },
       optimistic: {
         sending: 'sending...',

@@ -2379,10 +2379,6 @@ export default {
       loadingOlder: '正在加载更早的消息...',
       activity: {
         moreCount: '+{count} 条更多...',
-        expandMoreCount: '再展开 {count} 条...',
-        expandAll: '全部展开',
-        collapseAll: '全部收起',
-        hide: '隐藏',
         toolInvocation: {
           toolNames: {
             bash: '运行命令',
@@ -2443,15 +2439,9 @@ export default {
         },
       },
       controls: {
-        title: 'Part 操作',
-        actionsTitle: 'Part 操作',
-        menuTitle: '显示选项',
-        expandNextCount: '展开 {count} 个 part',
-        collectAll: '收齐 part',
-        pageSizeTitle: '每次加载 part 数量',
-        pageSizeOption: '每次 {count} 个 part',
-        pageSizeInputLabel: '每次加载的 part 数量（1–50）',
-        each: '每次',
+        expandNextCount: '再显示 {count} 个 part',
+        collectAll: '显示全部 part',
+        pageSizeInputLabel: '本次要多显示的 part 数量（1–50）',
       },
       optimistic: {
         sending: '发送中...',

@@ -322,6 +322,7 @@ impl App {
         &mut self,
         fold: agena_api::live::SessionTranscriptFoldResource,
         expand_all: bool,
+        reveal_count: usize,
     ) {
         let Some(session_id) = self.transcript.session_id else {
             return;
@@ -331,9 +332,10 @@ impl App {
         };
         let application = self.application.clone();
         let tx = self.tx.clone();
+        let reveal_count = reveal_count.clamp(1, 50) as u64;
         tokio::spawn(async move {
             let result = application
-                .list_session_transcript_fold_page(session_id, 5, cursor.as_str())
+                .list_session_transcript_fold_page(session_id, reveal_count, cursor.as_str())
                 .await
                 .map_err(crate::UiFailure::from_backend);
             let _ = tx

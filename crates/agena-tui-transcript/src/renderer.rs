@@ -182,8 +182,8 @@ pub fn render_entry_detailed_with_progressive_expansion(
                     first_content_id: activities[0].id,
                 };
                 let foldable_count = activities.len();
-                let expanded_all = expansions.get(&key).copied().unwrap_or(false);
-                let visible_count = if expanded_all {
+                let show_all = expansions.get(&key).copied().unwrap_or(false);
+                let visible_count = if show_all {
                     foldable_count
                 } else {
                     summary_visible_counts
@@ -192,17 +192,7 @@ pub fn render_entry_detailed_with_progressive_expansion(
                         .unwrap_or(COLLAPSED_ACTIVITY_VISIBLE_COUNT)
                 };
                 let collapsed_prefix_len = foldable_count.saturating_sub(visible_count);
-                // Keep the summary node when the ordinary expansion map explicitly
-                // expands a run: existing cursor/selection state uses that
-                // stable anchor to collapse it again. Progressive expansion
-                // removes the marker only after its bounded count reaches the
-                // complete run.
-                let hidden_count = if expanded_all {
-                    foldable_count.saturating_sub(COLLAPSED_ACTIVITY_VISIBLE_COUNT)
-                } else {
-                    collapsed_prefix_len
-                };
-                let expanded = expanded_all;
+                let hidden_count = collapsed_prefix_len;
                 // Run folding is purely positional. Individual Activity
                 // expansion controls that Activity's body only and must not
                 // exempt an old Activity from the collapsed prefix.
@@ -217,11 +207,7 @@ pub fn render_entry_detailed_with_progressive_expansion(
                     // the adjacent `assistant` header look selected.
                     let start_line = lines.len();
                     let summary = i18n.text_args(
-                        if expanded {
-                            "message-activity-run-expanded"
-                        } else {
-                            "message-activity-run-collapsed"
-                        },
+                        "message-activity-run-collapsed",
                         &agena_tui::fl_args!("count" => hidden_count as i64),
                     );
                     push_single_line(
@@ -242,10 +228,10 @@ pub fn render_entry_detailed_with_progressive_expansion(
                         copy_text: summary.clone(),
                         atomic: true,
                         toggleable: true,
-                        expanded,
+                        expanded: false,
                     });
                     for (part, hidden) in activities.into_iter().zip(hidden_when_collapsed) {
-                        if !expanded_all && hidden {
+                        if hidden {
                             continue;
                         }
                         append_rendered_part_node(
@@ -882,7 +868,7 @@ mod tests {
         assert!(text.starts_with("assistant"), "{text}");
         assert!(!text.starts_with("system"), "{text}");
         assert!(text.contains("Hook · mid-reply hook fired"), "{text}");
-        assert!(text.contains("5 older activity blocks collapsed"), "{text}");
+        assert!(text.contains("5 older parts hidden"), "{text}");
         let notice_line = rendered
             .lines
             .iter()
@@ -966,7 +952,7 @@ mod tests {
         // A long run of session hook rows must fold exactly like tool calls:
         // the oldest four collapse into one marker row and the newest five
         // stay visible instead of piling up.
-        assert!(text.contains("4 older activity blocks collapsed"), "{text}");
+        assert!(text.contains("4 older parts hidden"), "{text}");
         assert!(!text.contains("hook run 0"), "{text}");
         assert!(!text.contains("hook run 1"), "{text}");
         assert!(!text.contains("hook run 2"), "{text}");
@@ -1050,7 +1036,7 @@ mod tests {
             !text.contains("Prompt compaction completed"),
             "stale reply-content notice must fold away, got: {text}"
         );
-        assert!(text.contains("7 older activity blocks collapsed"), "{text}");
+        assert!(text.contains("7 older parts hidden"), "{text}");
         assert!(!text.contains("Read file 5"), "{text}");
         assert!(text.contains("Read file 6"), "{text}");
         assert_eq!(
@@ -1092,7 +1078,7 @@ mod tests {
     }
 
     #[test]
-    fn expanded_activity_run_stays_expanded_when_the_assistant_appends_an_activity() {
+    fn show_all_activity_run_stays_visible_when_the_assistant_appends_an_activity() {
         let now = Utc::now();
         let activity = |part_id: i64| {
             TranscriptFixture::reasoning_part(
@@ -1126,22 +1112,22 @@ mod tests {
 
         let before = render_entry_detailed(&message, 80, &I18n::english(), &defaults, &expansions);
         assert!(
-            before
-                .nodes
-                .iter()
-                .find(|node| node.key == summary_key)
-                .is_some_and(|node| node.expanded)
+            before.nodes.iter().all(|node| node.key != summary_key),
+            "the visibility marker disappears after show all"
         );
+        assert!(before.nodes.iter().any(|node| {
+            node.key
+                == (TranscriptNodeKey::Activity {
+                    entry_id: TranscriptEntryId::StoredMessage(17),
+                    content_id: TranscriptContentId::StoredPart(31),
+                })
+        }));
 
         message.parts.push(activity(37));
         let after = render_entry_detailed(&message, 80, &I18n::english(), &defaults, &expansions);
         assert!(
-            after
-                .nodes
-                .iter()
-                .find(|node| node.key == summary_key)
-                .is_some_and(|node| node.expanded),
-            "appending an Activity must not replace the expanded run with a new collapsed node"
+            after.nodes.iter().all(|node| node.key != summary_key),
+            "appending an Activity must not restore a hidden-parts marker after show all"
         );
         assert!(after.nodes.iter().any(|node| {
             node.key
@@ -1275,7 +1261,7 @@ mod tests {
             .expect("folded run summary");
         assert!(!summary.expanded);
         assert!(
-            summary.copy_text.contains("collapsed"),
+            summary.copy_text.contains("older parts hidden"),
             "the folded marker text belongs in copy: {}",
             summary.copy_text
         );
@@ -1727,7 +1713,7 @@ mod tests {
         let presentation = folded
             .nodes
             .iter()
-            .find(|node| &node.key == &presentation_key)
+            .find(|node| node.key == presentation_key)
             .expect("presentation section node");
         assert!(presentation.toggleable);
         assert!(presentation.expanded);

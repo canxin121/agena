@@ -1,28 +1,18 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
-import {
-  RiArrowGoBackLine,
-  RiCheckLine,
-  RiClipboardLine,
-  RiGitBranchLine,
-  RiLoader4Line,
-  RiMore2Line,
-} from '@remixicon/vue'
+import { computed, ref } from 'vue'
+import { RiArrowGoBackLine, RiCheckLine, RiClipboardLine, RiGitBranchLine, RiLoader4Line } from '@remixicon/vue'
 
 import AgenaTranscriptPart from '@/components/chat/AgenaTranscriptPart.vue'
 import ConfirmPopover from '@/components/ui/ConfirmPopover.vue'
 import IconButton from '@/components/ui/IconButton.vue'
-import OptionMenu from '@/components/ui/OptionMenu.vue'
 import ToolbarChipButton from '@/components/ui/ToolbarChipButton.vue'
-import type { OptionMenuGroup, OptionMenuItem } from '@/components/ui/optionMenu.types'
 import type { MessageLike, TranscriptDisplayPart } from '@/components/chat/messageList.types'
 import type { MessageFold } from '@/types/chat'
 import { getAssistantErrorInfo } from '@/pages/chat/assistantError'
-import { foldTranscriptActivityRun } from '@/pages/chat/transcriptActivityFolding'
+import { foldTranscriptActivityRun, transcriptActivityRunKey } from '@/pages/chat/transcriptActivityFolding'
 import { transcriptPartNavigationText } from '@/pages/chat/transcriptNavigation'
 import { partStatusPresentation } from '@/pages/chat/transcriptPartPresentation'
-import { partHasPendingInteraction } from '@/pages/chat/transcriptProjection'
-import { normalizeTranscriptPartPageSize, TRANSCRIPT_PART_PAGE_SIZE_OPTIONS } from '@/pages/chat/transcriptPartPaging'
+import { DEFAULT_TRANSCRIPT_PART_PAGE_SIZE, normalizeTranscriptPartPageSize } from '@/pages/chat/transcriptPartPaging'
 import { useI18n } from 'vue-i18n'
 
 const props = defineProps<{
@@ -34,7 +24,6 @@ const props = defineProps<{
   revertBusyMessageId: string
   isStreaming: boolean
   collapseSignal: number
-  expandAllSignal: number
   activityPageSize: number
   isMobilePointer: boolean
   isPartExpanded: (part: TranscriptDisplayPart) => boolean
@@ -50,8 +39,6 @@ const emit = defineEmits<{
   (event: 'partToggle', part: TranscriptDisplayPart, expanded: boolean): void
   (event: 'foldExpand', fold: MessageFold, all: boolean): void
   (event: 'nodeSelect', key: string): void
-  (event: 'expandAll'): void
-  (event: 'collapseAll'): void
   (event: 'setActivityPageSize', size: number): void
 }>()
 
@@ -78,29 +65,11 @@ const fallbackError = computed(() => {
   return assistantError.value.message || ''
 })
 const activityRunVisibleCount = ref<Record<string, number>>({})
-const allActivityRunsExpanded = ref(props.expandAllSignal > props.collapseSignal)
 const activityPageSize = computed(() => normalizeTranscriptPartPageSize(props.activityPageSize))
-const summaryMenuOpenKey = ref('')
-const summaryMenuAnchor = ref<HTMLElement | null>(null)
 
 type TranscriptRow =
   | { kind: 'part'; key: string; part: TranscriptDisplayPart }
-  | { kind: 'summary'; key: string; hiddenCount: number; expanded: boolean }
-
-watch(
-  () => props.collapseSignal,
-  () => {
-    activityRunVisibleCount.value = {}
-    allActivityRunsExpanded.value = false
-  },
-)
-
-watch(
-  () => props.expandAllSignal,
-  (signal) => {
-    if (signal > 0) allActivityRunsExpanded.value = true
-  },
-)
+  | { kind: 'summary'; key: string; hiddenCount: number; fold: MessageFold | null }
 
 const transcriptRows = computed<TranscriptRow[]>(() => {
   if (role.value === 'user') {
@@ -125,23 +94,15 @@ const transcriptRows = computed<TranscriptRow[]>(() => {
     const remoteFold = props.message.folds?.find((fold) =>
       run.some((part) => String(part.id) === String(fold.anchorPartId)),
     )
-    const summaryKey = `activity-summary:${messageId.value}:${remoteFold?.anchorPartId || run[0]?.id || index}`
-    const visibleCount = allActivityRunsExpanded.value
-      ? Number.MAX_SAFE_INTEGER
-      : (activityRunVisibleCount.value[summaryKey] ?? activityPageSize.value)
-    // An unanswered permission/question is an active control surface, not
-    // passive activity. Keep its operation visible even when the surrounding
-    // activity run is collapsed; otherwise the user can receive attention but
-    // has no keyboard-reachable control in the transcript.
-    const preservesPendingInteraction = run.some(
-      (part) => part.kind === 'operation' && partHasPendingInteraction(part.source),
-    )
-    const folded = preservesPendingInteraction
-      ? { hiddenCount: 0, visibleParts: run }
-      : foldTranscriptActivityRun(run, visibleCount)
+    // The newest part id is stable while older pages are prepended. Using the
+    // server fold anchor here would recreate this key after every fetch and
+    // immediately hide the parts that were just revealed.
+    const summaryKey = transcriptActivityRunKey(messageId.value, run, index)
+    const visibleCount = activityRunVisibleCount.value[summaryKey] ?? DEFAULT_TRANSCRIPT_PART_PAGE_SIZE
+    const folded = foldTranscriptActivityRun(run, visibleCount)
     const hiddenCount = (remoteFold?.hiddenCount || 0) + folded.hiddenCount
     if (hiddenCount) {
-      rows.push({ kind: 'summary', key: summaryKey, hiddenCount, expanded: false })
+      rows.push({ kind: 'summary', key: summaryKey, hiddenCount, fold: remoteFold || null })
     }
     for (const part of folded.visibleParts) {
       rows.push({ kind: 'part', key: part.key, part })
@@ -174,18 +135,16 @@ function togglePart(part: TranscriptDisplayPart) {
   emit('partToggle', part, !props.isPartExpanded(part))
 }
 
-function revealActivitySummary(key: string, hiddenCount: number, all = false, requestRemote = true) {
-  const current = activityRunVisibleCount.value[key] ?? activityPageSize.value
-  const next = all ? Number.MAX_SAFE_INTEGER : current + Math.max(1, Math.min(activityPageSize.value, hiddenCount))
-  activityRunVisibleCount.value = { ...activityRunVisibleCount.value, [key]: next }
-  const anchorPartId = key.slice(key.lastIndexOf(':') + 1)
-  const fold = props.message.folds?.find((candidate) => String(candidate.anchorPartId) === anchorPartId)
-  if (fold && requestRemote) emit('foldExpand', fold, all)
-  emit('nodeSelect', key)
+function revealActivitySummary(row: Extract<TranscriptRow, { kind: 'summary' }>, all = false, requestRemote = true) {
+  const current = activityRunVisibleCount.value[row.key] ?? DEFAULT_TRANSCRIPT_PART_PAGE_SIZE
+  const next = all ? Number.MAX_SAFE_INTEGER : current + Math.max(1, Math.min(activityPageSize.value, row.hiddenCount))
+  activityRunVisibleCount.value = { ...activityRunVisibleCount.value, [row.key]: next }
+  if (row.fold && requestRemote) emit('foldExpand', row.fold, all)
+  emit('nodeSelect', row.key)
 }
 
 function revealSummary(row: Extract<TranscriptRow, { kind: 'summary' }>, all = false) {
-  revealActivitySummary(row.key, row.hiddenCount, all)
+  revealActivitySummary(row, all)
 }
 
 function handleSummaryPageSizeInput(event: Event) {
@@ -193,65 +152,6 @@ function handleSummaryPageSizeInput(event: Event) {
   if (input instanceof HTMLInputElement) {
     emit('setActivityPageSize', normalizeTranscriptPartPageSize(input.value))
   }
-}
-
-function toggleSummaryMenu(key: string, event: MouseEvent) {
-  if (event.currentTarget instanceof HTMLElement) summaryMenuAnchor.value = event.currentTarget
-  summaryMenuOpenKey.value = summaryMenuOpenKey.value === key ? '' : key
-}
-
-function closeSummaryMenu() {
-  summaryMenuOpenKey.value = ''
-}
-
-function summaryMenuGroups(row: Extract<TranscriptRow, { kind: 'summary' }>): OptionMenuGroup[] {
-  return [
-    {
-      id: 'part-actions',
-      title: String(t('chat.messages.controls.actionsTitle')),
-      items: [
-        {
-          id: 'expand-next',
-          label: String(t('chat.messages.controls.expandNextCount', { count: activityPageSize.value })),
-          disabled: row.hiddenCount <= 0,
-        },
-        {
-          id: 'collect-all',
-          label: String(t('chat.messages.controls.collectAll')),
-          disabled: row.hiddenCount <= 0,
-        },
-        {
-          id: 'expand-all',
-          label: String(t('chat.messages.activity.expandAll')),
-        },
-        {
-          id: 'collapse-all',
-          label: String(t('chat.messages.activity.collapseAll')),
-        },
-      ],
-    },
-    {
-      id: 'part-page-size',
-      title: String(t('chat.messages.controls.pageSizeTitle')),
-      items: TRANSCRIPT_PART_PAGE_SIZE_OPTIONS.map<OptionMenuItem>((size) => ({
-        id: `page-size:${size}`,
-        label: String(t('chat.messages.controls.pageSizeOption', { count: size })),
-        checked: size === activityPageSize.value,
-      })),
-    },
-  ]
-}
-
-function runSummaryMenu(row: Extract<TranscriptRow, { kind: 'summary' }>, item: OptionMenuItem) {
-  const id = String(item.id || '')
-  if (id === 'expand-next') revealSummary(row)
-  else if (id === 'collect-all') revealSummary(row, true)
-  else if (id === 'expand-all') emit('expandAll')
-  else if (id === 'collapse-all') emit('collapseAll')
-  else if (id.startsWith('page-size:')) {
-    emit('setActivityPageSize', normalizeTranscriptPartPageSize(id.slice('page-size:'.length)))
-  }
-  closeSummaryMenu()
 }
 
 function partNavigationText(part: TranscriptDisplayPart): string {
@@ -395,23 +295,35 @@ function partNavigationText(part: TranscriptDisplayPart): string {
         @pointerdown="$emit('nodeSelect', row.key)"
         @focus="$emit('nodeSelect', row.key)"
       >
-        <div v-if="row.kind === 'summary'" class="flex min-w-0 flex-wrap items-center gap-1" data-part-controls="true">
-          <button
-            type="button"
-            class="flex min-w-0 flex-1 items-center gap-2 rounded-md px-1 py-1 text-left font-mono text-[11px] text-muted-foreground hover:bg-muted/35 hover:text-foreground"
-            data-transcript-toggle="true"
-            :aria-expanded="false"
-            @click="revealActivitySummary(row.key, row.hiddenCount)"
-          >
-            <span class="w-3 text-center" aria-hidden="true">▸</span>
-            <span>{{ t('chat.messages.activity.expandMoreCount', { count: row.hiddenCount }) }}</span>
-          </button>
-          <div class="flex shrink-0 flex-wrap items-center gap-1" data-transcript-chrome="true">
+        <div
+          v-if="row.kind === 'summary'"
+          class="flex min-w-0 flex-wrap items-center gap-1 py-1"
+          data-part-controls="true"
+          data-transcript-chrome="true"
+        >
+          <span class="mr-auto min-w-0 px-1 font-mono text-[11px] text-muted-foreground">
+            {{ t('chat.messages.activity.moreCount', { count: row.hiddenCount }) }}
+          </span>
+          <div class="flex shrink-0 flex-wrap items-center gap-1">
+            <input
+              :value="activityPageSize"
+              type="number"
+              min="1"
+              max="50"
+              step="1"
+              class="h-6 w-11 rounded border border-border/60 bg-background/70 px-1 text-center font-mono text-[10px] outline-none focus:border-primary/60"
+              :aria-label="t('chat.messages.controls.pageSizeInputLabel')"
+              :title="t('chat.messages.controls.pageSizeInputLabel')"
+              data-part-page-size="true"
+              @change="handleSummaryPageSizeInput"
+              @keydown.enter="handleSummaryPageSizeInput"
+            />
             <ToolbarChipButton
               :tooltip="t('chat.messages.controls.expandNextCount', { count: activityPageSize })"
               :title="t('chat.messages.controls.expandNextCount', { count: activityPageSize })"
               :is-mobile-pointer="isMobilePointer"
               :disabled="row.hiddenCount <= 0"
+              data-transcript-toggle="true"
               data-part-expand-next="true"
               @click.stop="revealSummary(row)"
             >
@@ -427,47 +339,6 @@ function partNavigationText(part: TranscriptDisplayPart): string {
             >
               {{ t('chat.messages.controls.collectAll') }}
             </ToolbarChipButton>
-            <input
-              :value="activityPageSize"
-              type="number"
-              min="1"
-              max="50"
-              step="1"
-              class="h-6 w-11 rounded border border-border/60 bg-background/70 px-1 text-center font-mono text-[10px] outline-none focus:border-primary/60"
-              :aria-label="t('chat.messages.controls.pageSizeInputLabel')"
-              :title="t('chat.messages.controls.pageSizeInputLabel')"
-              data-part-page-size="true"
-              @change="handleSummaryPageSizeInput"
-              @keydown.enter="handleSummaryPageSizeInput"
-            />
-            <IconButton
-              variant="ghost"
-              size="sm"
-              :tooltip="t('chat.messages.controls.menuTitle')"
-              :is-mobile-pointer="isMobilePointer"
-              :aria-label="t('chat.messages.controls.menuTitle')"
-              :class="summaryMenuOpenKey === row.key ? 'bg-secondary/60 text-foreground' : 'text-muted-foreground'"
-              data-part-menu="true"
-              @click.stop="toggleSummaryMenu(row.key, $event)"
-            >
-              <RiMore2Line class="h-4 w-4" />
-            </IconButton>
-            <OptionMenu
-              v-if="summaryMenuOpenKey === row.key"
-              :open="true"
-              :groups="summaryMenuGroups(row)"
-              :title="t('chat.messages.controls.menuTitle')"
-              :mobile-title="t('chat.messages.controls.menuTitle')"
-              :searchable="false"
-              :is-mobile-pointer="isMobilePointer"
-              :desktop-fixed="true"
-              :desktop-anchor-el="summaryMenuAnchor"
-              desktop-placement="bottom-end"
-              desktop-class="w-72"
-              @update:open="summaryMenuOpenKey = $event ? row.key : ''"
-              @close="closeSummaryMenu"
-              @select="runSummaryMenu(row, $event)"
-            />
           </div>
         </div>
         <AgenaTranscriptPart

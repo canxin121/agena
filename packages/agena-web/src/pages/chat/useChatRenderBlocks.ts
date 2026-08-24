@@ -74,17 +74,10 @@ export function useChatRenderBlocks(opts: {
 
   const activityExpandedByBlockKey = ref<Record<string, boolean>>({})
   const activityCollapseSignal = ref(0)
-  const activityExpandAllSignal = ref(0)
-  const MAX_VISIBLE_ACTIVITY_COLLAPSED = Number.POSITIVE_INFINITY
 
   function collapseAllActivities() {
     activityExpandedByBlockKey.value = {}
     activityCollapseSignal.value += 1
-  }
-
-  /** Expand every currently loaded fold and every loaded part detail. */
-  function expandAllActivities() {
-    activityExpandAllSignal.value += 1
   }
 
   function isActivityExpanded(partKey: string): boolean {
@@ -100,12 +93,9 @@ export function useChatRenderBlocks(opts: {
     getTextParts,
     isReasoningPart,
     isMetaPart,
-    MAX_VISIBLE_ACTIVITY_COLLAPSED,
     activityExpandedByBlockKey,
     activityCollapseSignal,
-    activityExpandAllSignal,
     collapseAllActivities,
-    expandAllActivities,
     isActivityExpanded,
     setActivityExpanded,
   }

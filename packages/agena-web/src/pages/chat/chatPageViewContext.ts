@@ -113,11 +113,7 @@ export type ChatPageViewContext = {
 
   activityInitiallyExpandedForPart: (part: TranscriptDisplayPart) => boolean
   activityCollapseSignal: MaybeRef<number>
-  activityExpandAllSignal: MaybeRef<number>
-  expandAllTranscriptParts: () => void
-  collapseAllTranscriptParts: () => void
   setTranscriptPartPageSize: (size: number) => void
-  MAX_VISIBLE_ACTIVITY_COLLAPSED: number
   isActivityExpanded: (key: string) => boolean
   setActivityExpanded: (key: string, expanded: boolean) => void
   isReasoningPart: (part: DynamicRecord) => boolean

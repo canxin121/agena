@@ -47,7 +47,6 @@ const props = defineProps<{
   currentPhase: string
   awaitingAssistant: boolean
   activityCollapseSignal: number
-  activityExpandAllSignal: number
   isPartExpanded: (part: TranscriptDisplayPart) => boolean
   isNodeSelected?: (key: string) => boolean
   isNodeSearchMatch?: (key: string) => boolean
@@ -68,8 +67,6 @@ const emit = defineEmits<{
   (event: 'unrevertFromRevert'): void
   (event: 'copySessionError'): void
   (event: 'clearSessionError'): void
-  (event: 'expandAll'): void
-  (event: 'collapseAll'): void
   (event: 'setActivityPageSize', size: number): void
 }>()
 
@@ -246,7 +243,6 @@ function forwardFoldExpand(fold: MessageFold, all: boolean) {
           :revert-busy-message-id="revertBusyMessageId"
           :is-streaming="isStreamingAssistantMessage(block.message)"
           :collapse-signal="activityCollapseSignal"
-          :expand-all-signal="activityExpandAllSignal"
           :activity-page-size="activityPageSize"
           :is-mobile-pointer="isMobilePointer"
           :is-part-expanded="isPartExpanded"
@@ -259,8 +255,6 @@ function forwardFoldExpand(fold: MessageFold, all: boolean) {
           @part-toggle="forwardPartToggle"
           @fold-expand="forwardFoldExpand"
           @node-select="$emit('nodeSelect', $event)"
-          @expand-all="$emit('expandAll')"
-          @collapse-all="$emit('collapseAll')"
           @set-activity-page-size="$emit('setActivityPageSize', $event)"
         />
 

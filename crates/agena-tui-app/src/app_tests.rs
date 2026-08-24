@@ -2606,7 +2606,7 @@ mod transcript_character_cursor_tests {
         let text = &transcript.rendered(120).lines[line].text;
         assert!(text.contains("final visible answer"), "target line: {text}");
         assert!(
-            !text.contains("older activity blocks collapsed"),
+            !text.contains("older parts hidden"),
             "Ctrl+J/K must skip the fold summary: {text}"
         );
     }
@@ -4083,10 +4083,7 @@ mod transcript_activity_copy_tests {
             .iter()
             .enumerate()
             .find_map(|(line, rendered)| {
-                rendered
-                    .text
-                    .contains("older activity blocks collapsed")
-                    .then_some(line)
+                rendered.text.contains("older parts hidden").then_some(line)
             })
             .expect("folded run marker line");
         transcript.select_pointer_line(
@@ -4100,7 +4097,7 @@ mod transcript_activity_copy_tests {
         transcript.toggle_visual_selection(120, 20, TranscriptVisualSelectionMode::Line);
         let copied = transcript.selected_text(120, "").expect("Visual line copy");
         assert!(
-            copied.contains("older activity blocks collapsed"),
+            copied.contains("older parts hidden"),
             "copying the folded marker should keep the visible marker: {copied}"
         );
         assert!(
@@ -4145,7 +4142,7 @@ mod transcript_activity_copy_tests {
             entry.copy_text
         );
         assert!(
-            !entry.copy_text.contains("older activity blocks collapsed"),
+            !entry.copy_text.contains("older parts hidden"),
             "the fold marker itself must never appear in the message copy: {}",
             entry.copy_text
         );
@@ -4233,7 +4230,7 @@ mod transcript_expansion_tests {
 
         transcript.set_cursor_line(100, 20, collapsed.start_line);
         assert_eq!(
-            transcript.toggle_cursor_node_expansion(100, 20),
+            transcript.toggle_cursor_node_expansion_by(100, 20, None),
             Some((TranscriptNodeKind::Activity, true))
         );
         let expanded = transcript
@@ -4297,6 +4294,151 @@ mod transcript_expansion_tests {
     }
 
     #[test]
+    fn activity_summary_count_and_show_all_do_not_expand_part_details() {
+        let mut transcript = TranscriptState {
+            session_id: Some(7),
+            parts: std::iter::once(parts_fixtures::run(3, "assistant", "completed"))
+                .chain((4..12).map(|part_id| {
+                    parts_fixtures::hook(
+                        3,
+                        part_id,
+                        "assistant",
+                        &format!("Part {part_id}"),
+                        &format!("detail {part_id}"),
+                    )
+                }))
+                .collect(),
+            detail_expanded_by_default: agena_tui_transcript::TranscriptDetailDefaults {
+                activity_default_expanded: false,
+                kind_defaults: std::collections::BTreeMap::new(),
+            },
+            ..TranscriptState::default()
+        };
+        let hidden_part_key = TranscriptNodeKey::Activity {
+            entry_id: agena_tui_transcript::TranscriptEntryId::StoredMessage(3),
+            content_id: agena_tui_transcript::TranscriptContentId::StoredPart(4),
+        };
+        transcript
+            .node_expansions
+            .insert(hidden_part_key.clone(), false);
+
+        let summary = transcript
+            .rendered(100)
+            .nodes
+            .iter()
+            .find(|node| matches!(node.key, TranscriptNodeKey::ActivitySummary { .. }))
+            .cloned()
+            .expect("three older parts should be hidden above the visible tail");
+        transcript.set_cursor_line(100, 20, summary.start_line);
+        assert_eq!(
+            transcript.toggle_cursor_node_expansion_by(100, 20, Some(2)),
+            Some((TranscriptNodeKind::Activity, true))
+        );
+        let visible_real_parts = transcript
+            .rendered(100)
+            .nodes
+            .iter()
+            .filter(|node| {
+                matches!(
+                    node.key,
+                    TranscriptNodeKey::Activity {
+                        content_id: agena_tui_transcript::TranscriptContentId::StoredPart(_),
+                        ..
+                    }
+                )
+            })
+            .count();
+        assert_eq!(
+            visible_real_parts, 7,
+            "a count of two reveals exactly two older parts"
+        );
+
+        transcript.expand_all_transcript_parts(100, 20);
+        let hidden_part = transcript
+            .rendered(100)
+            .nodes
+            .iter()
+            .find(|node| node.key == hidden_part_key)
+            .expect("show all should make the oldest part visible");
+        assert!(
+            !hidden_part.expanded,
+            "show all changes list visibility, not the part's own detail state"
+        );
+        assert!(
+            transcript
+                .rendered(100)
+                .nodes
+                .iter()
+                .all(|node| !matches!(node.key, TranscriptNodeKey::ActivitySummary { .. })),
+            "the list marker disappears once every part is visible"
+        );
+    }
+
+    #[test]
+    fn fetched_server_fold_parts_are_not_folded_away_again_locally() {
+        let initial_visible = (7..12)
+            .map(|part_id| {
+                parts_fixtures::hook(
+                    3,
+                    part_id,
+                    "assistant",
+                    &format!("Part {part_id}"),
+                    &format!("detail {part_id}"),
+                )
+            })
+            .collect::<Vec<_>>();
+        let mut transcript = TranscriptState {
+            session_id: Some(7),
+            parts: std::iter::once(parts_fixtures::run(3, "assistant", "completed"))
+                .chain(initial_visible)
+                .collect(),
+            transcript_folds: vec![agena_api::live::SessionTranscriptFoldResource {
+                run_id: 3,
+                run_ids: vec![3],
+                anchor_part_id: 7,
+                hidden_count: 3,
+                next_cursor: Some("older".to_owned()),
+            }],
+            detail_expanded_by_default: agena_tui_transcript::TranscriptDetailDefaults {
+                activity_default_expanded: false,
+                kind_defaults: std::collections::BTreeMap::new(),
+            },
+            ..TranscriptState::default()
+        };
+        let fetched = (4..7)
+            .map(|part_id| {
+                parts_fixtures::hook(
+                    3,
+                    part_id,
+                    "assistant",
+                    &format!("Part {part_id}"),
+                    &format!("detail {part_id}"),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        assert!(transcript.merge_fold_parts(3, 7, fetched, None, false));
+        let rendered = transcript.rendered(100);
+        assert!(
+            rendered
+                .nodes
+                .iter()
+                .all(|node| !matches!(node.key, TranscriptNodeKey::ActivitySummary { .. })),
+            "the client must not create a second fold after the server expansion"
+        );
+        for part_id in 4..12 {
+            let key = TranscriptNodeKey::Activity {
+                entry_id: agena_tui_transcript::TranscriptEntryId::StoredMessage(3),
+                content_id: agena_tui_transcript::TranscriptContentId::StoredPart(part_id),
+            };
+            assert!(
+                rendered.nodes.iter().any(|node| node.key == key),
+                "fetched part {part_id} should remain visible"
+            );
+        }
+    }
+
+    #[test]
     fn collapsing_from_inside_an_activity_keeps_the_cursor_on_that_activity() {
         let now = Utc::now();
         let message_id = 17;
@@ -4353,7 +4495,7 @@ mod transcript_expansion_tests {
         );
 
         let (_, expanded) = transcript
-            .toggle_cursor_node_expansion(80, 10)
+            .toggle_cursor_node_expansion_by(80, 10, None)
             .expect("reasoning should be toggleable");
 
         assert!(!expanded);
@@ -4515,7 +4657,7 @@ mod transcript_expansion_tests {
         let collapsed_scroll = transcript.viewport.top;
 
         let (_, expanded) = transcript
-            .toggle_cursor_node_expansion(80, 5)
+            .toggle_cursor_node_expansion_by(80, 5, None)
             .expect("reasoning should expand");
 
         assert!(expanded);

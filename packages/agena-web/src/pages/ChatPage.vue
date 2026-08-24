@@ -993,12 +993,9 @@ const {
   getTextParts,
   isReasoningPart,
   isMetaPart,
-  MAX_VISIBLE_ACTIVITY_COLLAPSED,
   activityExpandedByBlockKey,
   activityCollapseSignal,
-  activityExpandAllSignal,
   collapseAllActivities,
-  expandAllActivities,
   isActivityExpanded,
   setActivityExpanded,
 } = renderBlocksApi
@@ -1019,35 +1016,6 @@ function loadFoldedActivity(fold: MessageFold, all: boolean) {
   const sid = chat.selectedSessionId
   if (!sid) return
   void chat.loadFoldedActivity(sid, fold, all, chat.transcriptPartPageSize).catch(() => {})
-}
-
-async function loadAllTranscriptFolds() {
-  const sid = chat.selectedSessionId
-  if (!sid) return
-  for (const block of renderBlocks.value) {
-    if (block.kind !== 'message') continue
-    for (const fold of block.message.folds || []) {
-      await chat.loadFoldedActivity(sid, fold, true, chat.transcriptPartPageSize).catch(() => {})
-    }
-  }
-}
-
-function expandAllTranscriptParts() {
-  void (async () => {
-    await loadAllTranscriptFolds()
-    for (const block of renderBlocks.value) {
-      if (block.kind !== 'message') continue
-      for (const part of block.displayParts) {
-        if (part.toggleable) setActivityExpanded(part.key, true)
-      }
-    }
-  })()
-  // The run-level fold is separate from each part's detail expansion.
-  expandAllActivities()
-}
-
-function collapseAllTranscriptParts() {
-  collapseAllActivities()
 }
 
 function setTranscriptPartPageSize(size: number) {
@@ -2400,8 +2368,6 @@ const viewCtx = {
   // Activity rendering.
   activityInitiallyExpandedForPart,
   activityCollapseSignal,
-  activityExpandAllSignal,
-  MAX_VISIBLE_ACTIVITY_COLLAPSED,
   isActivityExpanded,
   setActivityExpanded,
   isReasoningPart,
@@ -2409,8 +2375,6 @@ const viewCtx = {
   transcriptPartExpanded,
   setTranscriptPartExpanded,
   loadFoldedActivity,
-  expandAllTranscriptParts,
-  collapseAllTranscriptParts,
   setTranscriptPartPageSize,
 
   // TUI-parity transcript navigation and search.

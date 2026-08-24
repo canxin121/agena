@@ -13,13 +13,13 @@
 // CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 use super::{
-    super::montgomery::Unencoded, unwrap_impossible_len_mismatch_error, BoxedLimbs, Elem,
-    OwnedModulusValue, PublicModulus, Storage, N0,
+    super::montgomery::Unencoded, BoxedLimbs, Elem, N0, OwnedModulusValue, PublicModulus, Storage,
+    unwrap_impossible_len_mismatch_error,
 };
 use crate::{
     bits::BitLength,
     cpu, error,
-    limb::{self, Limb, LIMB_BITS},
+    limb::{self, LIMB_BITS, Limb},
     polyfill::LeadingZerosStripped,
 };
 use core::marker::PhantomData;
@@ -113,7 +113,7 @@ impl<M> OwnedModulus<M> {
         })
     }
 
-    pub(crate) fn modulus(&self, cpu_features: cpu::Features) -> Modulus<M> {
+    pub(crate) fn modulus(&self, cpu_features: cpu::Features) -> Modulus<'_, M> {
         Modulus {
             limbs: self.inner.limbs(),
             n0: self.n0,

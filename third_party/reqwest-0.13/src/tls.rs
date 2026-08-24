@@ -67,10 +67,10 @@
 
 #[cfg(feature = "__rustls")]
 use rustls::{
+    DigitallySignedStruct, Error as TLSError, RootCertStore, SignatureScheme,
     client::danger::HandshakeSignatureValid, client::danger::ServerCertVerified,
     client::danger::ServerCertVerifier, crypto::WebPkiSupportedAlgorithms,
-    server::ParsedCertificate, DigitallySignedStruct, Error as TLSError, RootCertStore,
-    SignatureScheme,
+    server::ParsedCertificate,
 };
 use rustls_pki_types::pem::PemObject;
 #[cfg(feature = "__rustls")]
@@ -371,7 +371,7 @@ impl Identity {
     /// This requires the `rustls(-...)` Cargo feature enabled.
     #[cfg(feature = "__rustls")]
     pub fn from_pem(buf: &[u8]) -> crate::Result<Identity> {
-        use rustls_pki_types::{pem::SectionKind, PrivateKeyDer};
+        use rustls_pki_types::{PrivateKeyDer, pem::SectionKind};
         use std::io::Cursor;
 
         let (key, certs) = {
@@ -394,7 +394,7 @@ impl Identity {
                     _ => {
                         return Err(crate::error::builder(TLSError::General(String::from(
                             "No valid certificate was found",
-                        ))))
+                        ))));
                     }
                 }
             }
@@ -642,27 +642,6 @@ pub(crate) fn rustls_store(certs: Vec<Certificate>) -> crate::Result<RootCertSto
         cert.add_to_rustls(&mut root_cert_store)?;
     }
     Ok(root_cert_store)
-}
-
-#[cfg(feature = "__rustls")]
-#[cfg(any(all(unix, not(target_os = "android")), target_os = "windows"))]
-pub(crate) fn rustls_der(
-    certs: Vec<Certificate>,
-) -> crate::Result<Vec<rustls_pki_types::CertificateDer<'static>>> {
-    let mut ders = Vec::with_capacity(certs.len());
-    for cert in certs {
-        match cert.original {
-            Cert::Der(buf) => ders.push(buf.into()),
-            Cert::Pem(buf) => {
-                let mut reader = std::io::Cursor::new(buf);
-                let pems = Certificate::read_pem_certs(&mut reader)?;
-                for c in pems {
-                    ders.push(c.into());
-                }
-            }
-        }
-    }
-    Ok(ders)
 }
 
 #[cfg(feature = "__rustls")]

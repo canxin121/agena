@@ -1,6 +1,6 @@
 use agena_domain::{ExecutionStatus, PermissionMode};
 use anyhow::ensure;
-use serde_json::{Value, json};
+use serde_json::json;
 
 use super::{
     Harness, PendingReply, SuiteReport, TOOLS_CALL_HANDLER_KEY, TOOLS_HELP_HANDLER_KEY,
@@ -183,7 +183,7 @@ pub(crate) async fn run_tool_api_meta_suite(
         );
         let actual = calls
             .iter()
-            .map(|operation| Value::from(operation.input.clone()))
+            .map(|operation| operation.input.clone())
             .collect::<Vec<_>>();
         ensure!(
             actual.contains(&first) && actual.contains(&second),
@@ -250,7 +250,7 @@ pub(crate) async fn run_tool_api_meta_suite(
             calls.len()
         );
         ensure!(
-            Value::from(calls[0].input.clone()) == invalid,
+            calls[0].input == invalid,
             "automatic-help probe did not preserve the intentionally invalid input"
         );
         ensure!(
@@ -264,7 +264,7 @@ pub(crate) async fn run_tool_api_meta_suite(
             calls[0].error_message().unwrap_or("<no error>")
         );
         ensure!(
-            Value::from(calls[1].input.clone()) == corrected,
+            calls[1].input == corrected,
             "automatic-help retry input differed from the corrected object"
         );
         ensure!(

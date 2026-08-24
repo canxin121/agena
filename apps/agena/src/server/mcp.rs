@@ -2603,10 +2603,8 @@ async fn fetch_cimd_document(client_id: &str) -> Result<CimdClientMetadata, Stri
                 &error,
             )
         })?;
-        if {
-            let media_type = value.split(';').next().unwrap_or_default().trim();
-            !media_type.eq_ignore_ascii_case("application/json") && !media_type.ends_with("+json")
-        } {
+        let media_type = value.split(';').next().unwrap_or_default().trim();
+        if !media_type.eq_ignore_ascii_case("application/json") && !media_type.ends_with("+json") {
             return Err(format!(
                 "CIMD metadata endpoint returned unsupported Content-Type {value:?}"
             ));

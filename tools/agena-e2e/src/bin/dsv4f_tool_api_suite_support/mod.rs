@@ -484,7 +484,7 @@ pub(super) fn operations_since(
                 Some(SuiteOperation {
                     operation_id: part.operation_id.clone(),
                     status: part.status,
-                    value: operation.clone(),
+                    value: operation.as_ref().clone(),
                 })
             }
             _ => None,
@@ -539,9 +539,7 @@ pub(super) fn can_retry_missing_tool_api_call(
         .into_iter()
         .filter(|operation| operation.name == TOOLS_CALL_HANDLER_KEY)
         .collect::<Vec<_>>();
-    !calls
-        .iter()
-        .any(|call| Value::from(call.input.clone()) == expected)
+    !calls.iter().any(|call| call.input == expected)
         && calls.iter().all(operation_failed_or_incomplete)
 }
 
@@ -559,9 +557,7 @@ pub(super) fn can_retry_missing_native_invocation(
         .into_iter()
         .filter(|operation| operation.name == canonical_function)
         .collect::<Vec<_>>();
-    !calls
-        .iter()
-        .any(|call| Value::from(call.input.clone()) == *input)
+    !calls.iter().any(|call| &call.input == input)
         && calls.iter().all(operation_failed_or_incomplete)
 }
 
@@ -591,10 +587,9 @@ pub(super) fn extract_tool_api_outcome(
         "model did not call tools.help; operations: {}",
         operation_trace_with_ids(session, start_message_count)
     );
+    let expected_help_input = json!({"tool": tool_name});
     ensure!(
-        helped.iter().all(|help| {
-            serde_json::Value::from(help.input.clone()) == json!({"tool": tool_name})
-        }),
+        helped.iter().all(|help| help.input == expected_help_input),
         "tools.help input did not identify execution tool {tool_name}; operations: {}",
         operation_trace_with_ids(session, start_message_count)
     );
@@ -618,19 +613,16 @@ pub(super) fn extract_tool_api_outcome(
         operation_trace_with_ids(session, start_message_count)
     );
     ensure!(
-        calls.iter().all(|call| {
-            Value::from(call.input.clone())
-                .get("tool")
-                .and_then(Value::as_str)
-                == Some(tool_name)
-        }),
+        calls
+            .iter()
+            .all(|call| { call.input.get("tool").and_then(Value::as_str) == Some(tool_name) }),
         "model invoked an execution tool other than {tool_name}; operations: {}",
         operation_trace_with_ids(session, start_message_count)
     );
     let expected_call_input = json!({"tool": tool_name, "input": input});
     let matching_calls = calls
         .into_iter()
-        .filter(|call| Value::from(call.input.clone()) == expected_call_input)
+        .filter(|call| call.input == expected_call_input)
         .collect::<Vec<_>>();
     ensure!(
         matching_calls.len() == 1,
@@ -640,7 +632,7 @@ pub(super) fn extract_tool_api_outcome(
     );
     let call = matching_calls[0].clone();
     ensure!(
-        serde_json::Value::from(call.input.clone()) == expected_call_input,
+        call.input == expected_call_input,
         "tools.call input was not the supplied exact execution tool/input"
     );
     if expect_success {
@@ -689,7 +681,7 @@ pub(super) fn extract_native_outcome(
     );
     let call = matching[0].clone();
     ensure!(
-        serde_json::Value::from(call.input.clone()) == *input,
+        &call.input == input,
         "{canonical_function} input differed from the supplied exact input"
     );
     ensure!(
@@ -720,7 +712,7 @@ pub(super) fn operation_trace_with_ids(
     operations_since(session, start_message_count)
         .into_iter()
         .map(|operation| {
-            let input = Value::from(operation.input.clone());
+            let input = &operation.input;
             format!(
                 "{}({input}) operation_id={} status={:?} error={}",
                 operation.name,

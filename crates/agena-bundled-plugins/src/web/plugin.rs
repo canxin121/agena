@@ -3155,13 +3155,13 @@ fn complete_cdp_command(
 
 fn fail_pending_commands(pending: &mut BTreeMap<u64, PendingCdpCommand>, error: &str) {
     for (command_id, command) in std::mem::take(pending) {
-        if let PendingCdpCommand::Caller { response, .. } = command {
-            if response.send(Err(error.to_string())).is_err() {
-                tracing::debug!(
-                    command_id,
-                    "browser CDP failure response receiver closed before delivery"
-                );
-            }
+        if let PendingCdpCommand::Caller { response, .. } = command
+            && response.send(Err(error.to_string())).is_err()
+        {
+            tracing::debug!(
+                command_id,
+                "browser CDP failure response receiver closed before delivery"
+            );
         }
     }
 }

@@ -116,7 +116,7 @@ pub enum SessionProjectedPartDetail {
         request: agena_domain::UserInputRequest,
         reply: Option<agena_domain::UserInputReply>,
     },
-    ToolCall(agena_runtime_contracts::part_content::ToolCallContent),
+    ToolCall(Box<agena_runtime_contracts::part_content::ToolCallContent>),
     Hook(Box<SessionProjectedHookPart>),
     Notice {
         summary: String,

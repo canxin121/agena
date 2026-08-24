@@ -16,7 +16,7 @@ use super::AsChunksMut;
 use core::ops;
 
 #[inline(always)]
-pub fn as_chunks<T, const N: usize>(slice: &[T]) -> (AsChunks<T, N>, &[T]) {
+pub fn as_chunks<T, const N: usize>(slice: &[T]) -> (AsChunks<'_, T, N>, &[T]) {
     assert!(N != 0, "chunk size must be non-zero");
     let len = slice.len() / N;
     let (multiple_of_n, remainder) = slice.split_at(len * N);
@@ -37,7 +37,11 @@ impl<'a, T, const N: usize> AsChunks<'a, T, N> {
         self.0
     }
 
-    #[cfg(any(target_arch = "aarch64", target_arch = "arm", all(target_arch = "x86_64", target_pointer_width = "64")))]
+    #[cfg(any(
+        target_arch = "aarch64",
+        target_arch = "arm",
+        all(target_arch = "x86_64", target_pointer_width = "64")
+    ))]
     #[inline(always)]
     pub fn as_ptr(&self) -> *const [T; N] {
         self.0.as_ptr().cast()

@@ -1020,18 +1020,18 @@ impl BuiltinHumanRenderer {
         if let Value::Object(object) = value {
             if let Some(Value::Object(user)) = object.get("user") {
                 for key in ["fallback", "message"] {
-                    if let Some(Value::String(message)) = user.get(key) {
-                        if !message.trim().is_empty() {
-                            return message.clone();
-                        }
+                    if let Some(Value::String(message)) = user.get(key)
+                        && !message.trim().is_empty()
+                    {
+                        return message.clone();
                     }
                 }
             }
             for key in ["message", "detail", "fallback"] {
-                if let Some(Value::String(message)) = object.get(key) {
-                    if !message.trim().is_empty() {
-                        return message.clone();
-                    }
+                if let Some(Value::String(message)) = object.get(key)
+                    && !message.trim().is_empty()
+                {
+                    return message.clone();
                 }
             }
         }
@@ -3826,13 +3826,13 @@ impl BuiltinHumanRenderer {
                 blocks.push(block);
             }
         }
-        if key == "plan.review" {
-            if let Some(decision) = Self::object_string(object, "decision") {
-                blocks.push(Self::markdown_block(
-                    "plan-decision",
-                    format!("### Review decision\n{decision}"),
-                ));
-            }
+        if key == "plan.review"
+            && let Some(decision) = Self::object_string(object, "decision")
+        {
+            blocks.push(Self::markdown_block(
+                "plan-decision",
+                format!("### Review decision\n{decision}"),
+            ));
         }
         if blocks.is_empty() {
             blocks.push(Self::markdown_block(
@@ -4632,9 +4632,9 @@ impl BuiltinHumanRenderer {
         blocks
     }
 
-    fn browser_snapshot_object<'a>(
-        object: &'a serde_json::Map<String, Value>,
-    ) -> Option<&'a serde_json::Map<String, Value>> {
+    fn browser_snapshot_object(
+        object: &serde_json::Map<String, Value>,
+    ) -> Option<&serde_json::Map<String, Value>> {
         object
             .get("snapshot")
             .and_then(Value::as_object)
@@ -5088,10 +5088,11 @@ impl BuiltinHumanRenderer {
         cwd: Option<&str>,
     ) -> Vec<ViewBlock> {
         let parsed = ToolPayloadOutput::from_tool_output(tool_name, output);
-        let mut blocks = parsed
-            .is_none()
-            .then(|| Self::specific_tool_blocks(tool_name, raw))
-            .unwrap_or_default();
+        let mut blocks = if parsed.is_none() {
+            Self::specific_tool_blocks(tool_name, raw)
+        } else {
+            Vec::new()
+        };
         if parsed.is_none() && blocks.is_empty() {
             blocks = Self::specific_discovery_text_blocks(tool_name, raw.text.as_str());
             if blocks.is_empty() {

@@ -996,7 +996,7 @@ where
 	/// included in the unaliased bit-slice.
 	#[inline]
 	#[cfg(not(tarpaulin_include))]
-	pub fn bit_domain(&self) -> BitDomain<Const, T, O> {
+	pub fn bit_domain(&self) -> BitDomain<'_, Const, T, O> {
 		self.domain().into_bit_domain()
 	}
 
@@ -1009,7 +1009,7 @@ where
 	/// able to be included in the unaliased bit-slice.
 	#[inline]
 	#[cfg(not(tarpaulin_include))]
-	pub fn bit_domain_mut(&mut self) -> BitDomain<Mut, T, O> {
+	pub fn bit_domain_mut(&mut self) -> BitDomain<'_, Mut, T, O> {
 		self.domain_mut().into_bit_domain()
 	}
 
@@ -1022,7 +1022,7 @@ where
 	/// either the front or back edge of the slice are returned separately.
 	#[inline]
 	#[cfg(not(tarpaulin_include))]
-	pub fn domain(&self) -> Domain<Const, T, O> {
+	pub fn domain(&self) -> Domain<'_, Const, T, O> {
 		Domain::new(self)
 	}
 
@@ -1035,7 +1035,7 @@ where
 	/// elements on the front or back edge of the slice are returned separately.
 	#[inline]
 	#[cfg(not(tarpaulin_include))]
-	pub fn domain_mut(&mut self) -> Domain<Mut, T, O> {
+	pub fn domain_mut(&mut self) -> Domain<'_, Mut, T, O> {
 		Domain::new(self)
 	}
 }
@@ -1143,7 +1143,7 @@ where
 	/// }
 	/// ```
 	#[inline]
-	pub fn iter_ones(&self) -> IterOnes<T, O> {
+	pub fn iter_ones(&self) -> IterOnes<'_, T, O> {
 		IterOnes::new(self)
 	}
 
@@ -1182,7 +1182,7 @@ where
 	/// }
 	/// ```
 	#[inline]
-	pub fn iter_zeros(&self) -> IterZeros<T, O> {
+	pub fn iter_zeros(&self) -> IterZeros<'_, T, O> {
 		IterZeros::new(self)
 	}
 

@@ -565,13 +565,13 @@ impl Inner {
     async fn handle_inbound(self: &Arc<Self>, frame: Frame) {
         match frame {
             Frame::Response(resp) => {
-                if let Some((_, tx)) = self.pending.remove(&resp.id) {
-                    if tx.send(resp).is_err() {
-                        tracing::debug!(
-                            target: "agena_plugin_host::stdio",
-                            "plugin response receiver was dropped before delivery"
-                        );
-                    }
+                if let Some((_, tx)) = self.pending.remove(&resp.id)
+                    && tx.send(resp).is_err()
+                {
+                    tracing::debug!(
+                        target: "agena_plugin_host::stdio",
+                        "plugin response receiver was dropped before delivery"
+                    );
                 }
             }
             Frame::Request(req) => {
@@ -763,8 +763,8 @@ impl Inner {
             .map(|entry| entry.key().clone())
             .collect::<Vec<_>>();
         for id in pending {
-            if let Some((_, slot)) = self.pending.remove(&id) {
-                if slot
+            if let Some((_, slot)) = self.pending.remove(&id)
+                && slot
                     .send(Response {
                         jsonrpc: JsonRpcVersion,
                         id,
@@ -777,12 +777,11 @@ impl Inner {
                         },
                     })
                     .is_err()
-                {
-                    tracing::debug!(
-                        target: "agena_plugin_host::stdio",
-                        "disconnected plugin request receiver was already dropped"
-                    );
-                }
+            {
+                tracing::debug!(
+                    target: "agena_plugin_host::stdio",
+                    "disconnected plugin request receiver was already dropped"
+                );
             }
         }
     }
@@ -1192,16 +1191,15 @@ impl Drop for StdioTransport {
         self.inner.fail_pending("plugin transport dropped");
         if let Ok(mut handles) = self.inner.handles.try_lock()
             && let Some(handles) = handles.as_mut()
+            && let Err(error) = handles.child.start_kill()
         {
-            if let Err(error) = handles.child.start_kill() {
-                tracing::error!(
-                    diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
-                        "failed to kill the stdio plugin process tree while dropping its transport",
-                        &error,
-                    ),
-                    "stdio plugin transport cleanup failed"
-                );
-            }
+            tracing::error!(
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "failed to kill the stdio plugin process tree while dropping its transport",
+                    &error,
+                ),
+                "stdio plugin transport cleanup failed"
+            );
         }
     }
 }

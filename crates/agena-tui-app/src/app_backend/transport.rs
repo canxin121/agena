@@ -2472,13 +2472,13 @@ impl TuiBackend {
                             ),
                         },
                     };
-                    if refresh_plugin_presentation {
-                        if let Err(error) = backend.refresh_plugin_presentation_snapshot().await {
-                            tracing::warn!(
-                                diagnostic = %agena_failure::diagnostic::format_error_chain(error.as_ref()),
-                                "failed to refresh the TUI plugin presentation snapshot after a session event"
-                            );
-                        }
+                    if refresh_plugin_presentation
+                        && let Err(error) = backend.refresh_plugin_presentation_snapshot().await
+                    {
+                        tracing::warn!(
+                            diagnostic = %agena_failure::diagnostic::format_error_chain(error.as_ref()),
+                            "failed to refresh the TUI plugin presentation snapshot after a session event"
+                        );
                     }
                     if tx
                         .send(LiveEvent {

@@ -130,7 +130,7 @@ where
 	/// assert!(bits![].first().is_none());
 	/// ```
 	#[inline]
-	pub fn first(&self) -> Option<BitRef<Const, T, O>> {
+	pub fn first(&self) -> Option<BitRef<'_, Const, T, O>> {
 		self.get(0)
 	}
 
@@ -161,7 +161,7 @@ where
 	/// assert!(bits![mut].first_mut().is_none());
 	/// ```
 	#[inline]
-	pub fn first_mut(&mut self) -> Option<BitRef<Mut, T, O>> {
+	pub fn first_mut(&mut self) -> Option<BitRef<'_, Mut, T, O>> {
 		self.get_mut(0)
 	}
 
@@ -188,7 +188,7 @@ where
 	/// assert_eq!(rest, bits![0; 2]);
 	/// ```
 	#[inline]
-	pub fn split_first(&self) -> Option<(BitRef<Const, T, O>, &Self)> {
+	pub fn split_first(&self) -> Option<(BitRef<'_, Const, T, O>, &Self)> {
 		match self.len() {
 			0 => None,
 			_ => unsafe {
@@ -226,7 +226,7 @@ where
 	#[inline]
 	pub fn split_first_mut(
 		&mut self,
-	) -> Option<(BitRef<Mut, T::Alias, O>, &mut BitSlice<T::Alias, O>)> {
+	) -> Option<(BitRef<'_, Mut, T::Alias, O>, &mut BitSlice<T::Alias, O>)> {
 		match self.len() {
 			0 => None,
 			_ => unsafe {
@@ -259,7 +259,7 @@ where
 	/// assert_eq!(rest, bits![0; 2]);
 	/// ```
 	#[inline]
-	pub fn split_last(&self) -> Option<(BitRef<Const, T, O>, &Self)> {
+	pub fn split_last(&self) -> Option<(BitRef<'_, Const, T, O>, &Self)> {
 		match self.len() {
 			0 => None,
 			n => unsafe {
@@ -297,7 +297,7 @@ where
 	#[inline]
 	pub fn split_last_mut(
 		&mut self,
-	) -> Option<(BitRef<Mut, T::Alias, O>, &mut BitSlice<T::Alias, O>)> {
+	) -> Option<(BitRef<'_, Mut, T::Alias, O>, &mut BitSlice<T::Alias, O>)> {
 		match self.len() {
 			0 => None,
 			n => unsafe {
@@ -330,7 +330,7 @@ where
 	/// assert!(bits![].last().is_none());
 	/// ```
 	#[inline]
-	pub fn last(&self) -> Option<BitRef<Const, T, O>> {
+	pub fn last(&self) -> Option<BitRef<'_, Const, T, O>> {
 		match self.len() {
 			0 => None,
 			n => Some(unsafe { self.get_unchecked(n - 1) }),
@@ -364,7 +364,7 @@ where
 	/// assert!(bits![mut].last_mut().is_none());
 	/// ```
 	#[inline]
-	pub fn last_mut(&mut self) -> Option<BitRef<Mut, T, O>> {
+	pub fn last_mut(&mut self) -> Option<BitRef<'_, Mut, T, O>> {
 		match self.len() {
 			0 => None,
 			n => Some(unsafe { self.get_unchecked_mut(n - 1) }),
@@ -663,7 +663,7 @@ where
 	/// [`.by_refs()`]: crate::slice::Iter::by_refs
 	/// [`.by_vals()`]: crate::slice::Iter::by_vals
 	#[inline]
-	pub fn iter(&self) -> Iter<T, O> {
+	pub fn iter(&self) -> Iter<'_, T, O> {
 		Iter::new(self)
 	}
 
@@ -703,7 +703,7 @@ where
 	///
 	/// [`.remove_alias()`]: crate::slice::IterMut::remove_alias
 	#[inline]
-	pub fn iter_mut(&mut self) -> IterMut<T, O> {
+	pub fn iter_mut(&mut self) -> IterMut<'_, T, O> {
 		IterMut::new(self)
 	}
 
@@ -735,7 +735,7 @@ where
 	/// assert!(iter.next().is_none());
 	/// ```
 	#[inline]
-	pub fn windows(&self, size: usize) -> Windows<T, O> {
+	pub fn windows(&self, size: usize) -> Windows<'_, T, O> {
 		Windows::new(self, size)
 	}
 
@@ -780,7 +780,7 @@ where
 	/// [`.chunks_mut()`]: Self::chunks_mut
 	/// [`.rchunks()`]: Self::rchunks
 	#[inline]
-	pub fn chunks(&self, chunk_size: usize) -> Chunks<T, O> {
+	pub fn chunks(&self, chunk_size: usize) -> Chunks<'_, T, O> {
 		Chunks::new(self, chunk_size)
 	}
 
@@ -831,7 +831,7 @@ where
 	/// [`.rchunks_mut()`]: Self::rchunks_mut
 	/// [`.remove_alias()`]: crate::slice::ChunksMut::remove_alias
 	#[inline]
-	pub fn chunks_mut(&mut self, chunk_size: usize) -> ChunksMut<T, O> {
+	pub fn chunks_mut(&mut self, chunk_size: usize) -> ChunksMut<'_, T, O> {
 		ChunksMut::new(self, chunk_size)
 	}
 
@@ -877,7 +877,7 @@ where
 	/// [`.rchunks_exact()`]: Self::rchunks_exact
 	/// [`.remainder()`]: crate::slice::ChunksExact::remainder
 	#[inline]
-	pub fn chunks_exact(&self, chunk_size: usize) -> ChunksExact<T, O> {
+	pub fn chunks_exact(&self, chunk_size: usize) -> ChunksExact<'_, T, O> {
 		ChunksExact::new(self, chunk_size)
 	}
 
@@ -938,7 +938,7 @@ where
 	pub fn chunks_exact_mut(
 		&mut self,
 		chunk_size: usize,
-	) -> ChunksExactMut<T, O> {
+	) -> ChunksExactMut<'_, T, O> {
 		ChunksExactMut::new(self, chunk_size)
 	}
 
@@ -984,7 +984,7 @@ where
 	/// [`.rchunks_exact()`]: Self::rchunks_exact
 	/// [`.rchunks_mut()`]: Self::rchunks_mut
 	#[inline]
-	pub fn rchunks(&self, chunk_size: usize) -> RChunks<T, O> {
+	pub fn rchunks(&self, chunk_size: usize) -> RChunks<'_, T, O> {
 		RChunks::new(self, chunk_size)
 	}
 
@@ -1035,7 +1035,7 @@ where
 	/// [`.rchunks_exact_mut()`]: Self::rchunks_exact_mut
 	/// [`.remove_alias()`]: crate::slice::RChunksMut::remove_alias
 	#[inline]
-	pub fn rchunks_mut(&mut self, chunk_size: usize) -> RChunksMut<T, O> {
+	pub fn rchunks_mut(&mut self, chunk_size: usize) -> RChunksMut<'_, T, O> {
 		RChunksMut::new(self, chunk_size)
 	}
 
@@ -1082,7 +1082,7 @@ where
 	/// [`.rchunks_exact_mut()`]: Self::rchunks_exact_mut
 	/// [`.remainder()`]: crate::slice::RChunksExact::remainder
 	#[inline]
-	pub fn rchunks_exact(&self, chunk_size: usize) -> RChunksExact<T, O> {
+	pub fn rchunks_exact(&self, chunk_size: usize) -> RChunksExact<'_, T, O> {
 		RChunksExact::new(self, chunk_size)
 	}
 
@@ -1140,7 +1140,7 @@ where
 	pub fn rchunks_exact_mut(
 		&mut self,
 		chunk_size: usize,
-	) -> RChunksExactMut<T, O> {
+	) -> RChunksExactMut<'_, T, O> {
 		RChunksExactMut::new(self, chunk_size)
 	}
 
@@ -1324,7 +1324,7 @@ where
 	/// [`.split_inclusive()`]: Self::split_inclusive
 	/// [`.split_mut()`]: Self::split_mut
 	#[inline]
-	pub fn split<F>(&self, pred: F) -> Split<T, O, F>
+	pub fn split<F>(&self, pred: F) -> Split<'_, T, O, F>
 	where F: FnMut(usize, &bool) -> bool {
 		Split::new(self, pred)
 	}
@@ -1378,7 +1378,7 @@ where
 	/// [`.split_inclusive_mut()`]: Self::split_inclusive_mut
 	/// [`.splitn_mut()`]: Self::splitn_mut
 	#[inline]
-	pub fn split_mut<F>(&mut self, pred: F) -> SplitMut<T, O, F>
+	pub fn split_mut<F>(&mut self, pred: F) -> SplitMut<'_, T, O, F>
 	where F: FnMut(usize, &bool) -> bool {
 		SplitMut::new(self.alias_mut(), pred)
 	}
@@ -1421,7 +1421,7 @@ where
 	/// [`.split()`]: Self::split
 	/// [`.split_inclusive_mut()`]: Self::split_inclusive_mut
 	#[inline]
-	pub fn split_inclusive<F>(&self, pred: F) -> SplitInclusive<T, O, F>
+	pub fn split_inclusive<F>(&self, pred: F) -> SplitInclusive<'_, T, O, F>
 	where F: FnMut(usize, &bool) -> bool {
 		SplitInclusive::new(self, pred)
 	}
@@ -1474,7 +1474,7 @@ where
 	pub fn split_inclusive_mut<F>(
 		&mut self,
 		pred: F,
-	) -> SplitInclusiveMut<T, O, F>
+	) -> SplitInclusiveMut<'_, T, O, F>
 	where
 		F: FnMut(usize, &bool) -> bool,
 	{
@@ -1554,7 +1554,7 @@ where
 	/// [`.rsplit_mut()`]: Self::rsplit_mut
 	/// [`.split()`]: Self::split
 	#[inline]
-	pub fn rsplit<F>(&self, pred: F) -> RSplit<T, O, F>
+	pub fn rsplit<F>(&self, pred: F) -> RSplit<'_, T, O, F>
 	where F: FnMut(usize, &bool) -> bool {
 		RSplit::new(self, pred)
 	}
@@ -1606,7 +1606,7 @@ where
 	/// [`.rsplitn_mut()`]: Self::rsplitn_mut
 	/// [`.split_mut()`]: Self::split_mut
 	#[inline]
-	pub fn rsplit_mut<F>(&mut self, pred: F) -> RSplitMut<T, O, F>
+	pub fn rsplit_mut<F>(&mut self, pred: F) -> RSplitMut<'_, T, O, F>
 	where F: FnMut(usize, &bool) -> bool {
 		RSplitMut::new(self.alias_mut(), pred)
 	}
@@ -1651,7 +1651,7 @@ where
 	/// [`.split()`]: Self::split
 	/// [`.splitn_mut()`]: Self::splitn_mut
 	#[inline]
-	pub fn splitn<F>(&self, n: usize, pred: F) -> SplitN<T, O, F>
+	pub fn splitn<F>(&self, n: usize, pred: F) -> SplitN<'_, T, O, F>
 	where F: FnMut(usize, &bool) -> bool {
 		SplitN::new(self, pred, n)
 	}
@@ -1703,7 +1703,7 @@ where
 	/// [`.split_mut()`]: Self::split_mut
 	/// [`.splitn()`]: Self::splitn
 	#[inline]
-	pub fn splitn_mut<F>(&mut self, n: usize, pred: F) -> SplitNMut<T, O, F>
+	pub fn splitn_mut<F>(&mut self, n: usize, pred: F) -> SplitNMut<'_, T, O, F>
 	where F: FnMut(usize, &bool) -> bool {
 		SplitNMut::new(self.alias_mut(), pred, n)
 	}
@@ -1749,7 +1749,7 @@ where
 	/// [`.rsplitn_mut()`]: Self::rsplitn_mut
 	/// [`.splitn()`]: Self::splitn
 	#[inline]
-	pub fn rsplitn<F>(&self, n: usize, pred: F) -> RSplitN<T, O, F>
+	pub fn rsplitn<F>(&self, n: usize, pred: F) -> RSplitN<'_, T, O, F>
 	where F: FnMut(usize, &bool) -> bool {
 		RSplitN::new(self, pred, n)
 	}
@@ -1802,7 +1802,7 @@ where
 	/// [`.rsplit_mut()`]: Self::rsplit_mut
 	/// [`.splitn_mut()`]: Self::splitn_mut
 	#[inline]
-	pub fn rsplitn_mut<F>(&mut self, n: usize, pred: F) -> RSplitNMut<T, O, F>
+	pub fn rsplitn_mut<F>(&mut self, n: usize, pred: F) -> RSplitNMut<'_, T, O, F>
 	where F: FnMut(usize, &bool) -> bool {
 		RSplitNMut::new(self.alias_mut(), pred, n)
 	}

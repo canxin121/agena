@@ -733,7 +733,7 @@ where
 	/// assert!(bv.is_empty());
 	/// ```
 	#[inline]
-	pub fn drain<R>(&mut self, range: R) -> Drain<T, O>
+	pub fn drain<R>(&mut self, range: R) -> Drain<'_, T, O>
 	where R: RangeBounds<usize> {
 		Drain::new(self, range)
 	}
@@ -1021,7 +1021,7 @@ where
 		&mut self,
 		range: R,
 		replace_with: I,
-	) -> Splice<T, O, I::IntoIter>
+	) -> Splice<'_, T, O, I::IntoIter>
 	where
 		R: RangeBounds<usize>,
 		I: IntoIterator<Item = bool>,

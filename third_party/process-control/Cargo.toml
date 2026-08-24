@@ -61,6 +61,10 @@ rustdoc-args = [
 name = "process_control"
 path = "src/lib.rs"
 
+[lints.rust.unexpected_cfgs]
+level = "warn"
+check-cfg = ["cfg(process_control_docs_rs)"]
+
 [dependencies.attr_alias]
 version = "0.1.0"
 

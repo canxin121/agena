@@ -219,12 +219,11 @@ async fn oauth_callback_handler(State(state): State<OAuthCallbackState>, uri: Ur
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .take()
+        && sender.send(result).is_err()
     {
-        if sender.send(result).is_err() {
-            tracing::warn!(
-                "OAuth callback result receiver was dropped before the browser callback completed"
-            );
-        }
+        tracing::warn!(
+            "OAuth callback result receiver was dropped before the browser callback completed"
+        );
     }
     response
 }

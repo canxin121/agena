@@ -215,9 +215,11 @@ fn describe_workspace_head(path: &Path) -> String {
     match git(path, &["rev-parse", "--short", "HEAD"]) {
         Ok(output) => {
             let head = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            (!head.is_empty())
-                .then(|| format!("detached@{head}"))
-                .unwrap_or_else(|| "snapshot".to_owned())
+            if head.is_empty() {
+                "snapshot".to_owned()
+            } else {
+                format!("detached@{head}")
+            }
         }
         Err(error) => {
             tracing::debug!(diagnostic = %error, "using a generic managed snapshot description");

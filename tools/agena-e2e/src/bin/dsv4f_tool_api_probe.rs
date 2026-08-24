@@ -214,10 +214,9 @@ fn assert_tool_api_trace(
         .iter()
         .flat_map(|message| message.parts.iter())
         .filter_map(|part| match part.detail.as_ref() {
-            Some(SessionProjectedPartDetail::ToolCall(operation)) => Some((
-                operation.name.as_str(),
-                Some(serde_json::Value::from(operation.input.clone())),
-            )),
+            Some(SessionProjectedPartDetail::ToolCall(operation)) => {
+                Some((operation.name.as_str(), Some(operation.input.clone())))
+            }
             _ => None,
         })
         .collect::<Vec<_>>();

@@ -242,16 +242,15 @@ fn write_private_file(path: &Path, contents: &[u8]) -> Result<()> {
             .with_context(|| format!("failed to install service file {}", path.display()))?;
         Ok(())
     })();
-    if result.is_err() {
-        if let Err(cleanup_error) = fs::remove_file(&temporary)
-            && cleanup_error.kind() != std::io::ErrorKind::NotFound
-        {
-            tracing::warn!(
-                path = %temporary.display(),
-                diagnostic = %agena_failure::diagnostic::format_error_chain(&cleanup_error),
-                "failed to remove a temporary service file after installation failed"
-            );
-        }
+    if result.is_err()
+        && let Err(cleanup_error) = fs::remove_file(&temporary)
+        && cleanup_error.kind() != std::io::ErrorKind::NotFound
+    {
+        tracing::warn!(
+            path = %temporary.display(),
+            diagnostic = %agena_failure::diagnostic::format_error_chain(&cleanup_error),
+            "failed to remove a temporary service file after installation failed"
+        );
     }
     result
 }

@@ -539,19 +539,19 @@ fn durable_operation_activity(
         }
         _ => {}
     }
-    if activity.failure.is_none() {
-        if let Some(failure) = operation.failure {
-            match serde_json::from_value(failure) {
-                Ok(failure) => activity.failure = Some(failure),
-                Err(error) => tracing::warn!(
-                    operation_id = activity.operation_id.as_deref().unwrap_or("unknown"),
-                    diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
-                        "decode a persisted background-operation failure",
-                        &error,
-                    ),
-                    "background activity failure projection is incomplete"
+    if activity.failure.is_none()
+        && let Some(failure) = operation.failure
+    {
+        match serde_json::from_value(failure) {
+            Ok(failure) => activity.failure = Some(failure),
+            Err(error) => tracing::warn!(
+                operation_id = activity.operation_id.as_deref().unwrap_or("unknown"),
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "decode a persisted background-operation failure",
+                    &error,
                 ),
-            }
+                "background activity failure projection is incomplete"
+            ),
         }
     }
     activity

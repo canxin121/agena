@@ -600,32 +600,31 @@ pub async fn git_status(Query(q): Query<GitStatusQuery>) -> Response {
     if tracking.is_none()
         && !current.is_empty()
         && let Some(base) = select_base_ref_for_unpublished(&dir).await
-    {
-        if let Some((code, stdout, stderr)) = git_command_result_or_log(
+        && let Some((code, stdout, stderr)) = git_command_result_or_log(
             run_git(&dir, &["rev-list", "--count", &format!("{base}..HEAD")]).await,
             "estimate unpublished Git commit count",
-        ) {
-            if code == 0 {
-                match stdout.trim().parse::<i32>() {
-                    Ok(count) => {
-                        ahead = count;
-                        behind = 0;
-                    }
-                    Err(error) => tracing::warn!(
-                        diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
-                            "Git returned an invalid unpublished commit count",
-                            &error,
-                        ),
-                        "unpublished Git commit estimation was unavailable"
-                    ),
+        )
+    {
+        if code == 0 {
+            match stdout.trim().parse::<i32>() {
+                Ok(count) => {
+                    ahead = count;
+                    behind = 0;
                 }
-            } else {
-                tracing::debug!(
-                    git_exit_code = code,
-                    git_stderr = %super::redact_git_output(&super::truncate_for_payload(&stderr, 4_000)),
-                    "Git could not estimate unpublished commits"
-                );
+                Err(error) => tracing::warn!(
+                    diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                        "Git returned an invalid unpublished commit count",
+                        &error,
+                    ),
+                    "unpublished Git commit estimation was unavailable"
+                ),
             }
+        } else {
+            tracing::debug!(
+                git_exit_code = code,
+                git_stderr = %super::redact_git_output(&super::truncate_for_payload(&stderr, 4_000)),
+                "Git could not estimate unpublished commits"
+            );
         }
     }
 

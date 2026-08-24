@@ -1459,9 +1459,7 @@ fn findings_result_fragment(object: &serde_json::Map<String, serde_json::Value>)
                 .and_then(serde_json::Value::as_object)
                 .map(|counts| counts.values().filter_map(value_as_u64).sum::<u64>())
         });
-    let Some(total) = total else {
-        return None;
-    };
+    let total = total?;
     let mut parts = vec![format_count(total as usize, "findings")];
     if let Some(counts) = object.get("counts").and_then(serde_json::Value::as_object) {
         for severity in ["critical", "high", "medium", "low", "info"] {
@@ -1681,7 +1679,7 @@ fn skill_result_fragment(
             let parts = path
                 .into_iter()
                 .map(normalize_tool_title)
-                .chain(bytes.map(|value| format_bytes(value)))
+                .chain(bytes.map(format_bytes))
                 .collect::<Vec<_>>();
             if !parts.is_empty() {
                 return Some(parts.join(" · "));
@@ -2945,11 +2943,10 @@ fn provider_invocation_title_subject(key: &str, input: &serde_json::Value) -> St
     // strings in that envelope.
     let preferred: &[&str] = if key.contains("web_search") || key.ends_with("google_search") {
         &["query", "prompt", "q"]
-    } else if key.ends_with("google_maps") || key.ends_with("retrieval") {
-        &["query", "prompt"]
-    } else if key.ends_with("file_search")
+    } else if key.ends_with("google_maps")
+        || key.ends_with("retrieval")
+        || key.ends_with("file_search")
         || key.contains("tool_search")
-        || key.ends_with("tool_search")
     {
         &["query", "prompt"]
     } else if key.ends_with("web_fetch") || key.ends_with("url_context") {

@@ -857,7 +857,7 @@ impl Application {
         let status = self.runtime_status().runtime_status().await;
         let catalog = status.model_catalog;
         let selection = self.provider_catalog().default_selection();
-        let default_selection = (!selection.is_empty()).then(|| DefaultSelectionResource {
+        let default_selection = (!selection.is_empty()).then_some(DefaultSelectionResource {
             provider: selection.provider,
             adapter: selection.adapter,
             model: selection.model,

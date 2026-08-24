@@ -100,16 +100,15 @@ fn publish_record_at(
         })?;
         Ok(())
     })();
-    if write_result.is_err() {
-        if let Err(cleanup_error) = fs::remove_file(&temp_path)
-            && cleanup_error.kind() != std::io::ErrorKind::NotFound
-        {
-            tracing::warn!(
-                path = %temp_path.display(),
-                diagnostic = %agena_failure::diagnostic::format_error_chain(&cleanup_error),
-                "failed to remove a temporary server record after publication failed"
-            );
-        }
+    if write_result.is_err()
+        && let Err(cleanup_error) = fs::remove_file(&temp_path)
+        && cleanup_error.kind() != std::io::ErrorKind::NotFound
+    {
+        tracing::warn!(
+            path = %temp_path.display(),
+            diagnostic = %agena_failure::diagnostic::format_error_chain(&cleanup_error),
+            "failed to remove a temporary server record after publication failed"
+        );
     }
     write_result?;
     Ok(PublishedServerRecord {
@@ -124,16 +123,16 @@ impl Drop for PublishedServerRecord {
         let Ok(record) = read_record(&self.path) else {
             return;
         };
-        if record.server_id == self.server_id && record.pid == self.pid {
-            if let Err(error) = fs::remove_file(&self.path)
-                && error.kind() != std::io::ErrorKind::NotFound
-            {
-                tracing::warn!(
-                    path = %self.path.display(),
-                    diagnostic = %agena_failure::diagnostic::format_error_chain(&error),
-                    "failed to remove this process's published server record during shutdown"
-                );
-            }
+        if record.server_id == self.server_id
+            && record.pid == self.pid
+            && let Err(error) = fs::remove_file(&self.path)
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
+            tracing::warn!(
+                path = %self.path.display(),
+                diagnostic = %agena_failure::diagnostic::format_error_chain(&error),
+                "failed to remove this process's published server record during shutdown"
+            );
         }
     }
 }

@@ -411,14 +411,13 @@ impl<T: Send + 'static> ExecutionRegistry<T> {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(&(session_id, part_id))
+            && tx.send(()).is_err()
         {
-            if tx.send(()).is_err() {
-                tracing::debug!(
-                    session_id,
-                    part_id,
-                    "notification acknowledgement waiter was already dropped"
-                );
-            }
+            tracing::debug!(
+                session_id,
+                part_id,
+                "notification acknowledgement waiter was already dropped"
+            );
         }
     }
 

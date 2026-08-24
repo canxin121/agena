@@ -580,16 +580,15 @@ impl TemporaryDownloadCleanup {
 
 impl Drop for TemporaryDownloadCleanup {
     fn drop(&mut self) {
-        if let Some(path) = self.0.take() {
-            if let Err(error) = std::fs::remove_file(&path)
-                && error.kind() != std::io::ErrorKind::NotFound
-            {
-                tracing::warn!(
-                    path = %path.display(),
-                    diagnostic = %agena_failure::diagnostic::format_error_chain(&error),
-                    "failed to remove a temporary TUI download"
-                );
-            }
+        if let Some(path) = self.0.take()
+            && let Err(error) = std::fs::remove_file(&path)
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
+            tracing::warn!(
+                path = %path.display(),
+                diagnostic = %agena_failure::diagnostic::format_error_chain(&error),
+                "failed to remove a temporary TUI download"
+            );
         }
     }
 }

@@ -572,20 +572,20 @@ pub async fn git_rename(
         // Fall back to filesystem rename for untracked files.
         let src = dir.join(from);
         let dst = dir.join(to);
-        if let Some(parent) = dst.parent() {
-            if let Err(error) = tokio::fs::create_dir_all(parent).await {
-                tracing::warn!(
-                    git_exit_code = code,
-                    git_stdout = %redact_git_output(&truncate_for_payload(&out, 16_000)),
-                    git_stderr = %redact_git_output(&truncate_for_payload(&err, 16_000)),
-                    "Git rename failed before the filesystem fallback could create its destination"
-                );
-                return git_io_error_response(
-                    "create the destination directory for a repository rename",
-                    &error,
-                    "rename_parent_failed",
-                );
-            }
+        if let Some(parent) = dst.parent()
+            && let Err(error) = tokio::fs::create_dir_all(parent).await
+        {
+            tracing::warn!(
+                git_exit_code = code,
+                git_stdout = %redact_git_output(&truncate_for_payload(&out, 16_000)),
+                git_stderr = %redact_git_output(&truncate_for_payload(&err, 16_000)),
+                "Git rename failed before the filesystem fallback could create its destination"
+            );
+            return git_io_error_response(
+                "create the destination directory for a repository rename",
+                &error,
+                "rename_parent_failed",
+            );
         }
         if let Err(error) = tokio::fs::rename(&src, &dst).await {
             tracing::warn!(

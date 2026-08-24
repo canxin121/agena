@@ -1092,7 +1092,7 @@ fn project_part_detail(content: &TypedContent) -> agena_runtime::SessionProjecte
             skill_reference_from_skill_ref(value),
         ),
         TypedContent::ToolCall(value) => {
-            agena_runtime::SessionProjectedPartDetail::ToolCall((**value).clone())
+            agena_runtime::SessionProjectedPartDetail::ToolCall(Box::new((**value).clone()))
         }
         TypedContent::Hook(value) => agena_runtime::SessionProjectedPartDetail::Hook(Box::new(
             agena_runtime::SessionProjectedHookPart {

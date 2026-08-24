@@ -474,10 +474,10 @@ impl MonitorService for MonitorRegistry {
             if inner.status == ProcessStatus::Running {
                 inner.status = ProcessStatus::Stopped;
                 inner.completion_reason = Some("explicit_stop".to_string());
-                if let Some(tx) = inner.abort.take() {
-                    if tx.send(()).is_err() {
-                        tracing::debug!(monitor_id, "monitor abort receiver had already completed");
-                    }
+                if let Some(tx) = inner.abort.take()
+                    && tx.send(()).is_err()
+                {
+                    tracing::debug!(monitor_id, "monitor abort receiver had already completed");
                 }
             }
         }
@@ -502,13 +502,13 @@ impl Drop for MonitorRegistry {
                 .inner
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if let Some(abort) = inner.abort.take() {
-                if abort.send(()).is_err() {
-                    tracing::debug!(
-                        monitor_id = %state.monitor_id,
-                        "monitor abort receiver had already completed during registry shutdown"
-                    );
-                }
+            if let Some(abort) = inner.abort.take()
+                && abort.send(()).is_err()
+            {
+                tracing::debug!(
+                    monitor_id = %state.monitor_id,
+                    "monitor abort receiver had already completed during registry shutdown"
+                );
             }
             // Let the runner receive the abort signal and terminate its whole
             // process tree. Aborting the task here would only drop the direct
@@ -1064,26 +1064,26 @@ async fn stream_lines<R>(
                 state
                     .last_activity_ms
                     .store(Utc::now().timestamp_millis(), Ordering::Release);
-                if failure
+                let pattern_outcome = if failure
                     .as_ref()
                     .is_some_and(|pattern| pattern.is_match(&line))
                 {
-                    if let Err(error) = condition_tx.try_send(PatternOutcome::Failure) {
-                        tracing::debug!(
-                            diagnostic = %error,
-                            "monitor failure-pattern outcome was already queued or no longer observed"
-                        );
-                    }
+                    Some(PatternOutcome::Failure)
                 } else if success
                     .as_ref()
                     .is_some_and(|pattern| pattern.is_match(&line))
                 {
-                    if let Err(error) = condition_tx.try_send(PatternOutcome::Success) {
-                        tracing::debug!(
-                            diagnostic = %error,
-                            "monitor success-pattern outcome was already queued or no longer observed"
-                        );
-                    }
+                    Some(PatternOutcome::Success)
+                } else {
+                    None
+                };
+                if let Some(pattern_outcome) = pattern_outcome
+                    && let Err(error) = condition_tx.try_send(pattern_outcome)
+                {
+                    tracing::debug!(
+                        diagnostic = %error,
+                        "monitor pattern outcome was already queued or no longer observed"
+                    );
                 }
                 if let Some(re) = include.as_ref()
                     && !re.is_match(&line)

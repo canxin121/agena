@@ -252,15 +252,14 @@ impl WorkspacePreviewRuntime {
             .get(trimmed)
             .map(|current| *current == pid)
             .unwrap_or(false);
-        if !still_running {
-            if let Err(error) = self.registry.mark_stopped_by_id(trimmed, None).await {
-                tracing::error!(
-                    session_id = trimmed,
-                    pid,
-                    diagnostic = %agena_failure::diagnostic::format_error_chain(&error),
-                    "failed to persist a preview session stop that raced with process startup"
-                );
-            }
+        if !still_running && let Err(error) = self.registry.mark_stopped_by_id(trimmed, None).await
+        {
+            tracing::error!(
+                session_id = trimmed,
+                pid,
+                diagnostic = %agena_failure::diagnostic::format_error_chain(&error),
+                "failed to persist a preview session stop that raced with process startup"
+            );
         }
 
         let registry = self.registry.clone();
@@ -287,15 +286,15 @@ impl WorkspacePreviewRuntime {
                 Err(err) => Some(format!("preview process wait failed: {err}")),
             };
 
-            if should_apply {
-                if let Err(error) = registry.mark_stopped_by_id(&session_id, exit_detail).await {
-                    tracing::error!(
-                        session_id,
-                        pid,
-                        diagnostic = %agena_failure::diagnostic::format_error_chain(&error),
-                        "failed to persist preview process exit state"
-                    );
-                }
+            if should_apply
+                && let Err(error) = registry.mark_stopped_by_id(&session_id, exit_detail).await
+            {
+                tracing::error!(
+                    session_id,
+                    pid,
+                    diagnostic = %agena_failure::diagnostic::format_error_chain(&error),
+                    "failed to persist preview process exit state"
+                );
             }
         });
 

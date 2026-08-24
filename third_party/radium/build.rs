@@ -61,6 +61,16 @@ impl Atomics {
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
+    for cfg in [
+        "radium_atomic_8",
+        "radium_atomic_16",
+        "radium_atomic_32",
+        "radium_atomic_64",
+        "radium_atomic_ptr",
+    ] {
+        println!("cargo:rustc-check-cfg=cfg({cfg})");
+    }
+
     let mut atomics = Atomics::ALL;
 
     // Modern Cargo exposes rustc's target_has_atomic cfg directly to build
@@ -81,7 +91,6 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
         }
     } else {
-
         let target = env::var("TARGET")?;
         // Add new target strings here with their atomic availability.
         #[allow(clippy::match_single_binding, clippy::single_match)]

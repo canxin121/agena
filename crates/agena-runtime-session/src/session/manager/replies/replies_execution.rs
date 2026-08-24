@@ -3289,15 +3289,14 @@ impl SessionManager {
                     .apply_tool_error(
                         session,
                         pending_tool,
-                        ToolError::plugin(format!(
-                            "{}",
+                        ToolError::plugin(
                             agena_failure::diagnostic::format_error_chain_with_context(
                                 format!(
                                     "tool stream `{stream_id}` ended without a terminal result"
                                 ),
                                 &error,
-                            )
-                        )),
+                            ),
+                        ),
                         None,
                         state,
                     )

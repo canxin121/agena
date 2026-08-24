@@ -295,7 +295,7 @@ impl Statfs {
         apple_targets,
     )))]
     pub fn filesystem_type(&self) -> FsType {
-        FsType(self.0.f_type)
+        FsType(self.0.f_type.into())
     }
 
     /// Magic code defining system type
@@ -320,7 +320,7 @@ impl Statfs {
     /// Optimal transfer block size
     #[cfg(all(target_os = "linux", target_arch = "s390x", not(target_env = "musl")))]
     pub fn optimal_transfer_size(&self) -> u32 {
-        self.0.f_bsize
+        self.0.f_bsize.into()
     }
 
     /// Optimal transfer block size
@@ -330,7 +330,7 @@ impl Statfs {
         all(target_os = "linux", target_env = "ohos")
     ))]
     pub fn optimal_transfer_size(&self) -> libc::c_ulong {
-        self.0.f_bsize
+        self.0.f_bsize.into()
     }
 
     /// Optimal transfer block size
@@ -382,7 +382,7 @@ impl Statfs {
     // f_bsize on linux: https://github.com/torvalds/linux/blob/master/fs/nfs/super.c#L471
     #[cfg(all(target_os = "linux", target_env = "musl"))]
     pub fn block_size(&self) -> libc::c_ulong {
-        self.0.f_bsize
+        self.0.f_bsize.into()
     }
 
     /// Size of a block
@@ -456,13 +456,13 @@ impl Statfs {
     /// Maximum length of filenames
     #[cfg(all(target_os = "linux", target_arch = "s390x", not(target_env = "musl")))]
     pub fn maximum_name_length(&self) -> u32 {
-        self.0.f_namelen
+        self.0.f_namelen.into()
     }
 
     /// Maximum length of filenames
     #[cfg(all(target_os = "linux", target_env = "musl"))]
     pub fn maximum_name_length(&self) -> libc::c_ulong {
-        self.0.f_namelen
+        self.0.f_namelen.into()
     }
 
     /// Maximum length of filenames

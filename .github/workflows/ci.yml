@@ -16,10 +16,8 @@ jobs:
     name: Load hosted target manifest
     runs-on: ubuntu-latest
     outputs:
-      matrix: ${{ steps.matrix.outputs.matrix }}
+      cross_backend: ${{ steps.matrix.outputs.cross_backend }}
       native: ${{ steps.matrix.outputs.native }}
-      portable: ${{ steps.matrix.outputs.portable }}
-      portable_build_std: ${{ steps.matrix.outputs.portable_build_std }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -29,26 +27,22 @@ jobs:
           toolchain: 1.97.0
       - name: Verify universal target coverage
         run: python3 scripts/agena/verify-target-coverage.py
+      - name: Verify runtime crypto/auth capabilities
+        run: python3 scripts/ci/verify-runtime-capabilities.py
       - id: matrix
         name: Render hosted target matrix
         shell: bash
         run: |
           set -euo pipefail
-          matrix="$(python3 scripts/agena/target-matrix.py hosted-cross --compact)"
-          native="$(python3 scripts/agena/target-matrix.py native --compact)"
-          portable="$(python3 scripts/agena/target-matrix.py portable --compact)"
-          portable_build_std="$(python3 scripts/agena/target-matrix.py portable-build-std --compact)"
-          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+          cross_backend="$(python3 scripts/agena/target-matrix.py cross-backend --compact)"
+          native="$(python3 scripts/agena/target-matrix.py native-backend --compact)"
+          echo "cross_backend=$cross_backend" >> "$GITHUB_OUTPUT"
           echo "native=$native" >> "$GITHUB_OUTPUT"
-          echo "portable=$portable" >> "$GITHUB_OUTPUT"
-          echo "portable_build_std=$portable_build_std" >> "$GITHUB_OUTPUT"
           python3 - <<'PY_MATRIX'
           import json
           data = json.load(open("scripts/agena/universal-targets.json", encoding="utf-8"))
-          print(f"Loaded {len(data['hosted_cross'])} hosted target definitions")
-          print(f"Loaded {len(data['native'])} native target definitions")
-          print(f"Loaded {len(data['portable'])} distributed portable target definitions")
-          print(f"Loaded {len(data['portable_build_std'])} build-std portable target definitions")
+          print(f"Loaded {len(data['cross_backend'])} cross backend definitions")
+          print(f"Loaded {len(data['native_backend'])} native/SDK backend definitions")
           PY_MATRIX
 
   cross-tool:
@@ -83,7 +77,7 @@ jobs:
     strategy:
       fail-fast: false
       max-parallel: 20
-      matrix: ${{ fromJSON(needs.targets.outputs.matrix) }}
+      matrix: ${{ fromJSON(needs.targets.outputs.cross_backend) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -127,53 +121,20 @@ jobs:
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
         with:
           toolchain: 1.97.0
-          targets: ${{ matrix.target }}
-      - name: Check native target
-        run: cargo check -p agena --target '${{ matrix.target }}' --locked
-
-  portable-targets:
-    name: portable ${{ matrix.target }}
-    needs: targets
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      max-parallel: 24
-      matrix: ${{ fromJSON(needs.targets.outputs.portable) }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
-        with:
-          toolchain: 1.97.0
-          targets: ${{ matrix.target }}
-      - name: Build portable core
-        run: cargo build -p agena-portable-core --release --target '${{ matrix.target }}' --locked
-
-  portable-build-std-targets:
-    name: build-std portable ${{ matrix.target }}
-    needs: targets
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      max-parallel: 32
-      matrix: ${{ fromJSON(needs.targets.outputs.portable_build_std) }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
-        with:
-          toolchain: 1.97.0
           components: rust-src
-      - name: Install nightly Cargo driver
-        run: rustup toolchain install nightly-2026-08-18 --profile minimal
-      - name: Build target core from Rust 1.97 sources
+      - name: Install distributed target component
+        if: ${{ !matrix.build_std }}
         shell: bash
-        run: >-
-          bash scripts/agena/package-portable-core.sh
-          '${{ matrix.target }}'
-          true
-          '${{ matrix.rustflags }}'
+        run: rustup target add '${{ matrix.target }}' --toolchain 1.97.0
+      - name: Install nightly Cargo driver
+        if: matrix.build_std
+        shell: bash
+        run: rustup toolchain install nightly-2026-08-18 --profile minimal
+      - name: Check native target (Unix)
+        if: matrix.shell == 'bash'
+        shell: bash
+        run: bash scripts/ci/check-native-backend.sh '${{ matrix.target }}' '${{ matrix.build_std }}'
+      - name: Check native target (Windows)
+        if: matrix.shell == 'pwsh'
+        shell: pwsh
+        run: ./scripts/ci/check-native-backend.ps1 -TargetTriple '${{ matrix.target }}' -BuildStd $${{ matrix.build_std }}

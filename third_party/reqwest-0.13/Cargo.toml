@@ -174,11 +174,11 @@ query = [
 ]
 rustls = [
     "__rustls-ring",
-    "dep:rustls-platform-verifier",
+    "dep:webpki-roots",
     "__rustls",
 ]
 rustls-no-provider = [
-    "dep:rustls-platform-verifier",
+    "dep:webpki-roots",
     "__rustls",
 ]
 socks = []
@@ -204,6 +204,10 @@ version = "1.2"
 [dependencies.futures-core]
 version = "0.3.28"
 default-features = false
+
+[target.'cfg(not(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none"))))'.dependencies.webpki-roots]
+version = "1"
+optional = true
 
 [dependencies.futures-util]
 version = "0.3.28"
@@ -399,10 +403,6 @@ default-features = false
 [target.'cfg(not(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none"))))'.dependencies.rustls-pki-types]
 version = "1.9.0"
 features = ["std"]
-optional = true
-
-[target.'cfg(not(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none"))))'.dependencies.rustls-platform-verifier]
-version = ">=0.6.0, <0.8.0"
 optional = true
 
 [target.'cfg(not(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none"))))'.dependencies.tokio]

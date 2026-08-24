@@ -2,7 +2,6 @@ use std::path::{Path, PathBuf};
 
 #[cfg(not(any(
     target_os = "android",
-    target_os = "emscripten",
     target_os = "ios",
     target_os = "tvos",
     target_os = "watchos",
@@ -83,7 +82,6 @@ pub struct PastedImageInfo {
 
 #[cfg(not(any(
     target_os = "android",
-    target_os = "emscripten",
     target_os = "ios",
     target_os = "tvos",
     target_os = "watchos",
@@ -118,7 +116,6 @@ pub fn paste_image_to_temp_png() -> Result<(PathBuf, PastedImageInfo), PasteImag
 
 #[cfg(any(
     target_os = "android",
-    target_os = "emscripten",
     target_os = "ios",
     target_os = "tvos",
     target_os = "watchos",
@@ -132,7 +129,6 @@ pub fn paste_image_to_temp_png() -> Result<(PathBuf, PastedImageInfo), PasteImag
 
 #[cfg(not(any(
     target_os = "android",
-    target_os = "emscripten",
     target_os = "ios",
     target_os = "tvos",
     target_os = "watchos",

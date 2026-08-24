@@ -8,5 +8,12 @@ rust-version.workspace = true
 keyring = { workspace = true }
 thiserror = { workspace = true }
 
+[target.'cfg(target_os = "ios")'.dependencies]
+# keyring's v1 compatibility feature enables the Apple keychain backend, but
+# iOS only exposes the protected-data store. A direct target dependency keeps
+# the protected feature unified without enabling keyring's unrelated CLI
+# backend bundle on every platform.
+apple-native-keyring-store = { version = "1.0.1", features = ["protected"] }
+
 [lints]
 workspace = true

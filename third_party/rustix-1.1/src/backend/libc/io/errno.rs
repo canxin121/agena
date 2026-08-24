@@ -287,7 +287,11 @@ impl Errno {
         target_os = "vita",
         target_os = "wasi",
     )))]
+    #[cfg(not(all(target_os = "linux", target_env = "uclibc", target_arch = "mips")))]
     pub const HWPOISON: Self = Self(c::EHWPOISON);
+    /// `EHWPOISON`
+    #[cfg(all(target_os = "linux", target_env = "uclibc", target_arch = "mips"))]
+    pub const HWPOISON: Self = Self(168);
     /// `EIDRM`
     #[cfg(not(any(windows, target_os = "l4re")))]
     pub const IDRM: Self = Self(c::EIDRM);

@@ -217,18 +217,13 @@ impl AmazonBedrockAdapter {
             static_credentials,
         )
         .await
-        .map_err(|error| match error {
-            agena_provider_bedrock_auth::BedrockCredentialError::ProviderUnavailable => {
-                ProviderError::Config(
-                    "amazon-bedrock could not resolve aws credential provider".to_owned(),
-                )
-            }
-            agena_provider_bedrock_auth::BedrockCredentialError::Resolve(error) => {
+        .map_err(
+            |agena_provider_bedrock_auth::BedrockCredentialError::Resolve(error)| {
                 ProviderError::Provider(format!(
                     "amazon-bedrock failed to resolve aws credentials from chain: {error}"
                 ))
-            }
-        })?;
+            },
+        )?;
         self.update_prompt_cache_sigv4_runtime_shape(&credentials);
         Ok(credentials)
     }

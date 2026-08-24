@@ -231,6 +231,35 @@ impl Termios {
     }
 }
 
+// Hexagon musl exposes VEOF/VEOL/VEOL2/VMIN as c_int while the rest of the
+// c_cc indices are usize. Keep nix's public usize-backed enum, but spell the
+// verified Linux termios indices directly so the mixed libc types do not leak
+// into enum discriminants. These values match asm-generic/termios.h as exposed
+// by the Hexagon musl sysroot.
+#[cfg(all(target_os = "linux", target_arch = "hexagon"))]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[repr(usize)]
+#[non_exhaustive]
+pub enum SpecialCharacterIndices {
+    VINTR = 0,
+    VQUIT = 1,
+    VERASE = 2,
+    VKILL = 3,
+    VEOF = 4,
+    VTIME = 5,
+    VMIN = 6,
+    VSWTC = 7,
+    VSTART = 8,
+    VSTOP = 9,
+    VSUSP = 10,
+    VEOL = 11,
+    VREPRINT = 12,
+    VDISCARD = 13,
+    VWERASE = 14,
+    VLNEXT = 15,
+    VEOL2 = 16,
+}
+
 impl From<libc::termios> for Termios {
     fn from(termios: libc::termios) -> Self {
         Termios {
@@ -325,13 +354,40 @@ libc_enum! {
         B1500000,
         #[cfg(linux_android)]
         B2000000,
-        #[cfg(any(target_os = "android", all(target_os = "linux", not(target_arch = "sparc64"))))]
+        // Linux's SPARC libc ABIs do not expose these high baud-rate
+        // constants. Do not emit enum variants for constants the target libc
+        // cannot provide.
+        #[cfg(any(
+            target_os = "android",
+            all(
+                target_os = "linux",
+                not(any(target_arch = "sparc", target_arch = "sparc64"))
+            )
+        ))]
         B2500000,
-        #[cfg(any(target_os = "android", all(target_os = "linux", not(target_arch = "sparc64"))))]
+        #[cfg(any(
+            target_os = "android",
+            all(
+                target_os = "linux",
+                not(any(target_arch = "sparc", target_arch = "sparc64"))
+            )
+        ))]
         B3000000,
-        #[cfg(any(target_os = "android", all(target_os = "linux", not(target_arch = "sparc64"))))]
+        #[cfg(any(
+            target_os = "android",
+            all(
+                target_os = "linux",
+                not(any(target_arch = "sparc", target_arch = "sparc64"))
+            )
+        ))]
         B3500000,
-        #[cfg(any(target_os = "android", all(target_os = "linux", not(target_arch = "sparc64"))))]
+        #[cfg(any(
+            target_os = "android",
+            all(
+                target_os = "linux",
+                not(any(target_arch = "sparc", target_arch = "sparc64"))
+            )
+        ))]
         B4000000,
     }
     impl TryFrom<libc::speed_t>
@@ -405,6 +461,7 @@ libc_enum! {
 // TODO: Make this usable directly as a slice index.
 libc_enum! {
     /// Indices into the `termios.c_cc` array for special characters.
+    #[cfg(not(all(target_os = "linux", target_arch = "hexagon")))]
     #[repr(usize)]
     #[non_exhaustive]
     pub enum SpecialCharacterIndices {
@@ -424,7 +481,10 @@ libc_enum! {
         VKILL,
         #[cfg(not(target_os = "haiku"))]
         VLNEXT,
-        #[cfg(not(any(all(target_os = "linux", target_arch = "sparc64"),
+        #[cfg(not(any(all(
+                    target_os = "linux",
+                    any(target_arch = "sparc", target_arch = "sparc64")
+                ),
                 solarish, target_os = "aix", target_os = "haiku")))]
         VMIN,
         VQUIT,
@@ -439,7 +499,10 @@ libc_enum! {
         VSWTC,
         #[cfg(any(solarish, target_os = "haiku"))]
         VSWTCH,
-        #[cfg(not(any(all(target_os = "linux", target_arch = "sparc64"),
+        #[cfg(not(any(all(
+                    target_os = "linux",
+                    any(target_arch = "sparc", target_arch = "sparc64")
+                ),
                 solarish, target_os = "aix", target_os = "haiku")))]
         VTIME,
         #[cfg(not(any(target_os = "aix", target_os = "haiku")))]
@@ -450,7 +513,10 @@ libc_enum! {
 }
 
 #[cfg(any(
-    all(target_os = "linux", target_arch = "sparc64"),
+    all(
+        target_os = "linux",
+        any(target_arch = "sparc", target_arch = "sparc64")
+    ),
     solarish,
     target_os = "aix",
     target_os = "haiku",
@@ -667,7 +733,7 @@ libc_bitflags! {
         ECHOK;
         ECHO;
         ECHONL;
-        #[cfg(not(target_os = "redox"))]
+        #[cfg(not(any(target_os = "redox", target_os = "cygwin")))]
         ECHOPRT;
         #[cfg(not(target_os = "redox"))]
         ECHOCTL;
@@ -676,14 +742,19 @@ libc_bitflags! {
         #[cfg(bsd)]
         ALTWERASE;
         IEXTEN;
-        #[cfg(not(any(target_os = "redox", target_os = "haiku", target_os = "aix")))]
+        #[cfg(not(any(
+            target_os = "redox",
+            target_os = "haiku",
+            target_os = "aix",
+            target_os = "cygwin"
+        )))]
         EXTPROC;
         TOSTOP;
         #[cfg(not(target_os = "redox"))]
         FLUSHO;
         #[cfg(bsd)]
         NOKERNINFO;
-        #[cfg(not(target_os = "redox"))]
+        #[cfg(not(any(target_os = "redox", target_os = "cygwin")))]
         PENDIN;
         NOFLSH;
     }

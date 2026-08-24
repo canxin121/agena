@@ -1,63 +1,80 @@
 #!/usr/bin/env python3
-"""Verify that the universal release manifest covers every Rust 1.97 built-in target."""
+"""Verify the Rust 1.97 full-backend release target manifest."""
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from collections import Counter
 from pathlib import Path
 
 MANIFEST = Path(__file__).with_name("universal-targets.json")
 
-
-def command_targets(command: list[str]) -> set[str]:
-    output = subprocess.check_output(command, text=True)
-    return {line.split()[0] for line in output.splitlines() if line.strip()}
+def target_spec(target: str) -> dict[str, object]:
+    env = dict(os.environ)
+    env["RUSTC_BOOTSTRAP"] = "1"
+    try:
+        output = subprocess.check_output(
+            [
+                "rustc",
+                "-Z",
+                "unstable-options",
+                "--print",
+                "target-spec-json",
+                "--target",
+                target,
+            ],
+            text=True,
+            env=env,
+            stderr=subprocess.DEVNULL,
+        )
+    except subprocess.CalledProcessError as error:
+        raise SystemExit(
+            f"full-backend manifest contains a target unknown to rustc: {target}"
+        ) from error
+    return json.loads(output)
 
 
 def main() -> None:
     data = json.loads(MANIFEST.read_text(encoding="utf-8"))
     groups = {
-        "hosted_cross": data["hosted_cross"],
-        "native": data["native"],
-        "portable": data["portable"],
-        "portable_build_std": data["portable_build_std"],
+        "cross_backend": data["cross_backend"],
+        "native_backend": data["native_backend"],
     }
-    all_rows = [row for rows in groups.values() for row in rows]
-    counts = Counter(row["target"] for row in all_rows)
+    backend_rows = [row for rows in groups.values() for row in rows]
+    counts = Counter(row["target"] for row in backend_rows)
     duplicates = sorted(target for target, count in counts.items() if count > 1)
     if duplicates:
         raise SystemExit(f"universal target manifest contains duplicate targets: {duplicates}")
 
-    rustc_targets = command_targets(["rustc", "--print", "target-list"])
-    rustup_targets = command_targets(["rustup", "target", "list"])
-    covered = set(counts)
+    # The manifest is the complete Agena release surface. Validate its
+    # full-backend rows directly.
+    backend_targets = {row["target"] for row in backend_rows}
 
-    missing = sorted(rustc_targets - covered)
-    unknown = sorted(covered - rustc_targets)
-    if missing:
-        raise SystemExit(f"Rust built-in targets missing from release manifest: {missing}")
-    if unknown:
-        raise SystemExit(f"release manifest contains targets unknown to rustc: {unknown}")
+    bad_artifacts = sorted(
+        row["target"]
+        for row in backend_rows
+        if row.get("artifact_kind") != "backend"
+    )
+    if bad_artifacts:
+        raise SystemExit(f"all release targets must be full backend artifacts: {bad_artifacts}")
 
-    distributed_missing = sorted(rustup_targets - covered)
-    if distributed_missing:
-        raise SystemExit(f"Rust distributed targets missing from release manifest: {distributed_missing}")
+    specs = {target: target_spec(target) for target in backend_targets}
+    rustup_targets = {
+        line.split()[0]
+        for line in subprocess.check_output(
+            ["rustup", "target", "list"], text=True
+        ).splitlines()
+        if line.strip()
+    }
 
-    portable_build_std = {row["target"] for row in groups["portable_build_std"]}
-    distributed_in_build_std = sorted(portable_build_std & rustup_targets)
-    if distributed_in_build_std:
-        raise SystemExit(
-            f"build-std portable targets unexpectedly have distributed components: {distributed_in_build_std}"
-        )
-
-    print(f"Rust built-in targets covered: {len(rustc_targets)}")
-    print(f"Rust distributed targets: {len(rustup_targets)}")
-    print(f"Hosted/cross backend targets: {len(groups['hosted_cross'])}")
-    print(f"Native backend targets: {len(groups['native'])}")
-    print(f"Distributed portable core targets: {len(groups['portable'])}")
-    print(f"Build-std portable core targets: {len(groups['portable_build_std'])}")
-    print(f"Total unique release target triples: {len(covered)}")
+    distributed_backends = backend_targets & rustup_targets
+    build_std_backends = backend_targets - rustup_targets
+    print(f"Rust distributed full-backend targets: {len(distributed_backends)}")
+    print(f"Cross backend targets: {len(groups['cross_backend'])}")
+    print(f"Native/SDK backend targets: {len(groups['native_backend'])}")
+    print(f"Build-std full backend targets: {len(build_std_backends)}")
+    print(f"Full backend release target triples: {len(backend_targets)}")
 
 
 if __name__ == "__main__":

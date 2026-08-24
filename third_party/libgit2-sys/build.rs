@@ -1,0 +1,598 @@
+use std::env;
+use std::fs;
+use std::io;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+const CYGWIN_PATH_WRAPPER_SOURCE: &str = r#"
+use std::env;
+use std::ffi::OsString;
+use std::path::PathBuf;
+use std::process::Command;
+
+const BASH: &str = __AGENA_CYGWIN_BASH__;
+const TOOL: &str = __AGENA_CYGWIN_TOOL__;
+
+fn cygwin_path(value: &str) -> Option<String> {
+    let value = if let Some(rest) = value.strip_prefix("\\\\?\\UNC\\") {
+        return Some(format!("//{}", rest.replace('\\', "/")));
+    } else {
+        value.strip_prefix("\\\\?\\").unwrap_or(value)
+    };
+
+    let bytes = value.as_bytes();
+    if bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && matches!(bytes[2], b'/' | b'\\')
+    {
+        let drive = (bytes[0] as char).to_ascii_lowercase();
+        let rest = value[3..].replace('\\', "/");
+        return Some(format!("/cygdrive/{drive}/{rest}"));
+    }
+
+    if let Some(rest) = value.strip_prefix("\\\\\\\\") {
+        return Some(format!("//{}", rest.replace('\\', "/")));
+    }
+
+    None
+}
+
+fn convert_arg(argument: OsString) -> OsString {
+    let value = argument.to_string_lossy();
+
+    if let Some(path) = value.strip_prefix('@').and_then(cygwin_path) {
+        return format!("@{path}").into();
+    }
+
+    for prefix in [
+        "-I",
+        "-isystem",
+        "-iquote",
+        "-include",
+        "-o",
+        "-MF",
+        "-MQ",
+        "-MT",
+        "-L",
+        "--sysroot=",
+    ] {
+        if let Some(path) = value.strip_prefix(prefix).and_then(cygwin_path) {
+            return format!("{prefix}{path}").into();
+        }
+    }
+
+    cygwin_path(&value)
+        .map(Into::into)
+        .unwrap_or_else(|| value.into_owned().into())
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+fn main() {
+    // Cygwin's native Windows entry point does not preserve the argv spelling
+    // that cc-rs gives a native wrapper when the wrapper directly starts the
+    // compiler with CreateProcess.  Run the real tool from the official
+    // Cygwin bash instead: bash parses the translated POSIX arguments inside
+    // the Cygwin process boundary, and gcc/ar/ranlib remain the pinned tools
+    // installed under AGENA_CYGWIN_ROOT.
+    let tool = cygwin_path(TOOL).unwrap_or_else(|| TOOL.to_owned());
+    let mut command = format!("exec {}", shell_quote(&tool));
+    for argument in env::args_os().skip(1).map(convert_arg) {
+        command.push(' ');
+        command.push_str(&shell_quote(&argument.to_string_lossy()));
+    }
+
+    let status = Command::new(PathBuf::from(BASH))
+        .args(["--noprofile", "--norc", "-c", &command])
+        .status()
+        .unwrap_or_else(|error| {
+            eprintln!("failed to execute official Cygwin bash {BASH} for {TOOL}: {error}");
+            std::process::exit(127);
+        });
+    std::process::exit(status.code().unwrap_or(1));
+}
+"#;
+
+fn build_cygwin_path_wrapper(output: &Path, name: &str, bash: &Path, tool: &Path) -> PathBuf {
+    let source = output.join(format!("{name}.rs"));
+    let executable = output.join(format!("{name}.exe"));
+    let bash_literal = format!("{:?}", bash.to_string_lossy());
+    let tool_literal = format!("{:?}", tool.to_string_lossy());
+    let source_text = CYGWIN_PATH_WRAPPER_SOURCE
+        .replace("__AGENA_CYGWIN_BASH__", &bash_literal)
+        .replace("__AGENA_CYGWIN_TOOL__", &tool_literal);
+    fs::write(&source, source_text).unwrap_or_else(|error| {
+        panic!(
+            "failed to write Cygwin path wrapper source {}: {error}",
+            source.display()
+        )
+    });
+
+    let rustc = env::var_os("AGENA_REAL_RUSTC")
+        .or_else(|| env::var_os("RUSTC"))
+        .unwrap_or_else(|| "rustc".into());
+    let status = Command::new(&rustc)
+        .args([
+            "--crate-name",
+            "agena_cygwin_path_wrapper",
+            "--crate-type",
+            "bin",
+            "--edition=2021",
+        ])
+        .arg(&source)
+        .arg("-o")
+        .arg(&executable)
+        .status()
+        .unwrap_or_else(|error| panic!("failed to start host rustc for Cygwin wrapper: {error}"));
+    if !status.success() || !executable.is_file() {
+        panic!(
+            "host rustc failed to build the Cygwin path wrapper {}",
+            executable.display()
+        );
+    }
+    executable
+}
+
+/// Tries to use system libgit2 and emits necessary build script instructions.
+fn try_system_libgit2(
+    experimental_sha256: bool,
+) -> Result<pkg_config::Library, Box<dyn std::error::Error>> {
+    let mut cfg = pkg_config::Config::new();
+    let range_version = "1.9.6".."1.10.0";
+
+    let lib = if experimental_sha256 {
+        // Determine whether experimental SHA256 object support is enabled.
+        //
+        // Given the SHA256 support is ABI-incompatible,
+        // we take a conservative approach here:
+        //
+        // 1. Only accept if the library name has the `-experimental` suffix
+        // 2. The experimental library must have an `experimental.h` header file
+        //    containing an enabled `GIT_EXPERIMENTAL_SHA256` constant.
+        //
+        // See how libgit2 handles experimental features:
+        // https://github.com/libgit2/libgit2/blob/3ac4c0adb1064bad16a7f980d87e7261753fd07e/cmake/ExperimentalFeatures.cmake
+        match cfg
+            .range_version(range_version.clone())
+            .probe("libgit2-experimental")
+        {
+            Ok(lib) => {
+                let sha256_constant_in_header = lib.include_paths.iter().any(|path| {
+                    let header = path.join("git2/experimental.h");
+                    let contents = match std::fs::read_to_string(header) {
+                        Ok(s) => s,
+                        Err(_) => return false,
+                    };
+                    if contents.contains("#cmakedefine") {
+                        // still template
+                        return false;
+                    }
+                    contents
+                        .lines()
+                        .any(|l| l.starts_with("#define GIT_EXPERIMENTAL_SHA256 1"))
+                });
+                if sha256_constant_in_header {
+                    println!("cargo:rustc-cfg=libgit2_experimental_sha256");
+                    lib
+                } else {
+                    println!("cargo:warning=no GIT_EXPERIMENTAL_SHA256 constant in headers");
+                    return Err(
+                        "GIT_EXPERIMENTAL_SHA256 wasn't enabled for libgit2-experimental library"
+                            .into(),
+                    );
+                }
+            }
+            Err(e) => {
+                println!("cargo:warning=failed to probe system libgit2-experimental: {e}");
+                return Err(e.into());
+            }
+        }
+    } else {
+        match cfg.range_version(range_version).probe("libgit2") {
+            Ok(lib) => lib,
+            Err(e) => {
+                println!("cargo:warning=failed to probe system libgit2: {e}");
+                return Err(e.into());
+            }
+        }
+    };
+
+    for include in &lib.include_paths {
+        println!("cargo:root={}", include.display());
+    }
+    Ok(lib)
+}
+
+fn main() {
+    println!(
+        "cargo:rustc-check-cfg=cfg(\
+            libgit2_vendored,\
+            libgit2_experimental_sha256,\
+        )"
+    );
+
+    // Build scripts execute across a Windows/Cygwin process boundary for the
+    // Cygwin backend. Relative source paths can then be interpreted by the
+    // compiler in the wrong namespace. Resolve the vendored tree once and
+    // pass absolute paths to cc so the real C sources and headers are used.
+    let crate_root = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap());
+    let libgit2_root = crate_root.join("libgit2");
+
+    let https = env::var("CARGO_FEATURE_HTTPS").is_ok();
+    let ssh = env::var("CARGO_FEATURE_SSH").is_ok();
+    let vendored = env::var("CARGO_FEATURE_VENDORED").is_ok();
+    let zlib_ng_compat = env::var("CARGO_FEATURE_ZLIB_NG_COMPAT").is_ok();
+    let unstable_sha256 = env::var("CARGO_FEATURE_UNSTABLE_SHA256").is_ok();
+
+    // Specify `LIBGIT2_NO_VENDOR` to force to use system libgit2.
+    // Due to the additive nature of Cargo features, if some crate in the
+    // dependency graph activates `vendored` feature, there is no way to revert
+    // it back. This env var serves as a workaround for this purpose.
+    println!("cargo:rerun-if-env-changed=LIBGIT2_NO_VENDOR");
+    let forced_no_vendor = env::var_os("LIBGIT2_NO_VENDOR").map_or(false, |s| s != "0");
+
+    if forced_no_vendor {
+        if try_system_libgit2(unstable_sha256).is_err() {
+            panic!(
+                "\
+The environment variable `LIBGIT2_NO_VENDOR` has been set but no compatible system libgit2 could be found.
+The build is now aborting. To disable, unset the variable or use `LIBGIT2_NO_VENDOR=0`.
+",
+            );
+        }
+
+        // We've reached here, implying we're using system libgit2.
+        return;
+    }
+
+    // To use zlib-ng in zlib-compat mode, we have to build libgit2 ourselves.
+    let try_to_use_system_libgit2 = !vendored && !zlib_ng_compat;
+    if try_to_use_system_libgit2 && try_system_libgit2(unstable_sha256).is_ok() {
+        // using system libgit2 has worked
+        return;
+    }
+
+    println!("cargo:rustc-cfg=libgit2_vendored");
+
+    if !libgit2_root.join("src").exists() {
+        let _ = Command::new("git")
+            .args(&["submodule", "update", "--init", "libgit2"])
+            .current_dir(&crate_root)
+            .status();
+    }
+
+    let target = env::var("TARGET").unwrap();
+    let windows = target.contains("windows");
+    let dst = PathBuf::from(env::var_os("OUT_DIR").unwrap());
+    let include = dst.join("include");
+    let mut cfg = cc::Build::new();
+    fs::create_dir_all(&include).unwrap();
+
+    // Copy over all header files
+    cp_r(libgit2_root.join("include"), &include);
+
+    cfg.include(&include)
+        .include(libgit2_root.join("src/libgit2"))
+        .include(libgit2_root.join("src/util"))
+        .out_dir(dst.join("build"))
+        .warnings(false);
+
+    if target == "x86_64-pc-cygwin" {
+        // cc-rs runs as a native Windows host process.  Its absolute
+        // source/include/output arguments are therefore Windows paths, while
+        // the official Cygwin tools resolve arguments in the POSIX namespace.
+        // Use small native host adapters for every Cygwin tool that cc-rs
+        // invokes; the adapters only translate argument spelling and then
+        // execute the pinned, real Cygwin programs.
+        println!("cargo:rerun-if-env-changed=AGENA_CYGWIN_ROOT");
+        let cygwin_root = PathBuf::from(
+            env::var_os("AGENA_CYGWIN_ROOT")
+                .expect("AGENA_CYGWIN_ROOT is required for the Cygwin libgit2 backend"),
+        );
+        let cygwin_bin = cygwin_root.join("bin");
+        let cygwin_bash = cygwin_bin.join("bash.exe");
+        let cygwin_gcc = cygwin_bin.join("x86_64-pc-cygwin-gcc.exe");
+        let cygwin_ar = cygwin_bin.join("ar.exe");
+        let cygwin_ranlib = cygwin_bin.join("ranlib.exe");
+        for tool in [&cygwin_bash, &cygwin_gcc, &cygwin_ar, &cygwin_ranlib] {
+            if !tool.is_file() {
+                panic!(
+                    "official Cygwin tool required by vendored libgit2 is missing: {}",
+                    tool.display()
+                );
+            }
+        }
+        let gcc_wrapper =
+            build_cygwin_path_wrapper(&dst, "agena-cygwin-gcc-wrapper", &cygwin_bash, &cygwin_gcc);
+        let ar_wrapper =
+            build_cygwin_path_wrapper(&dst, "agena-cygwin-ar-wrapper", &cygwin_bash, &cygwin_ar);
+        let ranlib_wrapper =
+            build_cygwin_path_wrapper(
+                &dst,
+                "agena-cygwin-ranlib-wrapper",
+                &cygwin_bash,
+                &cygwin_ranlib,
+            );
+        cfg.compiler(gcc_wrapper)
+            .archiver(ar_wrapper)
+            .ranlib(ranlib_wrapper);
+    }
+
+    if unstable_sha256 {
+        println!("cargo:rustc-cfg=libgit2_experimental_sha256");
+        cfg.define("GIT_EXPERIMENTAL_SHA256", "1");
+    }
+
+    // Include all cross-platform C files
+    add_c_files(&mut cfg, libgit2_root.join("src/libgit2"));
+    add_c_files(&mut cfg, libgit2_root.join("src/util"));
+
+    // These are activated by features, but they're all unconditionally always
+    // compiled apparently and have internal #define's to make sure they're
+    // compiled correctly.
+    add_c_files(&mut cfg, libgit2_root.join("src/libgit2/transports"));
+    add_c_files(&mut cfg, libgit2_root.join("src/libgit2/streams"));
+
+    // Always use bundled HTTP parser (llhttp) for now
+    cfg.include(libgit2_root.join("deps/llhttp"));
+    add_c_files(&mut cfg, libgit2_root.join("deps/llhttp"));
+
+    // external/system xdiff is not yet supported
+    cfg.include(libgit2_root.join("deps/xdiff"));
+    add_c_files(&mut cfg, libgit2_root.join("deps/xdiff"));
+
+    // Use the included PCRE2 regex backend.
+    // Keep these settings aligned with libgit2's bundled PCRE2 configuration.
+    cfg.define("GIT_REGEX_BUILTIN", "1")
+        .include(libgit2_root.join("deps/pcre2"))
+        .define("PCRE2_STATIC", None)
+        .define("PCRE2_EXPORT", Some(""))
+        .define("PCRE2_EXP_DECL", Some(""))
+        .define("PCRE2_EXP_DEFN", Some(""))
+        .define("PCRE2_CODE_UNIT_WIDTH", Some("8"))
+        .define("SUPPORT_PCRE2_8", Some("1"))
+        .define("SUPPORT_UNICODE", Some("1"))
+        .define("LINK_SIZE", Some("2"))
+        .define("HEAP_LIMIT", Some("20000000"))
+        .define("MATCH_LIMIT", Some("10000000"))
+        .define("MATCH_LIMIT_DEPTH", Some("MATCH_LIMIT"))
+        .define("MAX_VARLOOKBEHIND", Some("255"))
+        .define("NEWLINE_DEFAULT", Some("2"))
+        .define("PARENS_NEST_LIMIT", Some("250"))
+        .define("MAX_NAME_SIZE", Some("128"))
+        .define("MAX_NAME_COUNT", Some("10000"));
+    add_pcre2_files(&mut cfg, &libgit2_root);
+
+    cfg.file(libgit2_root.join("src/util/allocators/failalloc.c"));
+    cfg.file(libgit2_root.join("src/util/allocators/stdalloc.c"));
+
+    if windows {
+        if target.contains("msvc") {
+            cfg.define("_CRT_SECURE_NO_DEPRECATE", None);
+            cfg.define("_CRT_SECURE_NO_WARNINGS", None);
+        }
+        add_c_files(&mut cfg, libgit2_root.join("src/util/win32"));
+        cfg.define("STRSAFE_NO_DEPRECATE", None);
+        cfg.define("WIN32", None);
+        cfg.define("_WIN32_WINNT", Some("0x0600"));
+
+        // libgit2's build system claims that forks like mingw-w64 of MinGW
+        // still want this define to use C99 stdio functions automatically.
+        // Apparently libgit2 breaks at runtime if this isn't here? Who knows!
+        if target.contains("gnu") {
+            cfg.define("__USE_MINGW_ANSI_STDIO", "1");
+        }
+    } else {
+        add_c_files(&mut cfg, libgit2_root.join("src/util/unix"));
+        cfg.flag("-fvisibility=hidden");
+    }
+    if target.contains("solaris") || target.contains("illumos") {
+        cfg.define("_POSIX_C_SOURCE", "200112L");
+        cfg.define("__EXTENSIONS__", None);
+    }
+
+    let mut features = String::new();
+
+    features.push_str("#ifndef INCLUDE_features_h\n");
+    features.push_str("#define INCLUDE_features_h\n");
+    features.push_str("#define GIT_THREADS 1\n");
+    features.push_str("#define GIT_TRACE 1\n");
+    features.push_str("#define GIT_HTTPPARSER_BUILTIN 1\n");
+
+    if !target.contains("android") {
+        features.push_str("#define GIT_USE_NSEC 1\n");
+    }
+
+    if windows {
+        features.push_str("#define GIT_IO_WSAPOLL 1\n");
+    } else {
+        // Should we fallback to `select` as more systems have that?
+        features.push_str("#define GIT_IO_POLL 1\n");
+        features.push_str("#define GIT_IO_SELECT 1\n");
+    }
+
+    if target.contains("apple") {
+        features.push_str("#define GIT_USE_STAT_MTIMESPEC 1\n");
+    } else {
+        features.push_str("#define GIT_USE_STAT_MTIM 1\n");
+    }
+
+    if env::var("CARGO_CFG_TARGET_POINTER_WIDTH").unwrap() == "32" {
+        features.push_str("#define GIT_ARCH_32 1\n");
+    } else {
+        features.push_str("#define GIT_ARCH_64 1\n");
+    }
+
+    if ssh {
+        if let Some(path) = env::var_os("DEP_SSH2_INCLUDE") {
+            cfg.include(path);
+        }
+        features.push_str("#define GIT_SSH 1\n");
+        features.push_str("#define GIT_SSH_LIBSSH2 1\n");
+        features.push_str("#define GIT_SSH_LIBSSH2_MEMORY_CREDENTIALS 1\n");
+    }
+    if https {
+        features.push_str("#define GIT_HTTPS 1\n");
+
+        if windows {
+            features.push_str("#define GIT_WINHTTP 1\n");
+        } else if target.contains("apple") {
+            features.push_str("#define GIT_SECURE_TRANSPORT 1\n");
+        } else {
+            features.push_str("#define GIT_OPENSSL 1\n");
+            if let Some(path) = env::var_os("DEP_OPENSSL_INCLUDE") {
+                cfg.include(path);
+            }
+        }
+    }
+
+    // Use the CollisionDetection SHA1 implementation.
+    features.push_str("#define GIT_SHA1_COLLISIONDETECT 1\n");
+    cfg.define("SHA1DC_NO_STANDARD_INCLUDES", "1");
+    cfg.define("SHA1DC_CUSTOM_INCLUDE_SHA1_C", "\"common.h\"");
+    cfg.define("SHA1DC_CUSTOM_INCLUDE_UBC_CHECK_C", "\"common.h\"");
+    cfg.file(libgit2_root.join("src/util/hash/collisiondetect.c"));
+    cfg.file(libgit2_root.join("src/util/hash/sha1dc/sha1.c"));
+    cfg.file(libgit2_root.join("src/util/hash/sha1dc/ubc_check.c"));
+
+    if https {
+        if windows {
+            features.push_str("#define GIT_SHA256_WIN32 1\n");
+            cfg.file(libgit2_root.join("src/util/hash/win32.c"));
+        } else if target.contains("apple") {
+            features.push_str("#define GIT_SHA256_COMMON_CRYPTO 1\n");
+            cfg.file(libgit2_root.join("src/util/hash/common_crypto.c"));
+        } else {
+            features.push_str("#define GIT_SHA256_OPENSSL 1\n");
+            cfg.file(libgit2_root.join("src/util/hash/openssl.c"));
+        }
+    } else {
+        features.push_str("#define GIT_SHA256_BUILTIN 1\n");
+        cfg.file(libgit2_root.join("src/util/hash/builtin.c"));
+        cfg.file(libgit2_root.join("src/util/hash/rfc6234/sha224-256.c"));
+    }
+
+    if let Some(path) = env::var_os("DEP_Z_INCLUDE").or_else(|| {
+        env::var_os("AGENA_ZIG_SYSROOT")
+            .map(|sysroot| PathBuf::from(sysroot).join("usr/include").into_os_string())
+    }) {
+        cfg.include(path);
+    }
+
+    if target.contains("apple") {
+        features.push_str("#define GIT_USE_ICONV 1\n");
+    }
+
+    features.push_str("#endif\n");
+    fs::write(include.join("git2_features.h"), features).unwrap();
+
+    cfg.compile("git2");
+
+    println!("cargo:root={}", dst.display());
+
+    if target.contains("windows") {
+        println!("cargo:rustc-link-lib=winhttp");
+        println!("cargo:rustc-link-lib=rpcrt4");
+        println!("cargo:rustc-link-lib=ole32");
+        println!("cargo:rustc-link-lib=crypt32");
+        println!("cargo:rustc-link-lib=secur32");
+        println!("cargo:rustc-link-lib=advapi32");
+    }
+
+    if target.contains("apple") {
+        println!("cargo:rustc-link-lib=iconv");
+        println!("cargo:rustc-link-lib=framework=Security");
+        println!("cargo:rustc-link-lib=framework=CoreFoundation");
+    }
+
+    println!(
+        "cargo:rerun-if-changed={}",
+        libgit2_root.join("include").display()
+    );
+    println!(
+        "cargo:rerun-if-changed={}",
+        libgit2_root.join("src").display()
+    );
+    println!(
+        "cargo:rerun-if-changed={}",
+        libgit2_root.join("deps").display()
+    );
+}
+
+fn cp_r(from: impl AsRef<Path>, to: impl AsRef<Path>) {
+    for e in from.as_ref().read_dir().unwrap() {
+        let e = e.unwrap();
+        let from = e.path();
+        let to = to.as_ref().join(e.file_name());
+        if e.file_type().unwrap().is_dir() {
+            fs::create_dir_all(&to).unwrap();
+            cp_r(&from, &to);
+        } else {
+            println!("{} => {}", from.display(), to.display());
+            fs::copy(&from, &to).unwrap();
+        }
+    }
+}
+
+fn add_c_files(build: &mut cc::Build, path: impl AsRef<Path>) {
+    let path = path.as_ref();
+    if !path.exists() {
+        panic!("Path {} does not exist", path.display());
+    }
+    // sort the C files to ensure a deterministic build for reproducible builds
+    let dir = path.read_dir().unwrap();
+    let mut paths = dir.collect::<io::Result<Vec<_>>>().unwrap();
+    paths.sort_by_key(|e| e.path());
+
+    for e in paths {
+        let path = e.path();
+        if e.file_type().unwrap().is_dir() {
+            // skip dirs for now
+        } else if path.extension().and_then(|s| s.to_str()) == Some("c") {
+            build.file(&path);
+        }
+    }
+}
+
+fn add_pcre2_files(build: &mut cc::Build, libgit2_root: &Path) {
+    // Keep this list in sync with libgit2's PCRE2_SOURCES:
+    // https://github.com/libgit2/libgit2/blob/f7a4071c766ceea3915415e22134cbe3e581c420/deps/pcre2/CMakeLists.txt#L65-L96
+    let root = libgit2_root.join("deps/pcre2");
+    for file in &[
+        "pcre2_auto_possess.c",
+        "pcre2_chartables.c",
+        "pcre2_chkdint.c",
+        "pcre2_compile.c",
+        "pcre2_compile_cgroup.c",
+        "pcre2_compile_class.c",
+        "pcre2_config.c",
+        "pcre2_context.c",
+        "pcre2_convert.c",
+        "pcre2_dfa_match.c",
+        "pcre2_error.c",
+        "pcre2_extuni.c",
+        "pcre2_find_bracket.c",
+        "pcre2_maketables.c",
+        "pcre2_match.c",
+        "pcre2_match_data.c",
+        "pcre2_match_next.c",
+        "pcre2_newline.c",
+        "pcre2_ord2utf.c",
+        "pcre2_pattern_info.c",
+        "pcre2_script_run.c",
+        "pcre2_serialize.c",
+        "pcre2_string_utils.c",
+        "pcre2_study.c",
+        "pcre2_substitute.c",
+        "pcre2_substring.c",
+        "pcre2_tables.c",
+        "pcre2_ucd.c",
+        "pcre2_valid_utf.c",
+        "pcre2_xclass.c",
+    ] {
+        build.file(root.join(file));
+    }
+}

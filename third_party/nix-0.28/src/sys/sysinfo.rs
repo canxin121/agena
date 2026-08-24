@@ -11,9 +11,15 @@ use crate::Result;
 pub struct SysInfo(libc::sysinfo);
 
 // The fields are c_ulong on 32-bit linux, u64 on 64-bit linux; x32's ulong is u32
-#[cfg(all(target_arch = "x86_64", target_pointer_width = "32"))]
+#[cfg(all(
+    any(target_arch = "aarch64", target_arch = "x86_64"),
+    target_pointer_width = "32"
+))]
 type mem_blocks_t = u64;
-#[cfg(not(all(target_arch = "x86_64", target_pointer_width = "32")))]
+#[cfg(not(all(
+    any(target_arch = "aarch64", target_arch = "x86_64"),
+    target_pointer_width = "32"
+)))]
 type mem_blocks_t = libc::c_ulong;
 
 impl SysInfo {

@@ -23,42 +23,15 @@ VERSION="$(read_version)"
   exit 1
 }
 command -v cross >/dev/null 2>&1 || { echo "ERROR: cross is required" >&2; exit 1; }
+[[ "$ARTIFACT_KIND" == "backend" ]] || {
+  echo "ERROR: only full Agena backend artifacts are supported: $ARTIFACT_KIND" >&2
+  exit 2
+}
 
-case "$TARGET_TRIPLE" in
-  i586-unknown-linux-*)
-    export RUSTFLAGS="${RUSTFLAGS:-} -C target-feature=+sse,+sse2"
-    ;;
-  mips-unknown-linux-gnu|mipsel-unknown-linux-gnu)
-    # Large Agena codegen can otherwise reach LLVM's integrated assembler with
-    # an out-of-range PC16 branch. Force the MIPS long-branch expansion pass.
-    export RUSTFLAGS="${RUSTFLAGS:-} -C llvm-args=--force-mips-long-branch"
-    ;;
-  mips64-unknown-linux-gnuabi64|mips64el-unknown-linux-gnuabi64)
-    # MIPS n64 PLT entries must remain in the signed 32-bit addressable range.
-    # The GNU linker otherwise places non-PIE executables above 4 GiB by
-    # default, which makes .got.plt unusable for the n64 PLT sequence.
-    export RUSTFLAGS="${RUSTFLAGS:-} -C relocation-model=static -C code-model=large -C llvm-args=--force-mips-long-branch -C link-arg=-Wl,-Ttext-segment=0x10000000"
-    ;;
-  sparcv9-sun-solaris|x86_64-pc-solaris)
-    # The pinned cross Solaris 10 images provide /compat.o to map the XPG7
-    # symbols used by modern Rust std back to the Solaris 10 ABI.
-    export RUSTFLAGS="${RUSTFLAGS:-} -C link-arg=/compat.o"
-    ;;
-  aarch64_be-unknown-linux-gnu)
-    # Rustix's linux_raw backend does not support big-endian AArch64. Force
-    # every transitive Rustix version onto its libc backend.
-    export RUSTFLAGS="${RUSTFLAGS:-} --cfg rustix_use_libc"
-    ;;
-esac
 
 PACKAGE="agena"
 BINARY_BASENAME="agena"
 ARCHIVE_PREFIX="agena-backend"
-if [[ "$ARTIFACT_KIND" == "web-runtime" ]]; then
-  PACKAGE="agena-web-runtime"
-  BINARY_BASENAME="agena-web-runtime"
-  ARCHIVE_PREFIX="agena-web-runtime"
-fi
 
 build_args=(
   build
@@ -87,18 +60,6 @@ case "$TARGET_TRIPLE" in
     [[ -f "$OUTPUT_DIR/${BINARY_BASENAME}.exe" ]] || { echo "ERROR: missing $OUTPUT_DIR/${BINARY_BASENAME}.exe" >&2; exit 1; }
     cp "$OUTPUT_DIR/${BINARY_BASENAME}.exe" "$STAGE_DIR/bin/${BINARY_BASENAME}.exe"
     archive_ext="zip"
-    ;;
-  wasm32-unknown-emscripten)
-    found=0
-    for suffix in js wasm data worker.js; do
-      candidate="$OUTPUT_DIR/${BINARY_BASENAME}.$suffix"
-      if [[ -f "$candidate" ]]; then
-        cp "$candidate" "$STAGE_DIR/bin/"
-        found=1
-      fi
-    done
-    [[ "$found" == 1 ]] || { echo "ERROR: no Emscripten Agena outputs found in $OUTPUT_DIR" >&2; exit 1; }
-    archive_ext="tar.gz"
     ;;
   *)
     [[ -f "$OUTPUT_DIR/$BINARY_BASENAME" ]] || { echo "ERROR: missing $OUTPUT_DIR/$BINARY_BASENAME" >&2; exit 1; }

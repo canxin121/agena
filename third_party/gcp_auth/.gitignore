@@ -1,0 +1,6 @@
+target
+.DS_Store
+
+# Intellij project files
+*.iml
+.idea

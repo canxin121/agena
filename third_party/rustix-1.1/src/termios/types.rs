@@ -362,7 +362,7 @@ bitflags! {
 
         /// `CRDLY`
         #[cfg(not(any(bsd, solarish, target_os = "redox")))]
-        const CRDLY = c::CRDLY;
+        const CRDLY = c::CRDLY as types::tcflag_t;
 
         /// `CR0`
         #[cfg(not(any(bsd, solarish, target_os = "fuchsia", target_os = "redox")))]
@@ -370,7 +370,7 @@ bitflags! {
 
         /// `CR1`
         #[cfg(not(any(
-            target_env = "musl",
+            any(target_env = "musl", target_env = "ohos"),
             bsd,
             solarish,
             target_os = "emscripten",
@@ -381,7 +381,7 @@ bitflags! {
 
         /// `CR2`
         #[cfg(not(any(
-            target_env = "musl",
+            any(target_env = "musl", target_env = "ohos"),
             bsd,
             solarish,
             target_os = "emscripten",
@@ -392,7 +392,7 @@ bitflags! {
 
         /// `CR3`
         #[cfg(not(any(
-            target_env = "musl",
+            any(target_env = "musl", target_env = "ohos"),
             bsd,
             solarish,
             target_os = "emscripten",
@@ -422,7 +422,7 @@ bitflags! {
 
         /// `TAB1`
         #[cfg(not(any(
-            target_env = "musl",
+            any(target_env = "musl", target_env = "ohos"),
             bsd,
             solarish,
             target_os = "emscripten",
@@ -433,7 +433,7 @@ bitflags! {
 
         /// `TAB2`
         #[cfg(not(any(
-            target_env = "musl",
+            any(target_env = "musl", target_env = "ohos"),
             bsd,
             solarish,
             target_os = "emscripten",
@@ -444,7 +444,7 @@ bitflags! {
 
         /// `TAB3`
         #[cfg(not(any(
-            target_env = "musl",
+            any(target_env = "musl", target_env = "ohos"),
             bsd,
             solarish,
             target_os = "emscripten",
@@ -473,7 +473,7 @@ bitflags! {
 
         /// `BS1`
         #[cfg(not(any(
-            target_env = "musl",
+            any(target_env = "musl", target_env = "ohos"),
             bsd,
             solarish,
             target_os = "emscripten",
@@ -484,7 +484,7 @@ bitflags! {
 
         /// `FFDLY`
         #[cfg(not(any(bsd, solarish, target_os = "redox")))]
-        const FFDLY = c::FFDLY;
+        const FFDLY = c::FFDLY as types::tcflag_t;
 
         /// `FF0`
         #[cfg(not(any(bsd, solarish, target_os = "fuchsia", target_os = "redox")))]
@@ -492,7 +492,7 @@ bitflags! {
 
         /// `FF1`
         #[cfg(not(any(
-            target_env = "musl",
+            any(target_env = "musl", target_env = "ohos"),
             bsd,
             solarish,
             target_os = "emscripten",
@@ -503,7 +503,7 @@ bitflags! {
 
         /// `VTDLY`
         #[cfg(not(any(bsd, solarish, target_os = "redox")))]
-        const VTDLY = c::VTDLY;
+        const VTDLY = c::VTDLY as types::tcflag_t;
 
         /// `VT0`
         #[cfg(not(any(bsd, solarish, target_os = "fuchsia", target_os = "redox")))]
@@ -511,7 +511,7 @@ bitflags! {
 
         /// `VT1`
         #[cfg(not(any(
-            target_env = "musl",
+            any(target_env = "musl", target_env = "ohos"),
             bsd,
             solarish,
             target_os = "emscripten",
@@ -584,7 +584,16 @@ bitflags! {
             target_os = "nto",
             target_os = "redox",
         )))]
-        const CMSPAR = c::CMSPAR;
+        const CMSPAR = {
+            #[cfg(target_env = "uclibc")]
+            {
+                0x4000_0000
+            }
+            #[cfg(not(target_env = "uclibc"))]
+            {
+                c::CMSPAR
+            }
+        };
 
         /// <https://docs.rs/bitflags/*/bitflags/#externally-defined-flags>
         const _ = !0;
@@ -1550,7 +1559,11 @@ mod tests {
                 check_renamed_struct_renamed_field!(Termios, termios, input_speed, c_ispeed);
                 check_renamed_struct_renamed_field!(Termios, termios, output_speed, c_ospeed);
             }
-            #[cfg(any(target_env = "musl", target_os = "fuchsia"))]
+            #[cfg(any(
+                target_env = "musl",
+                target_env = "ohos",
+                target_os = "fuchsia"
+            ))]
             {
                 check_renamed_struct_renamed_field!(Termios, termios, input_speed, __c_ispeed);
                 check_renamed_struct_renamed_field!(Termios, termios, output_speed, __c_ospeed);

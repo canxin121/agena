@@ -8,6 +8,7 @@ SERVER_TARGET_DIR="$REPO_ROOT/target"
 RELEASE_DIR="$REPO_ROOT/artifacts/agena"
 WEB_PROJECT_DIR="$REPO_ROOT/packages/agena-web"
 WEB_DIST_DIR="$WEB_PROJECT_DIR/dist"
+export RUSTUP_TOOLCHAIN="${AGENA_STABLE_TOOLCHAIN:-1.97.0}"
 
 detect_host_triple() {
   if rustc --print host-tuple >/dev/null 2>&1; then
@@ -23,7 +24,14 @@ read_version() {
 }
 
 TARGET_TRIPLE="${1:-$(detect_host_triple)}"
+BUILD_STD="${2:-false}"
+TARGET_RUSTFLAGS="${3:-}"
+COMBINED_RUSTFLAGS="${RUSTFLAGS:-}"
+if [[ -n "$TARGET_RUSTFLAGS" ]]; then
+  COMBINED_RUSTFLAGS="${COMBINED_RUSTFLAGS:+$COMBINED_RUSTFLAGS }$TARGET_RUSTFLAGS"
+fi
 VERSION="$(read_version)"
+
 
 if [[ -z "$VERSION" ]]; then
   echo "ERROR: failed to read agena version from $SERVER_MANIFEST" >&2
@@ -58,12 +66,21 @@ if [[ ! -f "$WEB_DIST_DIR/index.html" ]]; then
   exit 1
 fi
 
-cargo build \
-  --manifest-path "$SERVER_MANIFEST" \
-  --release \
-  --target "$TARGET_TRIPLE" \
-  --locked \
+build_args=(
+  build
+  --manifest-path "$SERVER_MANIFEST"
+  -p agena
+  --release
+  --target "$TARGET_TRIPLE"
+  --locked
   --target-dir "$SERVER_TARGET_DIR"
+)
+if [[ "$BUILD_STD" == true ]]; then
+  RUSTFLAGS="$COMBINED_RUSTFLAGS" \
+    bash "$REPO_ROOT/scripts/ci/run-build-std-cargo.sh" "$TARGET_TRIPLE" "${build_args[@]}"
+else
+  RUSTFLAGS="$COMBINED_RUSTFLAGS" cargo "${build_args[@]}"
+fi
 
 BIN_PATH="$SERVER_TARGET_DIR/$TARGET_TRIPLE/release/agena$EXT"
 if [[ ! -f "$BIN_PATH" ]]; then

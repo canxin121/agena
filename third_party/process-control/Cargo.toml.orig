@@ -1,0 +1,36 @@
+[package]
+name = "process_control"
+version = "5.2.0"
+authors = ["dylni"]
+edition = "2021"
+rust-version = "1.83.0"
+description = """
+Ergonomically run processes with limits
+"""
+readme = "README.md"
+repository = "https://github.com/dylni/process_control"
+license = "MIT OR Apache-2.0"
+keywords = ["kill", "process", "terminate", "timeout", "wait"]
+categories = ["concurrency", "os"]
+exclude = [".*", "tests.rs", "/rustfmt.toml", "/src/bin", "/tests"]
+
+[package.metadata.docs.rs]
+all-features = true
+rustc-args = ["--cfg", "process_control_docs_rs"]
+rustdoc-args = ["--cfg", "process_control_docs_rs"]
+
+[dependencies]
+attr_alias = "0.1.0"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2.120"
+
+[target.'cfg(all(unix, any(target_os = "cygwin", target_os = "fuchsia", target_os = "openbsd", target_os = "redox", target_os = "tvos")))'.dependencies]
+parking_lot = { version = "0.12", optional = true }
+signal-hook = "0.3"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_JobObjects", "Win32_System_IO", "Win32_System_Threading"] }
+
+[target.'cfg(windows)'.dev-dependencies]
+rustversion = "1.0"

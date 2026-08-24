@@ -8,10 +8,16 @@ description = "AWS credential-chain leaf adapter for Amazon Bedrock"
 
 [dependencies]
 agena-failure = { workspace = true }
+aws-config = { workspace = true }
 aws-credential-types = { workspace = true }
+aws-smithy-http-client = { workspace = true }
+aws-smithy-runtime-api = { workspace = true }
+base64 = { workspace = true }
 thiserror = { workspace = true }
+webpki-root-certs = { workspace = true }
 
 [lints]
 workspace = true
-[target.'cfg(not(any(all(target_arch = "aarch64", target_endian = "big"), all(target_arch = "x86", target_os = "windows", target_env = "gnu"))))'.dependencies]
-aws-config = { workspace = true, default-features = true }
+
+[dev-dependencies]
+reqwest = { workspace = true, features = ["rustls"] }

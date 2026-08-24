@@ -74,7 +74,7 @@ optional = true
 version = "0.2.8"
 
 [dependencies.libloading]
-version = "0.7.3"
+version = "0.8.9"
 
 [dependencies.lock_api]
 version = "0.4.6"

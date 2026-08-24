@@ -7,11 +7,11 @@
 pub(crate) use libc::*;
 
 /// `PROC_SUPER_MAGIC`—The magic number for the procfs filesystem.
-#[cfg(all(linux_kernel, target_env = "musl"))]
+#[cfg(all(linux_kernel, any(target_env = "musl", target_env = "ohos")))]
 pub(crate) const PROC_SUPER_MAGIC: u32 = 0x0000_9fa0;
 
 /// `NFS_SUPER_MAGIC`—The magic number for the NFS filesystem.
-#[cfg(all(linux_kernel, target_env = "musl"))]
+#[cfg(all(linux_kernel, any(target_env = "musl", target_env = "ohos")))]
 pub(crate) const NFS_SUPER_MAGIC: u32 = 0x0000_6969;
 
 #[cfg(feature = "process")]
@@ -65,6 +65,62 @@ pub(crate) const ETH_P_MAP: c_int = linux_raw_sys::if_ether::ETH_P_MAP as _;
 pub(crate) const ETH_P_MCTP: c_int = linux_raw_sys::if_ether::ETH_P_MCTP as _;
 #[cfg(all(linux_raw_dep, feature = "mount"))]
 pub(crate) const MS_NOSYMFOLLOW: c_ulong = linux_raw_sys::general::MS_NOSYMFOLLOW as _;
+
+// OpenHarmony's musl headers use the Linux statx ABI but do not expose the
+// statx request and attribute constants through libc. Keep these values in
+// the libc backend so rustix can provide the same statx API on OHOS without
+// disabling the real syscall or inventing a target-specific fallback.
+#[cfg(all(target_os = "linux", target_env = "ohos"))]
+pub(crate) const STATX_TYPE: u32 = 0x0000_0001;
+#[cfg(all(target_os = "linux", target_env = "ohos"))]
+pub(crate) const STATX_MODE: u32 = 0x0000_0002;
+#[cfg(all(target_os = "linux", target_env = "ohos"))]
+pub(crate) const STATX_NLINK: u32 = 0x0000_0004;
+#[cfg(all(target_os = "linux", target_env = "ohos"))]
+pub(crate) const STATX_UID: u32 = 0x0000_0008;
+#[cfg(all(target_os = "linux", target_env = "ohos"))]
+pub(crate) const STATX_GID: u32 = 0x0000_0010;
+#[cfg(all(target_os = "linux", target_env = "ohos"))]
+pub(crate) const STATX_ATIME: u32 = 0x0000_0020;
+#[cfg(all(target_os = "linux", target_env = "ohos"))]
+pub(crate) const STATX_MTIME: u32 = 0x0000_0040;
+#[cfg(all(target_os = "linux", target_env = "ohos"))]
+pub(crate) const STATX_CTIME: u32 = 0x0000_0080;
+#[cfg(all(target_os = "linux", target_env = "ohos"))]
+pub(crate) const STATX_INO: u32 = 0x0000_0100;
+#[cfg(all(target_os = "linux", target_env = "ohos"))]
+pub(crate) const STATX_SIZE: u32 = 0x0000_0200;
+#[cfg(all(target_os = "linux", target_env = "ohos"))]
+pub(crate) const STATX_BLOCKS: u32 = 0x0000_0400;
+#[cfg(all(target_os = "linux", target_env = "ohos"))]
+pub(crate) const STATX_BASIC_STATS: u32 = 0x0000_07ff;
+#[cfg(all(target_os = "linux", target_env = "ohos"))]
+pub(crate) const STATX_BTIME: u32 = 0x0000_0800;
+#[cfg(all(target_os = "linux", target_env = "ohos"))]
+pub(crate) const STATX_MNT_ID: u32 = 0x0000_1000;
+#[cfg(all(target_os = "linux", target_env = "ohos"))]
+pub(crate) const STATX_DIOALIGN: u32 = 0x0000_2000;
+#[cfg(all(target_os = "linux", target_env = "ohos"))]
+pub(crate) const STATX_ALL: u32 = 0x0000_0fff;
+
+#[cfg(all(target_os = "linux", target_env = "ohos"))]
+pub(crate) const STATX_ATTR_COMPRESSED: u64 = 0x0000_0004;
+#[cfg(all(target_os = "linux", target_env = "ohos"))]
+pub(crate) const STATX_ATTR_IMMUTABLE: u64 = 0x0000_0010;
+#[cfg(all(target_os = "linux", target_env = "ohos"))]
+pub(crate) const STATX_ATTR_APPEND: u64 = 0x0000_0020;
+#[cfg(all(target_os = "linux", target_env = "ohos"))]
+pub(crate) const STATX_ATTR_NODUMP: u64 = 0x0000_0040;
+#[cfg(all(target_os = "linux", target_env = "ohos"))]
+pub(crate) const STATX_ATTR_ENCRYPTED: u64 = 0x0000_0800;
+#[cfg(all(target_os = "linux", target_env = "ohos"))]
+pub(crate) const STATX_ATTR_AUTOMOUNT: u64 = 0x0000_1000;
+#[cfg(all(target_os = "linux", target_env = "ohos"))]
+pub(crate) const STATX_ATTR_MOUNT_ROOT: u64 = 0x0000_2000;
+#[cfg(all(target_os = "linux", target_env = "ohos"))]
+pub(crate) const STATX_ATTR_VERITY: u64 = 0x0010_0000;
+#[cfg(all(target_os = "linux", target_env = "ohos"))]
+pub(crate) const STATX_ATTR_DAX: u64 = 0x0020_0000;
 
 // TODO: Upstream these.
 #[cfg(all(linux_raw_dep, feature = "termios"))]
@@ -165,7 +221,13 @@ pub(super) use {lstat64 as lstat, stat64 as stat};
     target_os = "emscripten"
 ))]
 pub(super) use {pread64 as pread, pwrite64 as pwrite};
-#[cfg(any(target_os = "linux", target_os = "hurd", target_os = "emscripten"))]
+#[cfg(all(target_os = "linux", target_env = "uclibc"))]
+pub(super) use {preadv, pwritev};
+#[cfg(any(
+    all(target_os = "linux", not(target_env = "uclibc")),
+    target_os = "hurd",
+    target_os = "emscripten"
+))]
 pub(super) use {preadv64 as preadv, pwritev64 as pwritev};
 
 #[cfg(all(target_os = "linux", any(target_env = "gnu", target_env = "uclibc")))]
@@ -188,7 +250,7 @@ pub(super) unsafe fn prlimit(
     prlimit64(pid, resource, new_limit, old_limit)
 }
 
-#[cfg(all(target_os = "linux", target_env = "musl"))]
+#[cfg(all(target_os = "linux", any(target_env = "musl", target_env = "ohos")))]
 pub(super) unsafe fn prlimit(
     pid: pid_t,
     resource: c_int,
@@ -482,7 +544,10 @@ pub(super) use readwrite_pv64v2::{preadv64v2 as preadv2, pwritev64v2 as pwritev2
     not(any(
         target_os = "emscripten",
         target_env = "gnu",
-        all(target_arch = "loongarch64", target_env = "musl")
+        all(
+            target_arch = "loongarch64",
+            any(target_env = "musl", target_env = "ohos")
+        )
     ))
 ))]
 mod statx_flags {
@@ -506,7 +571,10 @@ mod statx_flags {
         target_os = "android",
         target_os = "emscripten",
         target_env = "gnu",
-        all(target_arch = "loongarch64", target_env = "musl")
+        all(
+            target_arch = "loongarch64",
+            any(target_env = "musl", target_env = "ohos")
+        )
     ))
 ))]
 pub(crate) use statx_flags::*;

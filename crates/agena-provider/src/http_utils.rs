@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, HashMap};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::Ordering;
 
+use portable_atomic::AtomicU64;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 

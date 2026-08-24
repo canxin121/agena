@@ -2,7 +2,6 @@
 resolver = "3"
 members = [
     "apps/agena",
-    "apps/agena-web-runtime",
     "crates/agena-tui-components",
     "crates/agena-tui",
     "crates/agena-tui-media",
@@ -58,7 +57,6 @@ members = [
     "crates/agena-macros",
     "crates/agena-macro-core",
     "crates/agena-plugin-sdk",
-    "crates/agena-portable-core",
     "crates/agena-rollout",
     "crates/agena-scheduler",
     "crates/agena-skills",
@@ -212,15 +210,18 @@ scraper = "0.27.0"
 spider = { version = "2.52.9", default-features = false, features = ["sync", "cookies", "encoding", "headers", "time"] }
 sea-orm = { version = "1.1.20", default-features = false, features = ["sqlx-sqlite", "runtime-tokio-rustls", "macros", "with-json"] }
 url = "2.5.8"
+webpki-root-certs = "1.0.9"
 
 # additional shared crates
 argon2 = "0.5.3"
 arboard = "3.6.1"
-aws-config = "1.9.0"
+aws-config = { version = "1.10.0", default-features = false, features = ["rt-tokio", "credentials-process", "sso"] }
 aws-credential-types = "1.3.0"
 aws-sigv4 = { version = "1.5.1", default-features = false, features = ["sign-http", "http1"] }
 aws-smithy-eventstream = "0.61.1"
 aws-smithy-http = "0.64.0"
+aws-smithy-http-client = { version = "1.2.0", default-features = false, features = ["rustls-ring"] }
+aws-smithy-runtime-api = "1.13.0"
 aws-smithy-types = "1.6.1"
 axum-extra = "0.12.6"
 bitflags = "2.13.0"
@@ -232,7 +233,7 @@ content_inspector = "0.2.4"
 derive_more = "2.1.1"
 fluent-templates = "0.14.0"
 futures-core = "0.3.32"
-gcp_auth = "0.12.7"
+gcp_auth = { version = "0.12.7", default-features = false, features = ["ring", "webpki-roots"] }
 getrandom = "0.4.3"
 governor = "0.10.4"
 globset = "0.4.18"
@@ -384,10 +385,36 @@ tower-http = { path = "third_party/tower-http" }
 tantivy = { path = "third_party/tantivy" }
 rmcp = { path = "third_party/rmcp" }
 nix = { path = "third_party/nix-0.28" }
+nix-0-31 = { package = "nix", path = "third_party/nix-0.31" }
 prometheus = { path = "third_party/prometheus" }
+portable-pty = { path = "third_party/portable-pty" }
+process-wrap = { path = "third_party/process-wrap" }
+process_control = { path = "third_party/process-control" }
 fs4 = { path = "third_party/fs4" }
+getrandom-0-3 = { package = "getrandom", path = "third_party/getrandom-0.3" }
+getrandom = { path = "third_party/getrandom-0.4" }
 abi_stable = { path = "third_party/abi_stable" }
+blake3 = { path = "third_party/blake3" }
+constant_time_eq = { path = "third_party/constant_time_eq" }
+cpufeatures = { path = "third_party/cpufeatures" }
+compact_str = { path = "third_party/compact_str-0.8", version = "0.8.2" }
+compact_str_09 = { package = "compact_str", path = "third_party/compact_str-0.9", version = "0.9.1" }
+cpufeatures-0-3 = { package = "cpufeatures", path = "third_party/cpufeatures-0.3" }
+libgit2-sys = { path = "third_party/libgit2-sys" }
+linux-raw-sys = { path = "third_party/linux-raw-sys-0.12" }
+quanta = { path = "third_party/quanta" }
+radium = { path = "third_party/radium" }
+ring = { path = "third_party/ring" }
+aws-smithy-http-client = { path = "third_party/aws-smithy-http-client" }
+gcp_auth = { path = "third_party/gcp_auth" }
+serial2 = { path = "third_party/serial2" }
 tree-sitter = { path = "third_party/tree-sitter" }
+tokio = { path = "third_party/tokio" }
+winapi = { path = "third_party/winapi-0.3" }
+windows-sys-0-52 = { package = "windows-sys", path = "third_party/windows-sys-0.52.0" }
+windows-sys-0-60 = { package = "windows-sys", path = "third_party/windows-sys-0.60.2" }
+windows-sys-0-61 = { package = "windows-sys", path = "third_party/windows-sys-0.61.2" }
+xxhash-rust = { path = "third_party/xxhash-rust" }
 spider_fingerprint = { path = "third_party/spider_fingerprint" }
 # Agena performs response-bearing terminal queries while the TUI is running.
 # Upstream Crossterm 0.29 treats OSC replies as Alt-key input because its
@@ -408,3 +435,8 @@ ratex-unicode-font = { path = "third_party/ratex-unicode-font" }
 # input from Crossterm. This source patch keeps the query on the owning thread,
 # uses cancellable descriptor waits, and never mutates tmux configuration.
 ratatui-image = { path = "third_party/ratatui-image" }
+# The upstream bitvec alignment proof assumes align_of(T) == size_of(T), which
+# is false for wider scalar types under the m68k Linux ABI. Bitvec's pointer
+# code already uses the actual Rust alignment, so keep the ABI-correct proof
+# relaxation local until upstream accepts the portability fix.
+bitvec = { path = "third_party/bitvec" }

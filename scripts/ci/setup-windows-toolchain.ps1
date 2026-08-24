@@ -1,0 +1,712 @@
+Param(
+  [Parameter(Mandatory = $true)]
+  [string]$TargetTriple
+)
+
+$ErrorActionPreference = "Stop"
+
+function Install-VsComponents {
+  param(
+    [Parameter(Mandatory = $true)][string]$Installer,
+    [Parameter(Mandatory = $true)][string]$InstallPath,
+    [Parameter(Mandatory = $true)][string[]]$Components
+  )
+
+  # Invoke the native installer directly so PowerShell passes the installation
+  # path as one argv element.  Start-Process flattens an ArgumentList array
+  # into a command line before launching setup.exe; on hosted runners that
+  # turns `C:\Program Files\...` into the truncated `C:\Program` path.
+  $InstallerArgs = @("modify", "--installPath", $InstallPath)
+  foreach ($Component in $Components) {
+    $InstallerArgs += @("--add", $Component)
+  }
+  # A direct native invocation is synchronous, so no unsupported --wait flag
+  # or lossy Start-Process quoting is involved.
+  # Recommended dependencies include the official C/C++ headers and runtime
+  # support used by the selected MSVC ABI.  A component can be present in the
+  # image manifest while its payload is absent on a fresh hosted image, so
+  # request the recommended payload explicitly during the real installer
+  # modify operation.
+  $InstallerArgs += @("--includeRecommended", "--quiet", "--norestart", "--noUpdateInstaller")
+  & $Installer @InstallerArgs
+  $ExitCode = $LASTEXITCODE
+  if ($ExitCode -notin @(0, 3010)) {
+    throw "Visual Studio component installation failed with exit code $ExitCode`: $($Components -join ', ')"
+  }
+}
+
+function Set-EnvFromVsDevCmd {
+  param(
+    [Parameter(Mandatory = $true)][string]$Arch,
+    [Parameter(Mandatory = $true)][string]$HostArch,
+    [Parameter(Mandatory = $true)][string]$TargetTriple
+  )
+
+  $VsWhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+  if (-not (Test-Path $VsWhere)) {
+    throw "vswhere.exe not found at $VsWhere"
+  }
+  $Install = (& $VsWhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath).Trim()
+  if (-not $Install) {
+    throw "Visual Studio installation with VC tools not found"
+  }
+  $VsDevCmd = Join-Path $Install "Common7\Tools\VsDevCmd.bat"
+  if (-not (Test-Path $VsDevCmd)) {
+    throw "VsDevCmd.bat not found at $VsDevCmd"
+  }
+
+  # VsDevCmd selects the ARM64 environment for ARM64EC; the actual MSVC
+  # compiler/library directories remain the distinct arm64ec ABI below.
+  $VsDevArch = if ($Arch -eq "arm64ec") { "arm64" } else { $Arch }
+  $Args = @("-no_logo", "-arch=$VsDevArch", "-host_arch=$HostArch")
+  $ArgLine = ($Args -join " ")
+  $Output = & cmd.exe /s /c "`"$VsDevCmd`" $ArgLine >nul && set"
+  if ($LASTEXITCODE -ne 0) {
+    throw "VsDevCmd failed for target arch=$Arch host=$HostArch"
+  }
+  foreach ($Line in $Output) {
+    $Index = $Line.IndexOf("=")
+    if ($Index -le 0) { continue }
+    $Name = $Line.Substring(0, $Index)
+    $Value = $Line.Substring($Index + 1)
+    [Environment]::SetEnvironmentVariable($Name, $Value, "Process")
+  }
+
+  # VsDevCmd normally puts the target-specific MSVC compiler first on PATH.
+  # Keep that selection explicit: on hosted images the command can leave the
+  # host compiler (for example HostX64\x64) first even though
+  # VSCMD_ARG_TGT_ARCH reports the requested ARM target.  Using that compiler
+  # would silently compile with the wrong ABI and, in the ARM case, commonly
+  # leaves the target C headers unavailable to cc-rs.
+  $ToolsRoot = Join-Path $Install "VC\Tools\MSVC"
+  $ToolsVersion = if ($env:VCToolsVersion) { $env:VCToolsVersion.TrimEnd('\') } else { $null }
+  if (-not $ToolsVersion) {
+    $ToolsVersion = (Get-ChildItem -Path $ToolsRoot -Directory |
+      Sort-Object Name -Descending | Select-Object -First 1).Name
+  }
+  if (-not $ToolsVersion) {
+    throw "MSVC tools version not found under $ToolsRoot"
+  }
+  $VCToolsRoot = Join-Path $ToolsRoot $ToolsVersion
+  if (-not (Test-Path $VCToolsRoot)) {
+    $ToolsVersion = (Get-ChildItem -Path $ToolsRoot -Directory |
+      Sort-Object Name -Descending | Select-Object -First 1).Name
+    $VCToolsRoot = Join-Path $ToolsRoot $ToolsVersion
+  }
+  $HostToolArch = if ($HostArch -eq "arm64") { "HostARM64" } else { "HostX64" }
+
+  $VsInstaller = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\setup.exe"
+  if (-not (Test-Path $VsInstaller)) {
+    throw "Visual Studio installer not found at $VsInstaller"
+  }
+
+  if ($Arch -eq "arm64ec") {
+    function Find-Arm64EcToolRoot {
+      # ARM64EC is an official Visual Studio ABI, but hosted Windows images
+      # can expose it in a side-by-side VS installation/toolset different from
+      # the one selected by VsDevCmd. Search every real VS installation and
+      # every installed MSVC toolset for the matching compiler and libraries.
+      # Never accept an x64 compiler or ARM64 library: that would produce the
+      # wrong ABI.
+      $VsWherePath = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+      $InstallPaths = @($Install)
+      if (Test-Path $VsWherePath) {
+        $InstallPaths += & $VsWherePath -all -products * -property installationPath |
+          ForEach-Object { $_.Trim() } |
+          Where-Object { $_ }
+      }
+      $InstallPaths = @($InstallPaths | Sort-Object -Unique)
+      foreach ($InstallPath in $InstallPaths) {
+        $CandidateToolsRoot = Join-Path $InstallPath "VC\Tools\MSVC"
+        if (-not (Test-Path $CandidateToolsRoot)) { continue }
+        foreach ($Candidate in (Get-ChildItem -Path $CandidateToolsRoot -Directory -ErrorAction SilentlyContinue | Sort-Object Name -Descending)) {
+          $LibraryPath = Join-Path $Candidate.FullName "lib\arm64ec"
+          if (-not (Test-Path $LibraryPath)) {
+            continue
+          }
+          # Visual Studio's ARM64EC toolset uses the ARM64 cl.exe binary and
+          # selects the distinct ARM64EC ABI with /arm64EC.  Some older VS
+          # toolsets exposed a separate arm64ec directory, so accept either
+          # official layout but never accept an x64 compiler or ARM64 library.
+          foreach ($CandidateCompilerArch in @("arm64ec", "arm64")) {
+            $CompilerPath = Join-Path $Candidate.FullName "bin\$HostToolArch\$CandidateCompilerArch\cl.exe"
+            if ((Test-Path $CompilerPath) -and (Test-Path $LibraryPath)) {
+              return [pscustomobject]@{
+                InstallPath = $InstallPath
+                ToolsRoot = $Candidate.FullName
+                CompilerArch = $CandidateCompilerArch
+              }
+            }
+          }
+        }
+      }
+      return $null
+    }
+
+    $Arm64EcTool = Find-Arm64EcToolRoot
+    if (-not $Arm64EcTool) {
+      # ARM64EC is an optional, distinct MSVC ABI component.  Do not point an
+      # ARM64EC build at the ARM64 compiler or libraries: install Microsoft's
+      # official component when the hosted image omitted it.
+      Write-Host "Installing official Visual Studio ARM64EC MSVC component: Microsoft.VisualStudio.Component.VC.Tools.ARM64EC"
+      Install-VsComponents -Installer $VsInstaller -InstallPath $Install -Components @(
+        "Microsoft.VisualStudio.Workload.NativeDesktop",
+        "Microsoft.VisualStudio.Component.VC.Tools.ARM64EC",
+        "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
+        "Microsoft.VisualStudio.Component.VC.14.44.17.14.x86.x64",
+        "Microsoft.VisualStudio.Component.VC.CoreBuildTools"
+      )
+
+      # The installer may add a side-by-side toolset and returns before the
+      # files are visible. Wait for a complete compiler/library pair across
+      # all official VS installations instead of falling through to another
+      # architecture.
+      $Deadline = (Get-Date).AddMinutes(5)
+      do {
+        $Arm64EcTool = Find-Arm64EcToolRoot
+        if ($Arm64EcTool) {
+          break
+        }
+        Start-Sleep -Seconds 2
+      } while ((Get-Date) -lt $Deadline)
+    }
+    if (-not $Arm64EcTool) {
+      throw "MSVC ARM64EC component missing after official installation: no official VS installation contains bin\$HostToolArch\arm64ec-or-arm64\cl.exe and lib\arm64ec"
+    }
+    $Install = $Arm64EcTool.InstallPath
+    $ToolsRoot = Join-Path $Install "VC\Tools\MSVC"
+    $VCToolsRoot = $Arm64EcTool.ToolsRoot
+    $ToolsVersion = Split-Path $VCToolsRoot -Leaf
+    $env:VCToolsVersion = $ToolsVersion
+    $CompilerArch = $Arm64EcTool.CompilerArch
+  } else {
+    $CompilerArch = $Arch
+  }
+
+  if ($Arch -eq "arm") {
+    $ArmCompilerPath = Join-Path $VCToolsRoot "bin\$HostToolArch\arm\cl.exe"
+    $ArmLibraryPath = Join-Path $VCToolsRoot "lib\arm"
+    if (-not (Test-Path $ArmCompilerPath) -or -not (Test-Path $ArmLibraryPath)) {
+      # Windows hosted images do not always carry the ARM32 MSVC component in
+      # the preinstalled VS instance. Install the official component through
+      # the VS installer instead of substituting host or ARM64 libraries.
+      Write-Host "Installing official Visual Studio ARM32 MSVC component: Microsoft.VisualStudio.Component.VC.Tools.ARM"
+      Install-VsComponents -Installer $VsInstaller -InstallPath $Install -Components @(
+        "Microsoft.VisualStudio.Workload.NativeDesktop",
+        "Microsoft.VisualStudio.Component.VC.Tools.ARM",
+        "Microsoft.VisualStudio.Component.VC.14.29.16.11.ARM",
+        "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
+        "Microsoft.VisualStudio.Component.VC.14.44.17.14.x86.x64",
+        "Microsoft.VisualStudio.Component.VC.CoreBuildTools"
+      )
+
+      # The installer can add a side-by-side MSVC tools version. Select the
+      # newest installed version that actually contains the ARM32 ABI rather
+      # than retaining a stale VCToolsVersion from VsDevCmd.
+      $ArmToolsVersion = Get-ChildItem -Path $ToolsRoot -Directory |
+        Sort-Object Name -Descending |
+        Where-Object {
+          (Test-Path (Join-Path $_.FullName "lib\arm")) -and
+          (Test-Path (Join-Path $_.FullName "bin\$HostToolArch\arm\cl.exe"))
+        } |
+        Select-Object -First 1 -ExpandProperty Name
+      if ($ArmToolsVersion) {
+        $ToolsVersion = $ArmToolsVersion
+        $VCToolsRoot = Join-Path $ToolsRoot $ToolsVersion
+        $env:VCToolsVersion = $ToolsVersion
+      }
+    }
+    $ArmCompilerPath = Join-Path $VCToolsRoot "bin\$HostToolArch\arm\cl.exe"
+    $ArmLibraryPath = Join-Path $VCToolsRoot "lib\arm"
+    if (-not (Test-Path -LiteralPath $ArmCompilerPath -PathType Leaf) -or
+      -not (Test-Path -LiteralPath $ArmLibraryPath -PathType Container)) {
+      throw "official ARM32 MSVC compiler and libraries are required for C/C++ sources: compiler=$ArmCompilerPath libraries=$ArmLibraryPath"
+    }
+  }
+
+  $TargetBin = Join-Path $VCToolsRoot "bin\$HostToolArch\$CompilerArch"
+  $Compiler = Join-Path $TargetBin "cl.exe"
+  $UsingClangCl = $false
+  if ($Arch -eq "arm") {
+    # ring contains ARM assembly sources with a .S suffix. MSVC's legacy ARM
+    # cl.exe does not assemble that suffix: it warns and ignores the source,
+    # then the linker fails because the expected .o file was never produced.
+    # Dispatch only those assembly sources to the official LLVM clang-cl
+    # driver; keep ordinary C/C++ sources on the official ARM32 MSVC compiler
+    # because clang-cl's ARMv7 target does not implement Windows SEH __try.
+    function Find-ClangCl {
+      $ClangCandidates = @(
+        (Join-Path $Install "VC\Tools\Llvm\x64\bin\clang-cl.exe"),
+        (Join-Path $Install "VC\Tools\Llvm\bin\clang-cl.exe"),
+        (Join-Path ${env:ProgramFiles} "LLVM\bin\clang-cl.exe")
+      )
+      $AllInstalls = @($Install)
+      if (Test-Path $VsWhere) {
+        $AllInstalls += & $VsWhere -all -products * -property installationPath |
+          ForEach-Object { $_.Trim() } |
+          Where-Object { $_ }
+      }
+      foreach ($InstallPath in @($AllInstalls | Sort-Object -Unique)) {
+        $ClangCandidates += @(
+          (Join-Path $InstallPath "VC\Tools\Llvm\x64\bin\clang-cl.exe"),
+          (Join-Path $InstallPath "VC\Tools\Llvm\bin\clang-cl.exe")
+        )
+      }
+      $ClangCandidates = @($ClangCandidates | Sort-Object -Unique)
+      foreach ($Candidate in $ClangCandidates) {
+        if (Test-Path -LiteralPath $Candidate -PathType Leaf) {
+          return $Candidate
+        }
+      }
+      $PathClang = Get-Command clang-cl.exe -ErrorAction SilentlyContinue
+      if ($PathClang) {
+        return $PathClang.Source
+      }
+      return $null
+    }
+
+    $ClangCl = Find-ClangCl
+    if (-not $ClangCl) {
+      # The hosted image's component manifest is not proof that the payload is
+      # present on this runner. Install Microsoft's documented LLVM component
+      # and wait for the actual compiler file to appear.
+      Write-Host "Installing official Visual Studio LLVM/Clang component: Microsoft.VisualStudio.Component.VC.Llvm.Clang"
+      Install-VsComponents -Installer $VsInstaller -InstallPath $Install -Components @(
+        "Microsoft.VisualStudio.Workload.NativeDesktop",
+        "Microsoft.VisualStudio.Component.VC.Llvm.Clang",
+        "Microsoft.VisualStudio.Component.VC.Llvm.ClangToolset",
+        "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
+        "Microsoft.VisualStudio.Component.VC.CoreBuildTools"
+      )
+
+      $Deadline = (Get-Date).AddMinutes(5)
+      do {
+        $ClangCl = Find-ClangCl
+        if ($ClangCl) { break }
+        Start-Sleep -Seconds 2
+      } while ((Get-Date) -lt $Deadline)
+    }
+    if (-not $ClangCl) {
+      throw "official ARM32 clang-cl missing after installing Microsoft.VisualStudio.Component.VC.Llvm.Clang"
+    }
+
+    $WrapperRoot = Join-Path $env:RUNNER_TEMP "agena-msvc-clang\$TargetTriple"
+    New-Item -ItemType Directory -Force -Path $WrapperRoot | Out-Null
+    # Keep "clang-cl" in the wrapper filename so cc-rs emits the MSVC object
+    # flag and the real clang-cl target selection. The wrapper then removes the
+    # two clang-cl-only arguments before dispatching ordinary C/C++ to the
+    # official ARM32 MSVC compiler. This preserves cc-rs's correct assembly
+    # command without asking clang-cl to compile SQLite's ARM32 SEH code.
+    $Compiler = Join-Path $WrapperRoot "clang-cl-arm-dispatch.cmd"
+    $WrapperLines = @(
+      '@echo off'
+      'setlocal EnableExtensions EnableDelayedExpansion'
+      'set "USE_CLANG="'
+      'for %%A in (%*) do ('
+      '  if /I "%%~xA"==".S" set "USE_CLANG=1"'
+      '  if /I "%%~xA"==".s" set "USE_CLANG=1"'
+      '  if /I "%%~A"=="-E" set "USE_CLANG=1"'
+      ')'
+      'if defined USE_CLANG ('
+      "  `"$ClangCl`" %*"
+      '  set "EXIT_CODE=!ERRORLEVEL!"'
+      '  endlocal & exit /b !EXIT_CODE!'
+      ')'
+      'set "MSVC_ARGS="'
+      'for %%A in (%*) do ('
+      '  set "ARG=%%~A"'
+      '  if /I "!ARG!"=="--" ('
+      '    rem Drop the clang-cl path delimiter before invoking cl.exe.'
+      '  ) else if /I "!ARG:~0,9!"=="--target=" ('
+      '    rem Drop the clang-cl target selector before invoking cl.exe.'
+      '  ) else ('
+      '    set "MSVC_ARGS=!MSVC_ARGS! "%%~A""'
+      '  )'
+      ')'
+      "`"$ArmCompilerPath`" !MSVC_ARGS!"
+      'set "EXIT_CODE=!ERRORLEVEL!"'
+      'endlocal & exit /b !EXIT_CODE!'
+    )
+    $WrapperText = ($WrapperLines -join "`r`n") + "`r`n"
+    [IO.File]::WriteAllText($Compiler, $WrapperText, [Text.Encoding]::ASCII)
+    $UsingClangCl = $true
+    Write-Host "Using official ARM32 MSVC cl.exe for C/C++ and official clang-cl for .S: cl=$ArmCompilerPath clang=$ClangCl --target=thumbv7a-pc-windows-msvc"
+  } elseif (-not (Test-Path $Compiler)) {
+    throw "MSVC target compiler missing for host=$HostArch target=${Arch}: $Compiler"
+  }
+  if (Test-Path $TargetBin) {
+    $env:PATH = "$TargetBin;$env:PATH"
+  }
+  # link.exe is a host tool even when it links ARM COFF.  Keep it available
+  # explicitly when the ARM compiler directory is absent from the VS image.
+  $HostLinkBin = Join-Path $VCToolsRoot "bin\$HostToolArch\x64"
+  if (Test-Path $HostLinkBin) {
+    $env:PATH = "$HostLinkBin;$env:PATH"
+  }
+  $env:VCToolsInstallDir = "$VCToolsRoot\"
+
+  # Preserve the SDK choices made by VsDevCmd while making the target MSVC
+  # headers and libraries unambiguous for build scripts that invoke cl.exe
+  # through cc-rs rather than through devenv/msbuild.
+  $VCToolsInclude = Join-Path $VCToolsRoot "include"
+  if (-not (Test-Path (Join-Path $VCToolsInclude "vcruntime.h"))) {
+    # The legacy ARM compiler can be installed beside a newer MSVC host toolset
+    # without carrying the MSVC runtime headers. MSVC's vcruntime.h is the
+    # stable marker for a complete official VC include tree; stddef.h itself is
+    # supplied by the Windows SDK UCRT include tree below.
+    function Find-MsvcHeaderToolsRoot {
+      # The compiler and headers can be split across official side-by-side VS
+      # installations on hosted images. Search the actual header path directly
+      # in every known installation; this avoids relying on VCToolsVersion,
+      # component requirements reported by vswhere, or recursive wildcard
+      # filtering of a large Visual Studio tree. Never create or copy a
+      # synthetic header tree.
+      $InstallPaths = @($Install)
+      $InstallPaths += & $VsWhere -all -products * -property installationPath |
+        ForEach-Object { $_.Trim() } |
+        Where-Object { $_ }
+      # vswhere normally reports every instance, but the hosted image can
+      # expose a VS installation through the standard filesystem layout before
+      # its component catalog is visible to vswhere. Enumerate only the fixed
+      # vendor-owned year/edition levels as a deterministic fallback; do not
+      # recursively walk or infer arbitrary directories.
+      foreach ($VisualStudioRoot in @(
+          (Join-Path ${env:ProgramFiles} "Microsoft Visual Studio"),
+          (Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio")
+        )) {
+        if (-not (Test-Path -LiteralPath $VisualStudioRoot -PathType Container)) {
+          continue
+        }
+        foreach ($YearRoot in (Get-ChildItem -LiteralPath $VisualStudioRoot -Directory -ErrorAction SilentlyContinue)) {
+          foreach ($EditionRoot in (Get-ChildItem -LiteralPath $YearRoot.FullName -Directory -ErrorAction SilentlyContinue)) {
+            $CandidateToolsRoot = Join-Path $EditionRoot.FullName "VC\Tools\MSVC"
+            if (Test-Path -LiteralPath $CandidateToolsRoot -PathType Container) {
+              $InstallPaths += $EditionRoot.FullName
+            }
+          }
+        }
+      }
+      $InstallPaths = @($InstallPaths |
+        ForEach-Object { $_.ToString().Trim() } |
+        Where-Object { $_ } |
+        Sort-Object -Unique)
+      Write-Host "Inspecting official MSVC installations: $($InstallPaths -join '; ')"
+
+      foreach ($InstallPath in $InstallPaths) {
+        $CandidateToolsRoot = Join-Path $InstallPath "VC\Tools\MSVC"
+        if (-not (Test-Path -LiteralPath $CandidateToolsRoot -PathType Container)) {
+          continue
+        }
+        $Candidates = @(Get-ChildItem -LiteralPath $CandidateToolsRoot -Directory -ErrorAction SilentlyContinue | Sort-Object Name -Descending)
+        Write-Host "Inspecting MSVC toolsets under ${InstallPath}: $($Candidates.Name -join ', ')"
+        foreach ($Candidate in $Candidates) {
+          $HeaderPath = Join-Path $Candidate.FullName "include\vcruntime.h"
+          if (Test-Path -LiteralPath $HeaderPath -PathType Leaf) {
+            Write-Host "Using official MSVC headers: $HeaderPath"
+            return $Candidate
+          }
+        }
+      }
+      return $null
+    }
+
+    $HeaderToolsRoot = Find-MsvcHeaderToolsRoot
+    if (-not $HeaderToolsRoot) {
+      Write-Host "Installing official Visual Studio C++ build tools to obtain MSVC headers"
+      Install-VsComponents -Installer $VsInstaller -InstallPath $Install -Components @(
+        "Microsoft.VisualStudio.Workload.NativeDesktop",
+        "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
+        "Microsoft.VisualStudio.Component.VC.14.44.17.14.x86.x64",
+        "Microsoft.VisualStudio.Component.VC.CoreBuildTools"
+      )
+
+      # setup.exe delegates modify operations to the Visual Studio installer
+      # service and can return before the selected toolset has been unpacked.
+      # Do not race that service: wait for a real official MSVC header tree to
+      # appear, rather than falling through to a host compiler or synthetic
+      # header substitute.
+      $Deadline = (Get-Date).AddMinutes(5)
+      do {
+        $HeaderToolsRoot = Find-MsvcHeaderToolsRoot
+        if ($HeaderToolsRoot) { break }
+        Start-Sleep -Seconds 2
+      } while ((Get-Date) -lt $Deadline)
+    }
+    if (-not $HeaderToolsRoot) {
+      throw "MSVC runtime headers missing: no installed toolset contains include\vcruntime.h after installing official C++ build tools"
+    }
+    $VCToolsInclude = Join-Path $HeaderToolsRoot.FullName "include"
+  }
+  # stddef.h is an official Windows SDK UCRT header rather than an MSVC
+  # toolset header. Verify the real SDK path selected by VsDevCmd and add it
+  # beside the MSVC include tree; do not rely on an inherited INCLUDE value
+  # that a C build script may replace.
+  $UcrtInclude = $null
+  foreach ($SdkRootValue in @($env:UniversalCRTSdkDir, $env:WindowsSdkDir)) {
+    if (-not $SdkRootValue) {
+      continue
+    }
+    $SdkRoot = $SdkRootValue.TrimEnd('\')
+    $SdkIncludeRoot = Join-Path $SdkRoot "Include"
+    if (-not (Test-Path -LiteralPath $SdkIncludeRoot -PathType Container)) {
+      continue
+    }
+    $SdkVersions = @()
+    foreach ($VersionValue in @($env:UCRTVersion, $env:WindowsSDKVersion)) {
+      if ($VersionValue) {
+        $SdkVersions += $VersionValue.TrimEnd('\')
+      }
+    }
+    $SdkVersions += Get-ChildItem -LiteralPath $SdkIncludeRoot -Directory -ErrorAction SilentlyContinue |
+      Sort-Object Name -Descending |
+      Select-Object -ExpandProperty Name
+    $SdkVersions = @($SdkVersions |
+      ForEach-Object { $_.ToString().TrimEnd('\') } |
+      Where-Object { $_ } |
+      Sort-Object -Unique)
+    foreach ($SdkVersion in $SdkVersions) {
+      $CandidateUcrtInclude = Join-Path (Join-Path $SdkIncludeRoot $SdkVersion) "ucrt"
+      $UcrtHeaderPath = Join-Path $CandidateUcrtInclude "stddef.h"
+      if (Test-Path -LiteralPath $UcrtHeaderPath -PathType Leaf) {
+        $UcrtInclude = $CandidateUcrtInclude
+        break
+      }
+    }
+    if ($UcrtInclude) {
+      break
+    }
+  }
+  if (-not $UcrtInclude) {
+    throw "Windows SDK UCRT headers missing: no official SDK include tree contains ucrt\stddef.h"
+  }
+  Write-Host "Using official Windows SDK UCRT headers: $(Join-Path $UcrtInclude 'stddef.h')"
+
+  # cc-rs invokes the selected compiler wrapper directly and does not print or
+  # normalize inherited INCLUDE values in its command diagnostics. Add both
+  # verified official header trees as target-scoped compiler flags so C build
+  # scripts cannot lose the MSVC runtime or UCRT headers when they replace the
+  # environment.
+  $HeaderIncludes = @($VCToolsInclude, $UcrtInclude)
+  # cc-rs normally splits *FLAGS on whitespace. Enable its documented shell
+  # parser so the quoted official Windows paths remain one compiler argument
+  # even when Visual Studio or the SDK is installed below Program Files.
+  $env:CC_SHELL_ESCAPED_FLAGS = "1"
+  $TargetEnvKey = $TargetTriple.Replace("-", "_")
+  # Use the compiler-neutral spelling. clang/clang-cl both accept -I, and
+  # MSVC cl.exe accepts '-' as an option prefix; unlike /I this prevents
+  # clang's GNU driver from treating /I"C:\Program Files\..." as a filename
+  # when cc-rs forwards target-scoped flags.
+  $HeaderFlags = @($HeaderIncludes | ForEach-Object { "-I`"$_`"" })
+  $AbiFlags = @($HeaderFlags)
+  if ($Arch -eq "arm64ec") {
+    # cl.exe is shared with the ARM64 toolset on current VS releases. This
+    # switch is what makes cc-rs C/C++ objects use the real ARM64EC ABI.
+    $AbiFlags += "/arm64EC"
+  }
+  foreach ($FlagName in @("CFLAGS_$TargetEnvKey", "CXXFLAGS_$TargetEnvKey")) {
+    $ExistingFlags = [Environment]::GetEnvironmentVariable($FlagName, "Process")
+    $AllFlags = @($AbiFlags)
+    if ($ExistingFlags) {
+      $AllFlags += $ExistingFlags
+    }
+    $CombinedFlags = $AllFlags -join " "
+    [Environment]::SetEnvironmentVariable($FlagName, $CombinedFlags, "Process")
+  }
+  $VCToolsLib = Join-Path $VCToolsRoot "lib\$Arch"
+  $HeaderPrefix = $HeaderIncludes -join ";"
+  if ($env:INCLUDE) {
+    $env:INCLUDE = "$HeaderPrefix;$env:INCLUDE"
+  } else {
+    $env:INCLUDE = $HeaderPrefix
+  }
+
+  $TargetLibDirs = @()
+  $PreserveExistingLib = $true
+  if (Test-Path $VCToolsLib) {
+    $TargetLibDirs += $VCToolsLib
+  } elseif (-not ($UsingClangCl -and $Arch -eq "arm")) {
+    throw "MSVC target library directory missing for host=$HostArch target=${Arch}: $VCToolsLib"
+  } else {
+    # VS 2026 hosted images may provide clang-cl for ARMv7 while omitting the
+    # legacy MSVC ARM compiler and VC\Tools\MSVC\...\lib\arm directory.  In
+    # that configuration use the actual ARM Windows SDK import libraries.  Do
+    # not substitute x64 or ARM64 libraries: clang-cl still has to link a
+    # genuine ARM32 MSVC target.
+    $PreserveExistingLib = $false
+    $WindowsSdkDir = $env:WindowsSdkDir
+    if (-not $WindowsSdkDir) {
+      throw "WindowsSdkDir is not set; cannot locate ARM Windows SDK libraries for $TargetTriple"
+    }
+    $RequestedWindowsSdkVersion = if ($env:WindowsSDKVersion) {
+      $env:WindowsSDKVersion.TrimEnd('\')
+    } else {
+      $null
+    }
+    $WindowsSdkLibRoot = Join-Path $WindowsSdkDir "Lib"
+    $InstalledWindowsSdkVersions = @(Get-ChildItem -Path $WindowsSdkLibRoot -Directory -ErrorAction SilentlyContinue |
+      Sort-Object Name -Descending | Select-Object -ExpandProperty Name)
+    if ($RequestedWindowsSdkVersion -and ($InstalledWindowsSdkVersions -notcontains $RequestedWindowsSdkVersion)) {
+      $InstalledWindowsSdkVersions += $RequestedWindowsSdkVersion
+    }
+    if ($InstalledWindowsSdkVersions.Count -eq 0) {
+      throw "Windows SDK library version not found under $WindowsSdkLibRoot"
+    }
+
+    $UniversalCrtDir = if ($env:UniversalCRTSdkDir) {
+      $env:UniversalCRTSdkDir.TrimEnd('\')
+    } else {
+      $WindowsSdkDir.TrimEnd('\')
+    }
+    $RequestedUniversalCrtVersion = if ($env:UCRTVersion) {
+      $env:UCRTVersion.TrimEnd('\')
+    } else {
+      $null
+    }
+    $InstalledUniversalCrtVersions = @(Get-ChildItem -Path (Join-Path $UniversalCrtDir "Lib") -Directory -ErrorAction SilentlyContinue |
+      Sort-Object Name -Descending | Select-Object -ExpandProperty Name)
+    if ($RequestedUniversalCrtVersion -and ($InstalledUniversalCrtVersions -notcontains $RequestedUniversalCrtVersion)) {
+      $InstalledUniversalCrtVersions += $RequestedUniversalCrtVersion
+    }
+
+    # The newest Windows SDK on a hosted image is not guaranteed to retain
+    # ARM32 import libraries.  Search the installed SDKs for a matching pair
+    # of real ARM32 libraries instead of failing on the first (or newest)
+    # version.  The UCRT version is searched independently because VS images
+    # can expose it through a different SDK root/version than um\arm.
+    $SelectedWindowsSdkVersion = $null
+    $SelectedUniversalCrtVersion = $null
+    $SdkUmArm = $null
+    $SdkUcrtArm = $null
+    foreach ($CandidateWindowsSdkVersion in $InstalledWindowsSdkVersions) {
+      $CandidateSdkUmArm = Join-Path (Join-Path $WindowsSdkLibRoot $CandidateWindowsSdkVersion) "um\arm"
+      if (-not (Test-Path $CandidateSdkUmArm)) {
+        continue
+      }
+      foreach ($CandidateUniversalCrtVersion in $InstalledUniversalCrtVersions) {
+        $CandidateSdkUcrtArm = Join-Path (Join-Path (Join-Path $UniversalCrtDir "Lib") $CandidateUniversalCrtVersion) "ucrt\arm"
+        if (Test-Path $CandidateSdkUcrtArm) {
+          $SelectedWindowsSdkVersion = $CandidateWindowsSdkVersion
+          $SelectedUniversalCrtVersion = $CandidateUniversalCrtVersion
+          $SdkUmArm = $CandidateSdkUmArm
+          $SdkUcrtArm = $CandidateSdkUcrtArm
+          break
+        }
+      }
+      if ($SelectedWindowsSdkVersion) {
+        break
+      }
+    }
+    if (-not $SelectedWindowsSdkVersion) {
+      $KnownUmArm = $InstalledWindowsSdkVersions | ForEach-Object {
+        Join-Path (Join-Path $WindowsSdkLibRoot $_) "um\arm"
+      }
+      $KnownUcrtArm = $InstalledUniversalCrtVersions | ForEach-Object {
+        Join-Path (Join-Path (Join-Path $UniversalCrtDir "Lib") $_) "ucrt\arm"
+      }
+      throw "ARM Windows SDK library directories missing for ${TargetTriple}: no matching um\arm and ucrt\arm pair (um candidates: $($KnownUmArm -join ', '); ucrt candidates: $($KnownUcrtArm -join ', '); WindowsSdkDir=$WindowsSdkDir, UniversalCRTSdkDir=$UniversalCrtDir)"
+    }
+    $env:WindowsSDKVersion = "$SelectedWindowsSdkVersion\"
+    $env:UCRTVersion = "$SelectedUniversalCrtVersion\"
+    $env:UniversalCRTSdkDir = "$UniversalCrtDir\"
+    $TargetLibDirs += $SdkUmArm
+    $TargetLibDirs += $SdkUcrtArm
+    Write-Host "Using ARM Windows SDK libraries: $SdkUmArm; $SdkUcrtArm (WindowsSDKVersion=$SelectedWindowsSdkVersion, UCRTVersion=$SelectedUniversalCrtVersion)"
+  }
+  if ($PreserveExistingLib -and $env:LIB) {
+    $env:LIB = (($TargetLibDirs + @($env:LIB)) -join ";")
+  } else {
+    $env:LIB = ($TargetLibDirs -join ";")
+  }
+
+  $Key = $TargetTriple.Replace("-", "_")
+  [Environment]::SetEnvironmentVariable("CC_$Key", $Compiler, "Process")
+  [Environment]::SetEnvironmentVariable("CXX_$Key", $Compiler, "Process")
+}
+
+function Install-LlvmMingw {
+  param([Parameter(Mandatory = $true)][string]$Target)
+
+  $Version = "20260616"
+  $ArchiveName = "llvm-mingw-$Version-ucrt-x86_64.zip"
+  $ExpectedSha256 = "b9b68a4d276e16fa25802aaba458e4638f64b3884c290aaccdc2d87083b6ca35"
+  $Root = Join-Path $env:RUNNER_TEMP "agena-llvm-mingw-$Version"
+  $Archive = Join-Path $Root $ArchiveName
+  $Extracted = Join-Path $Root "toolchain"
+  New-Item -ItemType Directory -Force -Path $Root | Out-Null
+
+  $NeedsDownload = $true
+  if (Test-Path $Archive) {
+    $Actual = (Get-FileHash -Algorithm SHA256 $Archive).Hash.ToLowerInvariant()
+    $NeedsDownload = $Actual -ne $ExpectedSha256
+  }
+  if ($NeedsDownload) {
+    Remove-Item -Force -ErrorAction SilentlyContinue $Archive
+    $Url = "https://github.com/mstorsjo/llvm-mingw/releases/download/$Version/$ArchiveName"
+    Invoke-WebRequest -UseBasicParsing -Uri $Url -OutFile $Archive
+    $Actual = (Get-FileHash -Algorithm SHA256 $Archive).Hash.ToLowerInvariant()
+    if ($Actual -ne $ExpectedSha256) {
+      throw "llvm-mingw SHA256 mismatch: expected $ExpectedSha256 got $Actual"
+    }
+  }
+
+  if (-not (Test-Path (Join-Path $Extracted "bin\clang.exe"))) {
+    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $Extracted
+    New-Item -ItemType Directory -Force -Path $Extracted | Out-Null
+    Expand-Archive -Path $Archive -DestinationPath $Extracted
+  }
+
+  $Top = Get-ChildItem -Path $Extracted -Directory | Select-Object -First 1
+  if ($Top -and (Test-Path (Join-Path $Top.FullName "bin\clang.exe"))) {
+    $Bin = Join-Path $Top.FullName "bin"
+  } elseif (Test-Path (Join-Path $Extracted "bin\clang.exe")) {
+    $Bin = Join-Path $Extracted "bin"
+  } else {
+    throw "llvm-mingw clang.exe not found after extraction"
+  }
+  $env:PATH = "$Bin;$env:PATH"
+
+  switch -Wildcard ($Target) {
+    "aarch64-*" { $Prefix = "aarch64-w64-mingw32" }
+    "i686-*" { $Prefix = "i686-w64-mingw32" }
+    "x86_64-*" { $Prefix = "x86_64-w64-mingw32" }
+    default { throw "No llvm-mingw target prefix mapping for $Target" }
+  }
+
+  $CC = Join-Path $Bin "$Prefix-clang.exe"
+  $CXX = Join-Path $Bin "$Prefix-clang++.exe"
+  $AR = Join-Path $Bin "llvm-ar.exe"
+  if (-not (Test-Path $CC)) { throw "llvm-mingw compiler missing: $CC" }
+  if (-not (Test-Path $CXX)) { throw "llvm-mingw compiler missing: $CXX" }
+  if (-not (Test-Path $AR)) { throw "llvm-mingw archiver missing: $AR" }
+
+  $Key = $Target.Replace("-", "_")
+  $Upper = $Key.ToUpperInvariant()
+  [Environment]::SetEnvironmentVariable("CC_$Key", $CC, "Process")
+  [Environment]::SetEnvironmentVariable("CXX_$Key", $CXX, "Process")
+  [Environment]::SetEnvironmentVariable("AR_$Key", $AR, "Process")
+  [Environment]::SetEnvironmentVariable("CARGO_TARGET_${Upper}_LINKER", $CC, "Process")
+}
+
+if ($TargetTriple -match "-windows-(gnu|gnullvm)$" -or $TargetTriple -match "-win7-windows-gnu$") {
+  Install-LlvmMingw -Target $TargetTriple
+  return
+}
+
+if ($TargetTriple -notmatch "windows-msvc$") {
+  return
+}
+
+$TargetArch = if ($TargetTriple.StartsWith("thumbv7a-")) {
+  "arm"
+} elseif ($TargetTriple.StartsWith("arm64ec-")) {
+  "arm64ec"
+} elseif ($TargetTriple.StartsWith("aarch64-")) {
+  "arm64"
+} elseif ($TargetTriple.StartsWith("i686-")) {
+  "x86"
+} else {
+  "x64"
+}
+
+$HostArch = if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { "arm64" } else { "x64" }
+Set-EnvFromVsDevCmd -Arch $TargetArch -HostArch $HostArch -TargetTriple $TargetTriple

@@ -1,0 +1,44 @@
+[package]
+name = "gcp_auth"
+version = "0.12.7"
+edition = "2021"
+rust-version = "1.85"
+repository = "https://github.com/djc/gcp_auth"
+description = "Google cloud platform (GCP) authentication using default and custom service accounts"
+documentation = "https://docs.rs/gcp_auth/"
+keywords = ["authentication", "gcp", "google"]
+categories = ["asynchronous", "authentication"]
+readme = "README.md"
+license = "MIT"
+
+[features]
+default = ["ring"]
+aws-lc-rs = ["hyper-rustls/aws-lc-rs", "dep:aws-lc-rs"]
+ring = ["hyper-rustls/ring", "dep:ring"]
+webpki-roots = ["hyper-rustls/webpki-roots"]
+
+[dependencies]
+async-trait = "0.1"
+aws-lc-rs = { version = "1", optional = true }
+base64 = "0.22"
+bytes = "1"
+chrono = { version = "0.4.31", features = ["serde"] }
+http = "1"
+http-body-util = "0.1"
+hyper = { version = "1", default-features = false, features = ["client", "http1", "http2"] }
+hyper-rustls = { version = "0.27", default-features = false, features = ["http1", "http2", "webpki-tokio"] }
+hyper-util = { version = "0.1.4", features = ["client-legacy"] }
+ring = { version = "0.17", optional = true }
+rustls = { version = "0.23", default-features = false, features = ["std"] }
+rustls-pki-types = "1"
+serde = { version = "1.0", features = ["derive", "rc"] }
+serde_json = "1.0"
+thiserror = "2.0"
+tokio = { version = "1.1", features = ["fs", "sync", "time"] }
+tracing = "0.1.29"
+tracing-futures = "0.2.5"
+url = "2"
+
+[dev-dependencies]
+tokio = { version = "1.1", features = ["macros", "parking_lot", "rt-multi-thread"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

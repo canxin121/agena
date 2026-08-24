@@ -1,7 +1,7 @@
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use smol_str::SmolStr;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::Ordering;
 
 use crate::{provider::project_completion_input, tool::ToolApiBinding};
 use agena_domain::{Role, ToolCallId};
@@ -10,6 +10,7 @@ use agena_provider::{
     CompletionInputRun, PromptCacheShape, PromptCacheShapeDiff, ProviderCompactionContext,
 };
 use agena_storage::store::{Part, PartRole, PartState};
+use portable_atomic::AtomicU64;
 
 use super::Session;
 use super::model::{PromptCompactionContent, PromptCompactionMessage, PromptCompactionRuntime};

@@ -179,6 +179,7 @@ pub async fn list_session_parts(
         version: page.meta.version,
         parts: projected,
         folds: Vec::new(),
+        user_message_count: None,
         page: agena_api::pagination::PageInfo {
             next_cursor,
             has_more: page.has_more,

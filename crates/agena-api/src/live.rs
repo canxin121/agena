@@ -190,6 +190,11 @@ pub struct SessionPartsResource {
     /// transcript endpoint. Raw `/parts` pages leave this empty.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub folds: Vec<SessionTranscriptFoldResource>,
+    /// Exact count of user-send messages in the session. Raw part snapshots
+    /// may omit it; transcript pages populate it so clients can display the
+    /// full history size without loading every page first.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_message_count: Option<u64>,
     /// Cursor metadata for newest-first keyset pagination. `parts` itself is
     /// returned chronologically so renderers can append it directly.
     pub page: crate::pagination::PageInfo,

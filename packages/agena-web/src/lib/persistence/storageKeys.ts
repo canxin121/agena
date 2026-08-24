@@ -42,6 +42,7 @@ export const localStorageKeys = {
     sessionRunConfig: namespacedKey('chat.session-run-config'),
     composerUserHeight: namespacedKey('chat.composer.user-height'),
     promptHistory: namespacedKey('chat.prompt-history.v1'),
+    transcriptPartPageSize: namespacedKey('chat.transcript-part-page-size.v1'),
     modelThinkingModeByKey: namespacedKey('chat.model.thinking-mode-by-key.v1'),
     modelSpeedModeByKey: namespacedKey('chat.model.speed-mode-by-key.v1'),
     sessionManualModelBySession: namespacedKey('chat.model.manual-by-session'),

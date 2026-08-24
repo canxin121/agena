@@ -94,6 +94,9 @@ pub trait SessionStore: Send + Sync {
     /// `(created_at_ms, part_id)` — cache first, then one membership JOIN.
     async fn load(&self, session_id: i64) -> Result<SessionView, StoreError>;
 
+    /// Count durable user-send run markers without loading transcript parts.
+    async fn user_message_count(&self, session_id: i64) -> Result<u64, StoreError>;
+
     /// Load one bounded newest-first keyset page without materializing the
     /// complete session transcript.
     async fn load_page(
@@ -1178,6 +1181,10 @@ where
 {
     async fn load(&self, session_id: i64) -> Result<SessionView, StoreError> {
         self.load_cached(session_id).await
+    }
+
+    async fn user_message_count(&self, session_id: i64) -> Result<u64, StoreError> {
+        self.engine.user_message_count(session_id).await
     }
 
     async fn load_page(
@@ -3575,6 +3582,10 @@ mod tests {
 
         async fn session_meta(&self, session_id: i64) -> Result<SessionMeta, StoreError> {
             self.inner.session_meta(session_id).await
+        }
+
+        async fn user_message_count(&self, session_id: i64) -> Result<u64, StoreError> {
+            self.inner.user_message_count(session_id).await
         }
 
         async fn load_session(&self, session_id: i64) -> Result<SessionView, StoreError> {

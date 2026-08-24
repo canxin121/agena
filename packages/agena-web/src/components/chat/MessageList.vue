@@ -26,6 +26,7 @@ import {
 
 const props = defineProps<{
   isCompactLayout: boolean
+  isMobilePointer: boolean
   selectedSessionId: string | null
   messagesLoading: boolean
   messagesError: string | null
@@ -33,6 +34,7 @@ const props = defineProps<{
   renderBlocks: RenderBlock[]
   pendingInitialScrollSessionId: string | null
   loadingOlder: boolean
+  activityPageSize: number
   showTimestamps: boolean
   formatTime: (ms?: number) => string
   copiedMessageId: string
@@ -67,6 +69,8 @@ const emit = defineEmits<{
   (event: 'copySessionError'): void
   (event: 'clearSessionError'): void
   (event: 'expandAll'): void
+  (event: 'collapseAll'): void
+  (event: 'setActivityPageSize', size: number): void
 }>()
 
 const { t } = useI18n()
@@ -84,16 +88,6 @@ const durableInteractionRequestIds = computed(() => {
 
 const pendingInteractionFallback = computed(() =>
   pendingInteractionPresentationFromAttention(props.pendingAttention, durableInteractionRequestIds.value),
-)
-
-const hasExpandableTranscript = computed(() =>
-  props.renderBlocks.some(
-    (block) =>
-      block.kind === 'message' &&
-      (Boolean(block.message.folds?.length) ||
-        block.displayParts.some((part) => part.toggleable) ||
-        block.displayParts.filter((part) => part.kind !== 'text' && part.kind !== 'answer').length > 5),
-  ),
 )
 
 // The pending user turn follows the same canonical part projection as the
@@ -228,16 +222,6 @@ function forwardFoldExpand(fold: MessageFold, all: boolean) {
   </div>
 
   <template v-else>
-    <div v-if="hasExpandableTranscript" class="mb-1 flex justify-end px-1">
-      <button
-        type="button"
-        class="rounded-md px-2 py-1 font-mono text-[10px] text-muted-foreground hover:bg-muted/35 hover:text-foreground"
-        data-transcript-expand-all="true"
-        @click="emit('expandAll')"
-      >
-        {{ t('chat.messages.activity.expandAll') }}
-      </button>
-    </div>
     <div v-if="loadingOlder" class="mb-2 flex items-center gap-2 px-1 text-[11px] text-muted-foreground">
       <RiLoader4Line class="h-3.5 w-3.5 animate-spin" />
       {{ t('chat.messages.loadingOlder') }}
@@ -263,6 +247,8 @@ function forwardFoldExpand(fold: MessageFold, all: boolean) {
           :is-streaming="isStreamingAssistantMessage(block.message)"
           :collapse-signal="activityCollapseSignal"
           :expand-all-signal="activityExpandAllSignal"
+          :activity-page-size="activityPageSize"
+          :is-mobile-pointer="isMobilePointer"
           :is-part-expanded="isPartExpanded"
           :is-node-selected="isNodeSelected"
           :is-node-search-match="isNodeSearchMatch"
@@ -273,6 +259,9 @@ function forwardFoldExpand(fold: MessageFold, all: boolean) {
           @part-toggle="forwardPartToggle"
           @fold-expand="forwardFoldExpand"
           @node-select="$emit('nodeSelect', $event)"
+          @expand-all="$emit('expandAll')"
+          @collapse-all="$emit('collapseAll')"
+          @set-activity-page-size="$emit('setActivityPageSize', $event)"
         />
 
         <div v-else class="rounded-md border border-border/60 px-3 py-2 text-sm" data-transcript-node="revert">

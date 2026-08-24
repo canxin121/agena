@@ -793,6 +793,30 @@ impl PersistenceEngine for SqliteEngine {
         session_meta_tx(self.db(), session_id).await
     }
 
+    async fn user_message_count(&self, session_id: i64) -> Result<u64, StoreError> {
+        let row = self
+            .db()
+            .query_one(Statement::from_sql_and_values(
+                DatabaseBackend::Sqlite,
+                "SELECT COUNT(*) AS user_message_count \
+                 FROM agena_session_parts sp \
+                 JOIN agena_parts p ON p.part_id = sp.part_id \
+                 WHERE sp.session_id = ? AND p.kind = 'run' AND p.role = 'user'",
+                [session_id.into()],
+            ))
+            .await
+            .map_err(map_db_err)?;
+        let Some(row) = row else {
+            return Err(StoreError::not_found(format!("session {session_id}")));
+        };
+        let count: i64 = row.try_get("", "user_message_count").map_err(map_db_err)?;
+        u64::try_from(count).map_err(|_| {
+            StoreError::InvalidState(format!(
+                "negative user message count for session {session_id}"
+            ))
+        })
+    }
+
     async fn load_session(&self, session_id: i64) -> Result<SessionView, StoreError> {
         let meta = self.session_meta(session_id).await?;
         let parts = self

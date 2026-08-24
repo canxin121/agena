@@ -1018,28 +1018,40 @@ function setTranscriptPartExpanded(part: TranscriptDisplayPart, expanded: boolea
 function loadFoldedActivity(fold: MessageFold, all: boolean) {
   const sid = chat.selectedSessionId
   if (!sid) return
-  void chat.loadFoldedActivity(sid, fold, all).catch(() => {})
+  void chat.loadFoldedActivity(sid, fold, all, chat.transcriptPartPageSize).catch(() => {})
+}
+
+async function loadAllTranscriptFolds() {
+  const sid = chat.selectedSessionId
+  if (!sid) return
+  for (const block of renderBlocks.value) {
+    if (block.kind !== 'message') continue
+    for (const fold of block.message.folds || []) {
+      await chat.loadFoldedActivity(sid, fold, true, chat.transcriptPartPageSize).catch(() => {})
+    }
+  }
 }
 
 function expandAllTranscriptParts() {
-  const sid = chat.selectedSessionId
   void (async () => {
+    await loadAllTranscriptFolds()
     for (const block of renderBlocks.value) {
       if (block.kind !== 'message') continue
-      if (sid) {
-        for (const fold of block.message.folds || []) {
-          await chat.loadFoldedActivity(sid, fold, true).catch(() => {})
-        }
-      }
       for (const part of block.displayParts) {
         if (part.toggleable) setActivityExpanded(part.key, true)
       }
     }
   })()
-  // The run-level fold is separate from each part's detail expansion. This
-  // signal reveals every currently loaded folded activity run without
-  // fetching the entire remote transcript.
+  // The run-level fold is separate from each part's detail expansion.
   expandAllActivities()
+}
+
+function collapseAllTranscriptParts() {
+  collapseAllActivities()
+}
+
+function setTranscriptPartPageSize(size: number) {
+  chat.setTranscriptPartPageSize(size)
 }
 
 const sessionActions = useChatSessionActions({
@@ -2398,6 +2410,8 @@ const viewCtx = {
   setTranscriptPartExpanded,
   loadFoldedActivity,
   expandAllTranscriptParts,
+  collapseAllTranscriptParts,
+  setTranscriptPartPageSize,
 
   // TUI-parity transcript navigation and search.
   transcriptSearchInputRef,

@@ -76,7 +76,8 @@ export type ChatPageViewContext = {
   chat: {
     selectedSessionId: string | null
     selectedAttention: AttentionLike
-    selectedHistory: { exhausted: boolean }
+    selectedHistory: { exhausted: boolean; limit: number; loading: boolean; userMessageCount?: number | null }
+    transcriptPartPageSize: number
     selectedSessionError: SessionErrorLike
     messages: MessageEntry[]
     messagesLoading: boolean
@@ -114,6 +115,8 @@ export type ChatPageViewContext = {
   activityCollapseSignal: MaybeRef<number>
   activityExpandAllSignal: MaybeRef<number>
   expandAllTranscriptParts: () => void
+  collapseAllTranscriptParts: () => void
+  setTranscriptPartPageSize: (size: number) => void
   MAX_VISIBLE_ACTIVITY_COLLAPSED: number
   isActivityExpanded: (key: string) => boolean
   setActivityExpanded: (key: string, expanded: boolean) => void

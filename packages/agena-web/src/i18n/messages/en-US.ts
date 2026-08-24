@@ -2386,6 +2386,7 @@ export default {
         moreCount: '+{count} more...',
         expandMoreCount: 'Show {count} more...',
         expandAll: 'Show all',
+        collapseAll: 'Collapse all',
         hide: 'Hide',
         toolInvocation: {
           toolNames: {
@@ -2445,6 +2446,17 @@ export default {
             thinking: 'Thinking',
           },
         },
+      },
+      controls: {
+        title: 'Part controls',
+        actionsTitle: 'Part controls',
+        menuTitle: 'Display options',
+        expandNextCount: 'Expand {count} parts',
+        collectAll: 'Load all parts',
+        pageSizeTitle: 'Parts per load',
+        pageSizeOption: '{count} parts at a time',
+        pageSizeInputLabel: 'Parts to load at a time (1–50)',
+        each: 'each',
       },
       optimistic: {
         sending: 'sending...',

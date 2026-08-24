@@ -491,6 +491,27 @@ impl PersistenceEngine for InMemoryEngine {
             .ok_or_else(|| StoreError::not_found(format!("session {session_id}")))
     }
 
+    async fn user_message_count(&self, session_id: i64) -> Result<u64, StoreError> {
+        self.session_meta(session_id).await?;
+        let membership = self.membership.read().expect("membership lock");
+        let parts = self.parts.read().expect("parts lock");
+        let count = membership
+            .get(&session_id)
+            .into_iter()
+            .flat_map(|ids| ids.iter())
+            .filter(|id| {
+                parts
+                    .get(id)
+                    .is_some_and(|part| part.kind == "run" && part.role == PartRole::User)
+            })
+            .count();
+        u64::try_from(count).map_err(|_| {
+            StoreError::InvalidState(format!(
+                "user message count overflow for session {session_id}"
+            ))
+        })
+    }
+
     async fn load_session(&self, session_id: i64) -> Result<SessionView, StoreError> {
         let meta = self.session_meta(session_id).await?;
         let parts = self.ordered_parts(session_id);

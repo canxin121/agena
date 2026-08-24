@@ -214,6 +214,7 @@ pub(crate) async fn session_parts(
         },
         parts,
         folds: Vec::new(),
+        user_message_count: None,
     })
 }
 

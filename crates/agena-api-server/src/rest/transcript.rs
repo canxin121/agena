@@ -21,6 +21,11 @@ use crate::{error::ServerError, live::project_parts_for_user, state::AppState};
 
 const RAW_SCAN_PAGE_SIZE: i64 = 200;
 const ACTIVITY_VISIBLE_TAIL: usize = 5;
+const MAX_ACTIVITY_VISIBLE_TAIL: usize = 50;
+/// A history page contains one user-side role group and one assistant-side
+/// role group. Consecutive runs of the same role stay together so a page
+/// never cuts a burst of user sends or assistant continuations in half.
+const DEFAULT_MESSAGE_ROLE_GROUPS: usize = 2;
 const MAX_VISIBLE_BLOCKS: usize = 12;
 
 fn transcript_visible_to_user(part: &Part) -> bool {
@@ -31,6 +36,10 @@ fn transcript_visible_to_user(part: &Part) -> bool {
 pub struct SessionTranscriptQuery {
     #[serde(default)]
     pub limit: Option<u64>,
+    /// Number of assistant activity parts kept visible before a fold is made.
+    /// The client may change this independently from the logical block limit.
+    #[serde(default)]
+    pub activity_limit: Option<u64>,
     #[serde(default)]
     pub cursor: Option<String>,
 }
@@ -77,9 +86,20 @@ pub async fn list_session_transcript(
     AxumQuery(query): AxumQuery<SessionTranscriptQuery>,
 ) -> Result<impl axum::response::IntoResponse, ServerError> {
     let store = state.session_store()?;
-    let limit = query.limit.unwrap_or(8).clamp(1, MAX_VISIBLE_BLOCKS as u64) as usize;
+    let user_message_count = store
+        .user_message_count(session_id)
+        .await
+        .map_err(|error| ServerError::internal_error(&error))?;
+    let limit = query
+        .limit
+        .unwrap_or(DEFAULT_MESSAGE_ROLE_GROUPS as u64)
+        .clamp(1, MAX_VISIBLE_BLOCKS as u64) as usize;
+    let activity_limit = query
+        .activity_limit
+        .unwrap_or(ACTIVITY_VISIBLE_TAIL as u64)
+        .clamp(1, MAX_ACTIVITY_VISIBLE_TAIL as u64) as usize;
     let cursor = decode_cursor(query.cursor.as_deref(), session_id)?;
-    let page = load_visible_page(store.as_ref(), session_id, cursor, limit).await?;
+    let page = load_visible_page(store.as_ref(), session_id, cursor, limit, activity_limit).await?;
     let next_cursor = page
         .next_cursor
         .map(|cursor| encode_transcript_cursor(session_id, cursor))
@@ -91,6 +111,7 @@ pub async fn list_session_transcript(
         version: page.version,
         parts: projected,
         folds: page.folds,
+        user_message_count: Some(user_message_count),
         page: agena_api::pagination::PageInfo {
             next_cursor,
             has_more: page.has_more,
@@ -137,6 +158,7 @@ pub async fn list_session_transcript_run_parts(
         version: page.meta.version,
         parts: projected,
         folds: Vec::new(),
+        user_message_count: None,
         page: agena_api::pagination::PageInfo {
             next_cursor,
             has_more: page.has_more,
@@ -206,6 +228,7 @@ pub async fn list_session_transcript_fold_parts(
             .version,
         parts: projected,
         folds: Vec::new(),
+        user_message_count: None,
         page: agena_api::pagination::PageInfo {
             next_cursor: next_cursor.transpose()?,
             has_more,
@@ -227,6 +250,7 @@ async fn load_visible_page(
     session_id: i64,
     before: Option<PartCursor>,
     limit: usize,
+    activity_visible_tail: usize,
 ) -> Result<VisiblePage, ServerError> {
     let mut raw_desc = Vec::<Part>::new();
     let mut raw_before = before;
@@ -234,7 +258,11 @@ async fn load_visible_page(
     let mut version = 0;
     let mut blocks = Vec::new();
 
-    while raw_has_more && blocks.len() < limit {
+    // When the raw page ends in the middle of a same-role burst, the current
+    // block list can reach `limit` before that burst is complete. Scan one
+    // additional logical block whenever older raw parts remain; otherwise a
+    // consecutive user/assistant run could be split across transcript pages.
+    while raw_has_more && blocks.len() <= limit {
         let page = store
             .load_page(session_id, raw_before, RAW_SCAN_PAGE_SIZE)
             .await
@@ -292,7 +320,7 @@ async fn load_visible_page(
         }
     }
 
-    let projection = project_visible_blocks(session_id, &selected)?;
+    let projection = project_visible_blocks(session_id, &selected, activity_visible_tail)?;
     Ok(VisiblePage {
         version,
         parts: projection.parts,
@@ -367,11 +395,12 @@ fn logical_blocks(parts: &[Part]) -> Vec<LogicalBlock> {
 
     let mut blocks = Vec::<LogicalBlock>::new();
     for unit in units {
-        if unit.role == "assistant" && blocks.last().is_some_and(|block| block.role == "assistant")
+        if matches!(unit.role.as_str(), "assistant" | "user")
+            && blocks.last().is_some_and(|block| block.role == unit.role)
         {
             blocks
                 .last_mut()
-                .expect("assistant block exists")
+                .expect("same-role block exists")
                 .units
                 .push(unit);
         } else {
@@ -387,6 +416,7 @@ fn logical_blocks(parts: &[Part]) -> Vec<LogicalBlock> {
 fn project_visible_blocks(
     session_id: i64,
     blocks: &[LogicalBlock],
+    activity_visible_tail: usize,
 ) -> Result<VisibleProjection, ServerError> {
     let mut parts = Vec::new();
     let mut folds = Vec::new();
@@ -399,7 +429,8 @@ fn project_visible_blocks(
             }
         }
         if block.role == "assistant" {
-            let (visible, unit_folds) = visible_assistant_block(session_id, block)?;
+            let (visible, unit_folds) =
+                visible_assistant_block(session_id, block, activity_visible_tail)?;
             parts.extend(visible);
             folds.extend(unit_folds);
         }
@@ -440,6 +471,7 @@ fn compact_presentation_part(mut part: Part) -> Part {
 fn visible_assistant_block(
     session_id: i64,
     block: &LogicalBlock,
+    activity_visible_tail: usize,
 ) -> Result<(Vec<Part>, Vec<SessionTranscriptFoldResource>), ServerError> {
     let run_ids = block
         .units
@@ -459,7 +491,7 @@ fn visible_assistant_block(
     }
     markers.sort_by_key(|part| (part.created_at_ms, part.part_id));
     activities.sort_by_key(|part| (part.created_at_ms, part.part_id));
-    let hidden_count = activities.len().saturating_sub(ACTIVITY_VISIBLE_TAIL);
+    let hidden_count = activities.len().saturating_sub(activity_visible_tail);
     let visible_start = hidden_count;
     let mut visible = markers;
     visible.extend(activities[visible_start..].iter().cloned());
@@ -618,7 +650,7 @@ mod tests {
                 parts,
             }],
         };
-        let (visible, folds) = visible_assistant_block(1, &block).unwrap();
+        let (visible, folds) = visible_assistant_block(1, &block, ACTIVITY_VISIBLE_TAIL).unwrap();
 
         assert_eq!(
             visible.iter().map(|part| part.part_id).collect::<Vec<_>>(),
@@ -629,6 +661,27 @@ mod tests {
         assert_eq!(folds[0].anchor_part_id, 3);
         assert_eq!(folds[0].hidden_count, 2);
         assert!(folds[0].next_cursor.is_some());
+    }
+
+    #[test]
+    fn server_fold_honors_a_custom_activity_tail() {
+        let parts = (1..=7).map(|id| part(id, "tool_call")).collect::<Vec<_>>();
+        let block = LogicalBlock {
+            role: "assistant".to_owned(),
+            units: vec![RunUnit {
+                run_id: Some(100),
+                role: "assistant".to_owned(),
+                parts,
+            }],
+        };
+
+        let (visible, folds) = visible_assistant_block(1, &block, 2).unwrap();
+
+        assert_eq!(
+            visible.iter().map(|part| part.part_id).collect::<Vec<_>>(),
+            vec![6, 7]
+        );
+        assert_eq!(folds[0].hidden_count, 5);
     }
 
     #[test]
@@ -646,5 +699,37 @@ mod tests {
                 "{visibility:?}"
             );
         }
+    }
+
+    #[test]
+    fn pagination_groups_consecutive_user_and_assistant_runs_together() {
+        let mut user_one = part(1, "run");
+        user_one.role = PartRole::User;
+        let mut user_two = part(2, "run");
+        user_two.role = PartRole::User;
+        let mut assistant_one = part(3, "run");
+        assistant_one.role = PartRole::Assistant;
+        let mut assistant_two = part(4, "run");
+        assistant_two.role = PartRole::Assistant;
+        let mut user_three = part(5, "run");
+        user_three.role = PartRole::User;
+
+        let blocks =
+            logical_blocks(&[user_one, user_two, assistant_one, assistant_two, user_three]);
+
+        assert_eq!(
+            blocks
+                .iter()
+                .map(|block| block.role.as_str())
+                .collect::<Vec<_>>(),
+            vec!["user", "assistant", "user"]
+        );
+        assert_eq!(
+            blocks
+                .iter()
+                .map(|block| block.units.len())
+                .collect::<Vec<_>>(),
+            vec![2, 2, 1]
+        );
     }
 }

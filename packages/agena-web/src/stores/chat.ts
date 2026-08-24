@@ -9,6 +9,7 @@ import { STORAGE_RUN_CONFIG } from './chat/storeKeys'
 import { ApiError } from '../lib/api'
 import { isRunTerminal } from '../lib/chatRunState'
 import { setLocalJson, getLocalJson } from '../lib/persist'
+import { localStorageKeys } from '../lib/persistence/storageKeys'
 import { useToastsStore } from './toasts'
 import { useDirectoryStore } from './directory'
 import { i18n } from '../i18n'
@@ -29,13 +30,16 @@ import type {
 import type { JsonObject, JsonValue } from '../types/json'
 import { readSessionIdFromQuery } from '@/app/navigation/sessionQuery'
 import { useWorkspacePaneContext, type WorkspacePaneContext } from '@/app/workspace/workspacePaneContext'
+import { DEFAULT_TRANSCRIPT_PART_PAGE_SIZE, normalizeTranscriptPartPageSize } from '@/pages/chat/transcriptPartPaging'
 
 // ─── constants ──────────────────────────────────────────────────────────────
 
 const SESSION_PAGE_SIZE = 30
 // Keep session entry cheap. The transcript endpoint interprets this as a
-// logical visible-block limit and performs folded raw-part paging server-side.
-const MESSAGE_PAGE_SIZE = 3
+// two same-role pagination groups: one user-side group and one assistant-side
+// group. The server keeps consecutive runs of one role together so a burst of
+// user sends or assistant continuations is never split at a page boundary.
+const MESSAGE_PAGE_SIZE = 2
 const STORAGE_SELECTED_SESSION = 'agena.chat.selected-session-id.v1'
 
 function isRecord(value: JsonValue): value is JsonObject {
@@ -62,6 +66,12 @@ function firstNonEmpty(values: Array<string | null | undefined>): string {
   return ''
 }
 
+function loadStoredTranscriptPartPageSize(): number {
+  return normalizeTranscriptPartPageSize(
+    getLocalJson<unknown>(localStorageKeys.chat.transcriptPartPageSize, DEFAULT_TRANSCRIPT_PART_PAGE_SIZE),
+  )
+}
+
 const useChatStoreDefinition = defineStore('chat', () => {
   const toasts = useToastsStore()
   const directoryStore = useDirectoryStore()
@@ -86,7 +96,13 @@ const useChatStoreDefinition = defineStore('chat', () => {
   const messagesLoading = ref(false)
   const messagesError = ref<string | null>(null)
 
+  // The same preference controls the server-side visible activity tail, the
+  // local collapsed activity window, and each lazy fold request. Keeping it
+  // in the store means a background refresh cannot silently fall back to 5.
+  const transcriptPartPageSize = ref(loadStoredTranscriptPartPageSize())
+
   const historyLimitBySession = ref<Record<string, number>>({})
+  const historyUserMessageCountBySession = ref<Record<string, number | null>>({})
   const historyLoadingBySession = ref<Record<string, boolean>>({})
   const historyExhaustedBySession = ref<Record<string, boolean>>({})
   const historyCursorBySession = ref<Record<string, string | null>>({})
@@ -320,21 +336,8 @@ const useChatStoreDefinition = defineStore('chat', () => {
   // ─── messages ─────────────────────────────────────────────────────────────
 
   function sessionMessageLimit(sessionId: string): number {
-    const sid = (sessionId || '').trim()
-    const base = MESSAGE_PAGE_SIZE
-    const window = typeof historyLimitBySession.value[sid] === 'number' ? Number(historyLimitBySession.value[sid]) : 0
-    return window > base ? window : base
-  }
-
-  function pruneSessionMessages(sessionId: string) {
-    const sid = (sessionId || '').trim()
-    if (!sid) return
-    const list = messagesBySession.value[sid]
-    if (!Array.isArray(list)) return
-    const limit = sessionMessageLimit(sid)
-    if (list.length > limit) {
-      list.splice(0, list.length - limit)
-    }
+    void sessionId
+    return MESSAGE_PAGE_SIZE
   }
 
   function ensureSessionMessages(sessionId: string): MessageEntry[] {
@@ -377,7 +380,11 @@ const useChatStoreDefinition = defineStore('chat', () => {
     return [...list].sort((a, b) => compareChatIds(String(a?.info?.id ?? ''), String(b?.info?.id ?? '')))
   }
 
-  function mergeMessageLists(older: MessageEntry[], newer: MessageEntry[]): MessageEntry[] {
+  function mergeMessageLists(
+    older: MessageEntry[],
+    newer: MessageEntry[],
+    opts?: { authoritativeFolds?: boolean },
+  ): MessageEntry[] {
     const map = new Map<string, MessageEntry>()
     for (const m of [...older, ...newer]) {
       const id = String(m?.info?.id ?? '')
@@ -395,17 +402,25 @@ const useChatStoreDefinition = defineStore('chat', () => {
           if (pid) partMap.set(pid, p)
         }
         merged.parts = [...partMap.values()].sort((a, b) => compareChatIds(String(a.id), String(b.id)))
+        // A fold-free second message can be the result of a local expansion,
+        // while a second message with folds is an authoritative transcript
+        // refresh. Prefer the second message's fold snapshot when present;
+        // otherwise retain the currently active local fold until the explicit
+        // expansion request updates it.
+        const preferredFolds = opts?.authoritativeFolds
+          ? m.folds || []
+          : m.folds?.length
+            ? m.folds
+            : existing.folds || []
         const foldMap = new Map<string, MessageFold>()
-        for (const fold of [...(existing.folds || []), ...(m.folds || [])]) {
+        for (const fold of preferredFolds) {
           const key = String(fold.runId)
           const previous = foldMap.get(key)
-          foldMap.set(key, {
+          const normalized = {
             ...fold,
-            ...(previous || {}),
-            hiddenCount: previous
-              ? Math.min(previous.hiddenCount, Math.max(0, Math.floor(Number(fold.hiddenCount))))
-              : Math.max(0, Math.floor(Number(fold.hiddenCount))),
-          })
+            hiddenCount: Math.max(0, Math.floor(Number(fold.hiddenCount))),
+          }
+          if (!previous || normalized.hiddenCount <= previous.hiddenCount) foldMap.set(key, normalized)
         }
         const activeFolds = [...foldMap.values()].filter((fold) => fold.hiddenCount > 0 && Boolean(fold.nextCursor))
         if (activeFolds.length) merged.folds = activeFolds
@@ -484,7 +499,10 @@ const useChatStoreDefinition = defineStore('chat', () => {
     return out
   }
 
-  async function refreshMessagesInternal(sessionId: string, opts?: { silent?: boolean }): Promise<void> {
+  async function refreshMessagesInternal(
+    sessionId: string,
+    opts?: { silent?: boolean; replace?: boolean; authoritativeFolds?: boolean },
+  ): Promise<void> {
     const sid = (sessionId || '').trim()
     if (!sid) return
 
@@ -499,14 +517,30 @@ const useChatStoreDefinition = defineStore('chat', () => {
 
     try {
       const limit = sessionMessageLimit(sid)
-      const page = await chatApi.listMessages(sid, limit)
+      const page = await chatApi.listMessages(sid, limit, undefined, transcriptPartPageSize.value)
       if (!isLatestRefreshMessagesRequest(sid, requestSeq, generation)) return
       const ordered = normalizeMessageList(page.entries)
       const hasLoadedOlder = historyOlderLoadedBySession.value[sid] === true
-      const nextMessages = hasLoadedOlder ? mergeMessageLists(ordered, ensureSessionMessages(sid)) : ordered
+      const currentMessages = ensureSessionMessages(sid)
+      const shouldReplace = opts?.replace === true
+      // A refresh can race with SSE delivery. Merge a live cache into the
+      // server page so a valid part received during the request is not
+      // discarded just because it was not in that page's snapshot. Explicit
+      // rewind/replace callers still get exact server replacement semantics.
+      const nextMessages =
+        shouldReplace || (!currentMessages.length && !hasLoadedOlder)
+          ? ordered
+          : mergeMessageLists(currentMessages, ordered, {
+              authoritativeFolds: opts?.authoritativeFolds,
+            })
       setSessionMessages(sid, nextMessages)
-      pruneSessionMessages(sid)
       markMessagesHydrated(sid)
+      if (typeof page.userMessageCount === 'number' && Number.isFinite(page.userMessageCount)) {
+        historyUserMessageCountBySession.value = {
+          ...historyUserMessageCountBySession.value,
+          [sid]: Math.max(0, Math.floor(page.userMessageCount)),
+        }
+      }
       historyLimitBySession.value = { ...historyLimitBySession.value, [sid]: nextMessages.length }
       if (!hasLoadedOlder) {
         historyCursorBySession.value = { ...historyCursorBySession.value, [sid]: page.nextCursor ?? null }
@@ -538,10 +572,15 @@ const useChatStoreDefinition = defineStore('chat', () => {
           pushErrorToastWithDedupe(`messages:${sid}`, msg || 'Failed to load messages', silent ? 3500 : 4500, 8000)
         }
       }
-      if (!authRequired && hasCache) {
+      // `hasCache` was captured before the request. SSE may have populated the
+      // cache while the request was in flight, so inspect the current cache
+      // before clearing anything. Never turn a transient refresh failure into
+      // a visible empty conversation.
+      const hasCurrentCache = (messagesBySession.value[sid]?.length ?? 0) > 0
+      if (!authRequired && hasCurrentCache) {
         scheduleMessageRefreshRetry(sid, 240)
       }
-      if (!hasCache && !silent) {
+      if (!hasCurrentCache && !silent) {
         setSessionMessages(sid, [])
       }
     } finally {
@@ -549,7 +588,10 @@ const useChatStoreDefinition = defineStore('chat', () => {
     }
   }
 
-  async function refreshMessages(sessionId: string, opts?: { silent?: boolean }) {
+  async function refreshMessages(
+    sessionId: string,
+    opts?: { silent?: boolean; replace?: boolean; authoritativeFolds?: boolean },
+  ) {
     const sid = (sessionId || '').trim()
     if (!sid) return
 
@@ -577,6 +619,10 @@ const useChatStoreDefinition = defineStore('chat', () => {
       loading: Boolean(historyLoadingBySession.value[sid]),
       exhausted: Boolean(historyExhaustedBySession.value[sid]),
       limit: typeof historyLimitBySession.value[sid] === 'number' ? Number(historyLimitBySession.value[sid]) : 0,
+      userMessageCount:
+        typeof historyUserMessageCountBySession.value[sid] === 'number'
+          ? Number(historyUserMessageCountBySession.value[sid])
+          : null,
     }
   })
 
@@ -598,11 +644,17 @@ const useChatStoreDefinition = defineStore('chat', () => {
     historyLoadingBySession.value = { ...historyLoadingBySession.value, [sid]: true }
     try {
       const cursor = historyCursorBySession.value[sid] ?? null
-      const page = await chatApi.listMessages(sid, MESSAGE_PAGE_SIZE, cursor)
+      const page = await chatApi.listMessages(sid, MESSAGE_PAGE_SIZE, cursor, transcriptPartPageSize.value)
       if (generation !== transcriptCacheGeneration) return false
       const normalized = normalizeMessageList(page.entries)
       const merged = mergeMessageLists(normalized, ensureSessionMessages(sid))
       setSessionMessages(sid, merged)
+      if (typeof page.userMessageCount === 'number' && Number.isFinite(page.userMessageCount)) {
+        historyUserMessageCountBySession.value = {
+          ...historyUserMessageCountBySession.value,
+          [sid]: Math.max(0, Math.floor(page.userMessageCount)),
+        }
+      }
       historyLimitBySession.value = { ...historyLimitBySession.value, [sid]: merged.length }
       historyOlderLoadedBySession.value = { ...historyOlderLoadedBySession.value, [sid]: true }
       historyCursorBySession.value = { ...historyCursorBySession.value, [sid]: page.nextCursor ?? null }
@@ -615,7 +667,12 @@ const useChatStoreDefinition = defineStore('chat', () => {
     }
   }
 
-  async function loadFoldedActivity(sessionId: string, fold: MessageFold, all = false): Promise<boolean> {
+  async function loadFoldedActivity(
+    sessionId: string,
+    fold: MessageFold,
+    all = false,
+    pageSize = transcriptPartPageSize.value,
+  ): Promise<boolean> {
     const sid = (sessionId || '').trim()
     if (!sid || !fold.nextCursor || !Number.isFinite(fold.runId)) return false
     if (historyLoadingBySession.value[sid]) return false
@@ -626,8 +683,9 @@ const useChatStoreDefinition = defineStore('chat', () => {
       let loadedAny = false
       let activeFold = { ...fold }
       let remaining = Math.max(0, Math.floor(Number(activeFold.hiddenCount)))
+      const requestedPageSize = normalizeTranscriptPartPageSize(pageSize)
       do {
-        const page = await chatApi.listTranscriptFoldParts(sid, activeFold.runIds, 5, cursor)
+        const page = await chatApi.listTranscriptFoldParts(sid, activeFold.runIds, requestedPageSize, cursor)
         if (generation !== transcriptCacheGeneration) return false
         const normalized = normalizeMessageList(page.entries)
         if (!normalized.length) break
@@ -685,6 +743,21 @@ const useChatStoreDefinition = defineStore('chat', () => {
     else delete target.folds
   }
 
+  function setTranscriptPartPageSize(value: number) {
+    const next = normalizeTranscriptPartPageSize(value)
+    if (transcriptPartPageSize.value === next) return
+    transcriptPartPageSize.value = next
+    setLocalJson(localStorageKeys.chat.transcriptPartPageSize, next)
+
+    const sid = selectedSessionId.value
+    if (sid && messagesHydratedBySession.value[sid]) {
+      // Re-read the visible tail using the new preference. The refresh merge
+      // keeps already loaded parts and only changes how much is initially
+      // shown for still-folded runs.
+      void refreshMessages(sid, { silent: true, authoritativeFolds: true }).catch(() => {})
+    }
+  }
+
   /** Drop transcript pages when the chat page is actually unmounted. */
   function clearTranscriptCache() {
     transcriptCacheGeneration += 1
@@ -700,6 +773,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
     messagesBySession.value = {}
     messagesHydratedBySession.value = {}
     historyLimitBySession.value = {}
+    historyUserMessageCountBySession.value = {}
     historyLoadingBySession.value = {}
     historyExhaustedBySession.value = {}
     historyCursorBySession.value = {}
@@ -997,6 +1071,10 @@ const useChatStoreDefinition = defineStore('chat', () => {
       loading: Boolean(historyLoadingBySession.value[sid]),
       exhausted: Boolean(historyExhaustedBySession.value[sid]),
       limit: typeof historyLimitBySession.value[sid] === 'number' ? Number(historyLimitBySession.value[sid]) : 0,
+      userMessageCount:
+        typeof historyUserMessageCountBySession.value[sid] === 'number'
+          ? Number(historyUserMessageCountBySession.value[sid])
+          : null,
     }
   }
 
@@ -1135,6 +1213,11 @@ const useChatStoreDefinition = defineStore('chat', () => {
       const next = { ...historyLimitBySession.value }
       delete next[sid]
       historyLimitBySession.value = next
+    }
+    {
+      const next = { ...historyUserMessageCountBySession.value }
+      delete next[sid]
+      historyUserMessageCountBySession.value = next
     }
     {
       const next = { ...historyLoadingBySession.value }
@@ -1442,7 +1525,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
     await chatApi.rewindSession(sid, turnId)
     clearMessagesHydrated(sid)
     // Reload the timeline (server removed later parts).
-    await refreshMessages(sid, { silent: true })
+    await refreshMessages(sid, { silent: true, replace: true })
     scheduleSessionsRefresh(1200)
   }
 
@@ -1522,6 +1605,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
 
             if (kind === 'run') {
               // New message (turn marker).
+              const messageAlreadyKnown = binarySearchById(list, String(partId), (m) => m.info.id).found
               const runState = readString(part.state as JsonValue)
               const content = asRecord(part.content)
               const info: MessageInfo = {
@@ -1543,7 +1627,15 @@ const useChatStoreDefinition = defineStore('chat', () => {
               if (modelID) info.modelID = modelID
               if (turnId) info.turnId = turnId
               upsertMessageEntryIn(list, info)
-              pruneSessionMessages(sid)
+              if (info.role === 'user' && !messageAlreadyKnown) {
+                const currentCount = historyUserMessageCountBySession.value[sid]
+                if (typeof currentCount === 'number') {
+                  historyUserMessageCountBySession.value = {
+                    ...historyUserMessageCountBySession.value,
+                    [sid]: currentCount + 1,
+                  }
+                }
+              }
               scheduleSessionsRefresh(800)
             } else {
               const existing = binarySearchById(list, key, (m) => m.info.id)
@@ -1553,7 +1645,6 @@ const useChatStoreDefinition = defineStore('chat', () => {
                 const partOut = normalizeAgenaPart(String(partId), sid, key, part as JsonValue)
                 if (partOut) {
                   upsertPart(list[existing.index], partOut, '')
-                  pruneSessionMessages(sid)
                 }
               } else {
                 // Orphan content part before any run marker: create a message.
@@ -1665,6 +1756,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
     messages,
     messagesLoading,
     messagesError,
+    transcriptPartPageSize,
     selectedAttention,
     selectedSessionError,
     selectedSessionRunConfig,
@@ -1680,6 +1772,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
     refreshMessages,
     loadOlderMessages,
     loadFoldedActivity,
+    setTranscriptPartPageSize,
     clearTranscriptCache,
     selectedHistory,
     createSession,

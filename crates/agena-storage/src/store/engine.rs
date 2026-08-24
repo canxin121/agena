@@ -65,6 +65,11 @@ pub trait PersistenceEngine: Send + Sync {
     /// Load a session's metadata.
     async fn session_meta(&self, session_id: i64) -> Result<SessionMeta, StoreError>;
 
+    /// Count durable user-send run markers without materializing the
+    /// transcript. This is used by the chat history navigator to show the
+    /// exact session size before older pages are loaded.
+    async fn user_message_count(&self, session_id: i64) -> Result<u64, StoreError>;
+
     /// Load a session's metadata plus all parts ordered by
     /// `(created_at_ms, part_id)` — one membership JOIN.
     async fn load_session(&self, session_id: i64) -> Result<SessionView, StoreError>;

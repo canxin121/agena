@@ -13,7 +13,7 @@ type ChatLike = {
   selectedSessionId: string | null
   messages: ChatMessageLike[]
   messagesLoading: boolean
-  selectedHistory: { loading: boolean; exhausted: boolean }
+  selectedHistory: { loading: boolean; exhausted: boolean; userMessageCount?: number | null }
   loadOlderMessages: (sid: string) => Promise<boolean>
 }
 
@@ -227,8 +227,10 @@ export function useChatScrollNav(opts: {
   })
 
   const navTotalLabel = computed(() => {
-    // OpenCode API does not expose a cheap total count.
-    // Show a "+" suffix until we've loaded the beginning.
+    const total = chat.selectedHistory.userMessageCount
+    if (typeof total === 'number' && Number.isFinite(total)) return String(Math.max(0, Math.floor(total)))
+    // Older servers do not expose the count. Show a "+" suffix until we've
+    // loaded the beginning in that compatibility case.
     const n = navigableMessageIds.value.length
     return chat.selectedHistory.exhausted ? String(n) : `${n}+`
   })

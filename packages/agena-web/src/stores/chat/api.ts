@@ -64,12 +64,7 @@ export type AgenaPart = {
   [k: string]: JsonValue
 }
 
-export type ToolDetailSection =
-  | 'metadata'
-  | 'input'
-  | 'output'
-  | 'output_metadata'
-  | 'presentation'
+export type ToolDetailSection = 'metadata' | 'input' | 'output' | 'output_metadata' | 'presentation'
 
 export type ToolDetailResource = {
   part_id: number
@@ -82,6 +77,7 @@ export type AgenaSessionParts = {
   session_id: number
   version: number
   parts: AgenaPart[]
+  user_message_count?: number | null
   folds?: Array<{
     run_id: number
     run_ids?: number[]
@@ -156,6 +152,7 @@ export type MessageListResponse = {
   entries: MessageEntry[]
   hasMore?: boolean
   nextCursor?: string | null
+  userMessageCount?: number | null
 }
 
 function messageFoldsFromWire(folds: AgenaSessionParts['folds']): MessageFold[] {
@@ -884,11 +881,15 @@ export async function listMessages(
   sessionId: string,
   limit: number,
   cursor?: string | null,
+  activityLimit?: number,
 ): Promise<MessageListResponse> {
   const sid = String(sessionId || '').trim()
   if (!sid) return { entries: [], hasMore: false, nextCursor: null }
   const params = new URLSearchParams()
   params.set('limit', String(Math.max(1, Math.min(12, Math.floor(limit || 8)))))
+  if (typeof activityLimit === 'number' && Number.isFinite(activityLimit)) {
+    params.set('activity_limit', String(Math.max(1, Math.min(50, Math.floor(activityLimit)))))
+  }
   if (typeof cursor === 'string' && cursor.trim()) params.set('cursor', cursor.trim())
   const parts = await apiJson<AgenaSessionParts>(
     `/api/v1/sessions/${encodeURIComponent(sid)}/transcript?${params.toString()}`,
@@ -898,6 +899,10 @@ export async function listMessages(
     entries: entriesFromParts(sid, parts.parts as unknown as JsonValue[], folds),
     hasMore: Boolean(parts.page?.has_more),
     nextCursor: parts.page?.next_cursor ?? null,
+    userMessageCount:
+      typeof parts.user_message_count === 'number' && Number.isFinite(parts.user_message_count)
+        ? Math.max(0, Math.floor(parts.user_message_count))
+        : null,
   }
 }
 

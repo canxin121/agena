@@ -421,6 +421,7 @@ void sessionActionsMenuRef
             <div ref="contentEl" class="chat-message-column py-3">
               <MessageList
                 :is-compact-layout="ui.isCompactLayout"
+                :is-mobile-pointer="ui.isMobilePointer"
                 :selected-session-id="chat.selectedSessionId"
                 :messages-loading="chat.messagesLoading"
                 :messages-error="chat.messagesError"
@@ -428,6 +429,7 @@ void sessionActionsMenuRef
                 :render-blocks="renderBlocks"
                 :pending-initial-scroll-session-id="pendingInitialScrollSessionId"
                 :loading-older="loadingOlder"
+                :activity-page-size="chat.transcriptPartPageSize"
                 :show-timestamps="showTimestamps"
                 :format-time="formatTime"
                 :copied-message-id="copiedMessageId"
@@ -459,6 +461,8 @@ void sessionActionsMenuRef
                 @copySessionError="handleCopySessionError"
                 @clearSessionError="chat.selectedSessionId ? chat.clearSessionError(chat.selectedSessionId) : undefined"
                 @expand-all="ctx.expandAllTranscriptParts"
+                @collapse-all="ctx.collapseAllTranscriptParts"
+                @set-activity-page-size="ctx.setTranscriptPartPageSize"
               />
 
               <div v-if="overlayReservePx > 0" :style="{ height: `${overlayReservePx}px` }" aria-hidden="true" />

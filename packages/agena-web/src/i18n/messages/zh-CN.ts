@@ -2381,6 +2381,7 @@ export default {
         moreCount: '+{count} 条更多...',
         expandMoreCount: '再展开 {count} 条...',
         expandAll: '全部展开',
+        collapseAll: '全部收起',
         hide: '隐藏',
         toolInvocation: {
           toolNames: {
@@ -2440,6 +2441,17 @@ export default {
             thinking: '思考',
           },
         },
+      },
+      controls: {
+        title: 'Part 操作',
+        actionsTitle: 'Part 操作',
+        menuTitle: '显示选项',
+        expandNextCount: '展开 {count} 个 part',
+        collectAll: '收齐 part',
+        pageSizeTitle: '每次加载 part 数量',
+        pageSizeOption: '每次 {count} 个 part',
+        pageSizeInputLabel: '每次加载的 part 数量（1–50）',
+        each: '每次',
       },
       optimistic: {
         sending: '发送中...',

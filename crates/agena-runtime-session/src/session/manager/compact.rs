@@ -354,7 +354,7 @@ impl SessionManager {
         let provider_registry = &state.provider_registry;
         let mut turns = inputs.turns.clone();
         prompt_window::render_tool_results_for_model(
-            turns.as_mut_slice(),
+            &mut turns,
             session.active_window_parts(),
             &state.tool_executor,
         )

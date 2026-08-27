@@ -1012,14 +1012,28 @@ pub(crate) fn file_ref_from_attachment(part: &AttachmentPart) -> part_content::F
 }
 
 /// Project a [`SkillReferencePart`] onto the canonical `skill_ref` shape: the
-/// first skill name as the named key, and the full snapshot losslessly under
-/// `extra["skills"]` so the typed content remains lossless.
+/// first skill name as the named key, and only its message-scoped reference
+/// metadata under `extra["skills"]`. Legacy snapshot bodies are accepted on
+/// read but are deliberately stripped from every newly persisted part.
 pub(crate) fn skill_ref_from_reference(part: &SkillReferencePart) -> part_content::SkillRefContent {
     let mut extra = BTreeMap::new();
     if !part.skills.is_empty() {
+        let skills = part
+            .skills
+            .iter()
+            .map(|skill| {
+                serde_json::json!({
+                    "name": skill.name,
+                    "description": skill.description,
+                    "content_hash": skill.content_hash,
+                    "source": skill.source,
+                    "aliases": skill.aliases,
+                })
+            })
+            .collect::<Vec<_>>();
         extra.insert(
             "skills".to_owned(),
-            serde_json::to_value(&part.skills).expect("skill snapshot is always JSON serializable"),
+            serde_json::to_value(skills).expect("skill reference is always JSON serializable"),
         );
     }
     part_content::SkillRefContent {
@@ -1613,6 +1627,38 @@ mod tests {
             typed_content_from_value("text", &new_part.content).unwrap(),
             content
         );
+    }
+
+    #[test]
+    fn skill_ref_persistence_strips_legacy_instructions() {
+        let content = skill_ref_from_reference(&SkillReferencePart {
+            skills: vec![crate::part::SkillReference {
+                name: "review".to_owned(),
+                description: "Review changes".to_owned(),
+                instructions: "legacy body must not persist".to_owned(),
+                content_hash: "abc123".to_owned(),
+                source: "workspace".to_owned(),
+                aliases: vec!["code-review".to_owned()],
+            }],
+        });
+        let stored = content
+            .extra
+            .get("skills")
+            .and_then(Value::as_array)
+            .and_then(|skills| skills.first())
+            .and_then(Value::as_object)
+            .expect("stored Skill reference metadata");
+        assert!(stored.get("instructions").is_none());
+        assert_eq!(stored.get("name").and_then(Value::as_str), Some("review"));
+        assert_eq!(
+            stored.get("content_hash").and_then(Value::as_str),
+            Some("abc123")
+        );
+
+        let restored = part_content::skill_reference_from_skill_ref(&content);
+        assert_eq!(restored.skills.len(), 1);
+        assert!(restored.skills[0].instructions.is_empty());
+        assert_eq!(restored.skills[0].description, "Review changes");
     }
 
     /// Canonical `text` payload helper used by the storage fixtures below.

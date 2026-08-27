@@ -52,16 +52,25 @@ pub(crate) enum CommandPaletteCommand {
 }
 
 /// App-owned Skill catalog page. The presentation remains a generic search
-/// picker, while the App keeps the concrete catalog names and the session
-/// needed to read an immutable Skill snapshot on selection.
+/// picker, while the App keeps the concrete lazy references returned by the
+/// catalog. Selecting a Skill does not read its body.
 #[derive(Debug, Clone)]
 pub(crate) struct SkillPickerOverlay {
     pub(crate) presentation: agena_tui::selection_picker::SelectionPickerPresentation,
     pub(crate) session_id: i64,
-    pub(crate) actions: BTreeMap<String, String>,
+    pub(crate) actions: BTreeMap<String, SkillPickerReference>,
     pub(crate) offset: usize,
     pub(crate) total: usize,
     pub(crate) limit: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SkillPickerReference {
+    pub(crate) name: String,
+    pub(crate) description: String,
+    pub(crate) aliases: Vec<String>,
+    pub(crate) content_hash: String,
+    pub(crate) source: String,
 }
 
 /// Workspace Skill management surface. The catalog can display every

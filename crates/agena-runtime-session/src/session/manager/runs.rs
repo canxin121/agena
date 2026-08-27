@@ -55,10 +55,9 @@ fn tool_visible_text_lossy(tool: &agena_runtime_contracts::part::OperationPart) 
         .map(ToOwned::to_owned)
 }
 
-/// Resolve requested Skill names/aliases into immutable Skill references
-/// for a delegated subtask. The catalog is rebuilt on demand from bundled
-/// and filesystem-discovered Skills, so a later catalog change never
-/// silently alters the snapshot attached to a child session.
+/// Resolve requested Skill names/aliases into lazy Skill references for a
+/// delegated subtask. The body is deliberately omitted; the delegated model
+/// can call `agena.skills.get` when it needs to apply the selected Skill.
 fn resolve_subtask_skill_references(
     workspace_root: &Path,
     requested: &[String],
@@ -89,7 +88,7 @@ fn resolve_subtask_skill_references(
                 Ok(SkillReference {
                     name: skill.frontmatter.name.clone(),
                     description: skill.frontmatter.description.clone(),
-                    instructions: skill.body.clone(),
+                    instructions: String::new(),
                     content_hash: skill.content_hash(),
                     source: skill
                         .source_path
@@ -932,7 +931,7 @@ mod tests {
         let names = refs.iter().map(|r| r.name.as_str()).collect::<Vec<_>>();
         assert_eq!(names, ["verify", "security_review"]);
         for reference in &refs {
-            assert!(!reference.instructions.is_empty());
+            assert!(reference.instructions.is_empty());
             assert!(!reference.content_hash.is_empty());
         }
     }
@@ -952,7 +951,8 @@ mod tests {
         let refs = resolve_subtask_skill_references(root.path(), &requested).expect("resolve");
         assert_eq!(refs.len(), 1);
         assert_eq!(refs[0].name, "explore");
-        assert!(refs[0].instructions.contains("Investigate the workspace"));
+        assert!(refs[0].instructions.is_empty());
+        assert_eq!(refs[0].description, "Explore a codebase");
         assert_eq!(
             refs[0].source,
             skill_dir.join("SKILL.md").display().to_string()
@@ -968,7 +968,7 @@ mod tests {
     }
 
     #[test]
-    fn skill_reference_snapshot_carries_stable_identity() {
+    fn skill_reference_carries_stable_identity_without_body() {
         let root = tempfile::tempdir().expect("temp dir");
         let requested = vec!["verify".to_string()];
         let refs = resolve_subtask_skill_references(root.path(), &requested).expect("resolve");
@@ -976,12 +976,12 @@ mod tests {
         let expected: SkillReference = serde_json::from_value(serde_json::json!({
             "name": first.name,
             "description": first.description,
-            "instructions": first.instructions,
             "content_hash": first.content_hash,
             "source": first.source,
             "aliases": first.aliases,
         }))
-        .expect("serializable snapshot");
+        .expect("serializable lazy reference");
         assert_eq!(&expected, first);
+        assert!(first.instructions.is_empty());
     }
 }

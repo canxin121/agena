@@ -185,7 +185,7 @@ pub struct SessionSubtaskRequest {
     pub prompt: String,
     pub access: agena_domain::ExecutionAccess,
     /// Optional Skill names or aliases to resolve and attach to the child
-    /// session's first user message as immutable Skill references.
+    /// session's first user message as lazy Skill references.
     pub skills: Option<Vec<String>>,
     pub task_id: Option<String>,
     pub requested_model_selection: agena_domain::ModelSelectionConfig,
@@ -934,7 +934,9 @@ fn part_contents_from_composer_document(
                         skills: vec![crate::part::SkillReference {
                             name: skill.name,
                             description: skill.description,
-                            instructions: skill.instructions,
+                            // New message input is ref-only even if an older
+                            // client still sends the legacy snapshot field.
+                            instructions: String::new(),
                             content_hash: skill.content_hash,
                             source: skill.source,
                             aliases: skill.aliases,

@@ -233,12 +233,12 @@ pub struct TaskToolInput {
     #[serde(default)]
     pub run_in_background: bool,
     /// Optional Skill names or aliases to attach to the delegated subtask's
-    /// first user message as immutable Skill references. The child session
-    /// receives the resolved Skill instructions as task guidance and should
-    /// apply them while completing the task. Use skills appropriate to the
-    /// task: for example a read-only review task can attach a review/read-only
-    /// skill, an exploration task can attach an explore skill. Unknown names
-    /// or aliases are rejected before the subtask starts.
+    /// first user message as lazy Skill references. The child model receives
+    /// catalog metadata and can call `agena.skills.get` when it needs the Skill
+    /// body. Use skills appropriate to the task: for example a read-only review
+    /// task can attach a review/read-only skill, an exploration task can attach
+    /// an explore skill. Unknown names or aliases are rejected before the
+    /// subtask starts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skills: Option<Vec<String>>,
     /// Resume an existing subtask session instead of creating a new one.

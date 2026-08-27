@@ -3106,7 +3106,7 @@ mod pending_message_tests {
                         payload: ActivityPayload::SkillReference(SkillReferenceActivity {
                             name: "batch".to_owned(),
                             description: "Run independent work".to_owned(),
-                            instructions: "Use isolated tasks".to_owned(),
+                            instructions: String::new(),
                             content_hash: "sha256:test".to_owned(),
                             source: "test".to_owned(),
                             aliases: Vec::new(),

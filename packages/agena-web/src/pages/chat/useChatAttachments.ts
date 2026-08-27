@@ -199,8 +199,8 @@ export function useChatAttachments(opts: { toasts: Toasts; composerRef: Ref<Comp
     const filename = basename(p)
     if (attachedFiles.value.some((f) => f.serverPath === p)) return
 
-    // Avoid pulling file contents into the browser. We send a lightweight reference
-    // and let the server expand it into a data: URL when posting.
+    // Avoid pulling workspace file contents into the browser or message. We send the
+    // workspace path as a lazy reference; the model can call fs.read when needed.
     const mime = guessMimeFromName(filename)
 
     attachedFiles.value = [

@@ -197,7 +197,11 @@ pub fn project_persisted(parts: &[Part]) -> Vec<WirePart> {
             TypedContent::Run(_) => {}
             TypedContent::FileRef(file_ref) => {
                 for item in &attachment_from_file_ref(&file_ref).attachments {
-                    wire.push(WirePart::Attachment { item: item.clone() });
+                    if let Some(text) = local_resource_reference_text(item) {
+                        wire.push(WirePart::Text { text });
+                    } else {
+                        wire.push(WirePart::Attachment { item: item.clone() });
+                    }
                 }
             }
             TypedContent::SkillRef(skill_ref) => {
@@ -306,9 +310,13 @@ fn wire_part_from_completion_input(part: CompletionInputPart) -> WirePart {
         CompletionInputPart::Text { text } => WirePart::Text { text },
         CompletionInputPart::Reasoning { text } => WirePart::Reasoning { text },
         CompletionInputPart::SystemMessage { text } => WirePart::SystemMessage { text },
-        CompletionInputPart::Attachment { attachment } => WirePart::Attachment {
-            item: attachment_item_from_completion_input(attachment),
-        },
+        CompletionInputPart::Attachment { attachment } => {
+            let item = attachment_item_from_completion_input(attachment);
+            match local_resource_reference_text(&item) {
+                Some(text) => WirePart::Text { text },
+                None => WirePart::Attachment { item },
+            }
+        }
         CompletionInputPart::ToolCall {
             id,
             function,
@@ -672,6 +680,47 @@ pub fn parts_text_lossy(parts: &[WirePart]) -> String {
 }
 
 // ─── Attachment helpers ───────────────────────────────────────────────────────
+
+/// Render a workspace-local resource as a lazy, model-visible reference.
+///
+/// Local paths belong to Agena's workspace and are intentionally never sent to
+/// a provider as multimodal bytes. The exact path is the stable hand-off to
+/// `fs.read`, which lets the model inspect the resource only when the task
+/// actually requires it.
+fn local_resource_reference_text(item: &AttachmentItem) -> Option<String> {
+    let AttachmentSource::LocalPath { path } = &item.source else {
+        return None;
+    };
+    let path = path.trim();
+    if path.is_empty() {
+        return None;
+    }
+
+    let resource = serde_json::json!({
+        "kind": item.kind.as_ref(),
+        "path": path,
+        "name": item.filename.as_deref().unwrap_or_default(),
+        "media_type": item.mime,
+        "size_bytes": item.size_bytes,
+        "sha256": item.sha256,
+    });
+    let payload = serde_json::json!({
+        "semantics": "message_scoped_user_selected_resource_reference",
+        "guidance": [
+            "The user attached this workspace resource by reference; its contents are not embedded in the message.",
+            "Use `fs.read` with `file_path` set exactly to the resource `path` when you need to inspect it. The default `mode=auto` is appropriate unless the task requires another read mode.",
+            "Do not infer the resource contents from its filename or metadata alone."
+        ],
+        "resource": resource,
+    });
+    let encoded = serde_json::to_string_pretty(&payload)
+        .expect("workspace resource reference is always JSON serializable")
+        .replace('<', "\\u003c")
+        .replace('>', "\\u003e");
+    Some(format!(
+        "<agena_resource_reference>\n{encoded}\n</agena_resource_reference>"
+    ))
+}
 
 pub fn hint_text(item: &AttachmentItem) -> String {
     let label = item.summary_label();
@@ -1538,7 +1587,7 @@ mod tests {
     }
 
     #[test]
-    fn selected_skill_reference_enters_provider_history_as_message_scoped_guidance() {
+    fn selected_skill_reference_enters_provider_history_as_lazy_tool_read_reference() {
         let skill = part(
             "skill_ref",
             PartRole::User,
@@ -1547,7 +1596,7 @@ mod tests {
                 "skills": [{
                     "name": "review",
                     "description": "Review the current branch",
-                    "instructions": "Inspect the diff and report concrete findings.",
+                    "instructions": "LEGACY BODY MUST NOT ENTER PROVIDER CONTEXT",
                     "content_hash": "abc123",
                     "source": "bundled",
                     "aliases": []
@@ -1564,15 +1613,46 @@ mod tests {
         let projected = project_persisted(&[skill, text]);
         assert_eq!(projected.len(), 2);
         let WirePart::Text { text: skill } = &projected[0] else {
-            panic!("expected Skill guidance text")
+            panic!("expected Skill reference text")
         };
         assert!(skill.contains("message_scoped_user_selected_skill_reference"));
-        assert!(skill.contains("Inspect the diff and report concrete findings."));
+        assert!(skill.contains("Review the current branch"));
+        assert!(skill.contains("abc123"));
+        assert!(skill.contains("agena.skills.get"));
+        assert!(!skill.contains("LEGACY BODY"));
         assert!(skill.contains("user explicitly selected"));
         assert!(matches!(
             &projected[1],
             WirePart::Text { text } if text == "Review my current change."
         ));
+    }
+
+    #[test]
+    fn local_workspace_file_projects_as_lazy_fs_read_reference() {
+        let file = part(
+            "file_ref",
+            PartRole::User,
+            PartState::Completed,
+            serde_json::json!({
+                "path": ".agena/uploads/abc123-screenshot.png",
+                "name": "screenshot.png",
+                "mime": "image/png",
+                "kind": "image",
+                "size_bytes": 12345
+            }),
+        );
+
+        let projected = project_persisted(&[file]);
+        assert_eq!(projected.len(), 1);
+        let WirePart::Text { text } = &projected[0] else {
+            panic!("workspace files must project as lazy text references")
+        };
+        assert!(text.contains("message_scoped_user_selected_resource_reference"));
+        assert!(text.contains(".agena/uploads/abc123-screenshot.png"));
+        assert!(text.contains("screenshot.png"));
+        assert!(text.contains("fs.read"));
+        assert!(text.contains("file_path"));
+        assert!(!text.contains("data:image/png"));
     }
 
     #[test]

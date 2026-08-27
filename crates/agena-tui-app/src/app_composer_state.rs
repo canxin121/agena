@@ -802,7 +802,7 @@ mod tests {
                         payload: ActivityPayload::SkillReference(SkillReferenceActivity {
                             name: "doctor".to_owned(),
                             description: String::new(),
-                            instructions: "Inspect.".to_owned(),
+                            instructions: String::new(),
                             content_hash: "hash".to_owned(),
                             source: "workspace".to_owned(),
                             aliases: Vec::new(),

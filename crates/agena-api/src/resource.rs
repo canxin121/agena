@@ -1626,6 +1626,8 @@ pub struct PartSkillReference {
     pub name: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub description: String,
+    /// Legacy snapshot compatibility. New Skill references omit bodies.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub instructions: String,
     pub content_hash: String,
     pub source: String,

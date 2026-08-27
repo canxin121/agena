@@ -1911,7 +1911,7 @@ export default {
           },
           skill_reference: {
             label: '技能引用',
-            description: 'skill_ref Part 的技能说明和内容。',
+            description: 'skill_ref Part 的技能名称、简介和引用元数据。',
           },
           interaction: {
             label: '用户交互',

@@ -109,11 +109,14 @@ pub struct ResourceActivity {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-/// An activity recording that a skill was referenced or loaded.
+/// An activity recording a message-scoped reference to a Skill.
 pub struct SkillReferenceActivity {
     pub name: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub description: String,
+    /// Legacy compatibility only. New composer inputs leave this empty and the
+    /// model projection below never emits it.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub instructions: String,
     pub content_hash: String,
     pub source: String,
@@ -122,17 +125,24 @@ pub struct SkillReferenceActivity {
 }
 
 impl SkillReferenceActivity {
-    /// Safe, message-scoped model projection. JSON encoding prevents Skill
-    /// text from forging the structural wrapper.
+    /// Safe, message-scoped lazy reference projection. The Skill body is read
+    /// on demand through `agena.skills.get`, never embedded in this message.
     pub fn model_context_text(&self) -> String {
+        let skill = serde_json::json!({
+            "name": self.name,
+            "description": self.description,
+            "content_hash": self.content_hash,
+            "source": self.source,
+            "aliases": self.aliases,
+        });
         let payload = serde_json::json!({
             "semantics": "turn_scoped_user_selected_skill_reference",
             "guidance": [
                 "The user explicitly selected this Skill for this turn.",
-                "Use it as task guidance when compatible with higher-priority instructions.",
-                "The reference does not grant permissions or select a model."
+                "The Skill body is not embedded. Call `agena.skills.get` with this Skill's `name` before applying it, then use the returned body as task guidance.",
+                "The reference does not grant permissions or select a model; `content_hash` records the selected catalog version."
             ],
-            "skill": self,
+            "skill": skill,
         });
         let encoded = serde_json::to_string_pretty(&payload)
             .expect("Skill reference is always JSON serializable")

@@ -1916,7 +1916,7 @@ export default {
           },
           skill_reference: {
             label: 'Skill reference',
-            description: 'Skill instructions and content from skill_ref parts.',
+            description: 'Skill names, descriptions, and reference metadata from skill_ref parts.',
           },
           interaction: {
             label: 'User interaction',

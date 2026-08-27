@@ -6,8 +6,9 @@ use std::sync::atomic::Ordering;
 use crate::{provider::project_completion_input, tool::ToolApiBinding};
 use agena_domain::{Role, ToolCallId};
 use agena_provider::{
-    CompletionInputAttachment, CompletionInputAttachmentSource, CompletionInputPart,
-    CompletionInputRun, PromptCacheShape, PromptCacheShapeDiff, ProviderCompactionContext,
+    CompletionInputAttachment, CompletionInputAttachmentKind, CompletionInputAttachmentSource,
+    CompletionInputPart, CompletionInputRun, PromptCacheShape, PromptCacheShapeDiff,
+    ProviderCompactionContext,
 };
 use agena_storage::store::{Part, PartRole, PartState};
 use portable_atomic::AtomicU64;
@@ -1058,7 +1059,7 @@ pub(crate) fn build_prepared_prompt(
 /// plugin/tool's runtime model projection. Only the ephemeral request is
 /// mutated; the raw `Part` rows remain unchanged.
 pub(crate) async fn render_tool_results_for_model(
-    turns: &mut [CompletionInputRun],
+    turns: &mut Vec<CompletionInputRun>,
     parts: &[Part],
     executor: &crate::tool::ToolExecutor,
 ) {
@@ -1088,7 +1089,9 @@ pub(crate) async fn render_tool_results_for_model(
     }
 
     let mut rendered = std::collections::HashMap::<String, String>::new();
-    for turn in turns {
+    let original_turns = std::mem::take(turns);
+    for mut turn in original_turns {
+        let mut attachment_parts = Vec::new();
         for part in &mut turn.parts {
             let CompletionInputPart::ToolResult {
                 tool_call_id,
@@ -1098,19 +1101,83 @@ pub(crate) async fn render_tool_results_for_model(
             else {
                 continue;
             };
-            if let Some(model) = rendered.get(tool_call_id) {
-                *output_json = model.clone();
-                continue;
-            }
             let Some((invocation, output)) = operations.get(tool_call_id) else {
                 continue;
             };
-            let projection = executor.render_tool_result(invocation, output).await;
-            if let Some(model) = projection.model {
+            if let Some(model) = rendered.get(tool_call_id) {
                 *output_json = model.clone();
-                rendered.insert(tool_call_id.clone(), model);
+            } else {
+                let projection = executor.render_tool_result(invocation, output).await;
+                if let Some(model) = projection.model {
+                    *output_json = model.clone();
+                    rendered.insert(tool_call_id.clone(), model);
+                }
+            }
+
+            if !output.attachments.is_empty() {
+                attachment_parts.push(CompletionInputPart::Text {
+                    text: format!(
+                        "<agena_tool_attachment_result tool_call_id={:?}>The immediately preceding tool result returned the following attachment content. Treat it as bytes read by that tool call.</agena_tool_attachment_result>",
+                        tool_call_id
+                    ),
+                });
+                attachment_parts.extend(output.attachments.iter().map(|item| {
+                    CompletionInputPart::Attachment {
+                        attachment: completion_input_attachment_from_raw_output(item),
+                    }
+                }));
             }
         }
+        turns.push(turn);
+        if !attachment_parts.is_empty() {
+            turns.push(CompletionInputRun {
+                role: Role::User,
+                parts: attachment_parts,
+                provider_state: Default::default(),
+            });
+        }
+    }
+}
+
+fn completion_input_attachment_from_raw_output(
+    item: &agena_domain::AttachmentItem,
+) -> CompletionInputAttachment {
+    CompletionInputAttachment {
+        kind: match item.kind {
+            agena_domain::AttachmentKind::Image => CompletionInputAttachmentKind::Image,
+            agena_domain::AttachmentKind::Audio => CompletionInputAttachmentKind::Audio,
+            agena_domain::AttachmentKind::Video => CompletionInputAttachmentKind::Video,
+            agena_domain::AttachmentKind::Pdf => CompletionInputAttachmentKind::Pdf,
+            agena_domain::AttachmentKind::File => CompletionInputAttachmentKind::File,
+        },
+        mime: item.mime.clone(),
+        source: match &item.source {
+            agena_domain::AttachmentSource::Url { url } => {
+                CompletionInputAttachmentSource::Url { url: url.clone() }
+            }
+            agena_domain::AttachmentSource::DataUrl { url } => {
+                CompletionInputAttachmentSource::DataUrl { url: url.clone() }
+            }
+            agena_domain::AttachmentSource::Base64 { data } => {
+                CompletionInputAttachmentSource::Base64 { data: data.clone() }
+            }
+            agena_domain::AttachmentSource::FileId { file_id } => {
+                CompletionInputAttachmentSource::FileId {
+                    id: file_id.clone(),
+                }
+            }
+            agena_domain::AttachmentSource::LocalPath { path } => {
+                CompletionInputAttachmentSource::LocalPath { path: path.clone() }
+            }
+        },
+        filename: item.filename.clone(),
+        title: item.title.clone(),
+        size_bytes: item.size_bytes,
+        sha256: item.sha256.clone(),
+        width: item.width,
+        height: item.height,
+        duration_ms: item.duration_ms,
+        page_count: item.page_count,
     }
 }
 
@@ -1221,12 +1288,24 @@ mod tool_result_render_tests {
     async fn prompt_uses_plugin_model_projection_without_mutating_durable_part() {
         let invocation =
             ToolInvocation::new("test.prompt_renderer.render", StructuredObject::default());
-        let mut operation = OperationPart::completed(
-            17,
-            invocation,
-            RawOutput::text("durable raw output"),
-            TimeRange::default(),
-        );
+        let mut raw_output = RawOutput::text("durable raw output");
+        raw_output.attachments.push(agena_domain::AttachmentItem {
+            kind: agena_domain::AttachmentKind::Image,
+            mime: "image/png".to_owned(),
+            source: agena_domain::AttachmentSource::Base64 {
+                data: "aW1hZ2UtYnl0ZXM=".to_owned(),
+            },
+            filename: Some("fixture.png".to_owned()),
+            title: None,
+            size_bytes: Some(11),
+            sha256: None,
+            width: Some(1),
+            height: Some(1),
+            duration_ms: None,
+            page_count: None,
+        });
+        let mut operation =
+            OperationPart::completed(17, invocation, raw_output, TimeRange::default());
         operation.metadata.insert(
             OPERATION_ID_METADATA_KEY.to_owned(),
             serde_json::Value::String("provider-call-17".to_owned()),
@@ -1274,6 +1353,25 @@ mod tool_result_render_tests {
             panic!("tool result projection");
         };
         assert_eq!(output_json, "plugin-only model projection");
+        assert_eq!(turns.len(), 2);
+        assert_eq!(turns[1].role, Role::User);
+        assert!(matches!(
+            &turns[1].parts[0],
+            CompletionInputPart::Text { text }
+                if text.contains("agena_tool_attachment_result")
+                    && text.contains("provider-call-17")
+        ));
+        assert!(matches!(
+            &turns[1].parts[1],
+            CompletionInputPart::Attachment { attachment }
+                if attachment.kind == CompletionInputAttachmentKind::Image
+                    && attachment.mime == "image/png"
+                    && matches!(
+                        &attachment.source,
+                        CompletionInputAttachmentSource::Base64 { data }
+                            if data == "aW1hZ2UtYnl0ZXM="
+                    )
+        ));
         assert_eq!(durable.content, content);
         assert!(durable.summary.is_none());
     }

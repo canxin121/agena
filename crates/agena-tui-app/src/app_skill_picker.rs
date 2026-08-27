@@ -1,23 +1,19 @@
 use crossterm::event::KeyCode;
 use serde_json::Value;
 
-use crate::{App, BTreeMap, ComposerItem, KeyEvent, Route, SkillPickerOverlay, UiResult, ui_text};
+use crate::{
+    App, BTreeMap, ComposerItem, KeyEvent, Route, SkillPickerOverlay, SkillPickerReference,
+    UiResult, ui_text,
+};
 use agena_tui::keymap::{KeyAction, KeyContext, resolve as resolve_tui_key};
 use agena_tui::selection_picker::SelectionPickerItem;
 
 const SKILL_PICKER_PAGE_SIZE: usize = 12;
 
-#[derive(Debug)]
-struct SkillCatalogItem {
-    name: String,
-    summary: String,
-    aliases: Vec<String>,
-}
-
 impl App {
-    /// Opens the user-driven Skill attachment flow. A Skill is read only after
-    /// the user selects it, and its exact text is then staged on the composer
-    /// as a message-scoped snapshot.
+    /// Opens the user-driven Skill attachment flow. The picker stages catalog
+    /// metadata only; the model can call `agena.skills.get` when it needs the
+    /// selected Skill body.
     pub(crate) fn open_skill_picker(&mut self) {
         let Some(session_id) = self
             .transcript
@@ -77,11 +73,12 @@ impl App {
             agena_tui::selection_picker::SelectionPickerEffect::Close => true,
             agena_tui::selection_picker::SelectionPickerEffect::KeepOpen => false,
             agena_tui::selection_picker::SelectionPickerEffect::Activate { key } => {
-                let Some(name) = dialog.actions.get(key.as_str()).cloned() else {
+                let Some(reference) = dialog.actions.get(key.as_str()).cloned() else {
                     return false;
                 };
-                self.request_skill_snapshot(dialog.session_id, name);
-                false
+                self.stage_skill_reference(skill_reference_item(reference));
+                self.focus = agena_tui::main_focus::Focus::Composer;
+                true
             }
         }
     }
@@ -142,11 +139,15 @@ impl App {
                 for (index, skill) in page.items.into_iter().enumerate() {
                     let key = format!("skill:{}:{}", dialog.offset, index);
                     let detail = if skill.aliases.is_empty() {
-                        skill.summary.clone()
-                    } else if skill.summary.is_empty() {
+                        skill.description.clone()
+                    } else if skill.description.is_empty() {
                         format!("aliases: {}", skill.aliases.join(", "))
                     } else {
-                        format!("{} · aliases: {}", skill.summary, skill.aliases.join(", "))
+                        format!(
+                            "{} · aliases: {}",
+                            skill.description,
+                            skill.aliases.join(", ")
+                        )
                     };
                     items.push(SelectionPickerItem::new(
                         key.clone(),
@@ -154,7 +155,7 @@ impl App {
                         detail.clone(),
                         format!("{} {} {}", skill.name, detail, skill.aliases.join(" ")),
                     ));
-                    dialog.actions.insert(key, skill.name);
+                    dialog.actions.insert(key, skill);
                 }
                 dialog.presentation.replace_items(items);
                 dialog.presentation.footer = self.skill_picker_footer(dialog);
@@ -167,38 +168,6 @@ impl App {
                 dialog.presentation.set_loading(false);
             }
         }
-    }
-
-    fn request_skill_snapshot(&mut self, session_id: i64, name: String) {
-        self.dispatch_backend_operation(
-            move |application| async move {
-                application
-                    .invoke_plugin_tool(
-                        "agena.skills",
-                        "get",
-                        serde_json::json!({ "name": name }),
-                        Some(session_id),
-                    )
-                    .await
-            },
-            move |app, result| match result.and_then(|response| skill_snapshot(response.payload)) {
-                Ok(skill) => {
-                    app.stage_skill_reference(skill);
-                    app.focus = agena_tui::main_focus::Focus::Composer;
-                    app.current_route = app.route_stack.pop().unwrap_or(Route::Main);
-                }
-                Err(error) => {
-                    let route = std::mem::replace(&mut app.current_route, Route::Main);
-                    app.current_route = match route {
-                        Route::SkillPicker(mut dialog) if dialog.session_id == session_id => {
-                            dialog.presentation.error_message = Some(error.to_string());
-                            Route::SkillPicker(dialog)
-                        }
-                        route => route,
-                    };
-                }
-            },
-        );
     }
 
     fn skill_picker_footer(&self, dialog: &SkillPickerOverlay) -> String {
@@ -229,10 +198,16 @@ fn skill_catalog_page(payload: Option<Value>) -> UiResult<SkillCatalogPage> {
             let value = value.as_object()?;
             (json_string(value.get("kind")) == "skill").then_some(())?;
             let name = json_string(value.get("name"));
-            (!name.is_empty()).then(|| SkillCatalogItem {
-                name,
-                summary: json_string(value.get("summary")),
-                aliases: json_strings(value.get("aliases")),
+            let content_hash = json_string(value.get("content_hash"));
+            let source = json_string(value.get("source"));
+            (!name.is_empty() && !content_hash.is_empty() && !source.is_empty()).then(|| {
+                SkillPickerReference {
+                    name,
+                    description: json_string(value.get("summary")),
+                    aliases: json_strings(value.get("aliases")),
+                    content_hash,
+                    source,
+                }
             })
         })
         .collect();
@@ -243,30 +218,25 @@ fn skill_catalog_page(payload: Option<Value>) -> UiResult<SkillCatalogPage> {
     })
 }
 
-fn skill_snapshot(payload: Option<Value>) -> UiResult<ComposerItem> {
-    let payload = payload.as_ref().and_then(Value::as_object).ok_or_else(|| {
-        crate::UiFailure::message("Skill details returned no structured payload.")
-    })?;
-    if json_string(payload.get("kind")) != "skill" {
-        return Err(crate::UiFailure::message(
-            "The selected catalog entry is not a Skill.",
-        ));
-    }
-    let name = required_skill_field(payload, "name")?;
-    let instructions = required_skill_field(payload, "body")?;
-    let content_hash = required_skill_field(payload, "content_hash")?;
-    let source = required_skill_field(payload, "source")?;
-    Ok(ComposerItem {
+fn skill_reference_item(reference: SkillPickerReference) -> ComposerItem {
+    let SkillPickerReference {
+        name,
+        description,
+        aliases,
+        content_hash,
+        source,
+    } = reference;
+    ComposerItem {
         placeholder: format!("[Skill: {name}]"),
         label: format!("Skill: {name}"),
         activity: agena_domain::ComposerActivity {
             id: agena_domain::ActivityId::new(),
             payload: agena_domain::ActivityPayload::SkillReference(
                 agena_domain::SkillReferenceActivity {
-                    description: json_string(payload.get("summary")),
-                    aliases: json_strings(payload.get("aliases")),
+                    description,
+                    aliases,
                     name: name.clone(),
-                    instructions,
+                    instructions: String::new(),
                     content_hash: content_hash.clone(),
                     source: source.clone(),
                 },
@@ -277,21 +247,14 @@ fn skill_snapshot(payload: Option<Value>) -> UiResult<ComposerItem> {
                 plugin_id: Some("agena.skills".to_owned()),
             },
         },
-    })
+    }
 }
 
 #[derive(Debug)]
 struct SkillCatalogPage {
-    items: Vec<SkillCatalogItem>,
+    items: Vec<SkillPickerReference>,
     total: usize,
     offset: usize,
-}
-
-fn required_skill_field(payload: &serde_json::Map<String, Value>, field: &str) -> UiResult<String> {
-    let value = json_string(payload.get(field));
-    (!value.is_empty()).then_some(value).ok_or_else(|| {
-        crate::UiFailure::message(format!("Skill detail is missing required field `{field}`."))
-    })
 }
 
 fn json_string(value: Option<&Value>) -> String {
@@ -324,7 +287,7 @@ fn json_count(value: Option<&Value>) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::{skill_catalog_page, skill_snapshot};
+    use super::{skill_catalog_page, skill_reference_item};
 
     #[test]
     fn parses_the_skill_catalog_page_without_activation_metadata() {
@@ -334,6 +297,8 @@ mod tests {
                 "kind": "skill",
                 "summary": "Review a change",
                 "aliases": ["code-review"],
+                "content_hash": "abc123",
+                "source": "workspace",
             }],
             "total": 1,
             "offset": 0,
@@ -342,26 +307,25 @@ mod tests {
         assert_eq!(page.total, 1);
         assert_eq!(page.items[0].name, "review");
         assert_eq!(page.items[0].aliases, ["code-review"]);
+        assert_eq!(page.items[0].content_hash, "abc123");
+        assert_eq!(page.items[0].source, "workspace");
     }
 
     #[test]
-    fn parses_an_immutable_skill_snapshot() {
-        let skill = skill_snapshot(Some(serde_json::json!({
-            "name": "review",
-            "kind": "skill",
-            "summary": "Review a change",
-            "body": "Inspect the diff.",
-            "aliases": ["code-review"],
-            "content_hash": "abc123",
-            "source": "workspace",
-        })))
-        .expect("valid skill snapshot");
+    fn stages_a_lazy_skill_reference_without_body() {
+        let skill = skill_reference_item(crate::SkillPickerReference {
+            name: "review".to_owned(),
+            description: "Review a change".to_owned(),
+            aliases: vec!["code-review".to_owned()],
+            content_hash: "abc123".to_owned(),
+            source: "workspace".to_owned(),
+        });
         let agena_domain::ActivityPayload::SkillReference(reference) = &skill.activity.payload
         else {
             panic!("expected a Skill reference activity")
         };
         assert_eq!(reference.name, "review");
-        assert_eq!(reference.instructions, "Inspect the diff.");
+        assert!(reference.instructions.is_empty());
         assert_eq!(reference.content_hash, "abc123");
         assert_eq!(reference.source, "workspace");
         assert_eq!(

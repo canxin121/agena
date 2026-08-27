@@ -1461,7 +1461,7 @@ impl SessionManager {
             let mut prepared =
                 prompt_window::build_prepared_prompt(&session, prompt_request_options);
             prompt_window::render_tool_results_for_model(
-                prepared.turns.as_mut_slice(),
+                &mut prepared.turns,
                 session.active_window_parts(),
                 &state.tool_executor,
             )

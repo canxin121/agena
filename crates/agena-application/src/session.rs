@@ -238,7 +238,6 @@ pub fn validate_input_document(document: &ComposerDocument) -> Result<(), Applic
             ActivityPayload::SkillReference(skill) => {
                 skills = skills.saturating_add(1);
                 if skill.name.trim().is_empty()
-                    || skill.instructions.trim().is_empty()
                     || skill.content_hash.trim().is_empty()
                     || skill.source.trim().is_empty()
                 {
@@ -248,7 +247,7 @@ pub fn validate_input_document(document: &ComposerDocument) -> Result<(), Applic
                 }
                 if skill.instructions.len() > 64 * 1024 {
                     return Err(ApplicationError::bad_request(
-                        "The skill instructions exceed the 64 KiB limit.",
+                        "The legacy skill instructions exceed the 64 KiB limit.",
                     ));
                 }
                 skill_bytes = skill_bytes.saturating_add(skill.instructions.len());

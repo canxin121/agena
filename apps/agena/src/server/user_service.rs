@@ -89,7 +89,11 @@ pub(crate) fn install(args: &ServerArgs) -> Result<PathBuf> {
         args.ui_password.as_deref(),
     )?;
 
-    write_private_file(path.as_path(), contents.as_bytes())?;
+    #[cfg(target_os = "windows")]
+    let contents = windows_task_file_bytes(contents.as_str());
+    #[cfg(not(target_os = "windows"))]
+    let contents = contents.into_bytes();
+    write_private_file(path.as_path(), contents.as_slice())?;
     reload_and_start(path.as_path())?;
     Ok(path)
 }
@@ -371,6 +375,16 @@ fn launchd_plist(
     ))
 }
 
+#[cfg(any(target_os = "windows", test))]
+fn windows_task_file_bytes(contents: &str) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(contents.len().saturating_mul(2) + 2);
+    bytes.extend_from_slice(&[0xff, 0xfe]);
+    for unit in contents.encode_utf16() {
+        bytes.extend_from_slice(unit.to_le_bytes().as_slice());
+    }
+    bytes
+}
+
 #[cfg(any(target_os = "linux", test))]
 fn systemd_unit(
     executable: &OsStr,
@@ -519,7 +533,7 @@ fn windows_task_xml_for_user(
         .unwrap_or_else(|| ".".to_owned());
 
     Ok(format!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+        "<?xml version=\"1.0\" encoding=\"UTF-16\"?>\n\
 <Task version=\"1.4\" xmlns=\"http://schemas.microsoft.com/windows/2004/02/mit/task\">\n\
   <RegistrationInfo>\n\
     <Description>Agena server</Description>\n\
@@ -875,5 +889,17 @@ mod tests {
         assert!(xml.contains("C:\\Program Files\\Agena\\agena.exe"));
         assert!(xml.contains("&quot;C:\\Users\\Agena User\\Workspace&quot;"));
         assert!(xml.contains("&quot;secret value&quot;"));
+        assert!(xml.starts_with("<?xml version=\"1.0\" encoding=\"UTF-16\"?>"));
+
+        let bytes = windows_task_file_bytes(xml.as_str());
+        assert_eq!(&bytes[..2], &[0xff, 0xfe]);
+        let units = bytes[2..]
+            .chunks_exact(2)
+            .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            String::from_utf16(&units).expect("decode UTF-16 task XML"),
+            xml
+        );
     }
 }

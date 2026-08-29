@@ -412,3 +412,4 @@ jobs:
           schtasks.exe /End /TN 'Agena Server' 2>$null | Out-Null
           schtasks.exe /Delete /TN 'Agena Server' /F 2>$null | Out-Null
           Get-Process agena -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+          exit 0

@@ -739,6 +739,27 @@ impl AgenaClient {
         self.parse_json(response).await
     }
 
+    /// Upload one client-local file into the server-owned workspace's managed
+    /// upload directory. The returned JSON contains the workspace-relative path
+    /// clients should persist as a `WorkspacePath` reference.
+    pub async fn upload_workspace_file(
+        &self,
+        workspace_id: i64,
+        filename: &str,
+        data_base64: &str,
+        mime: Option<&str>,
+    ) -> Result<serde_json::Value, ClientError> {
+        self.post_json(
+            &format!("/api/v1/workspaces/{workspace_id}/files"),
+            serde_json::json!({
+                "filename": filename,
+                "data_base64": data_base64,
+                "mime": mime,
+            }),
+        )
+        .await
+    }
+
     /// Download bytes from the server-owned workspace. The returned filename
     /// is reduced to a client-safe final path component even if the remote
     /// server sends an unsafe Content-Disposition header.

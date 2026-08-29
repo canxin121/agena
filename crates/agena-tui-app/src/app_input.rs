@@ -392,7 +392,7 @@ mod tests {
             true,
             false,
         ));
-        // Inline attachments, Skills, and large pastes are all visible draft
+        // Inline attachments, Skills, and long-paste file refs are all visible draft
         // content even if the text editor itself is empty.
         assert!(composer_ctrl_c_clears_input(
             Focus::Composer,

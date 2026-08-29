@@ -29,9 +29,11 @@ export function useChatAttachments(opts: { toasts: Toasts; composerRef: Ref<Comp
   // Used to ignore late file reads after the user clears attachments.
   let attachEpoch = 0
 
-  // Keep local attachments conservative so base64+JSON stays within server body limits.
-  const MAX_LOCAL_ATTACHMENT_BYTES = 25 * 1024 * 1024
-  const MAX_LOCAL_ATTACHMENT_TOTAL_BYTES = 35 * 1024 * 1024
+  // Match the server/TUI upload contract: 50 MiB per file, 200 MiB per composer batch.
+  const MAX_LOCAL_ATTACHMENT_BYTES = 50 * 1024 * 1024
+  const MAX_LOCAL_ATTACHMENT_TOTAL_BYTES = 200 * 1024 * 1024
+  const MAX_RESOURCE_ATTACHMENTS = 8
+  const LONG_PASTE_TEXT_CHARS = 1_000
 
   const attachProjectDialogOpen = ref(false)
   const attachProjectPath = ref('')
@@ -65,6 +67,13 @@ export function useChatAttachments(opts: { toasts: Toasts; composerRef: Ref<Comp
       for (const file of list) {
         if (epoch !== attachEpoch) break
         if (!(file instanceof File)) continue
+        if (attachedFiles.value.length >= MAX_RESOURCE_ATTACHMENTS) {
+          toasts.push(
+            'error',
+            i18n.global.t('chat.attachments.errors.tooMany', { count: MAX_RESOURCE_ATTACHMENTS }),
+          )
+          break
+        }
 
         if (file.size > MAX_LOCAL_ATTACHMENT_BYTES) {
           toasts.push(
@@ -102,6 +111,15 @@ export function useChatAttachments(opts: { toasts: Toasts; composerRef: Ref<Comp
           toasts.push('error', i18n.global.t('chat.attachments.errors.unsupportedFile', { name: filename }))
           continue
         }
+        // Another async paste/drop may have filled the remaining slots while this
+        // file was being read. Re-check immediately before committing the item.
+        if (attachedFiles.value.length >= MAX_RESOURCE_ATTACHMENTS) {
+          toasts.push(
+            'error',
+            i18n.global.t('chat.attachments.errors.tooMany', { count: MAX_RESOURCE_ATTACHMENTS }),
+          )
+          break
+        }
 
         attachedFiles.value = [
           ...attachedFiles.value,
@@ -128,9 +146,52 @@ export function useChatAttachments(opts: { toasts: Toasts; composerRef: Ref<Comp
     }
   }
 
+  function clipboardFiles(data: DataTransfer | null): File[] {
+    if (!data) return []
+
+    const files: File[] = []
+    const seen = new Set<string>()
+    const add = (file: File | null) => {
+      if (!file) return
+      const key = [file.name, file.size, file.type, file.lastModified].join('\u0000')
+      if (seen.has(key)) return
+      seen.add(key)
+      files.push(file)
+    }
+
+    for (const item of Array.from(data.items || [])) {
+      if (item.kind === 'file') add(item.getAsFile())
+    }
+    for (const file of Array.from(data.files || [])) add(file)
+    return files
+  }
+
+  function longPasteTextFile(text: string): File {
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').replace(/Z$/, '')
+    return new File([text], `clipboard-paste-${timestamp}.txt`, {
+      type: 'text/plain;charset=utf-8',
+      lastModified: Date.now(),
+    })
+  }
+
   async function handlePaste(e: ClipboardEvent) {
-    const files = e.clipboardData?.files
-    if (files && files.length) {
+    const data = e.clipboardData
+    const files = clipboardFiles(data)
+    const text = data?.getData('text/plain') || ''
+    const longText = Array.from(text).length >= LONG_PASTE_TEXT_CHARS
+
+    if (longText) {
+      // Long clipboard text becomes a real file attachment so the submitted
+      // message carries only a workspace ref. Suppress the browser's normal
+      // textarea insertion; short text still uses native paste unchanged.
+      e.preventDefault()
+      await attachLocalFiles([longPasteTextFile(text), ...files])
+      return
+    }
+
+    if (files.length) {
+      // Do not preventDefault: short clipboard text should still paste normally
+      // while image/file items are staged as attachments alongside it.
       await attachLocalFiles(files)
     }
   }
@@ -198,6 +259,13 @@ export function useChatAttachments(opts: { toasts: Toasts; composerRef: Ref<Comp
 
     const filename = basename(p)
     if (attachedFiles.value.some((f) => f.serverPath === p)) return
+    if (attachedFiles.value.length >= MAX_RESOURCE_ATTACHMENTS) {
+      toasts.push(
+        'error',
+        i18n.global.t('chat.attachments.errors.tooMany', { count: MAX_RESOURCE_ATTACHMENTS }),
+      )
+      return
+    }
 
     // Avoid pulling workspace file contents into the browser or message. We send the
     // workspace path as a lazy reference; the model can call fs.read when needed.

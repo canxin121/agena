@@ -270,7 +270,7 @@ impl App {
                 }
                 ComposerAction::AttachImage => {
                     self.reset_prompt_history_recall();
-                    self.request_file_attachment(true);
+                    self.pending_ui_action = Some(UiAction::PasteClipboard);
                     return;
                 }
                 ComposerAction::OpenPendingUserInput => {

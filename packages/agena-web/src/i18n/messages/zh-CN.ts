@@ -2354,6 +2354,7 @@ export default {
         totalTooLarge: '附件总大小过大（上限 {size}）',
         failedToReadFile: '读取文件失败：{name}',
         unsupportedFile: '不支持的文件：{name}',
+        tooMany: '一条消息最多可附加 {count} 个资源。',
       },
     },
 

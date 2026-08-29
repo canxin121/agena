@@ -461,6 +461,23 @@ impl TuiBackend {
         self.inner.workspace_id
     }
 
+    pub(crate) async fn upload_workspace_attachment(
+        &self,
+        filename: &str,
+        bytes: &[u8],
+        mime: Option<&str>,
+    ) -> Result<agena_application::dto::WorkspaceFileUploadResource> {
+        let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
+        let value = self
+            .inner
+            .client
+            .upload_workspace_file(self.inner.workspace_id, filename, encoded.as_str(), mime)
+            .await
+            .context("failed to upload a client-local attachment into the server workspace")?;
+        serde_json::from_value(value)
+            .context("the server returned an undecodable workspace upload resource")
+    }
+
     pub(crate) fn media_workspace_root(&self) -> &Path {
         self.media_workspace.path()
     }

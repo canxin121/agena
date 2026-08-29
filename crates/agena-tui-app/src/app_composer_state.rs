@@ -1,3 +1,26 @@
+const MAX_RESOURCE_ATTACHMENTS_PER_MESSAGE: usize = 8;
+const MAX_CLIPBOARD_UPLOAD_BYTES: u64 = 50 * 1024 * 1024;
+const MAX_CLIPBOARD_UPLOAD_TOTAL_BYTES: u64 = 200 * 1024 * 1024;
+
+#[derive(Debug)]
+struct ClipboardUploadCandidate {
+    path: PathBuf,
+    temporary: bool,
+    image_info: Option<PastedImageInfo>,
+}
+
+#[derive(Debug)]
+struct UploadedClipboardAttachment {
+    resource: agena_application::dto::WorkspaceFileUploadResource,
+    image_info: Option<PastedImageInfo>,
+}
+
+#[derive(Debug, Default)]
+struct ClipboardUploadBatch {
+    uploaded: Vec<UploadedClipboardAttachment>,
+    failures: Vec<String>,
+}
+
 impl App {
     pub(crate) fn jump_search_match(&mut self, forward: bool) {
         self.transcript.jump_search_match(
@@ -145,17 +168,44 @@ impl App {
         );
     }
 
-    pub(crate) fn stage_text_artifact(&mut self, text: String) {
-        let activity = text_artifact_composer_activity(text);
-        let (base_placeholder, label) =
-            crate::composer_state_impls::composer_activity_presentation(&activity.payload);
-        let placeholder = self.make_unique_composer_placeholder(base_placeholder);
-        self.composer.insert_element(placeholder.as_str());
-        self.composer_items.push(ComposerItem {
-            activity,
-            placeholder,
-            label,
-        });
+    pub(crate) fn stage_long_paste_text_file(&mut self, text: String) {
+        if self.remaining_resource_attachment_slots() == 0 {
+            self.flash_warning(self.i18n.text_args(
+                "flash-attachment-count-limit",
+                &agena_tui::fl_args!("count" => MAX_RESOURCE_ATTACHMENTS_PER_MESSAGE as i64),
+            ));
+            return;
+        }
+        if text.len() as u64 > MAX_CLIPBOARD_UPLOAD_BYTES {
+            self.flash_warning(self.i18n.text_args(
+                "flash-clipboard-paste-failed",
+                &agena_tui::fl_args!("error" => "pasted text exceeds the 50 MiB upload limit"),
+            ));
+            return;
+        }
+
+        let filename = format!("clipboard-paste-{}.txt", uuid::Uuid::new_v4().simple());
+        self.dispatch_backend_operation(
+            move |application| async move {
+                application
+                    .upload_workspace_attachment(
+                        filename.as_str(),
+                        text.as_bytes(),
+                        Some("text/plain; charset=utf-8"),
+                    )
+                    .await
+            },
+            |app, result| match result {
+                Ok(uploaded) => match app.stage_uploaded_attachment(uploaded, None) {
+                    Ok(()) => app.after_composer_text_mutated(),
+                    Err(error) => app.flash_warning(error),
+                },
+                Err(error) => app.flash_error(app.i18n.text_args(
+                    "flash-clipboard-paste-failed",
+                    &agena_tui::fl_args!("error" => error.to_string()),
+                )),
+            },
+        );
     }
 
     fn stage_resource(
@@ -173,32 +223,97 @@ impl App {
                     resolved.display()
                 ))
             })?;
-        let is_directory = metadata.is_directory;
+        self.stage_resource_with_metadata(
+            resolved.as_path(),
+            resource,
+            metadata.is_directory,
+            metadata.size.unwrap_or_default(),
+            "workspace",
+            resolved.display().to_string(),
+        )
+    }
+
+    pub(crate) fn stage_uploaded_attachment(
+        &mut self,
+        uploaded: agena_application::dto::WorkspaceFileUploadResource,
+        image_info: Option<&agena_tui_platform::clipboard::PastedImageInfo>,
+    ) -> UiResult<()> {
+        let mime = uploaded.mime.clone().unwrap_or_default();
+        let kind = AttachmentKind::detect(mime.as_str(), Some(uploaded.name.as_str()));
+        let display_name = uploaded.name.clone();
+        let resource = agena_domain::ResourceActivity {
+            kind: match kind {
+                AttachmentKind::Image => agena_domain::ResourceKind::Image,
+                AttachmentKind::Audio => agena_domain::ResourceKind::Audio,
+                AttachmentKind::Video => agena_domain::ResourceKind::Video,
+                AttachmentKind::Pdf => agena_domain::ResourceKind::Pdf,
+                AttachmentKind::File => agena_domain::ResourceKind::File,
+            },
+            reference: agena_domain::ResourceReference::WorkspacePath {
+                path: uploaded.path.clone(),
+            },
+            name: uploaded.name,
+            media_type: uploaded.mime,
+            size_bytes: Some(uploaded.size_bytes),
+            width: image_info.map(|info| info.width),
+            height: image_info.map(|info| info.height),
+            duration_ms: None,
+            page_count: None,
+        };
+        self.stage_resource_with_metadata(
+            Path::new(display_name.as_str()),
+            resource,
+            false,
+            uploaded.size_bytes,
+            "clipboard",
+            uploaded.path,
+        )
+    }
+
+    pub(crate) fn remaining_resource_attachment_slots(&self) -> usize {
+        let used = self
+            .composer_items
+            .iter()
+            .filter(|item| matches!(item.payload(), agena_domain::ActivityPayload::Resource(_)))
+            .count();
+        MAX_RESOURCE_ATTACHMENTS_PER_MESSAGE.saturating_sub(used)
+    }
+
+    fn stage_resource_with_metadata(
+        &mut self,
+        display_path: &Path,
+        resource: agena_domain::ResourceActivity,
+        is_directory: bool,
+        size_bytes: u64,
+        provenance_source: &str,
+        attached_path: String,
+    ) -> UiResult<()> {
+        if self.remaining_resource_attachment_slots() == 0 {
+            return Err(crate::UiFailure::message(self.i18n.text_args(
+                "flash-attachment-count-limit",
+                &agena_tui::fl_args!("count" => MAX_RESOURCE_ATTACHMENTS_PER_MESSAGE as i64),
+            )));
+        }
+        let kind = match resource.kind {
+            agena_domain::ResourceKind::Image => AttachmentKind::Image,
+            agena_domain::ResourceKind::Audio => AttachmentKind::Audio,
+            agena_domain::ResourceKind::Video => AttachmentKind::Video,
+            agena_domain::ResourceKind::Pdf => AttachmentKind::Pdf,
+            _ => AttachmentKind::File,
+        };
         let label = attachment_chip_label(
             &self.i18n,
-            resolved.as_path(),
-            match resource.kind {
-                agena_domain::ResourceKind::Image => AttachmentKind::Image,
-                agena_domain::ResourceKind::Audio => AttachmentKind::Audio,
-                agena_domain::ResourceKind::Video => AttachmentKind::Video,
-                agena_domain::ResourceKind::Pdf => AttachmentKind::Pdf,
-                _ => AttachmentKind::File,
-            },
+            display_path,
+            kind,
             is_directory,
             resource.width,
             resource.height,
-            metadata.size.unwrap_or_default(),
+            size_bytes,
         );
         let placeholder = self.make_unique_composer_placeholder(attachment_placeholder_base(
             &self.i18n,
-            resolved.as_path(),
-            match resource.kind {
-                agena_domain::ResourceKind::Image => AttachmentKind::Image,
-                agena_domain::ResourceKind::Audio => AttachmentKind::Audio,
-                agena_domain::ResourceKind::Video => AttachmentKind::Video,
-                agena_domain::ResourceKind::Pdf => AttachmentKind::Pdf,
-                _ => AttachmentKind::File,
-            },
+            display_path,
+            kind,
             is_directory,
         ));
 
@@ -210,7 +325,7 @@ impl App {
                 id: agena_domain::ActivityId::new(),
                 payload: agena_domain::ActivityPayload::Resource(resource),
                 provenance: agena_domain::ActivityProvenance {
-                    source: Some("workspace".to_owned()),
+                    source: Some(provenance_source.to_owned()),
                     content_hash: None,
                     plugin_id: None,
                 },
@@ -218,7 +333,7 @@ impl App {
         });
         self.flash_success(self.i18n.text_args(
             "flash-attached",
-            &agena_tui::fl_args!("path" => resolved.display().to_string()),
+            &agena_tui::fl_args!("path" => attached_path),
         ));
         Ok(())
     }
@@ -476,6 +591,7 @@ impl App {
                 }
                 Ok(())
             }
+            UiAction::PasteClipboard => self.paste_from_clipboard(terminal),
             UiAction::EditComposerExternally => self.edit_composer_externally(terminal),
             UiAction::DownloadTerminalFile { path, remove_after } => {
                 self.download_terminal_file(terminal, &path, remove_after)
@@ -486,6 +602,219 @@ impl App {
             UiAction::OpenPath { path } => self.open_path_in_editor(terminal, path.as_path()),
             UiAction::PageTranscript => self.page_transcript(terminal),
         }
+    }
+
+    fn paste_from_clipboard(&mut self, terminal: &mut TerminalRuntime) -> Result<()> {
+        self.reset_prompt_history_recall();
+        self.focus = Focus::Composer;
+        let context = terminal.context().clone();
+        let available_slots = self.remaining_resource_attachment_slots();
+        let mut failures = Vec::new();
+
+        if context.capabilities.clipboard_read_native.is_operational() {
+            match clipboard_file_list() {
+                Ok(paths) => {
+                    let mut candidates = paths
+                        .into_iter()
+                        .filter(|path| path.is_file())
+                        .map(|path| ClipboardUploadCandidate {
+                            path,
+                            temporary: false,
+                            image_info: None,
+                        })
+                        .collect::<Vec<_>>();
+                    if !candidates.is_empty() {
+                        if available_slots == 0 {
+                            self.flash_warning(self.i18n.text_args(
+                                "flash-attachment-count-limit",
+                                &agena_tui::fl_args!("count" => MAX_RESOURCE_ATTACHMENTS_PER_MESSAGE as i64),
+                            ));
+                            return Ok(());
+                        }
+                        if candidates.len() > available_slots {
+                            candidates.truncate(available_slots);
+                            self.flash_warning(self.i18n.text_args(
+                                "flash-clipboard-attachments-truncated",
+                                &agena_tui::fl_args!("count" => available_slots as i64),
+                            ));
+                        }
+                        self.dispatch_clipboard_uploads(candidates, None);
+                        return Ok(());
+                    }
+                }
+                Err(error) => failures.push(format!("clipboard files: {error}")),
+            }
+        }
+
+        match acquire_clipboard_image(&context, terminal)? {
+            Ok(acquisition) => {
+                if available_slots == 0 {
+                    if let Some(root) = acquisition.cleanup_root.as_ref() {
+                        let _ = std::fs::remove_dir_all(root);
+                    }
+                    for item in &acquisition.items {
+                        if item.temporary {
+                            let _ = std::fs::remove_file(&item.path);
+                        }
+                    }
+                    self.flash_warning(self.i18n.text_args(
+                        "flash-attachment-count-limit",
+                        &agena_tui::fl_args!("count" => MAX_RESOURCE_ATTACHMENTS_PER_MESSAGE as i64),
+                    ));
+                    return Ok(());
+                }
+                let candidates = acquisition
+                    .items
+                    .into_iter()
+                    .take(available_slots)
+                    .map(|item| ClipboardUploadCandidate {
+                        path: item.path,
+                        temporary: item.temporary,
+                        image_info: item.image_info,
+                    })
+                    .collect::<Vec<_>>();
+                if !candidates.is_empty() {
+                    self.dispatch_clipboard_uploads(candidates, acquisition.cleanup_root);
+                    return Ok(());
+                }
+            }
+            Err(error) => failures.push(format!("clipboard image: {error}")),
+        }
+
+        match get_clipboard_text(&context) {
+            Ok(text) if !text.is_empty() => {
+                self.handle_paste(text);
+                return Ok(());
+            }
+            Ok(_) => failures.push("clipboard text is empty".to_owned()),
+            Err(error) => failures.push(format!("clipboard text: {error}")),
+        }
+
+        self.flash_warning(self.i18n.text_args(
+            "flash-clipboard-paste-failed",
+            &agena_tui::fl_args!("error" => failures.join("; ")),
+        ));
+        Ok(())
+    }
+
+    fn dispatch_clipboard_uploads(
+        &mut self,
+        candidates: Vec<ClipboardUploadCandidate>,
+        cleanup_root: Option<PathBuf>,
+    ) {
+        let cleanup_files = candidates
+            .iter()
+            .filter(|candidate| candidate.temporary)
+            .map(|candidate| candidate.path.clone())
+            .collect::<Vec<_>>();
+        self.dispatch_backend_operation(
+            move |application| async move {
+                let mut batch = ClipboardUploadBatch::default();
+                let mut accepted_bytes = 0u64;
+                for candidate in candidates {
+                    let upload = async {
+                        let metadata = tokio::fs::metadata(candidate.path.as_path()).await?;
+                        if !metadata.is_file() {
+                            anyhow::bail!(
+                                "clipboard attachment is not a regular file: {}",
+                                candidate.path.display()
+                            );
+                        }
+                        if metadata.len() > MAX_CLIPBOARD_UPLOAD_BYTES {
+                            anyhow::bail!(
+                                "clipboard attachment exceeds the 50 MiB upload limit: {}",
+                                candidate.path.display()
+                            );
+                        }
+                        if accepted_bytes.saturating_add(metadata.len())
+                            > MAX_CLIPBOARD_UPLOAD_TOTAL_BYTES
+                        {
+                            anyhow::bail!(
+                                "clipboard attachments exceed the 200 MiB total upload limit"
+                            );
+                        }
+                        let bytes = tokio::fs::read(candidate.path.as_path()).await?;
+                        if bytes.is_empty() {
+                            anyhow::bail!(
+                                "clipboard attachment is empty: {}",
+                                candidate.path.display()
+                            );
+                        }
+                        let filename = candidate
+                            .path
+                            .file_name()
+                            .and_then(|name| name.to_str())
+                            .map(str::to_owned)
+                            .ok_or_else(|| {
+                                anyhow::anyhow!(
+                                    "clipboard attachment has no usable filename: {}",
+                                    candidate.path.display()
+                                )
+                            })?;
+                        let mime = mime_guess::from_path(candidate.path.as_path())
+                            .first_raw()
+                            .map(str::to_owned);
+                        application
+                            .upload_workspace_attachment(
+                                filename.as_str(),
+                                bytes.as_slice(),
+                                mime.as_deref(),
+                            )
+                            .await
+                    }
+                    .await;
+                    match upload {
+                        Ok(resource) => {
+                            accepted_bytes = accepted_bytes.saturating_add(resource.size_bytes);
+                            batch.uploaded.push(UploadedClipboardAttachment {
+                                resource,
+                                image_info: candidate.image_info,
+                            });
+                        }
+                        Err(error) => {
+                            batch
+                                .failures
+                                .push(format!("{}: {}", candidate.path.display(), error))
+                        }
+                    }
+                }
+
+                for path in cleanup_files {
+                    let _ = tokio::fs::remove_file(path).await;
+                }
+                if let Some(root) = cleanup_root {
+                    let _ = tokio::fs::remove_dir_all(root).await;
+                }
+                Ok::<_, anyhow::Error>(batch)
+            },
+            |app, result| match result {
+                Ok(mut batch) => {
+                    let mut staged = 0usize;
+                    for attachment in batch.uploaded {
+                        match app.stage_uploaded_attachment(
+                            attachment.resource,
+                            attachment.image_info.as_ref(),
+                        ) {
+                            Ok(()) => staged += 1,
+                            Err(error) => batch.failures.push(error.to_string()),
+                        }
+                    }
+                    if staged > 0 {
+                        app.after_composer_text_mutated();
+                    }
+                    if !batch.failures.is_empty() {
+                        app.flash_warning(app.i18n.text_args(
+                            "flash-clipboard-paste-failed",
+                            &agena_tui::fl_args!("error" => batch.failures.join("; ")),
+                        ));
+                    }
+                }
+                Err(error) => app.flash_error(app.i18n.text_args(
+                    "flash-clipboard-paste-failed",
+                    &agena_tui::fl_args!("error" => error.to_string()),
+                )),
+            },
+        );
     }
 
     pub(crate) fn edit_composer_externally(
@@ -621,18 +950,18 @@ pub(crate) fn sync_composer_items_with_editor_texts(
     synced
 }
 
+#[cfg(test)]
 fn text_artifact_composer_activity(text: String) -> agena_domain::ComposerActivity {
     let count = text.chars().count();
-    let label = format!("paste {count} chars");
     agena_domain::ComposerActivity {
         id: agena_domain::ActivityId::new(),
         payload: agena_domain::ActivityPayload::TextArtifact(agena_domain::TextArtifactActivity {
             text,
             language: None,
-            label: Some(label.clone()),
+            label: Some(format!("paste {count} chars")),
         }),
         provenance: agena_domain::ActivityProvenance {
-            source: Some("clipboard".to_owned()),
+            source: Some("legacy-test-fixture".to_owned()),
             content_hash: None,
             plugin_id: None,
         },
@@ -745,38 +1074,6 @@ mod tests {
         rebuild_placeholders, sync_composer_items_with_editor_texts,
         text_artifact_composer_activity, unique_composer_placeholder_text,
     };
-
-    #[test]
-    fn large_paste_is_a_stable_text_artifact_not_placeholder_text() {
-        let text = "x".repeat(1_000);
-        let activity = text_artifact_composer_activity(text.clone());
-        let id = activity.id;
-        let placeholder =
-            crate::composer_state_impls::composer_activity_presentation(&activity.payload).0;
-        let placeholder_range = 0..placeholder.len();
-        let document = composer_document_from_editor(
-            placeholder.as_str(),
-            std::slice::from_ref(&placeholder_range),
-            &[ComposerItem {
-                activity,
-                placeholder: placeholder.clone(),
-                label: "paste 1000 chars".to_owned(),
-            }],
-        );
-        assert!(matches!(
-            document.0.as_slice(),
-            [ComposerNode::Activity { activity }]
-                if activity.id == id
-                    && matches!(
-                        &activity.payload,
-                        ActivityPayload::TextArtifact(artifact) if artifact.text == text
-                    )
-        ));
-        assert!(document.text().is_empty());
-        let json = serde_json::to_string(&document).unwrap();
-        assert!(!json.contains("placeholder"));
-        assert!(!json.contains("[paste 1000 chars]"));
-    }
 
     #[test]
     fn mixed_document_preserves_inline_order_without_placeholder_text() {
@@ -976,8 +1273,8 @@ mod tests {
 use crate::Result;
 use crate::{
     App, AttachmentKind, BTreeMap, ClipboardTextError, ComposerDraft, ComposerItem,
-    DRAFT_PERSIST_INTERVAL_MS, DraftSlot, Duration, HashSet, Instant, Overlay, Path, PromptHistory,
-    Route, RunActivityTarget, RunOperation, TerminalRuntime, UiAction, UiResult,
+    DRAFT_PERSIST_INTERVAL_MS, DraftSlot, Duration, HashSet, Instant, Overlay, Path, PathBuf,
+    PromptHistory, Route, RunActivityTarget, RunOperation, TerminalRuntime, UiAction, UiResult,
     attachment_chip_label, attachment_placeholder_base, cleanup_temporary_composer_item,
     cleanup_temporary_composer_items, download_providers, edit_text, find_placeholder_occurrence,
     normalize_pasted_path, open_path, request_download, set_clipboard_text, ui_text,
@@ -985,3 +1282,7 @@ use crate::{
 use agena_tui::main_focus::Focus;
 use agena_tui::terminal_lifecycle::SuspendReason;
 use agena_tui_components::sanitize_editor_text;
+use agena_tui_platform::{
+    attachment_source::acquire_clipboard_image,
+    clipboard::{PastedImageInfo, clipboard_file_list, get_clipboard_text},
+};

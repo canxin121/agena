@@ -17,7 +17,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use crate::terminal::TerminalContext;
 
 #[derive(Debug, Clone)]
-/// Error copying text to the clipboard.
+/// Error reading or writing text through the clipboard.
 pub struct ClipboardTextError(pub String);
 
 impl std::fmt::Display for ClipboardTextError {
@@ -61,6 +61,26 @@ pub fn set_clipboard_text(
     mut write_terminal: impl FnMut(&[u8]) -> Result<(), ClipboardTextError>,
 ) -> Result<ClipboardCopyMethod, ClipboardTextError> {
     ClipboardService::new(context).copy_text(text, &mut write_terminal)
+}
+
+#[cfg(not(any(
+    target_os = "android",
+    target_os = "ios",
+    target_os = "tvos",
+    target_os = "watchos",
+    target_os = "visionos"
+)))]
+pub fn get_clipboard_text(context: &TerminalContext) -> Result<String, ClipboardTextError> {
+    if !context.capabilities.clipboard_read_native.is_operational() {
+        return Err(ClipboardTextError(
+            "native clipboard read is unavailable in the current terminal".to_owned(),
+        ));
+    }
+    let mut clipboard =
+        arboard::Clipboard::new().map_err(|error| ClipboardTextError::from_error(&error))?;
+    clipboard
+        .get_text()
+        .map_err(|error| ClipboardTextError::from_error(&error))
 }
 
 #[cfg(not(any(
@@ -205,6 +225,21 @@ pub fn set_clipboard_text(
 ) -> Result<ClipboardCopyMethod, ClipboardTextError> {
     Err(ClipboardTextError(
         "clipboard text copy is unsupported on this platform".to_string(),
+    ))
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "ios",
+    target_os = "tvos",
+    target_os = "watchos",
+    target_os = "visionos"
+))]
+pub fn get_clipboard_text(
+    _: &crate::terminal::TerminalContext,
+) -> Result<String, ClipboardTextError> {
+    Err(ClipboardTextError(
+        "clipboard text read is unsupported on this platform".to_string(),
     ))
 }
 

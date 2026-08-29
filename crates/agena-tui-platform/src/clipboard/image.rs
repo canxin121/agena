@@ -80,6 +80,48 @@ pub struct PastedImageInfo {
     pub height: u32,
 }
 
+#[derive(Debug, Clone)]
+/// Error reading filesystem entries advertised by the native clipboard.
+pub struct ClipboardFilesError(pub String);
+
+impl std::fmt::Display for ClipboardFilesError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.0.as_str())
+    }
+}
+
+impl std::error::Error for ClipboardFilesError {}
+
+#[cfg(not(any(
+    target_os = "android",
+    target_os = "ios",
+    target_os = "tvos",
+    target_os = "watchos",
+    target_os = "visionos"
+)))]
+pub fn clipboard_file_list() -> Result<Vec<PathBuf>, ClipboardFilesError> {
+    let mut clipboard = arboard::Clipboard::new().map_err(|error| {
+        ClipboardFilesError(agena_failure::diagnostic::format_error_chain(&error))
+    })?;
+    clipboard
+        .get()
+        .file_list()
+        .map_err(|error| ClipboardFilesError(agena_failure::diagnostic::format_error_chain(&error)))
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "ios",
+    target_os = "tvos",
+    target_os = "watchos",
+    target_os = "visionos"
+))]
+pub fn clipboard_file_list() -> Result<Vec<PathBuf>, ClipboardFilesError> {
+    Err(ClipboardFilesError(
+        "clipboard file-list read is unsupported on this platform".to_owned(),
+    ))
+}
+
 #[cfg(not(any(
     target_os = "android",
     target_os = "ios",

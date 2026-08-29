@@ -46,6 +46,10 @@ impl App {
             CommandId::Image => {
                 self.request_file_attachment(true);
             }
+            CommandId::Paste => {
+                self.focus = Focus::Composer;
+                self.pending_ui_action = Some(UiAction::PasteClipboard);
+            }
             CommandId::Copy => self.copy_loaded_transcript(),
             CommandId::CopyMessage => self.copy_last_assistant_message(),
             CommandId::CopyVisible => self.copy_visible_transcript(),
@@ -471,6 +475,7 @@ fn command_opens_interactive_surface_without_arguments(id: CommandId) -> bool {
             | CommandId::Skill
             | CommandId::SkillStudio
             | CommandId::Image
+            | CommandId::Paste
             | CommandId::Usage
             | CommandId::Activities
             | CommandId::Plan

@@ -2359,6 +2359,7 @@ export default {
         totalTooLarge: 'Attachments too large (max {size})',
         failedToReadFile: 'Failed to read file: {name}',
         unsupportedFile: 'Unsupported file: {name}',
+        tooMany: 'A message can attach at most {count} resources.',
       },
     },
 

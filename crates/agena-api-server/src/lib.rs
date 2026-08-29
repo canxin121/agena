@@ -329,7 +329,12 @@ pub fn router(state: AppState) -> Router {
             )
             .route(
                 "/api/v1/workspaces/{workspace_id}/files",
-                get(rest::list_workspace_files).post(rest::upload_workspace_file),
+                get(rest::list_workspace_files)
+                    .post(rest::upload_workspace_file)
+                    // 50 MiB raw files expand to about 66.7 MiB as base64; keep
+                    // enough room for the JSON envelope before service-level
+                    // decoded-size validation enforces the actual 50 MiB cap.
+                    .layer(DefaultBodyLimit::max(72 * 1024 * 1024)),
             )
             .route(
                 "/api/v1/workspaces/{workspace_id}/download",

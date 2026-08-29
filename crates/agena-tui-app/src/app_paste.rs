@@ -243,9 +243,8 @@ impl App {
                 return;
             }
 
-            if paste_requires_text_artifact(text.as_str()) {
-                self.stage_text_artifact(text);
-                self.after_composer_text_mutated();
+            if paste_requires_workspace_text_file(text.as_str()) {
+                self.stage_long_paste_text_file(text);
                 return;
             }
 
@@ -257,18 +256,18 @@ impl App {
     }
 }
 
-fn paste_requires_text_artifact(text: &str) -> bool {
+fn paste_requires_workspace_text_file(text: &str) -> bool {
     text.chars().count() >= 1_000
 }
 
 #[cfg(test)]
 mod tests {
-    use super::paste_requires_text_artifact;
+    use super::paste_requires_workspace_text_file;
 
     #[test]
-    fn thousand_character_pastes_use_text_artifacts() {
-        assert!(!paste_requires_text_artifact(&"x".repeat(999)));
-        assert!(paste_requires_text_artifact(&"x".repeat(1_000)));
+    fn thousand_character_pastes_become_workspace_text_files() {
+        assert!(!paste_requires_workspace_text_file(&"x".repeat(999)));
+        assert!(paste_requires_workspace_text_file(&"x".repeat(1_000)));
     }
 }
 use crate::{App, Overlay, Route};

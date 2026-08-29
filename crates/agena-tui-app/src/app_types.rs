@@ -810,6 +810,7 @@ pub(super) type UiCommand = Pin<Box<dyn Future<Output = UiCompletion> + Send + '
 #[derive(Debug, Clone)]
 pub(super) enum UiAction {
     CopyText { text: String, success: String },
+    PasteClipboard,
     EditComposerExternally,
     DownloadTerminalFile { path: PathBuf, remove_after: bool },
     ExportTranscript { path: Option<PathBuf> },

@@ -30,6 +30,7 @@ pub enum CommandId {
     Download,
     Editor,
     Image,
+    Paste,
     Copy,
     CopyMessage,
     CopyVisible,
@@ -294,9 +295,16 @@ pub const COMMANDS: &[CommandSpec] = &[
     CommandSpec {
         id: CommandId::Image,
         name: "image",
-        aliases: &["paste-image"],
+        aliases: &[],
         arguments: "",
         summary_key: "command-image-summary",
+    },
+    CommandSpec {
+        id: CommandId::Paste,
+        name: "paste",
+        aliases: &["clipboard", "paste-image"],
+        arguments: "",
+        summary_key: "command-paste-summary",
     },
     CommandSpec {
         id: CommandId::Copy,
@@ -500,6 +508,14 @@ mod tests {
     }
 
     #[test]
+    fn legacy_paste_image_alias_targets_the_clipboard_paste_command() {
+        let command = parse_command("/paste-image").expect("paste-image alias");
+        assert_eq!(command.spec.id, CommandId::Paste);
+        assert_eq!(command.spec.name, "paste");
+        assert!(command.args.is_empty());
+    }
+
+    #[test]
     fn distinguishes_required_arguments_from_optional_arguments() {
         assert!(
             find_command("commit")
@@ -557,6 +573,7 @@ mod tests {
             "attach",
             "skill",
             "image",
+            "paste",
             "usage",
             "activities",
             "fork",

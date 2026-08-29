@@ -1158,8 +1158,15 @@ impl SessionState {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-/// Server-owned session home view. A session occurs in exactly one group.
+/// Server-owned session home view.
+///
+/// `attention`, `running`, and `recent` partition sessions by execution state.
+/// `favorites` is an independent durable navigation bucket, so a favorite may
+/// also appear in one of the state buckets.
 pub struct SessionOverviewResource {
+    /// User-favorited sessions, newest first.
+    #[serde(default)]
+    pub favorites: Vec<SessionResource>,
     /// Sessions paused on user input or left interrupted after owner loss.
     pub attention: Vec<SessionResource>,
     /// Sessions whose execution lease is fresh, plus sessions still creating.

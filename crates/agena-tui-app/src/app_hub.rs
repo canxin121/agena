@@ -1,5 +1,6 @@
-//! Session hub route: home screen listing sessions needing attention, running,
-//! and recent, with a create-new-session action.
+//! Session hub route: home screen listing favorites, sessions needing
+//! attention, running sessions, and recent sessions, with a create-new-session
+//! action.
 //!
 //! The display projection and rendering live in `agena_tui_session::session_hub`;
 //! this module owns the overview request/response plumbing and the session-open
@@ -63,6 +64,14 @@ impl App {
                     SessionHubSection::new(
                         SessionHubSectionKind::New,
                         vec![self.hub_new_session_item()],
+                    ),
+                    SessionHubSection::new(
+                        SessionHubSectionKind::Favorites,
+                        overview
+                            .favorites
+                            .iter()
+                            .map(|session| self.hub_session_item(session))
+                            .collect(),
                     ),
                     SessionHubSection::new(
                         SessionHubSectionKind::Running,
@@ -143,6 +152,14 @@ impl App {
             }
             Some(KeyAction::Refresh) => {
                 self.spawn_hub_overview_request(state);
+            }
+            Some(KeyAction::ToggleFavorite) if !typing => {
+                let Some(selected) = state.presentation.selected_item().cloned() else {
+                    return false;
+                };
+                if !selected.is_new_session {
+                    self.request_session_favorite(selected.session_id, !selected.favorite);
+                }
             }
             Some(KeyAction::MoveUp) if !typing => state.presentation.move_selection(-1),
             Some(KeyAction::MoveDown) if !typing => state.presentation.move_selection(1),
@@ -231,6 +248,7 @@ impl App {
         SessionHubItem {
             session_id: session.id,
             title: session.title.clone(),
+            favorite: session.favorite,
             label: session.title.clone(),
             detail: detail_parts.join(" | "),
             is_new_session: false,
@@ -243,6 +261,7 @@ impl App {
         SessionHubItem {
             session_id: 0,
             title: String::new(),
+            favorite: false,
             label: self.i18n.text("hub-item-new"),
             detail: self.i18n.text("hub-item-new-detail"),
             is_new_session: true,

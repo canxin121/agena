@@ -8,6 +8,24 @@ const providerSource = readFileSync(
   'utf8',
 )
 
+function extractFunctionSource(signature: string): string {
+  const start = providerSource.indexOf(signature)
+  assert.ok(start >= 0, `missing function signature: ${signature}`)
+
+  const blockStart = providerSource.indexOf('{', start)
+  assert.ok(blockStart >= 0, `missing block start for: ${signature}`)
+
+  let depth = 0
+  for (let idx = blockStart; idx < providerSource.length; idx += 1) {
+    const ch = providerSource[idx]
+    if (ch === '{') depth += 1
+    else if (ch === '}') depth -= 1
+    if (depth === 0) return providerSource.slice(start, idx + 1)
+  }
+
+  throw new Error(`unterminated function block: ${signature}`)
+}
+
 test('provider studio renders providers and adapters as nested disclosure rows', () => {
   assert.ok(providerSource.includes('v-for="row in providerRows"'))
   assert.ok(providerSource.includes('v-for="adapter in adapterRows"'))
@@ -69,4 +87,18 @@ test('model editor is rendered inside the matching model row', () => {
   assert.ok(modelLoop >= 0)
   assert.ok(editor > modelLoop)
   assert.equal(globalEditor, -1)
+})
+
+test('model editor can be collapsed without being immediately reopened', () => {
+  const openModelEditor = extractFunctionSource(
+    'async function openModelEditor(adapterId: string, model: ProviderModel)',
+  )
+  const toggleAdapterRow = extractFunctionSource('function toggleAdapterRow(adapterId: string)')
+  const openProviderRow = extractFunctionSource('async function openProviderRow(row: ProviderRow)')
+
+  assert.ok(openModelEditor.includes('editingModel.value?.adapterId === adapterId'))
+  assert.ok(openModelEditor.includes('editingModel.value?.modelId === model.id'))
+  assert.ok(openModelEditor.includes('closeModelEditor()'))
+  assert.ok(toggleAdapterRow.includes('if (editingModel.value?.adapterId === adapterId) closeModelEditor()'))
+  assert.ok(openProviderRow.includes('closeModelEditor()'))
 })

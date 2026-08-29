@@ -425,11 +425,21 @@ impl App {
     }
 
     pub(crate) fn transcript_surface_title(&self) -> String {
-        ui_text::transcript_header_title(
+        let title = ui_text::transcript_header_title(
             &self.i18n,
             self.transcript.session_id,
             self.transcript.session_title.as_str(),
-        )
+        );
+        if self
+            .transcript
+            .execution
+            .as_ref()
+            .is_some_and(|execution| execution.session.favorite)
+        {
+            format!("★ {title}")
+        } else {
+            title
+        }
     }
 
     pub(crate) fn render_composer(&mut self, frame: &mut Frame, area: Rect) {

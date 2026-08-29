@@ -46,6 +46,7 @@ const props = withDefaults(
 const emit = defineEmits<{
   (e: 'toggle-collapse'): void
   (e: 'row-click', event: MouseEvent): void
+  (e: 'open-context-menu', event: MouseEvent): void
   (e: 'toggle-session-multi-select'): void
   (e: 'open-actions'): void
   (e: 'refresh'): void
@@ -96,6 +97,12 @@ const activityDotClass = computed(() => {
 function handleMobileOpenActionsClick() {
   emit('open-actions')
 }
+
+function handleContextMenu(event: MouseEvent) {
+  event.preventDefault()
+  event.stopPropagation()
+  emit('open-context-menu', event)
+}
 </script>
 
 <template>
@@ -104,6 +111,7 @@ function handleMobileOpenActionsClick() {
     :actions-always-visible="actionsAlwaysVisible"
     class="relative gap-1.5"
     @click="emit('row-click', $event)"
+    @contextmenu="handleContextMenu"
   >
     <template #icon>
       <ListItemSelectionIndicator v-if="multiSelectEnabled" :selected="multiSelected" />

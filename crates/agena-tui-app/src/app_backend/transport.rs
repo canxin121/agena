@@ -1887,6 +1887,17 @@ impl TuiBackend {
         Ok(session)
     }
 
+    pub async fn set_session_favorite(
+        &self,
+        session_id: i64,
+        favorite: bool,
+    ) -> Result<SessionResource> {
+        Ok(self
+            .client()
+            .set_session_favorite(session_id, favorite)
+            .await?)
+    }
+
     pub async fn create_session(
         &self,
         title: String,

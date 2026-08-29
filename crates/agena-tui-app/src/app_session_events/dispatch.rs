@@ -95,6 +95,9 @@ impl App {
             AppMessage::SessionRenamed { session_id, result } => {
                 self.handle_session_renamed(session_id, result)
             }
+            AppMessage::SessionFavoriteUpdated { session_id, result } => {
+                self.handle_session_favorite_updated(session_id, result)
+            }
             AppMessage::PermissionReplied {
                 session_id,
                 request_id,
@@ -250,6 +253,7 @@ impl App {
                             session_id: session.id,
                             parent_session_id: session.parent_id,
                             title: session.title,
+                            favorite: session.favorite,
                             updated_at_millis: session.updated_at.timestamp_millis(),
                         })
                         .collect(),
@@ -761,6 +765,7 @@ impl App {
                         session_id: session.id,
                         parent_session_id: session.parent_id,
                         title: session.title.clone(),
+                        favorite: session.favorite,
                         updated_at_millis: session.updated_at.timestamp_millis(),
                     });
                 if self.transcript.session_id == Some(session_id) {
@@ -779,10 +784,50 @@ impl App {
             Err(error) => self.flash_error(error),
         }
     }
+
+    pub(crate) fn handle_session_favorite_updated(
+        &mut self,
+        session_id: i64,
+        result: UiResult<SessionResource>,
+    ) {
+        match result {
+            Ok(session) => {
+                self.sessions
+                    .replace_item(agena_tui_session::session_list::SessionListItem {
+                        session_id: session.id,
+                        parent_session_id: session.parent_id,
+                        title: session.title.clone(),
+                        favorite: session.favorite,
+                        updated_at_millis: session.updated_at.timestamp_millis(),
+                    });
+                if self.transcript.session_id == Some(session_id)
+                    && let Some(execution) = self.transcript.execution.as_mut()
+                {
+                    execution.session = session.clone();
+                }
+                if let Route::Hub(state) = &mut self.current_route {
+                    state
+                        .presentation
+                        .set_item_favorite(session_id, session.favorite);
+                }
+                self.request_sessions(false);
+                let message_key = if session.favorite {
+                    "flash-session-favorited"
+                } else {
+                    "flash-session-unfavorited"
+                };
+                self.flash_success(
+                    self.i18n
+                        .text_args(message_key, &agena_tui::fl_args!("title" => session.title)),
+                );
+            }
+            Err(error) => self.flash_error(error),
+        }
+    }
 }
 use crate::{
-    App, AppMessage, ComposerDraft, DraftSlot, PendingUserMessage, RunActivityTarget, RunOperation,
-    RunOptionsState, SessionExecutionResource, SessionLoadScope, SessionRefresh, SessionResource,
-    UiResult, execution_update_is_stale, ui_text,
+    App, AppMessage, ComposerDraft, DraftSlot, PendingUserMessage, Route, RunActivityTarget,
+    RunOperation, RunOptionsState, SessionExecutionResource, SessionLoadScope, SessionRefresh,
+    SessionResource, UiResult, execution_update_is_stale, ui_text,
 };
 use agena_tui::main_focus::Focus;

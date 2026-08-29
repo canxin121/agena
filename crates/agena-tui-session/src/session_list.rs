@@ -16,6 +16,7 @@ pub struct SessionListItem {
     pub session_id: i64,
     pub parent_session_id: Option<i64>,
     pub title: String,
+    pub favorite: bool,
     /// UTC milliseconds, used only for the stable newest-first presentation
     /// order. It deliberately avoids exposing a transport timestamp type.
     pub updated_at_millis: i64,
@@ -332,6 +333,7 @@ mod tests {
             session_id: id,
             parent_session_id: parent_id,
             title: title.to_owned(),
+            favorite: false,
             updated_at_millis,
         }
     }

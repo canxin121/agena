@@ -2568,6 +2568,13 @@ export default {
       },
       directoryActions: {
         menuTitle: 'Directory Actions',
+        openFiles: {
+          label: 'Open in Files',
+          description: 'Use this directory as the current Files workspace',
+        },
+        copyPath: {
+          description: 'Copy the directory path to the clipboard',
+        },
         refresh: {
           label: 'Refresh',
           description: 'Reload sessions for this directory',
@@ -2585,6 +2592,9 @@ export default {
       },
       sessionActions: {
         menuTitle: 'Session Actions',
+        open: {
+          description: 'Open this session in the workspace',
+        },
         rename: {
           label: 'Rename session',
           description: 'Change the session title',
@@ -2641,7 +2651,19 @@ export default {
           confirmText: 'Delete',
         },
       },
+      contextMenu: {
+        menuTitle: 'Sidebar Actions',
+        expandAll: 'Expand all directories',
+        collapseAll: 'Collapse all directories',
+      },
       footers: {
+        favorites: {
+          toggleAria: 'Toggle favorite sessions',
+          title: 'Favorites',
+          prevPage: 'Previous favorites page',
+          nextPage: 'Next favorites page',
+          empty: 'No favorite sessions.',
+        },
         recent: {
           toggleAria: 'Toggle recent sessions',
           title: 'Recent',

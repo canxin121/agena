@@ -98,7 +98,7 @@ const props = defineProps<{
   isDirectoryFocused: (directory: DirectoryEntry) => boolean
   directoryActivityState: (directory: DirectoryEntry) => DirectoryActivityState
 
-  openDirectoryActions: (directory: DirectoryEntry) => void
+  openDirectoryActions: (directory: DirectoryEntry, event?: MouseEvent | PointerEvent) => void
   refreshDirectoryInline: (directory: DirectoryEntry) => Promise<void>
   newSessionInline: (directory: DirectoryEntry) => Promise<void>
   removeDirectoryInline: (directory: DirectoryEntry) => Promise<void>
@@ -108,11 +108,11 @@ const props = defineProps<{
   selectDirectory: (directoryId: string, directoryPath: string) => Promise<void>
   selectSession: (sessionId: string) => Promise<void>
 
-  openSessionActions: (directory: DirectoryEntry, session: SessionLike) => void
+  openSessionActions: (directory: DirectoryEntry, session: SessionLike, event?: MouseEvent | PointerEvent) => void
   openSessionActionMenu: (directory: DirectoryEntry, session: SessionLike, event?: MouseEvent | PointerEvent) => void
 
   togglePin: (sessionId: string) => void
-  toggleFavorite: (sessionId: string) => void
+  toggleFavorite: (sessionId: string, favoriteHint?: boolean) => void
   deleteSession: (sessionId: string) => Promise<void>
 
   hasAttention: (sessionId: string) => 'permission' | 'question' | null
@@ -260,6 +260,7 @@ function sessionSelectableCount(directoryId: string): number {
                 @toggle-collapse="props.toggleDirectoryCollapse(directory.id, directory.path)"
                 @toggle-session-multi-select="props.toggleDirectorySessionMultiSelect(directory.id)"
                 @open-actions="props.openDirectoryActions(directory)"
+                @open-context-menu="(event) => props.openDirectoryActions(directory, event)"
                 @refresh="props.refreshDirectoryInline(directory)"
                 @new-session="props.newSessionInline(directory)"
                 @remove="props.removeDirectoryInline(directory)"
@@ -487,6 +488,12 @@ function sessionSelectableCount(directoryId: string): number {
                             ? props.openSessionActions(row.directory, row.session)
                             : undefined
                         "
+                        @open-context-menu="
+                          (event) =>
+                            row.session && row.directory
+                              ? props.openSessionActions(row.directory, row.session, event)
+                              : undefined
+                        "
                         @open-action-menu="
                           (event) =>
                             row.session && row.directory
@@ -494,7 +501,7 @@ function sessionSelectableCount(directoryId: string): number {
                               : undefined
                         "
                         @toggle-pin="props.togglePin(row.id)"
-                        @toggle-favorite="props.toggleFavorite(row.id)"
+                        @toggle-favorite="(favorite) => props.toggleFavorite(row.id, favorite)"
                         @delete="props.deleteSession(row.id)"
                         @update:renameDraft="props.updateRenameDraft"
                         @rename-save="props.saveRename"
@@ -573,12 +580,15 @@ function sessionSelectableCount(directoryId: string): number {
                         "
                         @toggle-thread="props.toggleExpandedParent(row.id)"
                         @open-actions="row.session ? props.openSessionActions(directory, row.session) : undefined"
+                        @open-context-menu="
+                          (event) => (row.session ? props.openSessionActions(directory, row.session, event) : undefined)
+                        "
                         @open-action-menu="
                           (event) =>
                             row.session ? props.openSessionActionMenu(directory, row.session, event) : undefined
                         "
                         @toggle-pin="props.togglePin(row.id)"
-                        @toggle-favorite="props.toggleFavorite(row.id)"
+                        @toggle-favorite="(favorite) => props.toggleFavorite(row.id, favorite)"
                         @delete="props.deleteSession(row.id)"
                         @update:renameDraft="props.updateRenameDraft"
                         @rename-save="props.saveRename"

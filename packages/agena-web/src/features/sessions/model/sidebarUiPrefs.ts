@@ -8,6 +8,8 @@ export type SidebarUiPrefsForUi = {
   directoriesPage: number
   pinnedSessionsOpen: boolean
   pinnedSessionsPage: number
+  favoriteSessionsOpen: boolean
+  favoriteSessionsPage: number
   recentSessionsOpen: boolean
   recentSessionsPage: number
   runningSessionsOpen: boolean
@@ -41,6 +43,8 @@ export function normalizeSidebarUiPrefsForUi(prefs: ChatSidebarUiPrefs | null | 
     directoriesPage: toNonNegativeInt(p.directoriesPage),
     pinnedSessionsOpen: Boolean(p.pinnedSessionsOpen),
     pinnedSessionsPage: toNonNegativeInt(p.pinnedSessionsPage),
+    favoriteSessionsOpen: Boolean(p.favoriteSessionsOpen),
+    favoriteSessionsPage: toNonNegativeInt(p.favoriteSessionsPage),
     recentSessionsOpen: Boolean(p.recentSessionsOpen),
     recentSessionsPage: toNonNegativeInt(p.recentSessionsPage),
     runningSessionsOpen: Boolean(p.runningSessionsOpen),

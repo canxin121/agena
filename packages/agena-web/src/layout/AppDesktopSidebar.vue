@@ -20,6 +20,7 @@ import { cn } from '@/lib/utils'
 import { useUiStore } from '@/stores/ui'
 import { useDirectoryStore } from '@/stores/directory'
 import { useChatStore } from '@/stores/chat'
+import { useSettingsStore } from '@/stores/settings'
 import { apiJson } from '@/lib/api'
 import type { GitStatusResponse } from '@/types/git'
 import { localStorageKeys } from '@/lib/persistence/storageKeys'
@@ -48,6 +49,7 @@ type NavItem = {
 const ui = useUiStore()
 const directoryStore = useDirectoryStore()
 const chat = useChatStore()
+const settings = useSettingsStore()
 const route = useRoute()
 const workspaceNavigation = useWorkspaceNavigation()
 const { t } = useI18n()
@@ -134,6 +136,11 @@ const navItems = computed<NavItem[]>(() =>
 
 const primaryRailItems = computed(() => navItems.value.filter((item) => item.id !== 'settings'))
 const settingsNavItem = computed(() => navItems.value.find((item) => item.id === 'settings') || null)
+const hasFilesProjectRoot = computed(() => {
+  if (String(directoryStore.currentDirectory || '').trim()) return true
+  const projects = Array.isArray(settings.data?.projects) ? settings.data.projects : []
+  return projects.some((entry) => Boolean(String(entry?.path || '').trim()))
+})
 
 function isTabActive(tabId: MainTabId): boolean {
   return activeTab.value === tabId
@@ -148,7 +155,10 @@ async function locateCurrentSessionInSidebar() {
   if (!sid) return
   ui.openAndLocateSessionInSidebar(sid)
   if (activeTab.value !== 'chat') {
-    await workspaceNavigation.openMainTab('chat')
+    await workspaceNavigation.openWorkspaceLocation('chat', {
+      query: { sessionId: sid },
+      matchKeys: ['sessionId'],
+    })
   }
 }
 
@@ -171,8 +181,16 @@ function railItemAriaLabel(item: NavItem): string {
 }
 
 async function activateRailItem(tabId: MainTabId) {
-  if (tabId === 'chat' && isTabActive('chat') && String(chat.selectedSessionId || '').trim()) {
+  if (tabId === 'chat' && String(chat.selectedSessionId || '').trim()) {
     await locateCurrentSessionInSidebar()
+    return
+  }
+
+  // A Files pane without any project root has nothing to render into the
+  // desktop sidebar host. Keep the stable project/session sidebar visible
+  // instead of creating a context-less window that strands the shell.
+  if (tabId === 'files' && !hasFilesProjectRoot.value) {
+    ui.setSidebarOpen(true, { preserveWidth: true })
     return
   }
 

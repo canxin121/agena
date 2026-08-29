@@ -509,8 +509,10 @@ function adapterRowSummary(adapter: AdapterModels): string {
 
 function toggleAdapterRow(adapterId: string) {
   const next = new Set(expandedAdapterIds.value)
-  if (next.has(adapterId)) next.delete(adapterId)
-  else next.add(adapterId)
+  if (next.has(adapterId)) {
+    next.delete(adapterId)
+    if (editingModel.value?.adapterId === adapterId) closeModelEditor()
+  } else next.add(adapterId)
   expandedAdapterIds.value = next
 }
 
@@ -1430,6 +1432,10 @@ function addManualModel() {
 
 async function openModelEditor(adapterId: string, model: ProviderModel) {
   if (!draft.value || mutationBusy.value || listingModels.value) return
+  if (editingModel.value?.adapterId === adapterId && editingModel.value?.modelId === model.id) {
+    closeModelEditor()
+    return
+  }
   const requestGeneration = ++modelEditorGeneration
   editingModel.value = { adapterId, modelId: model.id }
   modelLoading.value = true
@@ -1730,6 +1736,7 @@ async function deleteAdapter(adapterId: string) {
 async function openProviderRow(row: ProviderRow) {
   if (mutationBusy.value || loading.value) return
   if (expandedProviderKey.value === row.key) {
+    closeModelEditor()
     expandedProviderKey.value = ''
     return
   }

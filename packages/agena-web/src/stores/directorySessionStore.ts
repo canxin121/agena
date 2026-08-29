@@ -21,15 +21,16 @@ import {
 } from './directorySessionRuntime'
 import type { JsonObject as UnknownRecord, JsonValue } from '@/types/json'
 
-type SidebarFooterKind = 'pinned' | 'recent' | 'running'
+type SidebarFooterKind = 'pinned' | 'favorite' | 'recent' | 'running'
 // Agena has no opencode-style sidebar endpoints. The sidebar data sources are:
 //   GET /api/v1/workspaces        → directory list (WorkspaceResource {id, path})
-//   GET /api/v1/sessions/overview → attention/running/recent session buckets
+//   GET /api/v1/sessions          → cross-workspace favorite/attention/running/recent buckets
 //   GET /api/v1/sessions          → flat session list (search/workspace filters)
 // Sidebar chrome (collapsed/expanded/pages) is client-local via uiPrefs.
 // Session favorite/pinned flags are durable server metadata.
 
 type AgenaOverviewWire = {
+  favorites: UnknownRecord[]
   attention: UnknownRecord[]
   running: UnknownRecord[]
   recent: UnknownRecord[]
@@ -173,8 +174,9 @@ async function fetchAgenaSessions(opts?: {
 }
 
 function overviewFromSessions(sessions: UnknownRecord[]): AgenaOverviewWire {
-  const overview: AgenaOverviewWire = { attention: [], running: [], recent: [] }
+  const overview: AgenaOverviewWire = { favorites: [], attention: [], running: [], recent: [] }
   for (const session of sessions) {
+    if (session.favorite === true) overview.favorites.push(session)
     const state = normalizeSessionState(session.state)
     const kind = sessionStateKind(state)
     if (kind === 'awaiting_interaction' || kind === 'interrupted' || kind === 'failed') {
@@ -294,6 +296,7 @@ type SidebarStateQuery = {
   directoryQuery?: string
   focusSessionId?: string
   pinnedPage?: number
+  favoritePage?: number
   recentPage?: number
   runningPage?: number
 }
@@ -326,6 +329,7 @@ type SidebarCommandRequest =
 type NormalizedSidebarView = {
   directorySidebarById: Record<string, DirectorySidebarView>
   pinnedFooterView: SidebarFooterView
+  favoriteFooterView: SidebarFooterView
   recentFooterView: SidebarFooterView
   runningFooterView: SidebarFooterView
 }
@@ -823,12 +827,14 @@ function normalizeSidebarView(raw: JsonValue | null | undefined): NormalizedSide
   const view = asRecord((raw as JsonValue) || undefined)
   const directoryRowsById = (view?.directoryRowsById ?? view?.directory_rows_by_id) as JsonValue
   const pinnedFooter = (view?.pinnedFooter ?? view?.pinned_footer) as JsonValue
+  const favoriteFooter = (view?.favoriteFooter ?? view?.favorite_footer) as JsonValue
   const recentFooter = (view?.recentFooter ?? view?.recent_footer) as JsonValue
   const runningFooter = (view?.runningFooter ?? view?.running_footer) as JsonValue
 
   return {
     directorySidebarById: normalizeDirectoryRowsById(directoryRowsById),
     pinnedFooterView: normalizeSidebarFooterView(pinnedFooter),
+    favoriteFooterView: normalizeSidebarFooterView(favoriteFooter),
     recentFooterView: normalizeSidebarFooterView(recentFooter),
     runningFooterView: normalizeSidebarFooterView(runningFooter),
   }
@@ -956,6 +962,15 @@ function applyPersistentStateQueryOverrides(
     }
   }
 
+  if (hasOwn(opts, 'favoritePage')) {
+    const value = Number(opts.favoritePage)
+    if (Number.isFinite(value)) {
+      next.favoritePage = Math.max(0, Math.floor(value))
+    } else {
+      delete next.favoritePage
+    }
+  }
+
   if (hasOwn(opts, 'recentPage')) {
     const value = Number(opts.recentPage)
     if (Number.isFinite(value)) {
@@ -985,6 +1000,7 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
 
   const directorySidebarById = ref<Record<string, DirectorySidebarView>>({})
   const pinnedFooterView = ref<SidebarFooterView>({ total: 0, page: 0, pageCount: 1, rows: [] })
+  const favoriteFooterView = ref<SidebarFooterView>({ total: 0, page: 0, pageCount: 1, rows: [] })
   const recentFooterView = ref<SidebarFooterView>({ total: 0, page: 0, pageCount: 1, rows: [] })
   const runningFooterView = ref<SidebarFooterView>({ total: 0, page: 0, pageCount: 1, rows: [] })
   const sidebarStateFocus = ref<SidebarFocusedSession | null>(null)
@@ -1004,6 +1020,7 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
       ...persistedStateQuery,
       directoriesPage: Math.max(0, Math.floor(Number(prefs.directoriesPage || 0))),
       pinnedPage: Math.max(0, Math.floor(Number(prefs.pinnedSessionsPage || 0))),
+      favoritePage: Math.max(0, Math.floor(Number(prefs.favoriteSessionsPage || 0))),
       recentPage: Math.max(0, Math.floor(Number(prefs.recentSessionsPage || 0))),
       runningPage: Math.max(0, Math.floor(Number(prefs.runningSessionsPage || 0))),
     }
@@ -1056,7 +1073,12 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
     for (const section of Object.values(directorySidebarById.value)) {
       rows.push(...section.pinnedRows, ...section.recentRows)
     }
-    rows.push(...pinnedFooterView.value.rows, ...recentFooterView.value.rows, ...runningFooterView.value.rows)
+    rows.push(
+      ...pinnedFooterView.value.rows,
+      ...favoriteFooterView.value.rows,
+      ...recentFooterView.value.rows,
+      ...runningFooterView.value.rows,
+    )
     return rows
   }
 
@@ -1171,12 +1193,17 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
       })
 
     const nextPinnedFooterView = { ...pinnedFooterView.value, rows: mergeFooterRows(pinnedFooterView.value.rows) }
+    const nextFavoriteFooterView = {
+      ...favoriteFooterView.value,
+      rows: mergeFooterRows(favoriteFooterView.value.rows),
+    }
     const nextRecentFooterView = { ...recentFooterView.value, rows: mergeFooterRows(recentFooterView.value.rows) }
     const nextRunningFooterView = { ...runningFooterView.value, rows: mergeFooterRows(runningFooterView.value.rows) }
 
     if (changed) {
       directorySidebarById.value = nextDirectorySidebarById
       pinnedFooterView.value = nextPinnedFooterView
+      favoriteFooterView.value = nextFavoriteFooterView
       recentFooterView.value = nextRecentFooterView
       runningFooterView.value = nextRunningFooterView
     }
@@ -1419,11 +1446,13 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
         patch.expandedParentSessionIds = [...current]
       } else if (command.type === 'setFooterOpen') {
         if (command.kind === 'pinned') patch.pinnedSessionsOpen = command.open
+        else if (command.kind === 'favorite') patch.favoriteSessionsOpen = command.open
         else if (command.kind === 'recent') patch.recentSessionsOpen = command.open
         else patch.runningSessionsOpen = command.open
       } else if (command.type === 'setFooterPage') {
         const target = Math.max(0, Math.floor(Number(command.page || 0)))
         if (command.kind === 'pinned') patch.pinnedSessionsPage = target
+        else if (command.kind === 'favorite') patch.favoriteSessionsPage = target
         else if (command.kind === 'recent') patch.recentSessionsPage = target
         else patch.runningSessionsPage = target
       }
@@ -1543,9 +1572,11 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
       ...persistedStateQuery,
       ...(kind === 'pinned'
         ? { pinnedPage: target }
-        : kind === 'recent'
-          ? { recentPage: target }
-          : { runningPage: target }),
+        : kind === 'favorite'
+          ? { favoritePage: target }
+          : kind === 'recent'
+            ? { recentPage: target }
+            : { runningPage: target }),
     }
     return executeSidebarCommand({ type: 'setFooterPage', kind, page: target }, opts)
   }
@@ -1611,6 +1642,7 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
         ]),
       ),
       pinnedFooterView: enrichFooterView(normalizedViewRaw.pinnedFooterView, knownRows),
+      favoriteFooterView: enrichFooterView(normalizedViewRaw.favoriteFooterView, knownRows),
       recentFooterView: enrichFooterView(normalizedViewRaw.recentFooterView, knownRows),
       runningFooterView: enrichFooterView(normalizedViewRaw.runningFooterView, knownRows),
     }
@@ -1624,6 +1656,9 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
     }
     if (!footerViewEquivalent(pinnedFooterView.value, normalizedView.pinnedFooterView)) {
       pinnedFooterView.value = normalizedView.pinnedFooterView
+    }
+    if (!footerViewEquivalent(favoriteFooterView.value, normalizedView.favoriteFooterView)) {
+      favoriteFooterView.value = normalizedView.favoriteFooterView
     }
     if (!footerViewEquivalent(recentFooterView.value, normalizedView.recentFooterView)) {
       recentFooterView.value = normalizedView.recentFooterView
@@ -1735,6 +1770,7 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
           pinnedRows.map((row) => row.session).filter((session): session is SidebarSessionSummary => Boolean(session)),
           uiPrefs.value.pinnedSessionsPage,
         ) as unknown as JsonValue,
+        favoriteFooter: footerView(overview.favorites, uiPrefs.value.favoriteSessionsPage) as unknown as JsonValue,
         recentFooter: footerView(overview.recent, uiPrefs.value.recentSessionsPage) as unknown as JsonValue,
         runningFooter: footerView(overview.running, uiPrefs.value.runningSessionsPage) as unknown as JsonValue,
       },
@@ -2031,9 +2067,11 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
           ? opts.page
           : targetKind === 'pinned'
             ? uiPrefs.value.pinnedSessionsPage
-            : targetKind === 'recent'
-              ? uiPrefs.value.recentSessionsPage
-              : uiPrefs.value.runningSessionsPage
+            : targetKind === 'favorite'
+              ? uiPrefs.value.favoriteSessionsPage
+              : targetKind === 'recent'
+                ? uiPrefs.value.recentSessionsPage
+                : uiPrefs.value.runningSessionsPage
       const page = Math.max(0, Math.floor(Number(pageRaw || 0)))
       const pageSizeRaw =
         typeof opts?.pageSize === 'number' && Number.isFinite(opts.pageSize) ? opts.pageSize : SIDEBAR_FOOTER_PAGE_SIZE
@@ -2048,6 +2086,11 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
         for (const session of allOverview) {
           const sid = agenaSessionId(session)
           if (!pinnedIds.has(sid)) continue
+          const row = toSidebarRowFromAgenaSession(session, null, expandedParents)
+          if (row) sourceRows.push(row)
+        }
+      } else if (targetKind === 'favorite') {
+        for (const session of overview.favorites) {
           const row = toSidebarRowFromAgenaSession(session, null, expandedParents)
           if (row) sourceRows.push(row)
         }
@@ -2081,6 +2124,10 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
         if (!footerViewEquivalent(pinnedFooterView.value, view)) {
           pinnedFooterView.value = view
         }
+      } else if (targetKind === 'favorite') {
+        if (!footerViewEquivalent(favoriteFooterView.value, view)) {
+          favoriteFooterView.value = view
+        }
       } else if (targetKind === 'recent') {
         if (!footerViewEquivalent(recentFooterView.value, view)) {
           recentFooterView.value = view
@@ -2094,6 +2141,8 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
       const patch: Partial<ChatSidebarUiPrefs> = {}
       if (targetKind === 'pinned') {
         patch.pinnedSessionsPage = view.page
+      } else if (targetKind === 'favorite') {
+        patch.favoriteSessionsPage = view.page
       } else if (targetKind === 'recent') {
         patch.recentSessionsPage = view.page
       } else {
@@ -2291,6 +2340,7 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
 
     directorySidebarById.value = {}
     pinnedFooterView.value = { total: 0, page: 0, pageCount: 1, rows: [] }
+    favoriteFooterView.value = { total: 0, page: 0, pageCount: 1, rows: [] }
     recentFooterView.value = { total: 0, page: 0, pageCount: 1, rows: [] }
     runningFooterView.value = { total: 0, page: 0, pageCount: 1, rows: [] }
     sidebarStateFocus.value = null
@@ -2307,6 +2357,7 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
     stateBySessionId,
     directorySidebarById,
     pinnedFooterView,
+    favoriteFooterView,
     recentFooterView,
     runningFooterView,
     sidebarStateFocus,

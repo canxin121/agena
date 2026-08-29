@@ -125,6 +125,7 @@ impl App {
         SessionSearchItem {
             session_id: session.id,
             title: session.title.clone(),
+            favorite: session.favorite,
             label: session.title,
             detail: detail_parts.join(" | "),
         }

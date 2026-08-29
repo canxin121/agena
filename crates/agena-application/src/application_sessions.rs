@@ -22,8 +22,9 @@ use crate::dto::{
 use crate::{Application, ApplicationError};
 
 impl Application {
-    /// Build the default server home view: every session needing attention,
-    /// every running session, then a bounded recent tail.
+    /// Build the default server home view: durable favorites plus every
+    /// session needing attention, every running session, then a bounded recent
+    /// tail. Favorites intentionally overlap the execution-state buckets.
     pub async fn session_overview(
         &self,
         workspace_id: Option<i64>,
@@ -47,7 +48,11 @@ impl Application {
         let mut attention = Vec::new();
         let mut running = Vec::new();
         let mut recent = Vec::new();
+        let mut favorites = Vec::new();
         for session in sessions {
+            if session.favorite {
+                favorites.push(session.clone());
+            }
             if session.state.is_attention() {
                 attention.push(session);
             } else if session.state.is_running()
@@ -71,8 +76,10 @@ impl Application {
         });
         running.sort_by(sort_recent);
         recent.sort_by(sort_recent);
+        favorites.sort_by(sort_recent);
         recent.truncate(usize::try_from(recent_limit.clamp(1, 200)).unwrap_or(200));
         Ok(SessionOverviewResource {
+            favorites,
             attention,
             running,
             recent,

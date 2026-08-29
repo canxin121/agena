@@ -6026,6 +6026,49 @@ mod new_session_model_stack_tests {
     }
 
     #[tokio::test]
+    async fn session_hub_exposes_favorites_as_an_independent_section() {
+        let mut app = app_without_session().await;
+        app.bootstrap();
+        let request_id = match &app.current_route {
+            Route::Hub(state) => state.request_id,
+            route => panic!("bootstrap must land on the hub, got {route:?}"),
+        };
+        let mut favorite = session_resource();
+        favorite.favorite = true;
+
+        app.handle_hub_overview_loaded(
+            request_id,
+            Ok(SessionOverviewResource {
+                favorites: vec![favorite.clone()],
+                attention: Vec::new(),
+                running: Vec::new(),
+                recent: vec![favorite],
+                generated_at: Utc::now(),
+            }),
+        );
+
+        let Route::Hub(state) = &app.current_route else {
+            panic!("hub should stay open");
+        };
+        assert!(state.presentation.rows().iter().any(|row| matches!(
+            row,
+            agena_tui_session::session_hub::HubRow::Header(
+                agena_tui_session::session_hub::SessionHubSectionKind::Favorites
+            )
+        )));
+        assert_eq!(
+            state
+                .presentation
+                .rows()
+                .iter()
+                .filter(|row| matches!(row, agena_tui_session::session_hub::HubRow::Item(item) if item.session_id == 7 && item.favorite))
+                .count(),
+            2,
+            "favorite remains visible in Favorites and Recent",
+        );
+    }
+
+    #[tokio::test]
     async fn session_hub_selects_explicit_new_session_action_before_existing_sessions() {
         let mut app = app_without_session().await;
         app.bootstrap();
@@ -6037,6 +6080,7 @@ mod new_session_model_stack_tests {
         app.handle_hub_overview_loaded(
             request_id,
             Ok(SessionOverviewResource {
+                favorites: Vec::new(),
                 attention: Vec::new(),
                 running: Vec::new(),
                 recent: Vec::new(),

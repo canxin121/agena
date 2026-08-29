@@ -18,6 +18,16 @@ impl App {
             CommandId::Lineage => self.open_lineage_picker(),
             CommandId::Rewind => self.open_rewind_messages_picker(),
             CommandId::Rename => self.open_rename_session_overlay(),
+            CommandId::Favorite => {
+                if !args.trim().is_empty() {
+                    self.flash_warning(self.i18n.text_args(
+                        "flash-command-usage",
+                        &agena_tui::fl_args!("usage" => spec.invocation()),
+                    ));
+                } else {
+                    self.toggle_current_session_favorite();
+                }
+            }
             CommandId::Timeline => self.open_timeline_overlay(TIMELINE_EVENT_LIMIT),
             CommandId::Settings => self.open_settings_studio(),
             CommandId::Model => self.open_session_model_chooser(),
@@ -449,6 +459,30 @@ impl App {
         };
         self.request_session_rename(session_id, trimmed.to_string());
         true
+    }
+
+    pub(crate) fn toggle_current_session_favorite(&mut self) {
+        let selected = self
+            .sessions
+            .current_selected()
+            .map(|session| (session.session_id, session.favorite, session.title.clone()));
+        let current = self.transcript.execution.as_ref().map(|execution| {
+            (
+                execution.session.id,
+                execution.session.favorite,
+                execution.session.title.clone(),
+            )
+        });
+        let target = if self.focus == Focus::Sessions {
+            selected.or(current)
+        } else {
+            current.or(selected)
+        };
+        let Some((session_id, favorite, _title)) = target else {
+            self.flash_warning(ui_text::t(&self.i18n, "flash-command-requires-session"));
+            return;
+        };
+        self.request_session_favorite(session_id, !favorite);
     }
 }
 

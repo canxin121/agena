@@ -192,6 +192,7 @@ pub enum KeyAction {
     TextObjectParagraph,
     YankLine,
     Toggle,
+    ToggleFavorite,
     ExpandAll,
     Copy,
     CopyVisible,
@@ -699,6 +700,24 @@ mod tests {
                 key(KeyCode::Backspace, KeyModifiers::NONE)
             ),
             None
+        );
+    }
+
+    #[test]
+    fn favorite_toggle_is_scoped_to_session_navigation_surfaces() {
+        for context in [KeyContext::Sessions, KeyContext::Hub] {
+            assert_eq!(
+                resolve(context, key(KeyCode::Char('f'), KeyModifiers::NONE)),
+                Some(KeyAction::ToggleFavorite),
+            );
+        }
+        assert_eq!(
+            resolve(
+                KeyContext::Transcript,
+                key(KeyCode::Char('f'), KeyModifiers::NONE)
+            ),
+            Some(KeyAction::FindForward),
+            "favorite must not steal Vim's transcript find key",
         );
     }
 

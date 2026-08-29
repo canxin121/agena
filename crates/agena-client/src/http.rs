@@ -862,6 +862,20 @@ impl AgenaClient {
         self.post_json("/api/v1/sessions", body).await
     }
 
+    /// Update the durable favorite marker without changing the session title
+    /// or pin state.
+    pub async fn set_session_favorite(
+        &self,
+        session_id: i64,
+        favorite: bool,
+    ) -> Result<SessionResource, ClientError> {
+        self.put_json(
+            &format!("/api/v1/sessions/{session_id}"),
+            serde_json::json!({ "favorite": favorite }),
+        )
+        .await
+    }
+
     pub async fn submit_message(
         &self,
         params: SubmitRunParams,

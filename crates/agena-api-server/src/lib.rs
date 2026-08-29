@@ -799,6 +799,17 @@ mod router_contract_tests {
             })
             .await
             .expect("create recent session");
+        session_store
+            .update_metadata(
+                ready_session.id,
+                agena_storage::store::SessionMetadataPatch {
+                    title: None,
+                    favorite: Some(true),
+                    pinned: None,
+                },
+            )
+            .await
+            .expect("favorite recent session");
         let running_session = session_store
             .create_session(agena_storage::store::NewSession {
                 workspace_id: workspace.id,
@@ -843,6 +854,14 @@ mod router_contract_tests {
             .expect("read session overview response");
         let overview: agena_api::resource::SessionOverviewResource =
             serde_json::from_slice(&body).expect("decode shared session overview response");
+        assert_eq!(
+            overview
+                .favorites
+                .iter()
+                .map(|session| session.id)
+                .collect::<Vec<_>>(),
+            vec![ready_session.id]
+        );
         assert!(overview.attention.is_empty());
         assert_eq!(
             overview

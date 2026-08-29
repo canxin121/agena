@@ -21,7 +21,7 @@ type SessionLike = {
   [k: string]: JsonValue
 }
 
-type RecentSessionRow = {
+type FavoriteSessionRow = {
   id: string
   session: SessionLike | null
   directory: DirectoryEntry | null
@@ -43,9 +43,9 @@ const props = defineProps<{
   page: number
   paging?: boolean
   loading?: boolean
-  recentSessionsPageCount: number
-  recentSessionsTotal: number
-  recentSessionRows: RecentSessionRow[]
+  favoriteSessionsPageCount: number
+  favoriteSessionsTotal: number
+  favoriteSessionRows: FavoriteSessionRow[]
   selectedSessionId: string | null
 
   uiIsCompactLayout: boolean
@@ -85,7 +85,7 @@ const emit = defineEmits<{
   (e: 'update:sessionActionMenuQuery', v: string): void
 }>()
 
-const count = computed(() => Math.max(0, Math.floor(props.recentSessionsTotal || 0)))
+const count = computed(() => Math.max(0, Math.floor(props.favoriteSessionsTotal || 0)))
 
 function isPinned(sessionId: string) {
   return props.pinnedSessionIds.includes(sessionId)
@@ -108,23 +108,23 @@ function statusMeta(sessionId: string) {
         type="button"
         class="flex-1 h-full min-w-0 flex items-center gap-2 text-left rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
         :aria-expanded="open"
-        :aria-label="String(t('chat.sidebar.footers.recent.toggleAria'))"
+        :aria-label="String(t('chat.sidebar.footers.favorites.toggleAria'))"
         @click="emit('update:open', !open)"
       >
         <component :is="open ? RiArrowDownSLine : RiArrowRightSLine" class="h-4 w-4 text-muted-foreground" />
         <span class="typography-ui-label font-medium text-muted-foreground">{{
-          t('chat.sidebar.footers.recent.title')
+          t('chat.sidebar.footers.favorites.title')
         }}</span>
       </button>
       <div class="flex items-center gap-2 flex-shrink-0">
         <span class="text-[11px] font-mono text-muted-foreground/70">{{ count }}</span>
         <SidebarPager
-          v-if="open && recentSessionsPageCount > 1"
+          v-if="open && favoriteSessionsPageCount > 1"
           :page="page"
-          :page-count="recentSessionsPageCount"
+          :page-count="favoriteSessionsPageCount"
           :disabled="Boolean(paging)"
-          :prev-label="String(t('chat.sidebar.footers.recent.prevPage'))"
-          :next-label="String(t('chat.sidebar.footers.recent.nextPage'))"
+          :prev-label="String(t('chat.sidebar.footers.favorites.prevPage'))"
+          :next-label="String(t('chat.sidebar.footers.favorites.nextPage'))"
           @update:page="(v) => emit('update:page', v)"
         />
       </div>
@@ -133,11 +133,11 @@ function statusMeta(sessionId: string) {
     <div v-if="open" class="px-2 pb-2 animate-in fade-in-0 slide-in-from-top-1 duration-200">
       <SidebarSectionSkeleton v-if="Boolean(loading)" :rows="3" compact />
       <div v-else-if="count === 0" class="px-2 py-2 text-xs text-muted-foreground animate-in fade-in-0 duration-150">
-        {{ t('chat.sidebar.footers.recent.empty') }}
+        {{ t('chat.sidebar.footers.favorites.empty') }}
       </div>
       <div v-else class="space-y-1 animate-in fade-in-0 duration-150">
         <SessionRow
-          v-for="item in recentSessionRows"
+          v-for="item in favoriteSessionRows"
           :key="item.renderKey"
           :session-id="item.id"
           :session="item.session"
@@ -171,7 +171,7 @@ function statusMeta(sessionId: string) {
             (event) =>
               toggleSessionSelected(item.id, {
                 event,
-                orderedSessionIds: recentSessionRows.map((row) => row.id),
+                orderedSessionIds: favoriteSessionRows.map((row) => row.id),
               })
           "
           @toggle-thread="emit('toggle-thread', item.id)"

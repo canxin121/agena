@@ -56,10 +56,10 @@ const props = defineProps<{
   pinnedSessionIds: string[]
   hasAttention: (sessionId: string) => 'permission' | 'question' | null
 
-  openSessionActions: (directory: DirectoryEntry, session: SessionLike) => void
+  openSessionActions: (directory: DirectoryEntry, session: SessionLike, event?: MouseEvent | PointerEvent) => void
   openSessionActionMenu: (directory: DirectoryEntry, session: SessionLike, event?: MouseEvent | PointerEvent) => void
   togglePin: (sessionId: string) => void
-  toggleFavorite: (sessionId: string) => void
+  toggleFavorite: (sessionId: string, favoriteHint?: boolean) => void
   deleteSession: (sessionId: string) => Promise<void>
 
   sessionActionMenuTarget: SessionMenuTarget | null
@@ -176,12 +176,16 @@ function statusMeta(sessionId: string) {
           "
           @toggle-thread="emit('toggle-thread', item.id)"
           @open-actions="item.session && item.directory ? openSessionActions(item.directory, item.session) : undefined"
+          @open-context-menu="
+            (event) =>
+              item.session && item.directory ? openSessionActions(item.directory, item.session, event) : undefined
+          "
           @open-action-menu="
             (event) =>
               item.session && item.directory ? openSessionActionMenu(item.directory, item.session, event) : undefined
           "
           @toggle-pin="togglePin(item.id)"
-          @toggle-favorite="toggleFavorite(item.id)"
+          @toggle-favorite="(favorite) => toggleFavorite(item.id, favorite)"
           @delete="deleteSession(item.id)"
           @update:renameDraft="updateRenameDraft"
           @rename-save="saveRename"

@@ -2563,6 +2563,13 @@ export default {
       },
       directoryActions: {
         menuTitle: '目录操作',
+        openFiles: {
+          label: '在文件中打开',
+          description: '将此目录设为当前文件工作区',
+        },
+        copyPath: {
+          description: '将目录路径复制到剪贴板',
+        },
         refresh: {
           label: '刷新',
           description: '重新加载此目录的会话',
@@ -2580,6 +2587,9 @@ export default {
       },
       sessionActions: {
         menuTitle: '会话操作',
+        open: {
+          description: '在工作区中打开此会话',
+        },
         rename: {
           label: '重命名会话',
           description: '修改会话标题',
@@ -2636,7 +2646,19 @@ export default {
           confirmText: '删除',
         },
       },
+      contextMenu: {
+        menuTitle: '侧边栏操作',
+        expandAll: '展开全部目录',
+        collapseAll: '收起全部目录',
+      },
       footers: {
+        favorites: {
+          toggleAria: '切换收藏会话',
+          title: '收藏',
+          prevPage: '上一页收藏会话',
+          nextPage: '下一页收藏会话',
+          empty: '没有收藏会话。',
+        },
         recent: {
           toggleAria: '切换最近会话',
           title: '最近',

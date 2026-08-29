@@ -13,6 +13,11 @@ impl App {
             Some(KeyAction::ModeCycle) => {
                 self.cycle_session_view_mode();
             }
+            Some(KeyAction::ToggleFavorite) => {
+                if let Some(session) = self.sessions.current_selected().cloned() {
+                    self.request_session_favorite(session.session_id, !session.favorite);
+                }
+            }
             Some(KeyAction::MoveUp) => {
                 let _ = self
                     .sessions

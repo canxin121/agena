@@ -87,6 +87,7 @@ pub fn preset_specs(
                     vec![
                         ("1 / 2 / 3", "context-help-key-session-scope"),
                         ("m", "context-help-key-session-cycle"),
+                        ("f", "context-help-key-toggle-favorite"),
                     ],
                 ),
             ],
@@ -507,6 +508,7 @@ pub fn preset_specs(
                     vec![
                         ("Ctrl+N / c", "context-help-key-create-session"),
                         ("l", "context-help-key-session-list"),
+                        ("f", "context-help-key-toggle-favorite"),
                         ("Ctrl+R", "context-help-key-refresh"),
                     ],
                 ),

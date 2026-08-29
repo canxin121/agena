@@ -9,6 +9,7 @@ pub enum CommandId {
     Lineage,
     Rewind,
     Rename,
+    Favorite,
     Timeline,
     Settings,
     Model,
@@ -151,6 +152,13 @@ pub const COMMANDS: &[CommandSpec] = &[
         aliases: &["title"],
         arguments: "",
         summary_key: "command-rename-summary",
+    },
+    CommandSpec {
+        id: CommandId::Favorite,
+        name: "favorite",
+        aliases: &["star"],
+        arguments: "",
+        summary_key: "command-favorite-summary",
     },
     CommandSpec {
         id: CommandId::Timeline,
@@ -513,6 +521,18 @@ mod tests {
         assert_eq!(command.spec.id, CommandId::Paste);
         assert_eq!(command.spec.name, "paste");
         assert!(command.args.is_empty());
+    }
+
+    #[test]
+    fn favorite_command_and_star_alias_toggle_session_metadata() {
+        let command = parse_command("/favorite").expect("favorite command");
+        assert_eq!(command.spec.id, CommandId::Favorite);
+        assert_eq!(command.spec.name, "favorite");
+        assert!(command.args.is_empty());
+
+        let alias = parse_command("/star").expect("star alias");
+        assert_eq!(alias.spec.id, CommandId::Favorite);
+        assert_eq!(alias.spec.name, "favorite");
     }
 
     #[test]

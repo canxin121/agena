@@ -29,3 +29,18 @@ test('workspace editor group pane renders retained SPA views and propagates pane
   assert.ok(!paneSource.includes("window.addEventListener('message'"))
   assert.ok(paneSource.includes('border-border/70 bg-secondary/40 text-foreground/85'))
 })
+
+test('workspace editor group tabs expose browser-style close actions from a context menu', () => {
+  const paneSource = readFileSync(resolve(import.meta.dir, '../src/layout/WorkspaceEditorGroupPane.vue'), 'utf8')
+
+  assert.ok(paneSource.includes('@contextmenu.prevent.stop="openTabContextMenu($event, windowTab.id)"'))
+  assert.ok(paneSource.includes('<OptionMenu'))
+  assert.ok(paneSource.includes("t('header.windowTabs.closeCurrent')"))
+  assert.ok(paneSource.includes("t('header.windowTabs.closeOthers')"))
+  assert.ok(paneSource.includes("t('header.windowTabs.closeLeft')"))
+  assert.ok(paneSource.includes("t('header.windowTabs.closeRight')"))
+  assert.ok(paneSource.includes("t('header.windowTabs.closeAll')"))
+  assert.ok(paneSource.includes('const tabIds = groupTabs.value.map((tab) => tab.id)'))
+  assert.ok(paneSource.includes('tabIds.slice(0, index)'))
+  assert.ok(paneSource.includes('tabIds.slice(index + 1)'))
+})

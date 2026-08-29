@@ -43,3 +43,25 @@ test('a late route notification cannot resurrect a workspace window that was jus
   assert.ok(source.includes('if (routeWindowId && isRouteWindowRestoreSuppressed(routeWindowId))'))
   assert.ok(source.includes("rawRoutePath === '/'"))
 })
+
+test('empty workspace navigation cannot get stranded in a context-less files sidebar', () => {
+  const navigationSource = readFileSync(
+    resolve(import.meta.dir, '../src/app/navigation/useWorkspaceNavigation.ts'),
+    'utf8',
+  )
+  const sidebarSource = readFileSync(resolve(import.meta.dir, '../src/layout/AppDesktopSidebar.vue'), 'utf8')
+  const filesSource = readFileSync(resolve(import.meta.dir, '../src/pages/FilesPage.vue'), 'utf8')
+
+  assert.ok(navigationSource.includes('async function navigateToEmptyWorkspace(replace = true)'))
+  assert.ok(navigationSource.includes('ui.closeAllWorkspaceWindows()'))
+  assert.ok(navigationSource.includes("const location = { path: '/' }"))
+  assert.ok(navigationSource.includes("if (tab === 'chat')"))
+  assert.ok(navigationSource.includes('await navigateToEmptyWorkspace(true)'))
+
+  assert.ok(sidebarSource.includes("if (tabId === 'files' && !hasFilesProjectRoot.value)"))
+  assert.ok(sidebarSource.includes('query: { sessionId: sid }'))
+  assert.ok(sidebarSource.includes("matchKeys: ['sessionId']"))
+
+  assert.ok(filesSource.includes('<Teleport v-if="useDesktopSidebarHost" :to="WORKSPACE_SIDEBAR_PANEL_HOST_SELECTOR">'))
+  assert.ok(filesSource.includes("t('files.empty.noProject.desktopDescription')"))
+})

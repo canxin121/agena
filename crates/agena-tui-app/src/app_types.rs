@@ -705,6 +705,10 @@ pub(super) enum AppMessage {
         session_id: i64,
         result: UiResult<SessionResource>,
     },
+    SessionFavoriteUpdated {
+        session_id: i64,
+        result: UiResult<SessionResource>,
+    },
     PermissionReplied {
         session_id: i64,
         request_id: String,

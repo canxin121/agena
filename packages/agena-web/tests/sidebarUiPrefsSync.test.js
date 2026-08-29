@@ -11,6 +11,8 @@ test('normalizeSidebarUiPrefsForUi: trims + dedup ids and clamps paging', () => 
     directoriesPage: -3,
     pinnedSessionsOpen: 'yes',
     pinnedSessionsPage: 2.9,
+    favoriteSessionsOpen: true,
+    favoriteSessionsPage: 3.8,
     recentSessionsOpen: 0,
     recentSessionsPage: NaN,
     runningSessionsOpen: true,
@@ -23,6 +25,8 @@ test('normalizeSidebarUiPrefsForUi: trims + dedup ids and clamps paging', () => 
   assert.equal(out.directoriesPage, 0)
   assert.equal(out.pinnedSessionsOpen, true)
   assert.equal(out.pinnedSessionsPage, 2)
+  assert.equal(out.favoriteSessionsOpen, true)
+  assert.equal(out.favoriteSessionsPage, 3)
   assert.equal(out.recentSessionsOpen, false)
   assert.equal(out.recentSessionsPage, 0)
   assert.equal(out.runningSessionsOpen, true)

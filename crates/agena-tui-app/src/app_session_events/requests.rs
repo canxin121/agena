@@ -69,6 +69,20 @@ impl App {
         });
     }
 
+    pub(crate) fn request_session_favorite(&mut self, session_id: i64, favorite: bool) {
+        let application = self.application.clone();
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            let result = application
+                .set_session_favorite(session_id, favorite)
+                .await
+                .map_err(crate::UiFailure::internal);
+            let _ = tx
+                .send(AppMessage::SessionFavoriteUpdated { session_id, result })
+                .await;
+        });
+    }
+
     pub(crate) fn request_providers(&mut self, purpose: ProviderPickerPurpose) {
         let application = self.application.clone();
         let tx = self.tx.clone();

@@ -4223,6 +4223,16 @@ onMounted(async () => {
 
     <div class="flex-1 min-h-0 m-0 p-0">
       <div v-if="!root" class="h-full">
+        <Teleport v-if="useDesktopSidebarHost" :to="WORKSPACE_SIDEBAR_PANEL_HOST_SELECTOR">
+          <div class="flex h-full min-h-0 items-center justify-center p-3 text-sidebar-foreground">
+            <div class="w-full rounded-md border border-sidebar-border/60 bg-sidebar-accent/10 p-3">
+              <div class="text-sm font-medium">{{ t('files.empty.noProject.title') }}</div>
+              <div class="mt-1 text-xs text-muted-foreground">
+                {{ t('files.empty.noProject.desktopDescription') }}
+              </div>
+            </div>
+          </div>
+        </Teleport>
         <div v-if="isCompactLayout && ui.isSessionSwitcherOpen" class="h-full p-3">
           <div class="rounded-sm border border-sidebar-border/60 bg-sidebar-accent/10 p-3">
             <div class="text-sm font-medium">{{ t('files.empty.noProject.title') }}</div>

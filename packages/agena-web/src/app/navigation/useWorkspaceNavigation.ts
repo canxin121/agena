@@ -28,6 +28,28 @@ export function useWorkspaceNavigation() {
     }
   }
 
+  async function navigateToEmptyWorkspace(replace = true) {
+    ui.closeAllWorkspaceWindows()
+    const location = { path: '/' }
+    const resolved = router.resolve(location)
+    if (router.currentRoute.value.fullPath === resolved.fullPath) return
+
+    const key = resolved.fullPath
+    const existing = navigationInFlightByPath.get(key)
+    if (existing) {
+      await existing
+      return
+    }
+
+    const request = (replace ? router.replace(location) : router.push(location)).catch(() => {})
+    navigationInFlightByPath.set(key, request)
+    try {
+      await request
+    } finally {
+      if (navigationInFlightByPath.get(key) === request) navigationInFlightByPath.delete(key)
+    }
+  }
+
   async function navigateToWorkspaceWindow(windowId: string, replace = false) {
     const target = ui.getWorkspaceWindowById(windowId)
     if (!target) return
@@ -85,6 +107,14 @@ export function useWorkspaceNavigation() {
       return existing.id
     }
 
+    // Chat without a concrete session is the stable empty-workspace surface,
+    // not a durable workspace window. This also gives the shell a recovery
+    // path from context-less non-chat tabs such as Files with no project.
+    if (tab === 'chat') {
+      await navigateToEmptyWorkspace(true)
+      return ''
+    }
+
     return openWorkspaceLocation(tab, {
       path: opts?.path || mainTabPath(tab),
       replace: opts?.replace,
@@ -93,6 +123,7 @@ export function useWorkspaceNavigation() {
 
   return {
     navigateToWorkspaceWindow,
+    navigateToEmptyWorkspace,
     openWorkspaceLocation,
     openMainTab,
     routeForWindow,

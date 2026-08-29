@@ -4,6 +4,9 @@ import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import {
   RiAddLine,
+  RiArrowDownSLine,
+  RiArrowRightSLine,
+  RiClipboardLine,
   RiCloseLine,
   RiDeleteBinLine,
   RiFolder6Line,
@@ -26,6 +29,7 @@ import { useDirectorySessionStore } from '@/stores/directorySessionStore'
 import AddDirectoryDialog from '@/layout/chatSidebar/components/AddDirectoryDialog.vue'
 import ChatSidebarHeader from '@/layout/chatSidebar/components/ChatSidebarHeader.vue'
 import DirectoriesList from '@/layout/chatSidebar/components/DirectoriesList.vue'
+import FavoriteSessionsFooter from '@/layout/chatSidebar/components/FavoriteSessionsFooter.vue'
 import PinnedSessionsFooter from '@/layout/chatSidebar/components/PinnedSessionsFooter.vue'
 import RecentSessionsFooter from '@/layout/chatSidebar/components/RecentSessionsFooter.vue'
 import RunningSessionsFooter from '@/layout/chatSidebar/components/RunningSessionsFooter.vue'
@@ -44,6 +48,7 @@ import { normalizeDirForCompare } from '@/features/sessions/model/labels'
 import { useSidebarLocate } from '@/layout/chatSidebar/useSidebarLocate'
 import { normalizeSidebarUiPrefsForUi } from '@/features/sessions/model/sidebarUiPrefs'
 import { apiJson } from '@/lib/api'
+import { copyTextToClipboard } from '@/lib/clipboard'
 import { useUnifiedMultiSelect } from '@/composables/useUnifiedMultiSelect'
 import { sessionStateKind } from '@/types/chat'
 
@@ -250,6 +255,12 @@ function applyUiPrefsToLocal(prefsRaw: Parameters<typeof normalizeSidebarUiPrefs
   if (pinnedSessionsPage.value !== prefs.pinnedSessionsPage) {
     pinnedSessionsPage.value = prefs.pinnedSessionsPage
   }
+  if (!favoriteSessionsOpenUpdating.value && favoriteSessionsOpen.value !== prefs.favoriteSessionsOpen) {
+    favoriteSessionsOpen.value = prefs.favoriteSessionsOpen
+  }
+  if (favoriteSessionsPage.value !== prefs.favoriteSessionsPage) {
+    favoriteSessionsPage.value = prefs.favoriteSessionsPage
+  }
 
   const nextPage = Math.max(0, Math.floor(Number(prefs.directoriesPage || 0)))
   if (directoryPage.value !== nextPage) {
@@ -275,10 +286,15 @@ const pinnedSessionsOpen = ref(Boolean(initialPrefs.pinnedSessionsOpen))
 const pinnedSessionsPage = ref(initialPrefs.pinnedSessionsPage)
 const pinnedSessionsPaging = ref(false)
 const pinnedSessionsOpenUpdating = ref(false)
+const favoriteSessionsOpen = ref(Boolean(initialPrefs.favoriteSessionsOpen))
+const favoriteSessionsPage = ref(initialPrefs.favoriteSessionsPage)
+const favoriteSessionsPaging = ref(false)
+const favoriteSessionsOpenUpdating = ref(false)
 const directoryPage = ref(initialPrefs.directoriesPage)
 const directoryPaging = ref(false)
 const pinCommandPendingIds = ref<Set<string>>(new Set())
 const favoriteCommandPendingIds = ref<Set<string>>(new Set())
+const favoriteOptimisticBySessionId = ref<Record<string, boolean>>({})
 const collapseCommandPendingIds = ref<Set<string>>(new Set())
 const directoryExpandLoadingIds = ref<Set<string>>(new Set())
 const directorySectionLoadingIds = ref<Set<string>>(new Set())
@@ -420,6 +436,7 @@ async function revalidateSidebarState(
     directoriesPage?: number
     focusSessionId?: string
     pinnedPage?: number
+    favoritePage?: number
     recentPage?: number
     runningPage?: number
     query?: string
@@ -441,6 +458,7 @@ async function revalidateSidebarState(
     directoryQuery,
     focusSessionId: opts?.focusSessionId,
     pinnedPage: opts?.pinnedPage,
+    favoritePage: opts?.favoritePage,
     recentPage: opts?.recentPage,
     runningPage: opts?.runningPage,
   })
@@ -546,19 +564,55 @@ function dismissDeepLinkFocus() {
 // Session creation can be slow; prevent duplicate creates from rapid clicks.
 const creatingSession = ref(false)
 
+type ContextMenuAnchor = HTMLElement | { getBoundingClientRect: () => DOMRect } | null
+
+function contextMenuAnchorFromEvent(event?: MouseEvent | PointerEvent): ContextMenuAnchor {
+  if (!event) return null
+  if (event.type === 'contextmenu') {
+    const x = event.clientX
+    const y = event.clientY
+    return {
+      getBoundingClientRect: () => new DOMRect(x, y, 0, 0),
+    }
+  }
+  return event.currentTarget instanceof HTMLElement ? event.currentTarget : null
+}
+
 const isAddDirectoryOpen = ref(false)
 const newDirectoryPath = ref('')
 
-// Mobile: keep the list clean; show actions in a compact dialog.
 const directoryActionsOpen = ref(false)
 const directoryActionsTarget = ref<DirectoryEntry | null>(null)
 const directoryActionsDialogQuery = ref('')
+const directoryActionsAnchorRef = ref<ContextMenuAnchor>(null)
 const directoryActionsDialogItems = computed<DirectoryDialogActionItem[]>(() => {
   const targetDirectoryId = String(directoryActionsTarget.value?.id || '').trim()
   const sessionMultiSelectActive = targetDirectoryId
     ? isSessionMultiSelectEnabledForDirectory(targetDirectoryId)
     : false
+  const collapsed = targetDirectoryId ? isDirectoryCollapsed(targetDirectoryId) : false
   const base: DirectoryDialogActionItem[] = [
+    {
+      id: 'open-files',
+      label: String(t('chat.sidebar.directoryActions.openFiles.label')),
+      description: String(t('chat.sidebar.directoryActions.openFiles.description')),
+      icon: RiFolder6Line,
+    },
+    {
+      id: 'toggle-collapse',
+      label: String(
+        t(
+          collapsed ? 'chat.sidebar.directoriesList.expandDirectory' : 'chat.sidebar.directoriesList.collapseDirectory',
+        ),
+      ),
+      icon: collapsed ? RiArrowRightSLine : RiArrowDownSLine,
+    },
+    {
+      id: 'copy-path',
+      label: String(t('common.copyPath')),
+      description: String(t('chat.sidebar.directoryActions.copyPath.description')),
+      icon: RiClipboardLine,
+    },
     {
       id: 'refresh',
       label: String(t('chat.sidebar.directoryActions.refresh.label')),
@@ -618,6 +672,10 @@ const filteredDirectoryActionsDialogItems = computed<DirectoryDialogActionItem[]
 const sessionActionsOpen = ref(false)
 const sessionActionsTarget = ref<{ directory: DirectoryEntry; session: SessionLike } | null>(null)
 const sessionActionsDialogQuery = ref('')
+const sessionActionsAnchorRef = ref<ContextMenuAnchor>(null)
+
+const sidebarActionsOpen = ref(false)
+const sidebarActionsAnchorRef = ref<ContextMenuAnchor>(null)
 
 const renameDialogOpen = ref(false)
 const renameBusy = ref(false)
@@ -669,6 +727,12 @@ const sessionActionsDialogItems = computed<SessionDialogActionItem[]>(() => {
   const isPinned = Boolean(target?.session?.id && pinnedSessionIds.value.includes(target.session.id))
   const base: SessionDialogActionItem[] = [
     {
+      id: 'open',
+      label: String(t('common.open')),
+      description: String(t('chat.sidebar.sessionActions.open.description')),
+      icon: RiFolder6Line,
+    },
+    {
       id: 'toggle-pin',
       label: isPinned
         ? String(t('chat.sidebar.sessionActions.unpin.label'))
@@ -690,7 +754,7 @@ const sessionActionsDialogItems = computed<SessionDialogActionItem[]>(() => {
       cancelText: String(t('common.cancel')),
     },
   ]
-  return [base[0], ...buildSessionActionItemsForSessionI18n(t, target?.session), base[1]].filter(
+  return [base[0], base[1], ...buildSessionActionItemsForSessionI18n(t, target?.session), base[2]].filter(
     (item): item is SessionDialogActionItem => Boolean(item),
   )
 })
@@ -706,23 +770,91 @@ const filteredSessionActionsDialogItems = computed<SessionDialogActionItem[]>(()
   })
 })
 
-const directoryActionMenuGroups = computed<OptionMenuGroup[]>(() => [
+function menuItemsById(items: OptionMenuItem[], ids: string[]): OptionMenuItem[] {
+  const allowed = new Set(ids)
+  return items.filter((item) => allowed.has(item.id))
+}
+
+const directoryActionMenuGroups = computed<OptionMenuGroup[]>(() => {
+  const items = filteredDirectoryActionsDialogItems.value as OptionMenuItem[]
+  return [
+    { id: 'directory-location', items: menuItemsById(items, ['open-files', 'toggle-collapse', 'copy-path']) },
+    {
+      id: 'directory-session-actions',
+      items: menuItemsById(items, ['refresh', 'toggle-session-multi-select', 'new-session']),
+    },
+    { id: 'directory-danger', items: menuItemsById(items, ['remove']) },
+  ].filter((group) => group.items.length > 0)
+})
+
+const sessionActionMenuGroups = computed<OptionMenuGroup[]>(() => {
+  const items = filteredSessionActionsDialogItems.value as OptionMenuItem[]
+  return [
+    { id: 'session-open', items: menuItemsById(items, ['open']) },
+    { id: 'session-organize', items: menuItemsById(items, ['toggle-pin', 'toggle-favorite', 'rename']) },
+    { id: 'session-content', items: menuItemsById(items, ['copy-transcript', 'export-transcript', 'fork']) },
+    { id: 'session-danger', items: menuItemsById(items, ['delete']) },
+  ].filter((group) => group.items.length > 0)
+})
+
+const sidebarActionMenuGroups = computed<OptionMenuGroup[]>(() => [
   {
-    id: 'directory-actions',
-    items: filteredDirectoryActionsDialogItems.value as OptionMenuItem[],
+    id: 'sidebar-primary',
+    items: [
+      {
+        id: 'add-directory',
+        label: String(t('chat.sidebar.header.addDirectory')),
+        icon: RiAddLine,
+      },
+      {
+        id: 'refresh',
+        label: String(t('chat.sidebar.header.refresh')),
+        icon: RiRefreshLine,
+        disabled: sessionsLoading.value,
+      },
+      {
+        id: 'toggle-multi-select',
+        label: String(
+          t(
+            chatDirectoryMultiSelect.enabled.value
+              ? 'chat.sidebar.multiSelect.actions.exitMultiSelect'
+              : 'chat.sidebar.multiSelect.actions.enterMultiSelect',
+          ),
+        ),
+        icon: chatDirectoryMultiSelect.enabled.value ? RiCloseLine : RiListCheck3,
+      },
+    ],
+  },
+  {
+    id: 'sidebar-directory-visibility',
+    items: [
+      {
+        id: 'expand-all',
+        label: String(t('chat.sidebar.contextMenu.expandAll')),
+        icon: RiArrowDownSLine,
+        disabled:
+          pagedDirectories.value.length === 0 || pagedDirectories.value.every((item) => !isDirectoryCollapsed(item.id)),
+      },
+      {
+        id: 'collapse-all',
+        label: String(t('chat.sidebar.contextMenu.collapseAll')),
+        icon: RiArrowRightSLine,
+        disabled:
+          pagedDirectories.value.length === 0 || pagedDirectories.value.every((item) => isDirectoryCollapsed(item.id)),
+      },
+    ],
   },
 ])
 
-const sessionActionMenuGroups = computed<OptionMenuGroup[]>(() => [
-  {
-    id: 'session-actions',
-    items: filteredSessionActionsDialogItems.value as OptionMenuItem[],
-  },
-])
-
-function openDirectoryActions(p: DirectoryEntry) {
+function openDirectoryActions(p: DirectoryEntry, event?: MouseEvent | PointerEvent) {
+  closeDesktopSessionActionMenu()
+  sessionActionsOpen.value = false
+  sessionActionsAnchorRef.value = null
+  sidebarActionsOpen.value = false
+  sidebarActionsAnchorRef.value = null
   directoryActionsTarget.value = p
   directoryActionsDialogQuery.value = ''
+  directoryActionsAnchorRef.value = contextMenuAnchorFromEvent(event)
   directoryActionsOpen.value = true
 }
 
@@ -754,10 +886,28 @@ async function removeDirectoryInline(p: DirectoryEntry) {
   await removeDirectoryEntry(p.id)
 }
 
-function openSessionActions(directory: DirectoryEntry, session: SessionLike) {
+function openSessionActions(directory: DirectoryEntry, session: SessionLike, event?: MouseEvent | PointerEvent) {
+  closeDesktopSessionActionMenu()
+  directoryActionsOpen.value = false
+  directoryActionsAnchorRef.value = null
+  sidebarActionsOpen.value = false
+  sidebarActionsAnchorRef.value = null
   sessionActionsTarget.value = { directory, session }
   sessionActionsDialogQuery.value = ''
+  sessionActionsAnchorRef.value = contextMenuAnchorFromEvent(event)
   sessionActionsOpen.value = true
+}
+
+function openSidebarContextMenu(event: MouseEvent) {
+  if (ui.isMobilePointer) return
+  event.preventDefault()
+  closeDesktopSessionActionMenu()
+  directoryActionsOpen.value = false
+  directoryActionsAnchorRef.value = null
+  sessionActionsOpen.value = false
+  sessionActionsAnchorRef.value = null
+  sidebarActionsAnchorRef.value = contextMenuAnchorFromEvent(event)
+  sidebarActionsOpen.value = true
 }
 
 async function directoryActionRefresh() {
@@ -790,6 +940,28 @@ function directoryActionToggleSessionMultiSelect() {
 
 async function runDirectoryDialogAction(item: DirectoryDialogActionItem) {
   if (item.disabled) return
+  if (item.id === 'open-files') {
+    const target = directoryActionsTarget.value
+    directoryActionsOpen.value = false
+    if (!target) return
+    await selectDirectory(target.id, target.path)
+    await workspaceNavigation.openMainTab('files')
+    return
+  }
+  if (item.id === 'toggle-collapse') {
+    const target = directoryActionsTarget.value
+    directoryActionsOpen.value = false
+    if (target) await toggleDirectoryCollapse(target.id, target.path)
+    return
+  }
+  if (item.id === 'copy-path') {
+    const target = directoryActionsTarget.value
+    directoryActionsOpen.value = false
+    if (!target) return
+    const ok = await copyTextToClipboard(target.path)
+    toasts.push(ok ? 'success' : 'error', String(t(ok ? 'common.copied' : 'common.failedToCopyToClipboard')))
+    return
+  }
   if (item.id === 'refresh') {
     await directoryActionRefresh()
     return
@@ -900,6 +1072,13 @@ async function runSessionDialogAction(item: SessionDialogActionItem) {
     return
   }
 
+  if (!props.mobileVariant && item.id === 'rename') {
+    const target = sessionActionsTarget.value
+    sessionActionsOpen.value = false
+    if (target) openInlineRenameForSession(target.session)
+    return
+  }
+
   // Mobile session switcher: keep the sidebar open for rename.
   // ChatPage is unmounted while the switcher is open.
   if (props.mobileVariant && item.id === 'rename') {
@@ -917,6 +1096,35 @@ async function runSessionDialogAction(item: SessionDialogActionItem) {
     await selectSession(t.session.id)
   }
   ui.requestSessionAction(item.id)
+}
+
+async function setPagedDirectoriesCollapsed(collapsed: boolean) {
+  const targets = pagedDirectories.value.filter((directory) => isDirectoryCollapsed(directory.id) !== collapsed)
+  for (const directory of targets) {
+    await toggleDirectoryCollapse(directory.id, directory.path)
+  }
+}
+
+async function runSidebarContextAction(item: OptionMenuItem) {
+  if (item.disabled) return
+  sidebarActionsOpen.value = false
+  if (item.id === 'add-directory') {
+    isAddDirectoryOpen.value = true
+    return
+  }
+  if (item.id === 'refresh') {
+    await handleSidebarRefresh()
+    return
+  }
+  if (item.id === 'toggle-multi-select') {
+    toggleChatMultiSelectMode()
+    return
+  }
+  if (item.id === 'expand-all') {
+    await setPagedDirectoriesCollapsed(false)
+    return
+  }
+  if (item.id === 'collapse-all') await setPagedDirectoriesCollapsed(true)
 }
 
 watch(
@@ -957,15 +1165,23 @@ async function toggleFavorite(id: string, favoriteHint?: boolean) {
   if (!sid || favoriteCommandPendingIds.value.has(sid)) return
 
   const current = typeof favoriteHint === 'boolean' ? favoriteHint : chat.getSessionById(sid)?.favorite === true
+  const nextFavorite = !current
   const pending = new Set(favoriteCommandPendingIds.value)
   pending.add(sid)
   favoriteCommandPendingIds.value = pending
+  favoriteOptimisticBySessionId.value = {
+    ...favoriteOptimisticBySessionId.value,
+    [sid]: nextFavorite,
+  }
   try {
-    await chat.updateSessionMetadata(sid, { favorite: !current })
+    await chat.updateSessionMetadata(sid, { favorite: nextFavorite })
     await directorySessions.revalidateFromApi(undefined, { silent: true })
   } catch (err) {
     toasts.push('error', err instanceof Error ? err.message : String(err))
   } finally {
+    const optimistic = { ...favoriteOptimisticBySessionId.value }
+    delete optimistic[sid]
+    favoriteOptimisticBySessionId.value = optimistic
     const next = new Set(favoriteCommandPendingIds.value)
     next.delete(sid)
     favoriteCommandPendingIds.value = next
@@ -977,6 +1193,7 @@ const sessionsLoading = computed(() => {
 })
 
 const pinnedFooterLoading = computed(() => pinnedSessionsOpenUpdating.value && pinnedSessionsOpen.value)
+const favoriteFooterLoading = computed(() => favoriteSessionsOpenUpdating.value && favoriteSessionsOpen.value)
 const recentFooterLoading = computed(() => recentSessionsOpenUpdating.value && recentSessionsOpen.value)
 const runningFooterLoading = computed(() => runningSessionsOpenUpdating.value && runningSessionsOpen.value)
 
@@ -1107,14 +1324,17 @@ watch(
 )
 
 const pinnedFooterView = computed(() => normalizeFooterView(directorySessions.pinnedFooterView))
+const favoriteFooterView = computed(() => normalizeFooterView(directorySessions.favoriteFooterView))
 const recentFooterView = computed(() => normalizeFooterView(directorySessions.recentFooterView))
 const runningFooterView = computed(() => normalizeFooterView(directorySessions.runningFooterView))
 
 const pinnedSessionsPageCount = computed(() => Math.max(1, Number(pinnedFooterView.value.pageCount || 1)))
+const favoriteSessionsPageCount = computed(() => Math.max(1, Number(favoriteFooterView.value.pageCount || 1)))
 const recentSessionsPageCount = computed(() => Math.max(1, Number(recentFooterView.value.pageCount || 1)))
 const runningSessionsPageCount = computed(() => Math.max(1, Number(runningFooterView.value.pageCount || 1)))
 
 const pinnedSessionsTotal = computed(() => Math.max(0, Number(pinnedFooterView.value.total || 0)))
+const favoriteSessionsTotal = computed(() => Math.max(0, Number(favoriteFooterView.value.total || 0)))
 const recentSessionsTotal = computed(() => Math.max(0, Number(recentFooterView.value.total || 0)))
 const runningSessionsTotal = computed(() => Math.max(0, Number(runningFooterView.value.total || 0)))
 
@@ -1163,8 +1383,21 @@ function mergeSidebarSessionLike(
   if (title) merged.title = title
   if (slug) merged.slug = slug
   if (directory) merged.directory = directory
-  if (typeof cacheSession?.favorite === 'boolean') merged.favorite = cacheSession.favorite
-  if (typeof cacheSession?.pinned === 'boolean') merged.pinned = cacheSession.pinned
+  const favorite = Object.prototype.hasOwnProperty.call(favoriteOptimisticBySessionId.value, sid)
+    ? favoriteOptimisticBySessionId.value[sid]
+    : typeof rowSession?.favorite === 'boolean'
+      ? rowSession.favorite
+      : typeof cacheSession?.favorite === 'boolean'
+        ? cacheSession.favorite
+        : undefined
+  const pinned =
+    typeof rowSession?.pinned === 'boolean'
+      ? rowSession.pinned
+      : typeof cacheSession?.pinned === 'boolean'
+        ? cacheSession.pinned
+        : undefined
+  if (favorite !== undefined) merged.favorite = favorite
+  if (pinned !== undefined) merged.pinned = pinned
   return merged
 }
 
@@ -1200,6 +1433,9 @@ function resolveSidebarRow(row: ThreadSessionRow): ThreadSessionRow {
 
 const pagedPinnedSessionRows = computed<ThreadSessionRow[]>(() =>
   ((pinnedFooterView.value.rows || []) as ThreadSessionRow[]).map(resolveSidebarRow),
+)
+const pagedFavoriteSessionRows = computed<ThreadSessionRow[]>(() =>
+  ((favoriteFooterView.value.rows || []) as ThreadSessionRow[]).map(resolveSidebarRow),
 )
 const pagedRecentSessionRows = computed<ThreadSessionRow[]>(() =>
   ((recentFooterView.value.rows || []) as ThreadSessionRow[]).map(resolveSidebarRow),
@@ -1341,6 +1577,14 @@ watch(
 )
 
 watch(
+  () => favoriteFooterView.value.page,
+  (next) => {
+    const resolved = Math.max(0, Math.floor(Number(next || 0)))
+    if (favoriteSessionsPage.value !== resolved) favoriteSessionsPage.value = resolved
+  },
+)
+
+watch(
   () => recentFooterView.value.page,
   (next) => {
     const resolved = Math.max(0, Math.floor(Number(next || 0)))
@@ -1372,6 +1616,25 @@ async function requestPinnedSessionsOpen(nextOpen: boolean) {
     }
   } finally {
     pinnedSessionsOpenUpdating.value = false
+  }
+}
+
+async function requestFavoriteSessionsOpen(nextOpen: boolean) {
+  if (favoriteSessionsOpenUpdating.value) return
+  const target = Boolean(nextOpen)
+  const previous = favoriteSessionsOpen.value
+  if (target === previous) return
+
+  favoriteSessionsOpen.value = target
+  favoriteSessionsOpenUpdating.value = true
+  try {
+    const ok = await directorySessions.commandSetFooterOpen('favorite', target, { silent: true })
+    if (!ok) {
+      favoriteSessionsOpen.value = previous
+      await revalidateSidebarState(undefined, { silent: true })
+    }
+  } finally {
+    favoriteSessionsOpenUpdating.value = false
   }
 }
 
@@ -1437,6 +1700,30 @@ async function requestPinnedSessionsPage(nextPage: number) {
   }
 }
 
+async function requestFavoriteSessionsPage(nextPage: number) {
+  if (favoriteSessionsPaging.value) return
+  const maxPage = Math.max(0, favoriteSessionsPageCount.value - 1)
+  const target = Math.max(0, Math.min(maxPage, Math.floor(nextPage || 0)))
+  if (target === favoriteSessionsPage.value) return
+
+  favoriteSessionsPaging.value = true
+  try {
+    const ok = await directorySessions.commandSetFooterPage('favorite', target, { silent: true })
+    if (!ok) {
+      await revalidateSidebarState(
+        {
+          directoriesPage: directoryPage.value,
+          query: sidebarQueryNorm.value,
+          favoritePage: target,
+        },
+        { silent: true },
+      )
+    }
+  } finally {
+    favoriteSessionsPaging.value = false
+  }
+}
+
 async function requestRecentSessionsPage(nextPage: number) {
   if (recentSessionsPaging.value) return
   const maxPage = Math.max(0, recentSessionsPageCount.value - 1)
@@ -1492,6 +1779,12 @@ async function openRunningSession(sessionId: string) {
 }
 
 async function openPinnedSession(sessionId: string) {
+  const sid = (sessionId || '').trim()
+  if (!sid) return
+  await selectSession(sid)
+}
+
+async function openFavoriteSession(sessionId: string) {
   const sid = (sessionId || '').trim()
   if (!sid) return
   await selectSession(sid)
@@ -2007,11 +2300,16 @@ const { locatedSessionId, locateFromSearch, searchWarming, sessionSearchHits, se
       :search-placeholder="String(t('common.searchActions'))"
       :empty-text="String(t('common.noActionsFound'))"
       :is-mobile-pointer="ui.isMobilePointer"
+      :desktop-anchor-el="directoryActionsAnchorRef"
+      desktop-placement="bottom-start"
       filter-mode="external"
       @update:open="
         (v) => {
           directoryActionsOpen = v
-          if (!v) directoryActionsTarget = null
+          if (!v) {
+            directoryActionsTarget = null
+            directoryActionsAnchorRef = null
+          }
         }
       "
       @select="runDirectoryDialogAction"
@@ -2027,14 +2325,37 @@ const { locatedSessionId, locateFromSearch, searchWarming, sessionSearchHits, se
       :search-placeholder="String(t('common.searchActions'))"
       :empty-text="String(t('common.noActionsFound'))"
       :is-mobile-pointer="ui.isMobilePointer"
+      :desktop-anchor-el="sessionActionsAnchorRef"
+      desktop-placement="bottom-start"
       filter-mode="external"
       @update:open="
         (v) => {
           sessionActionsOpen = v
-          if (!v) sessionActionsTarget = null
+          if (!v) {
+            sessionActionsTarget = null
+            sessionActionsAnchorRef = null
+          }
         }
       "
       @select="runSessionDialogAction"
+    />
+
+    <OptionMenu
+      :open="sidebarActionsOpen"
+      :groups="sidebarActionMenuGroups"
+      :title="String(t('chat.sidebar.contextMenu.menuTitle'))"
+      :searchable="false"
+      :is-mobile-pointer="false"
+      :desktop-anchor-el="sidebarActionsAnchorRef"
+      desktop-placement="bottom-start"
+      desktop-class="w-64"
+      @update:open="
+        (v) => {
+          sidebarActionsOpen = v
+          if (!v) sidebarActionsAnchorRef = null
+        }
+      "
+      @select="runSidebarContextAction"
     />
 
     <RenameSessionDialog
@@ -2170,7 +2491,7 @@ const { locatedSessionId, locateFromSearch, searchWarming, sessionSearchHits, se
         </div>
       </div>
 
-      <div class="flex-1 min-h-0 overflow-x-hidden overflow-y-auto pb-2">
+      <div class="flex-1 min-h-0 overflow-x-hidden overflow-y-auto pb-2" @contextmenu="openSidebarContextMenu">
         <div class="flex min-h-full flex-col">
           <DirectoriesList
             :ui-is-compact-layout="ui.isCompactLayout"
@@ -2247,6 +2568,46 @@ const { locatedSessionId, locateFromSearch, searchWarming, sessionSearchHits, se
           />
 
           <div class="mt-auto">
+            <FavoriteSessionsFooter
+              :open="favoriteSessionsOpen"
+              :page="favoriteSessionsPage"
+              :paging="favoriteSessionsPaging"
+              :loading="favoriteFooterLoading"
+              :favoriteSessionRows="pagedFavoriteSessionRows"
+              :favoriteSessionsTotal="favoriteSessionsTotal"
+              :favoriteSessionsPageCount="favoriteSessionsPageCount"
+              :selectedSessionId="chat.selectedSessionId"
+              :ui-is-compact-layout="ui.isCompactLayout"
+              :multiSelectEnabled="false"
+              :isSessionSelected="isSessionMultiSelected"
+              :toggleSessionSelected="toggleSessionMultiSelected"
+              :pinnedSessionIds="pinnedSessionIds"
+              :hasAttention="hasAttention"
+              :statusLabelForSessionId="statusLabelForSessionId"
+              :openSessionActions="openSessionActions"
+              :openSessionActionMenu="openSessionActionMenu"
+              :togglePin="togglePin"
+              :toggleFavorite="toggleFavorite"
+              :deleteSession="deleteSession"
+              :sessionActionMenuTarget="sessionActionMenuTarget"
+              :sessionActionMenuAnchorEl="sessionActionMenuAnchorRef"
+              :sessionActionMenuQuery="sessionActionMenuQuery"
+              @update:sessionActionMenuQuery="(v) => (sessionActionMenuQuery = v)"
+              :filteredSessionActionItems="filteredSessionActionItems"
+              :setSessionActionMenuRef="setSessionActionMenuRef"
+              :runSessionActionMenu="runSessionActionMenu"
+              :isSessionRenaming="isRenamingSession"
+              :renameDraft="renameDraft"
+              :renameBusy="renameBusy"
+              :updateRenameDraft="updateRenameDraft"
+              :saveRename="saveRenameFromSidebar"
+              :cancelRename="cancelRenameFromSidebar"
+              @update:open="(v) => void requestFavoriteSessionsOpen(v)"
+              @update:page="(v) => void requestFavoriteSessionsPage(v)"
+              @open-session="openFavoriteSession"
+              @toggle-thread="toggleExpandedParent"
+            />
+
             <PinnedSessionsFooter
               :open="pinnedSessionsOpen"
               :page="pinnedSessionsPage"

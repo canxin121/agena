@@ -27,6 +27,9 @@ use ratatui::{
 pub struct SessionHubItem {
     pub session_id: i64,
     pub title: String,
+    /// Durable user favorite state. Rendered as a persistent star marker and
+    /// used by the hub's favorite toggle without conflating it with pinning.
+    pub favorite: bool,
     /// First line of the row; the renderer never invents text, so the App
     /// pre-localizes it.
     pub label: String,
@@ -39,10 +42,11 @@ pub struct SessionHubItem {
 }
 
 /// Identity of a hub section. Ordering of the sections is fixed by the App:
-/// new session (action), then running, then attention, then recent.
+/// new session (action), favorites, running, attention, then recent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SessionHubSectionKind {
     New,
+    Favorites,
     Running,
     Attention,
     Recent,
@@ -52,6 +56,7 @@ impl SessionHubSectionKind {
     pub fn localization_key(self) -> &'static str {
         match self {
             Self::New => "hub-section-new",
+            Self::Favorites => "hub-section-favorites",
             Self::Running => "hub-section-running",
             Self::Attention => "hub-section-attention",
             Self::Recent => "hub-section-recent",
@@ -129,6 +134,44 @@ impl SessionHubPresentation {
     /// otherwise it lands on the first row.
     pub fn set_query(&mut self, query: &str) {
         self.query = query.trim().to_lowercase();
+        self.rebuild_rows();
+    }
+
+    /// Apply an authoritative favorite update to every visible copy of a
+    /// session and keep the independent Favorites section in sync.
+    pub fn set_item_favorite(&mut self, session_id: i64, favorite: bool) {
+        let mut source_item = None;
+        for section in &mut self.sections {
+            for item in &mut section.items {
+                if item.session_id != session_id || item.is_new_session {
+                    continue;
+                }
+                if section.kind != SessionHubSectionKind::Favorites && source_item.is_none() {
+                    source_item = Some(item.clone());
+                }
+                item.favorite = favorite;
+            }
+        }
+
+        if let Some(section) = self
+            .sections
+            .iter_mut()
+            .find(|section| section.kind == SessionHubSectionKind::Favorites)
+        {
+            if favorite {
+                if !section
+                    .items
+                    .iter()
+                    .any(|item| item.session_id == session_id)
+                    && let Some(mut item) = source_item
+                {
+                    item.favorite = true;
+                    section.items.insert(0, item);
+                }
+            } else {
+                section.items.retain(|item| item.session_id != session_id);
+            }
+        }
         self.rebuild_rows();
     }
 
@@ -236,7 +279,10 @@ impl SessionHubPresentation {
     /// Re-flatten `self.sections` through the current filter into `self.rows`,
     /// preserving the selected row by identity when it survives.
     fn rebuild_rows(&mut self) {
-        let previous = self.selected_item().cloned();
+        let previous = self
+            .selected_item()
+            .map(|item| (item.session_id, item.is_new_session));
+        let previous_selection = self.selection;
         let filtered = self
             .sections
             .iter()
@@ -259,7 +305,18 @@ impl SessionHubPresentation {
             .and_then(|previous| {
                 self.rows
                     .iter()
-                    .position(|row| matches!(row, HubRow::Item(item) if *item == previous))
+                    .enumerate()
+                    .filter_map(|(index, row)| match row {
+                        HubRow::Item(item)
+                            if (item.session_id, item.is_new_session) == previous =>
+                        {
+                            Some(index)
+                        }
+                        _ => None,
+                    })
+                    .min_by_key(|index| {
+                        (*index as isize - previous_selection as isize).unsigned_abs()
+                    })
             })
             .unwrap_or(0);
         self.clamp_selection();
@@ -419,13 +476,27 @@ pub fn render_session_hub(
         render_rows(frame, content_area, presentation, i18n);
     }
 
+    let mut footer_hints = vec![
+        ShortcutHint::new("↑/↓", i18n.text("hub-hint-move")),
+        ShortcutHint::new("Tab", i18n.text("hub-hint-section")),
+        ShortcutHint::new("Enter", i18n.text("hub-hint-open")),
+    ];
+    if let Some(selected) = presentation
+        .selected_item()
+        .filter(|item| !item.is_new_session)
+    {
+        footer_hints.push(ShortcutHint::new(
+            "f",
+            i18n.text(if selected.favorite {
+                "hub-action-unfavorite"
+            } else {
+                "hub-action-favorite"
+            }),
+        ));
+    }
+    footer_hints.push(ShortcutHint::new("Esc", i18n.text("hub-hint-back")));
     frame.render_widget(
-        Paragraph::new(build_shortcut_line([
-            ShortcutHint::new("↑/↓", i18n.text("hub-hint-move")),
-            ShortcutHint::new("Tab", i18n.text("hub-hint-section")),
-            ShortcutHint::new("Enter", i18n.text("hub-hint-open")),
-            ShortcutHint::new("Esc", i18n.text("hub-hint-back")),
-        ])),
+        Paragraph::new(build_shortcut_line(footer_hints)),
         footer_area,
     );
 }
@@ -447,7 +518,11 @@ fn render_rows(
                     .add_modifier(Modifier::BOLD),
             ))),
             HubRow::Item(item) => build_accented_two_line_list_item(
-                Cow::Borrowed(item.label.as_str()),
+                if item.favorite && !item.is_new_session {
+                    Cow::Owned(format!("★ {}", item.label))
+                } else {
+                    Cow::Borrowed(item.label.as_str())
+                },
                 None,
                 Some(Cow::Borrowed(item.detail.as_str())),
             ),
@@ -474,6 +549,7 @@ mod tests {
         SessionHubItem {
             session_id: id,
             title: format!("session {id}"),
+            favorite: false,
             label: format!("session {id}"),
             detail: "detail".to_string(),
             is_new_session: false,
@@ -484,6 +560,7 @@ mod tests {
         SessionHubItem {
             session_id: 0,
             title: String::new(),
+            favorite: false,
             label: "new session".to_string(),
             detail: String::new(),
             is_new_session: true,
@@ -524,6 +601,62 @@ mod tests {
                 .unwrap_or(false)
         );
         assert_eq!(presentation.total_count(), 3);
+    }
+
+    #[test]
+    fn favorite_updates_keep_the_independent_section_and_visible_copy_in_sync() {
+        let mut presentation = SessionHubPresentation::empty();
+        presentation.set_sections(vec![
+            SessionHubSection::new(SessionHubSectionKind::New, vec![new_session_item()]),
+            section(SessionHubSectionKind::Favorites, &[]),
+            section(SessionHubSectionKind::Recent, &[7]),
+        ]);
+        presentation.move_selection(1);
+        assert_eq!(
+            presentation.selected_item().map(|item| item.session_id),
+            Some(7)
+        );
+
+        presentation.set_item_favorite(7, true);
+        assert!(
+            presentation
+                .rows()
+                .contains(&HubRow::Header(SessionHubSectionKind::Favorites))
+        );
+        assert_eq!(
+            presentation
+                .rows()
+                .iter()
+                .filter(
+                    |row| matches!(row, HubRow::Item(item) if item.session_id == 7 && item.favorite)
+                )
+                .count(),
+            2,
+            "favorite appears in Favorites and its execution-state section",
+        );
+        assert_eq!(
+            presentation.selected_item().map(|item| item.session_id),
+            Some(7)
+        );
+        assert_eq!(
+            presentation.selected_item().map(|item| item.favorite),
+            Some(true)
+        );
+
+        presentation.set_item_favorite(7, false);
+        assert!(
+            !presentation
+                .rows()
+                .contains(&HubRow::Header(SessionHubSectionKind::Favorites))
+        );
+        assert_eq!(
+            presentation.selected_item().map(|item| item.session_id),
+            Some(7)
+        );
+        assert_eq!(
+            presentation.selected_item().map(|item| item.favorite),
+            Some(false)
+        );
     }
 
     #[test]

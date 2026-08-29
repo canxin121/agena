@@ -112,8 +112,9 @@ const emit = defineEmits<{
   (e: 'toggle-thread'): void
   (e: 'open-actions'): void
   (e: 'open-action-menu', event: MouseEvent | PointerEvent): void
+  (e: 'open-context-menu', event: MouseEvent): void
   (e: 'toggle-pin'): void
-  (e: 'toggle-favorite'): void
+  (e: 'toggle-favorite', currentFavorite: boolean): void
   (e: 'delete'): void
   (e: 'update:renameDraft', v: string): void
   (e: 'rename-save'): void
@@ -211,6 +212,13 @@ function handleDesktopOpenActionMenu(event: MouseEvent) {
   emit('open-action-menu', event)
 }
 
+function handleRowContextMenu(event: MouseEvent) {
+  if (!canShowActions.value || props.multiSelectEnabled || isInlineRename.value) return
+  event.preventDefault()
+  event.stopPropagation()
+  emit('open-context-menu', event)
+}
+
 function handleRowClick(event: MouseEvent) {
   if (isInlineRename.value) return
   if (props.multiSelectEnabled) {
@@ -262,6 +270,7 @@ function handleRowDragStart(event: DragEvent) {
       class="gap-2 relative"
       :class="highlighted ? 'ring-2 ring-primary/40 ring-inset' : ''"
       @click="handleRowClick($event)"
+      @contextmenu="handleRowContextMenu"
       @dragstart="handleRowDragStart"
     >
       <template #icon>
@@ -300,7 +309,15 @@ function handleRowDragStart(event: DragEvent) {
       <div class="flex w-full items-center min-w-0 gap-2">
         <template v-if="!isInlineRename">
           <div v-if="hasSession" class="flex-1 min-w-0 flex flex-col justify-center">
-            <span class="truncate typography-ui-label w-full text-left">{{ titleText }}</span>
+            <div class="flex min-w-0 items-center gap-1.5">
+              <RiStarFill
+                v-if="isFavorite"
+                class="h-3 w-3 flex-shrink-0 text-amber-500"
+                :title="String(t('chat.sidebar.sessionActions.unfavorite.label'))"
+                :aria-label="String(t('chat.sidebar.sessionActions.unfavorite.label'))"
+              />
+              <span class="min-w-0 flex-1 truncate typography-ui-label text-left">{{ titleText }}</span>
+            </div>
             <span
               v-if="showDirectory && (directoryText || directoryFallbackText)"
               class="truncate text-[10px] text-muted-foreground/70 w-full text-left"
@@ -409,7 +426,7 @@ function handleRowDragStart(event: DragEvent) {
                 ),
               )
             "
-            @click.stop="emit('toggle-favorite')"
+            @click.stop="emit('toggle-favorite', isFavorite)"
           >
             <component :is="isFavorite ? RiStarFill : RiStarLine" class="h-4 w-4" />
           </IconButton>

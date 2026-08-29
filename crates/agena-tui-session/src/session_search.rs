@@ -21,6 +21,7 @@ use crate::session_view::SessionViewMode;
 pub struct SessionSearchItem {
     pub session_id: i64,
     pub title: String,
+    pub favorite: bool,
     pub label: String,
     pub detail: String,
 }
@@ -39,7 +40,11 @@ impl SearchPickerItem for SessionSearchItem {
     }
 
     fn search_picker_label(&self) -> Cow<'_, str> {
-        Cow::Borrowed(&self.label)
+        if self.favorite {
+            Cow::Owned(format!("★ {}", self.label))
+        } else {
+            Cow::Borrowed(&self.label)
+        }
     }
 
     fn search_picker_detail(&self) -> Option<Cow<'_, str>> {

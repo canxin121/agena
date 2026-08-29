@@ -11,6 +11,8 @@ export type ChatSidebarUiPrefs = {
   sessionRootPageByDirectoryId: Record<string, number>
   pinnedSessionsOpen: boolean
   pinnedSessionsPage: number
+  favoriteSessionsOpen: boolean
+  favoriteSessionsPage: number
   recentSessionsOpen: boolean
   recentSessionsPage: number
   runningSessionsOpen: boolean
@@ -31,6 +33,8 @@ const DEFAULT_UI_PREFS: ChatSidebarUiPrefs = {
   sessionRootPageByDirectoryId: {},
   pinnedSessionsOpen: false,
   pinnedSessionsPage: 0,
+  favoriteSessionsOpen: false,
+  favoriteSessionsPage: 0,
   recentSessionsOpen: false,
   recentSessionsPage: 0,
   runningSessionsOpen: false,
@@ -76,6 +80,8 @@ export function defaultChatSidebarUiPrefs(): ChatSidebarUiPrefs {
     sessionRootPageByDirectoryId: { ...DEFAULT_UI_PREFS.sessionRootPageByDirectoryId },
     pinnedSessionsOpen: DEFAULT_UI_PREFS.pinnedSessionsOpen,
     pinnedSessionsPage: DEFAULT_UI_PREFS.pinnedSessionsPage,
+    favoriteSessionsOpen: DEFAULT_UI_PREFS.favoriteSessionsOpen,
+    favoriteSessionsPage: DEFAULT_UI_PREFS.favoriteSessionsPage,
     recentSessionsOpen: DEFAULT_UI_PREFS.recentSessionsOpen,
     recentSessionsPage: DEFAULT_UI_PREFS.recentSessionsPage,
     runningSessionsOpen: DEFAULT_UI_PREFS.runningSessionsOpen,
@@ -110,6 +116,10 @@ export function loadChatSidebarUiPrefs(): ChatSidebarUiPrefs {
       typeof parsed.pinnedSessionsPage === 'number' && Number.isFinite(parsed.pinnedSessionsPage)
         ? Math.max(0, Math.floor(parsed.pinnedSessionsPage))
         : 0
+    const favoriteSessionsPage =
+      typeof parsed.favoriteSessionsPage === 'number' && Number.isFinite(parsed.favoriteSessionsPage)
+        ? Math.max(0, Math.floor(parsed.favoriteSessionsPage))
+        : 0
     return {
       version,
       updatedAt,
@@ -120,6 +130,8 @@ export function loadChatSidebarUiPrefs(): ChatSidebarUiPrefs {
       sessionRootPageByDirectoryId: toPageMap(parsed.sessionRootPageByDirectoryId),
       pinnedSessionsOpen: Boolean(parsed.pinnedSessionsOpen),
       pinnedSessionsPage,
+      favoriteSessionsOpen: Boolean(parsed.favoriteSessionsOpen),
+      favoriteSessionsPage,
       recentSessionsOpen: Boolean(parsed.recentSessionsOpen),
       recentSessionsPage,
       runningSessionsOpen: Boolean(parsed.runningSessionsOpen),
@@ -149,6 +161,11 @@ export function saveChatSidebarUiPrefs(next: ChatSidebarUiPrefs) {
         pinnedSessionsPage:
           typeof next.pinnedSessionsPage === 'number' && Number.isFinite(next.pinnedSessionsPage)
             ? Math.max(0, Math.floor(next.pinnedSessionsPage))
+            : 0,
+        favoriteSessionsOpen: Boolean(next.favoriteSessionsOpen),
+        favoriteSessionsPage:
+          typeof next.favoriteSessionsPage === 'number' && Number.isFinite(next.favoriteSessionsPage)
+            ? Math.max(0, Math.floor(next.favoriteSessionsPage))
             : 0,
         recentSessionsOpen: Boolean(next.recentSessionsOpen),
         recentSessionsPage:

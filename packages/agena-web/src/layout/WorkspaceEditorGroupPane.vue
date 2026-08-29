@@ -12,6 +12,8 @@ import {
 } from '@remixicon/vue'
 
 import { WORKSPACE_MAIN_TABS, type MainTabId } from '@/app/navigation/mainTabs'
+import OptionMenu from '@/components/ui/OptionMenu.vue'
+import type { OptionMenuGroup, OptionMenuItem } from '@/components/ui/optionMenu.types'
 import {
   WORKSPACE_WINDOW_DRAG_MIME,
   hasWorkspaceWindowDragDataTransfer,
@@ -89,6 +91,60 @@ const activeWindowId = computed(() => String(activeWindow.value?.id || '').trim(
 const canDragTabs = computed(() => !ui.isCompactLayout)
 const isTabStripDropActive = ref(false)
 const mountedWindowIds = ref<string[]>([])
+const tabContextMenuOpen = ref(false)
+const tabContextWindowId = ref('')
+const tabContextMenuAnchorEl = ref<HTMLElement | null>(null)
+
+const tabContextWindowIndex = computed(() =>
+  groupTabs.value.findIndex((item) => item.id === String(tabContextWindowId.value || '').trim()),
+)
+const tabContextMenuTitle = computed(() => {
+  const target = windowMap.value.get(String(tabContextWindowId.value || '').trim())
+  return target ? windowTitle(target) : ''
+})
+
+const tabContextMenuGroups = computed<OptionMenuGroup[]>(() => {
+  const index = tabContextWindowIndex.value
+  const count = groupTabs.value.length
+  const validTarget = index >= 0
+  return [
+    {
+      id: 'tab-close-actions',
+      items: [
+        {
+          id: 'close-current',
+          label: String(t('header.windowTabs.closeCurrent')),
+          icon: RiCloseLine,
+          disabled: !validTarget,
+        },
+        {
+          id: 'close-others',
+          label: String(t('header.windowTabs.closeOthers')),
+          icon: RiCloseLine,
+          disabled: !validTarget || count <= 1,
+        },
+        {
+          id: 'close-left',
+          label: String(t('header.windowTabs.closeLeft')),
+          icon: RiCloseLine,
+          disabled: !validTarget || index <= 0,
+        },
+        {
+          id: 'close-right',
+          label: String(t('header.windowTabs.closeRight')),
+          icon: RiCloseLine,
+          disabled: !validTarget || index >= count - 1,
+        },
+        {
+          id: 'close-all',
+          label: String(t('header.windowTabs.closeAll')),
+          icon: RiCloseLine,
+          disabled: count === 0,
+        },
+      ],
+    },
+  ]
+})
 
 watch(
   activeWindowId,
@@ -296,6 +352,65 @@ async function closeTab(windowId: string) {
   await navigateToWindow(fallback.id, true)
 }
 
+function openTabContextMenu(event: MouseEvent, windowId: string) {
+  const targetId = String(windowId || '').trim()
+  const anchor = event.currentTarget
+  if (!targetId || !(anchor instanceof HTMLElement)) return
+  tabContextWindowId.value = targetId
+  tabContextMenuAnchorEl.value = anchor
+  tabContextMenuOpen.value = true
+}
+
+async function closeTabIds(windowIds: string[], fallbackWindowId = '') {
+  const ids = [...new Set(windowIds.map((id) => String(id || '').trim()).filter(Boolean))].filter((id) =>
+    Boolean(ui.getWorkspaceWindowById(id)),
+  )
+  if (!ids.length) return
+
+  const routeActiveId = String(ui.activeWorkspaceWindowId || '').trim()
+  const removesRouteActive = Boolean(routeActiveId && ids.includes(routeActiveId))
+
+  for (const id of ids) ui.closeWorkspaceWindow(id)
+  if (!removesRouteActive) return
+
+  const preferredFallbackId = String(fallbackWindowId || '').trim()
+  const fallback =
+    (preferredFallbackId ? ui.getWorkspaceWindowById(preferredFallbackId) : null) ||
+    ui.activeWorkspaceWindow ||
+    ui.workspaceWindows[0] ||
+    null
+  if (!fallback) return
+  await navigateToWindow(fallback.id, true)
+}
+
+async function handleTabContextMenuSelect(item: OptionMenuItem) {
+  const targetId = String(tabContextWindowId.value || '').trim()
+  const tabIds = groupTabs.value.map((tab) => tab.id)
+  const index = tabIds.indexOf(targetId)
+  if (!targetId || index < 0) return
+
+  if (item.id === 'close-current') {
+    await closeTab(targetId)
+    return
+  }
+  if (item.id === 'close-others') {
+    await closeTabIds(
+      tabIds.filter((id) => id !== targetId),
+      targetId,
+    )
+    return
+  }
+  if (item.id === 'close-left') {
+    await closeTabIds(tabIds.slice(0, index), targetId)
+    return
+  }
+  if (item.id === 'close-right') {
+    await closeTabIds(tabIds.slice(index + 1), targetId)
+    return
+  }
+  if (item.id === 'close-all') await closeTabIds(tabIds)
+}
+
 function clearTabStripDropState() {
   isTabStripDropActive.value = false
 }
@@ -431,6 +546,7 @@ async function handleTabStripDrop(event: DragEvent) {
           @click="void activateTab(windowTab.id)"
           @keydown.enter.prevent="void activateTab(windowTab.id)"
           @keydown.space.prevent="void activateTab(windowTab.id)"
+          @contextmenu.prevent.stop="openTabContextMenu($event, windowTab.id)"
           @dragstart="handleTabDragStart($event, windowTab.id)"
           @dragend="handleTabDragEnd($event)"
         >
@@ -455,6 +571,18 @@ async function handleTabStripDrop(event: DragEvent) {
           {{ t('header.windowTabs.splitNoContent') }}
         </div>
       </div>
+
+      <OptionMenu
+        v-model:open="tabContextMenuOpen"
+        :groups="tabContextMenuGroups"
+        :title="tabContextMenuTitle"
+        :searchable="false"
+        :is-mobile-pointer="false"
+        :desktop-anchor-el="tabContextMenuAnchorEl"
+        desktop-placement="bottom-start"
+        desktop-class="w-56"
+        @select="void handleTabContextMenuSelect($event)"
+      />
 
       <div
         v-if="isTabStripDropActive"

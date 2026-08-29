@@ -17,6 +17,24 @@ fn is_not_found(error: &anyhow::Error) -> bool {
         .is_some_and(|error| error.kind() == std::io::ErrorKind::NotFound)
 }
 
+fn remove_record_if_matches(record: &ServerEndpointRecord) -> Result<()> {
+    let path = server_record::record_path();
+    let current = match server_record::read_record(path.as_path()) {
+        Ok(current) => current,
+        Err(error) if is_not_found(&error) => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    if current.server_id != record.server_id || current.pid != record.pid {
+        return Ok(());
+    }
+    match fs::remove_file(&path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error)
+            .with_context(|| format!("failed to remove stopped server record {}", path.display())),
+    }
+}
+
 fn read_optional_server_record() -> Result<Option<ServerEndpointRecord>> {
     let path = server_record::record_path();
     match server_record::read_record(&path) {
@@ -274,6 +292,7 @@ pub(crate) async fn stop() -> Result<()> {
         let record = record?;
         if let Some(record) = record {
             wait_until_identity_stops(&record).await?;
+            remove_record_if_matches(&record)?;
             println!(
                 "Stopped installed Agena server pid {} (id {}).",
                 record.pid, record.server_id
@@ -308,6 +327,7 @@ pub(crate) async fn stop() -> Result<()> {
             }
         };
         if !still_same {
+            remove_record_if_matches(&record)?;
             println!(
                 "Stopped Agena server pid {} (id {}).",
                 identity.pid, identity.id
@@ -374,6 +394,7 @@ pub(crate) async fn uninstall() -> Result<()> {
     let record = record?;
     if let Some(record) = record {
         wait_until_identity_stops(&record).await?;
+        remove_record_if_matches(&record)?;
     }
     println!(
         "Uninstalled Agena user service definition {}. Agena configuration, sessions, and logs were preserved.",
@@ -487,7 +508,21 @@ fn send_interrupt(pid: u32) -> Result<()> {
     }
 }
 
-#[cfg(not(unix))]
+#[cfg(target_os = "windows")]
+fn send_interrupt(pid: u32) -> Result<()> {
+    let pid = pid.to_string();
+    let status = Command::new("taskkill.exe")
+        .args(["/PID", pid.as_str(), "/T", "/F"])
+        .status()
+        .context("failed to execute taskkill")?;
+    if status.success() {
+        Ok(())
+    } else {
+        bail!("taskkill failed with status {status}")
+    }
+}
+
+#[cfg(not(any(unix, target_os = "windows")))]
 fn send_interrupt(_pid: u32) -> Result<()> {
     bail!("`agena server stop` is not implemented on this platform")
 }

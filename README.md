@@ -14,9 +14,29 @@ cargo doc --workspace --no-deps --open
 
 Deployment guides:
 
+- [Installation and upgrades](docs/installation.md)
 - [Public MCP server with built-in OAuth](docs/mcp-public-oauth.md)
 
-## Quick start
+## Install
+
+macOS and Linux:
+
+```bash
+curl -fsSL https://github.com/canxin121/agena/releases/latest/download/install.sh | bash
+```
+
+Windows PowerShell:
+
+```powershell
+irm https://github.com/canxin121/agena/releases/latest/download/install.ps1 | iex
+```
+
+The installer verifies the release SHA-256, installs the native binary and Web
+frontend, and starts Agena as a per-user service. See the
+[installation guide](docs/installation.md) for upgrade, stop/start, uninstall,
+custom workspace/port, and pinned-version commands.
+
+## Development quick start
 
 First start the HTTP server:
 

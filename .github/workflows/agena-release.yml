@@ -433,11 +433,27 @@ jobs:
       - verify-assets
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.metadata.outputs.source_sha }}
+          persist-credentials: false
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: agena-release-*
           path: release-assets
           merge-multiple: true
+      - name: Add one-click installers to release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp scripts/agena/install.sh release-assets/install.sh
+          cp scripts/agena/install.ps1 release-assets/install.ps1
+          chmod +x release-assets/install.sh
+          (
+            cd release-assets
+            sha256sum install.sh > install.sh.sha256
+            sha256sum install.ps1 > install.ps1.sha256
+          )
       - uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           name: Agena ${{ needs.metadata.outputs.version }}
@@ -446,3 +462,127 @@ jobs:
           prerelease: ${{ contains(needs.metadata.outputs.version, '-') }}
           generate_release_notes: true
           files: release-assets/*
+
+  installer-smoke:
+    name: Published installer smoke (${{ matrix.name }})
+    if: always() && needs.publish.result == 'success'
+    needs:
+      - metadata
+      - publish
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x86_64
+            runner: ubuntu-latest
+            shell_kind: bash
+          - name: macOS arm64
+            runner: macos-15
+            shell_kind: bash
+          - name: Windows x86_64
+            runner: windows-latest
+            shell_kind: pwsh
+    env:
+      RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+      RELEASE_VERSION: ${{ needs.metadata.outputs.version }}
+      TEST_PORT: "43220"
+    steps:
+      - name: Smoke published installer (Unix)
+        if: matrix.shell_kind == 'bash'
+        shell: bash
+        run: |
+          set -euo pipefail
+          installer="$RUNNER_TEMP/install.sh"
+          install_dir="$RUNNER_TEMP/agena-install"
+          workspace="$RUNNER_TEMP/agena-workspace"
+          mkdir -p "$workspace"
+          curl --retry 5 --retry-delay 2 --retry-all-errors -fsSL \
+            "https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/install.sh" \
+            -o "$installer"
+          chmod +x "$installer"
+
+          bash "$installer" install \
+            --repo "$GITHUB_REPOSITORY" \
+            --version "$RELEASE_VERSION" \
+            --install-dir "$install_dir" \
+            --workspace "$workspace" \
+            --port "$TEST_PORT" \
+            --service-mode detached \
+            --no-path-update
+          bash "$installer" status --install-dir "$install_dir" --no-path-update
+          curl --retry 20 --retry-delay 1 --retry-connrefused -fsS "http://127.0.0.1:${TEST_PORT}/api/v1/health" >/dev/null
+          bash "$installer" stop --install-dir "$install_dir" --no-path-update
+          bash "$installer" start --install-dir "$install_dir" --no-path-update
+          curl --retry 20 --retry-delay 1 --retry-connrefused -fsS "http://127.0.0.1:${TEST_PORT}/api/v1/health" >/dev/null
+          bash "$installer" upgrade \
+            --repo "$GITHUB_REPOSITORY" \
+            --version "$RELEASE_VERSION" \
+            --install-dir "$install_dir" \
+            --no-path-update
+          bash "$installer" uninstall --install-dir "$install_dir" --no-path-update
+          test ! -e "$install_dir"
+
+      - name: Smoke published installer (Windows)
+        if: matrix.shell_kind == 'pwsh'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installer = Join-Path $env:RUNNER_TEMP 'install.ps1'
+          $installDir = Join-Path $env:RUNNER_TEMP 'agena-install'
+          $workspace = Join-Path $env:RUNNER_TEMP 'agena-workspace'
+          New-Item -ItemType Directory -Force -Path $workspace | Out-Null
+
+          $installerUrl = "https://github.com/$env:GITHUB_REPOSITORY/releases/download/$env:RELEASE_TAG/install.ps1"
+          for ($attempt = 1; $attempt -le 5; $attempt++) {
+            try {
+              Invoke-WebRequest -Uri $installerUrl -OutFile $installer -Headers @{ 'User-Agent' = 'agena-release-smoke' }
+              break
+            } catch {
+              if ($attempt -eq 5) { throw }
+              Start-Sleep -Seconds (2 * $attempt)
+            }
+          }
+
+          & $installer -Action Install `
+            -Repo $env:GITHUB_REPOSITORY `
+            -Version $env:RELEASE_VERSION `
+            -InstallDir $installDir `
+            -Workspace $workspace `
+            -Port ([int]$env:TEST_PORT) `
+            -ServiceMode detached `
+            -NoPathUpdate
+          & $installer -Action Status -InstallDir $installDir -NoPathUpdate
+          Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$env:TEST_PORT/api/v1/health" | Out-Null
+          & $installer -Action Stop -InstallDir $installDir -NoPathUpdate
+          & $installer -Action Start -InstallDir $installDir -NoPathUpdate
+          Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$env:TEST_PORT/api/v1/health" | Out-Null
+          & $installer -Action Upgrade `
+            -Repo $env:GITHUB_REPOSITORY `
+            -Version $env:RELEASE_VERSION `
+            -InstallDir $installDir `
+            -NoPathUpdate
+          & $installer -Action Uninstall -InstallDir $installDir -NoPathUpdate
+          if (Test-Path -LiteralPath $installDir) { throw 'published installer uninstall left files behind' }
+
+      - name: Cleanup published installer smoke (Unix)
+        if: always() && matrix.shell_kind == 'bash'
+        shell: bash
+        run: |
+          installer="$RUNNER_TEMP/install.sh"
+          install_dir="$RUNNER_TEMP/agena-install"
+          if [[ -f "$installer" && -d "$install_dir" ]]; then
+            bash "$installer" uninstall --install-dir "$install_dir" --no-path-update >/dev/null 2>&1 || true
+          fi
+
+      - name: Cleanup published installer smoke (Windows)
+        if: always() && matrix.shell_kind == 'pwsh'
+        shell: pwsh
+        run: |
+          $installer = Join-Path $env:RUNNER_TEMP 'install.ps1'
+          $installDir = Join-Path $env:RUNNER_TEMP 'agena-install'
+          if ((Test-Path -LiteralPath $installer) -and (Test-Path -LiteralPath $installDir)) {
+            try { & $installer -Action Uninstall -InstallDir $installDir -NoPathUpdate *> $null } catch {}
+          }
+          Get-Process agena -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue

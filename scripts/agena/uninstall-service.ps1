@@ -8,7 +8,7 @@ Param(
 $ErrorActionPreference = "Stop"
 
 try {
-  Unregister-ScheduledTask -TaskName "AgenaStudio" -Confirm:$false -ErrorAction Stop
+  Unregister-ScheduledTask -TaskName "Agena" -Confirm:$false -ErrorAction Stop
 }
 catch {}
 

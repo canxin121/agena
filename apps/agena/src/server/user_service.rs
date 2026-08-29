@@ -19,12 +19,35 @@ use anyhow::{Context, Result, bail};
 const SERVICE_LABEL: &str = "com.agena.server";
 #[cfg(target_os = "linux")]
 const SYSTEMD_UNIT_NAME: &str = "agena-server.service";
+#[cfg(target_os = "windows")]
+const WINDOWS_TASK_NAME: &str = "Agena Server";
 
+#[cfg(target_os = "windows")]
+fn windows_task_exists() -> bool {
+    Command::new("schtasks.exe")
+        .args(["/Query", "/TN", WINDOWS_TASK_NAME])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 pub(crate) fn is_installed() -> bool {
     service_file_path().is_ok_and(|path| path.is_file())
 }
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(target_os = "windows")]
+pub(crate) fn is_installed() -> bool {
+    service_file_path().is_ok_and(|path| path.is_file()) && windows_task_exists()
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+pub(crate) fn is_installed() -> bool {
+    false
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 pub(crate) fn install(args: &ServerArgs) -> Result<PathBuf> {
     let path = service_file_path()?;
     let executable = std::env::current_exe().context("failed to resolve Agena executable")?;
@@ -59,20 +82,24 @@ pub(crate) fn install(args: &ServerArgs) -> Result<PathBuf> {
         record_path.as_path(),
         args.ui_password.as_deref(),
     )?;
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-    bail!("OS-native Agena user services are supported only on macOS and Linux");
+    #[cfg(target_os = "windows")]
+    let contents = windows_task_xml(
+        executable.as_os_str(),
+        arguments.as_slice(),
+        args.ui_password.as_deref(),
+    )?;
 
     write_private_file(path.as_path(), contents.as_bytes())?;
     reload_and_start(path.as_path())?;
     Ok(path)
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
 pub(crate) fn install(_args: &ServerArgs) -> Result<PathBuf> {
-    bail!("OS-native Agena user services are supported only on macOS and Linux")
+    bail!("OS-native Agena user services are supported only on macOS, Linux, and Windows")
 }
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 pub(crate) fn start() -> Result<()> {
     let path = service_file_path()?;
     if !path.is_file() {
@@ -84,23 +111,23 @@ pub(crate) fn start() -> Result<()> {
     start_service(path.as_path())
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
 pub(crate) fn start() -> Result<()> {
-    bail!("OS-native Agena user services are supported only on macOS and Linux")
+    bail!("OS-native Agena user services are supported only on macOS, Linux, and Windows")
 }
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 pub(crate) fn stop() -> Result<()> {
     let path = service_file_path()?;
     stop_service(path.as_path())
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
 pub(crate) fn stop() -> Result<()> {
-    bail!("OS-native Agena user services are supported only on macOS and Linux")
+    bail!("OS-native Agena user services are supported only on macOS, Linux, and Windows")
 }
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 pub(crate) fn uninstall() -> Result<PathBuf> {
     let path = service_file_path()?;
     stop_service(path.as_path())?;
@@ -113,9 +140,9 @@ pub(crate) fn uninstall() -> Result<PathBuf> {
     Ok(path)
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
 pub(crate) fn uninstall() -> Result<PathBuf> {
-    bail!("OS-native Agena user services are supported only on macOS and Linux")
+    bail!("OS-native Agena user services are supported only on macOS, Linux, and Windows")
 }
 
 fn server_arguments(args: &ServerArgs) -> Result<Vec<OsString>> {
@@ -207,8 +234,18 @@ fn service_file_path() -> Result<PathBuf> {
             .unwrap_or(home_dir()?.join(".config"));
         Ok(base.join("systemd").join("user").join(SYSTEMD_UNIT_NAME))
     }
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-    bail!("OS-native Agena user services are supported only on macOS and Linux")
+    #[cfg(target_os = "windows")]
+    {
+        let record = super::server_record::record_path();
+        let base = record
+            .parent()
+            .filter(|path| !path.as_os_str().is_empty())
+            .map(ToOwned::to_owned)
+            .unwrap_or(home_dir()?);
+        Ok(base.join("agena-server-task.xml"))
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    bail!("OS-native Agena user services are supported only on macOS, Linux, and Windows")
 }
 
 fn write_private_file(path: &Path, contents: &[u8]) -> Result<()> {
@@ -238,6 +275,15 @@ fn write_private_file(path: &Path, contents: &[u8]) -> Result<()> {
         writer.write_all(contents)?;
         writer.flush()?;
         writer.get_ref().sync_all()?;
+        #[cfg(target_os = "windows")]
+        if path.exists() {
+            fs::remove_file(path).with_context(|| {
+                format!(
+                    "failed to replace existing Windows user service file {}",
+                    path.display()
+                )
+            })?;
+        }
         fs::rename(&temporary, path)
             .with_context(|| format!("failed to install service file {}", path.display()))?;
         Ok(())
@@ -385,7 +431,142 @@ fn path_text(path: &Path, label: &str) -> Result<String> {
     os_text(path.as_os_str(), label)
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "windows", test))]
+fn windows_quote_argument(value: &str) -> String {
+    if !value.is_empty()
+        && !value
+            .chars()
+            .any(|ch| ch.is_ascii_whitespace() || ch == '"')
+    {
+        return value.to_owned();
+    }
+
+    let mut quoted = String::from("\"");
+    let mut backslashes = 0usize;
+    for ch in value.chars() {
+        if ch == '\\' {
+            backslashes += 1;
+            continue;
+        }
+        if ch == '"' {
+            quoted.push_str(&"\\".repeat(backslashes * 2 + 1));
+            quoted.push('"');
+            backslashes = 0;
+            continue;
+        }
+        quoted.push_str(&"\\".repeat(backslashes));
+        backslashes = 0;
+        quoted.push(ch);
+    }
+    quoted.push_str(&"\\".repeat(backslashes * 2));
+    quoted.push('"');
+    quoted
+}
+
+#[cfg(target_os = "windows")]
+fn windows_user_id() -> Result<String> {
+    let username = std::env::var("USERNAME")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| anyhow::anyhow!("cannot resolve the Windows user name"))?;
+    Ok(std::env::var("USERDOMAIN")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .map(|domain| format!("{domain}\\{username}"))
+        .unwrap_or(username))
+}
+
+#[cfg(target_os = "windows")]
+fn windows_task_xml(
+    executable: &OsStr,
+    arguments: &[OsString],
+    ui_password: Option<&str>,
+) -> Result<String> {
+    windows_task_xml_for_user(
+        executable,
+        arguments,
+        ui_password,
+        windows_user_id()?.as_str(),
+    )
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn windows_task_xml_for_user(
+    executable: &OsStr,
+    arguments: &[OsString],
+    ui_password: Option<&str>,
+    user_id: &str,
+) -> Result<String> {
+    let executable = os_text(executable, "Agena executable")?;
+    let mut task_arguments = arguments
+        .iter()
+        .map(|argument| os_text(argument.as_os_str(), "service argument"))
+        .collect::<Result<Vec<_>>>()?;
+    if let Some(password) = ui_password.filter(|password| !password.trim().is_empty()) {
+        task_arguments.push("--ui-password".to_owned());
+        task_arguments.push(password.to_owned());
+    }
+    let task_arguments = task_arguments
+        .iter()
+        .map(|argument| windows_quote_argument(argument))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let working_directory = Path::new(executable.as_str())
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .map(|path| path_text(path, "Agena executable directory"))
+        .transpose()?
+        .unwrap_or_else(|| ".".to_owned());
+
+    Ok(format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+<Task version=\"1.4\" xmlns=\"http://schemas.microsoft.com/windows/2004/02/mit/task\">\n\
+  <RegistrationInfo>\n\
+    <Description>Agena server</Description>\n\
+  </RegistrationInfo>\n\
+  <Triggers>\n\
+    <LogonTrigger>\n\
+      <Enabled>true</Enabled>\n\
+      <UserId>{}</UserId>\n\
+    </LogonTrigger>\n\
+  </Triggers>\n\
+  <Principals>\n\
+    <Principal id=\"Author\">\n\
+      <UserId>{}</UserId>\n\
+      <LogonType>InteractiveToken</LogonType>\n\
+      <RunLevel>LeastPrivilege</RunLevel>\n\
+    </Principal>\n\
+  </Principals>\n\
+  <Settings>\n\
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>\n\
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>\n\
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>\n\
+    <AllowHardTerminate>true</AllowHardTerminate>\n\
+    <StartWhenAvailable>true</StartWhenAvailable>\n\
+    <RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>\n\
+    <AllowStartOnDemand>true</AllowStartOnDemand>\n\
+    <Enabled>true</Enabled>\n\
+    <Hidden>false</Hidden>\n\
+    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>\n\
+    <Priority>7</Priority>\n\
+  </Settings>\n\
+  <Actions Context=\"Author\">\n\
+    <Exec>\n\
+      <Command>{}</Command>\n\
+      <Arguments>{}</Arguments>\n\
+      <WorkingDirectory>{}</WorkingDirectory>\n\
+    </Exec>\n\
+  </Actions>\n\
+</Task>\n",
+        xml_escape(user_id),
+        xml_escape(user_id),
+        xml_escape(executable.as_str()),
+        xml_escape(task_arguments.as_str()),
+        xml_escape(working_directory.as_str()),
+    ))
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 fn xml_escape(value: &str) -> String {
     value
         .replace('&', "&amp;")
@@ -512,6 +693,55 @@ fn disable_before_uninstall() -> Result<()> {
     run_systemctl(["disable", SYSTEMD_UNIT_NAME])
 }
 
+#[cfg(target_os = "windows")]
+fn reload_and_start(path: &Path) -> Result<()> {
+    run_command(
+        Command::new("schtasks.exe")
+            .args(["/Create", "/TN", WINDOWS_TASK_NAME, "/XML"])
+            .arg(path)
+            .arg("/F"),
+        "schtasks /Create",
+    )?;
+    start_service(path)
+}
+
+#[cfg(target_os = "windows")]
+fn start_service(_path: &Path) -> Result<()> {
+    run_command(
+        Command::new("schtasks.exe").args(["/Run", "/TN", WINDOWS_TASK_NAME]),
+        "schtasks /Run",
+    )
+}
+
+#[cfg(target_os = "windows")]
+fn stop_service(_path: &Path) -> Result<()> {
+    let status = Command::new("schtasks.exe")
+        .args(["/End", "/TN", WINDOWS_TASK_NAME])
+        .status()
+        .context("failed to execute schtasks /End")?;
+    if !status.success() && windows_task_exists() && super::server_record::record_path().exists() {
+        bail!("schtasks /End failed with status {status}");
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn reload_after_uninstall() -> Result<()> {
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn disable_before_uninstall() -> Result<()> {
+    let status = Command::new("schtasks.exe")
+        .args(["/Delete", "/TN", WINDOWS_TASK_NAME, "/F"])
+        .status()
+        .context("failed to execute schtasks /Delete")?;
+    if !status.success() && windows_task_exists() {
+        bail!("schtasks /Delete failed with status {status}");
+    }
+    Ok(())
+}
+
 #[cfg(target_os = "linux")]
 fn run_systemctl<const N: usize>(arguments: [&str; N]) -> Result<()> {
     run_command(
@@ -624,5 +854,26 @@ mod tests {
         assert!(unit.contains("100%%"));
         assert!(unit.contains("AGENA_SERVER_UI_PASSWORD=secret value"));
         assert!(!unit.contains("/bin/sh"));
+    }
+
+    #[test]
+    fn windows_task_definition_uses_interactive_current_user_and_quotes_arguments() {
+        let xml = windows_task_xml_for_user(
+            OsStr::new(r"C:\Program Files\Agena\agena.exe"),
+            &[
+                OsString::from("server"),
+                OsString::from("--workspace"),
+                OsString::from(r"C:\Users\Agena User\Workspace"),
+            ],
+            Some("secret value"),
+            r"DEV\Agena User",
+        )
+        .expect("render task XML");
+        assert!(xml.contains("<UserId>DEV\\Agena User</UserId>"));
+        assert!(xml.contains("<LogonType>InteractiveToken</LogonType>"));
+        assert!(xml.contains("<RunLevel>LeastPrivilege</RunLevel>"));
+        assert!(xml.contains("C:\\Program Files\\Agena\\agena.exe"));
+        assert!(xml.contains("&quot;C:\\Users\\Agena User\\Workspace&quot;"));
+        assert!(xml.contains("&quot;secret value&quot;"));
     }
 }

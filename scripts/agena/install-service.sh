@@ -55,11 +55,9 @@ OS="$(uname -s)"
 ARCH="$(uname -m)"
 case "${OS}:${ARCH}" in
   Linux:x86_64|Linux:amd64) TARGET_TRIPLE="x86_64-unknown-linux-gnu" ;;
+  Linux:aarch64|Linux:arm64) TARGET_TRIPLE="aarch64-unknown-linux-gnu" ;;
   Darwin:x86_64) TARGET_TRIPLE="x86_64-apple-darwin" ;;
-  Darwin:arm64|Darwin:aarch64)
-    echo "ERROR: aarch64 macOS backend archives are not wired in this release flow yet." >&2
-    exit 1
-    ;;
+  Darwin:arm64|Darwin:aarch64) TARGET_TRIPLE="aarch64-apple-darwin" ;;
   *)
     echo "ERROR: unsupported platform ${OS}:${ARCH}" >&2
     exit 1

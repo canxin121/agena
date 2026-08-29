@@ -1,0 +1,414 @@
+name: Agena Installer CI
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - ".github/workflows/installer-ci.yml"
+      - ".github/workflows/agena-release.yml"
+      - "apps/agena/src/server/lifecycle.rs"
+      - "apps/agena/src/server/user_service.rs"
+      - "scripts/agena/install.sh"
+      - "scripts/agena/install.ps1"
+      - "scripts/agena/install-service.sh"
+      - "scripts/agena/install-service.ps1"
+      - "scripts/agena/uninstall-service.sh"
+      - "scripts/agena/uninstall-service.ps1"
+      - "scripts/agena/package-backend.sh"
+      - "scripts/agena/package-backend.ps1"
+      - "Cargo.toml"
+      - "Cargo.lock"
+  pull_request:
+    paths:
+      - ".github/workflows/installer-ci.yml"
+      - ".github/workflows/agena-release.yml"
+      - "apps/agena/src/server/lifecycle.rs"
+      - "apps/agena/src/server/user_service.rs"
+      - "scripts/agena/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: agena-installer-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_INCREMENTAL: "0"
+  CARGO_TERM_COLOR: always
+  AGENA_WEB_DIST_PREBUILT: "1"
+
+jobs:
+  contracts:
+    name: Installer contracts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          toolchain: 1.97.0
+      - name: Validate Unix installer syntax
+        shell: bash
+        run: bash -n scripts/agena/install.sh scripts/agena/install-service.sh scripts/agena/uninstall-service.sh
+      - name: Verify every published target has installer support
+        run: python3 scripts/agena/verify-target-coverage.py
+
+  lifecycle:
+    name: ${{ matrix.name }} install lifecycle
+    needs: contracts
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x86_64
+            runner: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            shell_kind: bash
+            service_mode: detached
+          - name: macOS arm64
+            runner: macos-15
+            target: aarch64-apple-darwin
+            shell_kind: bash
+            service_mode: native
+          - name: Windows x86_64
+            runner: windows-latest
+            target: x86_64-pc-windows-msvc
+            shell_kind: pwsh
+            service_mode: native
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          toolchain: 1.97.0
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          prefix-key: agena-installer-v1
+          key: ${{ matrix.target }}
+          cache-on-failure: true
+
+      - name: Validate PowerShell installer syntax
+        if: matrix.shell_kind == 'pwsh'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($path in @(
+            'scripts\agena\install.ps1',
+            'scripts\agena\install-service.ps1',
+            'scripts\agena\uninstall-service.ps1'
+          )) {
+            $tokens = $null
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $path),
+              [ref]$tokens,
+              [ref]$errors
+            )
+            if ($errors.Count -gt 0) {
+              $errors | ForEach-Object { Write-Error "${path}: $($_.Message)" }
+              throw "PowerShell syntax validation failed for $path"
+            }
+            Write-Host "PowerShell syntax: ok $path"
+          }
+
+      - name: Compile service lifecycle tests
+        run: cargo check -p agena --tests --locked
+
+      - name: Create minimal packaged Web frontend (Unix)
+        if: matrix.shell_kind == 'bash'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p packages/agena-web/dist
+          printf '<!doctype html><html><body>Agena installer CI</body></html>\n' > packages/agena-web/dist/index.html
+
+      - name: Create minimal packaged Web frontend (Windows)
+        if: matrix.shell_kind == 'pwsh'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path packages/agena-web/dist | Out-Null
+          Set-Content -LiteralPath packages/agena-web/dist/index.html -Value '<!doctype html><html><body>Agena installer CI</body></html>'
+
+      - name: Build real release archive (Unix)
+        if: matrix.shell_kind == 'bash'
+        shell: bash
+        run: bash scripts/agena/package-backend.sh '${{ matrix.target }}' false
+
+      - name: Build real release archive (Windows)
+        if: matrix.shell_kind == 'pwsh'
+        shell: pwsh
+        run: ./scripts/agena/package-backend.ps1 -TargetTriple '${{ matrix.target }}'
+
+      - name: Install, stop, start, restart, upgrade, uninstall (Unix)
+        if: matrix.shell_kind == 'bash'
+        shell: bash
+        env:
+          TEST_HOME: ${{ runner.temp }}/agena-installer-home
+          INSTALL_DIR: ${{ runner.temp }}/agena-install
+          WORKSPACE_DIR: ${{ runner.temp }}/agena-workspace
+          TEST_PORT: "43210"
+          SERVICE_MODE: ${{ matrix.service_mode }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$TEST_HOME" "$WORKSPACE_DIR"
+          export HOME="$TEST_HOME"
+          archive="$(find artifacts/agena -maxdepth 1 -type f -name "agena-backend-${TARGET}-v*.tar.gz" -print -quit)"
+          test -n "$archive"
+          checksum="${archive}.sha256"
+
+          install=(bash scripts/agena/install.sh)
+          "${install[@]}" install \
+            --archive "$archive" \
+            --checksum "$checksum" \
+            --install-dir "$INSTALL_DIR" \
+            --no-path-update \
+            --workspace "$WORKSPACE_DIR" \
+            --port "$TEST_PORT" \
+            --service-mode "$SERVICE_MODE"
+          "$INSTALL_DIR/bin/agena" --version
+          "${install[@]}" status --install-dir "$INSTALL_DIR" --no-path-update
+          curl --retry 20 --retry-delay 1 --retry-connrefused -fsS "http://127.0.0.1:${TEST_PORT}/api/v1/health" >/dev/null
+
+          "${install[@]}" stop --install-dir "$INSTALL_DIR" --no-path-update
+          if curl -fsS "http://127.0.0.1:${TEST_PORT}/api/v1/health" >/dev/null 2>&1; then
+            echo "server remained reachable after stop" >&2
+            exit 1
+          fi
+
+          "${install[@]}" start --install-dir "$INSTALL_DIR" --no-path-update
+          curl --retry 20 --retry-delay 1 --retry-connrefused -fsS "http://127.0.0.1:${TEST_PORT}/api/v1/health" >/dev/null
+
+          "${install[@]}" restart --install-dir "$INSTALL_DIR" --no-path-update
+          curl --retry 20 --retry-delay 1 --retry-connrefused -fsS "http://127.0.0.1:${TEST_PORT}/api/v1/health" >/dev/null
+
+          "${install[@]}" upgrade \
+            --archive "$archive" \
+            --checksum "$checksum" \
+            --install-dir "$INSTALL_DIR" \
+            --no-path-update
+          "${install[@]}" status --install-dir "$INSTALL_DIR" --no-path-update
+          curl --retry 20 --retry-delay 1 --retry-connrefused -fsS "http://127.0.0.1:${TEST_PORT}/api/v1/health" >/dev/null
+
+          # Upgrading a deliberately stopped installation must preserve that
+          # stopped state while refreshing the executable/service definition.
+          "${install[@]}" stop --install-dir "$INSTALL_DIR" --no-path-update
+          "${install[@]}" upgrade \
+            --archive "$archive" \
+            --checksum "$checksum" \
+            --install-dir "$INSTALL_DIR" \
+            --no-path-update
+          if curl -fsS "http://127.0.0.1:${TEST_PORT}/api/v1/health" >/dev/null 2>&1; then
+            echo "stopped service was unexpectedly started by upgrade" >&2
+            exit 1
+          fi
+          "${install[@]}" start --install-dir "$INSTALL_DIR" --no-path-update
+          curl --retry 20 --retry-delay 1 --retry-connrefused -fsS "http://127.0.0.1:${TEST_PORT}/api/v1/health" >/dev/null
+
+          # A package that passes the version probe but cannot launch must not
+          # replace the healthy installation. This exercises post-replacement
+          # rollback, not merely checksum/download failure.
+          version="$($INSTALL_DIR/bin/agena --version | awk '{print $NF}')"
+          old_hash="$(shasum -a 256 "$INSTALL_DIR/bin/agena" | awk '{print $1}')"
+          bad="$RUNNER_TEMP/agena-bad-upgrade"
+          rm -rf "$bad"
+          mkdir -p "$bad/bin" "$bad/web-dist"
+          cat > "$bad/bin/agena" <<EOF_BAD
+          #!/usr/bin/env bash
+          if [[ "\${1:-}" == "--version" ]]; then
+            echo "agena $version"
+            exit 0
+          fi
+          exit 42
+          EOF_BAD
+          chmod +x "$bad/bin/agena"
+          printf '<!doctype html><html><body>bad upgrade</body></html>\n' > "$bad/web-dist/index.html"
+          tar -C "$bad" -czf "$bad.tar.gz" .
+          shasum -a 256 "$bad.tar.gz" | awk -v name="$(basename "$bad.tar.gz")" '{print $1 "  " name}' > "$bad.tar.gz.sha256"
+          set +e
+          "${install[@]}" upgrade \
+            --archive "$bad.tar.gz" \
+            --checksum "$bad.tar.gz.sha256" \
+            --install-dir "$INSTALL_DIR" \
+            --no-path-update
+          bad_upgrade_rc=$?
+          set -e
+          if [[ "$bad_upgrade_rc" -eq 0 ]]; then
+            echo "intentionally broken upgrade unexpectedly succeeded" >&2
+            exit 1
+          fi
+          new_hash="$(shasum -a 256 "$INSTALL_DIR/bin/agena" | awk '{print $1}')"
+          test "$old_hash" = "$new_hash"
+          "${install[@]}" status --install-dir "$INSTALL_DIR" --no-path-update
+          curl --retry 20 --retry-delay 1 --retry-connrefused -fsS "http://127.0.0.1:${TEST_PORT}/api/v1/health" >/dev/null
+
+          "${install[@]}" uninstall --install-dir "$INSTALL_DIR" --no-path-update
+          test ! -e "$INSTALL_DIR"
+          if curl -fsS "http://127.0.0.1:${TEST_PORT}/api/v1/health" >/dev/null 2>&1; then
+            echo "server remained reachable after uninstall" >&2
+            exit 1
+          fi
+
+      - name: Install, stop, start, restart, upgrade, uninstall (Windows)
+        if: matrix.shell_kind == 'pwsh'
+        shell: pwsh
+        env:
+          INSTALL_DIR: ${{ runner.temp }}\agena-install
+          WORKSPACE_DIR: ${{ runner.temp }}\agena-workspace
+          TEST_PORT: "43210"
+          TARGET: ${{ matrix.target }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force -Path $env:WORKSPACE_DIR | Out-Null
+          schtasks.exe /Delete /TN 'Agena Server' /F 2>$null | Out-Null
+          Remove-Item -LiteralPath (Join-Path $HOME 'agena\server.json') -Force -ErrorAction SilentlyContinue
+
+          $archive = Get-ChildItem artifacts/agena -Filter "agena-backend-$env:TARGET-v*.zip" | Select-Object -First 1
+          if (-not $archive) { throw 'release archive not found' }
+          $checksum = "$($archive.FullName).sha256"
+          $installer = Join-Path $PWD 'scripts\agena\install.ps1'
+
+          & $installer -Action Install `
+            -Archive $archive.FullName `
+            -Checksum $checksum `
+            -InstallDir $env:INSTALL_DIR `
+            -Workspace $env:WORKSPACE_DIR `
+            -Port ([int]$env:TEST_PORT) `
+            -ServiceMode native `
+            -NoPathUpdate
+          & (Join-Path $env:INSTALL_DIR 'bin\agena.exe') --version
+          & $installer -Action Status -InstallDir $env:INSTALL_DIR -NoPathUpdate
+          Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$env:TEST_PORT/api/v1/health" | Out-Null
+
+          & $installer -Action Stop -InstallDir $env:INSTALL_DIR -NoPathUpdate
+          Start-Sleep -Seconds 1
+          try {
+            Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$env:TEST_PORT/api/v1/health" -TimeoutSec 2 | Out-Null
+            throw 'server remained reachable after stop'
+          } catch {
+            if ($_.Exception.Message -eq 'server remained reachable after stop') { throw }
+          }
+
+          & $installer -Action Start -InstallDir $env:INSTALL_DIR -NoPathUpdate
+          Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$env:TEST_PORT/api/v1/health" | Out-Null
+
+          & $installer -Action Restart -InstallDir $env:INSTALL_DIR -NoPathUpdate
+          Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$env:TEST_PORT/api/v1/health" | Out-Null
+
+          & $installer -Action Upgrade `
+            -Archive $archive.FullName `
+            -Checksum $checksum `
+            -InstallDir $env:INSTALL_DIR `
+            -NoPathUpdate
+          & $installer -Action Status -InstallDir $env:INSTALL_DIR -NoPathUpdate
+          Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$env:TEST_PORT/api/v1/health" | Out-Null
+
+          & $installer -Action Stop -InstallDir $env:INSTALL_DIR -NoPathUpdate
+          & $installer -Action Upgrade `
+            -Archive $archive.FullName `
+            -Checksum $checksum `
+            -InstallDir $env:INSTALL_DIR `
+            -NoPathUpdate
+          Start-Sleep -Seconds 1
+          try {
+            Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$env:TEST_PORT/api/v1/health" -TimeoutSec 2 | Out-Null
+            throw 'stopped service was unexpectedly started by upgrade'
+          } catch {
+            if ($_.Exception.Message -eq 'stopped service was unexpectedly started by upgrade') { throw }
+          }
+          & $installer -Action Start -InstallDir $env:INSTALL_DIR -NoPathUpdate
+          Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$env:TEST_PORT/api/v1/health" | Out-Null
+
+          $installedBinary = Join-Path $env:INSTALL_DIR 'bin\agena.exe'
+          $versionText = (& $installedBinary --version | Out-String).Trim()
+          $version = ($versionText -split '\s+')[-1]
+          $oldHash = (Get-FileHash -LiteralPath $installedBinary -Algorithm SHA256).Hash
+          $badRoot = Join-Path $env:RUNNER_TEMP 'agena-bad-upgrade'
+          Remove-Item -LiteralPath $badRoot -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path (Join-Path $badRoot 'bin') | Out-Null
+          New-Item -ItemType Directory -Force -Path (Join-Path $badRoot 'web-dist') | Out-Null
+          $badSource = Join-Path $badRoot 'bad.rs'
+          @"
+          fn main() {
+              if std::env::args().nth(1).as_deref() == Some("--version") {
+                  println!("agena $version");
+              } else {
+                  std::process::exit(42);
+              }
+          }
+          "@ | Set-Content -LiteralPath $badSource -Encoding UTF8
+          rustc $badSource -o (Join-Path $badRoot 'bin\agena.exe')
+          if ($LASTEXITCODE -ne 0) { throw 'failed to compile intentionally bad upgrade binary' }
+          Set-Content -LiteralPath (Join-Path $badRoot 'web-dist\index.html') -Value '<!doctype html><html><body>bad upgrade</body></html>'
+          $badArchive = Join-Path $env:RUNNER_TEMP 'agena-bad-upgrade.zip'
+          Remove-Item -LiteralPath $badArchive -Force -ErrorAction SilentlyContinue
+          Compress-Archive -Path (Join-Path $badRoot '*') -DestinationPath $badArchive -Force
+          $badChecksum = "$badArchive.sha256"
+          $badHash = (Get-FileHash -LiteralPath $badArchive -Algorithm SHA256).Hash.ToLowerInvariant()
+          Set-Content -LiteralPath $badChecksum -Value "$badHash  $(Split-Path -Leaf $badArchive)"
+          $failedAsExpected = $false
+          try {
+            & $installer -Action Upgrade `
+              -Archive $badArchive `
+              -Checksum $badChecksum `
+              -InstallDir $env:INSTALL_DIR `
+              -NoPathUpdate
+          } catch {
+            $failedAsExpected = $true
+            Write-Host "Broken upgrade failed as expected: $_"
+          }
+          if (-not $failedAsExpected) { throw 'intentionally broken upgrade unexpectedly succeeded' }
+          $newHash = (Get-FileHash -LiteralPath $installedBinary -Algorithm SHA256).Hash
+          if ($oldHash -ne $newHash) { throw 'rollback did not restore the previous Windows binary' }
+          & $installer -Action Status -InstallDir $env:INSTALL_DIR -NoPathUpdate
+          Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$env:TEST_PORT/api/v1/health" | Out-Null
+
+          & $installer -Action Uninstall -InstallDir $env:INSTALL_DIR -NoPathUpdate
+          if (Test-Path -LiteralPath $env:INSTALL_DIR) { throw 'install directory survived uninstall' }
+          schtasks.exe /Query /TN 'Agena Server' *> $null
+          if ($LASTEXITCODE -eq 0) { throw 'Agena Server scheduled task survived uninstall' }
+
+      - name: Cleanup native user service after failure (macOS)
+        if: always() && runner.os == 'macOS'
+        shell: bash
+        env:
+          TEST_HOME: ${{ runner.temp }}/agena-installer-home
+          INSTALL_DIR: ${{ runner.temp }}/agena-install
+        run: |
+          export HOME="$TEST_HOME"
+          if [[ -x "$INSTALL_DIR/bin/agena" ]]; then
+            "$INSTALL_DIR/bin/agena" server uninstall >/dev/null 2>&1 || true
+          fi
+          launchctl bootout "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.agena.server.plist" >/dev/null 2>&1 || true
+
+      - name: Cleanup detached server after failure (Linux)
+        if: always() && runner.os == 'Linux'
+        shell: bash
+        env:
+          TEST_HOME: ${{ runner.temp }}/agena-installer-home
+          INSTALL_DIR: ${{ runner.temp }}/agena-install
+        run: |
+          export HOME="$TEST_HOME"
+          if [[ -x "$INSTALL_DIR/bin/agena" ]]; then
+            "$INSTALL_DIR/bin/agena" server stop >/dev/null 2>&1 || true
+          fi
+
+      - name: Cleanup native user service after failure (Windows)
+        if: always() && runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          schtasks.exe /End /TN 'Agena Server' 2>$null | Out-Null
+          schtasks.exe /Delete /TN 'Agena Server' /F 2>$null | Out-Null
+          Get-Process agena -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue

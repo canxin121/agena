@@ -30,12 +30,22 @@ function Normalize-Version([string]$Raw) {
   return $Raw
 }
 
+function Get-TargetTriple {
+  $arch = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()
+  switch ($arch) {
+    "X64" { return "x86_64-pc-windows-msvc" }
+    "Arm64" { return "aarch64-pc-windows-msvc" }
+    default { throw "Unsupported Windows architecture: $arch" }
+  }
+}
+
 if (-not $Archive) {
   if (-not $Version) {
     throw "Provide -Archive or -Version"
   }
   $NormalizedVersion = Normalize-Version $Version
-  $Archive = "https://github.com/$Repo/releases/download/agena-v$NormalizedVersion/agena-backend-x86_64-pc-windows-msvc-v$NormalizedVersion.zip"
+  $TargetTriple = Get-TargetTriple
+  $Archive = "https://github.com/$Repo/releases/download/agena-v$NormalizedVersion/agena-backend-$TargetTriple-v$NormalizedVersion.zip"
 }
 
 $TempDir = Join-Path $env:TEMP ("agena-install-" + [Guid]::NewGuid().ToString("N"))
@@ -77,7 +87,7 @@ try {
     "--ui-dir", (Join-Path $InstallDir "web-dist")
   )
   if ($UiPassword) { $ArgList += @("--ui-password", $UiPassword) }
-  if ($WorkspaceRoot) { $ArgList += @("--workspace-root", $WorkspaceRoot) }
+  if ($WorkspaceRoot) { $ArgList += @("--workspace", $WorkspaceRoot) }
   if ($DatabasePath) { $ArgList += @("--database-path", $DatabasePath) }
   if ($DatabaseUrl) { $ArgList += @("--database-url", $DatabaseUrl) }
   foreach ($item in $Set) {

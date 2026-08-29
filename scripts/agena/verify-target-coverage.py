@@ -9,6 +9,8 @@ from collections import Counter
 from pathlib import Path
 
 MANIFEST = Path(__file__).with_name("universal-targets.json")
+INSTALLER_UNIX = Path(__file__).with_name("install.sh")
+INSTALLER_WINDOWS = Path(__file__).with_name("install.ps1")
 
 def target_spec(target: str) -> dict[str, object]:
     env = dict(os.environ)
@@ -70,11 +72,29 @@ def main() -> None:
 
     distributed_backends = backend_targets & rustup_targets
     build_std_backends = backend_targets - rustup_targets
+
+    unix_installer = INSTALLER_UNIX.read_text(encoding="utf-8")
+    windows_installer = INSTALLER_WINDOWS.read_text(encoding="utf-8")
+    missing_installer_targets = sorted(
+        target
+        for target in backend_targets
+        if target
+        not in (
+            windows_installer if "windows" in target else unix_installer
+        )
+    )
+    if missing_installer_targets:
+        raise SystemExit(
+            "one-click installers do not cover all published targets: "
+            f"{missing_installer_targets}"
+        )
+
     print(f"Rust distributed full-backend targets: {len(distributed_backends)}")
     print(f"Cross backend targets: {len(groups['cross_backend'])}")
     print(f"Native/SDK backend targets: {len(groups['native_backend'])}")
     print(f"Build-std full backend targets: {len(build_std_backends)}")
     print(f"Full backend release target triples: {len(backend_targets)}")
+    print(f"One-click installer target triples: {len(backend_targets)}")
 
 
 if __name__ == "__main__":

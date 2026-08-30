@@ -378,7 +378,9 @@ jobs:
           & $installer -Action Uninstall -InstallDir $env:INSTALL_DIR -NoPathUpdate
           if (Test-Path -LiteralPath $env:INSTALL_DIR) { throw 'install directory survived uninstall' }
           schtasks.exe /Query /TN 'Agena Server' *> $null
-          if ($LASTEXITCODE -eq 0) { throw 'Agena Server scheduled task survived uninstall' }
+          $taskQueryExit = $LASTEXITCODE
+          if ($taskQueryExit -eq 0) { throw 'Agena Server scheduled task survived uninstall' }
+          exit 0
 
       - name: Cleanup native user service after failure (macOS)
         if: always() && runner.os == 'macOS'

@@ -59,6 +59,80 @@ jobs:
       - name: Verify every published target has installer support
         run: python3 scripts/agena/verify-target-coverage.py
 
+  windows-remote-release:
+    name: Windows remote release installer
+    needs: contracts
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Validate source PowerShell installer syntax
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errors = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path 'scripts\agena\install.ps1'),
+            [ref]$tokens,
+            [ref]$errors
+          )
+          if ($errors.Count -gt 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            throw 'PowerShell syntax validation failed'
+          }
+
+      - name: Install current latest release through remote URLs
+        shell: pwsh
+        env:
+          INSTALL_DIR: ${{ runner.temp }}\agena-remote-install
+          WORKSPACE_DIR: ${{ runner.temp }}\agena-remote-workspace
+          TEST_PORT: "43211"
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installer = Join-Path $PWD 'scripts\agena\install.ps1'
+          New-Item -ItemType Directory -Force -Path $env:WORKSPACE_DIR | Out-Null
+
+          Write-Host '[remote-release] install latest from GitHub release URLs'
+          & $installer -Action Install `
+            -Repo $env:GITHUB_REPOSITORY `
+            -InstallDir $env:INSTALL_DIR `
+            -Workspace $env:WORKSPACE_DIR `
+            -Port ([int]$env:TEST_PORT) `
+            -ServiceMode detached `
+            -NoPathUpdate
+
+          Write-Host '[remote-release] status + health'
+          & $installer -Action Status -InstallDir $env:INSTALL_DIR -NoPathUpdate
+          Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$env:TEST_PORT/api/v1/health" -TimeoutSec 15 | Out-Null
+
+          Write-Host '[remote-release] stop + start'
+          & $installer -Action Stop -InstallDir $env:INSTALL_DIR -NoPathUpdate
+          & $installer -Action Start -InstallDir $env:INSTALL_DIR -NoPathUpdate
+          Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$env:TEST_PORT/api/v1/health" -TimeoutSec 15 | Out-Null
+
+          Write-Host '[remote-release] uninstall'
+          & $installer -Action Uninstall -InstallDir $env:INSTALL_DIR -NoPathUpdate
+          if (Test-Path -LiteralPath $env:INSTALL_DIR) {
+            throw 'remote release install directory survived uninstall'
+          }
+          Write-Host '[remote-release] complete'
+
+      - name: Cleanup remote release smoke
+        if: always()
+        shell: pwsh
+        env:
+          INSTALL_DIR: ${{ runner.temp }}\agena-remote-install
+        run: |
+          $installer = Join-Path $PWD 'scripts\agena\install.ps1'
+          if ((Test-Path -LiteralPath $installer) -and (Test-Path -LiteralPath $env:INSTALL_DIR)) {
+            try { & $installer -Action Uninstall -InstallDir $env:INSTALL_DIR -NoPathUpdate *> $null } catch {}
+          }
+          Get-Process agena -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+          exit 0
+
   lifecycle:
     name: ${{ matrix.name }} install lifecycle
     needs: contracts

@@ -48,25 +48,77 @@ function Get-TargetTriple {
 }
 
 function Get-LatestVersion {
-  $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/latest" -Headers @{ "User-Agent" = "agena-installer" }
+  $temp = Join-Path $env:TEMP ("agena-release-latest-" + [Guid]::NewGuid().ToString("N") + ".json")
+  try {
+    Get-FileFromSource "https://api.github.com/repos/$Repo/releases/latest" $temp
+    $release = Get-Content -LiteralPath $temp -Raw | ConvertFrom-Json
+  }
+  finally {
+    Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue
+  }
   if (-not $release.tag_name) { throw "Latest GitHub release has no tag_name" }
   return Normalize-Version ([string]$release.tag_name)
 }
 
 function Get-FileFromSource([string]$Source, [string]$Destination) {
-  if ($Source -match '^https?://') {
-    for ($attempt = 1; $attempt -le 3; $attempt++) {
-      try {
-        Invoke-WebRequest -Uri $Source -OutFile $Destination -Headers @{ "User-Agent" = "agena-installer" }
-        return
-      }
-      catch {
-        if ($attempt -eq 3) { throw }
-        Start-Sleep -Seconds $attempt
-      }
-    }
-  } else {
+  if ($Source -notmatch '^https?://') {
     Copy-Item -LiteralPath $Source -Destination $Destination -Force
+    return
+  }
+
+  Write-Host "Downloading $Source"
+  $curl = Get-Command curl.exe -ErrorAction SilentlyContinue
+  if ($curl) {
+    & $curl.Source `
+      --fail `
+      --location `
+      --silent `
+      --show-error `
+      --retry 3 `
+      --retry-delay 1 `
+      --retry-connrefused `
+      --connect-timeout 15 `
+      --max-time 600 `
+      --user-agent "agena-installer" `
+      --output $Destination `
+      $Source
+    if ($LASTEXITCODE -ne 0) {
+      throw "curl download failed with exit code $LASTEXITCODE: $Source"
+    }
+    $bytes = (Get-Item -LiteralPath $Destination).Length
+    Write-Host "Downloaded $bytes bytes"
+    return
+  }
+
+  # curl.exe ships with supported Windows releases. Keep a bounded
+  # Invoke-WebRequest fallback for older/minimal PowerShell environments.
+  $command = Get-Command Invoke-WebRequest
+  for ($attempt = 1; $attempt -le 3; $attempt++) {
+    try {
+      $params = @{
+        Uri = $Source
+        OutFile = $Destination
+        Headers = @{ "User-Agent" = "agena-installer" }
+      }
+      if ($command.Parameters.ContainsKey("ConnectionTimeoutSeconds")) {
+        $params.ConnectionTimeoutSeconds = 15
+        if ($command.Parameters.ContainsKey("OperationTimeoutSeconds")) {
+          $params.OperationTimeoutSeconds = 600
+        }
+      }
+      elseif ($command.Parameters.ContainsKey("TimeoutSec")) {
+        $params.TimeoutSec = 600
+      }
+      Invoke-WebRequest @params
+      $bytes = (Get-Item -LiteralPath $Destination).Length
+      Write-Host "Downloaded $bytes bytes"
+      return
+    }
+    catch {
+      Remove-Item -LiteralPath $Destination -Force -ErrorAction SilentlyContinue
+      if ($attempt -eq 3) { throw }
+      Start-Sleep -Seconds $attempt
+    }
   }
 }
 

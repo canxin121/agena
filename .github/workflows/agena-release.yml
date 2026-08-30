@@ -470,7 +470,7 @@ jobs:
       - metadata
       - publish
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 30
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -535,16 +535,22 @@ jobs:
           New-Item -ItemType Directory -Force -Path $workspace | Out-Null
 
           $installerUrl = "https://github.com/$env:GITHUB_REPOSITORY/releases/download/$env:RELEASE_TAG/install.ps1"
-          for ($attempt = 1; $attempt -le 5; $attempt++) {
-            try {
-              Invoke-WebRequest -Uri $installerUrl -OutFile $installer -Headers @{ 'User-Agent' = 'agena-release-smoke' }
-              break
-            } catch {
-              if ($attempt -eq 5) { throw }
-              Start-Sleep -Seconds (2 * $attempt)
-            }
-          }
+          Write-Host "[published-smoke] download installer"
+          & curl.exe `
+            --fail `
+            --location `
+            --silent `
+            --show-error `
+            --retry 5 `
+            --retry-delay 2 `
+            --retry-connrefused `
+            --connect-timeout 15 `
+            --max-time 180 `
+            --output $installer `
+            $installerUrl
+          if ($LASTEXITCODE -ne 0) { throw "failed to download published install.ps1" }
 
+          Write-Host "[published-smoke] install"
           & $installer -Action Install `
             -Repo $env:GITHUB_REPOSITORY `
             -Version $env:RELEASE_VERSION `
@@ -553,18 +559,23 @@ jobs:
             -Port ([int]$env:TEST_PORT) `
             -ServiceMode detached `
             -NoPathUpdate
+          Write-Host "[published-smoke] status + health"
           & $installer -Action Status -InstallDir $installDir -NoPathUpdate
-          Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$env:TEST_PORT/api/v1/health" | Out-Null
+          Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$env:TEST_PORT/api/v1/health" -TimeoutSec 15 | Out-Null
+          Write-Host "[published-smoke] stop + start"
           & $installer -Action Stop -InstallDir $installDir -NoPathUpdate
           & $installer -Action Start -InstallDir $installDir -NoPathUpdate
-          Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$env:TEST_PORT/api/v1/health" | Out-Null
+          Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$env:TEST_PORT/api/v1/health" -TimeoutSec 15 | Out-Null
+          Write-Host "[published-smoke] upgrade"
           & $installer -Action Upgrade `
             -Repo $env:GITHUB_REPOSITORY `
             -Version $env:RELEASE_VERSION `
             -InstallDir $installDir `
             -NoPathUpdate
+          Write-Host "[published-smoke] uninstall"
           & $installer -Action Uninstall -InstallDir $installDir -NoPathUpdate
           if (Test-Path -LiteralPath $installDir) { throw 'published installer uninstall left files behind' }
+          Write-Host "[published-smoke] complete"
 
       - name: Cleanup published installer smoke (Unix)
         if: always() && matrix.shell_kind == 'bash'

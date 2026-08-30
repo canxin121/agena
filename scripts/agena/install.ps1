@@ -311,7 +311,19 @@ function Install-OrUpgrade([string]$RequestedAction) {
     Assert-Checksum $archivePath $checksumPath
 
     $stage = Join-Path $temp "stage"
-    Expand-Archive -LiteralPath $archivePath -DestinationPath $stage -Force
+    New-Item -ItemType Directory -Force -Path $stage | Out-Null
+    Write-Host "Extracting Agena release archive"
+    $tar = Get-Command tar.exe -ErrorAction SilentlyContinue
+    if ($tar) {
+      & $tar.Source -xf $archivePath -C $stage
+      if ($LASTEXITCODE -ne 0) {
+        throw "tar.exe extraction failed with exit code ${LASTEXITCODE}"
+      }
+    }
+    else {
+      Expand-Archive -LiteralPath $archivePath -DestinationPath $stage -Force
+    }
+    Write-Host "Extracted Agena release archive"
     $stageBin = Join-Path $stage "bin\agena.exe"
     $stageWeb = Join-Path $stage "web-dist\index.html"
     if (-not (Test-Path -LiteralPath $stageBin) -or -not (Test-Path -LiteralPath $stageWeb)) {

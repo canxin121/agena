@@ -569,7 +569,7 @@ impl SessionManager {
                 // sent. Reload so it is in the projection; the notification
                 // cursor requests the next provider round. Nothing is
                 // committed here.
-                session = self.store.load_session(session.id).await?;
+                session = self.load_session_with_workspace_root(session.id).await?;
             }
         }
     }

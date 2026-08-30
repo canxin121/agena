@@ -122,7 +122,7 @@ impl SessionManager {
                     "subtask '{task_id}' does not exist under session {parent_session_id}"
                 ))
             })?;
-        self.store.load_session(child_id).await
+        self.load_session_with_workspace_root(child_id).await
     }
 
     pub async fn cancel_subtask(
@@ -256,7 +256,9 @@ impl SessionManager {
             }
         }
 
-        let mut session = self.store.load_session(request.run.session_id).await?;
+        let mut session = self
+            .load_session_with_workspace_root(request.run.session_id)
+            .await?;
         self.refresh_execution_policy(&mut session, &state);
         let options = self
             .apply_execution_context_to_run_options_async(&session, request.run.options)
@@ -442,7 +444,9 @@ impl SessionManager {
         steer_rx: mpsc::Receiver<Vec<TypedContent>>,
     ) -> Result<Session, AppError> {
         let state = self.execution_state();
-        let mut session = self.store.load_session(request.session_id).await?;
+        let mut session = self
+            .load_session_with_workspace_root(request.session_id)
+            .await?;
         self.refresh_execution_policy(&mut session, &state);
         let options = self
             .apply_execution_context_to_run_options_async(&session, request.options)
@@ -479,7 +483,7 @@ impl SessionManager {
         steer_rx: mpsc::Receiver<Vec<TypedContent>>,
     ) -> Result<Session, AppError> {
         let state = self.execution_state();
-        let mut session = self.store.load_session(session_id).await?;
+        let mut session = self.load_session_with_workspace_root(session_id).await?;
         self.refresh_execution_policy(&mut session, &state);
         let options = self
             .run_options_from_session_async(&session, state.clone())
@@ -547,7 +551,9 @@ impl SessionManager {
                 "subtask max_cost_microusd must be greater than zero".to_string(),
             ));
         }
-        let parent = self.store.load_session(request.parent_session_id).await?;
+        let parent = self
+            .load_session_with_workspace_root(request.parent_session_id)
+            .await?;
         if parent.is_subagent() {
             return Err(AppError::Config(
                 "delegated subtasks cannot create nested subtasks".to_string(),
@@ -586,7 +592,7 @@ impl SessionManager {
                         if self.execution_registry.is_active(existing_id).await {
                             return Err(AppError::ExecutionAlreadyActive(existing_id));
                         }
-                        self.store.load_session(existing_id).await?
+                        self.load_session_with_workspace_root(existing_id).await?
                     }
                     None => {
                         let child_id = self
@@ -597,7 +603,7 @@ impl SessionManager {
                                 description.to_string(),
                             )
                             .await?;
-                        self.store.load_session(child_id).await?
+                        self.load_session_with_workspace_root(child_id).await?
                     }
                 };
 
@@ -618,14 +624,13 @@ impl SessionManager {
                 child.runtime.execution.permission_ceiling = parent_permission;
                 child.runtime.execution.capability_denied_tool_names =
                     non_recursive_subtask_capability_denials();
-                child.runtime.execution.effective_workspace_root = Some(
-                    parent
-                        .runtime
-                        .execution
-                        .effective_workspace_root
-                        .clone()
-                        .unwrap_or_else(|| state.tool_executor.workspace_root().to_path_buf()),
-                );
+                // The child owns the same durable workspace id and therefore
+                // already has its project base root bound above. Only inherit a
+                // real snapshot/worktree override; copying the parent's derived
+                // project root into this persisted override would make an
+                // ordinary project session look permanently snapshot-scoped.
+                child.runtime.execution.effective_workspace_root =
+                    parent.runtime.execution.effective_workspace_root.clone();
                 let started_at_ms = chrono::Utc::now().timestamp_millis();
                 let baseline_message_id = child
                     .parts()
@@ -808,7 +813,7 @@ impl SessionManager {
                 } else {
                     (!matches!(&error, AppError::Cancelled)).then(|| error.failure())
                 };
-                let session = self.store.load_session(child_id).await?;
+                let session = self.load_session_with_workspace_root(child_id).await?;
                 (status, failure, budget_exceeded, session)
             }
         };

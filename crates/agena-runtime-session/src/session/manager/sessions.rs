@@ -162,6 +162,7 @@ impl SessionManager {
                 None,
             )
             .await?;
+        self.bind_session_workspace_root(&mut session).await?;
 
         let patch = match state
             .tool_executor
@@ -169,7 +170,12 @@ impl SessionManager {
             .dispatch_session_start(agena_plugin_host::SessionStartInput {
                 session_id: session.id,
                 source: agena_plugin_host::SessionStartSource::Startup,
-                workspace_root: state.tool_executor.workspace_root().display().to_string(),
+                workspace_root: session
+                    .runtime
+                    .effective_workspace_root()
+                    .unwrap_or_else(|| state.tool_executor.workspace_root())
+                    .display()
+                    .to_string(),
                 model: None,
             })
             .await
@@ -234,13 +240,49 @@ impl SessionManager {
         Ok(session)
     }
 
+    pub(in crate::session::manager) async fn bind_session_workspace_root(
+        &self,
+        session: &mut Session,
+    ) -> Result<(), AppError> {
+        let workspace_id = session.workspace_id;
+        let path = self
+            .workspace_repository
+            .path_by_id(workspace_id)
+            .await
+            .map_err(|error| {
+                AppError::Internal(format!(
+                    "failed to resolve workspace {workspace_id} for session {}: {error}",
+                    session.id
+                ))
+            })?
+            .ok_or_else(|| {
+                AppError::Internal(format!(
+                    "workspace {workspace_id} for session {} no longer exists",
+                    session.id
+                ))
+            })?;
+        session
+            .runtime
+            .set_base_workspace_root(Some(std::path::PathBuf::from(path)));
+        Ok(())
+    }
+
+    pub(in crate::session::manager) async fn load_session_with_workspace_root(
+        &self,
+        session_id: i64,
+    ) -> Result<Session, AppError> {
+        let mut session = self.store.load_session(session_id).await?;
+        self.bind_session_workspace_root(&mut session).await?;
+        Ok(session)
+    }
+
     pub async fn get_session(&self, session_id: i64) -> Result<Session, AppError> {
         let state = self.execution_state();
         // Reconcile interrupted runs lazily on first open so the transcript
         // shows aborted (not stuck in-progress) replies without scanning
         // unrelated sessions at startup.
         self.reconcile_session_on_open(session_id).await?;
-        let mut session = self.store.load_session(session_id).await?;
+        let mut session = self.load_session_with_workspace_root(session_id).await?;
         // The persisted runtime contains a historical effective-permission
         // snapshot. It is not the source of truth after a config reload or a
         // live session-permission edit. Rebuild it from the current shared

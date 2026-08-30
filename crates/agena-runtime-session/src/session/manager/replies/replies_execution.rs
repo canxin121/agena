@@ -325,7 +325,7 @@ impl SessionManager {
                 },
             )
             .await?;
-        let reloaded = self.store.load_session(session.id).await?;
+        let reloaded = self.load_session_with_workspace_root(session.id).await?;
         Ok((reloaded, true))
     }
 
@@ -554,7 +554,7 @@ impl SessionManager {
                 // Re-read after observing the signal generation. This closes
                 // the race where the final reply commits between our stale
                 // in-memory blocked check and installation of the waiter.
-                session = self.store.load_session(session.id).await?;
+                session = self.load_session_with_workspace_root(session.id).await?;
                 session.refresh_derived();
                 if !session.blocked() {
                     continue;
@@ -565,7 +565,7 @@ impl SessionManager {
                     _ = control.cancel.cancelled() => return Err(AppError::Cancelled),
                     _ = control.wait_for_interaction_after(interaction_epoch) => {}
                 }
-                session = self.store.load_session(session.id).await?;
+                session = self.load_session_with_workspace_root(session.id).await?;
                 continue;
             }
 
@@ -987,7 +987,7 @@ impl SessionManager {
                             == Some(agena_provider::ProviderErrorKind::ContextOverflow)
                     {
                         reactive_compaction_attempted = true;
-                        let reloaded = self.store.load_session(session_id).await?;
+                        let reloaded = self.load_session_with_workspace_root(session_id).await?;
                         let generation = reloaded.runtime.prompt_window.generation;
                         let compacted = Box::pin(self.automatic_compact_session(
                             reloaded,
@@ -1038,13 +1038,13 @@ impl SessionManager {
                                 std::time::Duration::from_millis(delay)
                             ) => {}
                         }
-                        session = self.store.load_session(session_id).await?;
+                        session = self.load_session_with_workspace_root(session_id).await?;
                         turn_run_id = None;
                         model_requested = true;
                         continue;
                     }
 
-                    session = self.store.load_session(session_id).await?;
+                    session = self.load_session_with_workspace_root(session_id).await?;
                     if let Some((continued, continuation_marker, is_plan_autorun)) = self
                         .dispatch_run_failure_continuation(
                             session,
@@ -1095,7 +1095,7 @@ impl SessionManager {
             last_assistant_message: None,
             run_error: Some(failure.user.fallback),
         };
-        session = self.store.load_session(session.id).await?;
+        session = self.load_session_with_workspace_root(session.id).await?;
         match state
             .tool_executor
             .plugin_manager()
@@ -1271,7 +1271,7 @@ impl SessionManager {
                 )?],
             )
             .await?;
-        let session = self.store.load_session(session.id).await?;
+        let session = self.load_session_with_workspace_root(session.id).await?;
         Ok((session, Some(run_id)))
     }
 
@@ -1920,7 +1920,7 @@ impl SessionManager {
             // request parts while its execution is suspended. Merge results
             // into the latest projection so completing outer calls cannot
             // replace those request/reply records with another snapshot.
-            session = self.store.load_session(session.id).await?;
+            session = self.load_session_with_workspace_root(session.id).await?;
             for (resolved, result) in ready_tools.into_iter().zip(executions) {
                 session = Box::pin(self.apply_tool_execution_result(
                     session,
@@ -2284,7 +2284,7 @@ impl SessionManager {
                     | ToolError::ToolUnavailable(_)
             )
         {
-            session = self.store.load_session(session.id).await?;
+            session = self.load_session_with_workspace_root(session.id).await?;
         }
 
         self.route_tool_error(session, pending, error, state).await
@@ -2655,7 +2655,7 @@ impl SessionManager {
             }
         }
 
-        let session = self.store.load_session(session.id).await?;
+        let session = self.load_session_with_workspace_root(session.id).await?;
         Box::pin(self.apply_tool_execution_result(session, &resolved.pending, execution, state))
             .await
     }
@@ -3254,37 +3254,37 @@ impl SessionManager {
         let execution = match stream_end {
             Ok(Ok(execution)) => execution,
             Ok(Err(ToolError::PolicyDenied(denial))) => {
-                let session = self.store.load_session(session.id).await?;
+                let session = self.load_session_with_workspace_root(session.id).await?;
                 return self
                     .apply_tool_policy_denied(session, pending_tool, *denial, state)
                     .await;
             }
             Ok(Err(ToolError::UserDeclined(decline))) => {
-                let session = self.store.load_session(session.id).await?;
+                let session = self.load_session_with_workspace_root(session.id).await?;
                 return self
                     .apply_tool_user_declined(session, pending_tool, *decline, Vec::new(), state)
                     .await;
             }
             Ok(Err(ToolError::CapabilityUnavailable(unavailable))) => {
-                let session = self.store.load_session(session.id).await?;
+                let session = self.load_session_with_workspace_root(session.id).await?;
                 return self
                     .apply_tool_capability_unavailable(session, pending_tool, *unavailable, state)
                     .await;
             }
             Ok(Err(ToolError::ToolUnavailable(unavailable))) => {
-                let session = self.store.load_session(session.id).await?;
+                let session = self.load_session_with_workspace_root(session.id).await?;
                 return self
                     .apply_tool_unavailable(session, pending_tool, *unavailable, state)
                     .await;
             }
             Ok(Err(err)) => {
-                let session = self.store.load_session(session.id).await?;
+                let session = self.load_session_with_workspace_root(session.id).await?;
                 return self
                     .apply_tool_error(session, pending_tool, err, None, state)
                     .await;
             }
             Err(error) => {
-                let session = self.store.load_session(session.id).await?;
+                let session = self.load_session_with_workspace_root(session.id).await?;
                 return self
                     .apply_tool_error(
                         session,
@@ -3350,7 +3350,7 @@ impl SessionManager {
             )?;
         }
 
-        let session = self.store.load_session(session.id).await?;
+        let session = self.load_session_with_workspace_root(session.id).await?;
         self.apply_tool_success_with_rules(session, pending_tool, execution, Vec::new(), state)
             .await
     }
@@ -3412,7 +3412,7 @@ impl SessionManager {
         pending_tool: &SessionPendingTool,
         state: Arc<SessionManagerState>,
     ) -> Result<Session, AppError> {
-        let mut session = self.store.load_session(session_id).await?;
+        let mut session = self.load_session_with_workspace_root(session_id).await?;
         let tool_part_ref = session
             .resolve_part_ref(&pending_tool.part)
             .ok_or_else(|| pending_tool_part_not_found_error(&pending_tool.part))?;
@@ -3446,13 +3446,13 @@ impl SessionManager {
         _state: Arc<SessionManagerState>,
     ) -> Result<Session, AppError> {
         if streamed_output.is_empty() {
-            return self.store.load_session(session_id).await;
+            return self.load_session_with_workspace_root(session_id).await;
         }
         // The single-source payload is written once at completion; a stream
         // checkpoint is no longer persisted (the v2 live broadcast carries
         // streaming detail, and the terminal frame replaces the payload).
         let _ = streamed_output;
-        self.store.load_session(session_id).await
+        self.load_session_with_workspace_root(session_id).await
     }
 
     pub(in crate::session::manager) async fn apply_tool_success_with_rules(

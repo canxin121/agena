@@ -403,6 +403,103 @@ async fn create_and_reload_use_the_sealed_facade() {
 }
 
 #[tokio::test]
+async fn session_workspace_id_scopes_tools_to_the_project_root() {
+    let manager = test_manager().await;
+    let project = tempfile::tempdir().expect("create project workspace");
+    let snapshot = tempfile::tempdir().expect("create snapshot workspace");
+    let project_path = std::fs::canonicalize(project.path()).expect("canonicalize project");
+    let snapshot_path = std::fs::canonicalize(snapshot.path()).expect("canonicalize snapshot");
+
+    let workspace = manager
+        .workspace_repository
+        .create(project_path.to_string_lossy().into_owned())
+        .await
+        .expect("create secondary workspace");
+    let session = manager
+        .store
+        .create_session(
+            workspace.id,
+            None,
+            agena_domain::SessionRelationKind::Root,
+            None,
+            "project-root session".to_owned(),
+            None,
+            None,
+        )
+        .await
+        .expect("create session in secondary workspace");
+
+    let server_root = manager
+        .execution_state()
+        .tool_executor
+        .workspace_root()
+        .to_path_buf();
+    assert_ne!(
+        server_root, project_path,
+        "the fixture must separate the server process workspace from the session project"
+    );
+
+    let mut loaded = manager
+        .get_session(session.id)
+        .await
+        .expect("load workspace-bound session");
+    assert_eq!(
+        loaded.runtime.effective_workspace_root(),
+        Some(project_path.as_path())
+    );
+    let project_executor = manager
+        .execution_state()
+        .tool_executor
+        .for_session_context_async(&loaded.runtime.execution)
+        .await;
+    assert_eq!(
+        project_executor.workspace_root(),
+        project_path.as_path(),
+        "tools for a normal root session must run in the session's project, not the server root"
+    );
+
+    loaded
+        .runtime
+        .set_effective_workspace_root(Some(snapshot_path.clone()));
+    loaded = manager
+        .store
+        .persist_execution_config(loaded)
+        .await
+        .expect("persist snapshot override");
+    let mut reloaded = manager
+        .get_session(loaded.id)
+        .await
+        .expect("reload snapshot-bound session");
+    assert_eq!(
+        reloaded.runtime.effective_workspace_root(),
+        Some(snapshot_path.as_path()),
+        "a snapshot/worktree override takes precedence over the project root"
+    );
+
+    reloaded.runtime.set_effective_workspace_root(None);
+    reloaded = manager
+        .store
+        .persist_execution_config(reloaded)
+        .await
+        .expect("clear snapshot override");
+    let reloaded = manager
+        .get_session(reloaded.id)
+        .await
+        .expect("reload project after snapshot exit");
+    assert_eq!(
+        reloaded.runtime.effective_workspace_root(),
+        Some(project_path.as_path()),
+        "exiting a snapshot must return tools to the owning project instead of the server root"
+    );
+    let restored_executor = manager
+        .execution_state()
+        .tool_executor
+        .for_session_context_async(&reloaded.runtime.execution)
+        .await;
+    assert_eq!(restored_executor.workspace_root(), project_path.as_path());
+}
+
+#[tokio::test]
 async fn session_model_selection_survives_a_store_reload() {
     let manager = test_manager().await;
     let session = create(&manager, "model selection persistence").await;

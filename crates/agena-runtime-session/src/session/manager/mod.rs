@@ -531,8 +531,10 @@ pub struct SessionManager {
     permission_rules: Arc<dyn agena_storage::PermissionRuleRepository>,
     permission_rule_writer:
         Arc<dyn agena_storage::PermissionRuleTransactionWriter<sea_orm::DatabaseTransaction>>,
-    /// Workspace identity resolution (kept infra, 19.1). Resolved lazily from
-    /// the tool executor's workspace root so the manager stays backend-neutral.
+    /// Workspace identity/path resolution (kept infra, 19.1). The server's
+    /// default workspace id is resolved lazily from the global tool root, while
+    /// each loaded session derives its process-local base tool root from its
+    /// durable `workspace_id` through this same repository.
     workspace_repository: Arc<dyn agena_storage::WorkspaceRepository>,
     workspace_id: tokio::sync::OnceCell<i64>,
     execution: ArcSwap<SessionManagerState>,
@@ -1510,7 +1512,7 @@ impl SessionManager {
         request: crate::part::AskUserToolInput,
     ) -> Result<agena_plugin_host::sdk::host_api::AskUserResponse, AppError> {
         let state = self.execution_state();
-        let session = self.store.load_session(session_id).await?;
+        let session = self.load_session_with_workspace_root(session_id).await?;
         let pending_tool = pending_tool_by_call_id(&session, call_id).ok_or_else(|| {
             AppError::Internal(format!(
                 "pending tool not found for host user input: session={session_id}, call={call_id}"
@@ -1813,7 +1815,7 @@ impl SessionManager {
             result = &mut response_rx => receive(result),
             _ = tokio::time::sleep(remaining) => {
                 let state = self.execution_state();
-                let session = self.store.load_session(session_id).await?;
+                let session = self.load_session_with_workspace_root(session_id).await?;
                 let options = self.run_options_from_session_async(&session, state).await?;
                 self.reply_user_input(SessionExecutionReplyRequest::new(
                     session_id,

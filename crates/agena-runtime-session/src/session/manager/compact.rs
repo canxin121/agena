@@ -83,7 +83,7 @@ impl SessionManager {
     ) -> Result<Session, AppError> {
         let session_id = request.session_id;
         let state = self.execution_state();
-        let mut session = self.store.load_session(session_id).await?;
+        let mut session = self.load_session_with_workspace_root(session_id).await?;
         self.refresh_execution_policy(&mut session, &state);
         let options = self
             .apply_execution_context_to_run_options_async(&session, request.options)

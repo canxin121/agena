@@ -461,6 +461,14 @@ pub struct SessionExecutionContext {
     /// current id after creation/hydration.
     #[serde(skip, default)]
     pub scope_session_id: Option<i64>,
+    /// Durable session ownership is `Session::workspace_id`; this process-local
+    /// path is derived from that id when the session is loaded. It is kept
+    /// separate from `effective_workspace_root`, which is a persisted
+    /// temporary override used by snapshot/worktree execution. Keeping the two
+    /// roots distinct lets exiting a snapshot return to the owning project
+    /// instead of falling back to the server process workspace.
+    #[serde(skip, default)]
+    pub base_workspace_root: Option<PathBuf>,
     #[serde(flatten)]
     pub selection: ExecutionSelection,
     #[serde(
@@ -506,7 +514,9 @@ impl agena_runtime_contracts::ToolSessionContext for SessionExecutionContext {
     }
 
     fn effective_workspace_root(&self) -> Option<&std::path::Path> {
-        self.effective_workspace_root.as_deref()
+        self.effective_workspace_root
+            .as_deref()
+            .or(self.base_workspace_root.as_deref())
     }
 
     fn effective_permission(&self) -> &agena_runtime_contracts::authorization::PermissionConfig {
@@ -590,7 +600,14 @@ impl SessionRuntimeState {
     }
 
     pub fn effective_workspace_root(&self) -> Option<&Path> {
-        self.execution.effective_workspace_root.as_deref()
+        self.execution
+            .effective_workspace_root
+            .as_deref()
+            .or(self.execution.base_workspace_root.as_deref())
+    }
+
+    pub fn set_base_workspace_root(&mut self, path: Option<PathBuf>) {
+        self.execution.base_workspace_root = path;
     }
 
     pub fn set_effective_workspace_root(&mut self, path: Option<PathBuf>) {

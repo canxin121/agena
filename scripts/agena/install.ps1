@@ -83,7 +83,7 @@ function Get-FileFromSource([string]$Source, [string]$Destination) {
       --output $Destination `
       $Source
     if ($LASTEXITCODE -ne 0) {
-      throw "curl download failed with exit code $LASTEXITCODE: $Source"
+      throw "curl download failed with exit code ${LASTEXITCODE}: $Source"
     }
     $bytes = (Get-Item -LiteralPath $Destination).Length
     Write-Host "Downloaded $bytes bytes"

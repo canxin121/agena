@@ -1186,8 +1186,9 @@ mod tool_result_render_tests {
     use std::collections::HashMap;
 
     use super::{
-        CompletionInputPart, CompletionInputRun, OPERATION_ID_METADATA_KEY, Part, PartRole,
-        PartState, Role, render_tool_results_for_model,
+        CompletionInputAttachmentKind, CompletionInputAttachmentSource, CompletionInputPart,
+        CompletionInputRun, OPERATION_ID_METADATA_KEY, Part, PartRole, PartState, Role,
+        render_tool_results_for_model,
     };
     use crate::{
         authorization::ExecutionPrincipal,

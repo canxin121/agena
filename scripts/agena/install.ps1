@@ -309,6 +309,7 @@ function Install-OrUpgrade([string]$RequestedAction) {
     Get-FileFromSource $archiveSource $archivePath
     Get-FileFromSource $checksumSource $checksumPath
     Assert-Checksum $archivePath $checksumPath
+    Write-Host "Verified Agena release checksum"
 
     $stage = Join-Path $temp "stage"
     New-Item -ItemType Directory -Force -Path $stage | Out-Null
@@ -329,6 +330,7 @@ function Install-OrUpgrade([string]$RequestedAction) {
     if (-not (Test-Path -LiteralPath $stageBin) -or -not (Test-Path -LiteralPath $stageWeb)) {
       throw "Release archive is missing bin/agena.exe or web-dist/index.html"
     }
+    Write-Host "Validating Agena release binary"
     $binaryVersionText = (& $stageBin --version | Out-String).Trim()
     if ($LASTEXITCODE -ne 0 -or $binaryVersionText -notmatch '(\S+)$') {
       throw "Installed Agena binary did not report a version"
@@ -338,6 +340,7 @@ function Install-OrUpgrade([string]$RequestedAction) {
       throw "Archive contains Agena $binaryVersion but $Version was requested"
     }
     $script:Version = $binaryVersion
+    Write-Host "Validated Agena $binaryVersion"
 
     $backup = Join-Path $temp "backup"
     New-Item -ItemType Directory -Force -Path $backup | Out-Null
@@ -345,7 +348,9 @@ function Install-OrUpgrade([string]$RequestedAction) {
       Copy-Item -LiteralPath $StateFile -Destination (Join-Path $backup "install-state.json") -Force
     }
 
+    Write-Host "Stopping existing Agena installation if needed"
     Stop-ForUpgrade
+    Write-Host "Installing Agena files"
     New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
     foreach ($name in @("bin", "web-dist")) {
       $existing = Join-Path $InstallDir $name
@@ -354,9 +359,12 @@ function Install-OrUpgrade([string]$RequestedAction) {
       }
       Move-Item -LiteralPath (Join-Path $stage $name) -Destination $existing
     }
+    Write-Host "Installed Agena files"
 
     try {
+      Write-Host "Starting Agena server using $ServiceMode mode"
       Start-Installed
+      Write-Host "Started Agena server"
       if ($RequestedAction -eq "Upgrade" -and -not $oldWasRunning) {
         $stopCode = Invoke-AgenaLifecycle @("server", "stop")
         if ($stopCode -ne 0) {

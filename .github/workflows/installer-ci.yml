@@ -101,7 +101,7 @@ jobs:
             -InstallDir $env:INSTALL_DIR `
             -Workspace $env:WORKSPACE_DIR `
             -Port ([int]$env:TEST_PORT) `
-            -ServiceMode detached `
+            -ServiceMode native `
             -NoPathUpdate
 
           Write-Host '[remote-release] status + health'
@@ -454,6 +454,35 @@ jobs:
           schtasks.exe /Query /TN 'Agena Server' *> $null
           $taskQueryExit = $LASTEXITCODE
           if ($taskQueryExit -eq 0) { throw 'Agena Server scheduled task survived uninstall' }
+          $global:LASTEXITCODE = 0
+
+          Write-Host '[detached-current] install'
+          & $installer -Action Install `
+            -Archive $archive.FullName `
+            -Checksum $checksum `
+            -InstallDir $env:INSTALL_DIR `
+            -Workspace $env:WORKSPACE_DIR `
+            -Port ([int]$env:TEST_PORT) `
+            -ServiceMode detached `
+            -NoPathUpdate
+          & $installer -Action Status -InstallDir $env:INSTALL_DIR -NoPathUpdate
+          Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$env:TEST_PORT/api/v1/health" -TimeoutSec 15 | Out-Null
+
+          Write-Host '[detached-current] stop + start'
+          & $installer -Action Stop -InstallDir $env:INSTALL_DIR -NoPathUpdate
+          Start-Sleep -Seconds 1
+          try {
+            Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$env:TEST_PORT/api/v1/health" -TimeoutSec 2 | Out-Null
+            throw 'detached server remained reachable after stop'
+          } catch {
+            if ($_.Exception.Message -eq 'detached server remained reachable after stop') { throw }
+          }
+          & $installer -Action Start -InstallDir $env:INSTALL_DIR -NoPathUpdate
+          Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$env:TEST_PORT/api/v1/health" -TimeoutSec 15 | Out-Null
+
+          Write-Host '[detached-current] uninstall'
+          & $installer -Action Uninstall -InstallDir $env:INSTALL_DIR -NoPathUpdate
+          if (Test-Path -LiteralPath $env:INSTALL_DIR) { throw 'detached install directory survived uninstall' }
           exit 0
 
       - name: Cleanup native user service after failure (macOS)

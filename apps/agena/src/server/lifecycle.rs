@@ -209,6 +209,17 @@ pub(crate) async fn start(mut args: ServerArgs) -> Result<()> {
         use std::os::unix::process::CommandExt as _;
         command.process_group(0);
     }
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt as _;
+        // `server start` must outlive the invoking PowerShell/terminal. Without
+        // Windows creation flags the child remains attached to the caller's
+        // console/process group, which can keep CI shells and real installer
+        // invocations open even though Agena redirected its stdio to a log.
+        const DETACHED_PROCESS: u32 = 0x0000_0008;
+        const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+        command.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
+    }
     let child = command.spawn().context("failed to spawn the server")?;
     let child_pid = child.id();
     drop(child);

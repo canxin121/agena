@@ -33,6 +33,34 @@ pub(crate) async fn run(request: TuiLaunchRequest) -> Result<(), AgenaProcessErr
     run_remote(launch_args).await
 }
 
+#[cfg(test)]
+mod tests {
+    use super::resolve_tui_workspace_root;
+    use std::{env, path::PathBuf};
+
+    #[test]
+    fn explicit_tui_workspace_wins_over_process_cwd() {
+        let explicit = PathBuf::from("/tmp/agena-explicit-workspace");
+        assert_eq!(
+            resolve_tui_workspace_root(Some(explicit.clone())).expect("resolve explicit workspace"),
+            explicit
+        );
+    }
+
+    #[test]
+    fn tui_workspace_defaults_to_process_cwd() {
+        let expected = env::current_dir().expect("read test process cwd");
+        assert_eq!(
+            resolve_tui_workspace_root(None).expect("resolve default TUI workspace"),
+            expected
+        );
+    }
+}
+
+fn resolve_tui_workspace_root(explicit: Option<PathBuf>) -> io::Result<PathBuf> {
+    explicit.map(Ok).unwrap_or_else(env::current_dir)
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct TuiLaunchArgs {
     pub server_url: String,
@@ -159,9 +187,14 @@ pub fn init_tui_tracing(
 }
 
 pub async fn run_remote(args: TuiLaunchArgs) -> Result<(), AgenaProcessError> {
+    // The CLI workspace is the directory the user launched Agena from unless
+    // they explicitly selected another one. Do not silently inherit the
+    // long-lived server process workspace here: installed servers commonly run
+    // from $HOME, which would make `cd project && agena` create sessions in ~.
+    let workspace_root = resolve_tui_workspace_root(args.workspace_root.clone())?;
     let backend = TuiBackend::connect_remote_authenticated(
         args.server_url.as_str(),
-        args.workspace_root.clone(),
+        Some(workspace_root),
         args.server_token.as_deref(),
         args.server_password.as_deref(),
     )

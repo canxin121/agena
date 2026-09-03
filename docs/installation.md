@@ -10,7 +10,7 @@ the server.
 ### macOS and Linux
 
 ```bash
-curl -fsSL https://github.com/canxin121/agena/releases/latest/download/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/canxin121/agena/master/scripts/agena/install.sh | bash
 ```
 
 Supported release architectures are x86_64 and arm64/aarch64 on both macOS and
@@ -19,8 +19,12 @@ Linux.
 ### Windows PowerShell
 
 ```powershell
-irm https://github.com/canxin121/agena/releases/latest/download/install.ps1 | iex
+irm https://raw.githubusercontent.com/canxin121/agena/master/scripts/agena/install.ps1 | iex
 ```
+
+Agena publishes beta GitHub Releases only. With no explicit `--version` /
+`-Version`, the installers select the newest prerelease whose tag matches
+`agena-vX.Y.Z-beta.N`.
 
 The Windows installer supports x86_64 and ARM64 release packages.
 
@@ -31,28 +35,41 @@ Scheduler logon task, and Linux uses a systemd user service when one is
 available. Linux environments without a user systemd session automatically use
 Agena's detached server lifecycle instead.
 
+When `--ui-password` (or `AGENA_SERVER_UI_PASSWORD`) is used on macOS/Linux,
+the installer also writes a private client environment file under the install
+directory and sources it from the shell profile. The same operator credential
+is exposed to thin clients as `AGENA_SERVER_PASSWORD`, so a newly opened shell
+can run `agena` / `agena tui` against the protected local server without a
+second manual password export. The password itself is not written directly into
+the shell profile.
+
+The TUI workspace is independent of the long-lived server process working
+directory: `cd /path/to/project && agena` uses `/path/to/project` for new
+sessions, while `agena tui --workspace /other/path` remains the explicit
+override.
+
 ## Lifecycle operations
 
 On macOS/Linux the installer can be re-run with an action:
 
 ```bash
-# Upgrade to the latest stable release.
-curl -fsSL https://github.com/canxin121/agena/releases/latest/download/install.sh | bash -s -- upgrade
+# Upgrade to the latest beta release.
+curl -fsSL https://raw.githubusercontent.com/canxin121/agena/master/scripts/agena/install.sh | bash -s -- upgrade
 
 # Inspect, stop, start, or restart the installed server.
-curl -fsSL https://github.com/canxin121/agena/releases/latest/download/install.sh | bash -s -- status
-curl -fsSL https://github.com/canxin121/agena/releases/latest/download/install.sh | bash -s -- stop
-curl -fsSL https://github.com/canxin121/agena/releases/latest/download/install.sh | bash -s -- start
-curl -fsSL https://github.com/canxin121/agena/releases/latest/download/install.sh | bash -s -- restart
+curl -fsSL https://raw.githubusercontent.com/canxin121/agena/master/scripts/agena/install.sh | bash -s -- status
+curl -fsSL https://raw.githubusercontent.com/canxin121/agena/master/scripts/agena/install.sh | bash -s -- stop
+curl -fsSL https://raw.githubusercontent.com/canxin121/agena/master/scripts/agena/install.sh | bash -s -- start
+curl -fsSL https://raw.githubusercontent.com/canxin121/agena/master/scripts/agena/install.sh | bash -s -- restart
 
 # Remove the application while keeping configuration, sessions, and logs.
-curl -fsSL https://github.com/canxin121/agena/releases/latest/download/install.sh | bash -s -- uninstall
+curl -fsSL https://raw.githubusercontent.com/canxin121/agena/master/scripts/agena/install.sh | bash -s -- uninstall
 ```
 
 For Windows, invoke the downloaded script block with the desired action:
 
 ```powershell
-$installer = [scriptblock]::Create((irm https://github.com/canxin121/agena/releases/latest/download/install.ps1))
+$installer = [scriptblock]::Create((irm https://raw.githubusercontent.com/canxin121/agena/master/scripts/agena/install.ps1))
 & $installer -Action Upgrade
 & $installer -Action Status
 & $installer -Action Stop
@@ -77,15 +94,15 @@ service on macOS, Linux, and Windows.
 macOS/Linux:
 
 ```bash
-curl -fsSL https://github.com/canxin121/agena/releases/latest/download/install.sh \
-  | bash -s -- install --version 0.1.0
+curl -fsSL https://raw.githubusercontent.com/canxin121/agena/master/scripts/agena/install.sh \
+  | bash -s -- install --version 0.1.2-beta.1
 ```
 
 Windows:
 
 ```powershell
-$installer = [scriptblock]::Create((irm https://github.com/canxin121/agena/releases/latest/download/install.ps1))
-& $installer -Action Install -Version 0.1.0
+$installer = [scriptblock]::Create((irm https://raw.githubusercontent.com/canxin121/agena/master/scripts/agena/install.ps1))
+& $installer -Action Install -Version 0.1.2-beta.1
 ```
 
 Both installers also accept a local or remote `--archive`/`-Archive` plus its

@@ -84,7 +84,7 @@ jobs:
             throw 'PowerShell syntax validation failed'
           }
 
-      - name: Install current latest release through remote URLs
+      - name: Install current latest beta release through remote URLs
         shell: pwsh
         env:
           INSTALL_DIR: ${{ runner.temp }}\agena-remote-install
@@ -95,7 +95,7 @@ jobs:
           $installer = Join-Path $PWD 'scripts\agena\install.ps1'
           New-Item -ItemType Directory -Force -Path $env:WORKSPACE_DIR | Out-Null
 
-          Write-Host '[remote-release] install latest from GitHub release URLs'
+          Write-Host '[remote-release] install latest beta from GitHub release URLs'
           & $installer -Action Install `
             -Repo $env:GITHUB_REPOSITORY `
             -InstallDir $env:INSTALL_DIR `

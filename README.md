@@ -22,16 +22,17 @@ Deployment guides:
 macOS and Linux:
 
 ```bash
-curl -fsSL https://github.com/canxin121/agena/releases/latest/download/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/canxin121/agena/master/scripts/agena/install.sh | bash
 ```
 
 Windows PowerShell:
 
 ```powershell
-irm https://github.com/canxin121/agena/releases/latest/download/install.ps1 | iex
+irm https://raw.githubusercontent.com/canxin121/agena/master/scripts/agena/install.ps1 | iex
 ```
 
-The installer verifies the release SHA-256, installs the native binary and Web
+Only beta GitHub Releases are published. The installer discovers the newest
+`agena-vX.Y.Z-beta.N` prerelease, verifies its SHA-256, installs the native binary and Web
 frontend, and starts Agena as a per-user service. See the
 [installation guide](docs/installation.md) for upgrade, stop/start, uninstall,
 custom workspace/port, and pinned-version commands.

@@ -50,13 +50,16 @@ function Get-TargetTriple {
 function Get-LatestVersion {
   $temp = Join-Path $env:TEMP ("agena-release-latest-" + [Guid]::NewGuid().ToString("N") + ".json")
   try {
-    Get-FileFromSource "https://api.github.com/repos/$Repo/releases/latest" $temp
-    $release = Get-Content -LiteralPath $temp -Raw | ConvertFrom-Json
+    Get-FileFromSource "https://api.github.com/repos/$Repo/releases?per_page=100" $temp
+    $releases = @(Get-Content -LiteralPath $temp -Raw | ConvertFrom-Json)
   }
   finally {
     Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue
   }
-  if (-not $release.tag_name) { throw "Latest GitHub release has no tag_name" }
+  $release = $releases | Where-Object {
+    -not $_.draft -and $_.prerelease -and ([string]$_.tag_name -match '^agena-v\d+\.\d+\.\d+-beta\.\d+$')
+  } | Select-Object -First 1
+  if (-not $release -or -not $release.tag_name) { throw "No Agena beta release was found for $Repo" }
   return Normalize-Version ([string]$release.tag_name)
 }
 

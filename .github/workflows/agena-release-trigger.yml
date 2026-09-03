@@ -4,7 +4,7 @@ run-name: Dispatch ${{ github.ref_name }}
 on:
   push:
     tags:
-      - agena-v*
+      - agena-v*-beta.*
 
 permissions:
   actions: write

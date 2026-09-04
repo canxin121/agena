@@ -25,26 +25,15 @@ export function extractAuthRequiredMessageFromBodyText(bodyText: string): string
   try {
     const parsed = JSON.parse(txt) as unknown
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return ''
-    const record = parsed as Record<string, unknown>
-
-    const message = typeof record.message === 'string' ? record.message.trim() : ''
-    if (message) return message
-
-    const errorValue = record.error
-    if (typeof errorValue === 'string') {
-      const err = errorValue.trim()
-      if (err) return err
-    }
-    if (errorValue && typeof errorValue === 'object' && !Array.isArray(errorValue)) {
-      const nested = errorValue as Record<string, unknown>
-      const nestedMessage = typeof nested.message === 'string' ? nested.message.trim() : ''
-      if (nestedMessage) return nestedMessage
-    }
+    const problem = (parsed as Record<string, unknown>).problem
+    if (!problem || typeof problem !== 'object' || Array.isArray(problem)) return ''
+    const user = (problem as Record<string, unknown>).user
+    if (!user || typeof user !== 'object' || Array.isArray(user)) return ''
+    const fallback = (user as Record<string, unknown>).fallback
+    return typeof fallback === 'string' ? fallback.trim() : ''
   } catch {
-    // ignore non-json payloads
+    return ''
   }
-
-  return ''
 }
 
 export function readAuthRequiredFromStorage(): StoredAuthRequired | null {

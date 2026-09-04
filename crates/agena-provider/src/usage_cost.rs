@@ -6,7 +6,7 @@ pub struct CompletionUsageCostContribution {
     pub total_cost_usd: f64,
     pub recorded_cost_usd: f64,
     pub estimated_cost_usd: f64,
-    pub unpriced_runs: u64,
+    pub unpriced_requests: u64,
 }
 
 impl CompletionUsageCostContribution {
@@ -14,7 +14,9 @@ impl CompletionUsageCostContribution {
         self.total_cost_usd += additional.total_cost_usd;
         self.recorded_cost_usd += additional.recorded_cost_usd;
         self.estimated_cost_usd += additional.estimated_cost_usd;
-        self.unpriced_runs = self.unpriced_runs.saturating_add(additional.unpriced_runs);
+        self.unpriced_requests = self
+            .unpriced_requests
+            .saturating_add(additional.unpriced_requests);
     }
 }
 
@@ -24,21 +26,15 @@ pub fn completion_usage_own_cost_contribution(
     model_id: &str,
     usage: &crate::CompletionUsage,
 ) -> CompletionUsageCostContribution {
-    let recorded = if usage.recorded_cost_available {
-        Some(usage.recorded_cost.max(0.0))
-    } else if usage.total_cost.is_finite() && usage.total_cost > 0.0 {
-        // Backward compatibility for rows persisted before explicit cost
-        // provenance was added.
-        Some(usage.total_cost)
-    } else {
-        None
-    };
+    let recorded = usage
+        .recorded_cost_available
+        .then_some(usage.recorded_cost.max(0.0));
     if let Some(recorded_cost_usd) = recorded {
         return CompletionUsageCostContribution {
             total_cost_usd: recorded_cost_usd,
             recorded_cost_usd,
             estimated_cost_usd: 0.0,
-            unpriced_runs: u64::from(usage.cost_estimate_incomplete),
+            unpriced_requests: u64::from(usage.cost_estimate_incomplete),
         };
     }
 
@@ -66,7 +62,7 @@ pub fn completion_usage_own_cost_contribution(
         total_cost_usd: estimated.unwrap_or_default(),
         recorded_cost_usd: 0.0,
         estimated_cost_usd: estimated.unwrap_or_default(),
-        unpriced_runs: u64::from(incomplete),
+        unpriced_requests: u64::from(incomplete),
     }
 }
 

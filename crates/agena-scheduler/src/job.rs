@@ -59,8 +59,8 @@ pub enum JobRunStatus {
 /// What to do when a job has been overdue long enough to be considered a
 /// scheduler misfire (for example, after the runtime was stopped).
 ///
-/// `RunOnceNow` is the backwards-compatible default: execute one delivery
-/// immediately, but never synthesize a burst of every cron tick that was
+/// `RunOnceNow` executes one delivery immediately, but never synthesizes a
+/// burst of every cron tick that was
 /// missed. `Skip` consumes one scheduled occurrence at a time and records it
 /// as skipped. `Reschedule` drops all missed occurrences and advances directly
 /// to the first future cron tick.
@@ -163,13 +163,9 @@ pub struct JobRunRecord {
     pub failure: Option<agena_failure::Failure>,
 }
 
-/// A durable, scheduler-wide audit entry.  It intentionally retains the job
+/// A durable, scheduler-wide audit entry. It intentionally retains the job
 /// identifier alongside a copy of one immutable run record so history remains
 /// queryable after a user deletes the job itself.
-///
-/// `ScheduledJob::run_history` is still retained as a small per-job working
-/// window for backwards-compatible list/status views.  The scheduler store
-/// owns the longer, globally bounded ledger exposed by `Scheduler::history`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SchedulerHistoryEntry {
     pub job_id: Uuid,
@@ -226,6 +222,7 @@ pub struct ScheduledJobLaunchProvenance {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 /// A scheduled job.
 pub struct ScheduledJob {
     pub id: Uuid,
@@ -237,16 +234,17 @@ pub struct ScheduledJob {
     pub owner_session_id: Option<i64>,
     /// Durable provenance for schedules created by an assistant tool call.
     ///
-    /// Older and host-created jobs legitimately have no provenance and are
-    /// delivered as Runtime ingress. When present, every fire is attached to
+    /// Host-created jobs may have no provenance and are delivered as Runtime
+    /// ingress. When present, every fire is attached to
     /// this exact assistant run/tool part instead of creating a new run.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub launch_provenance: Option<ScheduledJobLaunchProvenance>,
     pub created_at: DateTime<Utc>,
     pub last_fired_at: Option<DateTime<Utc>>,
     pub next_fire_at: Option<DateTime<Utc>>,
-    /// Explicit recovery policy for overdue jobs. `RunOnceNow` preserves the
-    /// historic behavior while avoiding implicit catch-up storms.
+    /// IANA timezone used to evaluate cron wall-clock fields. One-shot jobs use UTC.
+    pub timezone: String,
+    /// Explicit recovery policy for overdue jobs.
     #[serde(default)]
     pub misfire_policy: MisfirePolicy,
     /// Bounded retry policy for failed deliveries.
@@ -269,9 +267,6 @@ pub struct ScheduledJob {
     pub completed: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_run: Option<JobRunRecord>,
-    /// Bounded delivery history persisted with the job.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub run_history: Vec<JobRunRecord>,
     /// Free-form metadata (e.g. label, source).
     #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
     pub metadata: serde_json::Map<String, serde_json::Value>,
@@ -287,9 +282,8 @@ impl ScheduledJob {
     }
 
     /// Create a cron schedule whose wall-clock fields are evaluated in an
-    /// explicit IANA timezone. Persisting the zone in metadata keeps the wire
-    /// shape backwards compatible while making every future recomputation
-    /// (resume, update, advance, restart recovery) deterministic.
+    /// explicit IANA timezone. The timezone is persisted as part of the job so
+    /// resume, update, advance, and restart recovery are deterministic.
     pub fn new_cron_in_timezone(
         expression: impl Into<String>,
         prompt: impl Into<String>,
@@ -300,11 +294,6 @@ impl ScheduledJob {
         let timezone = parse_timezone(timezone)?;
         let now = Utc::now();
         let next = compute_next_fire(&expression, now, timezone)?;
-        let mut metadata = serde_json::Map::new();
-        metadata.insert(
-            "timezone".to_owned(),
-            serde_json::Value::String(timezone.name().to_owned()),
-        );
         Ok(Self {
             id: Uuid::new_v4(),
             kind: JobKind::Cron {
@@ -317,6 +306,7 @@ impl ScheduledJob {
             created_at: now,
             last_fired_at: None,
             next_fire_at: Some(next),
+            timezone: timezone.name().to_owned(),
             misfire_policy: MisfirePolicy::default(),
             retry_policy: RetryPolicy::default(),
             pending_delivery: None,
@@ -324,18 +314,12 @@ impl ScheduledJob {
             paused: false,
             completed: false,
             last_run: None,
-            run_history: Vec::new(),
-            metadata,
+            metadata: serde_json::Map::new(),
         })
     }
 
-    /// IANA timezone used by cron members. Rows created before timezone-aware
-    /// scheduling remain explicitly UTC for backwards compatibility.
     pub fn cron_timezone(&self) -> &str {
-        self.metadata
-            .get("timezone")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("UTC")
+        self.timezone.as_str()
     }
 
     pub fn new_once(at: DateTime<Utc>, prompt: impl Into<String>) -> Self {
@@ -348,6 +332,7 @@ impl ScheduledJob {
             created_at: Utc::now(),
             last_fired_at: None,
             next_fire_at: Some(at),
+            timezone: "UTC".to_owned(),
             misfire_policy: MisfirePolicy::default(),
             retry_policy: RetryPolicy::default(),
             pending_delivery: None,
@@ -355,7 +340,6 @@ impl ScheduledJob {
             paused: false,
             completed: false,
             last_run: None,
-            run_history: Vec::new(),
             metadata: serde_json::Map::new(),
         }
     }
@@ -530,13 +514,7 @@ impl ScheduledJob {
             session_id: result.session_id,
             failure: result.failure,
         };
-        self.last_run = Some(record.clone());
-        self.run_history.push(record);
-        const MAX_HISTORY: usize = 50;
-        if self.run_history.len() > MAX_HISTORY {
-            let excess = self.run_history.len() - MAX_HISTORY;
-            self.run_history.drain(..excess);
-        }
+        self.last_run = Some(record);
     }
 
     /// Claim the next delivery before a sink is invoked. Callers must persist
@@ -751,7 +729,7 @@ mod tests {
     };
 
     #[test]
-    fn assistant_launch_provenance_is_durable_and_backward_compatible() {
+    fn assistant_launch_provenance_is_durable() {
         let mut job = ScheduledJob::new_once(Utc::now(), "wake");
         let provenance = ScheduledJobLaunchProvenance {
             session_id: 60,
@@ -761,17 +739,22 @@ mod tests {
         };
         job.set_launch_provenance(provenance);
         let encoded = serde_json::to_value(&job).expect("encode scheduled job");
-        let decoded: ScheduledJob = serde_json::from_value(encoded.clone()).expect("decode job");
+        let decoded: ScheduledJob = serde_json::from_value(encoded).expect("decode job");
         assert_eq!(decoded.owner_session_id, Some(60));
         assert_eq!(decoded.launch_provenance, Some(provenance));
+    }
 
-        let mut legacy = encoded;
-        legacy
+    #[test]
+    fn scheduled_job_rejects_removed_per_job_run_history() {
+        let job = ScheduledJob::new_once(Utc::now(), "wake");
+        let mut encoded = serde_json::to_value(job).expect("encode scheduled job");
+        encoded
             .as_object_mut()
-            .expect("job object")
-            .remove("launch_provenance");
-        let decoded: ScheduledJob = serde_json::from_value(legacy).expect("decode legacy job");
-        assert_eq!(decoded.launch_provenance, None);
+            .expect("scheduled job is an object")
+            .insert("run_history".to_owned(), serde_json::json!([]));
+        let error = serde_json::from_value::<ScheduledJob>(encoded)
+            .expect_err("removed run_history field must be rejected");
+        assert!(error.to_string().contains("unknown field `run_history`"));
     }
 
     #[test]
@@ -816,14 +799,13 @@ mod tests {
     }
 
     #[test]
-    fn terminal_jobs_retain_bounded_delivery_history() {
+    fn terminal_jobs_retain_the_last_delivery() {
         let now = Utc::now();
         let mut job = ScheduledJob::new_once(now, "once");
         job.record_delivery(now, JobDeliveryResult::submitted(Some(9)));
         assert_eq!(job.advance(now).expect("advance"), JobOutcome::Expired);
         assert!(job.completed);
         assert!(!job.due(now + Duration::seconds(1)));
-        assert_eq!(job.run_history.len(), 1);
         assert_eq!(
             job.last_run.as_ref().and_then(|run| run.session_id),
             Some(9)
@@ -870,9 +852,10 @@ mod tests {
             JobOutcome::Expired
         );
         assert!(job.completed);
-        assert_eq!(job.run_history.len(), 2);
-        assert_eq!(job.run_history[0].status, JobRunStatus::Failed);
-        assert_eq!(job.run_history[1].status, JobRunStatus::Submitted);
+        assert_eq!(
+            job.last_run.as_ref().map(|run| run.status),
+            Some(JobRunStatus::Submitted)
+        );
     }
 
     #[test]

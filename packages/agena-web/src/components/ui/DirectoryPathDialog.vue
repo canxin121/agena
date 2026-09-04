@@ -39,7 +39,7 @@ const confirmButtonDisabled = computed(() => {
 })
 
 const browserLayoutClass = computed(() =>
-  ui.isMobilePointer
+  ui.isCompactTouch
     ? 'flex h-full min-h-0 flex-col'
     : 'flex h-[min(56dvh,34rem)] min-h-[14rem] flex-col',
 )

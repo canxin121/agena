@@ -215,7 +215,6 @@ const redirectUriOptions = [
 ]
 
 const defaultRedirectUri = 'http://localhost:1455/auth/callback'
-const legacyRedirectUris = new Set(['http://127.0.0.1:1455/callback', 'http://127.0.0.1:1455/auth/callback'])
 
 const awsProfiles = ref<string[]>(['default'])
 
@@ -303,21 +302,7 @@ function record(value: unknown): LooseRecord {
 }
 
 function canonicalizeModelConfig(value: JsonValue): LooseRecord {
-  const next = record(clone(value))
-  const legacyCapabilities = record(next.capabilities)
-
-  // ResolvedProviderModelConfig flattens ModelCapabilityPatch. Accept the
-  // old nested shape when a user pastes it into the advanced editor, but
-  // always write the canonical top-level fields back out.
-  for (const key of ['features', 'input']) {
-    if (next[key] === undefined && legacyCapabilities[key] !== undefined) {
-      next[key] = clone(legacyCapabilities[key])
-    }
-    delete legacyCapabilities[key]
-  }
-  if (Object.keys(legacyCapabilities).length === 0) delete next.capabilities
-  else next.capabilities = legacyCapabilities
-  return next
+  return record(clone(value))
 }
 
 function authMessageText(value: JsonValue): string {
@@ -627,7 +612,7 @@ function normalizeDraftShape(value: ProviderConfigDraft): ProviderConfigDraft {
   const gitlab = (next.credential_drafts.gitlab = record(next.credential_drafts.gitlab))
 
   const openaiRedirect = String(openai.redirect_uri || '').trim()
-  if (!openaiRedirect || legacyRedirectUris.has(openaiRedirect)) openai.redirect_uri = defaultRedirectUri
+  if (!openaiRedirect) openai.redirect_uri = defaultRedirectUri
   if (!String(gitlab.redirect_uri || '').trim()) gitlab.redirect_uri = defaultRedirectUri
 
   const mode = authKindMode(next.auth_kind)
@@ -1487,9 +1472,7 @@ function modelPathValue(key: string): any {
 }
 
 function modelCapabilityValue(key: 'features' | 'input'): { supported: string[]; unsupported: string[] } {
-  const direct = modelValue.value?.[key]
-  const legacy = modelValue.value?.capabilities?.[key]
-  const value = direct ?? legacy
+  const value = modelValue.value?.[key]
   if (Array.isArray(value)) return { supported: value.map(String), unsupported: [] }
   const object = record(value)
   return {
@@ -1613,12 +1596,6 @@ function setModelFieldValue(key: string, value: string | number | boolean) {
         setModelPath(next, key, unsupported.length ? { supported: tokens, unsupported } : tokens)
       } else {
         deleteModelPath(next, key)
-      }
-      // The configured model schema keeps these fields at the top level. A
-      // legacy capabilities wrapper is accepted on read, but never emitted.
-      if (next.capabilities && typeof next.capabilities === 'object') {
-        next.capabilities = { ...next.capabilities }
-        delete next.capabilities[key]
       }
     } else if (tokens.length) {
       setModelPath(next, key, tokens)

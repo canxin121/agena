@@ -310,7 +310,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     CommandSpec {
         id: CommandId::Paste,
         name: "paste",
-        aliases: &["clipboard", "paste-image"],
+        aliases: &["clipboard"],
         arguments: "",
         summary_key: "command-paste-summary",
     },
@@ -513,14 +513,6 @@ mod tests {
         let alias = parse_command("/dl notes.txt").expect("download alias");
         assert_eq!(alias.spec.id, CommandId::Download);
         assert_eq!(alias.args, "notes.txt");
-    }
-
-    #[test]
-    fn legacy_paste_image_alias_targets_the_clipboard_paste_command() {
-        let command = parse_command("/paste-image").expect("paste-image alias");
-        assert_eq!(command.spec.id, CommandId::Paste);
-        assert_eq!(command.spec.name, "paste");
-        assert!(command.args.is_empty());
     }
 
     #[test]

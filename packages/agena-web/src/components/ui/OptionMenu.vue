@@ -50,7 +50,7 @@ const props = withDefaults(
     searchPlaceholder?: string
     emptyText?: string
     helperText?: string
-    isMobilePointer?: boolean
+    isCompactTouch?: boolean
     closeLabel?: string
     desktopPlacement?: 'top-start' | 'top-end' | 'bottom-start' | 'bottom-end'
     desktopClass?: string
@@ -85,7 +85,7 @@ const props = withDefaults(
     searchPlaceholder: '',
     emptyText: '',
     helperText: '',
-    isMobilePointer: false,
+    isCompactTouch: false,
     closeLabel: '',
     desktopPlacement: 'bottom-start',
     desktopClass: 'w-64',
@@ -144,7 +144,7 @@ const collapsedGroupByKey = ref<Record<string, boolean>>({})
 const currentPage = ref(1)
 const localRefreshing = ref(false)
 
-const isMobileSheet = computed(() => Boolean(props.isMobilePointer))
+const isMobileSheet = computed(() => Boolean(props.isCompactTouch))
 const normalizedQuery = computed(() =>
   String(props.query || '')
     .trim()

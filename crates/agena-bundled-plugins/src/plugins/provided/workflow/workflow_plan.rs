@@ -514,25 +514,8 @@ impl WorkflowPlugin {
     pub(in crate::plugins::provided::workflow) fn plan_payload(
         plan: &WorkflowPlan,
     ) -> SdkResult<serde_json::Value> {
-        serde_json::to_value(serde_json::json!({ "plan": Self::plan_without_legacy_ids(plan) }))
+        serde_json::to_value(serde_json::json!({ "plan": plan }))
             .map_err(|err| PluginError::internal_error(&err))
-    }
-
-    /// Clone the plan with any legacy step/check identifiers stripped so tool
-    /// payloads never surface the old database-key style ids. New plans already
-    /// carry `None`, so this only affects plans persisted before the ids were
-    /// removed.
-    pub(in crate::plugins::provided::workflow) fn plan_without_legacy_ids(
-        plan: &WorkflowPlan,
-    ) -> WorkflowPlan {
-        let mut plan = plan.clone();
-        for step in &mut plan.steps {
-            step.id = None;
-            for checkpoint in &mut step.checkpoints {
-                checkpoint.id = None;
-            }
-        }
-        plan
     }
 
     pub(in crate::plugins::provided::workflow) fn validate_plan_objective(
@@ -590,14 +573,12 @@ impl WorkflowPlugin {
                         )));
                     }
                     Ok(WorkflowPlanCheckpoint {
-                        id: None,
                         text: text.to_string(),
                         status: checkpoint.status.unwrap_or_default(),
                     })
                 })
                 .collect::<SdkResult<Vec<_>>>()?;
             steps.push(WorkflowPlanStep {
-                id: None,
                 title: resolved_title.to_string(),
                 description: description.to_string(),
                 executor: step.executor,
@@ -929,17 +910,16 @@ impl WorkflowPlugin {
         plan: &WorkflowPlan,
         view: PlanGetView,
     ) -> serde_json::Value {
-        let plan = Self::plan_without_legacy_ids(plan);
-        match Self::next_actionable_step(&plan) {
+        match Self::next_actionable_step(plan) {
             Some((index, step)) => serde_json::json!({
-                "plan": &plan,
+                "plan": plan,
                 "view": view,
                 "current_step": step,
                 "current_step_index": index,
                 "current_step_goal": Self::step_goal(step),
             }),
             None => serde_json::json!({
-                "plan": &plan,
+                "plan": plan,
                 "view": view,
                 "current_step": serde_json::Value::Null,
                 "current_step_goal": serde_json::Value::Null,
@@ -1395,7 +1375,7 @@ impl WorkflowPlugin {
             Self::plan_output_text(format!("Plan review decision: {decision}.").as_str(), &plan)
         };
         let payload = serde_json::json!({
-            "plan": Self::plan_without_legacy_ids(&plan),
+            "plan": &plan,
             "decision": decision,
         });
         Ok(ToolInvokeOutput::from_parts(

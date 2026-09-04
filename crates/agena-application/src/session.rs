@@ -190,7 +190,6 @@ pub fn validate_input_document(document: &ComposerDocument) -> Result<(), Applic
     }
     let mut resources = 0usize;
     let mut skills = 0usize;
-    let mut skill_bytes = 0usize;
     for node in &document.0 {
         let ComposerNode::Activity { activity } = node else {
             continue;
@@ -245,12 +244,6 @@ pub fn validate_input_document(document: &ComposerDocument) -> Result<(), Applic
                         "The skill reference is incomplete.",
                     ));
                 }
-                if skill.instructions.len() > 64 * 1024 {
-                    return Err(ApplicationError::bad_request(
-                        "The legacy skill instructions exceed the 64 KiB limit.",
-                    ));
-                }
-                skill_bytes = skill_bytes.saturating_add(skill.instructions.len());
             }
             ActivityPayload::TextArtifact(artifact) => {
                 if artifact.text.is_empty() {
@@ -271,7 +264,7 @@ pub fn validate_input_document(document: &ComposerDocument) -> Result<(), Applic
             "A message cannot contain more than 8 attachments.",
         ));
     }
-    if skills > 8 || skill_bytes > 256 * 1024 {
+    if skills > 8 {
         return Err(ApplicationError::bad_request(
             "The skill references exceed the per-message limit.",
         ));

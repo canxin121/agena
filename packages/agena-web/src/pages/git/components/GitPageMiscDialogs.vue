@@ -11,7 +11,7 @@ const { t } = useI18n()
 
 const props = defineProps<{
   repoRoot: string | null
-  isMobilePointer: boolean
+  isCompactTouch: boolean
   actionsAnchorEl?: HTMLElement | null
   committing: boolean
   commitNoVerify: boolean
@@ -547,11 +547,11 @@ function runSourceControlAction(item: OptionMenuItem) {
     :mobile-title="t('git.ui.sourceControlActions')"
     :searchable="true"
     desktop-placement="bottom-end"
-    :desktop-fixed="!props.isMobilePointer"
+    :desktop-fixed="!props.isCompactTouch"
     :desktop-anchor-el="props.actionsAnchorEl ?? null"
     :search-placeholder="t('common.searchActions')"
     :empty-text="t('common.noActionsFound')"
-    :is-mobile-pointer="props.isMobilePointer"
+    :is-compact-touch="props.isCompactTouch"
     :paginated="true"
     :page-size="20"
     pagination-mode="group"

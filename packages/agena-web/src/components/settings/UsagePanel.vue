@@ -7,7 +7,7 @@ import { apiJson } from '@/lib/api'
 import { settingsText as st } from '@/i18n/settingsText'
 
 type UsageTotals = {
-  runs: number
+  requests: number
   sessions: number
   input_tokens: number
   output_tokens: number
@@ -17,7 +17,7 @@ type UsageTotals = {
   total_cost_usd: number
   recorded_cost_usd: number
   estimated_cost_usd: number
-  unpriced_runs: number
+  unpriced_requests: number
 }
 
 type UsageBreakdown = UsageTotals & {
@@ -36,8 +36,8 @@ type UsageStats = {
   to?: string | null
   totals: UsageTotals
   active_days: number
-  average_cost_per_run_usd: number
-  average_tokens_per_run: number
+  average_cost_per_request_usd: number
+  average_tokens_per_request: number
   peak_cost_date?: string | null
   peak_cost_usd: number
   peak_tokens_date?: string | null
@@ -159,7 +159,7 @@ onMounted(() => {
       <dl class="grid grid-cols-2 gap-x-6 gap-y-4 border-y border-border/60 py-4 sm:grid-cols-4">
         <div>
           <dt class="text-xs text-muted-foreground">{{ $st('Requests') }}</dt>
-          <dd class="mt-1 font-mono text-lg font-semibold tabular-nums">{{ formatInteger(stats.totals.runs) }}</dd>
+          <dd class="mt-1 font-mono text-lg font-semibold tabular-nums">{{ formatInteger(stats.totals.requests) }}</dd>
         </div>
         <div>
           <dt class="text-xs text-muted-foreground">{{ $st('Sessions') }}</dt>
@@ -195,7 +195,7 @@ onMounted(() => {
         <div>
           <div class="text-xs text-muted-foreground">{{ $st('Average per request') }}</div>
           <div class="mt-1 font-mono text-sm">
-            {{ formatInteger(stats.average_tokens_per_run) }} · {{ formatUsd(stats.average_cost_per_run_usd) }}
+            {{ formatInteger(stats.average_tokens_per_request) }} · {{ formatUsd(stats.average_cost_per_request_usd) }}
           </div>
         </div>
       </div>
@@ -228,7 +228,7 @@ onMounted(() => {
                     {{ rowLabel(section.key, row) }}
                   </td>
                   <td class="whitespace-nowrap px-3 py-2 text-right font-mono tabular-nums">
-                    {{ formatInteger(row.runs) }}
+                    {{ formatInteger(row.requests) }}
                   </td>
                   <td class="whitespace-nowrap px-3 py-2 text-right font-mono tabular-nums">
                     {{ formatInteger(row.total_tokens) }}

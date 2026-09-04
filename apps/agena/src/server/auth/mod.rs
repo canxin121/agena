@@ -77,18 +77,6 @@ pub(crate) struct CreateSessionBody {
     password: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct AuthErrorBody {
-    error: String,
-    #[serde(skip_serializing_if = "is_false")]
-    locked: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    code: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    retry_after_seconds: Option<i64>,
-}
-
 fn is_false(value: &bool) -> bool {
     !*value
 }
@@ -498,12 +486,9 @@ pub(crate) async fn auth_session_create(
     match &state.ui_auth {
         UiAuth::Disabled => (
             StatusCode::BAD_REQUEST,
-            Json(AuthErrorBody {
-                error: "UI password not configured".to_string(),
-                locked: false,
-                code: Some("auth_disabled".to_string()),
-                retry_after_seconds: None,
-            }),
+            Json(agena_api::ApiError::bad_request(
+                "UI password authentication is not configured.",
+            )),
         )
             .into_response(),
         UiAuth::Enabled(inner) => {
@@ -515,15 +500,9 @@ pub(crate) async fn auth_session_create(
             {
                 return (
                     StatusCode::TOO_MANY_REQUESTS,
-                    Json(AuthErrorBody {
-                        error: format!(
-                            "Too many failed login attempts. Try again in {} seconds",
-                            retry_after_seconds
-                        ),
-                        locked: true,
-                        code: Some("auth_rate_limited".to_string()),
-                        retry_after_seconds: Some(retry_after_seconds),
-                    }),
+                    Json(agena_api::ApiError::rate_limited(format!(
+                        "Too many failed login attempts. Try again in {retry_after_seconds} seconds."
+                    ))),
                 )
                     .into_response();
             }
@@ -534,27 +513,18 @@ pub(crate) async fn auth_session_create(
                 {
                     return (
                         StatusCode::TOO_MANY_REQUESTS,
-                        Json(AuthErrorBody {
-                            error: format!(
-                                "Too many failed login attempts. Try again in {} seconds",
-                                retry_after_seconds
-                            ),
-                            locked: true,
-                            code: Some("auth_rate_limited".to_string()),
-                            retry_after_seconds: Some(retry_after_seconds),
-                        }),
+                        Json(agena_api::ApiError::rate_limited(format!(
+                            "Too many failed login attempts. Try again in {retry_after_seconds} seconds."
+                        ))),
                     )
                         .into_response();
                 }
 
                 return (
                     StatusCode::UNAUTHORIZED,
-                    Json(AuthErrorBody {
-                        error: "Invalid password".to_string(),
-                        locked: true,
-                        code: Some("auth_invalid_password".to_string()),
-                        retry_after_seconds: None,
-                    }),
+                    Json(agena_api::ApiError::invalid_credentials(
+                        "The server password is incorrect.",
+                    )),
                 )
                     .into_response();
             }
@@ -608,12 +578,9 @@ pub(crate) async fn require_ui_auth(
 
             (
                 StatusCode::UNAUTHORIZED,
-                Json(AuthErrorBody {
-                    error: "UI authentication required".to_string(),
-                    locked: true,
-                    code: Some("auth_required".to_string()),
-                    retry_after_seconds: None,
-                }),
+                Json(agena_api::ApiError::authentication_required(
+                    "UI authentication is required. Sign in with the server password or token.",
+                )),
             )
                 .into_response()
         }

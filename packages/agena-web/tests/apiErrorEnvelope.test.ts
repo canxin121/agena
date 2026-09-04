@@ -30,7 +30,7 @@ test('apiJson exposes Agena problem fallback and code', async () => {
   }
 })
 
-test('apiJson retains legacy desktop-host error and hint envelopes', async () => {
+test('apiJson preserves current Workbench error and hint envelopes', async () => {
   const originalFetch = globalThis.fetch
   globalThis.fetch = (async () =>
     new Response(JSON.stringify({ error: 'File write failed', code: 'fs_write', hint: 'Check permissions.' }), {
@@ -39,7 +39,7 @@ test('apiJson retains legacy desktop-host error and hint envelopes', async () =>
     })) as typeof fetch
 
   try {
-    await assert.rejects(apiJson('/api/fs/write'), (error: unknown) => {
+    await assert.rejects(apiJson('/api/v1/workbench/fs/write'), (error: unknown) => {
       assert.ok(error instanceof ApiError)
       assert.equal(error.code, 'fs_write')
       assert.equal(error.hint, 'Check permissions.')

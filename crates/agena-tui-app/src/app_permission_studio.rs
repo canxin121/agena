@@ -443,26 +443,6 @@ impl App {
                 );
                 false
             }
-            SettingsPickerAction::ToggleMcpClientRegistration => {
-                self.dispatch_backend_operation(
-                    |application| async move { application.toggle_mcp_client_registration().await },
-                    |app, result| match result {
-                        Ok(value) => {
-                            let policy = value
-                                .get("clientRegistration")
-                                .and_then(serde_json::Value::as_str)
-                                .unwrap_or("cimd_only");
-                            app.flash_success(app.i18n.text_args(
-                                "settings-mcp-client-registration-updated",
-                                &agena_tui::fl_args!("policy" => policy.to_owned()),
-                            ));
-                            app.refresh_current_route_after_local_edit();
-                        }
-                        Err(error) => app.flash_error(error),
-                    },
-                );
-                false
-            }
             SettingsPickerAction::EditMcpPublicUrl => {
                 self.open_settings_field_editor(
                     SettingsFieldSpec {

@@ -45,8 +45,8 @@ fn fold_billable_units(
 }
 
 fn fold_model_cost(summary: &mut ModelCostBreakdown, usage: &CompletionUsage) {
-    summary.runs = summary
-        .runs
+    summary.requests = summary
+        .requests
         .saturating_add(usage.requests.max(u64::from(usage.has_own_usage())));
     summary.input_tokens = summary.input_tokens.saturating_add(usage.input_tokens);
     summary.output_tokens = summary.output_tokens.saturating_add(usage.output_tokens);
@@ -77,7 +77,9 @@ fn fold_model_cost(summary: &mut ModelCostBreakdown, usage: &CompletionUsage) {
     summary.total_cost_usd += cost.total_cost_usd;
     summary.recorded_cost_usd += cost.recorded_cost_usd;
     summary.estimated_cost_usd += cost.estimated_cost_usd;
-    summary.unpriced_runs = summary.unpriced_runs.saturating_add(cost.unpriced_runs);
+    summary.unpriced_requests = summary
+        .unpriced_requests
+        .saturating_add(cost.unpriced_requests);
     fold_billable_units(&mut summary.billable_units, usage);
 }
 
@@ -87,8 +89,8 @@ fn fold_session_cost(
     model_id: &str,
     usage: &CompletionUsage,
 ) {
-    summary.runs = summary
-        .runs
+    summary.requests = summary
+        .requests
         .saturating_add(usage.requests.max(u64::from(usage.has_own_usage())));
     summary.input_tokens = summary.input_tokens.saturating_add(usage.input_tokens);
     summary.output_tokens = summary.output_tokens.saturating_add(usage.output_tokens);
@@ -115,7 +117,9 @@ fn fold_session_cost(
     summary.total_cost_usd += cost.total_cost_usd;
     summary.recorded_cost_usd += cost.recorded_cost_usd;
     summary.estimated_cost_usd += cost.estimated_cost_usd;
-    summary.unpriced_runs = summary.unpriced_runs.saturating_add(cost.unpriced_runs);
+    summary.unpriced_requests = summary
+        .unpriced_requests
+        .saturating_add(cost.unpriced_requests);
     fold_billable_units(&mut summary.billable_units, usage);
 }
 

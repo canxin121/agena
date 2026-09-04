@@ -198,10 +198,6 @@ pub use agena_runtime_session::{
     SessionExecutionControlError,
 };
 pub use agena_runtime_session::{
-    RuntimeLivePresentationSubscription, RuntimeLivePresentationSubscriptionItem,
-    RuntimePresentationEvent, RuntimePresentationEventKind, RuntimePresentationEventMeta,
-};
-pub use agena_runtime_session::{
     SessionCreateRequest, SessionExecutionReplyRequest, SessionExecutionRequest,
     SessionForkRequest, SessionPermissionReplyRequest, SessionRewindRequest, SessionRunOptions,
     SessionUserRunRequest,
@@ -347,7 +343,7 @@ pub use runtime_draft_authentication_service::{
     start_openai_draft_auth_device,
 };
 pub use runtime_status_service::{
-    RuntimeLspServerStatus, RuntimeLspStatus, RuntimeMcpCredentialMigration, RuntimeMcpOAuthHealth,
+    RuntimeLspServerStatus, RuntimeLspStatus, RuntimeMcpCredentialConflict, RuntimeMcpOAuthHealth,
     RuntimeMcpServerStatus, RuntimeMcpStatus, RuntimeSkillStatus, RuntimeSkillsStatus,
     RuntimeStatusService, RuntimeStatusSnapshot,
 };

@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
 use crate::commands::CommandSpec;
@@ -303,16 +303,6 @@ pub(crate) struct TranscriptState {
     /// assistant run. The renderers keep the newest few visible by default;
     /// repeated expansion reveals another bounded chunk.
     pub(crate) activity_summary_visible_counts: BTreeMap<TranscriptNodeKey, usize>,
-    /// Operation Activity ids whose detail the user has expanded. Live
-    /// streaming deltas are only applied to these — collapsing an Activity
-    /// removes it, so computation and transfer for its detail stop.
-    pub(crate) expanded_operation_activity_ids: BTreeSet<agena_domain::ActivityId>,
-    /// Live activity-v2 overlays driven by `ActivityLiveEvent`s. Pure
-    /// in-memory presentation state: never part of the persisted snapshot
-    /// and cleared when the session resets. Each entry carries the terminal
-    /// state-node fields plus merged live `ViewBlock`s for expanded
-    /// rendering (07 §5.2).
-    pub(crate) v2_activities: BTreeMap<agena_domain::ActivityId, V2LiveActivity>,
     /// Live selection snapshots for pending user-input interaction parts,
     /// keyed by `request_id`. The App projects these from its
     /// `UserInputPresentation` state (selected option, custom draft, answer
@@ -336,18 +326,6 @@ pub(crate) struct TranscriptCache {
     pub(crate) transcript_folds: Vec<agena_api::live::SessionTranscriptFoldResource>,
     pub(crate) node_expansions: BTreeMap<TranscriptNodeKey, bool>,
     pub(crate) activity_summary_visible_counts: BTreeMap<TranscriptNodeKey, usize>,
-    pub(crate) expanded_operation_activity_ids: BTreeSet<agena_domain::ActivityId>,
-}
-
-/// A live activity-v2 overlay entry. Activity-v2 events are broadcast in
-/// memory only, so the live detail is owned here and merged from
-/// `ActivityLiveEvent::DetailDelta` blocks.
-#[derive(Debug, Clone)]
-pub(crate) struct V2LiveActivity {
-    pub(crate) activity_id: agena_domain::ActivityId,
-    pub(crate) title: String,
-    pub(crate) state: agena_domain::ActivityState,
-    pub(crate) live_blocks: Vec<agena_domain::ViewBlock>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

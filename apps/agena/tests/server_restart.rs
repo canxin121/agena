@@ -573,10 +573,14 @@ async fn wait_for_execution(
 ) -> SessionExecutionResource {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
     loop {
-        let execution = client
-            .get_session_state_with_parts(session_id, true)
+        let mut execution = client
+            .get_session_state(session_id)
             .await
             .expect("read process-test session state");
+        execution.parts = client
+            .session_all_parts(session_id)
+            .await
+            .expect("read process-test session parts");
         if predicate(&execution) {
             return execution;
         }
@@ -718,10 +722,14 @@ async fn killed_server_restarts_with_interrupted_then_reconciled_session() {
         "the restarted server must publish the stale run as interrupted before opening it"
     );
 
-    let reconciled = client_b
-        .get_session_state_with_parts(session.id, true)
+    let mut reconciled = client_b
+        .get_session_state(session.id)
         .await
         .expect("open and reconcile interrupted session");
+    reconciled.parts = client_b
+        .session_all_parts(session.id)
+        .await
+        .expect("read reconciled session parts");
     assert!(matches!(
         reconciled.session.state,
         SessionState::Ready { .. }

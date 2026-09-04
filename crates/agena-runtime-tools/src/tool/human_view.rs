@@ -1155,7 +1155,6 @@ impl BuiltinHumanRenderer {
                             .map(Self::compact_timestamp)
                             .unwrap_or_default()
                     ),
-                    json!(job.run_count),
                     json!(Self::bounded_generic_text(&job.prompt)),
                     json!(failure),
                 ]
@@ -1164,7 +1163,7 @@ impl BuiltinHumanRenderer {
     }
 
     fn cron_columns() -> Vec<&'static str> {
-        vec!["ID", "Schedule", "Status", "Next", "Runs", "Task", "Issue"]
+        vec!["ID", "Schedule", "Status", "Next", "Task", "Issue"]
     }
 
     /// ISO timestamps are useful in the raw result but too wide for a table
@@ -7026,7 +7025,6 @@ mod tests {
                     "completed": false,
                     "misfire_policy": "skip",
                     "retry_max_attempts": 1,
-                    "run_count": 2
                 }]
             })),
             ..RawOutput::default()

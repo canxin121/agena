@@ -81,7 +81,7 @@ pub(super) struct ServerMcpBackend {
 fn mcp_tool_is_exposed(tool: &OperatorToolResource) -> bool {
     is_stateless_mcp_tool_exposed(StatelessMcpToolMetadata {
         name: tool.name.as_str(),
-        plugin_id: tool.plugin_id.as_deref(),
+        plugin_id: Some(tool.plugin_id.as_str()),
         interactive: tool.interactive,
         task: tool.task,
     })
@@ -333,10 +333,17 @@ impl ServerSessionClient {
     }
 
     async fn execution(&self, session_id: i64) -> Result<SessionExecutionResource, AppError> {
-        self.client
-            .get_session_state_with_parts(session_id, true)
+        let mut execution = self
+            .client
+            .get_session_state(session_id)
             .await
-            .map_err(|error| client_error("failed to read session from server", error))
+            .map_err(|error| client_error("failed to read session from server", error))?;
+        execution.parts = self
+            .client
+            .session_all_parts(session_id)
+            .await
+            .map_err(|error| client_error("failed to read session parts from server", error))?;
+        Ok(execution)
     }
 }
 
@@ -2509,7 +2516,7 @@ mod tests {
             destructive: false,
             open_world: false,
             task: false,
-            plugin_id: plugin_id.map(str::to_owned),
+            plugin_id: plugin_id.unwrap_or("test.unclassified").to_owned(),
         }
     }
 

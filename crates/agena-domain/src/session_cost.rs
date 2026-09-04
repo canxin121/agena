@@ -7,7 +7,7 @@ use crate::UsageBillableUnitTotal;
 pub struct ModelCostBreakdown {
     pub provider_id: String,
     pub model_id: String,
-    pub runs: u64,
+    pub requests: u64,
     pub input_tokens: u64,
     pub output_tokens: u64,
     pub reasoning_tokens: u64,
@@ -20,7 +20,7 @@ pub struct ModelCostBreakdown {
     pub total_cost_usd: f64,
     pub recorded_cost_usd: f64,
     pub estimated_cost_usd: f64,
-    pub unpriced_runs: u64,
+    pub unpriced_requests: u64,
     pub billable_units: Vec<UsageBillableUnitTotal>,
 }
 
@@ -48,7 +48,7 @@ impl ModelCostBreakdown {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 /// Aggregated cost summary for a session.
 pub struct SessionCostSummary {
-    pub runs: u64,
+    pub requests: u64,
     pub input_tokens: u64,
     pub output_tokens: u64,
     pub reasoning_tokens: u64,
@@ -61,7 +61,7 @@ pub struct SessionCostSummary {
     pub total_cost_usd: f64,
     pub recorded_cost_usd: f64,
     pub estimated_cost_usd: f64,
-    pub unpriced_runs: u64,
+    pub unpriced_requests: u64,
     pub billable_units: Vec<UsageBillableUnitTotal>,
     pub by_model: Vec<ModelCostBreakdown>,
 }
@@ -87,7 +87,7 @@ impl SessionCostSummary {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.runs == 0
+        self.requests == 0
     }
 
     pub fn one_line(&self) -> String {
@@ -98,7 +98,7 @@ impl SessionCostSummary {
             .cache_write_tokens
             .saturating_add(self.cache_read_tokens);
         format!(
-            "{} in{} + {} out{} = {} tokens{} · ${:.4} over {} run{}",
+            "{} in{} + {} out{} = {} tokens{} · ${:.4} over {} request{}",
             format_count(self.input_tokens),
             if cache_tokens > 0 {
                 format!(" + {} cache", format_count(cache_tokens))
@@ -118,8 +118,8 @@ impl SessionCostSummary {
                 String::new()
             },
             self.total_cost_usd,
-            self.runs,
-            if self.runs == 1 { "" } else { "s" },
+            self.requests,
+            if self.requests == 1 { "" } else { "s" },
         )
     }
 }
@@ -151,7 +151,7 @@ mod tests {
     #[test]
     fn one_line_formats_summary_without_core_message_types() {
         let summary = SessionCostSummary {
-            runs: 2,
+            requests: 2,
             input_tokens: 1_200,
             output_tokens: 34,
             cache_read_tokens: 50,
@@ -161,7 +161,7 @@ mod tests {
 
         assert_eq!(
             summary.one_line(),
-            "1,200 in + 50 cache + 34 out = 1,284 tokens · 4.0% cache hit · $0.1234 over 2 runs"
+            "1,200 in + 50 cache + 34 out = 1,284 tokens · 4.0% cache hit · $0.1234 over 2 requests"
         );
     }
 }

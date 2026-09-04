@@ -19,7 +19,7 @@ interface Props {
   tooltip?: string
   disableTooltip?: boolean
   isTouchPointer?: boolean
-  isMobilePointer?: boolean
+  isCompactTouch?: boolean
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -39,7 +39,7 @@ const coarsePointer = computed(() => {
 })
 
 const isTouchPointer = computed(
-  () => props.isTouchPointer ?? (props.isMobilePointer === true ? true : coarsePointer.value),
+  () => props.isTouchPointer ?? (props.isCompactTouch === true ? true : coarsePointer.value),
 )
 
 defineExpose({

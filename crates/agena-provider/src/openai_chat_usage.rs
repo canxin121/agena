@@ -128,7 +128,6 @@ pub fn chat_usage_to_completion(usage: ChatUsage) -> CompletionUsage {
         reasoning_tokens,
         cache_write_tokens,
         cache_read_tokens,
-        total_cost: recorded_cost.unwrap_or_default(),
         recorded_cost: recorded_cost.unwrap_or_default(),
         recorded_cost_available: recorded_cost.is_some(),
         ..CompletionUsage::default()

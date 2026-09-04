@@ -1,7 +1,7 @@
 import { computed, watch, type ComputedRef, type Ref } from 'vue'
 
 import { directoryEntryLabel, includesQuery } from '@/features/sessions/model/labels'
-import type { DirectoryEntry, Project } from '@/features/sessions/model/types'
+import type { DirectoryEntry } from '@/features/sessions/model/types'
 import type { JsonValue as JsonLike } from '@/types/json'
 
 function asRecord(value: JsonLike): Record<string, JsonLike> {
@@ -28,7 +28,7 @@ export function normalizeDirectories(raw: JsonLike): DirectoryEntry[] {
     .filter((p) => Boolean(p.id) && Boolean(p.path))
 }
 
-export function normalizeProjects(raw: JsonLike): Project[] {
+export function normalizeProjects(raw: JsonLike): DirectoryEntry[] {
   return normalizeDirectories(raw)
 }
 
@@ -67,7 +67,7 @@ export function useSidebarDirectoryPaging(opts: {
 }
 
 export function useSidebarProjectPaging(opts: {
-  projects: ComputedRef<Project[]>
+  projects: ComputedRef<DirectoryEntry[]>
   queryNorm: ComputedRef<string>
   projectPage: Ref<number>
   pageSize: number

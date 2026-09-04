@@ -27,7 +27,7 @@ function close() {
 
 const { t } = useI18n()
 const ui = useUiStore()
-const useMobileFullscreen = computed(() => Boolean(props.mobileFullscreen && ui.isMobilePointer))
+const useMobileFullscreen = computed(() => Boolean(props.mobileFullscreen && ui.isCompactTouch))
 
 const contentClass = computed(() =>
   cn(

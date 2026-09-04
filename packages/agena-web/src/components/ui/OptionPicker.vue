@@ -31,7 +31,7 @@ const props = withDefaults(
     icon?: Component
     maxInitialOptions?: number
     desktopFixed?: boolean
-    isMobilePointer?: boolean
+    isCompactTouch?: boolean
   }>(),
   {
     emptyLabel: 'Select...',
@@ -60,7 +60,7 @@ const triggerEl = ref<HTMLElement | null>(null)
 const menuRef = ref<OptionMenuExpose | null>(null)
 const open = ref(false)
 const query = ref('')
-const effectiveIsMobilePointer = computed(() => props.isMobilePointer ?? ui.isMobilePointer)
+const effectiveIsMobilePointer = computed(() => props.isCompactTouch ?? ui.isCompactTouch)
 
 const selected = computed(() => String(props.modelValue || '').trim())
 const q = computed(() => query.value.trim().toLowerCase())
@@ -304,7 +304,7 @@ function optionLabel(opt: PickerOption): string {
       :search-placeholder="effectiveSearchPlaceholder"
       :empty-text="emptyText"
       :helper-text="helperText"
-      :is-mobile-pointer="effectiveIsMobilePointer"
+      :is-compact-touch="effectiveIsMobilePointer"
       :desktop-fixed="desktopFixed"
       :desktop-anchor-el="desktopFixed ? triggerEl : null"
       desktop-placement="bottom-start"

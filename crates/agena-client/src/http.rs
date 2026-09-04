@@ -277,8 +277,11 @@ impl AgenaClient {
         .await?;
         let value: serde_json::Value = serde_json::from_str(body.as_str())?;
         if !status.is_success() {
-            return Err(ClientError::Api(agena_api::error::ApiError::bad_request(
-                "server authentication failed. Check the configured password or token.",
+            if let Ok(api) = serde_json::from_value::<agena_api::error::ApiError>(value.clone()) {
+                return Err(ClientError::Api(api));
+            }
+            return Err(ClientError::Protocol(format!(
+                "HTTP {status} authentication error did not use the shared API envelope"
             )));
         }
         value
@@ -426,16 +429,6 @@ impl AgenaClient {
             if let Ok(api) = serde_json::from_value::<agena_api::error::ApiError>(value.clone()) {
                 return Err(ClientError::Api(api));
             }
-            if status == reqwest::StatusCode::UNAUTHORIZED
-                && value
-                    .get("code")
-                    .and_then(serde_json::Value::as_str)
-                    .is_some_and(|code| code.starts_with("auth_"))
-            {
-                return Err(ClientError::Api(agena_api::error::ApiError::bad_request(
-                    "server authentication is required. Set AGENA_SERVER_PASSWORD or AGENA_SERVER_TOKEN.",
-                )));
-            }
             return Err(ClientError::Protocol(format!(
                 "HTTP {status} error response did not use the shared API envelope"
             )));
@@ -562,16 +555,6 @@ impl AgenaClient {
         .await
     }
 
-    /// Backwards-compatible boolean helper. `true` selects full OAuth and
-    /// `false` selects anonymous mode.
-    pub async fn set_mcp_server_auth_enabled(
-        &self,
-        auth_enabled: bool,
-    ) -> Result<serde_json::Value, ClientError> {
-        self.set_mcp_server_auth_mode(if auth_enabled { "oauth" } else { "none" })
-            .await
-    }
-
     /// Configure anonymous tool execution in mixed-auth mode. `none` is the
     /// safe default; `read_only` explicitly permits permission-contract-proven
     /// read-only tools without OAuth and can expose private workspace data.
@@ -582,19 +565,6 @@ impl AgenaClient {
         self.put_json(
             "/api/v1/server/mcp",
             serde_json::json!({"anonymousAccess": anonymous_access}),
-        )
-        .await
-    }
-
-    /// Configure the OAuth client-registration surface. CIMD-only is the safe
-    /// default; `cimd_and_dcr` enables the public DCR endpoint for compatibility.
-    pub async fn set_mcp_server_client_registration(
-        &self,
-        client_registration: &str,
-    ) -> Result<serde_json::Value, ClientError> {
-        self.put_json(
-            "/api/v1/server/mcp",
-            serde_json::json!({"clientRegistration": client_registration}),
         )
         .await
     }
@@ -633,16 +603,12 @@ impl AgenaClient {
         self.delete_json("/api/v1/server/mcp/oauth/password").await
     }
 
-    /// Validate that the endpoint is a current Agena server and
-    /// return its process-lifetime identity. Legacy servers without identity
-    /// metadata are reachable but cannot participate in safe discovery.
+    /// Validate the endpoint protocol and return its process-lifetime identity.
     pub async fn server_identity(
         &self,
     ) -> Result<agena_api::resource::ServerIdentityResource, ClientError> {
         let health = self.health().await?;
-        let server = health.server.ok_or_else(|| {
-            ClientError::Protocol("the endpoint does not expose a server identity".to_owned())
-        })?;
+        let server = health.server;
         if server.protocol_version != agena_api::PROTOCOL_VERSION {
             return Err(ClientError::Protocol(format!(
                 "server protocol {} is incompatible with client protocol {}",
@@ -1501,20 +1467,8 @@ impl AgenaClient {
         &self,
         session_id: i64,
     ) -> Result<SessionExecutionResource, ClientError> {
-        self.get_session_state_with_parts(session_id, false).await
-    }
-
-    /// Fetch the bounded execution shell. Transcript history is deliberately
-    /// omitted unless a caller explicitly opts into the legacy full snapshot.
-    pub async fn get_session_state_with_parts(
-        &self,
-        session_id: i64,
-        include_parts: bool,
-    ) -> Result<SessionExecutionResource, ClientError> {
-        self.get_json(&format!(
-            "/api/v1/sessions/{session_id}/state?include_parts={include_parts}"
-        ))
-        .await
+        self.get_json(&format!("/api/v1/sessions/{session_id}/state"))
+            .await
     }
 
     pub async fn session_cost_summary(
@@ -1595,14 +1549,6 @@ impl AgenaClient {
         self.parse_json(response).await
     }
 
-    pub async fn session_parts(
-        &self,
-        session_id: i64,
-    ) -> Result<agena_api::live::SessionPartsResource, ClientError> {
-        self.get_json(&format!("/api/v1/sessions/{session_id}/parts"))
-            .await
-    }
-
     /// Fetch one tool-call detail section. Transcript snapshots intentionally
     /// omit the collapsed raw sections, so callers should request this only
     /// when the corresponding disclosure row is opened.
@@ -1641,6 +1587,40 @@ impl AgenaClient {
             .send_request(reqwest::Method::GET, url, None, None)
             .await?;
         self.parse_json(response).await
+    }
+
+    /// Fetch the complete visible part history through the current bounded
+    /// cursor-paged parts API. Pages are returned newest-first by cursor but
+    /// each page is chronological, so page order is reversed before flattening.
+    pub async fn session_all_parts(
+        &self,
+        session_id: i64,
+    ) -> Result<Vec<agena_api::resource::SessionTranscriptPart>, ClientError> {
+        let mut cursor: Option<String> = None;
+        let mut pages = Vec::new();
+        loop {
+            let page = self
+                .session_parts_page(session_id, 200, cursor.as_deref())
+                .await?;
+            let next_cursor = page.page.next_cursor.clone();
+            pages.push(page.parts);
+            if !page.page.has_more {
+                break;
+            }
+            let next_cursor = next_cursor.ok_or_else(|| {
+                ClientError::Protocol(
+                    "parts page reported has_more without a next cursor".to_owned(),
+                )
+            })?;
+            if cursor.as_deref() == Some(next_cursor.as_str()) {
+                return Err(ClientError::Protocol(
+                    "parts pagination cursor did not advance".to_owned(),
+                ));
+            }
+            cursor = Some(next_cursor);
+        }
+        pages.reverse();
+        Ok(pages.into_iter().flatten().map(Into::into).collect())
     }
 
     /// Fetch one presentation-oriented transcript page. The server skips
@@ -2805,11 +2785,9 @@ mod sse_contract_tests {
         {
             return (
                 StatusCode::UNAUTHORIZED,
-                Json(serde_json::json!({
-                    "error": "Invalid password",
-                    "locked": true,
-                    "code": "auth_invalid_password"
-                })),
+                Json(agena_api::ApiError::invalid_credentials(
+                    "The server password is incorrect.",
+                )),
             )
                 .into_response();
         }
@@ -2838,11 +2816,9 @@ mod sse_contract_tests {
             .fetch_add(1, Ordering::AcqRel);
         Err((
             StatusCode::UNAUTHORIZED,
-            Json(serde_json::json!({
-                "error": "UI authentication required",
-                "locked": true,
-                "code": "auth_required"
-            })),
+            Json(agena_api::ApiError::authentication_required(
+                "UI authentication is required. Sign in with the server password or token.",
+            )),
         )
             .into_response())
     }
@@ -3064,10 +3040,7 @@ mod sse_contract_tests {
         assert_eq!(health.generation, 7);
         assert_eq!(health.loaded_at.to_rfc3339(), "2026-01-02T03:04:05+00:00");
         assert!(health.database_connected);
-        assert!(
-            health.server.is_none(),
-            "legacy health fixtures remain compatible"
-        );
+        assert_eq!(health.server.protocol_version, agena_api::PROTOCOL_VERSION);
         server.await.unwrap();
     }
 
@@ -3151,40 +3124,6 @@ mod sse_contract_tests {
                 assert_eq!(api.problem.user.fallback, "workspace missing");
             }
             other => panic!("expected shared API error, got {other:?}"),
-        }
-        server.await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn legacy_ui_auth_errors_map_to_a_safe_actionable_problem() {
-        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
-        let address = listener.local_addr().unwrap();
-        let response_body = serde_json::json!({
-            "error": "UI authentication required",
-            "locked": true,
-            "code": "auth_required"
-        })
-        .to_string();
-        let server = tokio::spawn(async move {
-            let (mut stream, _) = listener.accept().await.unwrap();
-            let response = format!(
-                "HTTP/1.1 401 Unauthorized\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                response_body.len(),
-                response_body
-            );
-            stream.write_all(response.as_bytes()).await.unwrap();
-        });
-
-        let client = AgenaClient::new(format!("http://{address}")).unwrap();
-        let error = client
-            .health()
-            .await
-            .expect_err("protected endpoint must require auth");
-        match error {
-            crate::ClientError::Api(api) => {
-                assert!(api.problem.user.fallback.contains("AGENA_SERVER_PASSWORD"))
-            }
-            other => panic!("expected safe auth API error, got {other:?}"),
         }
         server.await.unwrap();
     }

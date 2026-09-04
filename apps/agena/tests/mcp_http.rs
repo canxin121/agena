@@ -7,13 +7,10 @@ use std::{
     time::Duration,
 };
 
-use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-use reqwest::{Client, StatusCode, header::LOCATION};
+use reqwest::{Client, StatusCode};
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 use tempfile::{TempDir, tempdir};
 use tokio::time::{Instant, sleep};
-use url::Url;
 
 struct TestServer {
     child: Child,
@@ -124,7 +121,6 @@ async fn spawn_server(
         "AGENA_MCP_OAUTH_ISSUER_URL",
         "AGENA_MCP_AUTH_MODE",
         "AGENA_MCP_ANONYMOUS_ACCESS",
-        "AGENA_MCP_CLIENT_REGISTRATION",
     ] {
         command.env_remove(name);
     }
@@ -570,7 +566,7 @@ async fn anonymous_mcp_is_stateless_and_hides_interactive_tools() {
     let (status, _, _) = response_json(
         client
             .put(format!("{}/api/v1/server/mcp", server.base_url))
-            .json(&json!({"enabled":false,"authEnabled":false}))
+            .json(&json!({"enabled":false,"authMode":"none"}))
             .send()
             .await
             .expect("disable MCP server"),
@@ -594,12 +590,11 @@ async fn anonymous_mcp_is_stateless_and_hides_interactive_tools() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn oauth_discovery_and_authorization_code_flow_are_chatgpt_compatible() {
+async fn oauth_discovery_is_cimd_only() {
     let management_password = "Agena-management-password-2026";
     let server = start_server_with_options(Some(management_password), &[]).await;
     let client = test_client();
     let management_token = login_ui(&client, &server.base_url, management_password).await;
-    let mcp_url = format!("{}/mcp", server.base_url);
     let resource = "https://mcp.example.test/mcp";
     let issuer = "https://auth.example.test";
     let password = "MCP-HTTP-test-password-2026";
@@ -633,8 +628,7 @@ async fn oauth_discovery_and_authorization_code_flow_are_chatgpt_compatible() {
                 "enabled": true,
                 "authMode": "none",
                 "publicUrl": resource,
-                "oauthIssuerUrl": issuer,
-                "clientRegistration": "cimd_only"
+                "oauthIssuerUrl": issuer
             }))
             .send()
             .await
@@ -667,7 +661,6 @@ async fn oauth_discovery_and_authorization_code_flow_are_chatgpt_compatible() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(control["ready"], true);
     assert_eq!(control["authMode"], "oauth");
-    assert_eq!(control["clientRegistration"], "cimd_only");
     assert_eq!(control["oauthIssuerUrl"], issuer);
     assert_eq!(
         control["oauth"]["protectedResourceMetadata"],
@@ -677,7 +670,6 @@ async fn oauth_discovery_and_authorization_code_flow_are_chatgpt_compatible() {
         control["oauth"]["authorizationServerMetadata"],
         "https://auth.example.test/.well-known/oauth-authorization-server"
     );
-    assert!(control["oauth"].get("registrationEndpoint").is_none());
 
     let (status, _, protected_resource) = response_json(
         client
@@ -744,428 +736,14 @@ async fn oauth_discovery_and_authorization_code_flow_are_chatgpt_compatible() {
         .expect("probe disabled DCR endpoint");
     assert_eq!(disabled_registration.status(), StatusCode::NOT_FOUND);
 
-    let (status, _, control) = response_json(
-        client
-            .put(format!("{}/api/v1/server/mcp", server.base_url))
-            .bearer_auth(&management_token)
-            .json(&json!({"clientRegistration": "cimd_and_dcr"}))
-            .send()
-            .await
-            .expect("enable OAuth DCR compatibility"),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(control["clientRegistration"], "cimd_and_dcr");
-    assert_eq!(
-        control["oauth"]["registrationEndpoint"],
-        "https://auth.example.test/oauth/register"
-    );
-
-    let (_, _, authorization_server) = response_json(
-        client
-            .get(format!(
-                "{}/.well-known/oauth-authorization-server",
-                server.base_url
-            ))
-            .send()
-            .await
-            .expect("read path-aware authorization server metadata"),
-    )
-    .await;
-    assert_eq!(
-        authorization_server["registration_endpoint"],
-        "https://auth.example.test/oauth/register"
-    );
-
-    // Framework extractor failures must stay inside the OAuth error contract.
-    // Axum's default JSON/form rejections can be HTTP 422, which the Secure
-    // MCP Tunnel surfaces as a failed MCP target instead of an OAuth error.
-    let malformed_registration = client
-        .post(format!("{}/oauth/register", server.base_url))
-        .header("content-type", "application/json")
-        .body(r#"{"redirect_uris":"not-an-array"}"#)
-        .send()
-        .await
-        .expect("send malformed OAuth registration");
-    assert_eq!(malformed_registration.status(), StatusCode::BAD_REQUEST);
-
     let malformed_token = client
         .post(format!("{}/oauth/token", server.base_url))
         .header("content-type", "application/json")
-        .body(r#"{"grant_type":"authorization_code"}"#)
+        .body(r#"{\"grant_type\":\"authorization_code\"}"#)
         .send()
         .await
         .expect("send malformed OAuth token request");
     assert_eq!(malformed_token.status(), StatusCode::BAD_REQUEST);
-
-    let redirect_uri = "https://chatgpt.com/connector/oauth/http-test";
-    let registration = client
-        .post(format!("{}/oauth/register", server.base_url))
-        .json(&json!({
-            "redirect_uris": [redirect_uri],
-            "client_name": "ChatGPT HTTP test",
-            "application_type": "web",
-            "token_endpoint_auth_method": "none",
-            "grant_types": ["authorization_code", "refresh_token"],
-            "response_types": ["code"]
-        }))
-        .send()
-        .await
-        .expect("register OAuth client");
-    assert_eq!(registration.status(), StatusCode::CREATED);
-    let registration: Value = registration.json().await.expect("decode registration");
-    let client_id = registration["client_id"]
-        .as_str()
-        .expect("registration returns client_id")
-        .to_owned();
-    assert_eq!(registration["application_type"], "web");
-
-    let verifier =
-        "AgenaHttpVerifier-0123456789-abcdefghijklmnopqrstuvwxyz-ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-    let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
-    let state = "agena-http-state";
-    let invalid_scope = client
-        .get(format!("{}/oauth/authorize", server.base_url))
-        .query(&[
-            ("response_type", "code"),
-            ("client_id", client_id.as_str()),
-            ("redirect_uri", redirect_uri),
-            ("state", state),
-            ("code_challenge", challenge.as_str()),
-            ("code_challenge_method", "S256"),
-            ("resource", resource),
-            ("scope", "agena:tools forbidden"),
-        ])
-        .send()
-        .await
-        .expect("request authorization with an invalid scope");
-    assert_eq!(invalid_scope.status(), StatusCode::SEE_OTHER);
-    assert_eq!(invalid_scope.headers()["cache-control"], "no-store");
-    let invalid_scope_callback = Url::parse(
-        invalid_scope
-            .headers()
-            .get(LOCATION)
-            .expect("invalid scope returns callback")
-            .to_str()
-            .expect("invalid scope callback is UTF-8"),
-    )
-    .expect("parse invalid scope callback");
-    assert_eq!(
-        invalid_scope_callback
-            .query_pairs()
-            .find(|(key, _)| key == "error")
-            .map(|(_, value)| value),
-        Some("invalid_scope".into())
-    );
-    assert_eq!(
-        invalid_scope_callback
-            .query_pairs()
-            .find(|(key, _)| key == "state")
-            .map(|(_, value)| value),
-        Some(state.into())
-    );
-    assert_eq!(
-        invalid_scope_callback
-            .query_pairs()
-            .find(|(key, _)| key == "iss")
-            .map(|(_, value)| value),
-        Some(issuer.into())
-    );
-
-    let authorization_query = [
-        ("response_type", "code"),
-        ("client_id", client_id.as_str()),
-        ("redirect_uri", redirect_uri),
-        ("state", state),
-        ("code_challenge", challenge.as_str()),
-        ("code_challenge_method", "S256"),
-        ("resource", resource),
-        ("scope", "agena:tools offline_access"),
-    ];
-    let authorization_page = client
-        .get(format!("{}/oauth/authorize", server.base_url))
-        .query(&authorization_query)
-        .send()
-        .await
-        .expect("open OAuth authorization page");
-    assert_eq!(authorization_page.status(), StatusCode::OK);
-    assert_eq!(authorization_page.headers()["cache-control"], "no-store");
-    assert!(
-        authorization_page
-            .headers()
-            .get("content-security-policy")
-            .is_some()
-    );
-    assert!(
-        authorization_page
-            .headers()
-            .get("content-security-policy")
-            .and_then(|value| value.to_str().ok())
-            .is_some_and(|policy| policy.contains("form-action 'self' https://chatgpt.com"))
-    );
-
-    let untrusted_authorization_submit = client
-        .post(format!("{}/oauth/authorize", server.base_url))
-        .header("origin", "https://attacker.example")
-        .header("content-type", "application/x-www-form-urlencoded")
-        .body(form_body(&[
-            ("response_type", "code"),
-            ("client_id", client_id.as_str()),
-            ("redirect_uri", redirect_uri),
-            ("state", state),
-            ("code_challenge", challenge.as_str()),
-            ("code_challenge_method", "S256"),
-            ("resource", resource),
-            ("scope", "agena:tools offline_access"),
-            ("password", password),
-        ]))
-        .send()
-        .await
-        .expect("reject OAuth authorization form from untrusted origin");
-    assert_eq!(
-        untrusted_authorization_submit.status(),
-        StatusCode::FORBIDDEN
-    );
-
-    let opaque_origin_authorization_submit = client
-        .post(format!("{}/oauth/authorize", server.base_url))
-        .header("origin", "null")
-        .header("sec-fetch-site", "same-origin")
-        .header("sec-fetch-mode", "navigate")
-        .header("sec-fetch-dest", "document")
-        .header("content-type", "application/x-www-form-urlencoded")
-        .body(form_body(&[
-            ("response_type", "code"),
-            ("client_id", client_id.as_str()),
-            ("redirect_uri", redirect_uri),
-            ("state", state),
-            ("code_challenge", challenge.as_str()),
-            ("code_challenge_method", "S256"),
-            ("resource", resource),
-            ("scope", "agena:tools offline_access"),
-            ("password", password),
-        ]))
-        .send()
-        .await
-        .expect("accept same-origin OAuth form with an opaque Origin");
-    assert_eq!(
-        opaque_origin_authorization_submit.status(),
-        StatusCode::SEE_OTHER
-    );
-
-    let authorization_submit = client
-        .post(format!("{}/oauth/authorize", server.base_url))
-        .header("origin", "https://chatgpt.com")
-        .header("content-type", "application/x-www-form-urlencoded")
-        .body(form_body(&[
-            ("response_type", "code"),
-            ("client_id", client_id.as_str()),
-            ("redirect_uri", redirect_uri),
-            ("state", state),
-            ("code_challenge", challenge.as_str()),
-            ("code_challenge_method", "S256"),
-            ("resource", resource),
-            ("scope", "agena:tools offline_access"),
-            ("password", password),
-        ]))
-        .send()
-        .await
-        .expect("submit OAuth authorization form");
-    assert_eq!(authorization_submit.status(), StatusCode::SEE_OTHER);
-    assert_eq!(authorization_submit.headers()["cache-control"], "no-store");
-    assert_eq!(authorization_submit.headers()["pragma"], "no-cache");
-    let callback = Url::parse(
-        authorization_submit
-            .headers()
-            .get(LOCATION)
-            .expect("authorization returns callback")
-            .to_str()
-            .expect("callback is valid UTF-8"),
-    )
-    .expect("parse OAuth callback");
-    assert_eq!(
-        callback
-            .query_pairs()
-            .find(|(key, _)| key == "state")
-            .map(|(_, value)| value),
-        Some(state.into())
-    );
-    assert_eq!(
-        callback
-            .query_pairs()
-            .find(|(key, _)| key == "iss")
-            .map(|(_, value)| value),
-        Some(issuer.into())
-    );
-    let code = callback
-        .query_pairs()
-        .find(|(key, _)| key == "code")
-        .map(|(_, value)| value.into_owned())
-        .expect("callback returns authorization code");
-
-    let token_response = client
-        .post(format!("{}/oauth/token", server.base_url))
-        .header("content-type", "application/x-www-form-urlencoded")
-        .body(form_body(&[
-            ("grant_type", "authorization_code"),
-            ("code", code.as_str()),
-            ("redirect_uri", redirect_uri),
-            ("client_id", client_id.as_str()),
-            ("code_verifier", verifier),
-            ("resource", resource),
-        ]))
-        .send()
-        .await
-        .expect("exchange OAuth authorization code");
-    assert_eq!(token_response.status(), StatusCode::OK);
-    let tokens: Value = token_response.json().await.expect("decode OAuth tokens");
-    let access_token = tokens["access_token"].as_str().expect("access token");
-    let refresh_token = tokens["refresh_token"].as_str().expect("refresh token");
-    assert_eq!(tokens["token_type"], "Bearer");
-    assert_eq!(tokens["scope"], "agena:tools offline_access");
-
-    let (status, tools) = post_mcp_with_bearer(
-        &client,
-        &mcp_url,
-        json!({"jsonrpc":"2.0","id":10,"method":"tools/list","params":{}}),
-        access_token,
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK);
-    assert!(
-        tools["result"]["tools"]
-            .as_array()
-            .expect("OAuth tools/list array")
-            .iter()
-            .all(|tool| tool["securitySchemes"]
-                == json!([{"type":"oauth2","scopes":["agena:tools"]}]))
-    );
-
-    // Re-saving the already-effective control projection is not an identity
-    // or policy change and must not revoke an established ChatGPT connection.
-    let (status, _, _) = response_json(
-        client
-            .put(format!("{}/api/v1/server/mcp", server.base_url))
-            .bearer_auth(&management_token)
-            .json(&json!({
-                "enabled": true,
-                "authMode": "oauth",
-                "anonymousAccess": "none",
-                "publicUrl": resource,
-                "oauthIssuerUrl": issuer,
-                "clientRegistration": "cimd_and_dcr"
-            }))
-            .send()
-            .await
-            .expect("re-save unchanged MCP control state"),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK);
-    let (status, _) = post_mcp_with_bearer(
-        &client,
-        &mcp_url,
-        json!({"jsonrpc":"2.0","id":101,"method":"tools/list","params":{}}),
-        access_token,
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK);
-
-    let invalid = client
-        .post(&mcp_url)
-        .header("content-type", "application/json")
-        .header("accept", "application/json, text/event-stream")
-        .bearer_auth("invalid-token")
-        .json(&initialize_request(11))
-        .send()
-        .await
-        .expect("request MCP with invalid bearer");
-    assert_eq!(invalid.status(), StatusCode::UNAUTHORIZED);
-    let challenge = invalid
-        .headers()
-        .get("www-authenticate")
-        .expect("OAuth challenge")
-        .to_str()
-        .expect("challenge is UTF-8");
-    assert!(challenge.contains(
-        "resource_metadata=\"https://mcp.example.test/.well-known/oauth-protected-resource/mcp\""
-    ));
-
-    let refresh_body = form_body(&[
-        ("grant_type", "refresh_token"),
-        ("refresh_token", refresh_token),
-        ("client_id", client_id.as_str()),
-        ("resource", resource),
-    ]);
-    let first_refresh = client
-        .post(format!("{}/oauth/token", server.base_url))
-        .header("content-type", "application/x-www-form-urlencoded")
-        .body(refresh_body.clone())
-        .send();
-    let second_refresh = client
-        .post(format!("{}/oauth/token", server.base_url))
-        .header("content-type", "application/x-www-form-urlencoded")
-        .body(refresh_body)
-        .send();
-    let (first_refresh, second_refresh) = tokio::join!(first_refresh, second_refresh);
-    let first_refresh = first_refresh.expect("send first concurrent refresh");
-    let second_refresh = second_refresh.expect("send second concurrent refresh");
-    let statuses = [first_refresh.status(), second_refresh.status()];
-    assert_eq!(
-        statuses
-            .iter()
-            .filter(|status| **status == StatusCode::OK)
-            .count(),
-        1,
-        "exactly one concurrent refresh may succeed"
-    );
-    assert_eq!(
-        statuses
-            .iter()
-            .filter(|status| **status == StatusCode::BAD_REQUEST)
-            .count(),
-        1,
-        "refresh replay must be rejected"
-    );
-    let (successful_refresh, rejected_refresh) = if first_refresh.status() == StatusCode::OK {
-        (first_refresh, second_refresh)
-    } else {
-        (second_refresh, first_refresh)
-    };
-    let refreshed: Value = successful_refresh
-        .json()
-        .await
-        .expect("decode successful concurrent refresh");
-    assert!(refreshed["access_token"].as_str().is_some());
-    assert!(refreshed["refresh_token"].as_str().is_some());
-    assert_eq!(refreshed["scope"], "agena:tools offline_access");
-    let rejected_refresh: Value = rejected_refresh
-        .json()
-        .await
-        .expect("decode concurrent refresh replay error");
-    assert_eq!(rejected_refresh["error"], "invalid_grant");
-
-    let revoke_response = client
-        .post(format!("{}/oauth/revoke", server.base_url))
-        .header("content-type", "application/x-www-form-urlencoded")
-        .body(form_body(&[
-            ("token", access_token),
-            ("client_id", client_id.as_str()),
-        ]))
-        .send()
-        .await
-        .expect("revoke OAuth token");
-    assert_eq!(revoke_response.status(), StatusCode::OK);
-
-    let revoked_access = client
-        .post(&mcp_url)
-        .header("content-type", "application/json")
-        .header("accept", "application/json, text/event-stream")
-        .bearer_auth(access_token)
-        .json(&initialize_request(12))
-        .send()
-        .await
-        .expect("request MCP with revoked bearer");
-    assert_eq!(revoked_access.status(), StatusCode::UNAUTHORIZED);
 
     let (status, _, _) = response_json(
         client
@@ -1207,8 +785,7 @@ async fn mixed_auth_defaults_closed_and_can_explicitly_allow_read_only_tools() {
                 "enabled": true,
                 "authMode": "none",
                 "publicUrl": resource,
-                "oauthIssuerUrl": issuer,
-                "clientRegistration": "cimd_only"
+                "oauthIssuerUrl": issuer
             }))
             .send()
             .await
@@ -1242,7 +819,6 @@ async fn mixed_auth_defaults_closed_and_can_explicitly_allow_read_only_tools() {
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(control["authMode"], "mixed");
-    assert_eq!(control["authEnabled"], true);
     assert_eq!(control["anonymousAccess"], "none");
 
     let (status, initialize) = post_mcp(&client, &mcp_url, initialize_request(30)).await;
@@ -1386,12 +962,11 @@ async fn explicit_public_oauth_environment_overrides_persisted_control_on_restar
                 "authMode": "none",
                 "publicUrl": "https://old.example.test/mcp",
                 "oauthIssuerUrl": "https://old-auth.example.test",
-                "anonymousAccess": "read_only",
-                "clientRegistration": "cimd_and_dcr"
+                "anonymousAccess": "read_only"
             }))
             .send()
             .await
-            .expect("persist the old MCP control state"),
+            .expect("persist the initial MCP control state"),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -1405,7 +980,6 @@ async fn explicit_public_oauth_environment_overrides_persisted_control_on_restar
         ("AGENA_MCP_PUBLIC_URL", "https://new.example.test/mcp"),
         ("AGENA_MCP_AUTH_MODE", "oauth"),
         ("AGENA_MCP_ANONYMOUS_ACCESS", "none"),
-        ("AGENA_MCP_CLIENT_REGISTRATION", "cimd-only"),
     ];
     let (mut second_child, second_base_url) = spawn_server(
         &workspace,
@@ -1434,42 +1008,8 @@ async fn explicit_public_oauth_environment_overrides_persisted_control_on_restar
     assert_eq!(control["oauth"]["issuer"], "https://new.example.test");
     assert_eq!(control["authMode"], "oauth");
     assert_eq!(control["anonymousAccess"], "none");
-    assert_eq!(control["clientRegistration"], "cimd_only");
     assert_eq!(control["ready"], true);
 
     second_child.kill().expect("stop second MCP server");
     second_child.wait().expect("reap second MCP server");
-}
-
-async fn post_mcp_with_bearer(
-    client: &Client,
-    url: &str,
-    request: Value,
-    token: &str,
-) -> (StatusCode, Value) {
-    let response = client
-        .post(url)
-        .header("content-type", "application/json")
-        .header("accept", "application/json, text/event-stream")
-        .bearer_auth(token)
-        .json(&request)
-        .send()
-        .await
-        .expect("send bearer MCP request");
-    let (status, _, body) = response_json(response).await;
-    (status, body)
-}
-
-fn form_body(values: &[(&str, &str)]) -> String {
-    values
-        .iter()
-        .map(|(key, value)| {
-            format!(
-                "{}={}",
-                urlencoding::encode(key),
-                urlencoding::encode(value)
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("&")
 }

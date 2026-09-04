@@ -55,10 +55,7 @@ impl AppError {
         error: &(dyn std::error::Error + 'static),
     ) -> Self {
         let diagnostic = agena_failure::diagnostic::format_error_chain_with_context(context, error);
-        tracing::error!(
-            diagnostic,
-            "legacy server request was denied by an I/O boundary"
-        );
+        tracing::error!(diagnostic, "server request was denied by an I/O boundary");
         let public = agena_failure::diagnostic::user_message_with_context(&diagnostic, 240);
         Self::forbidden(if public.is_empty() {
             "Access was denied by the operating system.".to_owned()
@@ -145,7 +142,7 @@ impl AppError {
                 tracing::error!(
                     %failure_id,
                     diagnostic = %message,
-                    "legacy server request failed"
+                    "server request failed"
                 );
                 let safe =
                     agena_failure::diagnostic::user_message_with_context(message.as_str(), 240);

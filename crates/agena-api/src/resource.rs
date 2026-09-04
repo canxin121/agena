@@ -29,11 +29,8 @@ pub struct HealthResponse {
     pub generation: u64,
     pub loaded_at: DateTime<Utc>,
     pub database_connected: bool,
-    /// Identity of the long-lived server serving this API. Older
-    /// servers omit it, so clients must treat `None` as an unverified legacy
-    /// endpoint rather than manufacturing an identity from the URL or PID.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub server: Option<ServerIdentityResource>,
+    /// Identity of the long-lived server serving this API.
+    pub server: ServerIdentityResource,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1372,6 +1369,23 @@ pub struct SessionTranscriptPart {
     pub run_id: Option<i64>,
 }
 
+impl From<crate::live::PartResource> for SessionTranscriptPart {
+    fn from(value: crate::live::PartResource) -> Self {
+        Self {
+            part_id: value.part_id,
+            kind: value.kind,
+            role: value.role,
+            state: value.state,
+            content: value.content,
+            presentation: value.presentation,
+            summary: value.summary,
+            created_at_ms: value.created_at_ms,
+            parent_part_id: value.parent_part_id,
+            run_id: value.run_id,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 /// Full execution view of a session.
 pub struct SessionExecutionResource {
@@ -1633,9 +1647,6 @@ pub struct PartSkillReference {
     pub name: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub description: String,
-    /// Legacy snapshot compatibility. New Skill references omit bodies.
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub instructions: String,
     pub content_hash: String,
     pub source: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1784,10 +1795,10 @@ impl PermissionConfigResource {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ApprovalModelSelectionResource {
-    pub provider_id: String,
+    pub provider: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub adapter_id: Option<String>,
-    pub model_id: String,
+    pub adapter: Option<String>,
+    pub model: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thinking_mode: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

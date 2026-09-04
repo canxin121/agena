@@ -2192,7 +2192,7 @@ async fn processor_run_turn_streams_parts_through_the_facade_without_v1_double_w
             request_override: Default::default(),
         },
         next_message_id: run_id,
-        marker_content: Some(run_marker_content("continue", None, None, None, None)),
+        marker_content: run_marker_content("continue", None, None, None, None),
         input_notification_part_ids: Vec::new(),
         part_ids: ProcessorPartIdAllocator,
         next_call_id: 0,

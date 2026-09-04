@@ -118,10 +118,7 @@ pub use background_activity::{
     BackgroundActivityFilter, BackgroundActivityKind, BackgroundActivityLogLine,
     BackgroundActivityLogRead, BackgroundActivityStatus,
 };
-pub use command_events::{
-    CommandBeginEvent, CommandContext, CommandEndEvent, CommandOutputDeltaEvent,
-    CommandOutputStream,
-};
+pub use command_events::CommandOutputStream;
 pub use context_policy::ContextPolicy;
 pub use doom_loop::{DoomLoopHit, DoomLoopPolicy};
 pub use execution::{ExecutionFailureKind, ExecutionOutcome, ExecutionPhase, ExecutionSource};

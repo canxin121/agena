@@ -546,21 +546,18 @@ export function skillPresentations(part: TranscriptDisplayPart): SkillPresentati
 
 function interactionQuestion(value: JsonValue, index: number): InteractionQuestionPresentation | null {
   const question = jsonRecord(value)
-  const label = firstString(question, ['question', 'title'])
+  const label = firstString(question, ['question'])
   if (!label) return null
   return {
-    questionId: firstString(question, ['question_id', 'questionId', 'id']) || String(index),
+    questionId: String(index),
     header: firstString(question, ['header']),
     question: label,
     multiple: booleanValue(question, ['multiple']),
-    // `allow_custom` is the wire spelling. `allowCustom` and the legacy
-    // `custom` spelling are accepted here because the live attention
-    // projection has existed in both forms across server versions.
-    allowCustom: booleanValue(question, ['allow_custom', 'allowCustom', 'custom']),
+    allowCustom: booleanValue(question, ['allow_custom']),
     options: jsonArray(question.options)
       .map((raw) => {
         const option = jsonRecord(raw)
-        const label = firstString(option, ['label', 'title', 'value'])
+        const label = firstString(option, ['label'])
         return label ? { label, description: firstString(option, ['description']) } : null
       })
       .filter((item): item is InteractionOptionPresentation => Boolean(item)),

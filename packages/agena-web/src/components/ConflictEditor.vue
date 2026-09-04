@@ -55,7 +55,7 @@ async function load() {
   error.value = null
   try {
     const resp = await apiJson<ConflictFileResponse>(
-      `/api/git/conflicts/file?directory=${encodeURIComponent(dir)}&path=${encodeURIComponent(path)}`,
+      `/api/v1/workbench/git/conflicts/file?directory=${encodeURIComponent(dir)}&path=${encodeURIComponent(path)}`,
     )
     file.value = resp
     resetChoices(resp.blocks || [])
@@ -93,7 +93,7 @@ async function resolve(strategy: 'ours' | 'theirs' | 'base' | 'both' | 'manual',
     if (strategy === 'manual') {
       body.choices = Object.entries(choices.value).map(([id, choice]) => ({ id: Number(id), choice }))
     }
-    await apiJson(`/api/git/conflicts/resolve?directory=${encodeURIComponent(dir)}`, {
+    await apiJson(`/api/v1/workbench/git/conflicts/resolve?directory=${encodeURIComponent(dir)}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),

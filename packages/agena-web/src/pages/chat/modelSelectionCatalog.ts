@@ -81,9 +81,9 @@ type RuntimeStatus = {
 }
 
 type ProviderAdapterModels = {
-  adapter_id?: string
-  enabled?: boolean
-  models?: ProviderModel[]
+  adapter_id: string
+  enabled: boolean
+  models: ProviderModel[]
   failure?: JsonValue
 }
 
@@ -261,10 +261,13 @@ export function useModelSelectionCatalog() {
               `/api/v1/providers/${encodeURIComponent(providerId)}/configured-models`,
             )
             const models: ProviderModel[] = []
-            for (const adapter of Array.isArray(adapters) ? adapters : []) {
-              if (adapter?.enabled === false) continue
-              const adapterId = readString(adapter?.adapter_id)
-              for (const rawModel of Array.isArray(adapter?.models) ? adapter.models : []) {
+            for (const adapter of adapters) {
+              if (!Array.isArray(adapter.models)) {
+                throw new TypeError(`Provider adapter ${readString(adapter.adapter_id) || '<unknown>'} is missing its models array`)
+              }
+              if (!adapter.enabled) continue
+              const adapterId = readString(adapter.adapter_id)
+              for (const rawModel of adapter.models) {
                 const model = normalizeModel(rawModel, providerId, adapterId)
                 if (model) models.push(model)
               }

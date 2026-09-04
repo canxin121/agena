@@ -16,11 +16,11 @@ const props = defineProps<{
   sessionsLoading: boolean
   query: string
   isTouchPointer?: boolean
-  isMobilePointer?: boolean
+  isCompactTouch?: boolean
   multiSelectEnabled?: boolean
 }>()
 
-const isTouchPointer = computed(() => Boolean(props.isTouchPointer ?? props.isMobilePointer))
+const isTouchPointer = computed(() => Boolean(props.isTouchPointer ?? props.isCompactTouch))
 
 const emit = defineEmits<{
   (e: 'update:query', v: string): void

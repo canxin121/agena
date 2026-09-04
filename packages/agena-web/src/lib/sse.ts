@@ -378,17 +378,6 @@ export function connectSse(opts: SseClientOptions): SseClient {
       }
     }
 
-    // Legacy passthrough for any remaining {type, properties} emitters.
-    if (!evt) {
-      if (typeof raw.type === 'string') {
-        evt = raw
-      } else {
-        const payload = raw.payload
-        if (isRecord(payload) && typeof payload.type === 'string') {
-          evt = payload
-        }
-      }
-    }
 
     if (!evt || typeof evt.type !== 'string') return
     if (typeof meta?.lastEventId === 'string' && meta.lastEventId) {
@@ -446,7 +435,7 @@ export function connectSse(opts: SseClientOptions): SseClient {
             emitAuthRequired({
               message: msg || 'UI authentication required',
               status: resp.status,
-              code: 'auth_required',
+              code: 'auth.required',
               url,
               authTokenVersion,
             })

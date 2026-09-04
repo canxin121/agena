@@ -24,20 +24,17 @@ pub struct ModelSelectionConfig {
     pub parallel_tool_calls: Option<bool>,
 }
 
-/// A concrete model selection used by the permission approval model.
-///
-/// The model identity intentionally keeps the historical `provider_id`,
-/// `adapter_id`, and `model_id` JSON names used by permission configuration.
-/// Variant fields live beside that identity so selecting an approval model is
-/// one atomic model-plus-variant choice without changing `ModelRef`'s
-/// identity semantics.
+/// A concrete model selection used by the permission approval model. Variant
+/// fields live beside the provider/adapter/model identity so selecting an
+/// approval model is one atomic model-plus-variant choice without changing
+/// `ModelRef`'s identity semantics.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ApprovalModelSelection {
-    pub provider_id: String,
+    pub provider: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub adapter_id: Option<String>,
-    pub model_id: String,
+    pub adapter: Option<String>,
+    pub model: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thinking_mode: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -51,9 +48,9 @@ pub struct ApprovalModelSelection {
 impl ApprovalModelSelection {
     pub fn from_model_ref(model: &crate::ModelRef) -> Self {
         Self {
-            provider_id: model.provider_id.to_string(),
-            adapter_id: model.adapter_id.as_ref().map(ToString::to_string),
-            model_id: model.model_id.to_string(),
+            provider: model.provider_id.to_string(),
+            adapter: model.adapter_id.as_ref().map(ToString::to_string),
+            model: model.model_id.to_string(),
             thinking_mode: None,
             speed_mode: None,
             verbosity: None,
@@ -62,18 +59,18 @@ impl ApprovalModelSelection {
     }
 
     pub fn model_ref(&self) -> Result<crate::ModelRef, crate::IdentifierError> {
-        match self.adapter_id.as_deref() {
+        match self.adapter.as_deref() {
             Some(adapter_id) => crate::ModelRef::try_new_with_adapter(
-                self.provider_id.clone(),
+                self.provider.clone(),
                 adapter_id,
-                self.model_id.clone(),
+                self.model.clone(),
             ),
-            None => crate::ModelRef::try_new(self.provider_id.clone(), self.model_id.clone()),
+            None => crate::ModelRef::try_new(self.provider.clone(), self.model.clone()),
         }
     }
 
     pub fn is_empty(&self) -> bool {
-        self.provider_id.trim().is_empty() || self.model_id.trim().is_empty()
+        self.provider.trim().is_empty() || self.model.trim().is_empty()
     }
 }
 
@@ -95,13 +92,13 @@ mod tests {
     use crate::ModelRef;
 
     #[test]
-    fn approval_model_selection_keeps_legacy_json_compatible() {
+    fn approval_model_selection_uses_current_model_selection_keys() {
         let selection: ApprovalModelSelection = serde_json::from_value(serde_json::json!({
-            "provider_id": "openai",
-            "adapter_id": "responses",
-            "model_id": "gpt-5"
+            "provider": "openai",
+            "adapter": "responses",
+            "model": "gpt-5"
         }))
-        .expect("legacy approval model references should deserialize");
+        .expect("current approval model selection should deserialize");
 
         assert_eq!(
             selection.model_ref().unwrap(),
@@ -113,11 +110,22 @@ mod tests {
     }
 
     #[test]
+    fn approval_model_selection_rejects_removed_id_keys() {
+        let error = serde_json::from_value::<ApprovalModelSelection>(serde_json::json!({
+            "provider_id": "openai",
+            "adapter_id": "responses",
+            "model_id": "gpt-5"
+        }))
+        .expect_err("removed approval-model id keys must be rejected");
+        assert!(error.to_string().contains("unknown field"));
+    }
+
+    #[test]
     fn approval_model_selection_round_trips_variants() {
         let selection = ApprovalModelSelection {
-            provider_id: "openai".to_owned(),
-            adapter_id: Some("responses".to_owned()),
-            model_id: "gpt-5".to_owned(),
+            provider: "openai".to_owned(),
+            adapter: Some("responses".to_owned()),
+            model: "gpt-5".to_owned(),
             thinking_mode: Some("high".to_owned()),
             speed_mode: Some("fast".to_owned()),
             verbosity: Some("compact".to_owned()),

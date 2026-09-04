@@ -6,7 +6,7 @@ const source = readFileSync(new URL('../src/components/ui/ConfirmPopover.vue', i
 
 test('mobile confirmation dialogs stay centered inside the visual safe area', () => {
   assert.match(source, /const\s+dialogContentClass\s*=\s*computed\(/)
-  assert.match(source, /ui\.isMobilePointer/)
+  assert.match(source, /ui\.isCompactTouch/)
   assert.match(source, /--oc-safe-area-top/)
   assert.match(source, /--oc-safe-area-right/)
   assert.match(source, /--oc-safe-area-bottom/)

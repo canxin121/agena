@@ -85,11 +85,6 @@ pub(crate) fn settings_studio_mcp_items(
         .and_then(|value| value.get("oauthIssuerUrl"))
         .and_then(serde_json::Value::as_str)
         .filter(|value| !value.trim().is_empty());
-    let client_registration = control
-        .as_ref()
-        .and_then(|value| value.get("clientRegistration"))
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or("cimd_only");
     let password_status = control
         .as_ref()
         .and_then(|value| value.get("oauth"))
@@ -205,20 +200,6 @@ pub(crate) fn settings_studio_mcp_items(
                 ui_text::t(i18n, "settings-mcp-anonymous-access-none-detail")
             },
             SettingsPickerAction::ToggleMcpAnonymousAccess,
-        ),
-        SettingsStudioItem::new(
-            ui_text::t(i18n, "settings-mcp-client-registration-label"),
-            if client_registration == "cimd_and_dcr" {
-                ui_text::t(i18n, "settings-mcp-client-registration-dcr")
-            } else {
-                ui_text::t(i18n, "settings-mcp-client-registration-cimd")
-            },
-            if client_registration == "cimd_and_dcr" {
-                ui_text::t(i18n, "settings-mcp-client-registration-dcr-detail")
-            } else {
-                ui_text::t(i18n, "settings-mcp-client-registration-cimd-detail")
-            },
-            SettingsPickerAction::ToggleMcpClientRegistration,
         ),
         SettingsStudioItem::new(
             ui_text::t(i18n, "settings-mcp-public-url-label"),

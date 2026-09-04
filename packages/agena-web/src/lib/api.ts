@@ -85,8 +85,8 @@ function apiErrorDetails(bodyJson: JsonLike, fallbackMessage: string): { message
   const problem = asRecord(body.problem)
   const user = asRecord(problem?.user)
 
-  // Legacy filesystem/git routes return { error, code, hint }; the native
-  // Agena API returns { problem: { code, user: { fallback } } }.
+  // Workbench endpoints return { error, code, hint }; resource endpoints use
+  // { problem: { code, user: { fallback } } }.
   const message =
     nonEmptyString(errorValue) ||
     nonEmptyString(body.message) ||
@@ -152,17 +152,12 @@ export async function apiJson<T>(url: string, init?: RequestInit): Promise<T> {
     attachApiErrorDetails(err, bodyJson, fallbackMessage)
 
     const code = (err.code || '').trim()
-    const isUiAuthRequired =
-      err.status === 401 &&
-      (code === 'auth_required' ||
-        String(err.message || '')
-          .trim()
-          .toLowerCase() === 'ui authentication required')
+    const isUiAuthRequired = err.status === 401 && code === 'auth.required'
     if (isUiAuthRequired) {
       emitAuthRequired({
         message: err.message,
         status: err.status,
-        code: code || 'auth_required',
+        code,
         url,
         authTokenVersion,
       })
@@ -206,17 +201,12 @@ export async function apiText(url: string, init?: RequestInit): Promise<string> 
     attachApiErrorDetails(err, bodyJson, fallbackMessage)
 
     const code = (err.code || '').trim()
-    const isUiAuthRequired =
-      err.status === 401 &&
-      (code === 'auth_required' ||
-        String(err.message || '')
-          .trim()
-          .toLowerCase() === 'ui authentication required')
+    const isUiAuthRequired = err.status === 401 && code === 'auth.required'
     if (isUiAuthRequired) {
       emitAuthRequired({
         message: err.message,
         status: err.status,
-        code: code || 'auth_required',
+        code,
         url,
         authTokenVersion,
       })
@@ -260,17 +250,12 @@ export async function apiBlob(url: string, init?: RequestInit): Promise<Blob> {
     attachApiErrorDetails(err, bodyJson, fallbackMessage)
 
     const code = (err.code || '').trim()
-    const isUiAuthRequired =
-      err.status === 401 &&
-      (code === 'auth_required' ||
-        String(err.message || '')
-          .trim()
-          .toLowerCase() === 'ui authentication required')
+    const isUiAuthRequired = err.status === 401 && code === 'auth.required'
     if (isUiAuthRequired) {
       emitAuthRequired({
         message: err.message,
         status: err.status,
-        code: code || 'auth_required',
+        code,
         url,
         authTokenVersion,
       })

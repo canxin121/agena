@@ -124,13 +124,6 @@ pub struct SessionPartListQuery {
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
-/// Optional history inclusion for the session execution shell.
-pub struct SessionStateQuery {
-    #[serde(default)]
-    pub include_parts: bool,
-}
-
-#[derive(Debug, Clone, Deserialize, Default)]
 /// Reconnect cursor for the live session-change stream.
 pub struct SessionChangeStreamQuery {
     #[serde(default)]
@@ -197,7 +190,7 @@ pub async fn health(State(state): State<AppState>) -> Result<impl IntoResponse, 
         generation: status.generation,
         loaded_at: status.loaded_at,
         database_connected: true,
-        server: Some(state.server().clone()),
+        server: state.server().clone(),
     }))
 }
 

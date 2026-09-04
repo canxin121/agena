@@ -2,7 +2,7 @@ use agena_domain::{ModelId, Role};
 
 use crate::{
     AgenaToolMode, CompletionInputPart, CompletionInputRun, CompletionInputToolResultStatus,
-    CompletionRequest, CompletionResponse, ProviderNativeToolsConfig,
+    CompletionRequest, CompletionResponse,
 };
 
 const PROVIDER_TOOL_BODY_FIELDS: &[&str] = &[
@@ -38,16 +38,7 @@ impl ProviderToolModeViolation {
 }
 
 /// Apply the transport mode for Agena's five fixed Tool API functions.
-///
-/// `provider_native` is retained only in the transition signature for callers
-/// compiled against the old provider contract. It is intentionally ignored:
-/// provider service capabilities are ordinary execution tools and never become
-/// conversation-level provider declarations.
-pub fn apply_configured_tool_request(
-    mode: AgenaToolMode,
-    _provider_native: &ProviderNativeToolsConfig,
-    request: &mut CompletionRequest,
-) {
+pub fn apply_configured_tool_request(mode: AgenaToolMode, request: &mut CompletionRequest) {
     request.provider_native_tools = Default::default();
     // Saved request patches must never inject an alternate tool surface. Each
     // adapter rebuilds its protocol declarations from tool_api_functions only.
@@ -76,11 +67,6 @@ pub fn strip_provider_tool_body_fields(request: &mut CompletionRequest) {
     for field in PROVIDER_TOOL_BODY_FIELDS {
         request.request_override.body_patch.remove(*field);
     }
-}
-
-/// Backward-compatible name retained for downstream callers.
-pub fn strip_provider_native_tool_body_fields(request: &mut CompletionRequest) {
-    strip_provider_tool_body_fields(request);
 }
 
 pub fn validate_disabled_tool_response(

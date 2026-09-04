@@ -236,7 +236,7 @@ const { width: viewportWidth } = useWindowSize()
 const COMPOSER_DESKTOP_MENU_GAP_PX = 16
 const COMPOSER_DESKTOP_MENU_VIEWPORT_MARGIN_PX = 8
 
-const composerToolbarLayout = computed(() => resolveComposerToolbarLayout(ui.isMobilePointer, viewportWidth.value))
+const composerToolbarLayout = computed(() => resolveComposerToolbarLayout(ui.isCompactTouch, viewportWidth.value))
 const splitComposerChipRows = computed(() => composerToolbarLayout.value.splitChipRows)
 const modelChipTextClass = computed(() =>
   splitComposerChipRows.value
@@ -420,7 +420,7 @@ void sessionActionsMenuRef
             <div ref="contentEl" class="chat-message-column py-3">
               <MessageList
                 :is-compact-layout="ui.isCompactLayout"
-                :is-mobile-pointer="ui.isMobilePointer"
+                :is-compact-touch="ui.isCompactTouch"
                 :selected-session-id="chat.selectedSessionId"
                 :messages-loading="chat.messagesLoading"
                 :messages-error="chat.messagesError"
@@ -533,7 +533,7 @@ void sessionActionsMenuRef
           >
             <div class="chat-column">
               <ChatRuntimeStatusOverlay
-                :is-mobile-pointer="ui.isMobilePointer"
+                :is-compact-touch="ui.isCompactTouch"
                 @reserve-change="handleOverlayReserve"
               />
             </div>
@@ -555,7 +555,7 @@ void sessionActionsMenuRef
                 :retry-status="retryStatus"
                 :retry-countdown-label="retryCountdownLabel"
                 :retry-next-label="retryNextLabel"
-                :mobile-pointer="ui.isMobilePointer"
+                :mobile-pointer="ui.isCompactTouch"
                 @abort="abortRun"
               />
               <Composer
@@ -684,7 +684,7 @@ void sessionActionsMenuRef
                       :loading="composerPickerLoading"
                       :refreshable="composerPickerRefreshable"
                       :on-refresh="refreshComposerPickerOptions"
-                      :is-mobile-pointer="ui.isMobilePointer"
+                      :is-compact-touch="ui.isCompactTouch"
                       :desktop-fixed="true"
                       :desktop-anchor-el="activePickerAnchor"
                       :desktop-gap-px="COMPOSER_DESKTOP_MENU_GAP_PX"
@@ -777,7 +777,7 @@ void sessionActionsMenuRef
                           :searchable="true"
                           :search-placeholder="t('common.searchActions')"
                           :empty-text="t('common.noActionsFound')"
-                          :is-mobile-pointer="ui.isMobilePointer"
+                          :is-compact-touch="ui.isCompactTouch"
                           :desktop-fixed="true"
                           :desktop-anchor-el="activeActionsAnchor"
                           :desktop-gap-px="COMPOSER_DESKTOP_MENU_GAP_PX"
@@ -854,7 +854,7 @@ void sessionActionsMenuRef
 
   <AttachmentsPanel
     :open="attachmentsPanelOpen"
-    :is-mobile-pointer="ui.isMobilePointer"
+    :is-compact-touch="ui.isCompactTouch"
     :desktop-anchor-el="activeAttachmentsAnchor"
     desktop-placement="top-start"
     :desktop-gap-px="COMPOSER_DESKTOP_MENU_GAP_PX"

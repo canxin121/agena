@@ -22,7 +22,7 @@ use super::{
     FILE_SEARCH_EXCLUDED_DIRS, MAX_CONTENT_REPLACE_PATHS, MAX_CONTENT_SEARCH_CONTEXT_CHARS,
     MAX_CONTENT_SEARCH_FILE_BYTES, MAX_CONTENT_SEARCH_MAX_MATCHES_PER_FILE,
     MAX_CONTENT_SEARCH_MAX_RESULTS, ensure_within_base, has_parent_dir_component,
-    normalize_directory_path, publish_fs_changed_event, to_api_path,
+    normalize_directory_path, to_api_path,
 };
 
 #[derive(Debug, Deserialize)]
@@ -665,8 +665,6 @@ pub async fn fs_content_replace(
                 _ => AppError::internal_error(&err),
             })?;
 
-        publish_fs_changed_event(&root, "replace-content", [resolved.as_path()], None, None);
-
         let relative_path = normalize_relative_search_path(&root, &resolved);
         return Ok(Json(ContentReplaceResponse {
             root: to_api_path(&root),
@@ -727,15 +725,7 @@ pub async fn fs_content_replace(
         }
 
         if let Err(err) = tokio::fs::write(&path, updated).await {
-            if !changed_paths.is_empty() {
-                publish_fs_changed_event(
-                    &root,
-                    "replace-content",
-                    changed_paths.iter(),
-                    None,
-                    None,
-                );
-            }
+            if !changed_paths.is_empty() {}
             tracing::error!(
                 completed_files = changed_paths.len(),
                 completed_replacements = total_replacements,
@@ -763,9 +753,7 @@ pub async fn fs_content_replace(
         });
     }
 
-    if !changed_paths.is_empty() {
-        publish_fs_changed_event(&root, "replace-content", changed_paths.iter(), None, None);
-    }
+    if !changed_paths.is_empty() {}
 
     files.sort_by(|a, b| a.relative_path.cmp(&b.relative_path));
 

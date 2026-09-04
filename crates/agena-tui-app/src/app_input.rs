@@ -144,7 +144,6 @@ impl App {
         }
 
         match self.focus {
-            Focus::Sessions => self.handle_sessions_key(key),
             Focus::Transcript => self.handle_transcript_key(key),
             Focus::Composer => self.handle_composer_key(key),
         }

@@ -18,7 +18,7 @@ const props = withDefaults(
     insertions?: number
     deletions?: number
     isMobileFormFactor?: boolean
-    isMobilePointer?: boolean
+    isCompactTouch?: boolean
     mobileActionItems?: OptionMenuItem[]
     mobileActionTitle?: string
     showSelection?: boolean
@@ -31,7 +31,7 @@ const props = withDefaults(
     insertions: 0,
     deletions: 0,
     isMobileFormFactor: false,
-    isMobilePointer: false,
+    isCompactTouch: false,
     mobileActionItems: () => [],
     mobileActionTitle: '',
     showSelection: false,
@@ -49,7 +49,7 @@ const emit = defineEmits<{
 const hasStat = computed(() => (props.insertions ?? 0) > 0 || (props.deletions ?? 0) > 0)
 const mobileActionMenuOpen = ref(false)
 const mobileActionMenuQuery = ref('')
-const isMobileFormFactor = computed(() => Boolean(props.isMobileFormFactor ?? props.isMobilePointer))
+const isMobileFormFactor = computed(() => Boolean(props.isMobileFormFactor ?? props.isCompactTouch))
 
 const hasMobileActions = computed(
   () => isMobileFormFactor.value && Array.isArray(props.mobileActionItems) && props.mobileActionItems.length > 0,
@@ -160,7 +160,7 @@ function handleRowDragStart(event: DragEvent) {
           :title="mobileActionTitleText"
           :mobile-title="mobileActionTitleText"
           :searchable="true"
-          :is-mobile-pointer="isMobileFormFactor"
+          :is-compact-touch="isMobileFormFactor"
           @update:open="setMobileActionMenuOpen"
           @update:query="(v) => (mobileActionMenuQuery = v)"
           @select="onMobileActionSelect"

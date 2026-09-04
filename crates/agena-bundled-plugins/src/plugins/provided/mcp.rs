@@ -54,16 +54,6 @@ fn mcp_settings_metadata() -> &'static [(&'static str, &'static str, &'static st
             "Enables MCP credential lookup for bearer-from-store authentication.",
         ),
         (
-            "/runtime/token_store/backend",
-            "Credential Backend",
-            "Uses the operating-system keyring by default. Select file only for explicit legacy compatibility.",
-        ),
-        (
-            "/runtime/token_store/file_fallback",
-            "Legacy File Fallback",
-            "When keyring is selected, optionally read the legacy chmod-600 token file after keyring lookup misses or is unavailable; this never writes credentials into configuration.",
-        ),
-        (
             "/servers",
             "Servers",
             "Named MCP server definitions keyed by server identifier.",
@@ -460,9 +450,9 @@ impl McpPlugin {
                     "refresh_available": health.refresh_available,
                     "recommendation": oauth_health_recommendation(health),
                 })),
-                "credential_migration": status.credential_migration.map(|migration| serde_json::json!({
-                    "state": migration.as_str(),
-                    "recommendation": migration.recommendation(),
+                "credential_conflict": status.credential_conflict.map(|conflict| serde_json::json!({
+                    "state": conflict.as_str(),
+                    "recommendation": conflict.recommendation(),
                 })),
             })).collect::<Vec<_>>() }),
             ),
@@ -602,8 +592,8 @@ fn status_summary_suffix(status: &agena_mcp_client::McpServerStatus) -> String {
                 .unwrap_or_default()
         ));
     }
-    if let Some(migration) = status.credential_migration {
-        parts.push(format!("; migration={}", migration.as_str()));
+    if let Some(conflict) = status.credential_conflict {
+        parts.push(format!("; credential_conflict={}", conflict.as_str()));
     }
     parts.concat()
 }

@@ -19,10 +19,10 @@ const props = defineProps<{
   canOperate: boolean
   isTouchPointer?: boolean
   isMobileFormFactor?: boolean
-  isMobilePointer?: boolean
+  isCompactTouch?: boolean
 }>()
 
-const isMobileFormFactor = computed(() => props.isMobileFormFactor ?? props.isMobilePointer)
+const isMobileFormFactor = computed(() => props.isMobileFormFactor ?? props.isCompactTouch)
 const isTouchPointer = computed(() => props.isTouchPointer ?? isMobileFormFactor.value)
 
 const emit = defineEmits<{

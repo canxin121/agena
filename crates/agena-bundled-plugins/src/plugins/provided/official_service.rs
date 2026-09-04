@@ -822,7 +822,6 @@ fn parse_openai_usage(tool: &str, response: &serde_json::Value) -> CompletionUsa
         cache_write_tokens: cache_write,
         cache_read_tokens: cache_read,
         other_tokens: total.unwrap_or_default().saturating_sub(known),
-        total_cost: recorded.unwrap_or_default(),
         recorded_cost: recorded.unwrap_or_default(),
         recorded_cost_available: recorded.is_some(),
         ..CompletionUsage::default()

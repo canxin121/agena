@@ -8,9 +8,8 @@ use chrono::{DateTime, FixedOffset, Utc};
 
 /// One persisted provider-usage observation used to build usage statistics.
 ///
-/// Storage adapters project their rows into this Runtime-owned value. The
-/// legacy session-cost reducer may consume it while message/session ownership
-/// continues its staged migration.
+/// Storage adapters project their rows into this Runtime-owned value so usage
+/// totals and cost summaries share one observation shape.
 #[derive(Debug, Clone, PartialEq)]
 pub struct UsageStatRecord {
     pub session_id: i64,
@@ -62,7 +61,7 @@ fn fold(
     usage: &agena_provider::CompletionUsage,
 ) {
     let requests = usage.requests.max(u64::from(usage.has_own_usage()));
-    totals.runs = totals.runs.saturating_add(requests);
+    totals.requests = totals.requests.saturating_add(requests);
     totals.input_tokens = totals.input_tokens.saturating_add(usage.input_tokens);
     totals.output_tokens = totals.output_tokens.saturating_add(usage.output_tokens);
     totals.reasoning_tokens = totals
@@ -86,7 +85,9 @@ fn fold(
     totals.total_cost_usd += cost.total_cost_usd;
     totals.recorded_cost_usd += cost.recorded_cost_usd;
     totals.estimated_cost_usd += cost.estimated_cost_usd;
-    totals.unpriced_runs = totals.unpriced_runs.saturating_add(cost.unpriced_runs);
+    totals.unpriced_requests = totals
+        .unpriced_requests
+        .saturating_add(cost.unpriced_requests);
     fold_billable_units(totals, usage);
 }
 
@@ -283,8 +284,8 @@ pub fn summarize_usage_records(
         to: query.to.to_owned(),
         timezone_offset_minutes: query.timezone_offset_minutes,
         active_days: by_day.len() as u64,
-        average_cost_per_run_usd: average(totals.total_cost_usd, totals.runs),
-        average_tokens_per_run: average(totals.total_tokens as f64, totals.runs),
+        average_cost_per_request_usd: average(totals.total_cost_usd, totals.requests),
+        average_tokens_per_request: average(totals.total_tokens as f64, totals.requests),
         average_cost_per_active_day_usd: average(totals.total_cost_usd, by_day.len() as u64),
         average_tokens_per_active_day: average(totals.total_tokens as f64, by_day.len() as u64),
         peak_cost_date: peak_cost.map(|item| item.date.clone()),
@@ -308,7 +309,7 @@ fn compare_totals(left: &UsageTotals, right: &UsageTotals) -> std::cmp::Ordering
         .total_cost_usd
         .partial_cmp(&left.total_cost_usd)
         .unwrap_or(std::cmp::Ordering::Equal)
-        .then(right.runs.cmp(&left.runs))
+        .then(right.requests.cmp(&left.requests))
 }
 
 fn usage_date_key(timestamp: DateTime<Utc>, timezone_offset_minutes: i32) -> String {
@@ -365,7 +366,8 @@ mod tests {
                 reasoning_tokens: 5,
                 cache_write_tokens: 10,
                 cache_read_tokens: 40,
-                total_cost: 0.25,
+                recorded_cost: 0.25,
+                recorded_cost_available: true,
                 ..agena_provider::CompletionUsage::default()
             },
         }
@@ -399,7 +401,7 @@ mod tests {
                 false,
             );
         let stats = summarize_usage_records(&records, &query, generated_at);
-        assert_eq!(stats.totals.runs, 1);
+        assert_eq!(stats.totals.requests, 1);
         assert_eq!(stats.totals.sessions, 1);
         assert_eq!(stats.totals.total_tokens, 175);
         assert_eq!(stats.by_day[0].date, "2026-07-11");
@@ -412,7 +414,7 @@ mod tests {
         let query = UsageStatsQuery::for_period(UsagePeriod::Last7Days, generated_at);
         let stats = summarize_usage_records(&[], &query, generated_at);
         assert_eq!(stats.totals.total_tokens, 0);
-        assert_eq!(stats.average_cost_per_run_usd, 0.0);
+        assert_eq!(stats.average_cost_per_request_usd, 0.0);
         assert_eq!(stats.average_tokens_per_active_day, 0.0);
         assert!(stats.peak_cost_date.is_none());
     }

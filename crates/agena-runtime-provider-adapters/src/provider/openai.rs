@@ -1106,7 +1106,7 @@ mod tests {
         assert_eq!(usage.input_tokens, 100);
         assert_eq!(usage.output_tokens, 20);
         assert_eq!(usage.reasoning_tokens, 15);
-        assert!((usage.total_cost - 0.0037756).abs() < 1e-12);
+        assert!((usage.recorded_cost - 0.0037756).abs() < 1e-12);
     }
 
     #[tokio::test]

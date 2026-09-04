@@ -176,7 +176,6 @@ mod tests {
         "settings-mcp-server-label",
         "settings-mcp-auth-label",
         "settings-mcp-anonymous-access-label",
-        "settings-mcp-client-registration-label",
         "settings-mcp-public-url-label",
         "settings-mcp-oauth-issuer-label",
         "settings-mcp-oauth-password-label",

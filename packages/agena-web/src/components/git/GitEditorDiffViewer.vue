@@ -262,7 +262,7 @@ async function load(opts: {
     if (opts.commit) {
       const parentRequest = opts.parentCommit
         ? apiJson<GitCommitFileContentResponse>(
-            `/api/git/commit-file-content?directory=${encodeURIComponent(opts.directory)}&commit=${encodeURIComponent(opts.parentCommit)}&path=${encodeURIComponent(opts.path)}`,
+            `/api/v1/workbench/git/commit-file-content?directory=${encodeURIComponent(opts.directory)}&commit=${encodeURIComponent(opts.parentCommit)}&path=${encodeURIComponent(opts.path)}`,
             { signal: opts.signal },
           )
         : Promise.resolve<GitCommitFileContentResponse>({
@@ -274,12 +274,12 @@ async function load(opts: {
 
       const [diffResponse, originalResponse, modifiedResponse] = await Promise.all([
         apiJson<GitCommitDiffResponse>(
-          `/api/git/commit-file-diff?directory=${encodeURIComponent(opts.directory)}&commit=${encodeURIComponent(opts.commit)}&path=${encodeURIComponent(opts.path)}&contextLines=3`,
+          `/api/v1/workbench/git/commit-file-diff?directory=${encodeURIComponent(opts.directory)}&commit=${encodeURIComponent(opts.commit)}&path=${encodeURIComponent(opts.path)}&contextLines=3`,
           { signal: opts.signal },
         ),
         parentRequest,
         apiJson<GitCommitFileContentResponse>(
-          `/api/git/commit-file-content?directory=${encodeURIComponent(opts.directory)}&commit=${encodeURIComponent(opts.commit)}&path=${encodeURIComponent(opts.path)}`,
+          `/api/v1/workbench/git/commit-file-content?directory=${encodeURIComponent(opts.directory)}&commit=${encodeURIComponent(opts.commit)}&path=${encodeURIComponent(opts.path)}`,
           { signal: opts.signal },
         ),
       ])
@@ -304,11 +304,11 @@ async function load(opts: {
 
     const [diffResponse, fileResponse] = await Promise.all([
       apiJson<GitDiffResponse>(
-        `/api/git/diff?directory=${encodeURIComponent(opts.directory)}&path=${encodeURIComponent(opts.path)}&staged=${opts.staged ? 'true' : 'false'}&contextLines=3&includeMeta=true`,
+        `/api/v1/workbench/git/diff?directory=${encodeURIComponent(opts.directory)}&path=${encodeURIComponent(opts.path)}&staged=${opts.staged ? 'true' : 'false'}&contextLines=3&includeMeta=true`,
         { signal: opts.signal },
       ),
       apiJson<{ original: string; modified: string }>(
-        `/api/git/file-diff?directory=${encodeURIComponent(opts.directory)}&path=${encodeURIComponent(opts.path)}&staged=${opts.staged ? 'true' : 'false'}`,
+        `/api/v1/workbench/git/file-diff?directory=${encodeURIComponent(opts.directory)}&path=${encodeURIComponent(opts.path)}&staged=${opts.staged ? 'true' : 'false'}`,
         { signal: opts.signal },
       ),
     ])

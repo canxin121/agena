@@ -7,9 +7,9 @@ import { mainTabPath, normalizeMainTabPath } from '../src/app/navigation/mainTab
 
 test('workspace tab locations preserve valid nested SPA routes', () => {
   assert.equal(mainTabPath('files'), '/files')
-  assert.equal(normalizeMainTabPath('settings', '/settings/providers'), '/settings/providers')
+  assert.equal(normalizeMainTabPath('settings', '/settings/models-providers'), '/settings/models-providers')
   assert.equal(normalizeMainTabPath('chat', '/'), '/chat')
-  assert.equal(normalizeMainTabPath('files', '/settings/providers'), '/files')
+  assert.equal(normalizeMainTabPath('files', '/settings/models-providers'), '/files')
 })
 
 test('desktop workspace uses one Vue document and retains visited tab views', () => {

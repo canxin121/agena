@@ -179,10 +179,6 @@ pub(crate) const BEDROCK_SIGV4_ADAPTER_RULES: &[ProviderDraftAdapterRule] =
     }];
 
 pub(crate) const DEFAULT_LOCAL_OAUTH_REDIRECT_URI: &str = "http://localhost:1455/auth/callback";
-pub(crate) const LEGACY_LOCAL_OAUTH_REDIRECT_URIS: &[&str] = &[
-    "http://127.0.0.1:1455/callback",
-    "http://127.0.0.1:1455/auth/callback",
-];
 pub(crate) const DEFAULT_GITLAB_INSTANCE_URL: &str = "https://gitlab.com";
 pub(crate) const CLINE_API_MODELS_URL: &str =
     "https://api.cline.bot/api/v1/ai/cline/recommended-models";
@@ -477,11 +473,7 @@ pub struct ProviderCredentialDraftBundle {
 
 impl ProviderCredentialDraftBundle {
     pub(crate) fn normalize_shape(&mut self) {
-        if self.openai_chatgpt.redirect_uri.trim().is_empty()
-            || LEGACY_LOCAL_OAUTH_REDIRECT_URIS
-                .iter()
-                .any(|legacy| self.openai_chatgpt.redirect_uri.trim() == *legacy)
-        {
+        if self.openai_chatgpt.redirect_uri.trim().is_empty() {
             self.openai_chatgpt.redirect_uri = DEFAULT_LOCAL_OAUTH_REDIRECT_URI.to_owned();
         }
         if self.gitlab.redirect_uri.trim().is_empty() {

@@ -26,7 +26,7 @@ use crate::{ApiResult, AppError, AppState};
 
 const PREVIEW_DISCOVERY_HOSTS: [&str; 2] = ["127.0.0.1", "localhost"];
 const PREVIEW_DISCOVERY_PORTS: [u16; 8] = [5173, 3000, 4173, 8080, 8000, 4200, 4321, 5174];
-const PREVIEW_PROXY_BASE_PREFIX: &str = "/api/workspace/preview/s/";
+const PREVIEW_PROXY_BASE_PREFIX: &str = "/api/v1/workbench/preview/s/";
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct WorkspacePreviewQuery {

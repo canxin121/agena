@@ -1,10 +1,6 @@
-use std::{
-    collections::HashSet,
-    path::{Component, Path, PathBuf},
-};
+use std::path::{Component, Path, PathBuf};
 
 use crate::{ApiResult, AppError};
-use serde::Serialize;
 
 use crate::server::path_utils::{home_dir_env, normalize_directory_path};
 
@@ -28,7 +24,6 @@ const DEFAULT_CONTENT_SEARCH_CONTEXT_CHARS: usize = 48;
 const MAX_CONTENT_SEARCH_CONTEXT_CHARS: usize = 160;
 const MAX_CONTENT_SEARCH_FILE_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_CONTENT_REPLACE_PATHS: usize = 4000;
-const MAX_FS_CHANGE_EVENT_PATHS: usize = 160;
 
 const FILE_SEARCH_EXCLUDED_DIRS: &[&str] = &[
     "node_modules",
@@ -42,107 +37,6 @@ const FILE_SEARCH_EXCLUDED_DIRS: &[&str] = &[
     "tmp",
     "logs",
 ];
-
-fn is_false(value: &bool) -> bool {
-    !*value
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct FsChangedEventProperties {
-    directory: String,
-    change_type: String,
-    paths: Vec<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    old_path: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    new_path: Option<String>,
-    #[serde(skip_serializing_if = "is_false")]
-    truncated: bool,
-}
-
-#[derive(Debug, Serialize)]
-struct FsChangedEvent {
-    #[serde(rename = "type")]
-    event_type: &'static str,
-    properties: FsChangedEventProperties,
-}
-
-fn encode_fs_changed_event<I>(
-    root: &Path,
-    change_type: &str,
-    changed_paths: I,
-    old_path: Option<&Path>,
-    new_path: Option<&Path>,
-) -> Option<String>
-where
-    I: IntoIterator,
-    I::Item: AsRef<Path>,
-{
-    let mut seen = HashSet::<String>::new();
-    let mut paths = Vec::<String>::new();
-    let mut truncated = false;
-
-    for path in changed_paths {
-        let normalized = to_api_path(path.as_ref());
-        if normalized.trim().is_empty() || !seen.insert(normalized.clone()) {
-            continue;
-        }
-        if paths.len() >= MAX_FS_CHANGE_EVENT_PATHS {
-            truncated = true;
-            continue;
-        }
-        paths.push(normalized);
-    }
-
-    if paths.is_empty() {
-        return None;
-    }
-
-    match serde_json::to_string(&FsChangedEvent {
-        event_type: "agena:fs-changed",
-        properties: FsChangedEventProperties {
-            directory: to_api_path(root),
-            change_type: change_type.to_string(),
-            paths,
-            old_path: old_path.map(to_api_path),
-            new_path: new_path.map(to_api_path),
-            truncated,
-        },
-    }) {
-        Ok(event) => Some(event),
-        Err(error) => {
-            tracing::error!(
-                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
-                    "serialize a filesystem change event",
-                    &error,
-                ),
-                "filesystem change event could not be encoded"
-            );
-            None
-        }
-    }
-}
-
-pub(crate) fn publish_fs_changed_event<I>(
-    root: &Path,
-    change_type: &str,
-    changed_paths: I,
-    old_path: Option<&Path>,
-    new_path: Option<&Path>,
-) where
-    I: IntoIterator,
-    I::Item: AsRef<Path>,
-{
-    if let Some(event) =
-        encode_fs_changed_event(root, change_type, changed_paths, old_path, new_path)
-    {
-        tracing::debug!(
-            event,
-            "filesystem change event was projected for legacy compatibility"
-        );
-    }
-}
 
 fn has_parent_dir_component(p: &Path) -> bool {
     p.components().any(|c| matches!(c, Component::ParentDir))

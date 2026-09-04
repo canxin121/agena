@@ -69,11 +69,11 @@ pub struct RuntimeMcpServerStatus {
     pub auth_mode: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub oauth_health: Option<RuntimeMcpOAuthHealth>,
-    /// Redacted migration advisory for coexisting, separately scoped bearer
-    /// and OAuth records.  It never changes which credential a connection
+    /// Redacted credential conflict for coexisting, separately scoped bearer
+    /// and OAuth records. It never changes which credential a connection
     /// uses and contains no token or keyring detail.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub credential_migration: Option<RuntimeMcpCredentialMigration>,
+    pub credential_conflict: Option<RuntimeMcpCredentialConflict>,
 }
 
 /// Redacted, local-only health of an MCP OAuth credential record. Status
@@ -88,8 +88,8 @@ pub struct RuntimeMcpOAuthHealth {
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
-/// MCP credential migration status.
-pub struct RuntimeMcpCredentialMigration {
+/// MCP credential conflict status.
+pub struct RuntimeMcpCredentialConflict {
     pub state: String,
     pub recommendation: String,
 }

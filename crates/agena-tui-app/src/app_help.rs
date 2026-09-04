@@ -61,10 +61,6 @@ impl App {
         }
         match &self.current_route {
             Route::Main => match self.focus {
-                Focus::Sessions => self.help_for(
-                    HelpPreset::Sessions,
-                    ui_text::t(&self.i18n, "help-section-sessions"),
-                ),
                 Focus::Transcript => self.help_for(
                     HelpPreset::Transcript,
                     ui_text::t(&self.i18n, "help-section-transcript"),

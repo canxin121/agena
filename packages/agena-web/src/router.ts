@@ -1,6 +1,5 @@
 import { createRouter, createWebHistory, type RouteLocationNormalizedLoaded, type RouteRecordRaw } from 'vue-router'
 import { sessionStorageKeys } from '@/lib/persistence/storageKeys'
-import { settingsPathForTab, settingsTabFromRouteValue } from '@/components/settings/sidebar/settingsSidebarNavigation'
 import { hasEmbeddedWorkspacePaneQuery } from '@/app/windowScope'
 
 const CHUNK_RECOVERY_KEY = sessionStorageKeys.app.chunkRecoveryReloaded
@@ -51,18 +50,6 @@ const routes: RouteRecordRaw[] = [
     path: '/git',
     component: () => import('./pages/GitPage.vue'),
     meta: { shellSidebar: 'none', mobilePanel: 'git' },
-  },
-  {
-    path: '/settings/opencode/:legacySection?',
-    redirect: (to) => ({
-      path: settingsPathForTab(settingsTabFromRouteValue(to.path) || 'general'),
-      query: to.query,
-      hash: to.hash,
-    }),
-  },
-  {
-    path: '/settings/plan/:legacySection?',
-    redirect: (to) => ({ path: '/settings/plugins', query: to.query, hash: to.hash }),
   },
   {
     path: '/settings/:section?',

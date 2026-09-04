@@ -267,19 +267,6 @@ impl App {
         if self.transcript.session_id != Some(session_id) {
             return;
         }
-        // Apply the incremental patch (cache invalidation, activity merge,
-        // watermark). A refresh is parked only when forced: streaming flushes
-        // emit `PartUpdated` far faster than the TUI can apply full-snapshot
-        // refreshes, and `on_tick` repaints on its own `REFRESH_INTERVAL_MS`
-        // gate, so ordinary events don't schedule one. The bool is consumed
-        // only by tests; the terminal schedules no refresh from it.
-        if let Some(event) = &live.event {
-            self.transcript.apply_presentation_event(
-                event,
-                self.layout.transcript_body.width,
-                self.layout.transcript_body.height,
-            );
-        }
         if live.force_refresh {
             self.pending_refresh_for(session_id);
         }

@@ -22,12 +22,8 @@ test('model selection keys preserve provider, adapter, and model identity', () =
   })
 })
 
-test('parseModelSlug accepts legacy provider/model storage entries', () => {
-  assert.deepEqual(parseModelSlug('anthropic/claude-sonnet'), {
-    provider: 'anthropic',
-    adapter: '',
-    model: 'claude-sonnet',
-  })
+test('parseModelSlug rejects removed two-part and malformed storage entries', () => {
+  assert.deepEqual(parseModelSlug('anthropic/claude-sonnet'), { provider: '', adapter: '', model: '' })
   assert.deepEqual(parseModelSlug('invalid'), { provider: '', adapter: '', model: '' })
 })
 
@@ -43,7 +39,7 @@ test('resolveEffectiveDefaults prefers the runtime-wide default and keeps its mo
         verbosity: 'compact',
         parallelToolCalls: true,
       },
-      fallback: { provider: 'legacy', model: 'legacy-model' },
+      fallback: { provider: 'fallback', model: 'fallback-model' },
     }),
     {
       provider: 'openai',

@@ -33,11 +33,6 @@ pub(crate) enum WorkflowPlanStepStatus {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default)]
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct WorkflowPlanCheckpoint {
-    /// Legacy identifier retained only so stored plans from older versions keep
-    /// deserializing. New plans omit it and steps/checks are addressed by their
-    /// 1-based index instead.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) id: Option<String>,
     pub(crate) text: String,
     pub(crate) status: WorkflowPlanStepStatus,
 }
@@ -45,11 +40,6 @@ pub(crate) struct WorkflowPlanCheckpoint {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default)]
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct WorkflowPlanStep {
-    /// Legacy identifier retained only so stored plans from older versions keep
-    /// deserializing. New plans omit it and steps/checks are addressed by their
-    /// 1-based index instead.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) id: Option<String>,
     pub(crate) title: String,
     pub(crate) description: String,
     pub(crate) executor: WorkflowPlanExecutor,

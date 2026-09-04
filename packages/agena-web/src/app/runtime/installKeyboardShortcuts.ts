@@ -46,8 +46,8 @@ export function installKeyboardShortcuts(): () => void {
         if (ui.isCompactLayout) void router.push('/chat')
         else void workspaceNavigation.openMainTab('chat')
       } else {
-        if (ui.isCompactLayout) void router.push('/settings/general')
-        else void workspaceNavigation.openMainTab('settings', { path: '/settings/general' })
+        if (ui.isCompactLayout) void router.push('/settings/interface')
+        else void workspaceNavigation.openMainTab('settings', { path: '/settings/interface' })
       }
       return
     }

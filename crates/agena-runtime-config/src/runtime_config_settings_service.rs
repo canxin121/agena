@@ -244,16 +244,10 @@ impl RuntimeConfigSettingsError {
 
     pub fn internal(diagnostic: impl Into<String>) -> Self {
         let diagnostic = diagnostic.into();
-        let mut presentation = agena_failure::UserPresentation::validated_with_context(
+        let presentation = agena_failure::UserPresentation::new(
             "settings-internal",
-            diagnostic.as_str(),
+            "Couldn’t update the settings.",
         );
-        if presentation.fallback == "The request is invalid. Review the input and try again." {
-            presentation = agena_failure::UserPresentation::new(
-                "settings-internal",
-                "The settings update failed; review the diagnostic log for the recorded failure id.",
-            );
-        }
         Self {
             kind: RuntimeConfigSettingsErrorKind::Internal,
             failure: Box::new(agena_failure::Failure::new(
@@ -386,8 +380,8 @@ pub fn list_runtime_file_settings(
 }
 
 /// Schema validation is supplied by the concrete composition layer. Runtime
-/// owns the JSON document operation and persistence mechanics; Runtime keeps only
-/// its schema-specific validation policy while that schema is still migrating.
+/// owns JSON document operations and persistence mechanics while the composed
+/// validator owns schema-specific policy.
 pub type RuntimeSettingsDocumentValidator =
     dyn Fn(&Path, &str) -> Result<(), RuntimeConfigSettingsError> + Send + Sync;
 

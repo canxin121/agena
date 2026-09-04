@@ -138,15 +138,15 @@ impl ServerSpec {
         }
     }
 
-    fn credential_migration(
+    fn credential_conflict(
         &self,
         server: &str,
         token_store: Option<&dyn TokenStore>,
-    ) -> Option<McpCredentialMigration> {
+    ) -> Option<McpCredentialConflict> {
         match self {
             // OAuth transport never reads the bearer store (see
             // `connect_http`).  A remaining manual bearer record is therefore
-            // safe but often signals a completed migration that should be
+            // safe but often signals a previous auth-mode switch that should be
             // cleaned up explicitly rather than silently combined.
             Self::Http {
                 auth: Some(HttpAuth::OAuth { .. }),
@@ -156,14 +156,14 @@ impl ServerSpec {
                 .unwrap_or(McpCredentialState::Missing)
             {
                 McpCredentialState::Configured => {
-                    Some(McpCredentialMigration::OAuthWithManualBearer)
+                    Some(McpCredentialConflict::OAuthWithManualBearer)
                 }
                 McpCredentialState::Unreadable => {
-                    Some(McpCredentialMigration::OAuthWithUnreadableManualBearer)
+                    Some(McpCredentialConflict::OAuthWithUnreadableManualBearer)
                 }
                 McpCredentialState::Missing => None,
             },
-            // Do not migrate automatically in the reverse direction either:
+            // Do not combine the two credential stores in the reverse direction either:
             // the user must first change config to `auth: oauth`, verify the
             // new connection, then remove the bearer credential.
             Self::Http {
@@ -174,10 +174,10 @@ impl ServerSpec {
                 .unwrap_or(crate::OAuthCredentialState::Unreadable)
             {
                 crate::OAuthCredentialState::Configured => {
-                    Some(McpCredentialMigration::BearerWithOAuth)
+                    Some(McpCredentialConflict::BearerWithOAuth)
                 }
                 crate::OAuthCredentialState::Unreadable => {
-                    Some(McpCredentialMigration::BearerWithUnreadableOAuth)
+                    Some(McpCredentialConflict::BearerWithUnreadableOAuth)
                 }
                 crate::OAuthCredentialState::Missing => None,
             },
@@ -228,7 +228,7 @@ impl McpServerAuthMode {
 
 /// Redacted presence state for a manual bearer credential.  It is separate
 /// from OAuth health so a status caller can detect a stale credential after a
-/// deliberate auth-mode migration without receiving a secret or keyring
+/// deliberate auth-mode switch without receiving a secret or keyring
 /// diagnostic.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum McpCredentialState {
@@ -237,18 +237,18 @@ pub enum McpCredentialState {
     Unreadable,
 }
 
-/// Explicit, non-mutating migration advisory.  This status proves neither
-/// credential is used by the other auth route: it only tells the operator
-/// that two separately stored records coexist and gives a safe cleanup path.
+/// Explicit, non-mutating credential conflict. This status proves neither
+/// credential is used by the other auth route; it tells the operator that two
+/// separately stored records coexist and gives a safe cleanup path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum McpCredentialMigration {
+pub enum McpCredentialConflict {
     OAuthWithManualBearer,
     OAuthWithUnreadableManualBearer,
     BearerWithOAuth,
     BearerWithUnreadableOAuth,
 }
 
-impl McpCredentialMigration {
+impl McpCredentialConflict {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::OAuthWithManualBearer => "oauth_with_manual_bearer",
@@ -265,7 +265,9 @@ impl McpCredentialMigration {
                 "inspect_or_clear_manual_bearer_before_cleanup"
             }
             Self::BearerWithOAuth => "switch_config_to_oauth_verify_then_remove_manual_bearer",
-            Self::BearerWithUnreadableOAuth => "inspect_or_clear_oauth_record_before_migration",
+            Self::BearerWithUnreadableOAuth => {
+                "inspect_or_clear_oauth_record_before_switching_auth"
+            }
         }
     }
 }
@@ -555,8 +557,8 @@ pub struct McpServerStatus {
     pub oauth_health: Option<OAuthCredentialHealth>,
     /// Optional, redacted advisory that a distinct bearer and OAuth record
     /// coexist across an explicit auth-mode boundary.  It never changes the
-    /// selected credential or triggers migration.
-    pub credential_migration: Option<McpCredentialMigration>,
+    /// selected credential or changes the selected credential.
+    pub credential_conflict: Option<McpCredentialConflict>,
 }
 
 impl Default for McpConnectionManager {
@@ -889,8 +891,8 @@ impl McpConnectionManager {
                 reconnect_supervisor_running,
                 auth_mode: spec.auth_mode(),
                 oauth_health: spec.oauth_health(name.as_str()),
-                credential_migration: spec
-                    .credential_migration(name.as_str(), self.token_store.as_deref()),
+                credential_conflict: spec
+                    .credential_conflict(name.as_str(), self.token_store.as_deref()),
             });
         }
         statuses
@@ -2009,7 +2011,7 @@ mod tests {
     }
 
     #[test]
-    fn oauth_and_bearer_migration_advisories_are_explicit_and_redacted() {
+    fn oauth_and_bearer_credential_conflicts_are_explicit_and_redacted() {
         struct PresentBearer;
         impl TokenStore for PresentBearer {
             fn bearer(&self, _server: &str) -> Option<String> {
@@ -2028,8 +2030,8 @@ mod tests {
             tool_policy: McpToolPolicy::default(),
         };
         let advisory = oauth
-            .credential_migration("example", Some(&PresentBearer))
-            .expect("manual bearer advisory");
+            .credential_conflict("example", Some(&PresentBearer))
+            .expect("manual bearer conflict");
         assert_eq!(advisory.as_str(), "oauth_with_manual_bearer");
         assert_eq!(
             advisory.recommendation(),

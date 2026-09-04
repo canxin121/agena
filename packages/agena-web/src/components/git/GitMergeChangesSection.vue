@@ -26,13 +26,13 @@ const props = withDefaults(
     loading: boolean
     isTouchPointer?: boolean
     isMobileFormFactor?: boolean
-    isMobilePointer?: boolean
+    isCompactTouch?: boolean
     multiSelectMode?: boolean
     selectedPaths?: string[]
   }>(),
   {
     isMobileFormFactor: false,
-    isMobilePointer: false,
+    isCompactTouch: false,
     multiSelectMode: false,
     selectedPaths: () => [],
   },
@@ -70,7 +70,7 @@ function onFileSelect(path: string, event: MouseEvent) {
 
 const selectedCount = computed(() => props.files.filter((f) => isPathSelected(f.path)).length)
 const selectableCount = computed(() => props.files.length)
-const isMobileFormFactor = computed(() => props.isMobileFormFactor ?? props.isMobilePointer)
+const isMobileFormFactor = computed(() => props.isMobileFormFactor ?? props.isCompactTouch)
 const isTouchPointer = computed(() => props.isTouchPointer ?? isMobileFormFactor.value)
 
 function mobileActionsForFile(path: string): OptionMenuItem[] {

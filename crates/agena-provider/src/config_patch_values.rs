@@ -504,10 +504,7 @@ pub fn provider_model_overlay_from_definition(
     ResolvedProviderModelConfig {
         enabled: true,
         native_compaction: true,
-        agena_tools: crate::AgenaToolsConfig {
-            mode,
-            provider_native: Default::default(),
-        },
+        agena_tools: crate::AgenaToolsConfig { mode },
         definition,
     }
 }

@@ -1,5 +1,5 @@
 //! Runtime-private adapter that materializes Runtime-owned parsed overrides into the
-//! legacy raw configuration schema.
+//! raw configuration schema.
 
 use super::{RawConfig, RawTracingConfig, RawTuiUiConfig, RawUiConfig};
 use crate::ConfigOverride;

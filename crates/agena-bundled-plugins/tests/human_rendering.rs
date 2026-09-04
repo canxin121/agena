@@ -24,7 +24,6 @@ fn sample_payload(tool: &str) -> Value {
         "completed": false,
         "misfire_policy": "skip",
         "retry_max_attempts": 1,
-        "run_count": 2,
         "last_run_status": "completed"
     });
     let task = json!({
@@ -128,8 +127,7 @@ fn sample_payload(tool: &str) -> Value {
             "completed": false,
             "misfire_policy": "skip",
             "retry_max_attempts": 1,
-            "run_count": 2,
-            "last_run_status": "completed"
+                "last_run_status": "completed"
         }}),
         "cron.resume" => json!({"job": job.clone()}),
         "cron.history" => json!({

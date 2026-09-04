@@ -1013,8 +1013,7 @@ pub(crate) fn file_ref_from_attachment(part: &AttachmentPart) -> part_content::F
 
 /// Project a [`SkillReferencePart`] onto the canonical `skill_ref` shape: the
 /// first skill name as the named key, and only its message-scoped reference
-/// metadata under `extra["skills"]`. Legacy snapshot bodies are accepted on
-/// read but are deliberately stripped from every newly persisted part.
+/// metadata under `extra["skills"]`.
 pub(crate) fn skill_ref_from_reference(part: &SkillReferencePart) -> part_content::SkillRefContent {
     let mut extra = BTreeMap::new();
     if !part.skills.is_empty() {
@@ -1126,12 +1125,12 @@ fn domain_usage_stats_from_storage(
     generated_at: DateTime<Utc>,
 ) -> agena_domain::UsageStats {
     let micros_per_usd = 1_000_000_f64;
-    let runs = stats.total_calls.max(0) as u64;
+    let requests = stats.total_calls.max(0) as u64;
     let input_tokens = stats.total_input_tokens.max(0) as u64;
     let output_tokens = stats.total_output_tokens.max(0) as u64;
     let total_cost_usd = stats.total_cost_micros.max(0) as f64 / micros_per_usd;
     let totals = agena_domain::UsageTotals {
-        runs,
+        requests,
         sessions: 0,
         input_tokens,
         output_tokens,
@@ -1148,14 +1147,14 @@ fn domain_usage_stats_from_storage(
         total_cost_usd,
         recorded_cost_usd: 0.0,
         estimated_cost_usd: total_cost_usd,
-        unpriced_runs: 0,
+        unpriced_requests: 0,
         billable_units: Vec::new(),
     };
     let by_provider = stats.groups.iter().fold(
         std::collections::BTreeMap::<String, agena_domain::UsageTotals>::new(),
         |mut map, group| {
             let provider = map.entry(group.provider_id.clone()).or_default();
-            provider.runs += group.calls.max(0) as u64;
+            provider.requests += group.calls.max(0) as u64;
             provider.input_tokens += group.input_tokens.max(0) as u64;
             provider.output_tokens += group.output_tokens.max(0) as u64;
             provider.total_tokens +=
@@ -1178,7 +1177,7 @@ fn domain_usage_stats_from_storage(
         .into_iter()
         .map(|group| {
             let totals = agena_domain::UsageTotals {
-                runs: group.calls.max(0) as u64,
+                requests: group.calls.max(0) as u64,
                 input_tokens: group.input_tokens.max(0) as u64,
                 output_tokens: group.output_tokens.max(0) as u64,
                 total_tokens: (group.input_tokens.max(0) + group.output_tokens.max(0)) as u64,
@@ -1204,15 +1203,15 @@ fn domain_usage_stats_from_storage(
         timezone_offset_minutes: query.timezone_offset_minutes,
         totals,
         active_days: 0,
-        average_cost_per_run_usd: if runs == 0 {
+        average_cost_per_request_usd: if requests == 0 {
             0.0
         } else {
-            total_cost_usd / runs as f64
+            total_cost_usd / requests as f64
         },
-        average_tokens_per_run: if runs == 0 {
+        average_tokens_per_request: if requests == 0 {
             0.0
         } else {
-            (input_tokens + output_tokens) as f64 / runs as f64
+            (input_tokens + output_tokens) as f64 / requests as f64
         },
         average_cost_per_active_day_usd: 0.0,
         average_tokens_per_active_day: 0.0,
@@ -1630,12 +1629,11 @@ mod tests {
     }
 
     #[test]
-    fn skill_ref_persistence_strips_legacy_instructions() {
+    fn skill_ref_persistence_round_trips_reference_metadata() {
         let content = skill_ref_from_reference(&SkillReferencePart {
             skills: vec![crate::part::SkillReference {
                 name: "review".to_owned(),
                 description: "Review changes".to_owned(),
-                instructions: "legacy body must not persist".to_owned(),
                 content_hash: "abc123".to_owned(),
                 source: "workspace".to_owned(),
                 aliases: vec!["code-review".to_owned()],
@@ -1648,7 +1646,6 @@ mod tests {
             .and_then(|skills| skills.first())
             .and_then(Value::as_object)
             .expect("stored Skill reference metadata");
-        assert!(stored.get("instructions").is_none());
         assert_eq!(stored.get("name").and_then(Value::as_str), Some("review"));
         assert_eq!(
             stored.get("content_hash").and_then(Value::as_str),
@@ -1657,7 +1654,7 @@ mod tests {
 
         let restored = part_content::skill_reference_from_skill_ref(&content);
         assert_eq!(restored.skills.len(), 1);
-        assert!(restored.skills[0].instructions.is_empty());
+        assert_eq!(restored.skills[0].name, "review");
         assert_eq!(restored.skills[0].description, "Review changes");
     }
 

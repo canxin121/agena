@@ -6,29 +6,18 @@
 //! before becoming keyring account names so arbitrary config identifiers do
 //! not create invalid platform account strings or expose server names in the
 //! credential index.
-//!
-//! [`FileTokenStore`] remains available only as an explicit compatibility
-//! backend/fallback. Its on-disk file is `chmod 600` on Unix, but it is not a
-//! substitute for a system secret store. Neither implementation ever writes a
-//! token back into Agena's normal JSON configuration.
 
-use std::collections::BTreeMap;
-use std::fs;
-use std::io::{self, Write as _};
-use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use agena_keyring_store::{KeyringSecretStore, SecretStore, SecretStoreError};
 use async_trait::async_trait;
 use oauth2::TokenResponse;
 use rmcp::transport::{AuthError, CredentialStore, StoredCredentials};
-use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::{McpCredentialState, TokenStore};
 
-const DEFAULT_RELATIVE_PATH: &str = "agena/mcp-tokens.json";
 pub const MCP_KEYRING_SERVICE: &str = "agena.mcp";
 const KEYRING_KEY_PREFIX: &str = "mcp-bearer-v1-";
 const OAUTH_KEYRING_KEY_PREFIX: &str = "mcp-oauth-v1-";
@@ -116,12 +105,8 @@ impl OAuthCredentialHealth {
 #[derive(Debug, Error)]
 /// Error from the MCP token store.
 pub enum TokenStoreError {
-    #[error("io error: {0}")]
-    Io(#[from] io::Error),
-    #[error("json error: {0}")]
-    Json(#[from] serde_json::Error),
-    #[error("token store lock poisoned")]
-    LockPoisoned,
+    #[error("invalid token-store input: {0}")]
+    InvalidInput(String),
     #[error("keyring error: {0}")]
     Keyring(#[from] SecretStoreError),
 }
@@ -371,218 +356,12 @@ impl CredentialStore for KeyringOAuthCredentialStore {
     }
 }
 
-/// Read-through composition used when a user explicitly opts into the legacy
-/// file fallback. A keyring value always wins; the file is consulted only
-/// after the keyring has no value or is unavailable.
-pub struct FallbackTokenStore {
-    primary: Arc<dyn TokenStore>,
-    fallback: Arc<dyn TokenStore>,
-}
-
-impl std::fmt::Debug for FallbackTokenStore {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("FallbackTokenStore")
-            .field("primary", &"TokenStore")
-            .field("fallback", &"TokenStore")
-            .finish()
-    }
-}
-
-impl FallbackTokenStore {
-    pub fn new(primary: Arc<dyn TokenStore>, fallback: Arc<dyn TokenStore>) -> Self {
-        Self { primary, fallback }
-    }
-}
-
-impl TokenStore for FallbackTokenStore {
-    fn bearer(&self, server: &str) -> Option<String> {
-        self.primary
-            .bearer(server)
-            .or_else(|| self.fallback.bearer(server))
-    }
-
-    fn credential_state(&self, server: &str) -> McpCredentialState {
-        let primary = self.primary.credential_state(server);
-        let fallback = self.fallback.credential_state(server);
-        match (primary, fallback) {
-            (McpCredentialState::Configured, _) | (_, McpCredentialState::Configured) => {
-                McpCredentialState::Configured
-            }
-            (McpCredentialState::Unreadable, _) | (_, McpCredentialState::Unreadable) => {
-                McpCredentialState::Unreadable
-            }
-            _ => McpCredentialState::Missing,
-        }
-    }
-}
-
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
-struct StoreFile {
-    #[serde(default)]
-    servers: BTreeMap<String, ServerTokenRecord>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct ServerTokenRecord {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    bearer: Option<String>,
-}
-
-#[derive(Debug)]
-/// File-backed MCP token store.
-pub struct FileTokenStore {
-    path: PathBuf,
-    inner: Mutex<StoreFile>,
-}
-
-impl FileTokenStore {
-    /// Open or create the token file at the default `~/agena/mcp-tokens.json`
-    /// path. Returns Ok with an empty store if the file does not exist.
-    pub fn open_default() -> Result<Self, TokenStoreError> {
-        Self::open(&default_path())
-    }
-
-    pub fn open(path: &Path) -> Result<Self, TokenStoreError> {
-        let inner = match fs::metadata(path) {
-            Ok(_) => {
-                let raw = fs::read_to_string(path)?;
-                if raw.trim().is_empty() {
-                    StoreFile::default()
-                } else {
-                    serde_json::from_str(&raw)?
-                }
-            }
-            Err(error) if error.kind() == io::ErrorKind::NotFound => StoreFile::default(),
-            Err(error) => return Err(TokenStoreError::Io(error)),
-        };
-        Ok(Self {
-            path: path.to_path_buf(),
-            inner: Mutex::new(inner),
-        })
-    }
-
-    pub fn path(&self) -> &Path {
-        &self.path
-    }
-
-    pub fn put_bearer(&self, server: &str, token: &str) -> Result<(), TokenStoreError> {
-        let server = normalized_server_name(server)?;
-        let token = normalized_token(token)?;
-        let mut guard = self
-            .inner
-            .lock()
-            .map_err(|_| TokenStoreError::LockPoisoned)?;
-        let entry = guard
-            .servers
-            .entry(server)
-            .or_insert_with(|| ServerTokenRecord { bearer: None });
-        entry.bearer = Some(token);
-        self.persist_snapshot(&guard)
-    }
-
-    pub fn delete(&self, server: &str) -> Result<bool, TokenStoreError> {
-        let server = normalized_server_name(server)?;
-        let mut guard = self
-            .inner
-            .lock()
-            .map_err(|_| TokenStoreError::LockPoisoned)?;
-        let removed = guard.servers.remove(server.as_str()).is_some();
-        if removed {
-            self.persist_snapshot(&guard)?;
-        }
-        Ok(removed)
-    }
-
-    pub fn list_servers(&self) -> Result<Vec<String>, TokenStoreError> {
-        let guard = self
-            .inner
-            .lock()
-            .map_err(|_| TokenStoreError::LockPoisoned)?;
-        Ok(guard.servers.keys().cloned().collect())
-    }
-
-    fn persist_snapshot(&self, snapshot: &StoreFile) -> Result<(), TokenStoreError> {
-        let parent = self.path.parent().ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!(
-                    "MCP token-store path has no parent: {}",
-                    self.path.display()
-                ),
-            )
-        })?;
-        fs::create_dir_all(parent)?;
-        let body = serde_json::to_vec_pretty(snapshot)?;
-        let mut builder = tempfile::Builder::new();
-        builder.prefix(".agena-mcp-token-").suffix(".json.tmp");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt as _;
-            builder.permissions(fs::Permissions::from_mode(0o600));
-        }
-        let mut staged = builder.tempfile_in(parent)?;
-        staged.write_all(body.as_slice())?;
-        staged.flush()?;
-        staged.as_file().sync_all()?;
-        staged.persist(&self.path).map_err(|error| error.error)?;
-        chmod_user_only(&self.path)?;
-        Ok(())
-    }
-}
-
-impl TokenStore for FileTokenStore {
-    fn bearer(&self, server: &str) -> Option<String> {
-        let guard = match self.inner.lock() {
-            Ok(guard) => guard,
-            Err(error) => {
-                tracing::error!(
-                    operation = "read MCP bearer token",
-                    error = %error,
-                    "recovering poisoned MCP file token-store lock"
-                );
-                error.into_inner()
-            }
-        };
-        guard
-            .servers
-            .get(server)
-            .and_then(|e| e.bearer.clone())
-            .filter(|t| !t.is_empty())
-    }
-
-    fn credential_state(&self, server: &str) -> McpCredentialState {
-        let guard = match self.inner.lock() {
-            Ok(guard) => guard,
-            Err(error) => {
-                tracing::error!(
-                    operation = "inspect MCP credential state",
-                    error = %error,
-                    "recovering poisoned MCP file token-store lock"
-                );
-                error.into_inner()
-            }
-        };
-        if guard
-            .servers
-            .get(server)
-            .and_then(|entry| entry.bearer.as_deref())
-            .is_some_and(|token| !token.trim().is_empty())
-        {
-            McpCredentialState::Configured
-        } else {
-            McpCredentialState::Missing
-        }
-    }
-}
-
 fn normalized_server_name(server: &str) -> Result<String, TokenStoreError> {
     let server = server.trim();
     if server.is_empty() {
-        return Err(TokenStoreError::Io(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "MCP server name must not be empty",
-        )));
+        return Err(TokenStoreError::InvalidInput(
+            "MCP server name must not be empty".to_owned(),
+        ));
     }
     Ok(server.to_owned())
 }
@@ -590,10 +369,9 @@ fn normalized_server_name(server: &str) -> Result<String, TokenStoreError> {
 fn normalized_token(token: &str) -> Result<String, TokenStoreError> {
     let token = token.trim();
     if token.is_empty() {
-        return Err(TokenStoreError::Io(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "MCP bearer token must not be empty",
-        )));
+        return Err(TokenStoreError::InvalidInput(
+            "MCP bearer token must not be empty".to_owned(),
+        ));
     }
     Ok(token.to_owned())
 }
@@ -620,33 +398,10 @@ fn oauth_keyring_key(server: &str) -> String {
     key
 }
 
-fn default_path() -> PathBuf {
-    let home = std::env::var("HOME")
-        .or_else(|_| std::env::var("USERPROFILE"))
-        .ok()
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| ".".to_string());
-    PathBuf::from(home).join(DEFAULT_RELATIVE_PATH)
-}
-
-#[cfg(unix)]
-fn chmod_user_only(path: &Path) -> io::Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-    let meta = fs::metadata(path)?;
-    let mut perms = meta.permissions();
-    perms.set_mode(0o600);
-    fs::set_permissions(path, perms)
-}
-
-#[cfg(not(unix))]
-fn chmod_user_only(_: &Path) -> io::Result<()> {
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
-    use std::sync::{Arc, Barrier, Mutex};
+    use std::sync::Arc;
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     use agena_keyring_store::{SecretStore, SecretStoreError};
@@ -656,8 +411,8 @@ mod tests {
     use rmcp::transport::{CredentialStore, StoredCredentials};
 
     use super::{
-        FileTokenStore, KeyringOAuthCredentialStore, KeyringTokenStore, OAuthCredentialState,
-        OAuthExpiryState, TokenStore, keyring_key, oauth_keyring_key,
+        KeyringOAuthCredentialStore, KeyringTokenStore, OAuthCredentialState, OAuthExpiryState,
+        TokenStore, keyring_key, oauth_keyring_key,
     };
 
     #[derive(Default)]
@@ -680,33 +435,6 @@ mod tests {
             self.0.lock().expect("lock").remove(key);
             Ok(())
         }
-    }
-
-    #[test]
-    fn file_fallback_serializes_concurrent_mutation_and_atomic_persistence() {
-        let directory = tempfile::tempdir().expect("MCP token directory");
-        let path = directory.path().join("tokens.json");
-        let store = Arc::new(FileTokenStore::open(&path).expect("token store"));
-        let barrier = Arc::new(Barrier::new(2));
-        let handles = [("first", "token-one"), ("second", "token-two")].map(|(server, token)| {
-            let store = Arc::clone(&store);
-            let barrier = Arc::clone(&barrier);
-            std::thread::spawn(move || {
-                barrier.wait();
-                store.put_bearer(server, token).expect("put bearer");
-            })
-        });
-        for handle in handles {
-            handle.join().expect("token writer");
-        }
-
-        let reopened = FileTokenStore::open(&path).expect("reopen token store");
-        assert_eq!(reopened.bearer("first").as_deref(), Some("token-one"));
-        assert_eq!(reopened.bearer("second").as_deref(), Some("token-two"));
-        assert_eq!(
-            directory.path().read_dir().expect("read directory").count(),
-            1
-        );
     }
 
     #[test]

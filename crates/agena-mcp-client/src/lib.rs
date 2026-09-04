@@ -13,7 +13,7 @@ pub mod token_store;
 
 pub use error::{McpError, McpResult};
 pub use manager::{
-    ConnectedServer, HttpAuth, McpConnectionManager, McpCredentialMigration, McpCredentialState,
+    ConnectedServer, HttpAuth, McpConnectionManager, McpCredentialConflict, McpCredentialState,
     McpServerAuthMode, McpServerStatus, McpToolPolicy, McpToolRisk, ReconnectPolicy, ServerSpec,
     TokenStore,
 };
@@ -24,7 +24,6 @@ pub use protocol::{
     ToolDescriptor,
 };
 pub use token_store::{
-    FallbackTokenStore, FileTokenStore, KeyringOAuthCredentialStore, KeyringTokenStore,
-    MCP_KEYRING_SERVICE, OAuthCredentialHealth, OAuthCredentialState, OAuthExpiryState,
-    TokenStoreError,
+    KeyringOAuthCredentialStore, KeyringTokenStore, MCP_KEYRING_SERVICE, OAuthCredentialHealth,
+    OAuthCredentialState, OAuthExpiryState, TokenStoreError,
 };

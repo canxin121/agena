@@ -34,7 +34,7 @@ import type { OptionMenuGroup, OptionMenuItem } from '@/components/ui/optionMenu
 import TerminalKeybar from '@/components/TerminalKeybar.vue'
 import { useUnifiedMultiSelect } from '@/composables/useUnifiedMultiSelect'
 import { consumeTrustedTerminalHandoffPayload, type TerminalHandoffTarget } from '@/lib/terminalHandoff'
-import { getLocalString, removeLocalKey, removeSessionKey, setLocalString } from '@/lib/persist'
+import { getLocalString, removeLocalKey, setLocalString } from '@/lib/persist'
 import { localStorageKeys } from '@/lib/persistence/storageKeys'
 import { ApiError } from '@/lib/api'
 import { copyTextToClipboard, readTextFromClipboard } from '@/lib/clipboard'
@@ -95,14 +95,6 @@ type TerminalUiStateEvent =
     }
 
 const STORAGE_GIT_HANDOFF_SESSION_NAME = localStorageKeys.terminal.gitHandoffSessionName
-const STORAGE_GIT_HANDOFF_SESSION_ID_DEPRECATED = 'studio.terminal.git-handoff-session-id'
-
-function clearDeprecatedGitHandoffStorage() {
-  removeLocalKey(STORAGE_GIT_HANDOFF_SESSION_ID_DEPRECATED)
-  removeSessionKey(STORAGE_GIT_HANDOFF_SESSION_ID_DEPRECATED)
-}
-
-clearDeprecatedGitHandoffStorage()
 
 const TERMINAL_STATE_REMOTE_SAVE_DEBOUNCE_MS = 250
 
@@ -127,7 +119,7 @@ function compactSessionMeta(input: unknown): TerminalSessionMeta | null {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return null
   const meta = input as Record<string, unknown>
   const name = normalizeSessionMetaName(meta.name)
-  const folderId = normalizeFolderId(meta.folderId ?? meta.group)
+  const folderId = normalizeFolderId(meta.folderId)
   const pinned = meta.pinned === true
 
   const rawLastUsedAt = Number(meta.lastUsedAt)
@@ -200,7 +192,6 @@ function firstQueryValue(raw: string | null | Array<string | null> | undefined):
 
 function hydratePendingSendFromQuery() {
   const token = firstQueryValue(route.query.sendToken)
-  const legacySend = firstQueryValue(route.query.send)
 
   if (token) {
     const handoff = consumeTrustedTerminalHandoffPayload(token)
@@ -211,13 +202,7 @@ function hydratePendingSendFromQuery() {
     pendingSendTarget.value = null
   }
 
-  if (!token && legacySend) {
-    // Legacy raw query payloads are intentionally blocked.
-    pendingSend.value = null
-    pendingSendTarget.value = null
-  }
-
-  if (token || legacySend) {
+  if (token) {
     const nextQuery = withEmbeddedWorkspaceScopeQuery({}, route.query)
     void router
       .replace({
@@ -836,9 +821,9 @@ const mobileSessionActionTargetId = ref<string | null>(null)
 const mobileSessionActionOpen = ref(false)
 const mobileSessionActionQuery = ref('')
 
-const mobileSessionCreateDialogOpen = computed(() => ui.isMobilePointer && sessionCreateOpen.value)
+const mobileSessionCreateDialogOpen = computed(() => ui.isCompactTouch && sessionCreateOpen.value)
 const mobileSessionRenameDialogOpen = computed(
-  () => ui.isMobilePointer && Boolean(normalizeSessionId(sessionRenamingId.value)),
+  () => ui.isCompactTouch && Boolean(normalizeSessionId(sessionRenamingId.value)),
 )
 
 const terminalMultiSelect = useUnifiedMultiSelect()
@@ -1102,7 +1087,7 @@ function mobileSessionActionGroups(id: string): OptionMenuGroup[] {
 
 function openMobileSessionActionMenu(id: string) {
   const sid = normalizeSessionId(id)
-  if (!sid || !ui.isMobilePointer) return
+  if (!sid || !ui.isCompactTouch) return
   mobileSessionActionTargetId.value = sid
   mobileSessionActionQuery.value = ''
   mobileSessionActionOpen.value = true
@@ -2187,7 +2172,7 @@ watch(el, () => {
           </div>
         </div>
 
-        <div v-if="!ui.isMobilePointer && sessionCreateOpen" class="flex-shrink-0 px-3 pb-2">
+        <div v-if="!ui.isCompactTouch && sessionCreateOpen" class="flex-shrink-0 px-3 pb-2">
           <div class="rounded-md border border-sidebar-border/70 bg-sidebar/95 p-2">
             <div class="mt-1 flex items-center gap-1">
               <Input
@@ -2233,7 +2218,7 @@ watch(el, () => {
                 :active="!terminalMultiSelect.enabled.value && sessionId === item.id"
                 :as="isSessionRenaming(item.id) ? 'div' : 'button'"
                 :action-visibility="
-                  terminalMultiSelect.enabled.value || ui.isMobilePointer || isSessionRenaming(item.id)
+                  terminalMultiSelect.enabled.value || ui.isCompactTouch || isSessionRenaming(item.id)
                     ? 'always'
                     : 'hover'
                 "
@@ -2252,7 +2237,7 @@ watch(el, () => {
                   </div>
                 </template>
 
-                <template v-if="!ui.isMobilePointer && isSessionRenaming(item.id)">
+                <template v-if="!ui.isCompactTouch && isSessionRenaming(item.id)">
                   <Input
                     v-model="sessionRenameDraft"
                     class="h-7 min-w-0 flex-1 text-xs"
@@ -2276,7 +2261,7 @@ watch(el, () => {
 
                 <template #actions>
                   <template
-                    v-if="!terminalMultiSelect.enabled.value && ui.isMobilePointer && !isSessionRenaming(item.id)"
+                    v-if="!terminalMultiSelect.enabled.value && ui.isCompactTouch && !isSessionRenaming(item.id)"
                   >
                     <ListItemOverflowActionButton
                       mobile
@@ -2291,14 +2276,14 @@ watch(el, () => {
                       :title="mobileSessionActionTitle(item.id)"
                       :mobile-title="mobileSessionActionTitle(item.id)"
                       :searchable="true"
-                      :is-mobile-pointer="ui.isMobilePointer"
+                      :is-compact-touch="ui.isCompactTouch"
                       @update:open="(v) => setMobileSessionActionMenuOpen(item.id, v)"
                       @update:query="(v) => (mobileSessionActionQuery = v)"
                       @select="(action) => runMobileSessionAction(item.id, action)"
                     />
                   </template>
 
-                  <template v-if="!ui.isMobilePointer && isSessionRenaming(item.id)">
+                  <template v-if="!ui.isCompactTouch && isSessionRenaming(item.id)">
                     <IconButton
                       size="xs"
                       class="text-muted-foreground hover:bg-primary/6"
@@ -2319,7 +2304,7 @@ watch(el, () => {
                     </IconButton>
                   </template>
 
-                  <template v-else-if="!terminalMultiSelect.enabled.value && !ui.isMobilePointer">
+                  <template v-else-if="!terminalMultiSelect.enabled.value && !ui.isCompactTouch">
                     <IconButton
                       size="xs"
                       class="text-muted-foreground hover:text-foreground hover:dark:bg-accent/40 hover:bg-primary/6"
@@ -2497,7 +2482,7 @@ watch(el, () => {
             <div ref="el" dir="ltr" class="absolute inset-0" />
           </div>
           <TerminalKeybar
-            v-if="ui.isMobilePointer"
+            v-if="ui.isCompactTouch"
             :disabled="status !== 'connected'"
             @mods="setKeyMods"
             @send="(d) => void sendInput(d)"

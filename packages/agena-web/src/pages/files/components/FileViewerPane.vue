@@ -68,7 +68,7 @@ const props = defineProps<{
   hideHeaderTitle?: boolean
   isTouchPointer?: boolean
   isMobileFormFactor?: boolean
-  isMobilePointer?: boolean
+  isCompactTouch?: boolean
   selectedFile: FileNode | null
   displaySelectedPath: string
   viewerMode: ViewerMode
@@ -160,7 +160,7 @@ const markdownPreviewContent = computed(() => {
   return ['```mermaid', source, '```'].join('\n')
 })
 const canShowViewMenu = computed(() => props.viewerMode === 'text' || props.viewerMode === 'markdown')
-const isMobileFormFactor = computed(() => props.isMobileFormFactor ?? props.isMobilePointer)
+const isMobileFormFactor = computed(() => props.isMobileFormFactor ?? props.isCompactTouch)
 const isTouchPointer = computed(() => props.isTouchPointer ?? isMobileFormFactor.value)
 const shouldShowHeaderBackButton = computed(
   () => Boolean(props.showHeaderBackButton) || (props.isCompactLayout && showMobileViewer.value),
@@ -1198,7 +1198,7 @@ function handleHeaderBackClick() {
         :title="t('files.viewer.viewMenu.title')"
         :mobile-title="t('files.viewer.viewMenu.title')"
         :searchable="true"
-        :is-mobile-pointer="isMobileFormFactor"
+        :is-compact-touch="isMobileFormFactor"
         desktop-placement="bottom-end"
         :desktop-fixed="true"
         :desktop-anchor-el="viewMenuAnchorEl"
@@ -1585,7 +1585,7 @@ function handleHeaderBackClick() {
               :mobile-title="t('files.viewer.timeline.selectCommitTitle')"
               :search-placeholder="t('files.viewer.timeline.searchPlaceholder')"
               :empty-text="t('files.viewer.timeline.emptyText')"
-              :is-mobile-pointer="isMobileFormFactor"
+              :is-compact-touch="isMobileFormFactor"
               desktop-placement="bottom-start"
               :desktop-fixed="true"
               :desktop-anchor-el="timelineLeftMenuAnchorEl"
@@ -1611,7 +1611,7 @@ function handleHeaderBackClick() {
               :mobile-title="t('files.viewer.timeline.selectCommitTitle')"
               :search-placeholder="t('files.viewer.timeline.searchPlaceholder')"
               :empty-text="t('files.viewer.timeline.emptyText')"
-              :is-mobile-pointer="isMobileFormFactor"
+              :is-compact-touch="isMobileFormFactor"
               desktop-placement="bottom-start"
               :desktop-fixed="true"
               :desktop-anchor-el="timelineRightMenuAnchorEl"

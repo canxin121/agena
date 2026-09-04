@@ -21,7 +21,6 @@ impl ToolExecutor {
             lsp_registry,
             cancellation_token: None,
             permission_inspector: None,
-            command_event_sink: None,
         }
     }
 
@@ -131,17 +130,6 @@ impl ToolExecutor {
     /// pass a registry built with a [`crate::MonitorListener`].
     pub fn with_monitor_registry(mut self, registry: Arc<dyn crate::MonitorService>) -> Self {
         self.monitor_registry = Some(registry);
-        self
-    }
-
-    /// Attach a runtime-owned sink for process command lifecycle/output
-    /// events. The sink is intentionally optional and is preserved when the
-    /// executor is scoped or cloned for a concurrent tool task.
-    pub fn with_command_event_sink(
-        mut self,
-        sink: Option<agena_tool::ToolRuntimeEventSink>,
-    ) -> Self {
-        self.command_event_sink = sink;
         self
     }
 

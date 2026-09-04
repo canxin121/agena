@@ -47,7 +47,7 @@ const groups = computed<OptionMenuGroup[]>(() => [
     :searchable="true"
     :search-placeholder="String(t('common.searchActions'))"
     :empty-text="String(t('common.noActionsFound'))"
-    :is-mobile-pointer="false"
+    :is-compact-touch="false"
     :desktop-fixed="true"
     :desktop-anchor-el="anchorEl"
     :desktop-placement="desktopPlacement"

@@ -10,17 +10,14 @@ use std::process::{ExitStatus, Stdio};
 use std::sync::{Arc, LazyLock};
 use std::time::{Duration, Instant};
 
-use agena_domain::CommandOutputStream;
 use agena_process::ManagedChild;
 use agena_tool::{ShellError, ShellOutput, ShellRequest};
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::process::Command;
-use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use super::ToolError;
 
-const OUTPUT_CHUNK_QUEUE_CAPACITY: usize = 128;
 const MAX_CAPTURE_BYTES_PER_STREAM: usize = 8 * 1024 * 1024;
 const MAX_CONCURRENT_SHELL_WORKERS: usize = 16;
 static SHELL_WORKERS: LazyLock<Arc<tokio::sync::Semaphore>> =
@@ -43,17 +40,6 @@ pub async fn execute(
     request: &ShellRequest,
     cancellation: Option<&CancellationToken>,
 ) -> Result<ShellOutput, ShellError> {
-    execute_with_callback(request, cancellation, None).await
-}
-
-/// Run a command while forwarding bounded stdout/stderr chunks to a callback.
-/// Pipe I/O and process waiting remain asynchronous; the callback must be
-/// non-blocking because it executes on the current Tokio task.
-pub async fn execute_with_callback(
-    request: &ShellRequest,
-    cancellation: Option<&CancellationToken>,
-    output_callback: Option<&(dyn Fn(CommandOutputStream, &[u8]) + Send + Sync)>,
-) -> Result<ShellOutput, ShellError> {
     validate(request)?;
 
     let env = sanitize_env(&request.env);
@@ -74,16 +60,8 @@ pub async fn execute_with_callback(
 
     let started = Instant::now();
     let mut child = agena_process::spawn(command).map_err(ShellError::Spawn)?;
-    let (chunk_tx, mut chunk_rx) = mpsc::channel(OUTPUT_CHUNK_QUEUE_CAPACITY);
-    let stdout_handle = child
-        .stdout()
-        .take()
-        .map(|reader| spawn_drain(reader, CommandOutputStream::Stdout, chunk_tx.clone()));
-    let stderr_handle = child
-        .stderr()
-        .take()
-        .map(|reader| spawn_drain(reader, CommandOutputStream::Stderr, chunk_tx.clone()));
-    drop(chunk_tx);
+    let stdout_handle = child.stdout().take().map(spawn_drain);
+    let stderr_handle = child.stderr().take().map(spawn_drain);
 
     let timeout = async {
         match request.timeout_ms {
@@ -100,32 +78,18 @@ pub async fn execute_with_callback(
     tokio::pin!(timeout);
     tokio::pin!(cancelled);
 
-    let mut chunks_open = true;
-    let mut output_sequence = 0_u64;
-    let wait_outcome = loop {
-        tokio::select! {
-            biased;
-            _ = &mut cancelled => {
-                terminate_process_tree(&mut child).await?;
-                break WaitOutcome::Cancelled;
-            }
-            _ = &mut timeout => {
-                let status = terminate_process_tree(&mut child).await?;
-                break WaitOutcome::TimedOut(status);
-            }
-            chunk = chunk_rx.recv(), if chunks_open => {
-                match chunk {
-                    Some(chunk) => emit_chunk(
-                        chunk,
-                        output_callback,
-                        &mut output_sequence,
-                    ),
-                    None => chunks_open = false,
-                }
-            }
-            result = child.wait() => {
-                break WaitOutcome::Exited(result.map_err(ShellError::Wait)?);
-            }
+    let wait_outcome = tokio::select! {
+        biased;
+        _ = &mut cancelled => {
+            terminate_process_tree(&mut child).await?;
+            WaitOutcome::Cancelled
+        }
+        _ = &mut timeout => {
+            let status = terminate_process_tree(&mut child).await?;
+            WaitOutcome::TimedOut(status)
+        }
+        result = child.wait() => {
+            WaitOutcome::Exited(result.map_err(ShellError::Wait)?)
         }
     };
 
@@ -133,9 +97,6 @@ pub async fn execute_with_callback(
     // inherited pipe. `process-wrap` targets the complete group/job here.
     child.start_kill().map_err(ShellError::Wait)?;
     let (stdout, stderr) = collect_drains(stdout_handle, stderr_handle).await?;
-    while let Ok(chunk) = chunk_rx.try_recv() {
-        emit_chunk(chunk, output_callback, &mut output_sequence);
-    }
 
     if matches!(wait_outcome, WaitOutcome::Cancelled) {
         return Err(ShellError::Cancelled);
@@ -249,23 +210,13 @@ fn status_to_code(status: ExitStatus) -> i32 {
     })
 }
 
-struct OutputChunk {
-    stream: CommandOutputStream,
-    bytes: Vec<u8>,
-}
-
-fn spawn_drain<R>(
-    mut reader: R,
-    stream: CommandOutputStream,
-    sender: mpsc::Sender<OutputChunk>,
-) -> tokio::task::JoinHandle<io::Result<String>>
+fn spawn_drain<R>(mut reader: R) -> tokio::task::JoinHandle<io::Result<String>>
 where
     R: AsyncRead + Unpin + Send + 'static,
 {
     tokio::spawn(async move {
         let mut captured_output = Vec::new();
         let mut truncated = false;
-        let mut live_delivery_partial = false;
         let mut chunk = [0_u8; 8 * 1024];
         loop {
             let read = reader.read(&mut chunk).await?;
@@ -276,36 +227,12 @@ where
             let captured = remaining.min(read);
             captured_output.extend_from_slice(&chunk[..captured]);
             truncated |= captured < read;
-            if let Err(error) = sender.try_send(OutputChunk {
-                stream: stream.clone(),
-                bytes: chunk[..read].to_vec(),
-            }) && !live_delivery_partial
-            {
-                live_delivery_partial = true;
-                tracing::warn!(
-                    output_stream = ?stream,
-                    diagnostic = %error,
-                    "live shell output chunk was not delivered; the terminal stream is partial but captured output remains available"
-                );
-            }
         }
         if truncated {
             captured_output.extend_from_slice(b"\n[output truncated after 8 MiB]\n");
         }
         Ok(String::from_utf8_lossy(&captured_output).into_owned())
     })
-}
-
-fn emit_chunk(
-    chunk: OutputChunk,
-    output_callback: Option<&(dyn Fn(CommandOutputStream, &[u8]) + Send + Sync)>,
-    output_sequence: &mut u64,
-) {
-    let Some(output_callback) = output_callback else {
-        return;
-    };
-    *output_sequence = output_sequence.saturating_add(1);
-    output_callback(chunk.stream, chunk.bytes.as_slice());
 }
 
 async fn collect_drains(

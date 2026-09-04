@@ -13,7 +13,6 @@ import { settingsText as st } from '@/i18n/settingsText'
 
 type McpAuthMode = 'none' | 'oauth' | 'mixed'
 type McpAnonymousAccess = 'none' | 'read_only'
-type McpClientRegistration = 'cimd_only' | 'cimd_and_dcr'
 
 type McpOAuthStatus = {
   configured: boolean
@@ -30,7 +29,6 @@ type McpOAuthStatus = {
   issuer: string
   authorizationEndpoint: string
   tokenEndpoint: string
-  registrationEndpoint?: string
   revocationEndpoint: string
   protectedResourceMetadata: string
   authorizationServerMetadata: string
@@ -38,12 +36,10 @@ type McpOAuthStatus = {
 
 type McpServerControl = {
   enabled: boolean
-  authEnabled: boolean
   authMode: McpAuthMode
   anonymousAccess: McpAnonymousAccess
   publicUrl: string | null
   oauthIssuerUrl: string | null
-  clientRegistration: McpClientRegistration
   resourceUrl: string
   ready: boolean
   warnings: string[]
@@ -59,7 +55,6 @@ const publicUrl = ref('')
 const oauthIssuerUrl = ref('')
 const authMode = ref<McpAuthMode>('none')
 const anonymousAccess = ref<McpAnonymousAccess>('none')
-const clientRegistration = ref<McpClientRegistration>('cimd_only')
 const oauthPassword = ref('')
 const copiedEndpoint = ref('')
 
@@ -72,8 +67,7 @@ const controlDirty = computed(() => {
     publicUrl.value.trim() !== String(value.publicUrl || '') ||
     oauthIssuerUrl.value.trim() !== String(value.oauthIssuerUrl || '') ||
     authMode.value !== value.authMode ||
-    anonymousAccess.value !== value.anonymousAccess ||
-    clientRegistration.value !== value.clientRegistration
+    anonymousAccess.value !== value.anonymousAccess
   )
 })
 const mcpSurfaceSummary = computed(() => {
@@ -126,22 +120,7 @@ const anonymousAccessOptions = [
     ),
   },
 ]
-const clientRegistrationOptions = [
-  {
-    value: 'cimd_only',
-    label: st('CIMD only (recommended)'),
-    description: st(
-      'Accept OpenAI ChatGPT Client ID Metadata Documents and keep public Dynamic Client Registration disabled.',
-    ),
-  },
-  {
-    value: 'cimd_and_dcr',
-    label: st('CIMD + Dynamic Client Registration'),
-    description: st(
-      'Compatibility mode for older OAuth clients. This exposes an unauthenticated registration endpoint.',
-    ),
-  },
-]
+
 
 function errorMessage(value: unknown): string {
   return value instanceof Error ? value.message : String(value)
@@ -152,9 +131,8 @@ function applyControl(value: McpServerControl) {
   enabled.value = value.enabled
   publicUrl.value = value.publicUrl || ''
   oauthIssuerUrl.value = value.oauthIssuerUrl || ''
-  authMode.value = value.authMode || (value.authEnabled ? 'oauth' : 'none')
+  authMode.value = value.authMode
   anonymousAccess.value = value.anonymousAccess || 'none'
-  clientRegistration.value = value.clientRegistration || 'cimd_only'
 }
 
 async function copyEndpoint(label: string, value: string | undefined) {
@@ -189,7 +167,6 @@ async function updateControl(body: {
   anonymousAccess?: McpAnonymousAccess
   publicUrl?: string | null
   oauthIssuerUrl?: string | null
-  clientRegistration?: McpClientRegistration
 }) {
   if (!control.value || saving.value) return
   saving.value = true
@@ -206,7 +183,6 @@ async function updateControl(body: {
         ...(Object.prototype.hasOwnProperty.call(body, 'oauthIssuerUrl')
           ? { oauthIssuerUrl: body.oauthIssuerUrl }
           : {}),
-        ...(body.clientRegistration ? { clientRegistration: body.clientRegistration } : {}),
       }),
     })
     applyControl(next)
@@ -224,7 +200,7 @@ function toggleEnabled() {
 async function saveControlDraft() {
   const highRisk =
     enabled.value &&
-    (authMode.value === 'none' || anonymousAccess.value === 'read_only' || clientRegistration.value === 'cimd_and_dcr')
+    (authMode.value === 'none' || anonymousAccess.value === 'read_only')
   if (highRisk && !(await confirmAction(st('Apply this high-risk MCP configuration?')))) return
   await updateControl({
     enabled: enabled.value,
@@ -232,7 +208,6 @@ async function saveControlDraft() {
     anonymousAccess: anonymousAccess.value,
     publicUrl: publicUrl.value.trim() || null,
     oauthIssuerUrl: oauthIssuerUrl.value.trim() || null,
-    clientRegistration: clientRegistration.value,
   })
 }
 
@@ -450,29 +425,6 @@ onMounted(() => {
         </div>
       </div>
 
-      <div class="grid gap-2">
-        <div class="text-sm font-medium">{{ $st('OAuth client registration') }}</div>
-        <div>
-          <OptionPicker
-            v-model="clientRegistration"
-            class="min-w-0 flex-1"
-            :options="clientRegistrationOptions"
-            :include-empty="false"
-            :title="$st('OAuth client registration')"
-            :disabled="saving"
-          />
-        </div>
-        <div
-          v-if="clientRegistration === 'cimd_and_dcr'"
-          class="rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-amber-800 dark:text-amber-200"
-        >
-          {{
-            $st(
-              'Compatibility mode exposes an unauthenticated Dynamic Client Registration endpoint. ChatGPT supports CIMD, so leave DCR disabled unless another client requires it.',
-            )
-          }}
-        </div>
-      </div>
 
       <SettingsSaveBar
         :dirty="controlDirty"
@@ -564,7 +516,6 @@ onMounted(() => {
               ['Authorization server metadata', oauth?.authorizationServerMetadata],
               ['Authorization endpoint', oauth?.authorizationEndpoint],
               ['Token endpoint', oauth?.tokenEndpoint],
-              ['Registration endpoint', oauth?.registrationEndpoint],
               ['Revocation endpoint', oauth?.revocationEndpoint],
             ]"
             :key="entry[0]"

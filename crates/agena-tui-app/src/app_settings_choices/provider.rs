@@ -61,17 +61,17 @@ impl App {
             agena_tui::model_chooser::SessionModelChooserPurpose::PermissionApproval => {
                 let mut approval = serde_json::Map::new();
                 approval.insert(
-                    "provider_id".to_owned(),
+                    "provider".to_owned(),
                     JsonValue::String(model.provider_id.to_string()),
                 );
                 if let Some(adapter_id) = model.adapter_id.as_ref() {
                     approval.insert(
-                        "adapter_id".to_owned(),
+                        "adapter".to_owned(),
                         JsonValue::String(adapter_id.to_string()),
                     );
                 }
                 approval.insert(
-                    "model_id".to_owned(),
+                    "model".to_owned(),
                     JsonValue::String(model.model_id.to_string()),
                 );
                 insert_optional_selection_value(&mut approval, "thinking_mode", thinking_mode);

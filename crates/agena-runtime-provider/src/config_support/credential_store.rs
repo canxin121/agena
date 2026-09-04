@@ -369,11 +369,7 @@ fn load_provider_configs(
         merged.merge_from(env_overlay);
     }
 
-    Ok(merged
-        .resolve_with_env(&env)?
-        .providers
-        .into_iter()
-        .collect())
+    Ok(merged.resolve()?.providers.into_iter().collect())
 }
 
 fn secret_auth_data(secret: &ProviderApiAuthConfig) -> Option<AuthData> {

@@ -1,7 +1,7 @@
 import { nextTick, onBeforeUnmount, onMounted, ref, watch, type Ref } from 'vue'
 import { localStorageKeys } from '@/lib/persistence/storageKeys'
 
-type UiLike = { isCompactLayout: boolean; isMobilePointer: boolean; isTouchPointer: boolean }
+type UiLike = { isCompactLayout: boolean; isCompactTouch: boolean; isTouchPointer: boolean }
 
 type ComposerExpose = {
   shellEl?: HTMLDivElement | { value: HTMLDivElement | null } | null
@@ -97,7 +97,7 @@ export function useChatComposerLayout(opts: {
     splitTopCollapseTimer = setTimeout(() => {
       splitTopCollapseTimer = null
       // Re-check conditions at execution time.
-      if (!ui.isMobilePointer) return
+      if (!ui.isCompactTouch) return
       if (!editorFullscreen.value) return
       if (editorClosing.value) return
       composerSplitTopCollapsed.value = true
@@ -105,12 +105,12 @@ export function useChatComposerLayout(opts: {
   }
 
   watch(
-    () => [ui.isMobilePointer, editorFullscreen.value, editorClosing.value] as const,
-    ([isMobilePointer, isFullscreen, isClosing]) => {
+    () => [ui.isCompactTouch, editorFullscreen.value, editorClosing.value] as const,
+    ([isCompactTouch, isFullscreen, isClosing]) => {
       clearSplitTopCollapseTimer()
 
       // Desktop/tablet: keep the normal split behavior.
-      if (!isMobilePointer) {
+      if (!isCompactTouch) {
         composerSplitTopCollapsed.value = false
         return
       }
@@ -367,25 +367,12 @@ export function useChatComposerLayout(opts: {
     clearSplitTopCollapseTimer()
   })
 
-  // Stub for compatibility if ChatPage calls it directly (though we'll remove usage)
-  function startComposerResize(_e: PointerEvent) {
-    // No-op
-  }
-
-  // Stub for compatibility
-  function syncExpandedComposerHeight() {
-    syncFullscreenHeight()
-  }
-
   return {
-    composerCollapsedHeight: ref(0), // Unused but kept for type compat if needed
     composerUserHeight,
     composerTargetHeight,
     composerMaxHeight,
     composerSplitTopCollapsed,
-    startComposerResize,
     applyComposerUserHeight,
-    syncExpandedComposerHeight,
     openEditorFullscreen,
     closeEditorFullscreen,
     toggleEditorFullscreen,

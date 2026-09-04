@@ -26,10 +26,8 @@ pub struct OperatorToolResource {
     pub open_world: bool,
     #[serde(default)]
     pub task: bool,
-    /// Stable full plugin id (for example, `agena.fs`). Optional for
-    /// backwards compatibility with older server responses.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub plugin_id: Option<String>,
+    /// Stable full plugin id (for example, `agena.fs`).
+    pub plugin_id: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]

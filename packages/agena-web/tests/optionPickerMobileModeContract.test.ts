@@ -6,9 +6,9 @@ const source = readFileSync(new URL('../src/components/ui/OptionPicker.vue', imp
 
 test('OptionPicker inherits the global mobile-pointer signal unless explicitly overridden', () => {
   assert.match(source, /useUiStore\(\)/)
-  assert.match(source, /props\.isMobilePointer \?\? ui\.isMobilePointer/)
-  assert.match(source, /:is-mobile-pointer="effectiveIsMobilePointer"/)
-  assert.doesNotMatch(source, /isMobilePointer:\s*false/)
+  assert.match(source, /props\.isCompactTouch \?\? ui\.isCompactTouch/)
+  assert.match(source, /:is-compact-touch="effectiveIsMobilePointer"/)
+  assert.doesNotMatch(source, /isCompactTouch:\s*false/)
 })
 
 test('OptionPicker trigger keeps native focus semantics and exposes popup state', () => {

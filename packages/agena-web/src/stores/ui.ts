@@ -291,9 +291,7 @@ export const useUiStore = defineStore('ui', () => {
   const isMobileDevice = ref(false)
   const isTouchPointer = ref(false)
 
-  // Legacy aliases kept for broad compatibility while migrating call sites.
-  const isMobile = ref(false)
-  const isMobilePointer = ref(false)
+  const isCompactTouch = ref(false)
 
   // Left sessions sidebar (desktop) + drill-down list (mobile)
   const isSidebarOpen = ref(getLocalString(STORAGE_SIDEBAR_OPEN) !== 'false')
@@ -385,9 +383,8 @@ export const useUiStore = defineStore('ui', () => {
     const title = String(source.title || '').trim()
     const routePath = normalizeMainTabPath(mainTab, String(source.routePath || ''))
     const routeQuery = normalizeRouteQueryRecord(source.routeQuery)
-    // A chat workspace is a persisted view of a real session.  Drop legacy
-    // tabs that represented the old blank chat surface so they cannot be
-    // resurrected on the next boot.
+    // A chat workspace is a persisted view of a real session. Chat tabs without
+    // a session id are invalid persisted workspace state and are discarded.
     if (mainTab === 'chat' && !readMatchQueryValue(routeQuery, 'sessionId')) return null
     const routeHashRaw = String(source.routeHash || '').trim()
     const routeHash = routeHashRaw && !routeHashRaw.startsWith('#') ? `#${routeHashRaw}` : routeHashRaw
@@ -1307,7 +1304,6 @@ export const useUiStore = defineStore('ui', () => {
 
   function setIsCompactLayout(next: boolean) {
     isCompactLayout.value = next
-    isMobile.value = next
     if (!next) {
       isSessionSwitcherOpen.value = false
     }
@@ -1321,13 +1317,8 @@ export const useUiStore = defineStore('ui', () => {
     isTouchPointer.value = next
   }
 
-  function setIsMobile(next: boolean) {
-    // Legacy API: historically used as compact layout signal.
-    setIsCompactLayout(next)
-  }
-
-  function setIsMobilePointer(next: boolean) {
-    isMobilePointer.value = next
+  function setIsCompactTouch(next: boolean) {
+    isCompactTouch.value = next
   }
 
   function toggleSidebar() {
@@ -2266,8 +2257,7 @@ export const useUiStore = defineStore('ui', () => {
     isCompactLayout,
     isMobileDevice,
     isTouchPointer,
-    isMobile,
-    isMobilePointer,
+    isCompactTouch,
     isSidebarOpen,
     sidebarWidth,
     effectiveSidebarWidth,
@@ -2309,8 +2299,7 @@ export const useUiStore = defineStore('ui', () => {
     setIsCompactLayout,
     setIsMobileDevice,
     setIsTouchPointer,
-    setIsMobile,
-    setIsMobilePointer,
+    setIsCompactTouch,
     toggleSidebar,
     setSidebarOpen,
     setSessionSwitcherOpen,

@@ -30,7 +30,7 @@ pub(crate) struct SessionRunRequest {
     /// `content["rounds"]`; the processor appends one record after every
     /// successful provider round so prompt projection can re-split the turn
     /// and delivery recovery can prove its exact notification inputs.
-    pub marker_content: Option<serde_json::Value>,
+    pub marker_content: serde_json::Value,
     /// Background notification parts that were actually present in the
     /// provider prompt for this round. Persisted into the round record so a
     /// delivery can prove model handling without confusing a concurrently

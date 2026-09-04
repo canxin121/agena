@@ -30,33 +30,12 @@ pub struct McpRuntimeConfig {
 /// Token store settings for MCP OAuth.
 pub struct McpTokenStoreConfig {
     pub enabled: bool,
-    /// The preferred durable credential backend. `keyring` keeps credentials
-    /// out of normal configuration and delegates protection to the operating
-    /// system; `file` exists only for explicit compatibility use.
-    pub backend: McpTokenStoreBackend,
-    /// When the keyring is unavailable or has no entry, also consult the
-    /// legacy chmod-600 file store. This is deliberately opt-in so headless
-    /// deployments do not silently create a plaintext credential file.
-    pub file_fallback: bool,
 }
 
 impl Default for McpTokenStoreConfig {
     fn default() -> Self {
-        Self {
-            enabled: true,
-            backend: McpTokenStoreBackend::Keyring,
-            file_fallback: false,
-        }
+        Self { enabled: true }
     }
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-/// Backend used to store MCP OAuth tokens.
-pub enum McpTokenStoreBackend {
-    #[default]
-    Keyring,
-    File,
 }
 
 /// Automatic reconnect behaviour for configured but temporarily unavailable

@@ -1,7 +1,5 @@
 //! The `Scheduler` runtime loop.
 
-use std::cmp::Reverse;
-use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -11,7 +9,7 @@ use tokio::task::JoinHandle;
 
 use crate::error::SchedulerResult;
 use crate::job::{JobDeliveryAttempt, JobOutcome, JobSink, ScheduledJob, SchedulerHistoryEntry};
-use crate::store::{JobStore, MAX_RETAINED_HISTORY_ENTRIES};
+use crate::store::JobStore;
 
 /// Background scheduler that fires jobs on their schedule.
 pub struct Scheduler {
@@ -64,42 +62,15 @@ impl Scheduler {
     }
 
     /// Return the globally retained scheduler audit ledger, newest first.
-    /// Unlike `ScheduledJob::run_history`, these records survive deletion of
-    /// the job that produced them.  The backing store bounds retention, so
-    /// callers must treat this as diagnostics/export history rather than an
-    /// unbounded event archive.
-    ///
-    /// The per-job histories are merged as a read-only compatibility fallback
-    /// for databases created before the ledger table existed.  Entries already
-    /// persisted in the ledger are deterministically deduplicated; after new
-    /// deliveries complete the central table is the authoritative copy.
+    /// Records survive deletion of the job that produced them. The backing
+    /// store bounds retention, so callers must treat this as diagnostics/export
+    /// history rather than an unbounded event archive.
     pub async fn history(
         &self,
         job_id: Option<uuid::Uuid>,
         limit: usize,
     ) -> Vec<SchedulerHistoryEntry> {
-        let mut entries = self
-            .store
-            .list_history(job_id, MAX_RETAINED_HISTORY_ENTRIES)
-            .await;
-        for job in self.store.list().await {
-            if job_id.is_some_and(|id| id != job.id) {
-                continue;
-            }
-            entries.extend(
-                job.run_history
-                    .into_iter()
-                    .map(|record| SchedulerHistoryEntry {
-                        job_id: job.id,
-                        record,
-                    }),
-            );
-        }
-        entries.sort_by_key(|entry| Reverse(entry.record.finished_at));
-        let mut seen = HashSet::new();
-        entries.retain(|entry| scheduler_history_identity(entry, &mut seen));
-        entries.truncate(limit.clamp(1, MAX_RETAINED_HISTORY_ENTRIES));
-        entries
+        self.store.list_history(job_id, limit).await
     }
 
     pub async fn pause(&self, id: uuid::Uuid) -> SchedulerResult<Option<ScheduledJob>> {
@@ -306,26 +277,6 @@ impl Scheduler {
                 .await;
         }
     }
-}
-
-fn scheduler_history_identity(entry: &SchedulerHistoryEntry, seen: &mut HashSet<String>) -> bool {
-    let key = format!(
-        "{}|{}|{}|{}|{:?}",
-        entry.job_id,
-        entry
-            .record
-            .triggered_at
-            .timestamp_nanos_opt()
-            .unwrap_or_default(),
-        entry
-            .record
-            .finished_at
-            .timestamp_nanos_opt()
-            .unwrap_or_default(),
-        entry.record.delivery_key.as_deref().unwrap_or_default(),
-        entry.record.status,
-    );
-    seen.insert(key)
 }
 
 impl Drop for Scheduler {

@@ -581,7 +581,7 @@ async function handleTabStripDrop(event: DragEvent) {
         :groups="tabContextMenuGroups"
         :title="tabContextMenuTitle"
         :searchable="false"
-        :is-mobile-pointer="false"
+        :is-compact-touch="false"
         :desktop-anchor-el="tabContextMenuAnchorEl"
         desktop-placement="bottom-start"
         desktop-class="w-56"

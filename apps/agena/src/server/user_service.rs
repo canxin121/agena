@@ -188,10 +188,6 @@ fn server_arguments(args: &ServerArgs) -> Result<Vec<OsString>> {
         arguments.push("--mcp-anonymous-access".into());
         arguments.push(access.as_str().into());
     }
-    if let Some(registration) = args.mcp_client_registration {
-        arguments.push("--mcp-client-registration".into());
-        arguments.push(registration.as_str().into());
-    }
 
     let workspace = args
         .workspace_root
@@ -794,7 +790,6 @@ mod tests {
             mcp_oauth_issuer_url: Some("https://auth.example.test".to_owned()),
             mcp_auth_mode: Some(agena_cli::McpAuthModeArg::Mixed),
             mcp_anonymous_access: Some(agena_cli::McpAnonymousAccessArg::ReadOnly),
-            mcp_client_registration: Some(agena_cli::McpClientRegistrationArg::CimdOnly),
             workspace_root: Some(workspace.path().to_path_buf()),
             ui_dir: Some(PathBuf::from("/opt/agena/web-dist")),
         };
@@ -814,7 +809,6 @@ mod tests {
             ["--mcp-oauth-issuer-url", "https://auth.example.test"],
             ["--mcp-auth-mode", "mixed"],
             ["--mcp-anonymous-access", "read-only"],
-            ["--mcp-client-registration", "cimd-only"],
         ] {
             assert!(
                 arguments.windows(2).any(|pair| pair == expected),

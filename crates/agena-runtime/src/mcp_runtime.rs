@@ -2,12 +2,9 @@
 
 use std::sync::Arc;
 
-use agena_mcp_client::{
-    FallbackTokenStore, FileTokenStore, KeyringTokenStore, McpConnectionManager, ReconnectPolicy,
-    ServerSpec, TokenStore,
-};
+use agena_mcp_client::{KeyringTokenStore, McpConnectionManager, ReconnectPolicy, ServerSpec};
 use agena_plugin_host::{PluginPackage, PluginsConfig};
-use agena_runtime_config::{McpHttpAuthConfig, McpServerConfig, McpTokenStoreBackend};
+use agena_runtime_config::{McpHttpAuthConfig, McpServerConfig};
 
 // Keep the runtime composition boundary and plugin schema on one configuration
 // definition. These were historically duplicated, making it possible for the
@@ -35,40 +32,7 @@ pub async fn build_mcp_manager(
     let mut manager = McpConnectionManager::new(client_name.into(), client_version.into())
         .with_roots([workspace_root.to_path_buf()]);
     if config.runtime.token_store.enabled {
-        let store: Option<Arc<dyn TokenStore>> = match config.runtime.token_store.backend {
-            McpTokenStoreBackend::Keyring => {
-                let keyring: Arc<dyn TokenStore> = Arc::new(KeyringTokenStore::new());
-                if config.runtime.token_store.file_fallback {
-                    match FileTokenStore::open_default() {
-                        Ok(file) => {
-                            Some(Arc::new(FallbackTokenStore::new(keyring, Arc::new(file))))
-                        }
-                        Err(error) => {
-                            tracing::warn!(
-                                target: "agena::mcp",
-                                "MCP keyring is enabled but explicit legacy file fallback could not open: {error}"
-                            );
-                            Some(keyring)
-                        }
-                    }
-                } else {
-                    Some(keyring)
-                }
-            }
-            McpTokenStoreBackend::File => match FileTokenStore::open_default() {
-                Ok(store) => Some(Arc::new(store)),
-                Err(error) => {
-                    tracing::warn!(
-                        target: "agena::mcp",
-                        "failed to open explicitly selected MCP file token store: {error}"
-                    );
-                    None
-                }
-            },
-        };
-        if let Some(store) = store {
-            manager.set_token_store(store);
-        }
+        manager.set_token_store(Arc::new(KeyringTokenStore::new()));
     }
 
     let manager = Arc::new(manager);
@@ -176,18 +140,11 @@ fn mcp_http_auth(config: Option<&McpHttpAuthConfig>) -> Option<agena_mcp_client:
 
 #[cfg(test)]
 mod tests {
-    use agena_runtime_config::{
-        McpConfig, McpReconnectConfig, McpTokenStoreBackend, McpTokenStoreConfig,
-    };
+    use agena_runtime_config::{McpConfig, McpReconnectConfig, McpTokenStoreConfig};
 
     #[test]
     fn token_store_defaults_to_enabled() {
         assert!(McpTokenStoreConfig::default().enabled);
-        assert_eq!(
-            McpTokenStoreConfig::default().backend,
-            McpTokenStoreBackend::Keyring
-        );
-        assert!(!McpTokenStoreConfig::default().file_fallback);
         assert!(McpConfig::default().runtime.token_store.enabled);
         assert!(McpReconnectConfig::default().enabled);
         assert!(McpConfig::default().runtime.reconnect.enabled);

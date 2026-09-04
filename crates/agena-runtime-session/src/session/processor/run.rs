@@ -43,20 +43,16 @@ fn round_record_from_parts(
 
 /// Append a round record to the marker's accumulated content, preserving every
 /// other key (`run_kind`, `provider_id`, `model_id`, `turn_id`, `reply_id`,
-/// `usage`, …). Returns `None` when no prior marker content is available (the
-/// caller did not carry the marker into the turn — legacy single-round runs),
-/// in which case the projection falls back to whole-run wire projection.
+/// `usage`, …). Current model turns always carry the durable marker content; a
+/// malformed non-object marker is an internal consistency error.
 fn merge_round_record(
-    marker_content: Option<&serde_json::Value>,
+    marker_content: &serde_json::Value,
     round_record: serde_json::Value,
-) -> Option<serde_json::Value> {
-    if marker_content.is_none() {
-        tracing::warn!(
-            target: "agena::session::processor",
-            "round record merge skipped: no marker content available; this round's parts will fall back to whole-run wire projection"
-        );
-    }
-    let mut content = marker_content?.as_object()?.clone();
+) -> Result<serde_json::Value, AppError> {
+    let mut content = marker_content
+        .as_object()
+        .cloned()
+        .ok_or_else(|| AppError::Internal("run marker content must be a JSON object".to_owned()))?;
     let mut rounds = content
         .get(MARKER_ROUNDS_KEY)
         .and_then(serde_json::Value::as_array)
@@ -67,7 +63,7 @@ fn merge_round_record(
         MARKER_ROUNDS_KEY.to_owned(),
         serde_json::Value::Array(rounds),
     );
-    Some(serde_json::Value::Object(content))
+    Ok(serde_json::Value::Object(content))
 }
 
 /// Fold one terminal stream event into the run's accumulated terminal state.
@@ -738,7 +734,7 @@ impl SessionProcessor {
             provider_state.as_ref(),
             &run.input_notification_part_ids,
         );
-        let merged_content = merge_round_record(run.marker_content.as_ref(), round_record);
+        let merged_content = merge_round_record(&run.marker_content, round_record)?;
         let run_marker = if all_parts_terminal {
             run.store
                 .complete_run(
@@ -747,7 +743,7 @@ impl SessionProcessor {
                     RunOutcome {
                         status: PartState::Completed,
                         abort_reason: None,
-                        content: merged_content,
+                        content: Some(merged_content),
                         provider_state,
                     },
                 )
@@ -775,7 +771,7 @@ impl SessionProcessor {
                     assistant_message_id,
                     PartDelta {
                         provider_state,
-                        content: merged_content,
+                        content: Some(merged_content),
                         ..PartDelta::default()
                     },
                 )
@@ -837,7 +833,7 @@ mod tests {
             "part_ids": [103, 104],
             "provider_state": {"response_id": "r1"}
         });
-        let merged = merge_round_record(Some(&marker), record).expect("marker content present");
+        let merged = merge_round_record(&marker, record).expect("valid marker content");
         let rounds = merged["rounds"].as_array().expect("rounds array");
         assert_eq!(rounds.len(), 2);
         assert_eq!(rounds[1]["part_ids"], serde_json::json!([103, 104]));
@@ -850,7 +846,7 @@ mod tests {
     fn merge_round_record_starts_the_array_on_a_fresh_marker() {
         let marker = serde_json::json!({"run_kind": "continue"});
         let record = serde_json::json!({"part_ids": [201], "provider_state": null});
-        let merged = merge_round_record(Some(&marker), record).expect("marker content present");
+        let merged = merge_round_record(&marker, record).expect("valid marker content");
         let rounds = merged["rounds"].as_array().expect("rounds array");
         assert_eq!(rounds.len(), 1);
         assert_eq!(rounds[0]["part_ids"], serde_json::json!([201]));
@@ -858,13 +854,15 @@ mod tests {
     }
 
     #[test]
-    fn merge_round_record_without_marker_content_returns_none() {
-        // The caller falls back to whole-run wire projection when no marker
-        // content is available; the first round of a multi-round turn must
-        // never reach this path (its caller threads the initial marker
-        // content), but the fallback itself must stay `None`.
+    fn merge_round_record_rejects_malformed_marker_content() {
         let record = serde_json::json!({"part_ids": [301], "provider_state": null});
-        assert!(merge_round_record(None, record).is_none());
+        let error = merge_round_record(&serde_json::json!(["not", "an", "object"]), record)
+            .expect_err("non-object marker content must be rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("run marker content must be a JSON object")
+        );
     }
 
     #[test]

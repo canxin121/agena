@@ -110,7 +110,7 @@ const COMMAND_SEEDS: CommandSeed[] = [
   ['skill-manager', ['manage-skills'], ''],
   ['download', ['dl'], '<workspace-path>'],
   ['editor', ['edit'], ''],
-  ['image', ['paste-image'], ''],
+  ['image', [], ''],
   ['copy', ['yank'], ''],
   ['copy-message', ['copy-last', 'copy-assistant'], ''],
   ['copy-visible', [], ''],

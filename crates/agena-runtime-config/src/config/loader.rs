@@ -64,7 +64,7 @@ where
             }
         }
 
-        let config = merged.resolve_with_env(&self.env)?;
+        let config = merged.resolve()?;
         Ok(ConfigResolution {
             config,
             meta: crate::ConfigResolutionMeta::from_layer_presence(
@@ -283,12 +283,10 @@ mod tests {
     }
 
     #[test]
-    fn client_versions_compaction_resolve_and_legacy_policy_keys_are_ignored() {
+    fn client_versions_and_compaction_resolve() {
         let root = test_root();
         let config_dir = root.join("agena");
         std::fs::create_dir_all(&config_dir).expect("create test config directory");
-        // The legacy presentation keys are tolerated and ignored so stale
-        // user configs keep loading.
         std::fs::write(
             config_dir.join("agena.json"),
             r#"{
@@ -307,12 +305,6 @@ mod tests {
                         "reserved_tokens": 8192
                     },
                     "max_turns": 50
-                },
-                "plugins": {
-                    "policy": {
-                        "tool_presentation": { "default_mode": "brief" },
-                        "ui_presentation": { "default_mode": "summary" }
-                    }
                 }
             }"#,
         )
@@ -326,7 +318,7 @@ mod tests {
                 workspace_root: Some(root.join("workspace")),
                 ..LoadConfigRequest::default()
             })
-            .expect("restored settings should load");
+            .expect("current settings should load");
 
         assert_eq!(
             resolution.config.runtime.providers.client_versions.codex,

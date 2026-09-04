@@ -144,12 +144,8 @@ pub(super) async fn execute_async(
         env,
         timeout_ms: Some(input.timeout_ms.unwrap_or(DEFAULT_SHELL_TIMEOUT_MS)),
     };
-    let session_id = context.session_id;
-    let call_id = context.call_id;
     let _worker_permit = super::shell::acquire_worker_permit().await?;
-    let execution = executor
-        .execute_shell_command(&request, final_command.as_str(), session_id, call_id)
-        .await?;
+    let execution = executor.execute_shell_command(&request).await?;
     executor.ensure_not_cancelled()?;
 
     let hook_input = CommandAfterInput {

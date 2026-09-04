@@ -55,7 +55,7 @@ pub struct RuntimeToolDescriptor {
     /// ChatGPT connector surface.
     pub task: bool,
     /// Stable full plugin id (for example, `agena.fs`).
-    pub plugin_id: Option<String>,
+    pub plugin_id: String,
 }
 
 #[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]

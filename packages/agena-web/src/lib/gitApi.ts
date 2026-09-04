@@ -17,7 +17,7 @@ export function gitUrl(path: string, directory: string, query?: Record<string, Q
   const cleanPath = (path || '').replace(/^\/+/, '')
   const params = { directory, ...(query ?? {}) }
   const qs = buildQuery(params)
-  return `/api/git/${cleanPath}${qs ? `?${qs}` : ''}`
+  return `/api/v1/workbench/git/${cleanPath}${qs ? `?${qs}` : ''}`
 }
 
 export async function gitJson<T>(

@@ -936,9 +936,6 @@ fn part_contents_from_composer_document(
                         skills: vec![crate::part::SkillReference {
                             name: skill.name,
                             description: skill.description,
-                            // New message input is ref-only even if an older
-                            // client still sends the legacy snapshot field.
-                            instructions: String::new(),
                             content_hash: skill.content_hash,
                             source: skill.source,
                             aliases: skill.aliases,
@@ -1623,9 +1620,6 @@ impl SessionManager {
                 }
             }
         });
-        let command_event_sink = resolved_outer_pending
-            .as_ref()
-            .map(|pending| self.command_event_sink_for_pending(session_id, pending));
         let launch_provenance = resolved_outer_pending
             .as_ref()
             .map(|pending| pending.scheduled_job_launch_provenance(session_id));
@@ -1634,8 +1628,7 @@ impl SessionManager {
             .tool_executor
             .for_session_context_async(&execution_context)
             .await
-            .with_cancellation_token(cancellation.clone())
-            .with_command_event_sink(command_event_sink);
+            .with_cancellation_token(cancellation.clone());
         let prepared = scoped_executor
             .prepare_invocation(&invocation, session_id, call_id)
             .await

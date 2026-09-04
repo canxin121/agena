@@ -2,7 +2,7 @@ import { computed, nextTick, ref, watch, type Ref } from 'vue'
 
 import { usePinnedScroll } from '@/composables/chat/usePinnedScroll'
 
-type UiLike = { isCompactLayout: boolean; isMobilePointer: boolean }
+type UiLike = { isCompactLayout: boolean; isCompactTouch: boolean }
 type ChatPartValue = unknown
 type ChatMessageLike = {
   info?: { role?: string; id?: string }
@@ -219,7 +219,7 @@ export function useChatScrollNav(opts: {
   } = pinned
 
   const navBottomOffset = computed(() => {
-    const base = ui.isMobilePointer ? 96 : 112
+    const base = ui.isCompactTouch ? 96 : 112
     const divider = !composerFullscreenActive.value && !ui.isCompactLayout ? composerDividerHitPx : 0
     const height = composerShellHeight.value + divider
     if (!height) return `${base}px`
@@ -229,10 +229,7 @@ export function useChatScrollNav(opts: {
   const navTotalLabel = computed(() => {
     const total = chat.selectedHistory.userMessageCount
     if (typeof total === 'number' && Number.isFinite(total)) return String(Math.max(0, Math.floor(total)))
-    // Older servers do not expose the count. Show a "+" suffix until we've
-    // loaded the beginning in that compatibility case.
-    const n = navigableMessageIds.value.length
-    return chat.selectedHistory.exhausted ? String(n) : `${n}+`
+    return String(navigableMessageIds.value.length)
   })
 
   function navPrev() {

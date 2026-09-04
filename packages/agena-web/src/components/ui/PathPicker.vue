@@ -186,7 +186,7 @@ function formatOutputPath(absPath: string): string {
 async function fetchList(path: string): Promise<ListResponse> {
   const query = path ? `?path=${encodeURIComponent(path)}` : ''
   const gitignore = effectiveRespectGitignore.value ? `${query ? '&' : '?'}respectGitignore=true` : ''
-  return apiJson<ListResponse>(`/api/fs/list${query}${gitignore}`)
+  return apiJson<ListResponse>(`/api/v1/workbench/fs/list${query}${gitignore}`)
 }
 
 function updateValue(next: string) {
@@ -270,7 +270,7 @@ async function createFolderInCurrentPath() {
   const folderName = normalizeNewFolderName(createFolderName.value)
   try {
     createFolderLoading.value = true
-    await apiJson<{ success: boolean }>(`/api/fs/mkdir?directory=${encodeURIComponent(parentPath)}`, {
+    await apiJson<{ success: boolean }>(`/api/v1/workbench/fs/mkdir?directory=${encodeURIComponent(parentPath)}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ path: folderName }),

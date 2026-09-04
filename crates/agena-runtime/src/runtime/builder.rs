@@ -620,7 +620,7 @@ fn scheduled_job_activity(
         exit_code: None,
         message: job.paused.then_some("Paused".to_owned()),
         failure,
-        last_seq: job.run_history.len() as u64,
+        last_seq: 0,
         has_more: false,
         dropped_lines: 0,
         cancellable: status.is_active(),
@@ -628,42 +628,9 @@ fn scheduled_job_activity(
     }
 }
 
-async fn cron_source_part_id(
-    manager: &SessionManager,
-    job: &agena_scheduler::ScheduledJob,
-) -> Option<i64> {
-    if let Some(provenance) = job.launch_provenance {
-        return Some(provenance.tool_part_id);
-    }
-    // Compatibility for schedules persisted before launch provenance became
-    // first-class: recover the source once from their completed cron.create
-    // receipt when it is still present.
-    let session_id = job.owner_session_id?;
-    let session = match manager.session_store().load(session_id).await {
-        Ok(session) => session,
-        Err(error) => {
-            tracing::warn!(
-                %session_id,
-                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
-                    "load the owning session while recovering legacy cron provenance",
-                    &error,
-                ),
-                "legacy cron provenance could not be recovered"
-            );
-            return None;
-        }
-    };
-    let job_id = job.id.to_string();
-    session.parts.iter().rev().find_map(|part| {
-        (part.kind == "tool_call"
-            && part.content.get("name").and_then(serde_json::Value::as_str) == Some("cron.create")
-            && part
-                .content
-                .pointer("/operation/result/structured/id")
-                .and_then(serde_json::Value::as_str)
-                == Some(job_id.as_str()))
-        .then_some(part.part_id)
-    })
+fn cron_source_part_id(job: &agena_scheduler::ScheduledJob) -> Option<i64> {
+    job.launch_provenance
+        .map(|provenance| provenance.tool_part_id)
 }
 
 fn cron_activity_job_id(
@@ -748,7 +715,7 @@ impl agena_runtime::RuntimeActivityService for AgenaRuntime {
                     {
                         continue;
                     }
-                    let source_part_id = cron_source_part_id(manager.as_ref(), &job).await;
+                    let source_part_id = cron_source_part_id(&job);
                     let activity = scheduled_job_activity(job, source_part_id);
                     projected.insert(activity.id.clone(), activity);
                 }
@@ -947,11 +914,7 @@ impl agena_runtime::RuntimeActivityService for AgenaRuntime {
             .await
             .map_err(|error| agena_runtime::ActivityControlError::internal_error(&error))?
             .ok_or_else(|| agena_runtime::ActivityControlError::not_found(activity_id))?;
-        let source_part_id = if let Some(manager) = self.current_snapshot().session_manager() {
-            cron_source_part_id(manager.as_ref(), &job).await
-        } else {
-            None
-        };
+        let source_part_id = cron_source_part_id(&job);
         let activity = scheduled_job_activity(job, source_part_id);
         self.activities.registry.upsert(activity.clone());
         Ok(activity)
@@ -968,11 +931,7 @@ impl agena_runtime::RuntimeActivityService for AgenaRuntime {
             .await
             .map_err(|error| agena_runtime::ActivityControlError::internal_error(&error))?
             .ok_or_else(|| agena_runtime::ActivityControlError::not_found(activity_id))?;
-        let source_part_id = if let Some(manager) = self.current_snapshot().session_manager() {
-            cron_source_part_id(manager.as_ref(), &job).await
-        } else {
-            None
-        };
+        let source_part_id = cron_source_part_id(&job);
         let activity = scheduled_job_activity(job, source_part_id);
         self.activities.registry.upsert(activity.clone());
         Ok(activity)
@@ -1280,7 +1239,7 @@ impl agena_runtime::RuntimeToolExecutionService for AgenaRuntime {
                     destructive: permissions.shell || permissions.mutating || has_write_access,
                     open_world,
                     task: permissions.task,
-                    plugin_id: Some(tool.plugin_full_name()),
+                    plugin_id: tool.plugin_full_name(),
                 }
             })
             .collect()
@@ -1858,7 +1817,7 @@ fn runtime_settings_schema_validator(
     config_path: &std::path::Path,
     text: &str,
 ) -> Result<(), agena_runtime::RuntimeConfigSettingsError> {
-    crate::config::validate_config_text(config_path, text, &crate::config::ProcessEnvironment)
+    crate::config::validate_config_text(config_path, text)
         .map_err(agena_runtime::config_error_to_settings_error)
 }
 
@@ -1980,10 +1939,10 @@ impl agena_runtime::RuntimeStatusService for AgenaRuntime {
                                 refresh_available: health.refresh_available,
                             }
                         }),
-                        credential_migration: status.credential_migration.map(|migration| {
-                            agena_runtime::RuntimeMcpCredentialMigration {
-                                state: migration.as_str().to_owned(),
-                                recommendation: migration.recommendation().to_owned(),
+                        credential_conflict: status.credential_conflict.map(|conflict| {
+                            agena_runtime::RuntimeMcpCredentialConflict {
+                                state: conflict.as_str().to_owned(),
+                                recommendation: conflict.recommendation().to_owned(),
                             }
                         }),
                     })

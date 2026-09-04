@@ -63,9 +63,9 @@ impl Drop for NotificationAggregator {
     }
 }
 
-/// Runtime session capabilities exposed to application command handling. The
-/// legacy manager is adapted exactly once here while message/event projection
-/// remains on its separate, explicitly concrete boundary.
+/// Runtime session capabilities exposed to application command handling.
+/// Message/event projection remains on its separate, explicitly concrete
+/// boundary.
 #[derive(Clone)]
 pub struct ApplicationSessionServices {
     pub execution_control: Arc<dyn agena_runtime::SessionExecutionControl>,
@@ -609,10 +609,8 @@ impl Application {
         }
     }
 
-    /// Projects the complete Studio diagnostic surface without exposing a
-    /// RuntimeApplicationServices bundle or Runtime status record to Studio.
-    /// Kept live for the legacy `apps/agena` JSON-RPC backend diagnostics
-    /// surface.
+    /// Projects the complete server diagnostic surface without exposing a
+    /// RuntimeApplicationServices bundle or Runtime status record to transports.
     pub async fn runtime_diagnostics(&self) -> RuntimeDiagnosticsResource {
         let status = self.runtime_status.runtime_status().await;
         RuntimeDiagnosticsResource {

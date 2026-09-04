@@ -268,8 +268,7 @@ impl TryFrom<&Value> for PasteRefContent {
 
 /// `skill_ref` — skill name/args reference plus message-scoped reference
 /// metadata under `extra["skills"]` (name/description/content_hash/source/
-/// aliases). Historical records may also contain legacy `instructions`; those
-/// remain decodable but are not provider-visible.
+/// aliases).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct SkillRefContent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -683,7 +682,7 @@ pub fn attachment_source_from_file_ref(part: &FileRefContent) -> AttachmentSourc
                     "decode persisted attachment source",
                     &error,
                 ),
-                "persisted attachment source is malformed; using the legacy fallback"
+                "persisted attachment source is malformed; continuing with canonical source fallback"
             ),
         }
     }
@@ -694,8 +693,7 @@ pub fn attachment_source_from_file_ref(part: &FileRefContent) -> AttachmentSourc
 }
 
 /// Project Skill reference metadata from `extra["skills"]` into a
-/// [`SkillReferencePart`]. Historical snapshot-shaped entries remain readable;
-/// a missing or malformed reference list yields no skills.
+/// [`SkillReferencePart`]. A missing or malformed reference list yields no skills.
 pub fn skill_reference_from_skill_ref(part: &SkillRefContent) -> SkillReferencePart {
     let skills = match part.extra.get("skills") {
         Some(value) => match serde_json::from_value::<Vec<SkillReference>>(value.clone()) {

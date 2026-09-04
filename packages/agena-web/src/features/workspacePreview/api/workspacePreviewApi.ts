@@ -87,7 +87,7 @@ function normalizePreviewSessions(payload: PreviewSessionsResponse): WorkspacePr
 }
 
 export async function listWorkspacePreviewSessions(): Promise<WorkspacePreviewSession[]> {
-  const payload = await apiJson<PreviewSessionsResponse>('/api/workspace/preview/sessions')
+  const payload = await apiJson<PreviewSessionsResponse>('/api/v1/workbench/preview/sessions')
   return normalizePreviewSessions(payload)
 }
 
@@ -128,7 +128,7 @@ export async function createWorkspacePreviewSession(
   const targetUrl = String(input?.targetUrl || '').trim()
   if (!targetUrl) throw new Error('Target URL is required')
 
-  const payload = await apiJson<unknown>('/api/workspace/preview/sessions', {
+  const payload = await apiJson<unknown>('/api/v1/workbench/preview/sessions', {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
@@ -172,7 +172,7 @@ export async function discoverWorkspacePreviewSession(
   const args = Array.isArray(input?.args) ? input.args.map((v) => String(v || '').trim()).filter(Boolean) : []
   if (args.length === 0) throw new Error('Args is required')
 
-  const payload = await apiJson<unknown>('/api/workspace/preview/sessions/discover', {
+  const payload = await apiJson<unknown>('/api/v1/workbench/preview/sessions/discover', {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
@@ -226,7 +226,7 @@ export async function updateWorkspacePreviewSession(
   const args = Array.isArray(patch.args) ? patch.args.map((v) => String(v || '').trim()).filter(Boolean) : []
   if (Array.isArray(patch.args) && args.length === 0) throw new Error('Args is required')
 
-  const payload = await apiJson<unknown>(`/api/workspace/preview/sessions/${encodeURIComponent(trimmedId)}`, {
+  const payload = await apiJson<unknown>(`/api/v1/workbench/preview/sessions/${encodeURIComponent(trimmedId)}`, {
     method: 'PUT',
     headers: {
       'content-type': 'application/json',
@@ -251,7 +251,7 @@ export async function deleteWorkspacePreviewSession(sessionId: string): Promise<
   const trimmedId = String(sessionId || '').trim()
   if (!trimmedId) throw new Error('Session id is required')
 
-  await apiJson<{ ok: boolean }>(`/api/workspace/preview/sessions/${encodeURIComponent(trimmedId)}`, {
+  await apiJson<{ ok: boolean }>(`/api/v1/workbench/preview/sessions/${encodeURIComponent(trimmedId)}`, {
     method: 'DELETE',
   })
 }
@@ -265,7 +265,7 @@ export async function renameWorkspacePreviewSession(
   if (!trimmedId) throw new Error('Session id is required')
   if (!trimmedNew) throw new Error('New session id is required')
 
-  const payload = await apiJson<unknown>(`/api/workspace/preview/sessions/${encodeURIComponent(trimmedId)}/rename`, {
+  const payload = await apiJson<unknown>(`/api/v1/workbench/preview/sessions/${encodeURIComponent(trimmedId)}/rename`, {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
@@ -282,7 +282,7 @@ export async function startWorkspacePreviewSession(sessionId: string): Promise<W
   const trimmedId = String(sessionId || '').trim()
   if (!trimmedId) throw new Error('Session id is required')
 
-  const payload = await apiJson<unknown>(`/api/workspace/preview/sessions/${encodeURIComponent(trimmedId)}/start`, {
+  const payload = await apiJson<unknown>(`/api/v1/workbench/preview/sessions/${encodeURIComponent(trimmedId)}/start`, {
     method: 'POST',
   })
 
@@ -295,7 +295,7 @@ export async function stopWorkspacePreviewSession(sessionId: string): Promise<Wo
   const trimmedId = String(sessionId || '').trim()
   if (!trimmedId) throw new Error('Session id is required')
 
-  const payload = await apiJson<unknown>(`/api/workspace/preview/sessions/${encodeURIComponent(trimmedId)}/stop`, {
+  const payload = await apiJson<unknown>(`/api/v1/workbench/preview/sessions/${encodeURIComponent(trimmedId)}/stop`, {
     method: 'POST',
   })
 

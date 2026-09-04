@@ -37,5 +37,5 @@ test('files api includes chunked read endpoint', () => {
 
   assert.ok(source.includes('export type FsReadChunkResponse = {'))
   assert.ok(source.includes('export async function readFileChunk(input: {'))
-  assert.ok(source.includes("return apiJson<FsReadChunkResponse>(`/api/fs/read-chunk?${params.join('&')}`)"))
+  assert.ok(source.includes("return apiJson<FsReadChunkResponse>(`/api/v1/workbench/fs/read-chunk?${params.join('&')}`)"))
 })

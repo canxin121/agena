@@ -29,7 +29,7 @@ const emit = defineEmits<{
 }>()
 
 const ui = useUiStore()
-const isMobileSheet = computed(() => Boolean(ui.isMobilePointer))
+const isMobileSheet = computed(() => Boolean(ui.isCompactTouch))
 
 const { t } = useI18n()
 

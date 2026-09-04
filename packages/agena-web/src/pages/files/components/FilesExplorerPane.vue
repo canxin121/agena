@@ -61,7 +61,7 @@ const props = defineProps<{
   switchRoot?: (rootPath: string) => void | Promise<void>
   isCompactLayout: boolean
   isMobileFormFactor?: boolean
-  isMobilePointer?: boolean
+  isCompactTouch?: boolean
   selectedFilePath: string
   activeCreateDir: string
   hasRootChildren: boolean
@@ -90,7 +90,7 @@ const props = defineProps<{
   uploadFiles: (files: readonly File[], targetDir?: string) => void | Promise<void>
 }>()
 
-const isMobileFormFactor = computed(() => Boolean(props.isMobileFormFactor ?? props.isMobilePointer))
+const isMobileFormFactor = computed(() => Boolean(props.isMobileFormFactor ?? props.isCompactTouch))
 
 const uploadInputRef = ref<HTMLInputElement | null>(null)
 const dropTargetDir = ref('')
@@ -1104,7 +1104,7 @@ onBeforeUnmount(() => {
             :mobile-title="t('files.explorer.toolbar.actions')"
             :searchable="true"
             filter-mode="internal"
-            :is-mobile-pointer="isMobileFormFactor"
+            :is-compact-touch="isMobileFormFactor"
             :desktop-fixed="true"
             desktop-placement="bottom-start"
             desktop-class="w-72"
@@ -1402,7 +1402,7 @@ onBeforeUnmount(() => {
                         :mobile-title="rowActionMenuTitle(entry.row.node)"
                         :searchable="true"
                         filter-mode="internal"
-                        :is-mobile-pointer="isMobileFormFactor"
+                        :is-compact-touch="isMobileFormFactor"
                         :desktop-fixed="true"
                         desktop-placement="bottom-start"
                         desktop-class="w-56"
@@ -1434,7 +1434,7 @@ onBeforeUnmount(() => {
                           :mobile-title="rowActionMenuTitle(entry.row.node)"
                           :searchable="true"
                           filter-mode="internal"
-                          :is-mobile-pointer="isMobileFormFactor"
+                          :is-compact-touch="isMobileFormFactor"
                           :desktop-fixed="true"
                           desktop-placement="bottom-start"
                           desktop-class="w-44"

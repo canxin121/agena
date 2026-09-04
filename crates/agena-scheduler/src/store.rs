@@ -9,10 +9,9 @@ use uuid::Uuid;
 
 use crate::job::{ScheduledJob, SchedulerHistoryEntry};
 
-/// The global audit ledger is deliberately bounded independently from the
-/// 50-record working history embedded in every retained job.  This protects
-/// the dedicated scheduler database from unbounded scheduler growth while
-/// retaining a useful cross-job, post-deletion diagnostic/export window.
+/// The global audit ledger is deliberately bounded to protect the dedicated
+/// scheduler database from unbounded growth while retaining a useful cross-job,
+/// post-deletion diagnostic/export window.
 pub const MAX_RETAINED_HISTORY_ENTRIES: usize = 1_000;
 
 #[async_trait::async_trait]

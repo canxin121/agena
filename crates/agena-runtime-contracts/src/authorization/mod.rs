@@ -51,16 +51,6 @@ pub fn validate_permission_config(config: &PermissionConfig) -> Result<(), Permi
     let _ = apply_to_permission_policy(config, PermissionPolicy::allow_all())?;
     let _ = apply_to_network_permission_policy(config, NetworkPermissionPolicy::allow_all())?;
     let _ = apply_to_tool_permission_policy(config, ToolPermissionPolicy::allow_all())?;
-    if config
-        .tools
-        .as_ref()
-        .is_some_and(|tools| tools.declared_tags_present)
-    {
-        tracing::warn!(
-            target: "agena::permission",
-            "permission.tools.tags is no longer honored: tool permission modes are configured by `tools.names`, `tools.rules`, or `tools.default`; the declared tags were ignored"
-        );
-    }
     Ok(())
 }
 

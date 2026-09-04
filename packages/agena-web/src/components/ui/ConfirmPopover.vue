@@ -67,7 +67,7 @@ const slots = useSlots()
 const { t } = useI18n()
 
 const hasTrigger = computed(() => Boolean(slots.default))
-const useDialog = computed(() => props.forceDialog || ui.isMobilePointer || !hasTrigger.value)
+const useDialog = computed(() => props.forceDialog || ui.isCompactTouch || !hasTrigger.value)
 
 const openInternal = ref(false)
 const isOpenControlled = computed(() => props.open !== null && props.open !== undefined)
@@ -84,7 +84,7 @@ const confirmButtonDisabled = computed(() => props.confirmDisabled || props.busy
 const dialogContentClass = computed(() =>
   cn(
     'fixed z-[81] pointer-events-auto grid min-w-0 -translate-x-1/2 -translate-y-1/2 gap-4 rounded-xl border border-border/70 bg-background/95 p-6 shadow-2xl backdrop-blur duration-200 overflow-y-auto overflow-x-hidden data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[state=closed]:slide-out-to-left-1/2 data-[state=closed]:slide-out-to-top-[48%] data-[state=open]:slide-in-from-left-1/2 data-[state=open]:slide-in-from-top-[48%] outline-none',
-    ui.isMobilePointer
+    ui.isCompactTouch
       ? 'left-[calc(var(--oc-safe-area-left,0px)+(100vw-var(--oc-safe-area-left,0px)-var(--oc-safe-area-right,0px))/2)] top-[calc(var(--oc-safe-area-top,0px)+(100dvh-var(--oc-safe-area-top,0px)-var(--oc-safe-area-bottom,0px))/2)] w-[calc(100vw-var(--oc-safe-area-left,0px)-var(--oc-safe-area-right,0px)-2rem)] max-h-[calc(100dvh-var(--oc-safe-area-top,0px)-var(--oc-safe-area-bottom,0px)-2rem)]'
       : 'left-[50%] top-[50%] w-[calc(100vw-2rem)] max-h-[calc(100dvh-3rem)]',
     props.maxWidth,

@@ -99,13 +99,9 @@ impl RawProjectMergeKeys {
     }
 }
 
-pub fn validate_config_text(
-    path: &Path,
-    text: &str,
-    env: &dyn ConfigEnvironment,
-) -> Result<(), ConfigError> {
+pub fn validate_config_text(path: &Path, text: &str) -> Result<(), ConfigError> {
     let (config, _) = parse_raw_config_text(path, text)?;
-    config.resolve_with_env(env)?;
+    config.resolve()?;
     Ok(())
 }
 
@@ -136,7 +132,7 @@ pub fn validate_layered_config_text(
     let mut merged = global;
     merged.merge_project_from_with_keys(workspace, workspace_merge_keys);
     merged.merge_from(RawConfig::from_env(env)?);
-    merged.resolve_with_env(env)?;
+    merged.resolve()?;
     Ok(())
 }
 
@@ -419,10 +415,7 @@ impl RawConfig {
         })
     }
 
-    pub fn resolve_with_env(
-        self,
-        env: &dyn ConfigEnvironment,
-    ) -> Result<ResolvedConfig, ConfigError> {
+    pub fn resolve(self) -> Result<ResolvedConfig, ConfigError> {
         let raw_tracing = self.tracing.unwrap_or_default();
         let database = raw_tracing
             .database
@@ -474,7 +467,7 @@ impl RawConfig {
             permission.merge_from(overlay);
         }
         let plugins: PluginConfig = self.plugins.unwrap_or_default();
-        let mcp = crate::mcp_config_from_plugins(&plugins).map_err(ConfigError::Validation)?;
+        crate::mcp_config_from_plugins(&plugins).map_err(ConfigError::Validation)?;
         let harnesses: HarnessesConfig = self.harnesses.unwrap_or_default();
         validate_harnesses(&harnesses)?;
 
@@ -483,7 +476,7 @@ impl RawConfig {
             .providers
             .providers
             .into_iter()
-            .map(|(provider_id, raw)| raw.resolve(provider_id, env, &harnesses, &mcp))
+            .map(|(provider_id, raw)| raw.resolve(provider_id))
             .collect::<Result<BTreeMap<_, _>, _>>()?;
         let default_selection =
             resolve_default_selection(explicit_default_selection.as_ref(), &providers)?;
@@ -1088,17 +1081,6 @@ fn validate_non_empty_list(label: &str, values: &[String]) -> Result<(), ConfigE
     Ok(())
 }
 
-fn validate_non_empty_strings(
-    provider_id: &str,
-    field: &str,
-    values: &[String],
-) -> Result<(), ConfigError> {
-    validate_non_empty_list(field, values).map_err(|_| ConfigError::InvalidProviderConfig {
-        provider_id: provider_id.to_owned(),
-        message: format!("{field} cannot contain empty strings"),
-    })
-}
-
 fn validate_configured_models(
     provider_id: &str,
     scope: &str,
@@ -1248,7 +1230,6 @@ mod openai_protocol_adapter_tests {
     use super::{
         RawConfig, reject_unsupported_fields_value, validate_config_text, validate_configured_modes,
     };
-    use crate::ProcessEnvironment;
     use agena_provider::ConfiguredModelDefinition;
     use std::{fs, path::Path};
 
@@ -1286,7 +1267,6 @@ mod openai_protocol_adapter_tests {
             validate_config_text(
                 Path::new("agena.json"),
                 config_with_adapter(adapter_id, "").as_str(),
-                &ProcessEnvironment,
             )
             .unwrap_or_else(|error| panic!("{adapter_id} should resolve: {error}"));
         }
@@ -1297,7 +1277,6 @@ mod openai_protocol_adapter_tests {
         let error = validate_config_text(
             Path::new("agena.json"),
             config_with_adapter("openai", "").as_str(),
-            &ProcessEnvironment,
         )
         .expect_err("legacy adapter id must be rejected");
         assert!(error.to_string().contains("unknown provider kind `openai`"));
@@ -1320,7 +1299,6 @@ mod openai_protocol_adapter_tests {
         let error = validate_config_text(
             Path::new("agena.json"),
             config_with_adapter("openai_responses", r#""api_mode": "auto","#).as_str(),
-            &ProcessEnvironment,
         )
         .expect_err("legacy api_mode must be rejected");
         assert!(error.to_string().contains("unknown field `api_mode`"));
@@ -1334,12 +1312,8 @@ mod openai_protocol_adapter_tests {
                 "agena_tools": { "mode": "prompt_envelope" }
             }"#,
         );
-        validate_config_text(
-            Path::new("agena.json"),
-            config.as_str(),
-            &ProcessEnvironment,
-        )
-        .expect_err("prompt-envelope mode was removed and must be rejected");
+        validate_config_text(Path::new("agena.json"), config.as_str())
+            .expect_err("prompt-envelope mode was removed and must be rejected");
     }
 
     #[test]
@@ -1359,12 +1333,8 @@ mod openai_protocol_adapter_tests {
                 )
                 .as_str(),
             );
-            let error = validate_config_text(
-                Path::new("agena.json"),
-                config.as_str(),
-                &ProcessEnvironment,
-            )
-            .expect_err("provider-native model-route configuration must be rejected");
+            let error = validate_config_text(Path::new("agena.json"), config.as_str())
+                .expect_err("provider-native model-route configuration must be rejected");
             assert!(
                 error
                     .to_string()
@@ -1388,12 +1358,8 @@ mod openai_protocol_adapter_tests {
                 )
                 .as_str(),
             );
-            let error = validate_config_text(
-                Path::new("agena.json"),
-                config.as_str(),
-                &ProcessEnvironment,
-            )
-            .expect_err("direct model-route configuration must be rejected");
+            let error = validate_config_text(Path::new("agena.json"), config.as_str())
+                .expect_err("direct model-route configuration must be rejected");
             assert!(
                 error
                     .to_string()
@@ -1482,19 +1448,15 @@ mod openai_protocol_adapter_tests {
     #[test]
     fn full_example_uses_only_resolvable_protocol_adapters() {
         let fixture = workspace_fixture("config.full.json");
-        validate_config_text(Path::new("config.full.json"), &fixture, &ProcessEnvironment)
+        validate_config_text(Path::new("config.full.json"), &fixture)
             .expect("config.full.json should remain a valid canonical configuration");
     }
 
     #[test]
     fn minimal_example_is_a_valid_canonical_configuration() {
         let fixture = workspace_fixture("config.example.json");
-        validate_config_text(
-            Path::new("config.example.json"),
-            &fixture,
-            &ProcessEnvironment,
-        )
-        .expect("config.example.json should remain a valid canonical configuration");
+        validate_config_text(Path::new("config.example.json"), &fixture)
+            .expect("config.example.json should remain a valid canonical configuration");
     }
 
     fn workspace_fixture(name: &str) -> String {
@@ -1571,12 +1533,8 @@ mod openai_protocol_adapter_tests {
                 }
             }
         });
-        validate_config_text(
-            Path::new("agena.json"),
-            &value.to_string(),
-            &ProcessEnvironment,
-        )
-        .expect("global default selection should be accepted");
+        validate_config_text(Path::new("agena.json"), &value.to_string())
+            .expect("global default selection should be accepted");
 
         value["providers"]["default"] = serde_json::json!("test");
         let error = reject_unsupported_fields_value(&value)
@@ -1627,12 +1585,8 @@ mod openai_protocol_adapter_tests {
                 }
             }
         });
-        let error = validate_config_text(
-            Path::new("agena.json"),
-            &value.to_string(),
-            &ProcessEnvironment,
-        )
-        .expect_err("disabled global default adapter must be rejected");
+        let error = validate_config_text(Path::new("agena.json"), &value.to_string())
+            .expect_err("disabled global default adapter must be rejected");
         assert!(error.to_string().contains("disabled adapter"));
     }
 
@@ -1658,12 +1612,8 @@ mod openai_protocol_adapter_tests {
                 }
             }
         });
-        let error = validate_config_text(
-            Path::new("agena.json"),
-            &value.to_string(),
-            &ProcessEnvironment,
-        )
-        .expect_err("unknown global default adapter must be rejected");
+        let error = validate_config_text(Path::new("agena.json"), &value.to_string())
+            .expect_err("unknown global default adapter must be rejected");
         assert!(error.to_string().contains("unknown adapter"));
     }
 
@@ -1692,12 +1642,8 @@ mod openai_protocol_adapter_tests {
                 }
             }
         });
-        let error = validate_config_text(
-            Path::new("agena.json"),
-            &value.to_string(),
-            &ProcessEnvironment,
-        )
-        .expect_err("unknown global default provider must be rejected");
+        let error = validate_config_text(Path::new("agena.json"), &value.to_string())
+            .expect_err("unknown global default provider must be rejected");
         assert!(error.to_string().contains("unknown provider"));
     }
 

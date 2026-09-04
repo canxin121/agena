@@ -178,8 +178,7 @@ impl App {
     /// **Operation** activity, so the node key is resolved through the same
     /// shared pending-part predicate the renderer and key router use
     /// ([`agena_tui_transcript::interaction_request_id_for_part`], which reads
-    /// the awaiting `user_input` record off the operation). The legacy
-    /// `Request` activity arm is covered by that predicate too. The reply-clear
+    /// the awaiting `user_input` record off the operation). The reply-clear
     /// path also resolves through this function: it runs against the still
     /// pending snapshot before the answered execution is applied, so the
     /// awaiting record is still present.

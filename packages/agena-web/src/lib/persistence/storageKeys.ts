@@ -33,7 +33,6 @@ export const localStorageKeys = {
     locale: namespacedKey('ui.locale'),
   },
   directory: {
-    lastDirectory: namespacedKey('directory.last-directory'),
     currentDirectoryByWindow: namespacedKey('directory.current-directory-by-window.v1'),
   },
   chat: {

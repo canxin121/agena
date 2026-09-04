@@ -1193,7 +1193,7 @@ function selectSession(sessionId: string) {
               density="compact"
               :draggable="canDragPreviewSession(session, 'chat')"
               :actions-always-visible="
-                !previewMultiSelect.enabled.value && (ui.isMobilePointer || isInlineRenameSession(session, 'chat'))
+                !previewMultiSelect.enabled.value && (ui.isCompactTouch || isInlineRenameSession(session, 'chat'))
               "
               @click="handlePreviewSessionRowClick(session, 'chat', $event)"
               @dragstart="handlePreviewSessionRowDragStart($event, session, 'chat')"
@@ -1271,7 +1271,7 @@ function selectSession(sessionId: string) {
 
                 <template v-else-if="!previewMultiSelect.enabled.value">
                   <ListItemOverflowActionButton
-                    :mobile="ui.isMobilePointer"
+                    :mobile="ui.isCompactTouch"
                     :label="String(t('common.actions'))"
                     @trigger="(event) => openRowMenu(session.id, 'chat', event)"
                   />
@@ -1347,7 +1347,7 @@ function selectSession(sessionId: string) {
               density="compact"
               :draggable="canDragPreviewSession(session, 'directory')"
               :actions-always-visible="
-                !previewMultiSelect.enabled.value && (ui.isMobilePointer || isInlineRenameSession(session, 'directory'))
+                !previewMultiSelect.enabled.value && (ui.isCompactTouch || isInlineRenameSession(session, 'directory'))
               "
               @click="handlePreviewSessionRowClick(session, 'directory', $event)"
               @dragstart="handlePreviewSessionRowDragStart($event, session, 'directory')"
@@ -1425,7 +1425,7 @@ function selectSession(sessionId: string) {
 
                 <template v-else-if="!previewMultiSelect.enabled.value">
                   <ListItemOverflowActionButton
-                    :mobile="ui.isMobilePointer"
+                    :mobile="ui.isCompactTouch"
                     :label="String(t('common.actions'))"
                     @trigger="(event) => openRowMenu(session.id, 'directory', event)"
                   />
@@ -1495,7 +1495,7 @@ function selectSession(sessionId: string) {
               density="compact"
               :draggable="canDragPreviewSession(session, 'all')"
               :actions-always-visible="
-                !previewMultiSelect.enabled.value && (ui.isMobilePointer || isInlineRenameSession(session, 'all'))
+                !previewMultiSelect.enabled.value && (ui.isCompactTouch || isInlineRenameSession(session, 'all'))
               "
               @click="handlePreviewSessionRowClick(session, 'all', $event)"
               @dragstart="handlePreviewSessionRowDragStart($event, session, 'all')"
@@ -1573,7 +1573,7 @@ function selectSession(sessionId: string) {
 
                 <template v-else-if="!previewMultiSelect.enabled.value">
                   <ListItemOverflowActionButton
-                    :mobile="ui.isMobilePointer"
+                    :mobile="ui.isCompactTouch"
                     :label="String(t('common.actions'))"
                     @trigger="(event) => openRowMenu(session.id, 'all', event)"
                   />
@@ -1591,7 +1591,7 @@ function selectSession(sessionId: string) {
       :title="String(t('common.actions'))"
       :mobile-title="String(t('common.actions'))"
       :searchable="false"
-      :is-mobile-pointer="ui.isMobilePointer"
+      :is-compact-touch="ui.isCompactTouch"
       :desktop-fixed="true"
       desktop-placement="bottom-end"
       :desktop-anchor-el="rowMenuAnchorEl"

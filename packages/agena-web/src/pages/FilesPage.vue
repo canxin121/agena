@@ -150,7 +150,7 @@ const configuredProjectRoots = computed(() => {
 const explorerRootPath = ref('')
 const root = computed(() => trimTrailingSlashes(normalizePath((explorerRootPath.value || '').trim())))
 const isCompactLayout = computed(() => ui.isCompactLayout)
-const isMobileFormFactor = computed(() => ui.isMobilePointer)
+const isMobileFormFactor = computed(() => ui.isCompactTouch)
 const embeddedView = ref<'list' | 'viewer'>(
   isEmbeddedWorkspacePaneContext(route.query) || props.embedded ? 'list' : 'viewer',
 )
@@ -735,7 +735,7 @@ const rawApiPath = computed(() => {
   const path = selectedPath.value
   const rootPath = root.value
   if (!path || !rootPath) return ''
-  return `/api/fs/raw?directory=${encodeURIComponent(rootPath)}&path=${encodeURIComponent(path)}`
+  return `/api/v1/workbench/fs/raw?directory=${encodeURIComponent(rootPath)}&path=${encodeURIComponent(path)}`
 })
 
 const rawUrl = ref('')
@@ -1880,7 +1880,7 @@ async function triggerDownloadForPath(path: string, fileName?: string) {
   const normalized = normalizePath(String(path || '').trim())
   if (!rootPath || !normalized || !withinWorkspace(normalized)) return
 
-  const url = `/api/fs/download?directory=${encodeURIComponent(rootPath)}&path=${encodeURIComponent(normalized)}`
+  const url = `/api/v1/workbench/fs/download?directory=${encodeURIComponent(rootPath)}&path=${encodeURIComponent(normalized)}`
   try {
     const blob = await apiBlob(url)
     const href = URL.createObjectURL(blob)

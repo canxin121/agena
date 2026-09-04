@@ -39,7 +39,7 @@ pub mod store;
 /// Resolves the SQLite database URL from (in priority order): an explicit
 /// URL, a filesystem path, or the conventional user-local database path.
 /// This is storage policy rather than Core runtime composition, so every
-/// process bootstrapper can use it without importing the legacy monolith.
+/// process bootstrapper can use it without importing runtime composition layers.
 #[derive(Debug, Clone, Default)]
 pub struct StorageConfig {
     pub database_url: Option<String>,

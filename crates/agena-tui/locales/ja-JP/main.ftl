@@ -580,11 +580,8 @@ settings-mcp-registration-label = 会員登録
 
 settings-mcp-pkce-label = ピクチャー
 
-settings-mcp-client-registration-label = OAuth クライアント登録
 
-settings-mcp-client-registration-cimd = CIMDのみ(推奨)
 
-settings-mcp-client-registration-dcr = CIMD+ダイナミッククライアント登録
 
 settings-mcp-public-url-label = 公開 MCP URL
 
@@ -1012,7 +1009,6 @@ settings-mcp-auth-mode-updated = エイジナ MCP 認証モードを {$mode} に
 
 settings-mcp-anonymous-access-updated = エイジナ MCP 匿名ツール {$policy}
 
-settings-mcp-client-registration-updated = エイジナ MCP クライアントの登録を {$policy} に設定
 
 settings-mcp-oauth-password-cleared = エイジナ MCP OAuth パスワードクリア
 
@@ -1186,8 +1182,6 @@ settings-mcp-auth-detail = 非認証、完全な OAuth、および ChatGPT 混�
 settings-mcp-anonymous-access-none-detail = 安全なデフォルト: どのツール呼び出しも匿名ではありません。 ChatGPT は、サインインする前にカタログを初期化し、検出することができます。
 settings-mcp-anonymous-access-read-only-detail = 高リスクのオプトイン: 読み取り専用ツールは匿名で実行でき、プライベート ワークスペース、ファイル システム、構成、または診断データが公開される可能性があります。
 settings-mcp-anonymous-access-inactive-detail = このポリシーは混合認証モードにのみ適用されます。認証を混合に切り替えて使用します。
-settings-mcp-client-registration-cimd-detail = OpenAI ChatGPT クライアント ID メタデータ ドキュメントのみを受け入れます。認証されていないパブリック DCR エンドポイントは無効のままになります。
-settings-mcp-client-registration-dcr-detail = 互換モード: パブリックの動的クライアント登録も公開します。クライアントが CIMD を使用できない場合にのみ有効にします。
 settings-mcp-public-url-detail = 正規の HTTPS MCP リソース URL を設定します。安全な MCP トンネル URL には、完全な /v1/mcp/tunnel_id パスが含まれる場合があります。転送されたリクエスト ヘッダーは、OAuth ID として信頼されることはありません。
 settings-mcp-oauth-issuer-detail = パブリックのブラウザ向け認可サーバー発行者を設定します。 Agena 管理の OAuth には、パスのないオリジン (https://auth.example.com など) が必要です。 OAuth と MCP が同じドメインを使用する場合は、空のままにしてください。
 settings-mcp-oauth-password-detail = Agena OAuth 認証ページに表示されるパスワードを設定します。これはサーバーによって Argon2 ハッシュとして保存されます。

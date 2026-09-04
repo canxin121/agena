@@ -186,13 +186,6 @@ function pushSidebarErrorToast(key: string, message: string, timeoutMs = 4500, d
   toasts.push('error', msg, timeoutMs)
 }
 
-function isUiAuthRequiredMessage(message: string): boolean {
-  return (
-    String(message || '')
-      .trim()
-      .toLowerCase() === 'ui authentication required'
-  )
-}
 
 function toIdSet(input: string[]): Set<string> {
   return new Set(input.map((v) => String(v || '').trim()).filter(Boolean))
@@ -870,9 +863,7 @@ async function refreshVisibleDirectories() {
 
 async function handleSidebarRefresh() {
   await settings.refresh()
-  if (settings.error && !isUiAuthRequiredMessage(settings.error)) {
-    pushSidebarErrorToast('sidebar:settings', settings.error, 4500, 8000)
-  }
+  if (settings.error) pushSidebarErrorToast('sidebar:settings', settings.error, 4500, 8000)
 
   await refreshVisibleDirectories()
   await chat.refreshSessions()
@@ -899,7 +890,7 @@ function openSessionActions(directory: DirectoryEntry, session: SessionLike, eve
 }
 
 function openSidebarContextMenu(event: MouseEvent) {
-  if (ui.isMobilePointer) return
+  if (ui.isCompactTouch) return
   event.preventDefault()
   closeDesktopSessionActionMenu()
   directoryActionsOpen.value = false
@@ -2299,7 +2290,7 @@ const { locatedSessionId, locateFromSearch, searchWarming, sessionSearchHits, se
       :searchable="true"
       :search-placeholder="String(t('common.searchActions'))"
       :empty-text="String(t('common.noActionsFound'))"
-      :is-mobile-pointer="ui.isMobilePointer"
+      :is-compact-touch="ui.isCompactTouch"
       :desktop-anchor-el="directoryActionsAnchorRef"
       desktop-placement="bottom-start"
       filter-mode="external"
@@ -2324,7 +2315,7 @@ const { locatedSessionId, locateFromSearch, searchWarming, sessionSearchHits, se
       :searchable="true"
       :search-placeholder="String(t('common.searchActions'))"
       :empty-text="String(t('common.noActionsFound'))"
-      :is-mobile-pointer="ui.isMobilePointer"
+      :is-compact-touch="ui.isCompactTouch"
       :desktop-anchor-el="sessionActionsAnchorRef"
       desktop-placement="bottom-start"
       filter-mode="external"
@@ -2345,7 +2336,7 @@ const { locatedSessionId, locateFromSearch, searchWarming, sessionSearchHits, se
       :groups="sidebarActionMenuGroups"
       :title="String(t('chat.sidebar.contextMenu.menuTitle'))"
       :searchable="false"
-      :is-mobile-pointer="false"
+      :is-compact-touch="false"
       :desktop-anchor-el="sidebarActionsAnchorRef"
       desktop-placement="bottom-start"
       desktop-class="w-64"

@@ -717,50 +717,13 @@ pub(crate) fn provider_model_settings_path(
 /// Return the stable model id used by Agena for one adapter route.
 ///
 /// Anthropic model discovery can return CPA's reversible `claude-fable-5-dd-`
-/// aliases. Runtime config normalizes those aliases, so Provider Studio must
-/// use the same key when reading and writing legacy file settings.
+/// aliases, so Provider Studio uses the same stable identity as runtime config.
 pub(crate) fn canonical_provider_model_id(adapter_id: &str, model_id: &str) -> String {
     if adapter_id == "anthropic" {
         agena_provider::normalize_anthropic_model_id(model_id)
     } else {
         model_id.to_owned()
     }
-}
-
-/// Return canonical-first keys that may contain a configured model overlay.
-/// The raw alias is retained as a fallback for settings written by older
-/// versions before Anthropic model discovery was normalized.
-pub(crate) fn provider_model_id_candidates(adapter_id: &str, model_id: &str) -> Vec<String> {
-    let canonical = canonical_provider_model_id(adapter_id, model_id);
-    let mut candidates = vec![canonical.clone()];
-    if canonical != model_id {
-        candidates.push(model_id.to_owned());
-    }
-    candidates
-}
-
-/// Canonicalize model keys in an adapter settings object while preserving an
-/// explicitly canonical value when both a legacy alias and canonical key are
-/// present.
-pub(crate) fn canonicalize_provider_model_settings(
-    adapter_id: &str,
-    models: &mut JsonMap<String, JsonValue>,
-) {
-    let current = std::mem::take(models);
-    let mut canonical = JsonMap::new();
-    let mut aliases = Vec::new();
-    for (model_id, value) in current {
-        let normalized = canonical_provider_model_id(adapter_id, model_id.as_str());
-        if normalized == model_id {
-            canonical.insert(normalized, value);
-        } else {
-            aliases.push((normalized, value));
-        }
-    }
-    for (model_id, value) in aliases {
-        canonical.entry(model_id).or_insert(value);
-    }
-    *models = canonical;
 }
 
 pub(crate) fn provider_adapter_settings_path(provider_id: &str, adapter_id: &str) -> String {
@@ -795,7 +758,6 @@ pub(crate) fn merge_provider_model_adapter_patch_for_save(
     let Some(models_object) = models.as_object_mut() else {
         return Err(ProviderStudioSaveError::ConfiguredProviderAdapterModelsMustBeObject);
     };
-    canonicalize_provider_model_settings(adapter_id, models_object);
     models_object.insert(
         canonical_provider_model_id(adapter_id, model_id),
         model_value,

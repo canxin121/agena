@@ -70,9 +70,8 @@ impl PluginsConfig {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(default)]
-/// Policy configuration for plugins (currently reserved; legacy keys are
-/// tolerated and ignored so stale configs keep loading).
+#[serde(default, deny_unknown_fields)]
+/// Policy configuration for plugins.
 pub struct PluginPolicyConfig {}
 
 impl PluginPolicyConfig {

@@ -82,7 +82,7 @@ export async function listDirectory(input: {
 }): Promise<FsListResponse> {
   const { path, respectGitignore, offset, limit } = input
   return apiJson<FsListResponse>(
-    `/api/fs/list?path=${encodeURIComponent(path)}&respectGitignore=${respectGitignore ? 'true' : 'false'}&offset=${encodeURIComponent(String(offset))}&limit=${encodeURIComponent(String(limit))}`,
+    `/api/v1/workbench/fs/list?path=${encodeURIComponent(path)}&respectGitignore=${respectGitignore ? 'true' : 'false'}&offset=${encodeURIComponent(String(offset))}&limit=${encodeURIComponent(String(limit))}`,
   )
 }
 
@@ -94,7 +94,7 @@ export async function searchFiles(input: {
 }): Promise<FsSearchResponse> {
   const { root, query, limit, respectGitignore } = input
   return apiJson<FsSearchResponse>(
-    `/api/fs/search?root=${encodeURIComponent(root)}&q=${encodeURIComponent(query)}&limit=${encodeURIComponent(String(limit))}&respectGitignore=${respectGitignore ? 'true' : 'false'}`,
+    `/api/v1/workbench/fs/search?root=${encodeURIComponent(root)}&q=${encodeURIComponent(query)}&limit=${encodeURIComponent(String(limit))}&respectGitignore=${respectGitignore ? 'true' : 'false'}`,
   )
 }
 
@@ -111,7 +111,7 @@ export async function searchFileContent(input: {
   maxMatchesPerFile?: number
   contextChars?: number
 }): Promise<FsContentSearchResponse> {
-  return apiJson<FsContentSearchResponse>(`/api/fs/search-content?directory=${encodeURIComponent(input.directory)}`, {
+  return apiJson<FsContentSearchResponse>(`/api/v1/workbench/fs/search-content?directory=${encodeURIComponent(input.directory)}`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
@@ -146,7 +146,7 @@ export async function replaceFileContent(input: {
     expected: string
   }
 }): Promise<FsContentReplaceResponse> {
-  return apiJson<FsContentReplaceResponse>(`/api/fs/replace-content?directory=${encodeURIComponent(input.directory)}`, {
+  return apiJson<FsContentReplaceResponse>(`/api/v1/workbench/fs/replace-content?directory=${encodeURIComponent(input.directory)}`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
@@ -164,7 +164,7 @@ export async function replaceFileContent(input: {
 }
 
 export async function readFileText(input: { directory: string; path: string }): Promise<string> {
-  return apiText(`/api/fs/read?directory=${encodeURIComponent(input.directory)}&path=${encodeURIComponent(input.path)}`)
+  return apiText(`/api/v1/workbench/fs/read?directory=${encodeURIComponent(input.directory)}&path=${encodeURIComponent(input.path)}`)
 }
 
 export async function readFileChunk(input: {
@@ -181,7 +181,7 @@ export async function readFileChunk(input: {
   if (typeof input.limit === 'number' && Number.isFinite(input.limit)) {
     params.push(`limit=${encodeURIComponent(String(Math.max(0, Math.floor(input.limit))))}`)
   }
-  return apiJson<FsReadChunkResponse>(`/api/fs/read-chunk?${params.join('&')}`)
+  return apiJson<FsReadChunkResponse>(`/api/v1/workbench/fs/read-chunk?${params.join('&')}`)
 }
 
 export async function writeFile(input: {
@@ -189,7 +189,7 @@ export async function writeFile(input: {
   path: string
   content: string
 }): Promise<{ success: boolean }> {
-  return apiJson<{ success: boolean }>(`/api/fs/write?directory=${encodeURIComponent(input.directory)}`, {
+  return apiJson<{ success: boolean }>(`/api/v1/workbench/fs/write?directory=${encodeURIComponent(input.directory)}`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ path: input.path, content: input.content }),
@@ -198,13 +198,13 @@ export async function writeFile(input: {
 
 export async function uploadFile(input: { directory: string; path: string; file: Blob }): Promise<FsUploadResponse> {
   return apiJson<FsUploadResponse>(
-    `/api/fs/upload?directory=${encodeURIComponent(input.directory)}&path=${encodeURIComponent(input.path)}&overwrite=true`,
+    `/api/v1/workbench/fs/upload?directory=${encodeURIComponent(input.directory)}&path=${encodeURIComponent(input.path)}&overwrite=true`,
     { method: 'POST', body: input.file },
   )
 }
 
 export async function makeDirectory(input: { directory: string; path: string }): Promise<{ success: boolean }> {
-  return apiJson<{ success: boolean }>(`/api/fs/mkdir?directory=${encodeURIComponent(input.directory)}`, {
+  return apiJson<{ success: boolean }>(`/api/v1/workbench/fs/mkdir?directory=${encodeURIComponent(input.directory)}`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ path: input.path }),
@@ -216,7 +216,7 @@ export async function renamePath(input: {
   oldPath: string
   newPath: string
 }): Promise<{ success: boolean }> {
-  return apiJson<{ success: boolean }>(`/api/fs/rename?directory=${encodeURIComponent(input.directory)}`, {
+  return apiJson<{ success: boolean }>(`/api/v1/workbench/fs/rename?directory=${encodeURIComponent(input.directory)}`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ oldPath: input.oldPath, newPath: input.newPath }),
@@ -224,7 +224,7 @@ export async function renamePath(input: {
 }
 
 export async function deletePath(input: { directory: string; path: string }): Promise<{ success: boolean }> {
-  return apiJson<{ success: boolean }>(`/api/fs/delete?directory=${encodeURIComponent(input.directory)}`, {
+  return apiJson<{ success: boolean }>(`/api/v1/workbench/fs/delete?directory=${encodeURIComponent(input.directory)}`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ path: input.path }),
@@ -233,7 +233,7 @@ export async function deletePath(input: { directory: string; path: string }): Pr
 
 export async function getGitBlame(input: { directory: string; path: string }): Promise<GitBlameResponse> {
   return apiJson<GitBlameResponse>(
-    `/api/git/blame?directory=${encodeURIComponent(input.directory)}&path=${encodeURIComponent(input.path)}`,
+    `/api/v1/workbench/git/blame?directory=${encodeURIComponent(input.directory)}&path=${encodeURIComponent(input.path)}`,
   )
 }
 
@@ -247,7 +247,7 @@ export async function getGitDiff(input: {
   const contextLines = input.contextLines ?? 3
   const includeMeta = input.includeMeta ? '&includeMeta=true' : ''
   return apiJson<GitDiffResponse>(
-    `/api/git/diff?directory=${encodeURIComponent(input.directory)}&path=${encodeURIComponent(input.path)}&staged=${input.staged ? 'true' : 'false'}&contextLines=${encodeURIComponent(String(contextLines))}${includeMeta}`,
+    `/api/v1/workbench/git/diff?directory=${encodeURIComponent(input.directory)}&path=${encodeURIComponent(input.path)}&staged=${input.staged ? 'true' : 'false'}&contextLines=${encodeURIComponent(String(contextLines))}${includeMeta}`,
   )
 }
 
@@ -256,7 +256,7 @@ export async function applyGitPatch(input: {
   patch: string
   mode: 'stage' | 'unstage' | 'discard'
 }): Promise<{ success: boolean }> {
-  return apiJson<{ success: boolean }>(`/api/git/patch?directory=${encodeURIComponent(input.directory)}`, {
+  return apiJson<{ success: boolean }>(`/api/v1/workbench/git/patch?directory=${encodeURIComponent(input.directory)}`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ patch: input.patch, mode: input.mode }),

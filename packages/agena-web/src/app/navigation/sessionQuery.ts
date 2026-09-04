@@ -10,11 +10,6 @@ function readQueryValue(query: ReadQueryLike, key: string): unknown {
   return (query as Record<string, unknown>)[key]
 }
 
-function hasQueryKey(query: ReadQueryLike, key: string): boolean {
-  if (!query || typeof query !== 'object') return false
-  return Object.prototype.hasOwnProperty.call(query, key)
-}
-
 function firstTrimmedString(value: unknown): string {
   if (typeof value === 'string') return value.trim()
   if (Array.isArray(value)) {
@@ -54,21 +49,12 @@ export function patchSessionIdInQuery(query: WriteQueryLike, sessionId: string):
     }
   }
   const sid = String(sessionId || '').trim()
-  const legacyKeys = ['session', 'sessionid'] as const
 
   if (!sid) {
     delete next[SESSION_QUERY_KEY]
-    for (const key of legacyKeys) {
-      delete next[key]
-    }
     return next
   }
 
   next[SESSION_QUERY_KEY] = sid
-  for (const key of legacyKeys) {
-    if (hasQueryKey(next, key)) {
-      delete next[key]
-    }
-  }
   return next
 }

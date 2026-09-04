@@ -747,7 +747,7 @@ fn is_valid_preview_session_id(id: &str) -> bool {
     if trimmed.is_empty() {
         return false;
     }
-    // Keep IDs URL-safe: used in /api/workspace/preview/s/{id}/ proxy paths.
+    // Keep IDs URL-safe: used in /api/v1/workbench/preview/s/{id}/ proxy paths.
     trimmed
         .bytes()
         .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
@@ -804,7 +804,7 @@ fn is_allowed_loopback_host(host: Host<&str>) -> bool {
 }
 
 pub(crate) fn preview_proxy_base_path(id: &str) -> String {
-    format!("/api/workspace/preview/s/{id}/")
+    format!("/api/v1/workbench/preview/s/{id}/")
 }
 
 pub(crate) fn preview_target_from_record(record: &PreviewSessionRecord) -> ApiResult<Url> {

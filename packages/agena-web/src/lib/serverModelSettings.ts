@@ -26,19 +26,16 @@ export function normalizeServerModelIdentity(
   value:
     | {
         provider?: unknown
-        provider_id?: unknown
         adapter?: unknown
-        adapter_id?: unknown
         model?: unknown
-        model_id?: unknown
       }
     | null
     | undefined,
 ): ServerModelIdentity {
   return {
-    provider: text(value?.provider) || text(value?.provider_id),
-    adapter: text(value?.adapter) || text(value?.adapter_id),
-    model: text(value?.model) || text(value?.model_id),
+    provider: text(value?.provider),
+    adapter: text(value?.adapter),
+    model: text(value?.model),
   }
 }
 
@@ -95,9 +92,9 @@ export function buildApprovalModelSettingsPatch(
   if (identity) {
     const selection = modelSelectionValue(identity, modes)
     approvalModel = {
-      provider_id: selection.provider,
-      ...(selection.adapter ? { adapter_id: selection.adapter } : {}),
-      model_id: selection.model,
+      provider: selection.provider,
+      ...(selection.adapter ? { adapter: selection.adapter } : {}),
+      model: selection.model,
       ...(selection.thinking_mode ? { thinking_mode: selection.thinking_mode } : {}),
       ...(selection.speed_mode ? { speed_mode: selection.speed_mode } : {}),
       ...(selection.verbosity ? { verbosity: selection.verbosity } : {}),

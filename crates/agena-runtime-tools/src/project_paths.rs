@@ -67,7 +67,7 @@ pub fn generated_image_artifact_path(
 /// Copy a provider-returned image data URL into the process-managed artifact
 /// store. Callers must reject `Ok(None)` when a terminal direct image API is
 /// expected; conversation processors may preserve non-data provider media for
-/// backward-compatible rendering.
+/// ordinary message rendering.
 pub async fn persist_generated_image_artifact(
     workspace_root: &Path,
     session_id: i64,

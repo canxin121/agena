@@ -3106,7 +3106,6 @@ mod pending_message_tests {
                         payload: ActivityPayload::SkillReference(SkillReferenceActivity {
                             name: "batch".to_owned(),
                             description: "Run independent work".to_owned(),
-                            instructions: String::new(),
                             content_hash: "sha256:test".to_owned(),
                             source: "test".to_owned(),
                             aliases: Vec::new(),
@@ -5505,19 +5504,14 @@ mod transcript_expansion_tests {
 
 #[cfg(test)]
 mod live_transcript_tests {
-    use agena_api::resource::SessionTranscriptPart;
-    use agena_domain::{ActivityId, ActivityState, ComposerDocument, ComposerNode};
-    use agena_runtime::{
-        RuntimePresentationEvent, RuntimePresentationEventKind, RuntimePresentationEventMeta,
-    };
-    use uuid::Uuid;
-
     use super::super::{PendingUserMessage, TranscriptState, Utc};
     use super::parts_fixtures;
+    use agena_api::resource::SessionTranscriptPart;
+    use agena_domain::{ComposerDocument, ComposerNode};
 
     /// A completed assistant run carrying a tall multi-line body, used to
     /// exercise viewport follow/recovery across full parts refreshes. Each
-    /// line is its own markdown paragraph so the v2 renderer keeps them as
+    /// line is its own markdown paragraph so the transcript renderer keeps them as
     /// separate focusable rows instead of folding them into soft breaks.
     fn tall_assistant(prefix: &str, run_id: i64, text_id: i64) -> Vec<SessionTranscriptPart> {
         let body = (0..40)
@@ -5528,50 +5522,6 @@ mod live_transcript_tests {
             parts_fixtures::run(run_id, "assistant", "completed"),
             parts_fixtures::text(run_id, text_id, "assistant", &body),
         ]
-    }
-
-    #[test]
-    fn activity_v2_events_do_not_advance_the_durable_watermark() {
-        let mut transcript = TranscriptState {
-            session_id: Some(7),
-            parts: vec![
-                parts_fixtures::run(1, "user", "completed"),
-                parts_fixtures::text(1, 2, "user", "question"),
-                parts_fixtures::run(3, "assistant", "in_progress"),
-            ],
-            ..TranscriptState::default()
-        };
-
-        // A live-only ActivityV2 event at a HIGHER seq must not advance it:
-        // the server's durable `latest_event_seq` never includes live-only
-        // events, so counting one would make every later refresh look stale
-        // and drop the terminal execution + completed reply.
-        let live = RuntimePresentationEvent {
-            meta: RuntimePresentationEventMeta {
-                id: Uuid::new_v4(),
-                seq_global: 50,
-                seq_session: Some(50),
-                session_id: Some(7),
-                workspace_id: None,
-                created_at: Utc::now(),
-                causation_id: None,
-                correlation_id: None,
-                envelope_schema: 1,
-            },
-            invalidates_ancestor_projection: false,
-            durable: false,
-            kind: RuntimePresentationEventKind::ActivityV2(Box::new(
-                agena_runtime::session::activity::ActivityLiveEvent::StateChanged {
-                    activity_id: ActivityId::new(),
-                    state: ActivityState::Completed,
-                },
-            )),
-        };
-        assert!(!transcript.apply_presentation_event(&live, 80, 20));
-        assert_eq!(
-            transcript.last_event_seq, None,
-            "live-only events must not advance the durable watermark"
-        );
     }
 
     #[test]

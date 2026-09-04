@@ -48,15 +48,15 @@ pub enum UsageDashboardSort {
     #[default]
     Cost,
     Tokens,
-    Runs,
+    Requests,
 }
 
 impl UsageDashboardSort {
     pub fn next(self) -> Self {
         match self {
             Self::Cost => Self::Tokens,
-            Self::Tokens => Self::Runs,
-            Self::Runs => Self::Cost,
+            Self::Tokens => Self::Requests,
+            Self::Requests => Self::Cost,
         }
     }
 }
@@ -98,7 +98,7 @@ pub enum UsageDashboardEffect {
 /// result into this type before it reaches the terminal presentation layer.
 #[derive(Debug, Clone, Default)]
 pub struct UsageDashboardTotals {
-    pub runs: u64,
+    pub requests: u64,
     pub sessions: u64,
     pub input_tokens: u64,
     pub output_tokens: u64,
@@ -114,7 +114,7 @@ pub struct UsageDashboardTotals {
     pub total_cost_usd: f64,
     pub recorded_cost_usd: f64,
     pub estimated_cost_usd: f64,
-    pub unpriced_runs: u64,
+    pub unpriced_requests: u64,
     pub billable_unit_kinds: u64,
     pub unpriced_billable_units: f64,
 }
@@ -141,7 +141,7 @@ pub struct UsageDashboardRow {
 pub struct UsageDashboardData {
     pub totals: UsageDashboardTotals,
     pub active_days: u64,
-    pub average_cost_per_run_usd: f64,
+    pub average_cost_per_request_usd: f64,
     pub average_cost_per_active_day_usd: f64,
     pub peak_cost_usd: f64,
     pub peak_cost_date: Option<String>,
@@ -197,9 +197,9 @@ pub fn usage_dashboard_sort_order(
             .partial_cmp(&left.total_cost_usd)
             .unwrap_or(std::cmp::Ordering::Equal),
         UsageDashboardSort::Tokens => right.total_tokens.cmp(&left.total_tokens),
-        UsageDashboardSort::Runs => right.runs.cmp(&left.runs),
+        UsageDashboardSort::Requests => right.requests.cmp(&left.requests),
     }
-    .then(right.runs.cmp(&left.runs))
+    .then(right.requests.cmp(&left.requests))
 }
 
 impl UsageDashboardPresentation {
@@ -324,7 +324,7 @@ pub fn usage_dashboard_sort_label(sort: UsageDashboardSort) -> &'static str {
     match sort {
         UsageDashboardSort::Cost => "Cost",
         UsageDashboardSort::Tokens => "Tokens",
-        UsageDashboardSort::Runs => "Runs",
+        UsageDashboardSort::Requests => "Requests",
     }
 }
 
@@ -475,8 +475,8 @@ fn render_usage_metrics(frame: &mut Frame<'_>, area: Rect, data: Option<&UsageDa
         ),
         (
             "Requests",
-            format_count(totals.runs),
-            format!("{} avg", format_cost(data.average_cost_per_run_usd)),
+            format_count(totals.requests),
+            format!("{} avg", format_cost(data.average_cost_per_request_usd)),
             agena_tui_components::theme::info_color(),
         ),
         (
@@ -717,7 +717,7 @@ fn render_usage_table(
     let mut lines = vec![Line::from(Span::styled(
         format!(
             "{:<name_width$} {:<bar_width$} {:>10} {:>10} {:>7} {:>7}",
-            "name", "", "cost", "tokens", "runs", "cache"
+            "name", "", "cost", "tokens", "requests", "cache"
         ),
         Style::default().fg(agena_tui_components::theme::muted_color()),
     ))];
@@ -744,7 +744,7 @@ fn render_usage_table(
                 ),
                 format_cost(row.totals.total_cost_usd),
                 format_tokens(row.totals.total_tokens),
-                format_count(row.totals.runs),
+                format_count(row.totals.requests),
                 format_percent(row.totals.cache_hit_rate),
                 width = name_width.saturating_sub(2)
             ),
@@ -781,9 +781,9 @@ fn render_usage_footer(
                 format_cost(data.peak_cost_usd),
                 data.peak_cost_date.as_deref().unwrap_or("—")
             );
-            if data.totals.unpriced_runs > 0 {
+            if data.totals.unpriced_requests > 0 {
                 summary.push_str(
-                    format!(" · ⚠ {} unpriced requests", data.totals.unpriced_runs).as_str(),
+                    format!(" · ⚠ {} unpriced requests", data.totals.unpriced_requests).as_str(),
                 );
             }
             summary
@@ -808,7 +808,7 @@ fn metric_value(sort: UsageDashboardSort, totals: &UsageDashboardTotals) -> f64 
     match sort {
         UsageDashboardSort::Cost => totals.total_cost_usd,
         UsageDashboardSort::Tokens => totals.total_tokens as f64,
-        UsageDashboardSort::Runs => totals.runs as f64,
+        UsageDashboardSort::Requests => totals.requests as f64,
     }
 }
 
@@ -899,7 +899,10 @@ mod tests {
     #[test]
     fn sort_cycles_and_labels_are_stable() {
         assert_eq!(UsageDashboardSort::Cost.next(), UsageDashboardSort::Tokens);
-        assert_eq!(UsageDashboardSort::Runs.next(), UsageDashboardSort::Cost);
+        assert_eq!(
+            UsageDashboardSort::Requests.next(),
+            UsageDashboardSort::Cost
+        );
         assert_eq!(
             usage_dashboard_view_label(UsageDashboardView::Providers),
             "Providers"

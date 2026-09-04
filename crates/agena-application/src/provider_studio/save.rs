@@ -1,13 +1,7 @@
-//! Provider Studio save/delete operations and their helpers, migrated from
-//! `agena-tui-backend/src/backend_provider/selection.rs` and
-//! `backend_provider/settings.rs`, plus `parse_credential_issuer` /
-//! `non_empty` / `trimmed_owned` from `backend_util.rs` and the JSON config
-//! helpers from `backend_config.rs`.
+//! Provider Studio save/delete operations and configuration helpers.
 //!
-//! The operations are free functions taking `&Application`; the `impl
-//! Application` surface in `application_provider_studio.rs` delegates to them.
-//! Function names and internal logic are preserved from the original backend;
-//! only the receiver changed and error types were normalized per the R7 brief.
+//! The operations are free functions over `&Application`; the public
+//! `impl Application` surface delegates to this module.
 
 use anyhow::{Context, anyhow};
 use serde_json::{Map as JsonMap, Value as JsonValue, json};
@@ -16,12 +10,12 @@ use super::catalog::{
     apply_provider_auth_required_adapter_defaults_to_json_adapters,
     apply_provider_auth_required_adapter_defaults_to_json_value,
     build_provider_auth_patch_value_for_save, build_provider_patch_value_for_save,
-    canonical_provider_model_id, canonicalize_provider_model_settings,
-    merge_provider_model_adapter_patch_for_save, preferred_catalog_model_for_provider_model,
-    provider_adapter_settings_path, provider_model_catalog_lookup_candidates,
-    provider_model_id_candidates, provider_model_json_for_model_id, provider_model_overlay_to_json,
-    provider_model_selection_contains, provider_model_settings_path, provider_settings_path,
-    quoted_settings_segment, required_provider_save_field, required_trimmed,
+    canonical_provider_model_id, merge_provider_model_adapter_patch_for_save,
+    preferred_catalog_model_for_provider_model, provider_adapter_settings_path,
+    provider_model_catalog_lookup_candidates, provider_model_json_for_model_id,
+    provider_model_overlay_to_json, provider_model_selection_contains,
+    provider_model_settings_path, provider_settings_path, quoted_settings_segment,
+    required_provider_save_field, required_trimmed,
 };
 use super::draft_auth_data::{
     ProviderStudioSaveError, ProviderStudioSaveField, ProviderStudioSaveResult,
@@ -347,12 +341,11 @@ pub(crate) async fn save_provider_draft(
                 adapter_id: adapter_id.to_owned(),
             }
         })?;
-        let mut existing_models = adapter_object
+        let existing_models = adapter_object
             .get("models")
             .and_then(JsonValue::as_object)
             .cloned()
             .unwrap_or_default();
-        canonicalize_provider_model_settings(adapter_id, &mut existing_models);
         let configured_models = adapter_models
             .models
             .iter()
@@ -454,7 +447,7 @@ pub(crate) async fn save_provider_adapter_matches(
             .flat_map(provider_model_catalog_lookup_candidates)
             .collect::<Vec<_>>(),
     );
-    let mut existing_models = read_file_provider_settings(app, provider_id)
+    let existing_models = read_file_provider_settings(app, provider_id)
         .map_err(ProviderStudioSaveError::other)?
         .as_ref()
         .and_then(JsonValue::as_object)
@@ -466,13 +459,13 @@ pub(crate) async fn save_provider_adapter_matches(
         .and_then(JsonValue::as_object)
         .cloned()
         .unwrap_or_default();
-    canonicalize_provider_model_settings(adapter_id, &mut existing_models);
     let configured_models = adapter_models
         .models
         .iter()
         .map(|model| -> Result<_, ProviderStudioSaveError> {
+            let model_id = canonical_provider_model_id(adapter_id, model.id.as_ref());
             let generated =
-                provider_model_json_for_model_id(&catalog_entries, model.id.as_ref(), Some(model))
+                provider_model_json_for_model_id(&catalog_entries, model_id.as_str(), Some(model))
                     .map_err(|error| {
                         ProviderStudioSaveError::other(
                             agena_failure::diagnostic::format_error_chain_with_context(
@@ -482,8 +475,8 @@ pub(crate) async fn save_provider_adapter_matches(
                         )
                     })?;
             Ok((
-                model.id.to_string(),
-                preserve_existing_model_config(generated, existing_models.get(model.id.as_str())),
+                model_id.clone(),
+                preserve_existing_model_config(generated, existing_models.get(model_id.as_str())),
             ))
         })
         .collect::<Result<JsonMap<_, _>, _>>()?;
@@ -516,28 +509,25 @@ pub(crate) fn provider_model_draft_value(
         required_trimmed(adapter_id, "adapter_id").map_err(crate::ApplicationError::internal)?;
     let model_id =
         required_trimmed(model_id, "model_id").map_err(crate::ApplicationError::internal)?;
+    let model_id = canonical_provider_model_id(adapter_id, model_id);
     if let Some(provider_id) = draft.source_provider_id.as_deref() {
-        for candidate in provider_model_id_candidates(adapter_id, model_id) {
-            let path = provider_model_settings_path(provider_id, adapter_id, candidate.as_str());
-            let configured = app
-                .runtime_config_settings()
-                .read_file_settings(agena_runtime::ConfigSettingsGetInput {
-                    target: agena_runtime::ConfigSettingsPathInput { path: Some(path) },
-                    source: agena_runtime::ConfigSettingsSource::File,
-                })
-                .map_err(|error| {
-                    crate::ApplicationError::internal(format!(
-                        "failed to read configured provider model: {error}"
-                    ))
-                })?
-                .value;
-            if !configured.is_null() {
-                return Ok(configured);
-            }
+        let path = provider_model_settings_path(provider_id, adapter_id, model_id.as_str());
+        let configured = app
+            .runtime_config_settings()
+            .read_file_settings(agena_runtime::ConfigSettingsGetInput {
+                target: agena_runtime::ConfigSettingsPathInput { path: Some(path) },
+                source: agena_runtime::ConfigSettingsSource::File,
+            })
+            .map_err(|error| {
+                crate::ApplicationError::internal(format!(
+                    "failed to read configured provider model: {error}"
+                ))
+            })?
+            .value;
+        if !configured.is_null() {
+            return Ok(configured);
         }
     }
-
-    let model_id = canonical_provider_model_id(adapter_id, model_id);
 
     let catalog_lookup_ids = [model_id.clone()]
         .into_iter()
@@ -749,7 +739,7 @@ pub(crate) async fn delete_provider_model(
         .map_err(ProviderStudioSaveError::Validation)?;
     let model_id = required_provider_save_field(model_id, ProviderStudioSaveField::ModelId)
         .map_err(ProviderStudioSaveError::Validation)?;
-    let model_ids = provider_model_id_candidates(adapter_id, model_id);
+    let model_id = canonical_provider_model_id(adapter_id, model_id);
     let _ = draft;
 
     let mut provider_value = read_file_provider_settings(app, provider_id)
@@ -772,15 +762,13 @@ pub(crate) async fn delete_provider_model(
         .get_mut("models")
         .and_then(JsonValue::as_object_mut)
         .ok_or(ProviderStudioSaveError::ConfiguredProviderAdapterModelsMustBeObject)?;
-    for model_id in model_ids {
-        models.remove(model_id.as_str());
-    }
+    models.remove(model_id.as_str());
 
     set_provider_settings(app, provider_id, provider_value).await?;
     Ok(ProviderStudioSaveResult::ModelDeleted {
         provider_id: provider_id.to_owned(),
         adapter_id: adapter_id.to_owned(),
-        model_id: canonical_provider_model_id(adapter_id, model_id),
+        model_id,
     })
 }
 
@@ -984,39 +972,15 @@ mod tests {
     use serde_json::json;
     use std::collections::BTreeMap;
 
-    use super::super::catalog::{
-        canonical_provider_model_id, canonicalize_provider_model_settings,
-        provider_model_id_candidates,
-    };
+    use super::super::catalog::canonical_provider_model_id;
     use super::{default_speed_mode_name, preserve_existing_model_config};
 
     #[test]
-    fn legacy_anthropic_model_aliases_are_canonicalized_for_provider_studio_settings() {
+    fn anthropic_discovery_aliases_use_the_stable_provider_studio_model_id() {
         assert_eq!(
             canonical_provider_model_id("anthropic", "claude-fable-5-dd-arret-6.5-tpg"),
             "gpt-5.6-terra"
         );
-        assert_eq!(
-            provider_model_id_candidates("anthropic", "claude-fable-5-dd-arret-6.5-tpg"),
-            vec![
-                "gpt-5.6-terra".to_owned(),
-                "claude-fable-5-dd-arret-6.5-tpg".to_owned()
-            ]
-        );
-
-        let mut settings = JsonMap::from_iter([
-            (
-                "claude-fable-5-dd-arret-6.5-tpg".to_owned(),
-                json!({ "display_name": "legacy" }),
-            ),
-            (
-                "gpt-5.6-terra".to_owned(),
-                json!({ "display_name": "canonical" }),
-            ),
-        ]);
-        canonicalize_provider_model_settings("anthropic", &mut settings);
-        assert_eq!(settings.len(), 1);
-        assert_eq!(settings["gpt-5.6-terra"]["display_name"], "canonical");
     }
 
     #[test]

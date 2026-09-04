@@ -36,13 +36,11 @@ impl AgenaToolMode {
 pub struct AgenaToolsConfig {
     #[serde(default)]
     pub mode: AgenaToolMode,
-    #[serde(default, skip_serializing_if = "ProviderNativeToolsConfig::is_empty")]
-    pub provider_native: ProviderNativeToolsConfig,
 }
 
 impl AgenaToolsConfig {
     pub fn is_default(&self) -> bool {
-        self.mode.is_disabled() && self.provider_native.is_empty()
+        self.mode.is_disabled()
     }
 }
 
@@ -1225,7 +1223,7 @@ pub const PROVIDER_TOOL_USAGE_METADATA_KEY: &str = "agena.provider_tool_usage.v1
 /// breakdowns. `other_tokens` reconciles a provider-reported authoritative
 /// total when additional internal token categories exist.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct CompletionUsage {
     pub requests: u64,
     pub input_tokens: u64,
@@ -1238,8 +1236,6 @@ pub struct CompletionUsage {
     pub tool_use_tokens: u64,
     pub other_tokens: u64,
 
-    /// Legacy provider-reported cost field retained for persisted rows.
-    pub total_cost: f64,
     /// Explicit provider-reported cost and provenance. A recorded zero is
     /// distinguishable from a provider that returned no cost.
     pub recorded_cost: f64,
@@ -1291,18 +1287,15 @@ impl CompletionUsage {
         self.requests > 0
             || self.own_total_tokens() > 0
             || self.recorded_cost_available
-            || self.total_cost > 0.0
             || self.estimated_cost > 0.0
             || !self.billable_items.is_empty()
     }
 
     /// Best available cost for this request. Provider-recorded cost wins over
-    /// compatibility and local estimate fields.
+    /// the local estimate.
     pub fn own_effective_cost_usd(&self) -> f64 {
         if self.recorded_cost_available {
             self.recorded_cost.max(0.0)
-        } else if self.total_cost.is_finite() && self.total_cost > 0.0 {
-            self.total_cost
         } else if self.estimated_cost.is_finite() {
             self.estimated_cost.max(0.0)
         } else {
@@ -1343,7 +1336,6 @@ impl CompletionUsage {
             .tool_use_tokens
             .saturating_add(additional.tool_use_tokens);
         self.other_tokens = self.other_tokens.saturating_add(additional.other_tokens);
-        self.total_cost += additional.total_cost;
         self.recorded_cost += additional.recorded_cost;
         self.recorded_cost_available |= additional.recorded_cost_available;
         self.estimated_cost += additional.estimated_cost;
@@ -1413,7 +1405,6 @@ impl CompletionUsage {
                 .saturating_sub(earlier.cache_read_tokens),
             tool_use_tokens: self.tool_use_tokens.saturating_sub(earlier.tool_use_tokens),
             other_tokens: self.other_tokens.saturating_sub(earlier.other_tokens),
-            total_cost: (self.total_cost - earlier.total_cost).max(0.0),
             recorded_cost: (self.recorded_cost - earlier.recorded_cost).max(0.0),
             recorded_cost_available: self.recorded_cost_available,
             estimated_cost: (self.estimated_cost - earlier.estimated_cost).max(0.0),

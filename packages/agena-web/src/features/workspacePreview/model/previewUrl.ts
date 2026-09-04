@@ -1,6 +1,6 @@
 export type WorkspacePreviewViewport = 'desktop' | 'mobile'
 
-const PREVIEW_PROXY_BASE_PREFIX = '/api/workspace/preview/s/'
+const PREVIEW_PROXY_BASE_PREFIX = '/api/v1/workbench/preview/s/'
 const PREVIEW_ORIGIN = 'https://preview.local'
 
 export function normalizePreviewProxyBasePath(input: string): string {

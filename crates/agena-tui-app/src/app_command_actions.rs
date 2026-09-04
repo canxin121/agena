@@ -426,27 +426,6 @@ impl App {
         });
     }
 
-    pub(crate) fn set_session_view_mode(&mut self, mode: SessionViewMode) {
-        if mode == SessionViewMode::Subtree && self.current_or_selected_session_id().is_none() {
-            self.flash_warning(ui_text::t(&self.i18n, "flash-command-requires-session"));
-            return;
-        }
-        let effect = self
-            .sessions
-            .update(agena_tui_session::session_list::SessionListAction::SetViewMode(mode));
-        self.flash_success(self.i18n.text_args(
-            "flash-session-view-mode",
-            &agena_tui::fl_args!("mode" => self.current_session_view_summary()),
-        ));
-        if effect == agena_tui_session::session_list::SessionListEffect::Reload {
-            self.request_sessions(false);
-        }
-    }
-
-    pub(crate) fn cycle_session_view_mode(&mut self) {
-        self.set_session_view_mode(self.sessions.view_mode().next());
-    }
-
     pub(crate) fn submit_session_rename(&mut self, title: &str) -> bool {
         let trimmed = title.trim();
         if trimmed.is_empty() {
@@ -473,11 +452,7 @@ impl App {
                 execution.session.title.clone(),
             )
         });
-        let target = if self.focus == Focus::Sessions {
-            selected.or(current)
-        } else {
-            current.or(selected)
-        };
+        let target = current.or(selected);
         let Some((session_id, favorite, _title)) = target else {
             self.flash_warning(ui_text::t(&self.i18n, "flash-command-requires-session"));
             return;
@@ -523,4 +498,3 @@ use crate::{
     TIMELINE_EVENT_LIMIT, UiAction, non_empty_owned, parse_pr_command_args, ui_text,
 };
 use agena_tui::main_focus::Focus;
-use agena_tui_session::session_view::SessionViewMode;

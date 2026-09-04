@@ -243,7 +243,6 @@ enum CanonicalActivityDetailFormat {
     /// Render line-oriented output as plain text, but promote recognisable
     /// Markdown documents to the shared AST renderer.
     Auto,
-    Markdown,
     Json,
     Plain,
 }
@@ -291,20 +290,11 @@ fn canonical_activity_details(
 ) -> Vec<CanonicalActivityDetail> {
     match payload {
         agena_domain::ActivityPayload::SkillReference(skill) => {
-            let mut details = Vec::new();
-            if !skill.instructions.trim().is_empty() {
-                details.push(CanonicalActivityDetail::section(
-                    "Instructions",
-                    skill.instructions.clone(),
-                    CanonicalActivityDetailFormat::Markdown,
-                ));
-            }
-            details.push(CanonicalActivityDetail::section(
+            vec![CanonicalActivityDetail::section(
                 "Source",
                 format!("{} · {}", skill.source, skill.content_hash),
                 CanonicalActivityDetailFormat::Plain,
-            ));
-            details
+            )]
         }
         agena_domain::ActivityPayload::Notice(notice) => notice
             .detail
@@ -611,9 +601,6 @@ fn render_canonical_activity_detail(
         CanonicalActivityDetailFormat::Auto => {
             render_expanded_tool_text_block(out, body_prefix, detail.body.as_str(), width);
         }
-        CanonicalActivityDetailFormat::Markdown => {
-            push_expanded_markdown(out, body_prefix, detail.body.as_str(), width);
-        }
         CanonicalActivityDetailFormat::Json => {
             let markdown = format!("```json\n{}\n```", detail.body.trim());
             push_expanded_markdown(out, body_prefix, markdown.as_str(), width);
@@ -652,7 +639,7 @@ fn canonical_activity_detail_preview(detail: &CanonicalActivityDetail) -> Option
                     _ => None,
                 })
         }
-        CanonicalActivityDetailFormat::Auto | CanonicalActivityDetailFormat::Markdown => detail
+        CanonicalActivityDetailFormat::Auto => detail
             .body
             .lines()
             .find(|line| !line.trim().is_empty())
@@ -1607,17 +1594,6 @@ pub(crate) fn render_part_node(
                             skill.name.as_str(),
                             skill.description.as_str(),
                             CanonicalActivityDetailFormat::Auto,
-                        ),
-                        width,
-                        None,
-                        true,
-                    );
-                    render_canonical_activity_detail(
-                        out,
-                        &CanonicalActivityDetail::section(
-                            "Instructions",
-                            skill.instructions.as_str(),
-                            CanonicalActivityDetailFormat::Markdown,
                         ),
                         width,
                         None,

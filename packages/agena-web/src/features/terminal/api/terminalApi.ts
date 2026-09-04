@@ -130,11 +130,11 @@ function parseCreateResponse(payload: JsonLike): TerminalCreateResponse {
 }
 
 function terminalPath(id: string): string {
-  return `/api/terminal/${encodeURIComponent(id)}`
+  return `/api/v1/workbench/terminal/${encodeURIComponent(id)}`
 }
 
 function terminalUiStatePath(): string {
-  return '/api/ui/terminal/state'
+  return '/api/v1/workbench/terminal/state'
 }
 
 export async function createTerminalSession(input: {
@@ -142,7 +142,7 @@ export async function createTerminalSession(input: {
   cols: number
   rows: number
 }): Promise<TerminalCreateResponse> {
-  const payload = await apiJson<JsonLike>('/api/terminal/create', {
+  const payload = await apiJson<JsonLike>('/api/v1/workbench/terminal/create', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(input),
@@ -216,7 +216,7 @@ export async function restartTerminalSession(input: {
 }
 
 export function terminalStreamUrl(id: string, since?: number): string {
-  const base = apiUrl(`/api/terminal/${encodeURIComponent(id)}/stream`)
+  const base = apiUrl(`/api/v1/workbench/terminal/${encodeURIComponent(id)}/stream`)
   if (typeof since !== 'number' || !Number.isFinite(since) || since <= 0) return base
   return `${base}?since=${Math.floor(since)}`
 }
@@ -236,7 +236,7 @@ export async function putTerminalUiState(input: TerminalUiState): Promise<Termin
 }
 
 export function terminalUiStateEventsUrl(since?: number): string {
-  const base = apiUrl('/api/ui/terminal/state/events')
+  const base = apiUrl('/api/v1/workbench/terminal/state/events')
   if (typeof since !== 'number' || !Number.isFinite(since) || since <= 0) return base
   return `${base}?since=${Math.floor(since)}`
 }

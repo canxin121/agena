@@ -17,8 +17,7 @@ pub struct Request {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub params: Option<Value>,
     /// Host-issued callback authority for the lifetime of this Host→Plugin
-    /// request. Older plugin drivers ignore the optional field; current SDK
-    /// drivers install it as task-local context before invoking plugin code.
+    /// request. Requests that do not need callback authority omit it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context: Option<HostCallbackContext>,
 }
@@ -260,12 +259,12 @@ mod callback_context_tests {
             Some("ctx-test".to_string())
         );
 
-        let legacy: Request = serde_json::from_value(serde_json::json!({
+        let context_free: Request = serde_json::from_value(serde_json::json!({
             "jsonrpc": "2.0",
             "id": 8,
             "method": "meta/ping"
         }))
-        .expect("deserialize legacy request");
-        assert!(legacy.context.is_none());
+        .expect("deserialize context-free request");
+        assert!(context_free.context.is_none());
     }
 }

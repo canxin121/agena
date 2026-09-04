@@ -236,7 +236,6 @@ fn skill_reference_item(reference: SkillPickerReference) -> ComposerItem {
                     description,
                     aliases,
                     name: name.clone(),
-                    instructions: String::new(),
                     content_hash: content_hash.clone(),
                     source: source.clone(),
                 },
@@ -325,7 +324,6 @@ mod tests {
             panic!("expected a Skill reference activity")
         };
         assert_eq!(reference.name, "review");
-        assert!(reference.instructions.is_empty());
         assert_eq!(reference.content_hash, "abc123");
         assert_eq!(reference.source, "workspace");
         assert_eq!(

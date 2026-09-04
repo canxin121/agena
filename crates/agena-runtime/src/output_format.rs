@@ -1,6 +1,6 @@
 //! Stable presentation-format selection used by process-facing commands.
 //!
-//! This is deliberately independent of the legacy configuration schema: a
+//! This is deliberately independent of runtime configuration: a
 //! command-line output choice is a presentation contract, not a resolved
 //! configuration value.
 

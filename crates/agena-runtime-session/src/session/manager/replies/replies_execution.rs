@@ -242,35 +242,6 @@ impl From<ToolError> for PendingToolPreflightError {
 }
 
 impl SessionManager {
-    /// Build a per-operation sink for process lifecycle/output events. Shell
-    /// execution is synchronous and may run on a blocking worker, so delivery
-    /// is handed back to Tokio immediately and never blocks the pipe reader.
-    pub(in crate::session::manager) fn command_event_sink_for_pending(
-        &self,
-        _session_id: i64,
-        _pending: &ResolvedPendingTool,
-    ) -> agena_tool::ToolRuntimeEventSink {
-        // v2 (design 14): the event bus and its `EventKind::CommandBegin/Delta/
-        // End` envelopes are gone. Command progress is carried by the streamed
-        // tool part's own deltas and the live ActivityV2 bridge; there is
-        // nothing durable to publish here. The sink is kept as a no-op so the
-        // tool executor's `with_command_event_sink` contract still type-checks.
-        Arc::new(|_event| {})
-    }
-
-    pub(in crate::session::manager) fn command_event_sink_for_pending_if_needed(
-        &self,
-        session_id: i64,
-        pending: &ResolvedPendingTool,
-    ) -> Option<agena_tool::ToolRuntimeEventSink> {
-        let command_capable = pending.prepared_shell_command.is_some()
-            || matches!(
-                pending.invocation.name.as_str(),
-                "shell" | "shell.run" | "agena.shell.run" | "agena_shell_run"
-            );
-        command_capable.then(|| self.command_event_sink_for_pending(session_id, pending))
-    }
-
     /// Close the assistant run that preceded a newly-arrived external input,
     /// but only after every child part it owns is terminal.
     ///
@@ -862,13 +833,8 @@ impl SessionManager {
             // One user message == one run marker (turn-scoped runs). The first
             // model turn of a stable run starts the marker (durable before the
             // provider call, design 17.4); every later model turn of the same
-            // turn reuses it. Build the marker content once up front: it is
-            // needed both to start the durable marker and, on the first model
-            // turn (when the brand-new marker is not yet installed in the
-            // in-memory session), as the fallback marker content threaded into
-            // the processor. Without that fallback the first round's record
-            // would merge onto a missing marker and be silently dropped,
-            // breaking the prompt projection for every later round.
+            // turn reuses it. Build the marker content once up front so the
+            // first round can use the exact content written by `start_run`.
             let initial_marker_content = run_marker_content(
                 "continue",
                 Some(current_options.model.provider_id.as_ref()),
@@ -890,14 +856,14 @@ impl SessionManager {
             // The marker's current content (accumulated round records, usage)
             // is threaded into the processor so it can extend the round list.
             // On the first model turn the marker was just started and is not
-            // yet present in `session.parts()`; fall back to the initial
-            // content so the first round record still lands on the marker.
+            // yet installed in the in-memory session, so use the exact initial
+            // content that was persisted above.
             let marker_content = session
                 .parts()
                 .iter()
                 .find(|part| part.part_id == marker_run_id)
                 .map(|marker| marker.content.clone())
-                .or_else(|| Some(initial_marker_content.clone()));
+                .unwrap_or_else(|| initial_marker_content.clone());
 
             match Box::pin(self.run_model_turn(
                 session,
@@ -1382,7 +1348,7 @@ impl SessionManager {
         options: &SessionRunOptions,
         _run_source: ExecutionSource,
         marker_run_id: i64,
-        marker_content: Option<serde_json::Value>,
+        marker_content: serde_json::Value,
         state: Arc<SessionManagerState>,
         control: Arc<ExecutionControl>,
     ) -> Result<(Session, ModelTurnOutcome, i64), AppError> {
@@ -2140,12 +2106,9 @@ impl SessionManager {
             None => return Ok(Vec::new()),
         };
         for pending_tool in pending_tools {
-            let command_event_sink =
-                self.command_event_sink_for_pending_if_needed(session_id, &pending_tool);
             let scoped_executor = batch_executor
                 .clone()
-                .with_cancellation_token(cancellation.clone())
-                .with_command_event_sink(command_event_sink);
+                .with_cancellation_token(cancellation.clone());
             let acquire = semaphore.clone().acquire_owned();
             let permit = match cancellation.as_ref() {
                 Some(cancellation) => tokio::select! {
@@ -2518,9 +2481,6 @@ impl SessionManager {
             None
         };
 
-        let scoped_executor = scoped_executor.with_command_event_sink(
-            self.command_event_sink_for_pending_if_needed(session.id, &resolved),
-        );
         let streaming_tool = match scoped_executor
             .execute_invocation_streaming(&resolved.invocation, session.id, resolved.call_id)
             .await
@@ -3135,34 +3095,6 @@ impl SessionManager {
         const TITLE_REFRESH_MS: u64 = 2_000;
         let mut last_title_refresh = std::time::Instant::now();
         let mut streamed_output = String::new();
-        // Resolve the Activity id once so live detail broadcasts never need a
-        // per-tick session load. v2 parts carry no activity id; the live
-        // handler is purely in-memory (broadcast is a no-op bridge), so a
-        // fresh id per stream is sufficient.
-        let streaming_activity_id = Some(agena_domain::ActivityId::new());
-        // Activity v2 live bridge (07 §5.2, §6.1): one in-memory handler feeds
-        // the unified wire events from the same text deltas that drive the
-        // streamed tool part. Events are broadcast live (a no-op bridge in v2;
-        // P5 re-homes onto the facade notification bus).
-        let activity_invocation = session
-            .part(&pending_tool.part)
-            .and_then(operation_from_part)
-            .map(|operation| operation.invocation);
-        let initial_title = activity_invocation
-            .as_ref()
-            .filter(|invocation| !invocation.name.is_empty())
-            .map(agena_tool::initial_tool_title)
-            .unwrap_or_else(|| "tool".to_owned());
-        let activity_action_title = initial_title.clone();
-        let mut activity_handler = streaming_activity_id.map(|activity_id| {
-            crate::activity::ActivityHandler::begin(
-                activity_id,
-                crate::activity::ActivityKind::Operation,
-                initial_title,
-            )
-        });
-        let stream_started = std::time::Instant::now();
-        let mut stream_block_created = false;
         loop {
             let chunk = match cancellation.as_ref() {
                 Some(cancellation) => tokio::select! {
@@ -3192,44 +3124,11 @@ impl SessionManager {
                 continue;
             }
             streamed_output.push_str(delta);
-            if let Some(handler) = &mut activity_handler {
-                let render_event = if stream_block_created {
-                    agena_tool::ToolActivityEvent::Render(agena_domain::RenderDelta::append(
-                        "stream",
-                        agena_domain::ViewBlock::Log {
-                            id: None,
-                            stream: agena_domain::CommandOutputStream::Stdout,
-                            text: delta.to_string(),
-                        },
-                    ))
-                } else {
-                    stream_block_created = true;
-                    agena_tool::ToolActivityEvent::Render(agena_domain::RenderDelta::new(
-                        agena_domain::ViewBlock::Log {
-                            id: Some("stream".to_owned()),
-                            stream: agena_domain::CommandOutputStream::Stdout,
-                            text: delta.to_string(),
-                        },
-                    ))
-                };
-                for event in handler.apply_event(render_event) {
-                    self.broadcast_activity_v2(session.id, event)?;
-                }
-            }
-            // Live streaming detail is carried by ActivityV2 DetailDelta
-            // broadcasts above; the legacy CommandOutputDelta detail path is
-            // removed.
             if last_title_refresh.elapsed() >= std::time::Duration::from_millis(TITLE_REFRESH_MS) {
                 last_title_refresh = std::time::Instant::now();
                 session = self
                     .refresh_streaming_title(session.id, pending_tool, state.clone())
                     .await?;
-                if let Some(handler) = &mut activity_handler
-                    && let Some(event) =
-                        handler.refresh_elapsed_title(stream_started.elapsed().as_secs())
-                {
-                    self.broadcast_activity_v2(session.id, event)?;
-                }
             }
         }
         session = self
@@ -3304,52 +3203,6 @@ impl SessionManager {
             }
         };
 
-        // Assemble the terminal activity node once the stream finished
-        // successfully and broadcast it live (a no-op bridge in v2; P5
-        // re-homes onto the notification bus). The durable payload is the
-        // streamed output the tool part checkpoint carries — the v1
-        // The former duplicate transcript write path is deleted.
-        if let Some(mut handler) = activity_handler.take() {
-            let terminal_raw_output = agena_domain::RawOutput::from_parts(
-                execution.output.to_json_payload(),
-                execution.view.output_text.clone(),
-                execution.view.attachments.clone(),
-                execution.output.managed_outputs.clone(),
-                execution
-                    .view
-                    .metadata
-                    .iter()
-                    .map(|(key, value)| (key.clone(), serde_json::Value::String(value.clone())))
-                    .collect(),
-                execution.output.truncated,
-            );
-            let final_title = activity_invocation
-                .as_ref()
-                .map(|invocation| {
-                    agena_tool::completed_tool_title(invocation, &terminal_raw_output)
-                })
-                .unwrap_or_else(|| {
-                    agena_tool::completed_tool_title_with_action(
-                        activity_action_title.as_str(),
-                        &terminal_raw_output,
-                    )
-                });
-            let node = handler.finish(
-                agena_tool::ToolActivityResult {
-                    title: Some(final_title),
-                    summary: Some(execution.view.summary.clone()),
-                    raw_output: terminal_raw_output,
-                },
-                agena_domain::ActivityState::Completed,
-            );
-            self.broadcast_activity_v2(
-                session.id,
-                crate::activity::ActivityLiveEvent::Upserted {
-                    node: Box::new(node),
-                },
-            )?;
-        }
-
         let session = self.load_session_with_workspace_root(session.id).await?;
         self.apply_tool_success_with_rules(session, pending_tool, execution, Vec::new(), state)
             .await
@@ -3379,26 +3232,6 @@ impl SessionManager {
 
         self.persist_tool_completion(session, &resolved, Vec::new(), state)
             .await
-    }
-
-    /// Broadcast a slice of freshly streamed output to live presentation
-    /// consumers as a non-persistent `CommandOutputDelta`. Expanded terminals
-    /// render this delta into the Activity's detail in real time; collapsed
-    /// terminals drop it. Nothing is written to disk.
-    /// Publish one activity v2 live wire event (07 §5.2). In-memory,
-    /// non-persistent, fire-and-forget like the legacy detail broadcasts.
-    ///
-    /// v2 (design 14): the event bus is gone; live streaming progress is
-    /// delivered by the facade's `NotificationBus` as part-patch
-    /// [`SessionChange`](agena_storage::store::SessionChange) events (D10),
-    /// and this call is a no-op bridge kept for the streaming-tool path. P5
-    /// re-homes any remaining consumers onto the notification bus.
-    fn broadcast_activity_v2(
-        &self,
-        _session_id: i64,
-        _event: crate::activity::ActivityLiveEvent,
-    ) -> Result<(), AppError> {
-        Ok(())
     }
 
     /// Refresh the running title of a streaming tool and emit a header-only

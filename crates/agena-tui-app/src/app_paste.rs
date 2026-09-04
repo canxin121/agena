@@ -248,8 +248,8 @@ impl App {
                 return;
             }
 
-            // TerminalRuntime normalizes bracketed paste and the bounded
-            // legacy fallback into the same application event.
+            // TerminalRuntime normalizes terminal paste input into one
+            // application event before it reaches the composer.
             self.composer.insert_str(text.as_str());
             self.after_composer_text_mutated();
         }

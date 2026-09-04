@@ -328,9 +328,7 @@ fn apply_configured_tool_mode(
     request: &mut CompletionRequest,
 ) {
     let mode = provider.agena_tool_mode_for_adapter(model.adapter_id.as_ref(), &model.model_id);
-    let provider_native = provider
-        .provider_native_tools_config_for_adapter(model.adapter_id.as_ref(), &model.model_id);
-    agena_provider::apply_configured_tool_request(mode, &provider_native, request);
+    agena_provider::apply_configured_tool_request(mode, request);
 }
 
 /// Backfill the assistant reasoning wire field onto the request's assistant
@@ -1809,7 +1807,6 @@ mod tool_api_function_validation_tests {
                     reasoning_tokens: 1,
                     cache_write_tokens: 0,
                     cache_read_tokens: 0,
-                    total_cost: 0.0,
                     ..CompletionUsage::default()
                 }),
                 provider_metadata: None,

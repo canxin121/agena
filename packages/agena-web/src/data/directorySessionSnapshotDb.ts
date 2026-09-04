@@ -61,15 +61,10 @@ function openSnapshotDb(): Promise<IDBDatabase> {
 
   openDbPromise = new Promise((resolve, reject) => {
     const req = window.indexedDB.open(DB_NAME, DB_VERSION)
-    req.onupgradeneeded = (event) => {
+    req.onupgradeneeded = () => {
       const db = req.result
       if (!db.objectStoreNames.contains(STORE_NAME)) {
         db.createObjectStore(STORE_NAME)
-      } else if (event.oldVersion < DB_VERSION) {
-        // The persisted runtime projection was intentionally replaced by the
-        // canonical tagged SessionState. Drop the old snapshot rather than
-        // rehydrating a second, incompatible state machine.
-        req.transaction?.objectStore(STORE_NAME).clear()
       }
     }
     req.onsuccess = () => {

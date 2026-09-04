@@ -24,7 +24,11 @@ function timeoutSignal(ms: number): AbortSignal | undefined {
 }
 
 type AuthStatusOk = { authenticated: boolean; disabled?: boolean; locked?: boolean; token?: string }
-type AuthStatusLocked = { authenticated: boolean; locked: boolean; error?: string; code?: string }
+type ApiProblemBody = {
+  problem?: {
+    user?: { fallback?: string }
+  }
+}
 
 export const useAuthStore = defineStore('auth', () => {
   const checked = ref(false)
@@ -53,7 +57,7 @@ export const useAuthStore = defineStore('auth', () => {
     if (loginInFlight.value) return false
 
     stateRevision += 1
-    // Force the app into the locked state immediately (e.g. when an API call returns auth_required).
+    // Force the app into the locked state immediately (e.g. when an API call returns auth.required).
     checked.value = true
     authenticated.value = false
     disabled.value = false
@@ -111,12 +115,15 @@ export const useAuthStore = defineStore('auth', () => {
       }
 
       if (resp.status === 401 || resp.status === 429) {
-        const data = (await resp.json().catch(() => null)) as AuthStatusLocked | null
+        const data = (await resp.json().catch(() => null)) as ApiProblemBody | null
         if (!isCurrent()) return
         authenticated.value = false
         disabled.value = false
-        locked.value = Boolean(data?.locked) || resp.status === 401
-        lastError.value = String(data?.error || (resp.status === 429 ? 'Too many login attempts' : 'Invalid password'))
+        locked.value = true
+        lastError.value = String(
+          data?.problem?.user?.fallback ||
+            (resp.status === 429 ? 'Too many login attempts' : 'UI authentication is required.'),
+        )
         clearUiAuthTokenForBaseUrl(readActiveBackendBaseUrl())
         return
       }

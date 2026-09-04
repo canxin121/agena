@@ -142,7 +142,7 @@ pub use tool_stream::{
 mod tool_mode_policy;
 pub use tool_mode_policy::{
     ProviderToolModeViolation, apply_configured_tool_request, prepare_disabled_tool_request,
-    project_disabled_completion_input_history, strip_provider_native_tool_body_fields,
+    project_disabled_completion_input_history, strip_provider_tool_body_fields,
     validate_disabled_tool_response,
 };
 mod prompt_tool_envelope;
@@ -317,7 +317,6 @@ mod tests {
     fn tool_config_has_stable_default_and_wire_shape() {
         let config = AgenaToolsConfig::default();
         assert_eq!(config.mode, AgenaToolMode::Disabled);
-        assert!(config.provider_native.is_empty());
         assert_eq!(
             serde_json::to_value(config).unwrap(),
             serde_json::json!({"mode": "disabled"})

@@ -15,30 +15,51 @@ use crate::server::{diagnostics::health, state::AppState};
 
 fn fs_router() -> Router<Arc<AppState>> {
     Router::new()
-        .route("/api/fs/home", get(crate::server::fs::fs_home))
-        .route("/api/fs/list", get(crate::server::fs::fs_list))
-        .route("/api/fs/search", get(crate::server::fs::fs_search))
+        .route("/api/v1/workbench/fs/home", get(crate::server::fs::fs_home))
+        .route("/api/v1/workbench/fs/list", get(crate::server::fs::fs_list))
         .route(
-            "/api/fs/search-content",
+            "/api/v1/workbench/fs/search",
+            get(crate::server::fs::fs_search),
+        )
+        .route(
+            "/api/v1/workbench/fs/search-content",
             post(crate::server::fs::fs_content_search),
         )
         .route(
-            "/api/fs/replace-content",
+            "/api/v1/workbench/fs/replace-content",
             post(crate::server::fs::fs_content_replace),
         )
-        .route("/api/fs/read", get(crate::server::fs::fs_read))
-        .route("/api/fs/read-chunk", get(crate::server::fs::fs_read_chunk))
-        .route("/api/fs/write", post(crate::server::fs::fs_write))
-        .route("/api/fs/mkdir", post(crate::server::fs::fs_mkdir))
-        .route("/api/fs/delete", post(crate::server::fs::fs_delete))
-        .route("/api/fs/rename", post(crate::server::fs::fs_rename))
-        .route("/api/fs/raw", get(crate::server::fs::fs_raw))
-        .route("/api/fs/download", get(crate::server::fs::fs_download))
+        .route("/api/v1/workbench/fs/read", get(crate::server::fs::fs_read))
+        .route(
+            "/api/v1/workbench/fs/read-chunk",
+            get(crate::server::fs::fs_read_chunk),
+        )
+        .route(
+            "/api/v1/workbench/fs/write",
+            post(crate::server::fs::fs_write),
+        )
+        .route(
+            "/api/v1/workbench/fs/mkdir",
+            post(crate::server::fs::fs_mkdir),
+        )
+        .route(
+            "/api/v1/workbench/fs/delete",
+            post(crate::server::fs::fs_delete),
+        )
+        .route(
+            "/api/v1/workbench/fs/rename",
+            post(crate::server::fs::fs_rename),
+        )
+        .route("/api/v1/workbench/fs/raw", get(crate::server::fs::fs_raw))
+        .route(
+            "/api/v1/workbench/fs/download",
+            get(crate::server::fs::fs_download),
+        )
 }
 
-/// Legacy web-UI routes restored for the opencode-studio frontend: filesystem,
-/// git, workspace preview, and terminal. All sit behind the same bearer-token
-/// `require_ui_auth` as the canonical `/api/v1` router.
+/// Workbench API for filesystem, Git, preview, terminal, and MCP controls.
+/// These UI-oriented endpoints are versioned separately from the resource API
+/// but share the same bearer-token boundary.
 fn server_api_router() -> Router<Arc<AppState>> {
     fs_router()
         .route(
@@ -51,364 +72,469 @@ fn server_api_router() -> Router<Arc<AppState>> {
             put(crate::server::mcp::set_mcp_oauth_password)
                 .delete(crate::server::mcp::clear_mcp_oauth_password),
         )
-        .route("/api/fs/upload", post(crate::server::fs::fs_upload))
         .route(
-            "/api/workspace/preview",
+            "/api/v1/workbench/fs/upload",
+            post(crate::server::fs::fs_upload),
+        )
+        .route(
+            "/api/v1/workbench/preview",
             get(crate::server::preview::routes::workspace_preview_get),
         )
         .route(
-            "/api/workspace/preview-url",
+            "/api/v1/workbench/preview-url",
             get(crate::server::preview::routes::workspace_preview_url_get),
         )
         .route(
-            "/api/workspace/preview/proxy",
+            "/api/v1/workbench/preview/proxy",
             get(crate::server::preview::routes::workspace_preview_proxy_get),
         )
         .route(
-            "/api/workspace/preview/sessions",
+            "/api/v1/workbench/preview/sessions",
             get(crate::server::preview::routes::workspace_preview_sessions_get)
                 .post(crate::server::preview::routes::workspace_preview_sessions_post),
         )
         .route(
-            "/api/workspace/preview/sessions/{id}",
+            "/api/v1/workbench/preview/sessions/{id}",
             get(crate::server::preview::routes::workspace_preview_sessions_by_id_get)
                 .delete(crate::server::preview::routes::workspace_preview_sessions_delete)
                 .put(crate::server::preview::routes::workspace_preview_sessions_put),
         )
         .route(
-            "/api/workspace/preview/sessions/{id}/rename",
+            "/api/v1/workbench/preview/sessions/{id}/rename",
             post(crate::server::preview::routes::workspace_preview_sessions_rename_post),
         )
         .route(
-            "/api/workspace/preview/sessions/{id}/start",
+            "/api/v1/workbench/preview/sessions/{id}/start",
             post(crate::server::preview::routes::workspace_preview_sessions_start_post),
         )
         .route(
-            "/api/workspace/preview/sessions/{id}/stop",
+            "/api/v1/workbench/preview/sessions/{id}/stop",
             post(crate::server::preview::routes::workspace_preview_sessions_stop_post),
         )
         .route(
-            "/api/workspace/preview/sessions/discover",
+            "/api/v1/workbench/preview/sessions/discover",
             post(crate::server::preview::routes::workspace_preview_sessions_discover_post),
         )
         .route(
-            "/api/workspace/preview/s/{id}",
+            "/api/v1/workbench/preview/s/{id}",
             axum::routing::any(
                 crate::server::preview::routes::workspace_preview_session_proxy_root,
             ),
         )
         .route(
-            "/api/workspace/preview/s/{id}/",
+            "/api/v1/workbench/preview/s/{id}/",
             axum::routing::any(
                 crate::server::preview::routes::workspace_preview_session_proxy_root,
             ),
         )
         .route(
-            "/api/workspace/preview/s/{id}/{*path}",
+            "/api/v1/workbench/preview/s/{id}/{*path}",
             axum::routing::any(
                 crate::server::preview::routes::workspace_preview_session_proxy_path,
             ),
         )
-        .route("/api/git/status", get(crate::server::git::git_status))
-        .route("/api/git/watch", get(crate::server::git::git_watch))
-        .route("/api/git/blame", get(crate::server::git::git_blame))
-        .route("/api/git/diff", get(crate::server::git::git_diff))
-        .route("/api/git/file-diff", get(crate::server::git::git_file_diff))
         .route(
-            "/api/git/commit-file-diff",
+            "/api/v1/workbench/git/status",
+            get(crate::server::git::git_status),
+        )
+        .route(
+            "/api/v1/workbench/git/watch",
+            get(crate::server::git::git_watch),
+        )
+        .route(
+            "/api/v1/workbench/git/blame",
+            get(crate::server::git::git_blame),
+        )
+        .route(
+            "/api/v1/workbench/git/diff",
+            get(crate::server::git::git_diff),
+        )
+        .route(
+            "/api/v1/workbench/git/file-diff",
+            get(crate::server::git::git_file_diff),
+        )
+        .route(
+            "/api/v1/workbench/git/commit-file-diff",
             get(crate::server::git::git_commit_file_diff),
         )
         .route(
-            "/api/git/commit-file-content",
+            "/api/v1/workbench/git/commit-file-content",
             get(crate::server::git::git_commit_file_content),
         )
         .route(
-            "/api/git/conflicts/file",
+            "/api/v1/workbench/git/conflicts/file",
             get(crate::server::git::git_conflict_file),
         )
         .route(
-            "/api/git/conflicts/resolve",
+            "/api/v1/workbench/git/conflicts/resolve",
             post(crate::server::git::git_conflict_resolve),
         )
-        .route("/api/git/patch", post(crate::server::git::git_apply_patch))
-        .route("/api/git/check", get(crate::server::git::git_check))
-        .route("/api/git/repos", get(crate::server::git::git_repos))
         .route(
-            "/api/git/safe-directory",
+            "/api/v1/workbench/git/patch",
+            post(crate::server::git::git_apply_patch),
+        )
+        .route(
+            "/api/v1/workbench/git/check",
+            get(crate::server::git::git_check),
+        )
+        .route(
+            "/api/v1/workbench/git/repos",
+            get(crate::server::git::git_repos),
+        )
+        .route(
+            "/api/v1/workbench/git/safe-directory",
             post(crate::server::git::git_safe_directory),
         )
-        .route("/api/git/init", post(crate::server::git::git_init))
-        .route("/api/git/clone", post(crate::server::git::git_clone))
         .route(
-            "/api/git/gpg/enable-preset-passphrase",
+            "/api/v1/workbench/git/init",
+            post(crate::server::git::git_init),
+        )
+        .route(
+            "/api/v1/workbench/git/clone",
+            post(crate::server::git::git_clone),
+        )
+        .route(
+            "/api/v1/workbench/git/gpg/enable-preset-passphrase",
             post(crate::server::git::git_gpg_enable_preset_passphrase),
         )
         .route(
-            "/api/git/gpg/disable-signing",
+            "/api/v1/workbench/git/gpg/disable-signing",
             post(crate::server::git::git_gpg_disable_signing),
         )
         .route(
-            "/api/git/gpg/set-signing-key",
+            "/api/v1/workbench/git/gpg/set-signing-key",
             post(crate::server::git::git_gpg_set_signing_key),
         )
         .route(
-            "/api/git/remote-info",
+            "/api/v1/workbench/git/remote-info",
             get(crate::server::git::git_remote_info),
         )
         .route(
-            "/api/git/remotes",
+            "/api/v1/workbench/git/remotes",
             post(crate::server::git::git_remote_add)
                 .put(crate::server::git::git_remote_rename)
                 .delete(crate::server::git::git_remote_remove),
         )
         .route(
-            "/api/git/remotes/set-url",
+            "/api/v1/workbench/git/remotes/set-url",
             post(crate::server::git::git_remote_set_url),
         )
         .route(
-            "/api/git/signing-info",
+            "/api/v1/workbench/git/signing-info",
             get(crate::server::git::git_signing_info),
         )
-        .route("/api/git/state", get(crate::server::git::git_state))
         .route(
-            "/api/git/merge/abort",
+            "/api/v1/workbench/git/state",
+            get(crate::server::git::git_state),
+        )
+        .route(
+            "/api/v1/workbench/git/merge/abort",
             post(crate::server::git::git_merge_abort),
         )
         .route(
-            "/api/git/rebase/abort",
+            "/api/v1/workbench/git/rebase/abort",
             post(crate::server::git::git_rebase_abort),
         )
-        .route("/api/git/stash", get(crate::server::git::git_stash_list))
         .route(
-            "/api/git/stash/show",
+            "/api/v1/workbench/git/stash",
+            get(crate::server::git::git_stash_list),
+        )
+        .route(
+            "/api/v1/workbench/git/stash/show",
             get(crate::server::git::git_stash_show),
         )
         .route(
-            "/api/git/stash/push",
+            "/api/v1/workbench/git/stash/push",
             post(crate::server::git::git_stash_push),
         )
         .route(
-            "/api/git/stash/apply",
+            "/api/v1/workbench/git/stash/apply",
             post(crate::server::git::git_stash_apply),
         )
         .route(
-            "/api/git/stash/pop",
+            "/api/v1/workbench/git/stash/pop",
             post(crate::server::git::git_stash_pop),
         )
         .route(
-            "/api/git/stash/drop",
+            "/api/v1/workbench/git/stash/drop",
             post(crate::server::git::git_stash_drop),
         )
         .route(
-            "/api/git/stash/drop-all",
+            "/api/v1/workbench/git/stash/drop-all",
             post(crate::server::git::git_stash_drop_all),
         )
         .route(
-            "/api/git/stash/branch",
+            "/api/v1/workbench/git/stash/branch",
             post(crate::server::git::git_stash_branch),
         )
         .route(
-            "/api/git/rebase/continue",
+            "/api/v1/workbench/git/rebase/continue",
             post(crate::server::git::git_rebase_continue),
         )
         .route(
-            "/api/git/rebase/skip",
+            "/api/v1/workbench/git/rebase/skip",
             post(crate::server::git::git_rebase_skip),
         )
         .route(
-            "/api/git/cherry-pick/abort",
+            "/api/v1/workbench/git/cherry-pick/abort",
             post(crate::server::git::git_cherry_pick_abort),
         )
         .route(
-            "/api/git/cherry-pick/continue",
+            "/api/v1/workbench/git/cherry-pick/continue",
             post(crate::server::git::git_cherry_pick_continue),
         )
         .route(
-            "/api/git/cherry-pick/skip",
+            "/api/v1/workbench/git/cherry-pick/skip",
             post(crate::server::git::git_cherry_pick_skip),
         )
         .route(
-            "/api/git/cherry-pick",
+            "/api/v1/workbench/git/cherry-pick",
             post(crate::server::git::git_cherry_pick),
         )
         .route(
-            "/api/git/revert/abort",
+            "/api/v1/workbench/git/revert/abort",
             post(crate::server::git::git_revert_abort),
         )
         .route(
-            "/api/git/revert/continue",
+            "/api/v1/workbench/git/revert/continue",
             post(crate::server::git::git_revert_continue),
         )
         .route(
-            "/api/git/revert/skip",
+            "/api/v1/workbench/git/revert/skip",
             post(crate::server::git::git_revert_skip),
         )
         .route(
-            "/api/git/revert-commit",
+            "/api/v1/workbench/git/revert-commit",
             post(crate::server::git::git_revert_commit),
         )
-        .route("/api/git/merge", post(crate::server::git::git_merge))
-        .route("/api/git/rebase", post(crate::server::git::git_rebase))
         .route(
-            "/api/git/remote-branches",
+            "/api/v1/workbench/git/merge",
+            post(crate::server::git::git_merge),
+        )
+        .route(
+            "/api/v1/workbench/git/rebase",
+            post(crate::server::git::git_rebase),
+        )
+        .route(
+            "/api/v1/workbench/git/remote-branches",
             get(crate::server::git::git_remote_branches_list),
         )
-        .route("/api/git/compare", get(crate::server::git::git_compare))
-        .route("/api/git/lfs", get(crate::server::git::git_lfs_status))
         .route(
-            "/api/git/lfs/install",
+            "/api/v1/workbench/git/compare",
+            get(crate::server::git::git_compare),
+        )
+        .route(
+            "/api/v1/workbench/git/lfs",
+            get(crate::server::git::git_lfs_status),
+        )
+        .route(
+            "/api/v1/workbench/git/lfs/install",
             post(crate::server::git::git_lfs_install),
         )
         .route(
-            "/api/git/lfs/track",
+            "/api/v1/workbench/git/lfs/track",
             post(crate::server::git::git_lfs_track),
         )
-        .route("/api/git/lfs/locks", get(crate::server::git::git_lfs_locks))
-        .route("/api/git/lfs/lock", post(crate::server::git::git_lfs_lock))
         .route(
-            "/api/git/lfs/unlock",
+            "/api/v1/workbench/git/lfs/locks",
+            get(crate::server::git::git_lfs_locks),
+        )
+        .route(
+            "/api/v1/workbench/git/lfs/lock",
+            post(crate::server::git::git_lfs_lock),
+        )
+        .route(
+            "/api/v1/workbench/git/lfs/unlock",
             post(crate::server::git::git_lfs_unlock),
         )
         .route(
-            "/api/git/submodules",
+            "/api/v1/workbench/git/submodules",
             get(crate::server::git::git_submodules),
         )
         .route(
-            "/api/git/submodules/add",
+            "/api/v1/workbench/git/submodules/add",
             post(crate::server::git::git_submodule_add),
         )
         .route(
-            "/api/git/submodules/init",
+            "/api/v1/workbench/git/submodules/init",
             post(crate::server::git::git_submodule_init),
         )
         .route(
-            "/api/git/submodules/update",
+            "/api/v1/workbench/git/submodules/update",
             post(crate::server::git::git_submodule_update),
         )
-        .route("/api/git/log", get(crate::server::git::git_log))
         .route(
-            "/api/git/commit-diff",
+            "/api/v1/workbench/git/log",
+            get(crate::server::git::git_log),
+        )
+        .route(
+            "/api/v1/workbench/git/commit-diff",
             get(crate::server::git::git_commit_diff),
         )
         .route(
-            "/api/git/commit-files",
+            "/api/v1/workbench/git/commit-files",
             get(crate::server::git::git_commit_files),
         )
-        .route("/api/git/stage", post(crate::server::git::git_stage))
-        .route("/api/git/clean", post(crate::server::git::git_clean))
-        .route("/api/git/ignore", post(crate::server::git::git_ignore))
-        .route("/api/git/rename", post(crate::server::git::git_rename))
-        .route("/api/git/delete", post(crate::server::git::git_delete))
-        .route("/api/git/unstage", post(crate::server::git::git_unstage))
-        .route("/api/git/revert", post(crate::server::git::git_revert))
-        .route("/api/git/pull", post(crate::server::git::git_pull))
-        .route("/api/git/push", post(crate::server::git::git_push))
         .route(
-            "/api/git/create-github-repo-and-push",
+            "/api/v1/workbench/git/stage",
+            post(crate::server::git::git_stage),
+        )
+        .route(
+            "/api/v1/workbench/git/clean",
+            post(crate::server::git::git_clean),
+        )
+        .route(
+            "/api/v1/workbench/git/ignore",
+            post(crate::server::git::git_ignore),
+        )
+        .route(
+            "/api/v1/workbench/git/rename",
+            post(crate::server::git::git_rename),
+        )
+        .route(
+            "/api/v1/workbench/git/delete",
+            post(crate::server::git::git_delete),
+        )
+        .route(
+            "/api/v1/workbench/git/unstage",
+            post(crate::server::git::git_unstage),
+        )
+        .route(
+            "/api/v1/workbench/git/revert",
+            post(crate::server::git::git_revert),
+        )
+        .route(
+            "/api/v1/workbench/git/pull",
+            post(crate::server::git::git_pull),
+        )
+        .route(
+            "/api/v1/workbench/git/push",
+            post(crate::server::git::git_push),
+        )
+        .route(
+            "/api/v1/workbench/git/create-github-repo-and-push",
             post(crate::server::git::git_create_github_repo_and_push),
         )
-        .route("/api/git/fetch", post(crate::server::git::git_fetch))
-        .route("/api/git/commit", post(crate::server::git::git_commit))
         .route(
-            "/api/git/undo-commit",
+            "/api/v1/workbench/git/fetch",
+            post(crate::server::git::git_fetch),
+        )
+        .route(
+            "/api/v1/workbench/git/commit",
+            post(crate::server::git::git_commit),
+        )
+        .route(
+            "/api/v1/workbench/git/undo-commit",
             post(crate::server::git::git_undo_commit),
         )
-        .route("/api/git/reset", post(crate::server::git::git_reset_commit))
         .route(
-            "/api/git/commit-template",
+            "/api/v1/workbench/git/reset",
+            post(crate::server::git::git_reset_commit),
+        )
+        .route(
+            "/api/v1/workbench/git/commit-template",
             get(crate::server::git::git_commit_template),
         )
         .route(
-            "/api/git/conflicts",
+            "/api/v1/workbench/git/conflicts",
             get(crate::server::git::git_conflicts_list),
         )
         .route(
-            "/api/git/branches",
+            "/api/v1/workbench/git/branches",
             get(crate::server::git::git_branches)
                 .post(crate::server::git::git_create_branch)
                 .delete(crate::server::git::git_delete_branch),
         )
         .route(
-            "/api/git/branches/rename",
+            "/api/v1/workbench/git/branches/rename",
             post(crate::server::git::git_rename_branch),
         )
         .route(
-            "/api/git/branches/delete-remote",
+            "/api/v1/workbench/git/branches/delete-remote",
             post(crate::server::git::git_delete_remote_branch),
         )
-        .route("/api/git/tags", get(crate::server::git::git_tags_list))
-        .route("/api/git/tags", post(crate::server::git::git_tags_create))
         .route(
-            "/api/git/tags",
+            "/api/v1/workbench/git/tags",
+            get(crate::server::git::git_tags_list),
+        )
+        .route(
+            "/api/v1/workbench/git/tags",
+            post(crate::server::git::git_tags_create),
+        )
+        .route(
+            "/api/v1/workbench/git/tags",
             axum::routing::delete(crate::server::git::git_tags_delete),
         )
         .route(
-            "/api/git/tags/delete-remote",
+            "/api/v1/workbench/git/tags/delete-remote",
             post(crate::server::git::git_tags_delete_remote),
         )
-        .route("/api/git/checkout", post(crate::server::git::git_checkout))
         .route(
-            "/api/git/checkout-detached",
+            "/api/v1/workbench/git/checkout",
+            post(crate::server::git::git_checkout),
+        )
+        .route(
+            "/api/v1/workbench/git/checkout-detached",
             post(crate::server::git::git_checkout_detached),
         )
         .route(
-            "/api/git/branches/create-from",
+            "/api/v1/workbench/git/branches/create-from",
             post(crate::server::git::git_create_branch_from),
         )
         .route(
-            "/api/git/worktrees",
+            "/api/v1/workbench/git/worktrees",
             get(crate::server::git::git_worktrees)
                 .post(crate::server::git::git_worktree_add)
                 .delete(crate::server::git::git_worktree_remove),
         )
         .route(
-            "/api/git/worktrees/prune",
+            "/api/v1/workbench/git/worktrees/prune",
             post(crate::server::git::git_worktree_prune),
         )
         .route(
-            "/api/git/worktrees/migrate",
+            "/api/v1/workbench/git/worktrees/migrate",
             post(crate::server::git::git_worktree_migrate),
         )
         .route(
-            "/api/ui/terminal/state",
+            "/api/v1/workbench/terminal/state",
             get(crate::server::terminal::ui_state::terminal_ui_state_get)
                 .put(crate::server::terminal::ui_state::terminal_ui_state_put),
         )
         .route(
-            "/api/ui/terminal/state/events",
+            "/api/v1/workbench/terminal/state/events",
             get(crate::server::terminal::ui_state::terminal_ui_state_events),
         )
         .route(
-            "/api/terminal/create",
+            "/api/v1/workbench/terminal/create",
             post(crate::server::terminal::manager::terminal_create),
         )
         .route(
-            "/api/terminal/{session_id}",
+            "/api/v1/workbench/terminal/{session_id}",
             get(crate::server::terminal::manager::terminal_get)
                 .delete(crate::server::terminal::manager::terminal_delete),
         )
         .route(
-            "/api/terminal/{session_id}/stream",
+            "/api/v1/workbench/terminal/{session_id}/stream",
             get(crate::server::terminal::manager::terminal_stream),
         )
         .route(
-            "/api/terminal/{session_id}/input",
+            "/api/v1/workbench/terminal/{session_id}/input",
             post(crate::server::terminal::manager::terminal_input),
         )
         .route(
-            "/api/terminal/{session_id}/resize",
+            "/api/v1/workbench/terminal/{session_id}/resize",
             post(crate::server::terminal::manager::terminal_resize),
         )
         .route(
-            "/api/terminal/{session_id}/start",
+            "/api/v1/workbench/terminal/{session_id}/start",
             post(crate::server::terminal::manager::terminal_start),
         )
         .route(
-            "/api/terminal/{session_id}/stop",
+            "/api/v1/workbench/terminal/{session_id}/stop",
             post(crate::server::terminal::manager::terminal_stop),
         )
         .route(
-            "/api/terminal/{session_id}/restart",
+            "/api/v1/workbench/terminal/{session_id}/restart",
             post(crate::server::terminal::manager::terminal_restart),
         )
 }
@@ -564,7 +690,6 @@ pub(crate) async fn run(args: crate::server::ServerArgs) -> Result<()> {
                 oauth_issuer_url: args.mcp_oauth_issuer_url.as_deref(),
                 auth_mode: args.mcp_auth_mode.map(Into::into),
                 anonymous_access: args.mcp_anonymous_access.map(Into::into),
-                client_registration: args.mcp_client_registration.map(Into::into),
                 fallback_public_url: endpoint_url.as_str(),
             },
         )

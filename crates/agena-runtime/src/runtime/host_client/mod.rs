@@ -573,7 +573,7 @@ impl HostClient for RuntimeHostClient {
                 reasoning_tokens: response.usage.reasoning_tokens,
                 cache_write_tokens: response.usage.cache_write_tokens,
                 cache_read_tokens: response.usage.cache_read_tokens,
-                total_cost: response.usage.total_cost,
+                total_cost: response.usage.effective_cost_usd(),
             },
         })
     }

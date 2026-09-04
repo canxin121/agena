@@ -32,7 +32,7 @@ const IMAGE_EXTENSIONS = new Set([
 
 const VIDEO_EXTENSIONS = new Set(['mp4', 'webm', 'ogv', 'mov', 'm4v', 'mkv'])
 const AUDIO_EXTENSIONS = new Set(['mp3', 'wav', 'ogg', 'oga', 'm4a', 'aac', 'flac', 'opus', 'weba'])
-const FS_API_PATHS = new Set(['/api/fs/raw', '/api/fs/download'])
+const FS_API_PATHS = new Set(['/api/v1/workbench/fs/raw', '/api/v1/workbench/fs/download'])
 
 function normalizePath(raw: string): string {
   return String(raw || '')
@@ -329,7 +329,7 @@ export function mediaKindFromHref(rawHref: string): MediaKind | null {
 }
 
 export function buildWorkspaceRawFileUrl(workspaceRoot: string, path: string): string {
-  return `/api/fs/raw?directory=${encodeURIComponent(workspaceRoot)}&path=${encodeURIComponent(path)}`
+  return `/api/v1/workbench/fs/raw?directory=${encodeURIComponent(workspaceRoot)}&path=${encodeURIComponent(path)}`
 }
 
 export function resolveWorkspaceFileLink(rawHref: string, opts: WorkspaceLinkOptions): WorkspaceLinkTarget | null {

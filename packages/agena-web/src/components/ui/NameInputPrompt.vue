@@ -16,7 +16,7 @@ const props = withDefaults(
     confirmLabel?: string
     cancelLabel?: string
     busy?: boolean
-    isMobilePointer?: boolean
+    isCompactTouch?: boolean
   }>(),
   {
     title: '',
@@ -39,7 +39,7 @@ const ui = useUiStore()
 
 const inputEl = ref<HTMLInputElement | null>(null)
 
-const isMobileSheet = computed(() => (props.isMobilePointer === undefined ? ui.isMobilePointer : props.isMobilePointer))
+const isMobileSheet = computed(() => (props.isCompactTouch === undefined ? ui.isCompactTouch : props.isCompactTouch))
 
 const draft = computed({
   get: () => String(props.modelValue || ''),

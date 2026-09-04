@@ -51,11 +51,12 @@ test('deriveSessionSelectionFromMessages prefers the latest complete run marker 
   )
 })
 
-test('manual model storage migrates legacy keys to provider/adapter/model keys', () => {
-  assert.deepEqual(normalizeSessionManualModelStorageEntry(' session-1 ', ' openai/gpt-5 '), {
+test('manual model storage accepts only current provider/adapter/model keys', () => {
+  assert.deepEqual(normalizeSessionManualModelStorageEntry(' session-1 ', ' openai//gpt-5 '), {
     key: 'session-1',
     value: 'openai//gpt-5',
   })
+  assert.equal(normalizeSessionManualModelStorageEntry('session-1', 'openai/gpt-5'), null)
   assert.equal(normalizeSessionManualModelStorageEntry('session-1', 'invalid'), null)
 })
 

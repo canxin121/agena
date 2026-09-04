@@ -320,7 +320,6 @@ fn summarize(j: ScheduledJob) -> CronJobSummary {
         misfire_policy: format!("{:?}", j.misfire_policy).to_ascii_lowercase(),
         retry_max_attempts: j.retry_policy.max_attempts,
         retry_at: j.retry_at.map(|time| time.to_rfc3339()),
-        run_count: j.run_history.len() as u32,
         last_run_status: j
             .last_run
             .as_ref()

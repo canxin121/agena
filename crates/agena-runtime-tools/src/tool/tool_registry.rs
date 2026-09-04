@@ -637,7 +637,6 @@ pub struct ToolExecutor {
     pub(super) lsp_registry: Option<Arc<agena_lsp::LspRegistry>>,
     pub(super) cancellation_token: Option<tokio_util::sync::CancellationToken>,
     pub(super) permission_inspector: Option<Arc<dyn ExecutionPermissionInspector>>,
-    pub(super) command_event_sink: Option<agena_tool::ToolRuntimeEventSink>,
 }
 
 /// Runtime-owned extension point for adding execution-time permission checks

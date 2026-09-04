@@ -44,7 +44,7 @@ export function useGitWatchSse<TPayload>(opts: {
       },
       onError: () => {
         opts.onError?.()
-        // Keep legacy retry signal for callers that want a full restart.
+        // Keep the explicit retry timer so callers can restart the watch after an error.
         if (watchRetryTimer.value) return
         watchRetryTimer.value = window.setTimeout(() => {
           watchRetryTimer.value = null

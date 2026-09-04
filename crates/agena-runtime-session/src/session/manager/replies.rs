@@ -174,8 +174,8 @@ pub(super) fn assistant_message_id(
 }
 
 /// Whether the run marker owning `part_ref` represents an externally initiated
-/// provider tool call (defaults to false; the marker content records it when
-/// set). Mirrors the legacy `MessageMetadata::externally_initiated_tool`.
+/// provider tool call. The run marker records the flag when present and
+/// defaults to false otherwise.
 pub(super) fn run_marker_externally_initiated_tool(
     session: &Session,
     part_ref: &SessionPartRef,
@@ -658,7 +658,7 @@ pub(super) fn plugin_user_input_request_id(
 
 /// The permission actions a run's tool operation accumulated Allow approvals
 /// for, keyed by the owning run marker id + stable permission request id
-/// (mirrors the legacy `Session::operation_permission_approved_actions`).
+/// The approved action keys are derived from the operation's current permission records.
 pub(super) fn operation_permission_approved_actions(
     session: &Session,
     assistant_message_id: i64,
@@ -726,9 +726,8 @@ impl SessionManager {
         has_replied: impl FnOnce(&Session, &str) -> bool,
     ) -> Result<PendingReplyLookup<P>, AppError> {
         if request_id.trim().is_empty() {
-            // Optional provider ids historically leaked into request ids. An
-            // empty lookup is never a safe correlation key: matching it could
-            // select an arbitrary legacy ask among several id-less tools.
+            // An empty lookup is never a safe correlation key: matching it could
+            // select an arbitrary ask among several id-less provider calls.
             return Err(pending_reply_not_found_error(request_kind, request_id));
         }
         match find_pending(session, request_id) {
@@ -929,11 +928,7 @@ impl SessionManager {
                 .tool_executor
                 .for_session_context_async(&execution_tool.session_runtime.execution)
                 .await
-                .with_cancellation_token(Some(cancellation))
-                .with_command_event_sink(
-                    execution_manager
-                        .command_event_sink_for_pending_if_needed(session_id, &execution_tool),
-                );
+                .with_cancellation_token(Some(cancellation));
             let host_user_input_sequence = execution_manager
                 .host_user_input_sequence_guard(session_id, execution_tool.call_id);
             let execution = scoped_executor

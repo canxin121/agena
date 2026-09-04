@@ -60,12 +60,11 @@ pub async fn get_session(
 pub async fn get_session_state(
     State(state): State<AppState>,
     Path(session_id): Path<i64>,
-    AxumQuery(query): AxumQuery<SessionStateQuery>,
 ) -> Result<impl IntoResponse, ServerError> {
     Ok(Json(
         state
             .application()
-            .session_execution_resource_with_parts(session_id, query.include_parts)
+            .session_execution_shell(session_id)
             .await?,
     ))
 }
@@ -538,8 +537,8 @@ use super::{
     AppState, AxumQuery, Deserialize, Event, HeaderMap, Infallible, IntoResponse, Json, Path,
     PermissionReply, ServerError, SessionChangeStreamQuery, SessionCreateRequest,
     SessionForkRequestBody, SessionListQuery, SessionPartListQuery, SessionReplyRequestBody,
-    SessionRewindRequestBody, SessionRunRequest, SessionRunRequestBody, SessionStateQuery,
-    SessionUpdateRequest, Sse, State, UserInputReply, if_match_version, json_http, json_http_found,
+    SessionRewindRequestBody, SessionRunRequest, SessionRunRequestBody, SessionUpdateRequest, Sse,
+    State, UserInputReply, if_match_version, json_http, json_http_found,
     server_error_from_application, sse_error_event, stream,
 };
 

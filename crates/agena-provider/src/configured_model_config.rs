@@ -18,9 +18,8 @@ pub struct ResolvedProviderModelConfig {
     /// endpoint before falling back to Agena's text summarizer.
     #[serde(skip_serializing_if = "is_true")]
     pub native_compaction: bool,
-    /// Transport mode for the fixed five-function Agena Tool API. The legacy
-    /// `direct` and `provider_native` members are always empty and are rejected
-    /// when loading new configuration.
+    /// Transport mode for the fixed five-function Agena Tool API. Removed
+    /// `direct` and `provider_native` members are rejected when loading config.
     #[serde(default)]
     pub agena_tools: AgenaToolsConfig,
     #[serde(flatten)]
@@ -35,10 +34,10 @@ impl<'de> Deserialize<'de> for ResolvedProviderModelConfig {
         use serde::de::Error as _;
 
         let mut fields = serde_json::Map::<String, serde_json::Value>::deserialize(deserializer)?;
-        for legacy_key in ["provider_tools", "provider_native_tools", "native_tools"] {
-            if fields.contains_key(legacy_key) {
+        for removed_key in ["provider_tools", "provider_native_tools", "native_tools"] {
+            if fields.contains_key(removed_key) {
                 return Err(D::Error::custom(format!(
-                    "unknown field `{legacy_key}`; provider service capabilities are ordinary plugins such as `agena.openai`"
+                    "unknown field `{removed_key}`; provider service capabilities are ordinary plugins such as `agena.openai`"
                 )));
             }
         }
@@ -54,12 +53,12 @@ impl<'de> Deserialize<'de> for ResolvedProviderModelConfig {
             .transpose()
             .map_err(D::Error::custom)?
             .unwrap_or(true);
-        let mut agena_tools = match fields.remove("agena_tools") {
-            Some(serde_json::Value::Object(mut value)) => {
-                for removed in ["direct", "provider_native"] {
-                    if value.remove(removed).is_some() {
+        let agena_tools = match fields.remove("agena_tools") {
+            Some(serde_json::Value::Object(value)) => {
+                for removed_field in ["direct", "provider_native"] {
+                    if value.contains_key(removed_field) {
                         return Err(D::Error::custom(format!(
-                            "unknown field `agena_tools.{removed}`; only the five Tool API gateway functions use the provider tool protocol"
+                            "unknown field `agena_tools.{removed_field}`; only the five Tool API gateway functions use the provider tool protocol"
                         )));
                     }
                 }
@@ -69,7 +68,6 @@ impl<'de> Deserialize<'de> for ResolvedProviderModelConfig {
             Some(value) => serde_json::from_value(value).map_err(D::Error::custom)?,
             None => AgenaToolsConfig::default(),
         };
-        agena_tools.provider_native = Default::default();
         let definition =
             serde_json::from_value(serde_json::Value::Object(fields)).map_err(D::Error::custom)?;
         Ok(Self {

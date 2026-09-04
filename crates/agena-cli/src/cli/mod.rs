@@ -900,10 +900,6 @@ pub struct ServerArgs {
     /// `read-only` can expose private workspace data even without writes.
     #[arg(long, env = "AGENA_MCP_ANONYMOUS_ACCESS", value_enum)]
     pub mcp_anonymous_access: Option<McpAnonymousAccessArg>,
-    /// OAuth client-registration policy. CIMD-only is the secure default; DCR
-    /// is retained as an explicit compatibility option.
-    #[arg(long, env = "AGENA_MCP_CLIENT_REGISTRATION", value_enum)]
-    pub mcp_client_registration: Option<McpClientRegistrationArg>,
     #[arg(long = "workspace", env = "AGENA_WORKSPACE_ROOT", value_name = "PATH")]
     pub workspace_root: Option<PathBuf>,
     /// Directory containing the built Web frontend. When omitted, repository
@@ -947,22 +943,6 @@ impl McpAnonymousAccessArg {
         match self {
             Self::None => "none",
             Self::ReadOnly => "read-only",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-#[value(rename_all = "kebab_case")]
-pub enum McpClientRegistrationArg {
-    CimdOnly,
-    CimdAndDcr,
-}
-
-impl McpClientRegistrationArg {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::CimdOnly => "cimd-only",
-            Self::CimdAndDcr => "cimd-and-dcr",
         }
     }
 }
@@ -1851,8 +1831,6 @@ mod parser_contract_tests {
             "mixed",
             "--mcp-anonymous-access",
             "read-only",
-            "--mcp-client-registration",
-            "cimd-only",
         ])
         .expect("parse complete MCP server configuration");
         assert!(matches!(
@@ -1866,8 +1844,6 @@ mod parser_contract_tests {
                     && request.args.mcp_auth_mode == Some(super::McpAuthModeArg::Mixed)
                     && request.args.mcp_anonymous_access
                         == Some(super::McpAnonymousAccessArg::ReadOnly)
-                    && request.args.mcp_client_registration
-                        == Some(super::McpClientRegistrationArg::CimdOnly)
         ));
     }
 

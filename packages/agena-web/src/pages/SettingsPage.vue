@@ -24,7 +24,6 @@ import {
   normalizeRememberedSettingsRoute,
   settingsPathForTab,
   settingsTabFromRouteValue,
-  canonicalSettingsTab,
   type SettingsSidebarDestination,
   type SettingsTab,
 } from '@/components/settings/sidebar/settingsSidebarNavigation'
@@ -65,10 +64,10 @@ const interfacePages = computed(() => buildSettingsSubpages('interface'))
 
 function readInitialSection(): SettingsTab {
   const routeSection = settingsTabFromRouteValue(route.params.section)
-  if (routeSection) return canonicalSettingsTab(routeSection)
+  if (routeSection) return routeSection
   try {
     const remembered = settingsTabFromRouteValue(localStorage.getItem(SETTINGS_LAST_SECTION_KEY))
-    if (remembered) return canonicalSettingsTab(remembered)
+    if (remembered) return remembered
   } catch {
     // ignore
   }
@@ -150,7 +149,7 @@ watch(
   (value) => {
     const section = settingsTabFromRouteValue(value)
     if (section) {
-      activeSection.value = canonicalSettingsTab(section)
+      activeSection.value = section
       try {
         localStorage.setItem(SETTINGS_LAST_SECTION_KEY, settingsPathForTab(activeSection.value))
       } catch {

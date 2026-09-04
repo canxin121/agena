@@ -565,25 +565,6 @@ impl TuiBackend {
         Ok(value)
     }
 
-    pub(crate) async fn toggle_mcp_client_registration(&self) -> Result<serde_json::Value> {
-        let current = self.mcp_server_control().await?;
-        let next = match current
-            .get("clientRegistration")
-            .and_then(serde_json::Value::as_str)
-        {
-            Some("cimd_and_dcr") => "cimd_only",
-            _ => "cimd_and_dcr",
-        };
-        let value = self
-            .inner
-            .client
-            .set_mcp_server_client_registration(next)
-            .await
-            .context("failed to update Agena MCP client registration policy")?;
-        *self.inner.mcp_server_control.write().await = Some(value.clone());
-        Ok(value)
-    }
-
     pub(crate) async fn set_mcp_public_url(
         &self,
         public_url: Option<String>,
@@ -1303,25 +1284,12 @@ impl TuiBackend {
             .provider_studio_operation(operation, serde_json::json!({ "draft": draft }))
             .await
             .map_err(agena_application::provider_studio::ProviderDraftAuthError::other)?;
-        match serde_json::from_value::<
-            std::result::Result<
-                agena_application::provider_studio::ProviderDraftAuthActionResult,
-                agena_application::provider_studio::ProviderDraftAuthError,
-            >,
-        >(value.clone())
-        {
-            Ok(result) => result,
-            Err(wrapped_error) => match serde_json::from_value(value) {
-                Ok(action) => Ok(action),
-                Err(bare_error) => Err(
-                    agena_application::provider_studio::ProviderDraftAuthError::other(format!(
-                        "failed to decode Provider Studio authentication response as either the wrapped result or legacy bare action payload: wrapped result: {}; bare action: {}",
-                        agena_failure::diagnostic::format_error_chain(&wrapped_error),
-                        agena_failure::diagnostic::format_error_chain(&bare_error),
-                    )),
-                ),
-            },
-        }
+        serde_json::from_value(value).map_err(|error| {
+            agena_application::provider_studio::ProviderDraftAuthError::other(format!(
+                "failed to decode Provider Studio authentication response: {}",
+                agena_failure::diagnostic::format_error_chain(&error),
+            ))
+        })
     }
 
     pub async fn list_saved_provider_adapter_models(
@@ -1518,32 +1486,20 @@ impl TuiBackend {
             .provider_studio_operation(operation, body)
             .await
             .map_err(provider_studio_transport_error)?;
-        let result = match serde_json::from_value::<
-            std::result::Result<
-                agena_application::provider_studio::ProviderStudioSaveResult,
-                agena_application::provider_studio::ProviderStudioSaveError,
-            >,
-        >(value.clone())
-        {
-            Ok(result) => result,
-            Err(wrapped_error) => match serde_json::from_value(value) {
-                Ok(result) => Ok(result),
-                Err(bare_error) => Err(provider_studio_transport_error(format_args!(
-                    "failed to decode Provider Studio save response as either the wrapped result or legacy bare success payload: wrapped result: {}; bare result: {}",
-                    agena_failure::diagnostic::format_error_chain(&wrapped_error),
-                    agena_failure::diagnostic::format_error_chain(&bare_error),
-                ))),
-            },
-        };
-        if result.is_ok() {
-            self.refresh_config_sources()
-                .await
-                .map_err(provider_studio_transport_error)?;
-            self.refresh_provider_runtime_snapshot()
-                .await
-                .map_err(provider_studio_transport_error)?;
-        }
-        result
+        let result: agena_application::provider_studio::ProviderStudioSaveResult =
+            serde_json::from_value(value).map_err(|error| {
+                provider_studio_transport_error(format_args!(
+                    "failed to decode Provider Studio save response: {}",
+                    agena_failure::diagnostic::format_error_chain(&error),
+                ))
+            })?;
+        self.refresh_config_sources()
+            .await
+            .map_err(provider_studio_transport_error)?;
+        self.refresh_provider_runtime_snapshot()
+            .await
+            .map_err(provider_studio_transport_error)?;
+        Ok(result)
     }
 
     async fn refresh_provider_drafts(&self) -> Result<()> {
@@ -2414,7 +2370,6 @@ impl TuiBackend {
                         if tx
                             .send(LiveEvent {
                                 snapshot: None,
-                                event: None,
                                 force_refresh: true,
                             })
                             .await
@@ -2444,7 +2399,6 @@ impl TuiBackend {
                         if tx
                             .send(LiveEvent {
                                 snapshot: None,
-                                event: None,
                                 force_refresh: true,
                             })
                             .await
@@ -2462,7 +2416,6 @@ impl TuiBackend {
                 if tx
                     .send(LiveEvent {
                         snapshot: Some(snapshot),
-                        event: None,
                         force_refresh: false,
                     })
                     .await
@@ -2511,7 +2464,6 @@ impl TuiBackend {
                     if tx
                         .send(LiveEvent {
                             snapshot: None,
-                            event: None,
                             force_refresh,
                         })
                         .await
@@ -2528,7 +2480,6 @@ impl TuiBackend {
                 if tx
                     .send(LiveEvent {
                         snapshot: None,
-                        event: None,
                         force_refresh: true,
                     })
                     .await

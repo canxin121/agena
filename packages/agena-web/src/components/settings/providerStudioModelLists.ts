@@ -13,10 +13,9 @@ function record(value: unknown): UnknownRecord | null {
 }
 
 /**
- * Normalize both configured-model array responses and live-listing response
- * envelopes. Older Agena servers omitted `models` when an adapter had no
- * configured routes, so browser consumers must treat a missing field as an
- * empty list rather than calling Array methods on `undefined`.
+ * Normalize the two current provider-model response envelopes: configured
+ * models return an adapter array, while live listing returns `{ adapters }`.
+ * Every adapter must carry its `models` array.
  */
 export function normalizeProviderAdapterModels<TModel>(value: unknown): ProviderAdapterModelsRecord<TModel>[] {
   const response = record(value)
@@ -27,13 +26,16 @@ export function normalizeProviderAdapterModels<TModel>(value: unknown): Provider
     if (!item) return []
     const adapterId = String(item.adapter_id || '').trim()
     if (!adapterId) return []
+    if (!Array.isArray(item.models)) {
+      throw new TypeError(`Provider adapter ${adapterId} is missing its models array`)
+    }
 
     return [
       {
         ...item,
         adapter_id: adapterId,
         enabled: item.enabled === true,
-        models: Array.isArray(item.models) ? (item.models as TModel[]) : [],
+        models: item.models as TModel[],
       } as ProviderAdapterModelsRecord<TModel>,
     ]
   })

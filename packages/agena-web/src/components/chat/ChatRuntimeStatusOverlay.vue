@@ -19,7 +19,7 @@ type RuntimeStatus = {
   }
 }
 
-const props = withDefaults(defineProps<{ isMobilePointer?: boolean }>(), { isMobilePointer: false })
+const props = withDefaults(defineProps<{ isCompactTouch?: boolean }>(), { isCompactTouch: false })
 const emit = defineEmits<{ (event: 'reserve-change', px: number): void }>()
 
 const rootEl = ref<HTMLElement | null>(null)
@@ -101,7 +101,7 @@ onBeforeUnmount(() => {
     <section
       v-if="activePanel"
       class="pointer-events-auto flex max-h-[min(56dvh,32rem)] w-full flex-col overflow-hidden rounded-md border border-border/70 bg-background/95 shadow-lg backdrop-blur"
-      :class="props.isMobilePointer ? '' : 'max-w-xl'"
+      :class="props.isCompactTouch ? '' : 'max-w-xl'"
     >
       <header class="flex items-center justify-between gap-2 border-b border-border/60 px-3 py-2">
         <div class="min-w-0">

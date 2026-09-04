@@ -2,7 +2,7 @@ import { defineStore } from 'pinia'
 import { computed, ref, watch } from 'vue'
 
 import { apiJson } from '@/lib/api'
-import { getLocalJson, getLocalString, removeLocalKey, setLocalJson, setLocalString } from '@/lib/persist'
+import { getLocalJson, setLocalJson } from '@/lib/persist'
 import { localStorageKeys } from '@/lib/persistence/storageKeys'
 import { fsPathEquals, fsPathStartsWith, normalizeFsPath, trimTrailingFsSlashes } from '@/lib/path'
 import type { SseEvent } from '@/lib/sse'
@@ -10,7 +10,6 @@ import { DEFAULT_WINDOW_SCOPE_ID, normalizeWindowScopeId, resolveWindowScopeId }
 import { useWorkspacePaneContext, type WorkspacePaneContext } from '@/app/workspace/workspacePaneContext'
 import { useUiStore } from '@/stores/ui'
 
-const STORAGE_LAST_DIRECTORY = localStorageKeys.directory.lastDirectory
 const STORAGE_CURRENT_DIRECTORY_BY_WINDOW = localStorageKeys.directory.currentDirectoryByWindow
 
 type FsHomeResponse = { home?: string; path?: string }
@@ -37,7 +36,7 @@ function toRecord(value: unknown): Record<string, unknown> | null {
 
 export function parseFsChangedEvent(evt: SseEvent): FsChangeEvent | null {
   // Restored backend publishes agena:fs-changed (apps/agena server/fs).
-  if (evt.type !== 'agena:fs-changed' && evt.type !== 'opencode-studio:fs-changed') return null
+  if (evt.type !== 'agena:fs-changed') return null
   const props = toRecord(evt.properties)
   if (!props) return null
 
@@ -82,10 +81,7 @@ const useDirectoryStoreDefinition = defineStore('directory', () => {
   const currentDirectoryByWindow = ref<Record<string, string>>(
     (() => {
       const persisted = getLocalJson<unknown>(STORAGE_CURRENT_DIRECTORY_BY_WINDOW, {})
-      if (!persisted || typeof persisted !== 'object' || Array.isArray(persisted)) {
-        const legacy = trimTrailingFsSlashes(normalizeFsPath(getLocalString(STORAGE_LAST_DIRECTORY).trim()))
-        return legacy ? { [DEFAULT_WINDOW_SCOPE_ID]: legacy } : {}
-      }
+      if (!persisted || typeof persisted !== 'object' || Array.isArray(persisted)) return {}
 
       const out: Record<string, string> = {}
       for (const [rawWindowId, rawPath] of Object.entries(persisted as Record<string, unknown>)) {
@@ -96,9 +92,7 @@ const useDirectoryStoreDefinition = defineStore('directory', () => {
         out[windowId] = normalized
       }
 
-      if (Object.keys(out).length > 0) return out
-      const legacy = trimTrailingFsSlashes(normalizeFsPath(getLocalString(STORAGE_LAST_DIRECTORY).trim()))
-      return legacy ? { [DEFAULT_WINDOW_SCOPE_ID]: legacy } : {}
+      return out
     })(),
   )
   const fsEventSeq = ref(0)
@@ -139,18 +133,11 @@ const useDirectoryStoreDefinition = defineStore('directory', () => {
 
   function persistCurrentDirectoryMap(next: Record<string, string>) {
     setLocalJson(STORAGE_CURRENT_DIRECTORY_BY_WINDOW, next)
-    const activeScope = normalizeWindowScopeId(currentWindowScopeId.value)
-    const preferred = String(next[activeScope] || next[DEFAULT_WINDOW_SCOPE_ID] || '').trim()
-    if (preferred) {
-      setLocalString(STORAGE_LAST_DIRECTORY, preferred)
-      return
-    }
-    removeLocalKey(STORAGE_LAST_DIRECTORY)
   }
 
   async function refreshHome() {
     try {
-      const resp = await apiJson<FsHomeResponse>('/api/fs/home')
+      const resp = await apiJson<FsHomeResponse>('/api/v1/workbench/fs/home')
       const raw = typeof resp?.home === 'string' ? resp.home : resp?.path
       const path = typeof raw === 'string' ? trimTrailingFsSlashes(raw) : ''
       homeDirectory.value = path || null
@@ -206,13 +193,6 @@ const useDirectoryStoreDefinition = defineStore('directory', () => {
       return
     }
 
-    const raw = getLocalString(STORAGE_LAST_DIRECTORY).trim()
-    if (!raw) return
-
-    const normalized = trimTrailingFsSlashes(normalizeFsPath(raw))
-    if (normalized) {
-      setDirectoryForWindow(scopeId, normalized)
-    }
   }
 
   watch(currentDirectoryByWindow, (map) => {

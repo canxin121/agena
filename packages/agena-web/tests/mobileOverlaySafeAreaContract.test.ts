@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs'
 
 test('fullscreen dialogs keep content and close controls inside mobile safe areas', () => {
   const source = readFileSync(new URL('../src/components/ui/Dialog.vue', import.meta.url), 'utf8')
-  assert.match(source, /props\.mobileFullscreen && ui\.isMobilePointer/)
+  assert.match(source, /props\.mobileFullscreen && ui\.isCompactTouch/)
   assert.match(source, /--oc-safe-area-top/)
   assert.match(source, /--oc-safe-area-right/)
   assert.match(source, /--oc-safe-area-bottom/)

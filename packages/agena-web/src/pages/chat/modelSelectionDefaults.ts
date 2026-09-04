@@ -40,13 +40,6 @@ export function encodeModelSelectionKey(selection: ProviderModelPair): string {
 
 export function parseModelSlug(slug: string): { provider: string; adapter: string; model: string } {
   const parts = clean(slug).split('/')
-  if (parts.length === 2) {
-    return {
-      provider: decodePart(parts[0] || ''),
-      adapter: '',
-      model: decodePart(parts[1] || ''),
-    }
-  }
   if (parts.length !== 3) return { provider: '', adapter: '', model: '' }
   return {
     provider: decodePart(parts[0] || ''),

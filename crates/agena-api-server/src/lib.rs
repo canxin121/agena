@@ -645,7 +645,7 @@ mod router_contract_tests {
             serde_json::from_slice(&body).expect("decode shared health response");
         assert_eq!(health.status, "ok");
         assert_eq!(health.generation, 1);
-        let server = health.server.expect("health identifies the server");
+        let server = health.server;
         assert_eq!(server.pid, std::process::id());
         assert_eq!(server.protocol_version, agena_api::PROTOCOL_VERSION);
 
@@ -1367,7 +1367,7 @@ mod router_contract_tests {
             } if id == "health-query"
                 && health.status == "ok"
                 && health.database_connected
-                && health.server.is_some()
+                && health.server.protocol_version == agena_api::PROTOCOL_VERSION
         ));
 
         let workspace_path = std::env::temp_dir().join(format!(
@@ -2163,10 +2163,14 @@ mod router_contract_tests {
     ) -> SessionExecutionResource {
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
         loop {
-            let execution = client
-                .get_session_state_with_parts(session_id, true)
+            let mut execution = client
+                .get_session_state(session_id)
                 .await
                 .expect("read session execution");
+            execution.parts = client
+                .session_all_parts(session_id)
+                .await
+                .expect("read session parts");
             if predicate(&execution) {
                 return execution;
             }

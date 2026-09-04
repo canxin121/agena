@@ -13,8 +13,8 @@ use tokio::process::Command;
 
 use super::{
     ApiResult, AppError, MAX_FS_LIST_LIMIT, Path, ensure_within_base, has_parent_dir_component,
-    home_dir_env, normalize_directory_path, normalize_for_workspace_compare,
-    publish_fs_changed_event, resolve_path, to_api_path,
+    home_dir_env, normalize_directory_path, normalize_for_workspace_compare, resolve_path,
+    to_api_path,
 };
 
 fn absolute_fs_path(resolved: PathBuf, context: &'static str) -> ApiResult<PathBuf> {
@@ -201,7 +201,7 @@ pub async fn fs_mkdir(
         .filter(|p| !p.is_empty())
         .ok_or_else(|| AppError::bad_request("Path is required"))?;
 
-    let (base, resolved) = resolve_workspace_path_from_context(
+    let (_, resolved) = resolve_workspace_path_from_context(
         state.as_ref(),
         &headers,
         q.directory.as_deref(),
@@ -214,8 +214,6 @@ pub async fn fs_mkdir(
         .map_err(|error| {
             permission_or_internal_fs_error("create a filesystem directory", error, "Access denied")
         })?;
-
-    publish_fs_changed_event(&base, "mkdir", [resolved.as_path()], None, None);
 
     Ok(Json(SuccessPathResponse {
         success: true,
@@ -636,7 +634,7 @@ pub async fn fs_upload(
         return Err(AppError::payload_too_large("File too large"));
     }
 
-    let (base, resolved) = resolve_workspace_path_from_context(
+    let (_, resolved) = resolve_workspace_path_from_context(
         state.as_ref(),
         &headers,
         q.directory.as_deref(),
@@ -689,8 +687,6 @@ pub async fn fs_upload(
             _ => AppError::internal_error_with_context("write an uploaded file", &error),
         })?;
 
-    publish_fs_changed_event(&base, "upload", [resolved.as_path()], None, None);
-
     Ok(Json(UploadResponse {
         success: true,
         path: to_api_path(&resolved),
@@ -724,7 +720,7 @@ pub async fn fs_write(
         return Err(AppError::payload_too_large("Content too large"));
     }
 
-    let (base, resolved) = resolve_workspace_path_from_context(
+    let (_, resolved) = resolve_workspace_path_from_context(
         state.as_ref(),
         &headers,
         q.directory.as_deref(),
@@ -747,8 +743,6 @@ pub async fn fs_write(
         .map_err(|error| {
             permission_or_internal_fs_error("write a filesystem file", error, "Access denied")
         })?;
-
-    publish_fs_changed_event(&base, "write", [resolved.as_path()], None, None);
 
     Ok(Json(SuccessPathResponse {
         success: true,
@@ -774,7 +768,7 @@ pub async fn fs_delete(
         .filter(|p| !p.is_empty())
         .ok_or_else(|| AppError::bad_request("Path is required"))?;
 
-    let (base, resolved) = resolve_workspace_path_from_context(
+    let (_, resolved) = resolve_workspace_path_from_context(
         state.as_ref(),
         &headers,
         q.directory.as_deref(),
@@ -817,8 +811,6 @@ pub async fn fs_delete(
     .map_err(|error| {
         permission_or_internal_fs_error("delete a filesystem entry", error, "Access denied")
     })?;
-
-    publish_fs_changed_event(&base, "delete", [resolved.as_path()], None, None);
 
     Ok(Json(SuccessPathResponse {
         success: true,
@@ -884,14 +876,6 @@ pub async fn fs_rename(
                 "Access denied",
             )
         })?;
-
-    publish_fs_changed_event(
-        &base_old,
-        "rename",
-        [resolved_old.as_path(), resolved_new.as_path()],
-        Some(&resolved_old),
-        Some(&resolved_new),
-    );
 
     Ok(Json(SuccessPathResponse {
         success: true,

@@ -162,7 +162,7 @@ function getRememberedSettingsRoute(): string {
   } catch {
     // ignore
   }
-  return '/settings/general'
+  return '/settings/interface'
 }
 
 function openSettings() {

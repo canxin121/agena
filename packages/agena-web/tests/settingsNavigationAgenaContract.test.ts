@@ -6,16 +6,17 @@ import {
   settingsTabFromRouteValue,
 } from '../src/components/settings/sidebar/settingsSidebarNavigation'
 
-test('legacy OpenCode settings links resolve to the corresponding Agena panel', () => {
-  assert.equal(settingsTabFromRouteValue('/settings/opencode/providers'), 'providers')
-  assert.equal(settingsTabFromRouteValue('/settings/opencode/permissions'), 'permissions')
-  assert.equal(settingsTabFromRouteValue('/settings/opencode/plugins'), 'plugins')
-  assert.equal(settingsTabFromRouteValue('/settings/opencode/activities'), 'activities')
-  assert.equal(settingsTabFromRouteValue('/settings/opencode/memories'), 'memories')
-  assert.equal(settingsTabFromRouteValue('/settings/opencode/usage'), 'usage')
+test('settings routes accept only current Agena section ids', () => {
+  assert.equal(settingsTabFromRouteValue('/settings/models-providers'), 'models-providers')
+  assert.equal(settingsTabFromRouteValue('/settings/permissions'), 'permissions')
+  assert.equal(settingsTabFromRouteValue('/settings/plugins-tools'), 'plugins-tools')
+  assert.equal(settingsTabFromRouteValue('/settings/runtime-session'), 'runtime-session')
+  assert.equal(settingsTabFromRouteValue('/settings/interface'), 'interface')
+  assert.equal(settingsTabFromRouteValue('/settings/diagnostics'), 'diagnostics')
 })
 
-test('removed Agent settings fall back to General instead of exposing an empty panel', () => {
-  assert.equal(settingsTabFromRouteValue('/settings/opencode/agents'), 'general')
-  assert.equal(normalizeRememberedSettingsRoute('/settings/opencode/agents'), '/settings/general')
+test('unknown settings routes do not resolve as aliases', () => {
+  assert.equal(settingsTabFromRouteValue('/settings/general'), null)
+  assert.equal(settingsTabFromRouteValue('/settings/opencode/providers'), null)
+  assert.equal(normalizeRememberedSettingsRoute('/settings/general'), '/settings/interface')
 })

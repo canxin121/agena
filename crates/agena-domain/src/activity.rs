@@ -114,10 +114,6 @@ pub struct SkillReferenceActivity {
     pub name: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub description: String,
-    /// Legacy compatibility only. New composer inputs leave this empty and the
-    /// model projection below never emits it.
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub instructions: String,
     pub content_hash: String,
     pub source: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

@@ -226,7 +226,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       const authRequired =
-        err instanceof ApiError && err.status === 401 && (err.code || '').trim().toLowerCase() === 'auth_required'
+        err instanceof ApiError && err.status === 401 && (err.code || '').trim() === 'auth.required'
       sessionsError.value = null
       if (!authRequired) {
         pushErrorToastWithDedupe('sessions', msg || 'Failed to load sessions', 4500, 12_000)
@@ -535,11 +535,9 @@ const useChatStoreDefinition = defineStore('chat', () => {
             })
       setSessionMessages(sid, nextMessages)
       markMessagesHydrated(sid)
-      if (typeof page.userMessageCount === 'number' && Number.isFinite(page.userMessageCount)) {
-        historyUserMessageCountBySession.value = {
-          ...historyUserMessageCountBySession.value,
-          [sid]: Math.max(0, Math.floor(page.userMessageCount)),
-        }
+      historyUserMessageCountBySession.value = {
+        ...historyUserMessageCountBySession.value,
+        [sid]: page.userMessageCount,
       }
       historyLimitBySession.value = { ...historyLimitBySession.value, [sid]: nextMessages.length }
       if (!hasLoadedOlder) {
@@ -563,7 +561,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
       if (!isLatestRefreshMessagesRequest(sid, requestSeq, generation)) return
       const msg = err instanceof Error ? err.message : String(err)
       const authRequired =
-        err instanceof ApiError && err.status === 401 && (err.code || '').trim().toLowerCase() === 'auth_required'
+        err instanceof ApiError && err.status === 401 && (err.code || '').trim() === 'auth.required'
       if (isSelected) {
         messagesError.value = null
         if (authRequired) {
@@ -649,11 +647,9 @@ const useChatStoreDefinition = defineStore('chat', () => {
       const normalized = normalizeMessageList(page.entries)
       const merged = mergeMessageLists(normalized, ensureSessionMessages(sid))
       setSessionMessages(sid, merged)
-      if (typeof page.userMessageCount === 'number' && Number.isFinite(page.userMessageCount)) {
-        historyUserMessageCountBySession.value = {
-          ...historyUserMessageCountBySession.value,
-          [sid]: Math.max(0, Math.floor(page.userMessageCount)),
-        }
+      historyUserMessageCountBySession.value = {
+        ...historyUserMessageCountBySession.value,
+        [sid]: page.userMessageCount,
       }
       historyLimitBySession.value = { ...historyLimitBySession.value, [sid]: merged.length }
       historyOlderLoadedBySession.value = { ...historyOlderLoadedBySession.value, [sid]: true }
@@ -876,8 +872,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
               .map((q, index) => {
                 const qr = asRecord(q)
                 const header = readString(qr.header as JsonValue) || title || `Question ${index + 1}`
-                const question =
-                  readString(qr.question as JsonValue) || readString(qr.title as JsonValue) || `Question ${index + 1}`
+                const question = readString(qr.question as JsonValue) || `Question ${index + 1}`
                 const options = Array.isArray(qr.options)
                   ? qr.options
                       .map((o) => {
@@ -890,9 +885,9 @@ const useChatStoreDefinition = defineStore('chat', () => {
                       .filter((o) => Boolean(o.label))
                   : []
                 const multiple = qr.multiple === true
-                const allowCustom = qr.allow_custom === true || qr.allowCustom === true || qr.custom === true
+                const allowCustom = qr.allow_custom === true
                 return {
-                  question_id: readString(qr.question_id as JsonValue) || String(index),
+                  question_id: String(index),
                   header,
                   question,
                   options,
@@ -943,10 +938,8 @@ const useChatStoreDefinition = defineStore('chat', () => {
             permission,
             patterns,
             always: [],
-            // Keep the full state request available to the transcript
-            // fallback. The compact legacy fields above remain for sidebar
-            // and command consumers, while the inline UI needs reason,
-            // explanation, source, scope, and the structured action.
+            // Keep the full state request available to the transcript and inline UI.
+            // Sidebar/command consumers use the compact fields above.
             request: rec,
           },
         },
@@ -1448,10 +1441,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
     const rawQuestions = request ? asRecord(request).questions : null
     if (Array.isArray(rawQuestions)) {
       rawQuestions.forEach((_, index) => {
-        // The user-input reply contract is indexed by question ordinal. A
-        // question_id may be present in a future/legacy presentation payload,
-        // but it is not a valid wire key for this endpoint: the runtime
-        // validator accepts only "0", "1", ... and rejects unknown keys.
+        // The user-input reply contract is indexed by question ordinal.
         answersMap[String(index)] = Array.isArray(answers[index]) ? answers[index] : []
       })
     } else {

@@ -18,8 +18,8 @@ pub struct UsageBillableUnitTotal {
 /// Aggregate usage totals.
 pub struct UsageTotals {
     /// Number of provider requests, including requests issued by ordinary
-    /// provider-backed tools. The field name is retained for API compatibility.
-    pub runs: u64,
+    /// provider-backed tools.
+    pub requests: u64,
     pub sessions: u64,
     pub input_tokens: u64,
     pub output_tokens: u64,
@@ -38,7 +38,7 @@ pub struct UsageTotals {
     pub total_cost_usd: f64,
     pub recorded_cost_usd: f64,
     pub estimated_cost_usd: f64,
-    pub unpriced_runs: u64,
+    pub unpriced_requests: u64,
     pub billable_units: Vec<UsageBillableUnitTotal>,
 }
 
@@ -90,8 +90,8 @@ pub struct UsageStats {
     pub timezone_offset_minutes: i32,
     pub totals: UsageTotals,
     pub active_days: u64,
-    pub average_cost_per_run_usd: f64,
-    pub average_tokens_per_run: f64,
+    pub average_cost_per_request_usd: f64,
+    pub average_tokens_per_request: f64,
     pub average_cost_per_active_day_usd: f64,
     pub average_tokens_per_active_day: f64,
     pub peak_cost_date: Option<String>,

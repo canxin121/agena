@@ -494,15 +494,15 @@ pub(crate) fn settings_studio_provider_approval_model_item(
 }
 
 fn approval_model_selection_summary(selection: &agena_domain::ApprovalModelSelection) -> String {
-    let mut route = vec![selection.provider_id.clone()];
+    let mut route = vec![selection.provider.clone()];
     if let Some(adapter_id) = selection
-        .adapter_id
+        .adapter
         .as_deref()
         .filter(|value| !value.trim().is_empty())
     {
         route.push(adapter_id.trim().to_owned());
     }
-    route.push(selection.model_id.clone());
+    route.push(selection.model.clone());
     let mut variants = Vec::new();
     if let Some(value) = selection.thinking_mode.as_deref() {
         variants.push(format!("think={value}"));

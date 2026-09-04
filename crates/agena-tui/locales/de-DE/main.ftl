@@ -580,11 +580,8 @@ settings-mcp-registration-label = Registrierung
 
 settings-mcp-pkce-label = PKCE
 
-settings-mcp-client-registration-label = OAuth-Clientregistrierung
 
-settings-mcp-client-registration-cimd = CIMD nur (empfohlen)
 
-settings-mcp-client-registration-dcr = CIMD + Dynamische Kundenregistrierung
 
 settings-mcp-public-url-label = Öffentliche MCP-URL
 
@@ -1012,7 +1009,6 @@ settings-mcp-auth-mode-updated = Agena MCP-Authentifizierungsmodus eingestellt a
 
 settings-mcp-anonymous-access-updated = Agena MCP anonymer Toolzugriff auf {$policy}
 
-settings-mcp-client-registration-updated = Agena MCP-Clientregistrierung auf {$policy} eingestellt
 
 settings-mcp-oauth-password-cleared = Alterna MCP OAuth Passwort gelöscht
 
@@ -1186,8 +1182,6 @@ settings-mcp-auth-detail = Wechseln Sie zwischen No-Auth, Full OAuth und ChatGPT
 settings-mcp-anonymous-access-none-detail = Sichere Standardeinstellung: Kein Werkzeugaufruf ist anonym. ChatGPT kann den Katalog weiterhin initialisieren und erkennen, bevor er sich anmeldet.
 settings-mcp-anonymous-access-read-only-detail = Opt-in mit hohem Risiko: Nur-Lese-Tools können anonym ausgeführt werden und können private Arbeitsbereichs-, Dateisystem-, Konfigurations- oder Diagnosedaten offenlegen.
 settings-mcp-anonymous-access-inactive-detail = Diese Richtlinie gilt nur im gemischten Authentifizierungsmodus; Schalten Sie die Authentifizierung auf gemischt um, um sie zu verwenden.
-settings-mcp-client-registration-cimd-detail = Akzeptieren Sie nur OpenAI ChatGPT-Client-ID-Metadatendokumente. Der nicht authentifizierte öffentliche DCR-Endpunkt bleibt deaktiviert.
-settings-mcp-client-registration-dcr-detail = Kompatibilitätsmodus: Stellen Sie auch die öffentliche dynamische Client-Registrierung bereit. Nur aktivieren, wenn ein Client CIMD nicht verwenden kann.
 settings-mcp-public-url-detail = Legen Sie die kanonische HTTPS-MCP-Ressourcen-URL fest. Sichere MCP-Tunnel-URLs können den vollständigen /v1/mcp/tunnel_id-Pfad enthalten; Weitergeleitete Anforderungsheader werden niemals als OAuth-Identität vertrauenswürdig.
 settings-mcp-oauth-issuer-detail = Legen Sie den öffentlichen, browserseitigen Autorisierungsserver-Aussteller fest. Von Agena verwaltetes OAuth erfordert einen Ursprung ohne Pfad, z. B. https://auth.example.com; Lassen Sie es leer, wenn OAuth und MCP dieselbe Domäne verwenden.
 settings-mcp-oauth-password-detail = Legen Sie das auf der Agena OAuth-Autorisierungsseite angezeigte Passwort fest. Es wird vom Server als Argon2-Hash gespeichert.

@@ -33,7 +33,7 @@ const props = withDefaults(
     attachedFiles: AttachedFile[]
     formatBytes: (bytes: number) => string
     busy?: boolean
-    isMobilePointer?: boolean
+    isCompactTouch?: boolean
     desktopAnchorEl?: DesktopAnchorLike
     desktopPlacement?: 'top-start' | 'top-end' | 'bottom-start' | 'bottom-end'
     desktopGapPx?: number
@@ -42,7 +42,7 @@ const props = withDefaults(
   }>(),
   {
     busy: false,
-    isMobilePointer: false,
+    isCompactTouch: false,
     desktopAnchorEl: null,
     desktopPlacement: 'top-start',
     desktopGapPx: 8,
@@ -67,7 +67,7 @@ const emit = defineEmits<{
 const panelEl = ref<HTMLElement | null>(null)
 let returnFocusEl: HTMLElement | null = null
 
-const isMobileSheet = computed(() => Boolean(props.isMobilePointer))
+const isMobileSheet = computed(() => Boolean(props.isCompactTouch))
 
 const fileCount = computed(() => (Array.isArray(props.attachedFiles) ? props.attachedFiles.length : 0))
 const countLabel = computed(() => {
@@ -533,7 +533,7 @@ onBeforeUnmount(() => {
         <IconButton
           size="sm"
           :tooltip="t('common.close')"
-          :is-mobile-pointer="isMobileSheet"
+          :is-compact-touch="isMobileSheet"
           :title="t('common.close')"
           :aria-label="t('common.close')"
           @click="close"
@@ -632,7 +632,7 @@ onBeforeUnmount(() => {
                   size="xs"
                   class="text-muted-foreground hover:text-foreground hover:bg-secondary/50"
                   :tooltip="t('common.remove')"
-                  :is-mobile-pointer="isMobileSheet"
+                  :is-compact-touch="isMobileSheet"
                   :title="t('common.remove')"
                   :aria-label="t('chat.attachments.removeAttachmentAria')"
                   @click="$emit('remove', f.id)"
@@ -676,7 +676,7 @@ onBeforeUnmount(() => {
         <IconButton
           size="sm"
           :tooltip="t('common.close')"
-          :is-mobile-pointer="isMobileSheet"
+          :is-compact-touch="isMobileSheet"
           :title="t('common.close')"
           :aria-label="t('common.close')"
           @click="close"
@@ -775,7 +775,7 @@ onBeforeUnmount(() => {
                   size="xs"
                   class="text-muted-foreground hover:text-foreground hover:bg-secondary/50"
                   :tooltip="t('common.remove')"
-                  :is-mobile-pointer="isMobileSheet"
+                  :is-compact-touch="isMobileSheet"
                   :title="t('common.remove')"
                   :aria-label="t('chat.attachments.removeAttachmentAria')"
                   @click="$emit('remove', f.id)"

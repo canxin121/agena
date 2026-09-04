@@ -349,7 +349,7 @@ const iframeEl = ref<HTMLIFrameElement | null>(null)
 const touchOverlayEl = ref<HTMLElement | null>(null)
 
 const touchSimulationSupported = computed(
-  () => viewerMode.value === 'responsive' && preview.viewport === 'mobile' && ui.isMobilePointer !== true,
+  () => viewerMode.value === 'responsive' && preview.viewport === 'mobile' && ui.isCompactTouch !== true,
 )
 
 const touchSimulationEnabled = computed(() => touchSimulationSupported.value && preview.touchSimulation === true)
@@ -1281,7 +1281,7 @@ onBeforeUnmount(() => {
           :title="sessionPickerLabel"
           :mobile-title="sessionPickerLabel"
           :searchable="true"
-          :is-mobile-pointer="ui.isMobilePointer"
+          :is-compact-touch="ui.isCompactTouch"
           :desktop-fixed="true"
           :paginated="true"
           :page-size="18"

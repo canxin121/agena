@@ -19,7 +19,7 @@ impl ToolExecutor {
     /// Execute the runtime-owned snapshot operation behind the snapshot
     /// plugin's host callback. This is an internal operation boundary, not a
     /// public tool-registry lookup, so it cannot recurse through or depend on
-    /// legacy `enter_snapshot`/`exit_snapshot` registrations.
+    /// tool-registry `snapshot.enter`/`snapshot.exit` handlers.
     pub fn enter_snapshot_internal(
         &self,
         input: &EnterSnapshotToolInput,

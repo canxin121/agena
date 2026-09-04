@@ -16,37 +16,12 @@ function templatePayloadToText(payload: WorkspaceWindowTemplateDragData): string
 
 function parseTemplatePayloadFromText(raw: unknown): WorkspaceWindowTemplateDragData | null {
   const text = String(raw || '').trim()
-  if (!text) return null
-
-  if (text.startsWith(WORKSPACE_WINDOW_TEMPLATE_TEXT_PREFIX)) {
-    const body = text.slice(WORKSPACE_WINDOW_TEMPLATE_TEXT_PREFIX.length)
-    if (!body) return null
-    try {
-      const parsed = JSON.parse(body) as unknown
-      return normalizeTemplatePayload(parsed)
-    } catch {
-      return null
-    }
-  }
-
-  // Backward-compatible fallback for legacy plain-text format:
-  //   <tab>:<json-query>
-  // Example: files:{"filePath":"src/main.ts"}
-  const idx = text.indexOf(':')
-  if (idx <= 0) return null
-  const tab = normalizeTemplateTab(text.slice(0, idx))
-  if (!tab) return null
-  const queryRaw = text.slice(idx + 1)
-  if (!queryRaw) return { tab }
-
+  if (!text.startsWith(WORKSPACE_WINDOW_TEMPLATE_TEXT_PREFIX)) return null
+  const body = text.slice(WORKSPACE_WINDOW_TEMPLATE_TEXT_PREFIX.length)
+  if (!body) return null
   try {
-    const parsedQuery = JSON.parse(queryRaw) as unknown
-    if (!parsedQuery || typeof parsedQuery !== 'object' || Array.isArray(parsedQuery)) return null
-    const query = normalizeStringRecord(parsedQuery)
-    return {
-      tab,
-      ...(Object.keys(query).length ? { query } : {}),
-    }
+    const parsed = JSON.parse(body) as unknown
+    return normalizeTemplatePayload(parsed)
   } catch {
     return null
   }

@@ -835,9 +835,9 @@ pub fn permission_config_resource_from_domain(
             }),
         approval_model: value.approval_model.as_ref().map(|model| {
             agena_api::resource::ApprovalModelSelectionResource {
-                provider_id: model.provider_id.clone(),
-                adapter_id: model.adapter_id.clone(),
-                model_id: model.model_id.clone(),
+                provider: model.provider.clone(),
+                adapter: model.adapter.clone(),
+                model: model.model.clone(),
                 thinking_mode: model.thinking_mode.clone(),
                 speed_mode: model.speed_mode.clone(),
                 verbosity: model.verbosity.clone(),

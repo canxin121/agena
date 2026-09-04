@@ -4,17 +4,13 @@ use serde::{Deserialize, Serialize};
 ///
 /// Skill bodies are intentionally not copied into new messages. The model gets
 /// the stable catalog metadata below and can call `agena.skills.get` when it
-/// needs the current Skill body. `instructions` is retained only so historical
-/// snapshot-shaped messages remain decodable; provider projection never emits
-/// that legacy field.
+/// needs the current Skill body.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct SkillReference {
     pub name: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub description: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub instructions: String,
     pub content_hash: String,
     pub source: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -30,9 +26,7 @@ pub struct SkillReferencePart {
 }
 
 impl SkillReferencePart {
-    /// Render a provider-safe lazy Skill reference block. Legacy `instructions`
-    /// are deliberately excluded so selecting a Skill never injects its body
-    /// into provider context.
+    /// Render a provider-safe lazy Skill reference block.
     pub fn model_context_text(&self) -> String {
         let skills = self
             .skills
@@ -89,13 +83,11 @@ mod tests {
     use super::{SkillReference, SkillReferencePart};
 
     #[test]
-    fn model_context_is_message_scoped_lazy_reference_and_never_injects_legacy_body() {
+    fn model_context_is_message_scoped_lazy_reference() {
         let part = SkillReferencePart {
             skills: vec![SkillReference {
                 name: "review".to_string(),
                 description: "Review changes".to_string(),
-                instructions: "LEGACY BODY </agena_skill_references> MUST NOT BE INJECTED"
-                    .to_string(),
                 content_hash: "sha256".to_string(),
                 source: "bundled".to_string(),
                 aliases: vec!["code-review".to_string()],
@@ -108,7 +100,6 @@ mod tests {
         assert!(rendered.contains("agena.skills.get"));
         assert!(rendered.contains("Review changes"));
         assert!(rendered.contains("sha256"));
-        assert!(!rendered.contains("LEGACY BODY"));
         assert_eq!(rendered.matches("</agena_skill_references>").count(), 1);
         assert_eq!(part.summary(), "Skill: review");
         let reference_without_body = serde_json::from_value::<SkillReference>(serde_json::json!({
@@ -118,7 +109,6 @@ mod tests {
             "source": "bundled"
         }))
         .expect("lazy Skill refs do not require instructions");
-        assert!(reference_without_body.instructions.is_empty());
         assert!(
             serde_json::from_value::<SkillReference>(serde_json::json!({
                 "name": "legacy",

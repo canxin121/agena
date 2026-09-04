@@ -15,7 +15,7 @@ export function useDeviceRuntime() {
     ui.setIsCompactLayout(info.isCompactLayout)
     ui.setIsMobileDevice(info.isMobileDevice)
     ui.setIsTouchPointer(info.isTouchPointer)
-    ui.setIsMobilePointer(info.isMobilePointer)
+    ui.setIsCompactTouch(info.isCompactTouch)
   }
 
   // Prime state synchronously during App setup so loading/login UI renders

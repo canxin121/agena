@@ -422,7 +422,6 @@ pub(crate) fn provider_model_config_draft_to_model_value(
         native_compaction: draft.native_compaction,
         agena_tools: AgenaToolsConfig {
             mode: draft.agena_tool_mode,
-            provider_native: Default::default(),
         },
         definition,
     };
@@ -669,7 +668,6 @@ mod tests {
             native_compaction: false,
             agena_tools: AgenaToolsConfig {
                 mode: AgenaToolMode::Disabled,
-                provider_native: Default::default(),
             },
             definition: definition.clone(),
         };

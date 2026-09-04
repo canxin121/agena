@@ -152,7 +152,10 @@ export type MessageListResponse = {
   entries: MessageEntry[]
   hasMore?: boolean
   nextCursor?: string | null
-  userMessageCount?: number | null
+}
+
+export type TranscriptMessageListResponse = MessageListResponse & {
+  userMessageCount: number
 }
 
 function messageFoldsFromWire(folds: AgenaSessionParts['folds']): MessageFold[] {
@@ -882,9 +885,9 @@ export async function listMessages(
   limit: number,
   cursor?: string | null,
   activityLimit?: number,
-): Promise<MessageListResponse> {
+): Promise<TranscriptMessageListResponse> {
   const sid = String(sessionId || '').trim()
-  if (!sid) return { entries: [], hasMore: false, nextCursor: null }
+  if (!sid) return { entries: [], hasMore: false, nextCursor: null, userMessageCount: 0 }
   const params = new URLSearchParams()
   params.set('limit', String(Math.max(1, Math.min(12, Math.floor(limit || 8)))))
   if (typeof activityLimit === 'number' && Number.isFinite(activityLimit)) {
@@ -895,14 +898,14 @@ export async function listMessages(
     `/api/v1/sessions/${encodeURIComponent(sid)}/transcript?${params.toString()}`,
   )
   const folds = messageFoldsFromWire(parts.folds)
+  if (typeof parts.user_message_count !== 'number' || !Number.isFinite(parts.user_message_count)) {
+    throw new Error('Transcript response is missing user_message_count')
+  }
   return {
     entries: entriesFromParts(sid, parts.parts as unknown as JsonValue[], folds),
     hasMore: Boolean(parts.page?.has_more),
     nextCursor: parts.page?.next_cursor ?? null,
-    userMessageCount:
-      typeof parts.user_message_count === 'number' && Number.isFinite(parts.user_message_count)
-        ? Math.max(0, Math.floor(parts.user_message_count))
-        : null,
+    userMessageCount: Math.max(0, Math.floor(parts.user_message_count)),
   }
 }
 

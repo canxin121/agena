@@ -628,15 +628,10 @@ settings-mcp-registration-label = 註冊
 
 settings-mcp-pkce-label = PKCE
 
-settings-mcp-client-registration-label = OAuth 客戶端註冊
 
-settings-mcp-client-registration-cimd = 僅 CIMD（推薦）
 
-settings-mcp-client-registration-dcr = CIMD + 動態客戶端註冊
 
-settings-mcp-client-registration-cimd-detail = 僅接受 OpenAI ChatGPT Client ID Metadata Document；關閉無需鑑權的公網 DCR 端點。
 
-settings-mcp-client-registration-dcr-detail = 兼容模式：同時開放公網動態客戶端註冊。僅在客戶端無法使用 CIMD 時啟用。
 
 settings-mcp-public-url-label = MCP 公共 URL
 
@@ -1120,7 +1115,6 @@ settings-mcp-auth-mode-updated = Agena MCP 身份驗證模式已設為 {$mode}
 
 settings-mcp-anonymous-access-updated = Agena MCP 匿名工具訪問策略已設為 {$policy}
 
-settings-mcp-client-registration-updated = Agena MCP 客戶端註冊策略已設為 {$policy}
 
 settings-mcp-oauth-password-cleared = Agena MCP OAuth 密碼已清除
 

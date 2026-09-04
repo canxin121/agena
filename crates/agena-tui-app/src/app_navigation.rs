@@ -251,15 +251,9 @@ impl App {
     }
 
     pub(crate) fn current_or_selected_session_id(&self) -> Option<i64> {
-        if self.focus == Focus::Sessions {
-            self.sessions
-                .current_selected_id()
-                .or(self.transcript.session_id)
-        } else {
-            self.transcript
-                .session_id
-                .or_else(|| self.sessions.current_selected_id())
-        }
+        self.transcript
+            .session_id
+            .or_else(|| self.sessions.current_selected_id())
     }
 
     pub(crate) fn begin_run_operation(
@@ -351,11 +345,6 @@ impl App {
     }
 
     pub(crate) fn current_or_selected_session_title(&self) -> Option<String> {
-        if self.focus == Focus::Sessions
-            && let Some(session) = self.sessions.current_selected()
-        {
-            return Some(session.title.clone());
-        }
         if let Some(execution) = self.transcript.execution.as_ref() {
             return Some(execution.session.title.clone());
         }

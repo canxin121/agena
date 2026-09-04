@@ -266,7 +266,7 @@ mod tests {
         assert_eq!(usage.cache_read_tokens, 6);
         assert_eq!(usage.output_tokens, 9);
         assert_eq!(usage.reasoning_tokens, 94);
-        assert!((usage.total_cost - 0.0037756).abs() < 1e-12);
+        assert!((usage.recorded_cost - 0.0037756).abs() < 1e-12);
     }
 
     #[test]

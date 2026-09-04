@@ -1596,7 +1596,6 @@ mod tests {
                 "skills": [{
                     "name": "review",
                     "description": "Review the current branch",
-                    "instructions": "LEGACY BODY MUST NOT ENTER PROVIDER CONTEXT",
                     "content_hash": "abc123",
                     "source": "bundled",
                     "aliases": []
@@ -1619,7 +1618,6 @@ mod tests {
         assert!(skill.contains("Review the current branch"));
         assert!(skill.contains("abc123"));
         assert!(skill.contains("agena.skills.get"));
-        assert!(!skill.contains("LEGACY BODY"));
         assert!(skill.contains("user explicitly selected"));
         assert!(matches!(
             &projected[1],

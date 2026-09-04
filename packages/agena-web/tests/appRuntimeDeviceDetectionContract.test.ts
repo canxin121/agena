@@ -12,7 +12,7 @@ test('root device runtime owns the shared detector for loading, login, and works
   assert.match(deviceRuntimeSource, /ui\.setIsCompactLayout\(info\.isCompactLayout\)/)
   assert.match(deviceRuntimeSource, /ui\.setIsMobileDevice\(info\.isMobileDevice\)/)
   assert.match(deviceRuntimeSource, /ui\.setIsTouchPointer\(info\.isTouchPointer\)/)
-  assert.match(deviceRuntimeSource, /ui\.setIsMobilePointer\(info\.isMobilePointer\)/)
+  assert.match(deviceRuntimeSource, /ui\.setIsCompactTouch\(info\.isCompactTouch\)/)
   assert.match(deviceRuntimeSource, /applyDevice\(\)[\s\S]*onMounted/)
   assert.match(deviceRuntimeSource, /addEventListener\?\.\('change', applyDevice\)/)
   assert.doesNotMatch(appRuntimeSource, /getDeviceInfo|applyDeviceClasses|function\s+applyDevice/)

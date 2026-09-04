@@ -74,7 +74,7 @@ function getRememberedSettingsRoute(): string {
   } catch {
     // ignore storage failures
   }
-  return '/settings/general'
+  return '/settings/interface'
 }
 
 function routeForTab(tabId: MainTabId): string {
@@ -91,7 +91,7 @@ async function refreshDiffFileCount() {
   }
   try {
     const resp = await apiJson<Partial<GitStatusResponse>>(
-      `/api/git/status?directory=${encodeURIComponent(dir)}&summary=true`,
+      `/api/v1/workbench/git/status?directory=${encodeURIComponent(dir)}&summary=true`,
     )
     if (typeof resp?.totalFiles === 'number') {
       diffFileCount.value = resp.totalFiles

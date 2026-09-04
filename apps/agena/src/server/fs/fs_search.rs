@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     path::{Path, PathBuf},
     time::Instant,
 };
@@ -8,7 +9,7 @@ use ignore::WalkBuilder;
 use serde::{Deserialize, Serialize};
 
 use super::{
-    ApiResult, AppError, DEFAULT_FILE_SEARCH_LIMIT, FILE_SEARCH_EXCLUDED_DIRS, HashSet,
+    ApiResult, AppError, DEFAULT_FILE_SEARCH_LIMIT, FILE_SEARCH_EXCLUDED_DIRS,
     MAX_FILE_SEARCH_LIMIT, home_dir_env, resolve_path, to_api_path,
 };
 

@@ -211,7 +211,7 @@ fn usage_dashboard_data(stats: &UsageStats) -> UsageDashboardData {
     UsageDashboardData {
         totals: usage_dashboard_totals(&stats.totals),
         active_days: stats.active_days,
-        average_cost_per_run_usd: stats.average_cost_per_run_usd,
+        average_cost_per_request_usd: stats.average_cost_per_request_usd,
         average_cost_per_active_day_usd: stats.average_cost_per_active_day_usd,
         peak_cost_usd: stats.peak_cost_usd,
         peak_cost_date: stats.peak_cost_date.clone(),
@@ -264,7 +264,7 @@ fn usage_dashboard_data(stats: &UsageStats) -> UsageDashboardData {
 
 fn usage_dashboard_totals(totals: &UsageTotals) -> UsageDashboardTotals {
     UsageDashboardTotals {
-        runs: totals.runs,
+        requests: totals.requests,
         sessions: totals.sessions,
         input_tokens: totals.input_tokens,
         output_tokens: totals.output_tokens,
@@ -280,7 +280,7 @@ fn usage_dashboard_totals(totals: &UsageTotals) -> UsageDashboardTotals {
         total_cost_usd: totals.total_cost_usd,
         recorded_cost_usd: totals.recorded_cost_usd,
         estimated_cost_usd: totals.estimated_cost_usd,
-        unpriced_runs: totals.unpriced_runs,
+        unpriced_requests: totals.unpriced_requests,
         billable_unit_kinds: totals.billable_units.len() as u64,
         unpriced_billable_units: totals
             .billable_units

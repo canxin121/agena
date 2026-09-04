@@ -339,7 +339,7 @@ fn finish_edit(
                 text.as_str(),
                 env,
             )?,
-            None => super::raw::validate_config_text(&config_path, text.as_str(), env)?,
+            None => super::raw::validate_config_text(&config_path, text.as_str())?,
         }
     }
     let previous = get_json_path(&before, path.as_deref())?;
@@ -862,7 +862,7 @@ mod tests {
         let resolved = super::super::raw::RawConfigFile::read(&config_path)
             .expect("read edited config")
             .config
-            .resolve_with_env(&TestEnvironment)
+            .resolve()
             .expect("resolve edited config");
         assert!(!resolved.session.compaction.auto);
         assert_eq!(resolved.session.compaction.reserved_tokens, Some(8192));

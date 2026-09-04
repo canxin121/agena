@@ -520,13 +520,10 @@ impl App {
                     refresh.latest_event_seq,
                 ) {
                     // The server's durable watermark is authoritative over
-                    // the local high-water mark: live-only events
-                    // (ActivityV2, streamed text upserts, retry notices)
-                    // consume global sequence numbers but are never
-                    // persisted, so the local watermark can sit ahead of
-                    // the durable log. Clamp back to the server's durable
-                    // max so the next refresh can observe new durable
-                    // events again.
+                    // the local high-water mark. Non-durable transport updates
+                    // can consume sequence numbers without entering persisted
+                    // history, so clamp back to the durable max before the
+                    // next refresh.
                     let mut clamped = false;
                     if let Some(server_latest) = refresh.latest_event_seq
                         && self

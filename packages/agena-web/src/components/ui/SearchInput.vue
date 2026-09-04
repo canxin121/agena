@@ -27,7 +27,7 @@ interface Props {
   clearAriaLabel?: string
   clearTitle?: string
   isTouchPointer?: boolean
-  isMobilePointer?: boolean
+  isCompactTouch?: boolean
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -59,7 +59,7 @@ const value = useVModel(props, 'modelValue', emit, {
 })
 
 const hasValue = computed(() => String(value.value || '').length > 0)
-const isTouchPointer = computed(() => props.isTouchPointer ?? props.isMobilePointer)
+const isTouchPointer = computed(() => props.isTouchPointer ?? props.isCompactTouch)
 
 function triggerSearch() {
   if (props.disabled || props.searchDisabled) return

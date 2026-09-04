@@ -21,12 +21,12 @@ const TWO_ROW_LAYOUT: ComposerToolbarLayout = {
   splitChipRows: true,
 }
 
-export function shouldWrapComposerToolbar(isMobilePointer: boolean, viewportWidth: number): boolean {
-  if (!isMobilePointer) return false
+export function shouldWrapComposerToolbar(isCompactTouch: boolean, viewportWidth: number): boolean {
+  if (!isCompactTouch) return false
   if (!Number.isFinite(viewportWidth)) return false
   return Math.floor(viewportWidth) <= COMPOSER_TOOLBAR_WRAP_MAX_WIDTH
 }
 
-export function resolveComposerToolbarLayout(isMobilePointer: boolean, viewportWidth: number): ComposerToolbarLayout {
-  return shouldWrapComposerToolbar(isMobilePointer, viewportWidth) ? TWO_ROW_LAYOUT : SINGLE_ROW_LAYOUT
+export function resolveComposerToolbarLayout(isCompactTouch: boolean, viewportWidth: number): ComposerToolbarLayout {
+  return shouldWrapComposerToolbar(isCompactTouch, viewportWidth) ? TWO_ROW_LAYOUT : SINGLE_ROW_LAYOUT
 }

@@ -26,7 +26,7 @@ import {
 
 const props = defineProps<{
   isCompactLayout: boolean
-  isMobilePointer: boolean
+  isCompactTouch: boolean
   selectedSessionId: string | null
   messagesLoading: boolean
   messagesError: string | null
@@ -244,7 +244,7 @@ function forwardFoldExpand(fold: MessageFold, all: boolean) {
           :is-streaming="isStreamingAssistantMessage(block.message)"
           :collapse-signal="activityCollapseSignal"
           :activity-page-size="activityPageSize"
-          :is-mobile-pointer="isMobilePointer"
+          :is-compact-touch="isCompactTouch"
           :is-part-expanded="isPartExpanded"
           :is-node-selected="isNodeSelected"
           :is-node-search-match="isNodeSearchMatch"

@@ -101,6 +101,39 @@ impl ApiError {
         )
     }
 
+    pub fn authentication_required(message: impl AsRef<str>) -> Self {
+        Self::new(
+            "auth.required",
+            FailureCategory::AuthenticationRequired,
+            FailureResponsibility::Caller,
+            RetryDirective::AfterUserAction,
+            RecoveryDirective::Reauthenticate,
+            UserPresentation::validated("auth-required", message),
+        )
+    }
+
+    pub fn invalid_credentials(message: impl AsRef<str>) -> Self {
+        Self::new(
+            "auth.invalid_credentials",
+            FailureCategory::AuthenticationRequired,
+            FailureResponsibility::Caller,
+            RetryDirective::AfterUserAction,
+            RecoveryDirective::Reauthenticate,
+            UserPresentation::validated("auth-invalid-credentials", message),
+        )
+    }
+
+    pub fn rate_limited(message: impl AsRef<str>) -> Self {
+        Self::new(
+            "auth.rate_limited",
+            FailureCategory::RateLimited,
+            FailureResponsibility::Caller,
+            RetryDirective::Backoff,
+            RecoveryDirective::Retry,
+            UserPresentation::validated("auth-rate-limited", message),
+        )
+    }
+
     fn new(
         code: &'static str,
         category: FailureCategory,
@@ -164,6 +197,35 @@ mod tests {
         let error = ApiError::not_found("Session not found.");
         assert_eq!(error.to_string(), "Session not found.");
         assert!(!error.to_string().contains(error.problem.code.as_str()));
+    }
+
+    #[test]
+    fn ui_auth_failures_use_the_shared_problem_taxonomy() {
+        let required = ApiError::authentication_required("UI authentication is required.");
+        assert_eq!(required.problem.code.as_str(), "auth.required");
+        assert_eq!(
+            required.problem.category,
+            FailureCategory::AuthenticationRequired
+        );
+        assert_eq!(
+            required.problem.recovery,
+            agena_failure::RecoveryDirective::Reauthenticate
+        );
+
+        let invalid = ApiError::invalid_credentials("The server password is incorrect.");
+        assert_eq!(invalid.problem.code.as_str(), "auth.invalid_credentials");
+        assert_eq!(
+            invalid.problem.category,
+            FailureCategory::AuthenticationRequired
+        );
+
+        let limited = ApiError::rate_limited("Too many failed login attempts.");
+        assert_eq!(limited.problem.code.as_str(), "auth.rate_limited");
+        assert_eq!(limited.problem.category, FailureCategory::RateLimited);
+        assert_eq!(
+            limited.problem.retry,
+            agena_failure::RetryDirective::Backoff
+        );
     }
 
     #[test]

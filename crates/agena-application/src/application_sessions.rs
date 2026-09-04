@@ -251,33 +251,41 @@ impl Application {
         &self,
         session_id: i64,
     ) -> Result<SessionExecutionResource, ApplicationError> {
-        self.session_execution_resource_with_parts(session_id, true)
-            .await
+        let session_services = self.session_execution_services()?;
+        let resource = self
+            .service()
+            .session_execution_resource(
+                session_services.execution_control.as_ref(),
+                session_services.queries.as_ref(),
+                session_id,
+            )
+            .await?;
+        self.with_background_activities(resource, session_id).await
     }
 
-    pub async fn session_execution_resource_with_parts(
+    /// Bounded execution/status projection. Transcript history is fetched via
+    /// the dedicated cursor-paged parts/transcript endpoints.
+    pub async fn session_execution_shell(
         &self,
         session_id: i64,
-        include_parts: bool,
     ) -> Result<SessionExecutionResource, ApplicationError> {
         let session_services = self.session_execution_services()?;
-        let mut resource = if include_parts {
-            self.service()
-                .session_execution_resource(
-                    session_services.execution_control.as_ref(),
-                    session_services.queries.as_ref(),
-                    session_id,
-                )
-                .await?
-        } else {
-            self.service()
-                .session_execution_resource_without_parts(
-                    session_services.execution_control.as_ref(),
-                    session_services.queries.as_ref(),
-                    session_id,
-                )
-                .await?
-        };
+        let resource = self
+            .service()
+            .session_execution_resource_without_parts(
+                session_services.execution_control.as_ref(),
+                session_services.queries.as_ref(),
+                session_id,
+            )
+            .await?;
+        self.with_background_activities(resource, session_id).await
+    }
+
+    async fn with_background_activities(
+        &self,
+        mut resource: SessionExecutionResource,
+        session_id: i64,
+    ) -> Result<SessionExecutionResource, ApplicationError> {
         if let Ok(activities) = self.runtime_activities() {
             let filter = agena_domain::BackgroundActivityFilter {
                 session_id: Some(session_id),

@@ -31,8 +31,8 @@ test('binarySearchById finds Agena numeric ids in numeric order', () => {
   )
 })
 
-test('compareChatIds retains lexical ordering for non-numeric legacy ids', () => {
-  assert.equal(compareChatIds('msg_10', 'msg_2') < 0, true)
+test('compareChatIds rejects removed non-numeric chat ids', () => {
+  assert.throws(() => compareChatIds('msg_10', 'msg_2'), /must be decimal integers/)
 })
 
 test('message and part upserts preserve numeric Agena order without duplicates', () => {

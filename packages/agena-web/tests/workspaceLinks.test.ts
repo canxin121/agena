@@ -66,14 +66,14 @@ test('resolveWorkspaceMediaUrl builds raw endpoint for local media links', () =>
       workspaceRoot: WORKSPACE_ROOT,
       baseFilePath: DOC_README,
     }),
-    '/api/fs/raw?directory=%2Fworkspace%2Fproject&path=%2Fworkspace%2Fproject%2Fdocs%2Fassets%2Fdiagram.png',
+    '/api/v1/workbench/fs/raw?directory=%2Fworkspace%2Fproject&path=%2Fworkspace%2Fproject%2Fdocs%2Fassets%2Fdiagram.png',
   )
 })
 
-test('extractWorkspacePathFromFileUrl parses /api/fs/raw links', () => {
+test('extractWorkspacePathFromFileUrl parses /api/v1/workbench/fs/raw links', () => {
   assert.equal(
     extractWorkspacePathFromFileUrl(
-      '/api/fs/raw?directory=%2Fworkspace%2Fproject&path=docs%2FREADME.md',
+      '/api/v1/workbench/fs/raw?directory=%2Fworkspace%2Fproject&path=docs%2FREADME.md',
       WORKSPACE_ROOT,
     ),
     '/workspace/project/docs/README.md',

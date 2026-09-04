@@ -1,8 +1,5 @@
 export type DeviceInfo = {
-  // Legacy compact-layout switch (kept for existing call sites).
-  isMobile: boolean
-  // Legacy compact-touch switch (kept for existing call sites).
-  isMobilePointer: boolean
+  isCompactTouch: boolean
 
   // Explicit signals (used for finer-grained decisions).
   isNarrow: boolean
@@ -54,8 +51,7 @@ function isDesktopContainerRuntime(): boolean {
 export function getDeviceInfo(): DeviceInfo {
   if (typeof window === 'undefined') {
     return {
-      isMobile: false,
-      isMobilePointer: false,
+      isCompactTouch: false,
       isNarrow: false,
       isCoarsePointer: false,
       isCompactLayout: false,
@@ -76,13 +72,10 @@ export function getDeviceInfo(): DeviceInfo {
   const isDesktopContainer = isDesktopContainerRuntime()
   const isMobileDevice = !isDesktopContainer && (hasMobileUserAgent || (isTouchPointer && !hasHover))
 
-  // Legacy fields kept intentionally for existing usage sites.
-  const isMobile = isCompactLayout
-  const isMobilePointer = isNarrowTouch && isTouchPointer
+  const isCompactTouch = isNarrowTouch && isTouchPointer
 
   return {
-    isMobile,
-    isMobilePointer,
+    isCompactTouch,
     isNarrow: isCompactLayout,
     isCoarsePointer: isTouchPointer,
     isCompactLayout,
@@ -94,7 +87,7 @@ export function getDeviceInfo(): DeviceInfo {
 export function applyDeviceClasses(info: DeviceInfo) {
   if (typeof document === 'undefined') return
   const root = document.documentElement
-  root.classList.toggle('mobile-pointer', info.isMobilePointer)
+  root.classList.toggle('mobile-pointer', info.isCompactTouch)
   root.classList.toggle('touch-pointer', info.isTouchPointer)
   root.classList.toggle('device-mobile', info.isMobileDevice)
   root.classList.toggle('device-desktop', !info.isMobileDevice)

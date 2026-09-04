@@ -346,7 +346,6 @@ fn part_content(part: &SessionTranscriptPart) -> TranscriptPartContent<'static> 
                 skills: vec![PartSkillReference {
                     name: string_field(content, "skill").unwrap_or_default(),
                     description: string_field(content, "description").unwrap_or_default(),
-                    instructions: string_field(content, "instructions").unwrap_or_default(),
                     content_hash: string_field(content, "content_hash").unwrap_or_default(),
                     source: string_field(content, "source").unwrap_or_default(),
                     aliases: Vec::new(),

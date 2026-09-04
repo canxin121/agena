@@ -11,8 +11,7 @@
 //!   [`normalize_tool_summary`], [`compose_tool_title`]) and
 //!   [`invocation_call_summary`].
 //! - **Execution contracts** — [`PreparedToolInvocation`],
-//!   [`ToolPermissionCheck`], [`ToolExecutionSummary`], [`ToolRuntimeEvent`],
-//!   and the runtime event sink.
+//!   [`ToolPermissionCheck`], and [`ToolExecutionSummary`].
 //! - **Shell** — [`shell`] provides [`ShellRequest`] / [`ShellOutput`] and
 //!   [`ShellError`]; [`shell_analysis`] analyzes command shapes.
 //! - **Search** — [`code_search`] and [`tool_search`] locate code and tools.
@@ -20,13 +19,12 @@
 //!   [`ToolAvailability`], patch operations, and cron summaries.
 
 use std::collections::BTreeMap;
-use std::sync::Arc;
 use std::time::Duration;
 
 pub mod tool_activity;
 use agena_domain::{
-    CommandBeginEvent, CommandEndEvent, CommandOutputDeltaEvent, PermissionAction,
-    PermissionDecision, RawOutput, ToolInvocation, ToolPermissionContract, ToolResultState,
+    PermissionAction, PermissionDecision, RawOutput, ToolInvocation, ToolPermissionContract,
+    ToolResultState,
 };
 pub use agena_plugin_contracts::{
     TOOL_SUMMARY_MAX_DISPLAY_WIDTH, TOOL_TITLE_MAX_DISPLAY_WIDTH, normalize_tool_summary,
@@ -4541,8 +4539,6 @@ pub struct CronJobSummary {
     pub retry_max_attempts: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retry_at: Option<String>,
-    #[serde(default)]
-    pub run_count: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_run_status: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -4638,21 +4634,6 @@ pub struct ShellOutput {
     pub duration: Duration,
     pub timed_out: bool,
 }
-
-/// Runtime-side presentation signals emitted while a process-backed tool is
-/// running. The session runtime owns delivery (and decides whether the
-/// signals are ephemeral or durable); this crate only exposes a small callback
-/// contract so stdout/stderr can be observed without waiting for the child
-/// process to exit.
-#[derive(Debug, Clone)]
-pub enum ToolRuntimeEvent {
-    CommandBegin(CommandBeginEvent),
-    CommandOutputDelta(CommandOutputDeltaEvent),
-    CommandEnd(CommandEndEvent),
-}
-
-/// Sink receiving tool runtime events.
-pub type ToolRuntimeEventSink = Arc<dyn Fn(ToolRuntimeEvent) + Send + Sync>;
 
 #[derive(Debug, thiserror::Error)]
 /// Error from shell command execution.

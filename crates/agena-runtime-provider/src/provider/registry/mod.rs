@@ -225,7 +225,7 @@ fn hydrate_usage_cost_from_provider_metadata(
         return;
     };
     usage.requests = usage.requests.max(1);
-    if usage.recorded_cost_available || usage.total_cost > 0.0 || usage.estimated_cost > 0.0 {
+    if usage.recorded_cost_available || usage.estimated_cost > 0.0 {
         return;
     }
     let metadata = provider.model_metadata_for_adapter(model.adapter_id.as_ref(), &model.model_id);
@@ -793,7 +793,6 @@ mod tests {
             reasoning_tokens: 30,
             cache_write_tokens: 0,
             cache_read_tokens: 0,
-            total_cost: 0.0,
             ..CompletionUsage::default()
         };
 

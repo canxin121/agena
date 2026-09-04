@@ -86,7 +86,7 @@ export type ChatPageViewContext = {
   }
   ui: {
     isCompactLayout: boolean
-    isMobilePointer: boolean
+    isCompactTouch: boolean
     isSessionSwitcherOpen: boolean
     setSessionSwitcherOpen: (open: boolean) => void
   }

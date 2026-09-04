@@ -25,7 +25,7 @@ const props = defineProps<{
   isStreaming: boolean
   collapseSignal: number
   activityPageSize: number
-  isMobilePointer: boolean
+  isCompactTouch: boolean
   isPartExpanded: (part: TranscriptDisplayPart) => boolean
   isNodeSelected?: (key: string) => boolean
   isNodeSearchMatch?: (key: string) => boolean
@@ -321,7 +321,7 @@ function partNavigationText(part: TranscriptDisplayPart): string {
             <ToolbarChipButton
               :tooltip="t('chat.messages.controls.expandNextCount', { count: activityPageSize })"
               :title="t('chat.messages.controls.expandNextCount', { count: activityPageSize })"
-              :is-mobile-pointer="isMobilePointer"
+              :is-compact-touch="isCompactTouch"
               :disabled="row.hiddenCount <= 0"
               data-transcript-toggle="true"
               data-part-expand-next="true"
@@ -332,7 +332,7 @@ function partNavigationText(part: TranscriptDisplayPart): string {
             <ToolbarChipButton
               :tooltip="t('chat.messages.controls.collectAll')"
               :title="t('chat.messages.controls.collectAll')"
-              :is-mobile-pointer="isMobilePointer"
+              :is-compact-touch="isCompactTouch"
               :disabled="row.hiddenCount <= 0"
               data-part-collect-all="true"
               @click.stop="revealSummary(row, true)"

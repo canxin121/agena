@@ -1746,10 +1746,10 @@ async function executeBuiltInCommand(command: BuiltInCommand, rawArgs = ''): Pro
       openRenameDialog()
       return
     case 'timeline':
-      await router.push('/settings/activities')
+      await router.push({ path: '/settings/diagnostics', query: { view: 'activities' } })
       return
     case 'settings':
-      await router.push('/settings/general')
+      await router.push('/settings/interface')
       return
     case 'model':
       await modelSelection.toggleComposerPicker('model')
@@ -1849,10 +1849,10 @@ async function executeBuiltInCommand(command: BuiltInCommand, rawArgs = ''): Pro
       openFilePicker()
       return
     case 'skill':
-      await router.push('/settings/plugins')
+      await router.push('/settings/plugins-tools')
       return
     case 'skill-manager':
-      await router.push('/settings/plugins')
+      await router.push('/settings/plugins-tools')
       return
     case 'download':
       if (!args) {
@@ -1920,11 +1920,11 @@ async function executeBuiltInCommand(command: BuiltInCommand, rawArgs = ''): Pro
       return
     }
     case 'usage':
-      await router.push('/settings/usage')
+      await router.push({ path: '/settings/diagnostics', query: { view: 'usage' } })
       return
     case 'activities':
     case 'background':
-      await router.push('/settings/activities')
+      await router.push({ path: '/settings/diagnostics', query: { view: 'activities' } })
       return
     case 'plan':
       if (!sid) toasts.push('info', String(t('chat.planViewer.requiresSession')))

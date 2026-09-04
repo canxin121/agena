@@ -130,7 +130,7 @@ watch(
   >
     <div
       class="flex min-h-0 flex-col"
-      :class="ui.isMobilePointer ? 'h-full' : ''"
+      :class="ui.isCompactTouch ? 'h-full' : ''"
       data-transcript-chrome="true"
       data-plan-state-viewer="true"
       tabindex="-1"
@@ -159,7 +159,7 @@ watch(
 
       <div
         class="overflow-auto py-3"
-        :class="ui.isMobilePointer ? 'min-h-0 flex-1' : 'min-h-[12rem] max-h-[70dvh]'"
+        :class="ui.isCompactTouch ? 'min-h-0 flex-1' : 'min-h-[12rem] max-h-[70dvh]'"
       >
         <div v-if="loading && !markdown" class="flex items-center gap-2 py-8 text-sm text-muted-foreground">
           <RiLoader4Line class="h-4 w-4 animate-spin" />

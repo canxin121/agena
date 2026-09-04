@@ -4,17 +4,13 @@
 
 use tokio::sync::mpsc;
 
-/// Push notification emitted by the unified bus for the active session.
-/// Indicates whether the change requires reloading messages.
+/// Session subscription signal used by the TUI to converge from snapshots and
+/// force a persisted-state refresh after lag or transport loss.
 #[derive(Debug, Clone)]
 pub struct LiveEvent {
     /// Snapshot captured after a live subscription was established. Remote
     /// reconnect uses this to close the subscribe/read race.
     pub snapshot: Option<agena_api::resource::SessionExecutionResource>,
-    /// Concrete event payload when the subscriber kept up with the bus.
-    /// `None` means the receiver lagged and the UI should force-refresh
-    /// from persisted state instead of trying to apply an incremental patch.
-    pub event: Option<agena_runtime::RuntimePresentationEvent>,
     /// True when the UI should ignore incremental assumptions and force a
     /// replay from persisted state (for example after bus lag).
     pub force_refresh: bool,

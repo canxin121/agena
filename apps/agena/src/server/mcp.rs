@@ -15,8 +15,7 @@ use std::{
 use agena_application::{Application, dto::OperatorToolResource};
 use agena_mcp_server::{
     CallToolParams, CallToolResult, McpServerBackend, McpServerError, StatelessMcpToolMetadata,
-    ToolDescriptor, is_stateless_mcp_tool_exposed, serialize_call_tool_result,
-    serialize_tool_descriptor,
+    ToolDescriptor, is_stateless_mcp_tool_exposed,
 };
 use async_trait::async_trait;
 use axum::{
@@ -55,7 +54,6 @@ const CIMD_CACHE_TTL: Duration = Duration::from_secs(5 * 60);
 const MAX_MCP_METADATA_BODY_BYTES: usize = 8 * 1024 * 1024;
 const MAX_CIMD_DOCUMENT_BYTES: usize = 256 * 1024;
 const MAX_MCP_OAUTH_PASSWORD_BYTES: usize = 4096;
-const MAX_REGISTERED_OAUTH_CLIENTS: usize = 256;
 const MAX_CACHED_CIMD_CLIENTS: usize = 128;
 const MAX_OUTSTANDING_AUTHORIZATION_CODES: usize = 1024;
 const MAX_REFRESH_TOKEN_RECORDS: usize = 4096;
@@ -63,9 +61,8 @@ const MAX_OAUTH_URI_BYTES: usize = 4096;
 const MAX_OAUTH_LABEL_BYTES: usize = 256;
 const MAX_OAUTH_TOKEN_BYTES: usize = 8192;
 const MAX_OAUTH_SCOPE_BYTES: usize = 512;
-const DEFAULT_MCP_PROTOCOL_VERSION: &str = "2025-06-18";
 const OAUTH_SIGNING_KEY_VERSION: u32 = 1;
-const OAUTH_RUNTIME_VERSION: u32 = 2;
+const OAUTH_RUNTIME_VERSION: u32 = 3;
 // ChatGPT submits the user-facing OAuth authorization form from its hosted
 // connector origin. Keep this allowlist explicit and narrow; arbitrary
 // browser origins must not be accepted for the MCP/OAuth surface.
@@ -85,55 +82,10 @@ pub(crate) struct McpServerState {
 fn mcp_tool_is_exposed(tool: &OperatorToolResource) -> bool {
     is_stateless_mcp_tool_exposed(StatelessMcpToolMetadata {
         name: tool.name.as_str(),
-        plugin_id: tool.plugin_id.as_deref(),
+        plugin_id: Some(tool.plugin_id.as_str()),
         interactive: tool.interactive,
         task: tool.task,
     })
-}
-
-fn request_has_modern_mcp_headers(headers: &HeaderMap) -> bool {
-    headers.contains_key("mcp-method")
-        || headers.contains_key("mcp-name")
-        || headers
-            .get("mcp-protocol-version")
-            .and_then(|value| value.to_str().ok())
-            .is_some_and(|version| version.trim() == "2026-07-28")
-}
-
-fn value_uses_modern_mcp(value: &serde_json::Value) -> bool {
-    let message_is_modern = |message: &serde_json::Value| {
-        message.get("method").and_then(serde_json::Value::as_str) == Some("server/discover")
-            || message
-                .get("params")
-                .and_then(|params| params.get("_meta"))
-                .and_then(|meta| meta.get("io.modelcontextprotocol/protocolVersion"))
-                .and_then(serde_json::Value::as_str)
-                == Some("2026-07-28")
-    };
-    match value {
-        serde_json::Value::Object(_) => message_is_modern(value),
-        serde_json::Value::Array(messages) => messages.iter().any(message_is_modern),
-        _ => false,
-    }
-}
-
-fn value_is_legacy_compat_request(value: &serde_json::Value) -> bool {
-    let message_is_supported = |message: &serde_json::Value| {
-        message
-            .get("method")
-            .and_then(serde_json::Value::as_str)
-            .is_some_and(|method| {
-                matches!(method, "initialize" | "ping" | "tools/list" | "tools/call")
-                    || method.starts_with("notifications/")
-            })
-    };
-    match value {
-        serde_json::Value::Object(_) => message_is_supported(value),
-        serde_json::Value::Array(messages) => {
-            !messages.is_empty() && messages.iter().all(message_is_supported)
-        }
-        _ => false,
-    }
 }
 
 fn refresh_token_fingerprint(token: &str) -> String {
@@ -259,39 +211,12 @@ impl From<agena_cli::McpAnonymousAccessArg> for McpAnonymousAccess {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum McpClientRegistration {
-    /// Accept only ChatGPT Client ID Metadata Documents. This is the safer
-    /// default because it avoids exposing an unauthenticated DCR endpoint to
-    /// the public internet.
-    #[default]
-    CimdOnly,
-    /// Also expose OAuth Dynamic Client Registration for older clients.
-    CimdAndDcr,
-}
-
-impl McpClientRegistration {
-    const fn dcr_enabled(self) -> bool {
-        matches!(self, Self::CimdAndDcr)
-    }
-}
-impl From<agena_cli::McpClientRegistrationArg> for McpClientRegistration {
-    fn from(value: agena_cli::McpClientRegistrationArg) -> Self {
-        match value {
-            agena_cli::McpClientRegistrationArg::CimdOnly => Self::CimdOnly,
-            agena_cli::McpClientRegistrationArg::CimdAndDcr => Self::CimdAndDcr,
-        }
-    }
-}
-
 struct McpControlState {
     enabled: std::sync::atomic::AtomicBool,
     auth_mode: RwLock<McpAuthMode>,
     anonymous_access: RwLock<McpAnonymousAccess>,
     configured_resource: RwLock<Option<String>>,
     configured_issuer: RwLock<Option<String>>,
-    client_registration: RwLock<McpClientRegistration>,
     oauth_password: RwLock<Option<McpOAuthPassword>>,
     database: Option<Arc<ServerStateDb>>,
     update_lock: tokio::sync::Mutex<()>,
@@ -309,25 +234,20 @@ struct McpReadiness {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 struct PersistedMcpServerControl {
     #[serde(default = "default_mcp_server_enabled")]
     enabled: bool,
     #[serde(default)]
     public_url: Option<String>,
-    /// Legacy projection retained for downgrade compatibility. New readers use
-    /// `auth_mode`; old persisted values map `true` to full OAuth.
     #[serde(default)]
-    auth_enabled: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    auth_mode: Option<McpAuthMode>,
+    auth_mode: McpAuthMode,
     #[serde(default)]
     anonymous_access: McpAnonymousAccess,
     #[serde(default)]
     oauth_password_phc: Option<String>,
     #[serde(default)]
     oauth_issuer_url: Option<String>,
-    #[serde(default)]
-    client_registration: McpClientRegistration,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -454,7 +374,6 @@ pub(crate) struct McpServerStartupConfig<'a> {
     pub(crate) oauth_issuer_url: Option<&'a str>,
     pub(crate) auth_mode: Option<McpAuthMode>,
     pub(crate) anonymous_access: Option<McpAnonymousAccess>,
-    pub(crate) client_registration: Option<McpClientRegistration>,
     pub(crate) fallback_public_url: &'a str,
 }
 
@@ -483,7 +402,6 @@ impl McpServerState {
             true,
             McpAuthMode::None,
             McpAnonymousAccess::None,
-            McpClientRegistration::CimdOnly,
             None,
             None,
         ))
@@ -500,16 +418,12 @@ impl McpServerState {
             .get_json::<PersistedMcpServerControl>(KV_KEY_MCP_SERVER_CONTROL)
             .await?;
         let had_persisted_control = persisted.is_some();
-        let persisted_used_legacy_auth = persisted
-            .as_ref()
-            .is_some_and(|control| control.auth_mode.is_none());
         let (
             mut enabled,
             mut auth_mode,
             mut anonymous_access,
             configured_public_url,
             configured_issuer_url,
-            mut client_registration,
             oauth_password,
         ) = match persisted.as_ref() {
             Some(persisted) => {
@@ -523,15 +437,10 @@ impl McpServerState {
                     .transpose()?;
                 (
                     persisted.enabled,
-                    persisted.auth_mode.unwrap_or(if persisted.auth_enabled {
-                        McpAuthMode::Oauth
-                    } else {
-                        McpAuthMode::None
-                    }),
+                    persisted.auth_mode,
                     persisted.anonymous_access,
                     persisted.public_url.clone(),
                     persisted.oauth_issuer_url.clone(),
-                    persisted.client_registration,
                     oauth_password,
                 )
             }
@@ -541,7 +450,6 @@ impl McpServerState {
                 McpAnonymousAccess::None,
                 None,
                 None,
-                McpClientRegistration::CimdOnly,
                 None,
             ),
         };
@@ -557,7 +465,6 @@ impl McpServerState {
             anonymous_access,
             configured_resource.clone(),
             configured_issuer.clone(),
-            client_registration,
         );
 
         // Explicit process configuration is authoritative on every startup,
@@ -586,10 +493,6 @@ impl McpServerState {
         if let Some(value) = startup.anonymous_access {
             anonymous_access = value;
         }
-        if let Some(value) = startup.client_registration {
-            client_registration = value;
-        }
-
         if enabled && auth_mode.is_enabled() && matches!(&ui_auth, UiAuth::Disabled) {
             return Err(
                 "public MCP OAuth requires AGENA_SERVER_UI_PASSWORD (or --ui-password) so the Agena management API and authorization page are not exposed without an operator credential"
@@ -603,7 +506,6 @@ impl McpServerState {
             anonymous_access,
             configured_resource.clone(),
             configured_issuer.clone(),
-            client_registration,
         );
         let control_changed = !had_persisted_control || persisted_effective != effective_control;
         let fallback_resource = normalize_public_mcp_url(startup.fallback_public_url)?;
@@ -619,7 +521,7 @@ impl McpServerState {
             .await?;
         if persisted_runtime
             .as_ref()
-            .is_some_and(|runtime| !matches!(runtime.version, 1 | OAUTH_RUNTIME_VERSION))
+            .is_some_and(|runtime| runtime.version != OAUTH_RUNTIME_VERSION)
         {
             return Err("unsupported persisted MCP OAuth runtime version".to_owned());
         }
@@ -644,23 +546,22 @@ impl McpServerState {
             enabled,
             auth_mode,
             anonymous_access,
-            client_registration,
             oauth_password,
             Some(Arc::clone(&database)),
         );
 
         if control_changed {
-            // Tokens, refresh families, and registered clients are bound to
+            // Tokens, refresh families, and clients are bound to
             // the previous resource/issuer/policy. Never carry them across an
             // environment-driven deployment identity change.
             state.clear_oauth_runtime_state().await?;
         }
-        // Persist normalized/migrated values so a later restart without the
-        // explicit environment still has one coherent connector identity. Do
+        // Persist normalized values so a later restart without the explicit
+        // environment still has one coherent connector identity. Do
         // this after invalidating the old OAuth runtime: if the control write
         // fails, an old identity with cleared tokens is safer than a new
         // identity accidentally retaining old token state.
-        if control_changed || persisted_used_legacy_auth {
+        if control_changed {
             state
                 .persist_control(
                     enabled,
@@ -668,7 +569,6 @@ impl McpServerState {
                     anonymous_access,
                     configured_resource,
                     configured_issuer,
-                    client_registration,
                 )
                 .await?;
         }
@@ -688,7 +588,6 @@ impl McpServerState {
         enabled: bool,
         auth_mode: McpAuthMode,
         anonymous_access: McpAnonymousAccess,
-        client_registration: McpClientRegistration,
         oauth_password: Option<McpOAuthPassword>,
         database: Option<Arc<ServerStateDb>>,
     ) -> Self {
@@ -704,7 +603,6 @@ impl McpServerState {
                 anonymous_access: RwLock::new(anonymous_access),
                 configured_resource: RwLock::new(configured_resource),
                 configured_issuer: RwLock::new(configured_issuer),
-                client_registration: RwLock::new(client_registration),
                 oauth_password: RwLock::new(oauth_password),
                 database,
                 update_lock: tokio::sync::Mutex::new(()),
@@ -751,14 +649,6 @@ impl McpServerState {
             .read()
             .expect("MCP OAuth issuer lock poisoned")
             .clone()
-    }
-
-    fn client_registration(&self) -> McpClientRegistration {
-        *self
-            .control
-            .client_registration
-            .read()
-            .expect("MCP client registration lock poisoned")
     }
 
     fn tool_is_exposed(&self, tool: &OperatorToolResource) -> bool {
@@ -920,7 +810,6 @@ impl McpServerState {
             enabled = self.is_enabled(),
             auth_mode = ?self.auth_mode(),
             anonymous_access = ?self.anonymous_access(),
-            client_registration = ?self.client_registration(),
             resource = %resource,
             issuer = %issuer,
             ready = readiness.ready,
@@ -958,7 +847,6 @@ impl McpServerState {
     }
 
     async fn clear_oauth_runtime_state(&self) -> Result<(), String> {
-        self.oauth.clients.clear();
         self.oauth.cimd_clients.clear();
         self.oauth.authorization_codes.clear();
         self.oauth.refresh_tokens.clear();
@@ -971,16 +859,13 @@ impl McpServerState {
         let issuer = self.issuer_for_headers(headers);
         let auth_mode = self.auth_mode();
         let auth_enabled = auth_mode.is_enabled();
-        let client_registration = self.client_registration();
         let readiness = self.readiness(headers);
         McpServerControlResponse {
             enabled: self.is_enabled(),
-            auth_enabled,
             auth_mode,
             anonymous_access: self.anonymous_access(),
             public_url: self.configured_public_url(),
             oauth_issuer_url: self.configured_oauth_issuer_url(),
-            client_registration,
             resource_url: resource_url.clone(),
             ready: readiness.ready,
             warnings: readiness.warnings.clone(),
@@ -992,11 +877,7 @@ impl McpServerState {
                     && matches!(self.ui_auth, UiAuth::Enabled(_)),
                 ready: readiness.ready,
                 authorization_server_kind: "agena-managed".to_owned(),
-                registration_methods: if client_registration.dcr_enabled() {
-                    vec!["cimd".to_owned(), "dcr".to_owned()]
-                } else {
-                    vec!["cimd".to_owned()]
-                },
+                registration_methods: vec!["cimd".to_owned()],
                 // The current Agena token endpoint implements the public
                 // client/PKCE flow only. Do not advertise private_key_jwt
                 // until assertion signature and replay validation are live;
@@ -1010,9 +891,6 @@ impl McpServerState {
                 issuer: issuer.clone(),
                 authorization_endpoint: append_public_endpoint(&issuer, "/oauth/authorize"),
                 token_endpoint: append_public_endpoint(&issuer, "/oauth/token"),
-                registration_endpoint: client_registration
-                    .dcr_enabled()
-                    .then(|| append_public_endpoint(&issuer, "/oauth/register")),
                 revocation_endpoint: append_public_endpoint(&issuer, "/oauth/revoke"),
                 protected_resource_metadata: protected_resource_metadata_url(&resource_url),
                 authorization_server_metadata: authorization_server_metadata_url(&issuer),
@@ -1028,7 +906,6 @@ impl McpServerState {
         anonymous_access: McpAnonymousAccess,
         public_url: Option<String>,
         oauth_issuer_url: Option<String>,
-        client_registration: McpClientRegistration,
     ) -> Result<(), String> {
         let database = self
             .control
@@ -1040,12 +917,10 @@ impl McpServerState {
                 KV_KEY_MCP_SERVER_CONTROL,
                 &PersistedMcpServerControl {
                     enabled,
-                    auth_enabled: auth_mode.is_enabled(),
-                    auth_mode: Some(auth_mode),
+                    auth_mode,
                     anonymous_access,
                     public_url,
                     oauth_issuer_url,
-                    client_registration,
                     oauth_password_phc: self.oauth_password_phc(),
                 },
             )
@@ -1059,7 +934,6 @@ impl McpServerState {
         anonymous_access: McpAnonymousAccess,
         configured_resource: Option<String>,
         configured_issuer: Option<String>,
-        client_registration: McpClientRegistration,
     ) -> Result<(), String> {
         let _guard = self.control.update_lock.lock().await;
         let previous_enabled = self.is_enabled();
@@ -1067,13 +941,11 @@ impl McpServerState {
         let previous_anonymous_access = self.anonymous_access();
         let previous_resource = self.configured_public_url();
         let previous_issuer = self.configured_oauth_issuer_url();
-        let previous_client_registration = self.client_registration();
         let control_changed = previous_enabled != enabled
             || previous_auth_mode != auth_mode
             || previous_anonymous_access != anonymous_access
             || previous_resource != configured_resource
-            || previous_issuer != configured_issuer
-            || previous_client_registration != client_registration;
+            || previous_issuer != configured_issuer;
         if control_changed {
             // Invalidate the old token/client state before committing a new
             // public identity or policy. A later persistence failure then
@@ -1086,7 +958,6 @@ impl McpServerState {
             anonymous_access,
             configured_resource.clone(),
             configured_issuer.clone(),
-            client_registration,
         )
         .await?;
         self.control.enabled.store(enabled, Ordering::Release);
@@ -1110,11 +981,6 @@ impl McpServerState {
             .configured_issuer
             .write()
             .expect("MCP OAuth issuer lock poisoned") = configured_issuer;
-        *self
-            .control
-            .client_registration
-            .write()
-            .expect("MCP client registration lock poisoned") = client_registration;
         Ok(())
     }
 
@@ -1136,7 +1002,6 @@ impl McpServerState {
         let oauth_issuer_url = self.configured_oauth_issuer_url();
         let auth_mode = self.auth_mode();
         let anonymous_access = self.anonymous_access();
-        let client_registration = self.client_registration();
         let database = self
             .control
             .database
@@ -1148,12 +1013,10 @@ impl McpServerState {
                 KV_KEY_MCP_SERVER_CONTROL,
                 &PersistedMcpServerControl {
                     enabled,
-                    auth_enabled: auth_mode.is_enabled(),
-                    auth_mode: Some(auth_mode),
+                    auth_mode,
                     anonymous_access,
                     public_url,
                     oauth_issuer_url,
-                    client_registration,
                     oauth_password_phc: Some(phc.clone()),
                 },
             )
@@ -1173,7 +1036,6 @@ impl McpServerState {
         let oauth_issuer_url = self.configured_oauth_issuer_url();
         let auth_mode = self.auth_mode();
         let anonymous_access = self.anonymous_access();
-        let client_registration = self.client_registration();
         let database = self
             .control
             .database
@@ -1188,12 +1050,10 @@ impl McpServerState {
                 KV_KEY_MCP_SERVER_CONTROL,
                 &PersistedMcpServerControl {
                     enabled,
-                    auth_enabled: auth_mode.is_enabled(),
-                    auth_mode: Some(auth_mode),
+                    auth_mode,
                     anonymous_access,
                     public_url,
                     oauth_issuer_url,
-                    client_registration,
                     oauth_password_phc: None,
                 },
             )
@@ -1211,12 +1071,10 @@ impl McpServerState {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct McpServerControlResponse {
     enabled: bool,
-    auth_enabled: bool,
     auth_mode: McpAuthMode,
     anonymous_access: McpAnonymousAccess,
     public_url: Option<String>,
     oauth_issuer_url: Option<String>,
-    client_registration: McpClientRegistration,
     resource_url: String,
     ready: bool,
     warnings: Vec<String>,
@@ -1241,8 +1099,6 @@ struct McpOAuthControlStatus {
     issuer: String,
     authorization_endpoint: String,
     token_endpoint: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    registration_endpoint: Option<String>,
     revocation_endpoint: String,
     protected_resource_metadata: String,
     authorization_server_metadata: String,
@@ -1250,7 +1106,7 @@ struct McpOAuthControlStatus {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct UpdateMcpServerControlRequest {
     #[serde(default)]
     enabled: Option<bool>,
@@ -1258,10 +1114,6 @@ pub(crate) struct UpdateMcpServerControlRequest {
     /// configured public URL and returns to the listener-local fallback.
     #[serde(default)]
     public_url: Option<Option<String>>,
-    /// Backwards-compatible boolean projection. `true` selects full OAuth and
-    /// `false` selects no authentication. New clients should send `authMode`.
-    #[serde(default)]
-    auth_enabled: Option<bool>,
     #[serde(default)]
     auth_mode: Option<McpAuthMode>,
     #[serde(default)]
@@ -1270,8 +1122,6 @@ pub(crate) struct UpdateMcpServerControlRequest {
     /// issuer and returns to the resource-derived issuer.
     #[serde(default)]
     oauth_issuer_url: Option<Option<String>>,
-    #[serde(default)]
-    client_registration: Option<McpClientRegistration>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1294,18 +1144,9 @@ pub(crate) async fn update_mcp_server_control(
     let enabled = request
         .enabled
         .unwrap_or_else(|| state.mcp_server.is_enabled());
-    let auth_mode = match (request.auth_mode, request.auth_enabled) {
-        (Some(mode), Some(enabled)) if mode.is_enabled() != enabled => {
-            return control_error(
-                StatusCode::BAD_REQUEST,
-                "authMode and the legacy authEnabled value disagree".to_owned(),
-            );
-        }
-        (Some(mode), _) => mode,
-        (None, Some(true)) => McpAuthMode::Oauth,
-        (None, Some(false)) => McpAuthMode::None,
-        (None, None) => state.mcp_server.auth_mode(),
-    };
+    let auth_mode = request
+        .auth_mode
+        .unwrap_or_else(|| state.mcp_server.auth_mode());
     let anonymous_access = request
         .anonymous_access
         .unwrap_or_else(|| state.mcp_server.anonymous_access());
@@ -1317,9 +1158,6 @@ pub(crate) async fn update_mcp_server_control(
             Err(error) => return control_error(StatusCode::BAD_REQUEST, error),
         },
     };
-    let client_registration = request
-        .client_registration
-        .unwrap_or_else(|| state.mcp_server.client_registration());
     let configured_issuer = match request.oauth_issuer_url {
         None => state.mcp_server.configured_oauth_issuer_url(),
         Some(None) => None,
@@ -1353,7 +1191,6 @@ pub(crate) async fn update_mcp_server_control(
             anonymous_access,
             configured_resource,
             configured_issuer,
-            client_registration,
         )
         .await
     {
@@ -1447,15 +1284,6 @@ pub(crate) fn router(state: Arc<McpServerState>) -> Router {
         // method/status pair is enough to diagnose connector failures without
         // putting tool arguments, bearer tokens, or result data in logs.
         .layer(middleware::from_fn(trace_mcp_http_request))
-        // Some existing Secure MCP Tunnel deployments forward legacy-era
-        // requests independently and omit initialize/session state. Preserve
-        // that finite tools-only behavior, but immediately defer every modern
-        // 2026 request to rmcp 3.x so protocol negotiation, standard headers,
-        // cache semantics, and server/discover remain SDK-owned.
-        .layer(middleware::from_fn_with_state(
-            Arc::clone(&state),
-            compat_legacy_stateless_mcp,
-        ))
         .layer(middleware::from_fn_with_state(
             Arc::clone(&state),
             require_mcp_bearer,
@@ -1494,7 +1322,6 @@ pub(crate) fn router(state: Arc<McpServerState>) -> Router {
         )
         .route("/.well-known/jwks.json", axum::routing::get(jwks))
         .route("/oauth/jwks.json", axum::routing::get(jwks))
-        .route("/oauth/register", axum::routing::post(register_client))
         .route(
             "/oauth/authorize",
             axum::routing::get(authorize_get).post(authorize_post),
@@ -1794,95 +1621,6 @@ fn is_tools_list_request(body: &[u8]) -> bool {
         .is_some_and(|value| contains_tools_list(&value))
 }
 
-/// Handle the small stateless MCP subset used by ChatGPT and Secure MCP
-/// Tunnel before handing the request to rmcp.
-///
-/// `rmcp`'s Streamable HTTP implementation is the canonical implementation
-/// for normal MCP traffic. Its 2.2 legacy dispatcher can nevertheless answer
-/// with HTTP 422 when a request that is valid for a stateless tunnel arrives
-/// without an initialized session. The tunnel contract forwards individual
-/// JSON-RPC requests, so handling these messages at the HTTP boundary keeps
-/// the public connector surface independent of that session bookkeeping.
-///
-/// This middleware deliberately runs after `require_mcp_bearer` in the
-/// middleware stack. It never authenticates a request. The fallback below is
-/// defensive only: a valid JSON-RPC request should always be handled here,
-/// but if a future change lets one reach rmcp's legacy dispatcher, convert its
-/// HTTP 422 into a JSON-RPC response so a Secure MCP Tunnel never exposes the
-/// rmcp-specific session error to ChatGPT.
-async fn compat_legacy_stateless_mcp(
-    State(state): State<Arc<McpServerState>>,
-    request: axum::http::Request<Body>,
-    next: middleware::Next,
-) -> Response {
-    if request.method() != axum::http::Method::POST {
-        return next.run(request).await;
-    }
-
-    let (parts, body) = request.into_parts();
-    let body = match to_bytes(body, MAX_MCP_METADATA_BODY_BYTES).await {
-        Ok(body) => body,
-        Err(error) => return mcp_request_body_error(&error),
-    };
-    if request_has_modern_mcp_headers(&parts.headers) {
-        return next
-            .run(axum::http::Request::from_parts(parts, Body::from(body)))
-            .await;
-    }
-
-    let value = match serde_json::from_slice::<serde_json::Value>(&body) {
-        Ok(value) => value,
-        Err(error) => {
-            // A tunnel request is already one complete JSON-RPC message. Do
-            // not pass malformed JSON to rmcp's transport parser: its legacy
-            // error boundary can turn an otherwise recoverable connector
-            // failure into HTTP 422 ("expect initialize"). A JSON-RPC parse
-            // error is the protocol-level response and keeps the HTTP
-            // transport usable for the next independent tunnel request.
-            tracing::warn!(
-                error = %error,
-                "received malformed JSON-RPC message on stateless MCP endpoint"
-            );
-            return json_no_store(
-                StatusCode::OK,
-                serde_json::json!({
-                    "jsonrpc": "2.0",
-                    "id": null,
-                    "error": {
-                        "code": -32700,
-                        "message": "Parse error"
-                    }
-                }),
-            );
-        }
-    };
-    if value_uses_modern_mcp(&value) || !value_is_legacy_compat_request(&value) {
-        return next
-            .run(axum::http::Request::from_parts(parts, Body::from(body)))
-            .await;
-    }
-    let request_id = jsonrpc_request_id(&value);
-
-    let payload = match compat_stateless_mcp_payload(&state, value).await {
-        Ok(Some(payload)) => payload,
-        Ok(None) => {
-            return next
-                .run(axum::http::Request::from_parts(parts, Body::from(body)))
-                .await;
-        }
-        Err(error) => {
-            return json_no_store(StatusCode::OK, compat_jsonrpc_error(request_id, error));
-        }
-    };
-
-    if payload.is_null() {
-        // JSON-RPC notifications have no response body. 202 is the
-        // Streamable HTTP acknowledgement used by rmcp for this case.
-        return StatusCode::ACCEPTED.into_response();
-    }
-    json_no_store(StatusCode::OK, payload)
-}
-
 fn jsonrpc_request_id_from_bytes(body: &[u8]) -> Option<serde_json::Value> {
     serde_json::from_slice::<serde_json::Value>(body)
         .ok()
@@ -1912,171 +1650,6 @@ fn jsonrpc_request_id(value: &serde_json::Value) -> Option<serde_json::Value> {
         serde_json::Value::Array(messages) => messages.first().and_then(jsonrpc_request_id),
         _ => None,
     }
-}
-
-async fn compat_stateless_mcp_payload(
-    state: &McpServerState,
-    value: serde_json::Value,
-) -> Result<Option<serde_json::Value>, McpServerError> {
-    match value {
-        serde_json::Value::Object(_) => compat_stateless_mcp_message(state, &value).await,
-        serde_json::Value::Array(requests) if !requests.is_empty() => {
-            let mut responses = Vec::with_capacity(requests.len());
-            for request in requests {
-                let response = compat_stateless_mcp_message(state, &request)
-                    .await?
-                    .unwrap_or(serde_json::Value::Null);
-                if !response.is_null() {
-                    responses.push(response);
-                }
-            }
-            if responses.is_empty() {
-                Ok(Some(serde_json::Value::Null))
-            } else {
-                Ok(Some(serde_json::Value::Array(responses)))
-            }
-        }
-        serde_json::Value::Array(_) => Ok(Some(compat_jsonrpc_error(
-            None,
-            McpServerError::InvalidParams(
-                "JSON-RPC batch must contain at least one message".to_owned(),
-            ),
-        ))),
-        _ => Ok(Some(compat_jsonrpc_error(
-            None,
-            McpServerError::InvalidParams("JSON-RPC message must be an object".to_owned()),
-        ))),
-    }
-}
-
-async fn compat_stateless_mcp_message(
-    state: &McpServerState,
-    request: &serde_json::Value,
-) -> Result<Option<serde_json::Value>, McpServerError> {
-    let Some(method) = request.get("method").and_then(serde_json::Value::as_str) else {
-        // A response is not expected on the server's inbound endpoint, but it
-        // is still a valid JSON-RPC message. A stateless tunnel must consume
-        // it without handing it to rmcp's session dispatcher. Invalid message
-        // shapes get a normal JSON-RPC error rather than an HTTP 422.
-        if request.get("result").is_some() || request.get("error").is_some() {
-            return Ok(Some(serde_json::Value::Null));
-        }
-        return Ok(Some(compat_jsonrpc_error(
-            request.get("id").cloned().filter(|id| !id.is_null()),
-            McpServerError::InvalidParams(
-                "JSON-RPC request must contain a string method".to_owned(),
-            ),
-        )));
-    };
-    let id = request.get("id").cloned().filter(|id| !id.is_null());
-    let response = |result: serde_json::Value| {
-        id.clone().map(|id| {
-            serde_json::json!({
-                "jsonrpc": "2.0",
-                "id": id,
-                "result": result,
-            })
-        })
-    };
-
-    match method {
-        method if method.starts_with("notifications/") => Ok(Some(serde_json::Value::Null)),
-        "ping" => Ok(response(serde_json::json!({})).or(Some(serde_json::Value::Null))),
-        "initialize" => {
-            Ok(response(compat_initialize_result(request)).or(Some(serde_json::Value::Null)))
-        }
-        "tools/list" => {
-            let auth_requirements = state.exposed_tool_auth_requirements().await;
-            let backend = ApplicationMcpBackend {
-                state: Arc::new(state.clone()),
-            };
-            let tools = backend.list_tools().await?;
-            let tools = tools
-                .into_iter()
-                .map(serialize_tool_descriptor)
-                .collect::<Result<Vec<_>, _>>()?;
-            let tools = serde_json::to_value(tools)?;
-            let payload = response(serde_json::json!({"tools": tools}));
-            let Some(payload) = payload else {
-                return Ok(Some(serde_json::Value::Null));
-            };
-            let payload = add_tool_security_schemes(payload, state.auth_mode(), &auth_requirements)
-                .unwrap_or_else(|| serde_json::json!({}));
-            Ok(Some(payload))
-        }
-        "tools/call" => {
-            let params = request
-                .get("params")
-                .and_then(serde_json::Value::as_object)
-                .ok_or_else(|| {
-                    McpServerError::InvalidParams("tools/call params must be an object".to_owned())
-                })?;
-            let name = params
-                .get("name")
-                .and_then(serde_json::Value::as_str)
-                .filter(|name| !name.trim().is_empty())
-                .ok_or_else(|| {
-                    McpServerError::InvalidParams(
-                        "tools/call requires a non-empty string name".to_owned(),
-                    )
-                })?;
-            let backend = ApplicationMcpBackend {
-                state: Arc::new(state.clone()),
-            };
-            let result = backend
-                .call_tool(CallToolParams {
-                    name: name.to_owned(),
-                    arguments: params.get("arguments").cloned(),
-                })
-                .await?;
-            let result = serialize_call_tool_result(result)?;
-            Ok(response(result).or(Some(serde_json::Value::Null)))
-        }
-        // Agena intentionally exposes only tools on this endpoint. Keep the
-        // response HTTP-successful and report unsupported MCP methods at the
-        // JSON-RPC layer. Passing them to rmcp would re-enter its legacy
-        // lifecycle dispatcher and can produce HTTP 422 when the tunnel has
-        // delivered requests independently.
-        _ => Ok(Some(if id.is_some() {
-            compat_jsonrpc_error(id.clone(), McpServerError::NotFound(method.to_owned()))
-        } else {
-            serde_json::Value::Null
-        })),
-    }
-}
-
-fn compat_initialize_result(request: &serde_json::Value) -> serde_json::Value {
-    let protocol_version = request
-        .get("params")
-        .and_then(|params| params.get("protocolVersion"))
-        .and_then(serde_json::Value::as_str)
-        .filter(|version| matches!(*version, "2025-03-26" | "2025-06-18" | "2025-11-25"))
-        .unwrap_or(DEFAULT_MCP_PROTOCOL_VERSION);
-    serde_json::json!({
-        "protocolVersion": protocol_version,
-        "capabilities": {"tools": {}},
-        "serverInfo": {
-            "name": "agena",
-            "version": env!("CARGO_PKG_VERSION"),
-        },
-        "instructions": "Agena exposes its local runtime tools over MCP. Resources and prompts are intentionally unavailable on this endpoint."
-    })
-}
-
-fn compat_jsonrpc_error(id: Option<serde_json::Value>, error: McpServerError) -> serde_json::Value {
-    let code = match &error {
-        McpServerError::InvalidParams(_) => -32602,
-        McpServerError::NotFound(_) => -32601,
-        _ => -32603,
-    };
-    serde_json::json!({
-        "jsonrpc": "2.0",
-        "id": id.unwrap_or(serde_json::Value::Null),
-        "error": {
-            "code": code,
-            "message": error.to_string(),
-        },
-    })
 }
 
 fn rewrite_tool_list_json(
@@ -2273,8 +1846,6 @@ struct AuthorizationServerMetadata {
     issuer: String,
     authorization_endpoint: String,
     token_endpoint: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    registration_endpoint: Option<String>,
     revocation_endpoint: String,
     revocation_endpoint_auth_methods_supported: Vec<String>,
     client_id_metadata_document_supported: bool,
@@ -2327,10 +1898,6 @@ async fn authorization_server_metadata(
                 "refresh_token".to_owned(),
             ],
             issuer: issuer.clone(),
-            registration_endpoint: state
-                .client_registration()
-                .dcr_enabled()
-                .then(|| append_public_endpoint(&issuer, "/oauth/register")),
             response_types_supported: vec!["code".to_owned()],
             revocation_endpoint: append_public_endpoint(&issuer, "/oauth/revoke"),
             revocation_endpoint_auth_methods_supported: vec!["none".to_owned()],
@@ -2350,43 +1917,6 @@ async fn jwks(State(state): State<Arc<McpServerState>>, _headers: HeaderMap) -> 
         return mcp_auth_disabled();
     }
     json_no_store(StatusCode::OK, state.oauth.signing_key.jwks())
-}
-
-#[derive(Debug, Deserialize)]
-struct ClientRegistrationRequest {
-    redirect_uris: Vec<String>,
-    #[serde(default)]
-    client_name: Option<String>,
-    #[serde(default)]
-    token_endpoint_auth_method: Option<String>,
-    #[serde(default)]
-    token_endpoint_auth_methods_supported: Option<Vec<String>>,
-    #[serde(default)]
-    grant_types: Option<Vec<String>>,
-    #[serde(default)]
-    response_types: Option<Vec<String>>,
-    #[serde(default)]
-    application_type: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-struct ClientRegistrationResponse {
-    client_id: String,
-    client_id_issued_at: u64,
-    token_endpoint_auth_method: &'static str,
-    redirect_uris: Vec<String>,
-    grant_types: [&'static str; 2],
-    response_types: [&'static str; 1],
-    application_type: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    client_name: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct RegisteredClient {
-    redirect_uris: Vec<String>,
-    client_name: Option<String>,
-    token_endpoint_auth_method: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -2413,8 +1943,8 @@ struct CachedCimdClient {
 
 fn client_metadata_supports_none(singular: Option<&str>, plural: Option<&[String]>) -> bool {
     // ChatGPT's production CIMD currently publishes a plural capability set
-    // containing both `none` and `private_key_jwt`, while the legacy singular
-    // field prefers `private_key_jwt`. The plural field is authoritative for
+    // containing both `none` and `private_key_jwt`, while the singular field
+    // prefers `private_key_jwt`. The plural field is authoritative for
     // capability intersection: Agena may select `none` because its token
     // endpoint advertises and implements that public-client method.
     match plural {
@@ -2439,128 +1969,6 @@ fn client_metadata_supports_code_response(response_types: Option<&[String]>) -> 
             && values.iter().any(|value| value == "code")
             && values.iter().all(|value| value == "code")
     })
-}
-
-async fn register_client(
-    State(state): State<Arc<McpServerState>>,
-    request: Result<Json<ClientRegistrationRequest>, axum::extract::rejection::JsonRejection>,
-) -> Response {
-    if !state.auth_enabled() || !state.client_registration().dcr_enabled() {
-        return mcp_auth_disabled();
-    }
-    let Json(request) = match request {
-        Ok(request) => request,
-        Err(error) => {
-            tracing::warn!(
-                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
-                    "MCP dynamic client registration body is invalid",
-                    &error,
-                ),
-                "rejecting invalid MCP client registration request"
-            );
-            return oauth_error(
-                StatusCode::BAD_REQUEST,
-                "invalid_client_metadata",
-                "the client registration body must be a valid JSON object",
-            );
-        }
-    };
-    if request.redirect_uris.is_empty() || request.redirect_uris.len() > 16 {
-        return oauth_error(
-            StatusCode::BAD_REQUEST,
-            "invalid_client_metadata",
-            "redirect_uris must contain between one and sixteen URIs",
-        );
-    }
-    let _registration_guard = state.oauth.registration_lock.lock().await;
-    if state.oauth.clients.len() >= MAX_REGISTERED_OAUTH_CLIENTS {
-        return oauth_error(
-            StatusCode::TOO_MANY_REQUESTS,
-            "temporarily_unavailable",
-            "the OAuth client registration limit has been reached",
-        );
-    }
-    if request
-        .client_name
-        .as_deref()
-        .is_some_and(|name| name.trim().is_empty() || name.len() > MAX_OAUTH_LABEL_BYTES)
-    {
-        return oauth_error(
-            StatusCode::BAD_REQUEST,
-            "invalid_client_metadata",
-            "client_name must be non-empty and at most 256 bytes",
-        );
-    }
-    let application_type = request.application_type.as_deref().unwrap_or("web");
-    if !matches!(application_type, "web" | "native") {
-        return oauth_error(
-            StatusCode::BAD_REQUEST,
-            "invalid_client_metadata",
-            "application_type must be web or native",
-        );
-    }
-    if !client_metadata_supports_none(
-        request.token_endpoint_auth_method.as_deref(),
-        request.token_endpoint_auth_methods_supported.as_deref(),
-    ) {
-        return oauth_error(
-            StatusCode::BAD_REQUEST,
-            "invalid_client_metadata",
-            "the client must support token endpoint authentication method none",
-        );
-    }
-    if !client_metadata_supports_grants(request.grant_types.as_deref()) {
-        return oauth_error(
-            StatusCode::BAD_REQUEST,
-            "invalid_client_metadata",
-            "grant_types may contain only authorization_code and refresh_token and must include authorization_code",
-        );
-    }
-    if !client_metadata_supports_code_response(request.response_types.as_deref()) {
-        return oauth_error(
-            StatusCode::BAD_REQUEST,
-            "invalid_client_metadata",
-            "response_types must contain only code",
-        );
-    }
-    if request.redirect_uris.iter().any(|redirect| {
-        redirect.len() > MAX_OAUTH_URI_BYTES || validate_redirect_uri(redirect).is_err()
-    }) {
-        return oauth_error(
-            StatusCode::BAD_REQUEST,
-            "invalid_redirect_uri",
-            "redirect_uris must be absolute HTTPS URLs without fragments",
-        );
-    }
-
-    let client_id = format!("agena_client_{}", crate::server::issue_token());
-    let client = RegisteredClient {
-        redirect_uris: request.redirect_uris.clone(),
-        client_name: request.client_name.clone(),
-        token_endpoint_auth_method: "none".to_owned(),
-    };
-    state.oauth.clients.insert(client_id.clone(), client);
-    if let Err(error) = state.oauth.persist().await {
-        state.oauth.clients.remove(client_id.as_str());
-        tracing::error!(error = %error, "failed to persist registered MCP OAuth client");
-        return oauth_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "server_error",
-            "the OAuth client could not be persisted",
-        );
-    }
-
-    let response = ClientRegistrationResponse {
-        client_id,
-        client_id_issued_at: unix_timestamp(),
-        token_endpoint_auth_method: "none",
-        redirect_uris: request.redirect_uris,
-        grant_types: ["authorization_code", "refresh_token"],
-        response_types: ["code"],
-        application_type: application_type.to_owned(),
-        client_name: request.client_name,
-    };
-    json_no_store(StatusCode::CREATED, response)
 }
 
 async fn fetch_cimd_document(client_id: &str) -> Result<CimdClientMetadata, String> {
@@ -2823,30 +2231,17 @@ async fn validate_authorization_client(
                 "client_id is required and must be at most 4096 bytes",
             )
         })?;
-    let registered_client = if state.client_registration().dcr_enabled() {
-        state
-            .oauth
-            .clients
-            .get(client_id)
-            .map(|entry| entry.clone())
-    } else {
-        None
-    };
-    let cimd_client = if registered_client.is_none() {
-        Some(load_cimd_client(state, client_id).await.map_err(|error| {
-            tracing::warn!(
-                client_id,
-                diagnostic = %error,
-                "CIMD client metadata validation failed"
-            );
-            OAuthRequestError::new(
-                "invalid_client",
-                "the CIMD client metadata document could not be validated",
-            )
-        })?)
-    } else {
-        None
-    };
+    let cimd_client = load_cimd_client(state, client_id).await.map_err(|error| {
+        tracing::warn!(
+            client_id,
+            diagnostic = %error,
+            "CIMD client metadata validation failed"
+        );
+        OAuthRequestError::new(
+            "invalid_client",
+            "the CIMD client metadata document could not be validated",
+        )
+    })?;
     let redirect_uri = request
         .redirect_uri
         .as_deref()
@@ -2857,31 +2252,20 @@ async fn validate_authorization_client(
                 "redirect_uri is required and must be at most 4096 bytes",
             )
         })?;
-    let redirect_matches_client = registered_client
-        .as_ref()
-        .is_some_and(|client| client.redirect_uris.iter().any(|uri| uri == redirect_uri))
-        || cimd_client
-            .as_ref()
-            .is_some_and(|client| client.redirect_uris.iter().any(|uri| uri == redirect_uri));
+    let redirect_matches_client = cimd_client
+        .redirect_uris
+        .iter()
+        .any(|uri| uri == redirect_uri);
     if !redirect_matches_client {
         return Err(OAuthRequestError::new(
             "invalid_request",
             "redirect_uri does not match the registered client metadata",
         ));
     }
-    let verified_chatgpt_cimd = cimd_client.is_some();
-    let client_name = registered_client
-        .as_ref()
-        .and_then(|client| client.client_name.clone())
-        .or_else(|| {
-            cimd_client
-                .as_ref()
-                .and_then(|client| client.client_name.clone())
-        })
-        // Only a successfully validated ChatGPT CIMD URL earns this fallback.
-        // An unnamed dynamically registered client must remain generic on the
-        // password/consent page rather than being mislabeled as ChatGPT.
-        .or_else(|| verified_chatgpt_cimd.then(|| "ChatGPT".to_owned()));
+    let client_name = cimd_client
+        .client_name
+        .clone()
+        .or_else(|| Some("ChatGPT".to_owned()));
     Ok(ValidatedAuthorizationClient {
         client_id: client_id.to_owned(),
         client_name,
@@ -3243,10 +2627,9 @@ struct RefreshTokenRecord {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct PersistedOAuthRuntime {
     version: u32,
-    #[serde(default)]
-    clients: HashMap<String, RegisteredClient>,
     #[serde(default)]
     refresh_tokens: HashMap<String, RefreshTokenRecord>,
     #[serde(default)]
@@ -3267,14 +2650,12 @@ struct AccessTokenClaims {
 }
 
 struct OAuthState {
-    clients: DashMap<String, RegisteredClient>,
     cimd_clients: DashMap<String, CachedCimdClient>,
     authorization_codes: DashMap<String, AuthorizationCodeRecord>,
     refresh_tokens: DashMap<String, RefreshTokenRecord>,
     revoked_jti: DashMap<String, u64>,
     authorization_lock: tokio::sync::Mutex<()>,
     cimd_fetch_lock: tokio::sync::Mutex<()>,
-    registration_lock: tokio::sync::Mutex<()>,
     refresh_rotation_lock: tokio::sync::Mutex<()>,
     persist_lock: tokio::sync::Mutex<()>,
     signing_key: OAuthSigningKey,
@@ -3288,31 +2669,20 @@ impl OAuthState {
         persisted: Option<PersistedOAuthRuntime>,
     ) -> Self {
         let state = Self {
-            clients: DashMap::new(),
             cimd_clients: DashMap::new(),
             authorization_codes: DashMap::new(),
             refresh_tokens: DashMap::new(),
             revoked_jti: DashMap::new(),
             authorization_lock: tokio::sync::Mutex::new(()),
             cimd_fetch_lock: tokio::sync::Mutex::new(()),
-            registration_lock: tokio::sync::Mutex::new(()),
             refresh_rotation_lock: tokio::sync::Mutex::new(()),
             persist_lock: tokio::sync::Mutex::new(()),
             signing_key,
             database,
         };
         if let Some(persisted) = persisted {
-            let legacy_plaintext_refresh_keys = persisted.version == 1;
-            for (client_id, client) in persisted.clients {
-                state.clients.insert(client_id, client);
-            }
             for (token, record) in persisted.refresh_tokens {
-                let key = if legacy_plaintext_refresh_keys {
-                    refresh_token_fingerprint(token.as_str())
-                } else {
-                    token
-                };
-                state.refresh_tokens.insert(key, record);
+                state.refresh_tokens.insert(token, record);
             }
             for (jti, expires_at) in persisted.revoked_jti {
                 state.revoked_jti.insert(jti, expires_at);
@@ -3325,15 +2695,9 @@ impl OAuthState {
         let Some(database) = self.database.as_ref() else {
             return Ok(());
         };
-        // Snapshot and write under one lock. Without this, an older concurrent
-        // snapshot can finish last and erase a newer client, refresh token, or
-        // revocation record from the single persisted runtime document.
+        // Snapshot and write under one lock so concurrent token/revocation
+        // updates cannot overwrite newer persisted state.
         let _persist_guard = self.persist_lock.lock().await;
-        let clients = self
-            .clients
-            .iter()
-            .map(|entry| (entry.key().clone(), entry.value().clone()))
-            .collect();
         let refresh_tokens = self
             .refresh_tokens
             .iter()
@@ -3349,7 +2713,6 @@ impl OAuthState {
                 KV_KEY_MCP_OAUTH_RUNTIME,
                 &PersistedOAuthRuntime {
                     version: OAUTH_RUNTIME_VERSION,
-                    clients,
                     refresh_tokens,
                     revoked_jti,
                 },
@@ -4243,9 +3606,8 @@ fn validate_redirect_uri(value: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// ChatGPT's CIMD client ID is an HTTPS metadata-document URL rather than a
-/// value previously returned by /oauth/register. Keep the accepted surface
-/// deliberately narrow: only OpenAI's production ChatGPT metadata namespace is
+/// ChatGPT's CIMD client ID is an HTTPS metadata-document URL. Keep the accepted
+/// surface deliberately narrow: only OpenAI's production ChatGPT metadata namespace is
 /// trusted, and the document is fetched and validated before use.
 fn is_supported_cimd_client_id(value: &str) -> bool {
     let Ok(url) = Url::parse(value.trim()) else {
@@ -4538,7 +3900,7 @@ mod tests {
             destructive: false,
             open_world: false,
             task: false,
-            plugin_id: plugin_id.map(str::to_owned),
+            plugin_id: plugin_id.unwrap_or("test.unclassified").to_owned(),
         }
     }
 
@@ -4927,76 +4289,6 @@ mod tests {
         let html = render_authorization_page(&request, None);
         assert!(html.contains("<strong>an MCP client</strong>"));
         assert!(!html.contains("<strong>ChatGPT</strong>"));
-    }
-
-    #[test]
-    fn modern_requests_bypass_the_legacy_stateless_fallback() {
-        let mut headers = HeaderMap::new();
-        headers.insert("mcp-method", HeaderValue::from_static("tools/list"));
-        assert!(request_has_modern_mcp_headers(&headers));
-
-        let discover = serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "server/discover",
-            "params": {
-                "_meta": {
-                    "io.modelcontextprotocol/protocolVersion": "2026-07-28",
-                    "io.modelcontextprotocol/clientInfo": {
-                        "name": "ChatGPT",
-                        "version": "test"
-                    },
-                    "io.modelcontextprotocol/clientCapabilities": {}
-                }
-            }
-        });
-        assert!(value_uses_modern_mcp(&discover));
-        assert!(!value_is_legacy_compat_request(&discover));
-    }
-
-    #[test]
-    fn legacy_fallback_accepts_only_the_finite_tools_surface() {
-        for method in ["initialize", "ping", "tools/list", "tools/call"] {
-            assert!(value_is_legacy_compat_request(&serde_json::json!({
-                "jsonrpc": "2.0",
-                "id": 1,
-                "method": method,
-            })));
-        }
-        assert!(value_is_legacy_compat_request(&serde_json::json!({
-            "jsonrpc": "2.0",
-            "method": "notifications/initialized",
-        })));
-        assert!(!value_is_legacy_compat_request(&serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "resources/list",
-        })));
-    }
-
-    #[test]
-    fn stateless_initialize_compatibility_returns_chatgpt_handshake() {
-        let request = serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": 12,
-            "method": "initialize",
-            "params": {"protocolVersion": "2025-06-18"}
-        });
-        let result = compat_initialize_result(&request);
-        assert_eq!(result["protocolVersion"], "2025-06-18");
-        assert_eq!(result["capabilities"]["tools"], serde_json::json!({}));
-        assert_eq!(result["serverInfo"]["name"], "agena");
-    }
-
-    #[test]
-    fn stateless_jsonrpc_error_uses_standard_error_codes() {
-        let error = compat_jsonrpc_error(
-            Some(serde_json::json!(12)),
-            McpServerError::InvalidParams("bad params".to_owned()),
-        );
-        assert_eq!(error["jsonrpc"], "2.0");
-        assert_eq!(error["id"], 12);
-        assert_eq!(error["error"]["code"], -32602);
     }
 
     #[test]

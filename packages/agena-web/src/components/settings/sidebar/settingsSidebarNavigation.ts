@@ -1,8 +1,4 @@
-/**
- * The web settings workbench follows the same top-level sections as the TUI
- * Settings Studio.  The legacy names remain accepted by the route parser so
- * links from older clients do not become dead links.
- */
+/** The web settings workbench follows the same top-level sections as the TUI Settings Studio. */
 
 export const SETTINGS_TAB_IDS = [
   'models-providers',
@@ -14,15 +10,6 @@ export const SETTINGS_TAB_IDS = [
 ] as const
 
 export type SettingsTab = (typeof SETTINGS_TAB_IDS)[number]
-export type LegacySettingsTab =
-  | 'general'
-  | 'providers'
-  | 'permissions'
-  | 'plugins'
-  | 'activities'
-  | 'memories'
-  | 'usage'
-export type SettingsRouteTab = SettingsTab | LegacySettingsTab
 export type SettingsSidebarGroupId = 'core' | 'application' | 'system'
 export type SettingsSidebarIconKey =
   | 'models-providers'
@@ -132,102 +119,31 @@ const GROUP_LABEL_KEYS: Record<SettingsSidebarGroupId, string> = {
   system: 'settings.groups.system',
 }
 
-const LEGACY_ROUTE_ALIASES: Record<string, LegacySettingsTab> = {
-  general: 'general',
-  appearance: 'general',
-  provider: 'providers',
-  providers: 'providers',
-  model: 'providers',
-  models: 'providers',
-  permission: 'permissions',
-  permissions: 'permissions',
-  plugin: 'plugins',
-  plugins: 'plugins',
-  command: 'plugins',
-  commands: 'plugins',
-  skill: 'plugins',
-  skills: 'plugins',
-  activity: 'activities',
-  activities: 'activities',
-  task: 'activities',
-  tasks: 'activities',
-  memory: 'memories',
-  memories: 'memories',
-  usage: 'usage',
-}
-
-const LEGACY_TO_CANONICAL: Record<LegacySettingsTab, SettingsTab> = {
-  general: 'interface',
-  providers: 'models-providers',
-  permissions: 'permissions',
-  plugins: 'plugins-tools',
-  activities: 'diagnostics',
-  memories: 'diagnostics',
-  usage: 'diagnostics',
-}
-
 export function isSettingsTab(input: string): input is SettingsTab {
   return SETTINGS_TAB_IDS.includes(input as SettingsTab)
 }
 
-export function isLegacySettingsTab(input: string): input is LegacySettingsTab {
-  return Object.prototype.hasOwnProperty.call(LEGACY_TO_CANONICAL, input)
-}
-
-export function canonicalSettingsTab(input: SettingsRouteTab | null | undefined): SettingsTab {
-  if (input && isSettingsTab(input)) return input
-  if (input && isLegacySettingsTab(input)) return LEGACY_TO_CANONICAL[input]
-  return 'interface'
-}
-
-/** Return the canonical URL used by the new workbench. */
-export function settingsPathForTab(tab: SettingsRouteTab): string {
-  if (isLegacySettingsTab(tab)) {
-    // Keep the most common old URL stable for bookmarks. The SettingsPage
-    // still renders the canonical Interface section for it.
-    if (tab === 'general') return '/settings/general'
-    return settingsPathForTab(LEGACY_TO_CANONICAL[tab])
-  }
+export function settingsPathForTab(tab: SettingsTab): string {
   return `/settings/${tab}`
 }
 
-/**
- * Parse both canonical section ids and legacy route values. Returning the
- * legacy alias is intentional: existing contract tests and old callers can
- * still identify what they linked to; callers rendering the workbench should
- * pass the result through canonicalSettingsTab().
- */
-export function settingsTabFromRouteValue(value: unknown): SettingsRouteTab | null {
+export function settingsTabFromRouteValue(value: unknown): SettingsTab | null {
   const raw = String(value || '')
     .trim()
     .toLowerCase()
   if (!raw) return null
   if (isSettingsTab(raw)) return raw
-  if (isLegacySettingsTab(raw)) return raw
-  if (LEGACY_ROUTE_ALIASES[raw]) return LEGACY_ROUTE_ALIASES[raw]
 
   const path = raw.split(/[?#]/, 1)[0] || ''
   const parts = path.split('/').filter(Boolean)
   if (parts[0] !== 'settings') return null
-
-  if (parts[1] === 'opencode') {
-    const legacySection = parts[2] || ''
-    return LEGACY_ROUTE_ALIASES[legacySection] || 'general'
-  }
-  if (parts[1] === 'plan') return 'plugins'
-
   const section = parts[1] || ''
-  if (isSettingsTab(section)) return section
-  return LEGACY_ROUTE_ALIASES[section] || null
+  return isSettingsTab(section) ? section : null
 }
 
 export function normalizeRememberedSettingsRoute(value: unknown, fallback: SettingsTab = 'interface'): string {
   const parsed = settingsTabFromRouteValue(value)
-  // Keep the legacy General URL stable for old bookmarks and the existing
-  // shell navigation contract. SettingsPage canonicalizes it to Interface
-  // when deciding which panel to render.
-  if (parsed === 'general') return settingsPathForTab('general')
-  return settingsPathForTab(parsed ? canonicalSettingsTab(parsed) : fallback)
+  return settingsPathForTab(parsed || fallback)
 }
 
 function navigationNodeWithDefaultView(node: SettingsSidebarNavigationNode): SettingsSidebarNavigationNode {

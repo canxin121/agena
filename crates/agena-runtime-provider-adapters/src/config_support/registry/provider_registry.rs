@@ -111,7 +111,7 @@ pub(crate) fn build_provider(
                     enabled: config.enabled,
                     native_compaction: config.native_compaction,
                     agena_tool_mode: config.agena_tools.mode,
-                    provider_native_tools: config.agena_tools.provider_native.clone(),
+                    provider_native_tools: Default::default(),
                     definition: config.definition.clone(),
                 },
             ))

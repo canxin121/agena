@@ -34,10 +34,11 @@ const isMobileSheet = computed(() => Boolean(ui.isMobilePointer))
 const { t } = useI18n()
 
 const MOBILE_SHEET_MARGIN_PX = 8
-const MOBILE_SHEET_MIN_MAX_HEIGHT_PX = 180
 
 const mobileSheetStyle = ref<CSSProperties>({
   top: `${MOBILE_SHEET_MARGIN_PX}px`,
+  left: '50%',
+  width: `calc(100% - ${MOBILE_SHEET_MARGIN_PX * 2}px)`,
   maxHeight: `calc(100dvh - ${MOBILE_SHEET_MARGIN_PX * 2}px)`,
   '--oc-form-dialog-mobile-max-height': `calc(100dvh - ${MOBILE_SHEET_MARGIN_PX * 2}px)`,
 })
@@ -51,7 +52,7 @@ const desktopContentClass = computed(() =>
 
 const mobileContentClass = computed(() =>
   cn(
-    'fixed left-2 right-2 z-[71] pointer-events-auto flex flex-col overflow-hidden rounded-xl border border-border/70 bg-background/95 shadow-xl backdrop-blur duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0',
+    'fixed z-[71] pointer-events-auto flex -translate-x-1/2 flex-col overflow-hidden rounded-xl border border-border/70 bg-background/95 shadow-xl backdrop-blur duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0',
     props.maxWidth || 'max-w-none',
   ),
 )
@@ -96,22 +97,59 @@ function resolveViewportHeight(): number {
   return window.innerHeight
 }
 
+function resolveViewportWidth(): number {
+  if (typeof window === 'undefined') return 0
+  const vvWidth = window.visualViewport?.width
+  if (typeof vvWidth === 'number' && Number.isFinite(vvWidth) && vvWidth > 0) {
+    return vvWidth
+  }
+  return window.innerWidth
+}
+
+function resolveViewportLeft(): number {
+  if (typeof window === 'undefined') return 0
+  const vvLeft = window.visualViewport?.offsetLeft
+  if (typeof vvLeft === 'number' && Number.isFinite(vvLeft) && vvLeft > 0) {
+    return vvLeft
+  }
+  return 0
+}
+
+function resolveViewportTop(): number {
+  if (typeof window === 'undefined') return 0
+  const vvTop = window.visualViewport?.offsetTop
+  if (typeof vvTop === 'number' && Number.isFinite(vvTop) && vvTop > 0) {
+    return vvTop
+  }
+  return 0
+}
+
 function syncMobileSheetPosition() {
   if (!props.open || !isMobileSheet.value) return
   if (typeof window === 'undefined' || typeof document === 'undefined') return
 
   const viewportHeight = resolveViewportHeight()
   if (!viewportHeight) return
+  const viewportTop = resolveViewportTop()
+  const viewportWidth = resolveViewportWidth()
+  const viewportLeft = resolveViewportLeft()
 
   const safeTop = cssVarPx('--oc-safe-area-top', 0)
   const safeBottom = cssVarPx('--oc-safe-area-bottom', 0)
+  const safeLeft = cssVarPx('--oc-safe-area-left', 0)
+  const safeRight = cssVarPx('--oc-safe-area-right', 0)
 
-  const topInset = safeTop + MOBILE_SHEET_MARGIN_PX
-  const bottomInset = safeBottom + MOBILE_SHEET_MARGIN_PX
-  const maxHeight = Math.max(MOBILE_SHEET_MIN_MAX_HEIGHT_PX, viewportHeight - topInset - bottomInset)
+  const topInset = viewportTop + safeTop + MOBILE_SHEET_MARGIN_PX
+  const bottomEdge = viewportTop + viewportHeight - safeBottom - MOBILE_SHEET_MARGIN_PX
+  const maxHeight = Math.max(0, bottomEdge - topInset)
+  const usableWidth = Math.max(0, viewportWidth - safeLeft - safeRight)
+  const panelWidth = Math.max(0, usableWidth - MOBILE_SHEET_MARGIN_PX * 2)
+  const panelCenter = viewportLeft + safeLeft + usableWidth / 2
 
   const nextStyle: CSSProperties = {
     top: `${Math.round(topInset)}px`,
+    left: `${Math.round(panelCenter)}px`,
+    width: `${Math.round(panelWidth)}px`,
     maxHeight: `${Math.round(maxHeight)}px`,
     '--oc-form-dialog-mobile-max-height': `${Math.round(maxHeight)}px`,
   }

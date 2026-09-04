@@ -890,5 +890,8 @@
   "Default speed mode": "डिफ़ॉल्ट गति मोड",
   "Default verbosity": "डिफ़ॉल्ट वाचालता",
   "Clear a mode to inherit the model’s native default.": "मॉडल का मूल डिफ़ॉल्ट अपनाने के लिए कोई मोड साफ़ करें।",
-  "Save runtime default": "रनटाइम डिफ़ॉल्ट सहेजें"
+  "Save runtime default": "रनटाइम डिफ़ॉल्ट सहेजें",
+  "Move up": "ऊपर ले जाएँ",
+  "Move down": "नीचे ले जाएँ",
+  "Duplicate": "डुप्लिकेट करें"
 }

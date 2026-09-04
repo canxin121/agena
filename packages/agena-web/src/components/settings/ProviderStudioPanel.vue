@@ -10,6 +10,7 @@ import IconButton from '@/components/ui/IconButton.vue'
 import Input from '@/components/ui/Input.vue'
 import OptionPicker from '@/components/ui/OptionPicker.vue'
 import { apiJson } from '@/lib/api'
+import { confirmAction } from '@/lib/appConfirm'
 import { useToastsStore } from '@/stores/toasts'
 import type { JsonValue } from '@/types/json'
 import { settingsText as st } from '@/i18n/settingsText'
@@ -1284,7 +1285,7 @@ async function deleteProvider() {
   if (!draft.value || mutationBusy.value) return
   const draftSnapshot = clone(draft.value)
   const providerId = String(draftSnapshot.source_provider_id || draftSnapshot.provider_id || '').trim()
-  if (!providerId || !window.confirm(st('Delete provider {providerId}?', { providerId: providerId }))) return
+  if (!providerId || !(await confirmAction(st('Delete provider {providerId}?', { providerId: providerId })))) return
   const submittedDraftGeneration = draftRequestGeneration
   const submittedDraftIdentity = providerDraftIdentity(draftSnapshot)
   const submittedEditorState = providerEditorStateFingerprint(
@@ -1687,7 +1688,7 @@ async function deleteModel(adapterId: string, modelId: string) {
   if (
     !draft.value ||
     mutationBusy.value ||
-    !window.confirm(st('Delete model {adapterId}/{modelId}?', { adapterId: adapterId, modelId: modelId }))
+    !(await confirmAction(st('Delete model {adapterId}/{modelId}?', { adapterId: adapterId, modelId: modelId })))
   )
     return
   const key = modelKey(adapterId, modelId)
@@ -1713,7 +1714,7 @@ async function deleteAdapter(adapterId: string) {
   if (
     !draft.value ||
     mutationBusy.value ||
-    !window.confirm(st('Delete adapter {adapterId}?', { adapterId: adapterId }))
+    !(await confirmAction(st('Delete adapter {adapterId}?', { adapterId: adapterId })))
   )
     return
   if (configuredAdapterIds.value.has(adapterId)) {
@@ -1742,7 +1743,7 @@ async function openProviderRow(row: ProviderRow) {
   }
   const currentKey = expandedProviderKey.value
   if (providerDirty.value && currentKey && currentKey !== row.key) {
-    const discard = window.confirm(st('Discard unsaved provider changes and open another provider?'))
+    const discard = await confirmAction(st('Discard unsaved provider changes and open another provider?'))
     if (!discard) return
   }
   expandedProviderKey.value = row.key
@@ -1768,7 +1769,7 @@ async function discardProviderChanges() {
 }
 
 async function refreshActiveProvider() {
-  if (providerDirty.value && !window.confirm(st('Discard unsaved provider changes and refresh from the server?')))
+  if (providerDirty.value && !(await confirmAction(st('Discard unsaved provider changes and refresh from the server?'))))
     return
   const sourceProviderId = String(draft.value?.source_provider_id || selectedProviderId.value || '').trim()
   await loadDraft(sourceProviderId || undefined)
@@ -1780,7 +1781,7 @@ async function deleteProviderRow(row: ProviderRow) {
     return
   }
   if (selectedProviderId.value !== row.providerId || !draft.value) {
-    if (!window.confirm(st('Delete provider {providerId}?', { providerId: row.providerId }))) return
+    if (!(await confirmAction(st('Delete provider {providerId}?', { providerId: row.providerId })))) return
     mutationBusy.value = true
     try {
       await apiJson('/api/v1/provider-studio/delete-provider', {
@@ -1803,7 +1804,7 @@ async function deleteProviderRow(row: ProviderRow) {
 
 async function createProvider() {
   if (mutationBusy.value || loading.value) return
-  if (providerDirty.value && !window.confirm(st('Discard unsaved provider changes and create a new provider?'))) return
+  if (providerDirty.value && !(await confirmAction(st('Discard unsaved provider changes and create a new provider?')))) return
   await loadDraft()
   if (draft.value) {
     const next = clone(draft.value)

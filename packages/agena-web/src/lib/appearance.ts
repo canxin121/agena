@@ -69,6 +69,13 @@ export function applyAppearanceSettingsToDom(settings: AnySettings) {
   // Tailwind + CSS in this repo use `.dark` on the root element.
   root.classList.toggle('dark', variant === 'dark')
 
+  // Keep the browser chrome (mobile address/status bar) visually aligned
+  // with the resolved application theme, including manual theme overrides.
+  const themeColor = variant === 'dark' ? '#151313' : '#fbf8f3'
+  document.querySelectorAll<HTMLMetaElement>('meta[name="theme-color"]').forEach((meta) => {
+    meta.content = themeColor
+  })
+
   const uiFont = resolveFont(getString(settings, 'uiFont'), UI_FONT_PRESETS, UI_FONT_PRESETS['system']!)
   const monoFont = resolveFont(getString(settings, 'monoFont'), MONO_FONT_PRESETS, MONO_FONT_PRESETS['system']!)
   root.style.setProperty('--font-sans', uiFont)

@@ -767,7 +767,7 @@ onBeforeUnmount(() => {
 
     <template v-else>
       <div class="min-h-[220px] flex-1 overflow-hidden rounded-md border border-border/60 bg-[#101415]">
-        <div ref="el" class="h-full w-full" />
+        <div ref="el" dir="ltr" class="h-full w-full" />
       </div>
 
       <div class="text-[11px] text-muted-foreground">

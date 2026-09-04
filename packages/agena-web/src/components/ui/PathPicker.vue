@@ -364,7 +364,7 @@ const browserViewportWrapperClass = computed(() => (props.view === 'browser' ? '
 const browserViewportClass = computed(() => {
   if (props.browserClass) return props.browserClass
   if (props.view === 'browser') return 'flex min-h-0 h-full flex-col'
-  return 'min-h-[50vh] max-h-[50vh]'
+  return 'min-h-[50dvh] max-h-[50dvh]'
 })
 
 watch(

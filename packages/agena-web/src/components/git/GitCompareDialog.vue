@@ -61,12 +61,14 @@ function onUpdateText(key: 'base' | 'head' | 'path', v: string | number) {
           :model-value="base"
           class="h-9 font-mono text-xs"
           :placeholder="t('git.ui.dialogs.compare.placeholders.base')"
+          :aria-label="t('git.ui.dialogs.compare.placeholders.base')"
           @update:model-value="(v) => onUpdateText('base', v)"
         />
         <Input
           :model-value="head"
           class="h-9 font-mono text-xs"
           :placeholder="t('git.ui.dialogs.compare.placeholders.head')"
+          :aria-label="t('git.ui.dialogs.compare.placeholders.head')"
           @update:model-value="(v) => onUpdateText('head', v)"
         />
         <Button
@@ -87,6 +89,7 @@ function onUpdateText(key: 'base' | 'head' | 'path', v: string | number) {
         :model-value="path"
         class="h-9 font-mono text-xs"
         :placeholder="t('git.ui.dialogs.compare.placeholders.pathOptional')"
+        :aria-label="t('git.ui.dialogs.compare.placeholders.pathOptional')"
         @update:model-value="(v) => onUpdateText('path', v)"
       />
 

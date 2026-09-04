@@ -109,7 +109,14 @@ function close() {
       v-if="isCompactLayout && selectedFile"
       class="h-12 border-b border-border/40 flex items-center bg-background flex-shrink-0 px-4 select-none"
     >
-      <Button variant="ghost" size="sm" class="h-8 w-8 -ml-2 mr-1 p-0 rounded-full" @click="close">
+      <Button
+        variant="ghost"
+        size="sm"
+        class="h-8 w-8 -ml-2 mr-1 p-0 rounded-full"
+        :aria-label="t('common.back')"
+        :title="t('common.back')"
+        @click="close"
+      >
         <RiArrowGoBackLine class="h-5 w-5" />
       </Button>
       <div class="flex flex-col min-w-0 overflow-hidden">

@@ -1,4 +1,6 @@
 import { apiErrorBodyRecord, ApiError } from '@/lib/api'
+import { confirmAction } from '@/lib/appConfirm'
+import { promptForText } from '@/lib/appTextPrompt'
 import { i18n } from '@/i18n'
 
 type QueryValue = string | number | boolean | null | undefined
@@ -241,12 +243,16 @@ export function useGitCommitOps(opts: {
     const dir = repoRoot.value
     if (!dir) return false
 
-    const nextBranch = (
-      window.prompt(
-        `Branch "${baseBranch}" is protected. Enter a new branch name for this commit:`,
-        suggestProtectedBranchName(baseBranch),
-      ) || ''
-    ).trim()
+    const nextBranch =
+      (
+        await promptForText({
+          title: String(i18n.global.t('git.ui.protectedBranchNewBranchTitle')),
+          description: String(i18n.global.t('git.ui.protectedBranchNewBranchDescription', { branch: baseBranch })),
+          placeholder: String(i18n.global.t('git.ui.branchAction.branchNamePlaceholder')),
+          initialValue: suggestProtectedBranchName(baseBranch),
+          confirmText: String(i18n.global.t('common.create')),
+        })
+      )?.trim() || ''
     if (!nextBranch) return false
 
     try {
@@ -345,7 +351,7 @@ export function useGitCommitOps(opts: {
     if (promptMode === 'alwaysCommit') return true
 
     if (promptMode === 'alwaysPrompt') {
-      return window.confirm(`Branch "${branch}" is protected. Commit anyway?`)
+      return await confirmAction(String(i18n.global.t('git.ui.protectedBranchCommitConfirm', { branch })))
     }
     return await switchToNewBranchForProtected(branch)
   }

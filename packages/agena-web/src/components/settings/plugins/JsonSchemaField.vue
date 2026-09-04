@@ -250,6 +250,7 @@ const showMultiline = computed(() => {
       :value="typeof modelValue === 'string' ? modelValue : ''"
       rows="5"
       :disabled="disabled"
+      :aria-label="title"
       class="w-full rounded-md border border-input bg-transparent p-3 text-sm outline-none focus:border-ring"
       @input="updateText(($event.target as HTMLTextAreaElement).value)"
     />
@@ -258,6 +259,7 @@ const showMultiline = computed(() => {
       v-else-if="kind === 'string'"
       :model-value="typeof modelValue === 'string' ? modelValue : ''"
       :disabled="disabled"
+      :aria-label="title"
       @update:model-value="updateText"
     />
 
@@ -266,6 +268,7 @@ const showMultiline = computed(() => {
       type="number"
       :model-value="typeof modelValue === 'number' ? modelValue : 0"
       :disabled="disabled"
+      :aria-label="title"
       @update:model-value="updateNumber"
     />
 
@@ -321,18 +324,34 @@ const showMultiline = computed(() => {
         <div class="flex items-center justify-between gap-2">
           <span class="text-xs font-medium text-muted-foreground">{{ $st('Item') }} {{ index + 1 }}</span>
           <div class="flex flex-wrap gap-1">
-            <Button variant="ghost" size="sm" :disabled="disabled || index === 0" @click="moveArrayItem(index, -1)">
+            <Button
+              variant="ghost"
+              size="sm"
+              :disabled="disabled || index === 0"
+              :aria-label="$st('Move up')"
+              :title="$st('Move up')"
+              @click="moveArrayItem(index, -1)"
+            >
               <RiArrowUpLine class="h-4 w-4" />
             </Button>
             <Button
               variant="ghost"
               size="sm"
               :disabled="disabled || index >= arrayValue.length - 1"
+              :aria-label="$st('Move down')"
+              :title="$st('Move down')"
               @click="moveArrayItem(index, 1)"
             >
               <RiArrowDownLine class="h-4 w-4" />
             </Button>
-            <Button variant="ghost" size="sm" :disabled="disabled" @click="duplicateArrayItem(index)">
+            <Button
+              variant="ghost"
+              size="sm"
+              :disabled="disabled"
+              :aria-label="$st('Duplicate')"
+              :title="$st('Duplicate')"
+              @click="duplicateArrayItem(index)"
+            >
               <RiFileCopyLine class="h-4 w-4" />
             </Button>
             <Button
@@ -375,6 +394,7 @@ const showMultiline = computed(() => {
         rows="6"
         spellcheck="false"
         :disabled="disabled"
+        :aria-label="title"
         class="w-full rounded-md border border-input bg-transparent p-3 font-mono text-xs outline-none focus:border-ring"
       />
       <div class="flex flex-wrap items-center justify-between gap-2">

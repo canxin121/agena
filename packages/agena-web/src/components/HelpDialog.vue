@@ -139,7 +139,7 @@ async function setTheme(mode: 'light' | 'dark' | 'system') {
     max-width="max-w-2xl"
     @update:open="(v) => (ui.isHelpDialogOpen = v)"
   >
-    <div class="max-h-[65vh] overflow-auto pr-1">
+    <div class="max-h-[65dvh] overflow-auto pr-1">
       <div class="space-y-4">
         <section>
           <div class="text-[11px] font-semibold tracking-wider uppercase text-muted-foreground mb-2">

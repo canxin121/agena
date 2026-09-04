@@ -115,8 +115,10 @@ async function submit() {
 </script>
 
 <template>
-  <div class="min-h-dvh bg-background px-4 py-6">
-    <div class="mx-auto my-auto flex min-h-[calc(100dvh-3rem)] w-full max-w-[360px] flex-col justify-center space-y-6">
+  <div
+    class="flex min-h-dvh bg-background pt-[calc(1.5rem+var(--oc-safe-area-top,0px))] pr-[calc(1rem+var(--oc-safe-area-right,0px))] pb-[calc(1.5rem+var(--oc-safe-area-bottom,0px))] pl-[calc(1rem+var(--oc-safe-area-left,0px))]"
+  >
+    <div class="mx-auto my-auto flex w-full max-w-[360px] flex-col justify-center space-y-6">
       <div class="flex flex-col items-center gap-4 text-center">
         <div
           class="flex h-16 w-16 items-center justify-center rounded-2xl bg-primary/10 ring-1 ring-inset ring-foreground/5"
@@ -125,7 +127,7 @@ async function submit() {
         </div>
         <div class="space-y-1">
           <h1 class="text-2xl font-semibold tracking-tight text-foreground">{{ t('login.title') }}</h1>
-          <p class="text-sm text-muted-foreground">Enter your password to unlock Agena.</p>
+          <p class="text-sm text-muted-foreground">{{ t('login.unlockDescription') }}</p>
         </div>
       </div>
 
@@ -144,9 +146,13 @@ async function submit() {
         </div>
 
         <div v-if="connecting" class="grid gap-3">
-          <div class="flex items-center justify-center gap-3 rounded-lg border border-border bg-muted/10 px-4 py-6">
+          <div
+            role="status"
+            aria-live="polite"
+            class="flex items-center justify-center gap-3 rounded-lg border border-border bg-muted/10 px-4 py-6"
+          >
             <div class="h-4 w-4 animate-spin rounded-full border-2 border-primary/30 border-t-primary" />
-            <div class="text-sm text-muted-foreground">Connecting to server...</div>
+            <div class="text-sm text-muted-foreground">{{ t('common.connecting') }}</div>
           </div>
         </div>
 
@@ -157,6 +163,7 @@ async function submit() {
               v-model="password"
               type="password"
               :placeholder="String(t('login.passwordPlaceholder'))"
+              :aria-label="String(t('login.passwordPlaceholder'))"
               autocomplete="current-password"
               @keydown.enter="submit"
               :disabled="busy"
@@ -177,6 +184,7 @@ async function submit() {
 
       <div
         v-if="visibleError"
+        role="alert"
         class="animate-in fade-in slide-in-from-top-2 rounded-lg bg-destructive/10 p-3 text-sm font-medium text-destructive ring-1 ring-inset ring-destructive/20"
       >
         <div class="break-words text-center">{{ visibleError }}</div>

@@ -44,9 +44,14 @@ function normalizeText(value: unknown): string {
 const tooltipFromAttrs = computed(() => normalizeText(attrs.title))
 const tooltipText = computed(() => normalizeText(props.tooltip) || tooltipFromAttrs.value)
 const showCustomTooltip = computed(() => !props.disableTooltip && !isTouchPointer.value && Boolean(tooltipText.value))
+const nativeType = computed(() => {
+  const explicit = normalizeText(attrs.type)
+  if (explicit) return explicit
+  return props.as === 'button' && !props.asChild ? 'button' : undefined
+})
 
 const passthroughAttrs = computed(() => {
-  const { title, ...rest } = attrs
+  const { title, type: _type, ...rest } = attrs
   return rest
 })
 
@@ -62,13 +67,28 @@ const computedClass = computed(() => {
 
 <template>
   <Tooltip v-if="showCustomTooltip">
-    <Primitive v-bind="passthroughAttrs" :title="nativeTitle" :as="as" :as-child="asChild" :class="computedClass">
+    <Primitive
+      v-bind="passthroughAttrs"
+      :title="nativeTitle"
+      :type="nativeType"
+      :as="as"
+      :as-child="asChild"
+      :class="computedClass"
+    >
       <slot />
     </Primitive>
     <template #content>{{ tooltipText }}</template>
   </Tooltip>
 
-  <Primitive v-else v-bind="passthroughAttrs" :title="nativeTitle" :as="as" :as-child="asChild" :class="computedClass">
+  <Primitive
+    v-else
+    v-bind="passthroughAttrs"
+    :title="nativeTitle"
+    :type="nativeType"
+    :as="as"
+    :as-child="asChild"
+    :class="computedClass"
+  >
     <slot />
   </Primitive>
 </template>

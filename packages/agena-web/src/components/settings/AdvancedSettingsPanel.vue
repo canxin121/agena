@@ -5,6 +5,7 @@ import { RiDeleteBinLine, RiFileCopyLine, RiRefreshLine, RiSave3Line, RiShieldCh
 import Button from '@/components/ui/Button.vue'
 import IconButton from '@/components/ui/IconButton.vue'
 import OptionPicker from '@/components/ui/OptionPicker.vue'
+import { confirmAction } from '@/lib/appConfirm'
 import {
   deleteRuntimeSetting,
   readRuntimeSettingSources,
@@ -188,7 +189,7 @@ async function save() {
 async function clearOverride() {
   const path = normalizedPath.value
   if (!path || actionBusy.value) return
-  if (!window.confirm(st('Delete {layer} override {path}?', { layer: selectedLayerLabel.value, path }))) return
+  if (!(await confirmAction(st('Delete {layer} override {path}?', { layer: selectedLayerLabel.value, path })))) return
   activeAction.value = 'clear'
   error.value = ''
   lastAction.value = null

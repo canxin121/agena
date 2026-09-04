@@ -276,9 +276,9 @@ function handleRowDragStart(event: DragEvent) {
       <template #icon>
         <div class="flex items-center gap-1.5 min-w-0">
           <ListItemSelectionIndicator v-if="multiSelectEnabled" :selected="multiSelected" />
-          <span
+          <button
             v-if="isParent"
-            role="button"
+            type="button"
             class="h-5 w-5 flex-shrink-0 inline-flex items-center justify-center rounded text-muted-foreground hover:text-foreground hover:dark:bg-accent/40 hover:bg-primary/6 cursor-pointer active:scale-95 transition"
             :aria-label="
               String(
@@ -293,7 +293,7 @@ function handleRowDragStart(event: DragEvent) {
           >
             <RiArrowDownSLine v-if="isExpanded" class="h-4 w-4" />
             <RiArrowRightSLine v-else class="h-4 w-4" />
-          </span>
+          </button>
           <span v-else-if="showThreadPlaceholder" class="inline-flex h-5 w-5 flex-shrink-0" aria-hidden="true" />
 
           <span

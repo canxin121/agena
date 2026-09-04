@@ -1384,7 +1384,7 @@ function handleHeaderBackClick() {
         <div v-if="!rawUrl" class="p-2">
           <div class="space-y-2 rounded-md border border-border/40 bg-background/30 p-3">
             <Skeleton class="h-3 w-32" />
-            <Skeleton class="h-[65vh] max-h-[42rem] w-full rounded-md" />
+            <Skeleton class="h-[65dvh] max-h-[42rem] w-full rounded-md" />
           </div>
         </div>
         <iframe
@@ -1408,9 +1408,9 @@ function handleHeaderBackClick() {
 
       <div v-else-if="viewerMode === 'video'" class="grid h-full place-items-center p-3">
         <div class="w-full max-w-5xl rounded-md border border-border/40 bg-background/70 p-2">
-          <video v-if="rawUrl" :src="rawUrl" controls class="max-h-[72vh] w-full rounded" />
+          <video v-if="rawUrl" :src="rawUrl" controls class="max-h-[72dvh] w-full rounded" />
           <div v-else class="p-2">
-            <Skeleton class="h-[48vh] max-h-[34rem] w-full rounded" />
+            <Skeleton class="h-[48dvh] max-h-[34rem] w-full rounded" />
           </div>
         </div>
       </div>
@@ -1419,7 +1419,7 @@ function handleHeaderBackClick() {
         <div v-if="!rawUrl" class="w-full max-w-5xl p-1">
           <div class="space-y-2 rounded-md border border-border/40 bg-background/30 p-3">
             <Skeleton class="h-3 w-1/3" />
-            <Skeleton class="h-[52vh] max-h-[36rem] w-full rounded-md" />
+            <Skeleton class="h-[52dvh] max-h-[36rem] w-full rounded-md" />
           </div>
         </div>
         <button
@@ -1432,7 +1432,7 @@ function handleHeaderBackClick() {
           <img
             :src="rawUrl"
             :alt="selectedFile?.name || t('files.viewer.imageAltFallback')"
-            class="max-w-full max-h-[70vh] object-contain rounded-md cursor-zoom-in"
+            class="max-w-full max-h-[70dvh] object-contain rounded-md cursor-zoom-in"
           />
         </button>
       </div>

@@ -169,7 +169,6 @@ const {
 
   // Model and run mode picker.
   composerPickerOpen,
-  composerPickerStyle,
   composerPickerTitle,
   composerPickerSearchable,
   composerPickerSearchPlaceholder,
@@ -349,7 +348,8 @@ void sessionActionsMenuRef
       :collapse-top="composerSplitTopCollapsed"
       @update:model-value="handleComposerResize"
       @dblclick="resetComposerHeight"
-      :min-height="ui.isCompactLayout ? 170 : 190"
+      :min-height="ui.isCompactLayout ? 160 : 190"
+      :max-height="composerMaxHeight"
       :disabled="ui.isCompactLayout"
     >
       <template #top>
@@ -686,7 +686,6 @@ void sessionActionsMenuRef
                       :on-refresh="refreshComposerPickerOptions"
                       :is-mobile-pointer="ui.isMobilePointer"
                       :desktop-fixed="true"
-                      :desktop-style="composerPickerStyle"
                       :desktop-anchor-el="activePickerAnchor"
                       :desktop-gap-px="COMPOSER_DESKTOP_MENU_GAP_PX"
                       :desktop-viewport-margin-px="COMPOSER_DESKTOP_MENU_VIEWPORT_MARGIN_PX"
@@ -695,7 +694,7 @@ void sessionActionsMenuRef
                       pagination-mode="group"
                       :collapsible-groups="composerPickerOpen === 'model'"
                       desktop-placement="top-start"
-                      desktop-class="w-[min(420px,calc(100%-1rem))]"
+                      desktop-class="w-[min(420px,calc(100vw-1rem))]"
                       filter-mode="external"
                       @update:open="setComposerPickerOpen"
                       @update:query="setComposerPickerQuery"

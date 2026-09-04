@@ -42,11 +42,21 @@ function onUpdateText(key: 'from' | 'to', v: string | number) {
     <div class="space-y-3">
       <div class="grid gap-1">
         <div class="text-xs font-medium text-muted-foreground">{{ t('common.from') }}</div>
-        <Input :model-value="from" class="h-9 font-mono text-xs" @update:model-value="(v) => onUpdateText('from', v)" />
+        <Input
+          :model-value="from"
+          class="h-9 font-mono text-xs"
+          :aria-label="t('common.from')"
+          @update:model-value="(v) => onUpdateText('from', v)"
+        />
       </div>
       <div class="grid gap-1">
         <div class="text-xs font-medium text-muted-foreground">{{ t('common.to') }}</div>
-        <Input :model-value="to" class="h-9 font-mono text-xs" @update:model-value="(v) => onUpdateText('to', v)" />
+        <Input
+          :model-value="to"
+          class="h-9 font-mono text-xs"
+          :aria-label="t('common.to')"
+          @update:model-value="(v) => onUpdateText('to', v)"
+        />
       </div>
       <div class="flex justify-end gap-2">
         <Button variant="secondary" size="sm" @click="$emit('update:open', false)">{{ t('common.cancel') }}</Button>

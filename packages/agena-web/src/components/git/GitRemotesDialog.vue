@@ -89,12 +89,14 @@ const selectedInfo = computed(() => props.remotes.find((r) => r.name === props.s
           :model-value="newRemoteName"
           class="h-9 font-mono text-xs"
           placeholder="origin"
+          :aria-label="t('git.ui.dialogs.remotes.placeholders.newRemoteName')"
           @update:model-value="(v) => onUpdateText('newRemoteName', v)"
         />
         <Input
           :model-value="newRemoteUrl"
           class="h-9 font-mono text-xs"
           placeholder="https://github.com/org/repo.git"
+          :aria-label="t('git.ui.dialogs.remotes.placeholders.newRemoteUrl')"
           @update:model-value="(v) => onUpdateText('newRemoteUrl', v)"
         />
         <Button size="sm" :disabled="!newRemoteName.trim() || !newRemoteUrl.trim()" @click="$emit('add')">{{
@@ -125,6 +127,7 @@ const selectedInfo = computed(() => props.remotes.find((r) => r.name === props.s
             :model-value="renameRemoteTo"
             class="h-9 font-mono text-xs"
             :placeholder="t('git.ui.dialogs.remotes.placeholders.newRemoteName')"
+            :aria-label="t('git.ui.dialogs.remotes.placeholders.newRemoteName')"
             @update:model-value="(v) => onUpdateText('renameRemoteTo', v)"
           />
           <Button size="sm" :disabled="!selectedRemote.trim() || !renameRemoteTo.trim()" @click="$emit('rename')">{{
@@ -137,6 +140,7 @@ const selectedInfo = computed(() => props.remotes.find((r) => r.name === props.s
             :model-value="setRemoteUrl"
             class="h-9 font-mono text-xs"
             :placeholder="t('git.ui.dialogs.remotes.placeholders.newRemoteUrl')"
+            :aria-label="t('git.ui.dialogs.remotes.placeholders.newRemoteUrl')"
             @update:model-value="(v) => onUpdateText('setRemoteUrl', v)"
           />
           <Button size="sm" :disabled="!selectedRemote.trim() || !setRemoteUrl.trim()" @click="$emit('setUrl')">{{

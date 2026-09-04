@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 
 import { buildWorkspaceRawFileUrl } from '@/lib/workspaceLinks'
 import type { AttachmentPresentation } from '@/pages/chat/transcriptPartPresentation'
@@ -11,6 +12,8 @@ const props = withDefaults(
   }>(),
   { workspaceRoot: '' },
 )
+
+const { t } = useI18n()
 
 const emit = defineEmits<{
   (event: 'open', path: string, url: string): void
@@ -111,13 +114,15 @@ function openAttachment() {
       <span v-if="facts" class="shrink-0 text-right text-[10px] text-muted-foreground">{{ facts }}</span>
     </div>
 
-    <img
+    <button
       v-if="isImage && href"
-      :src="href"
-      :alt="attachment.label"
-      class="mt-2 max-h-96 max-w-full cursor-zoom-in rounded-md object-contain"
+      type="button"
+      class="mt-2 block max-w-full overflow-hidden rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      :aria-label="`${t('common.open')}: ${attachment.label}`"
       @click="openAttachment"
-    />
+    >
+      <img :src="href" alt="" aria-hidden="true" class="max-h-96 max-w-full cursor-zoom-in object-contain" />
+    </button>
     <video
       v-else-if="isVideo && href"
       :src="href"

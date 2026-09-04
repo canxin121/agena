@@ -12,6 +12,7 @@ import Dialog from '@/components/ui/Dialog.vue'
 import IconButton from '@/components/ui/IconButton.vue'
 import { apiJson } from '@/lib/api'
 import { buildPlanToolInvocationRequest, type PlanTool, type PlanToolInput } from '@/pages/chat/planViewerRequest'
+import { useUiStore } from '@/stores/ui'
 import type { JsonValue } from '@/types/json'
 
 const props = defineProps<{
@@ -24,6 +25,7 @@ const emit = defineEmits<{
 }>()
 
 const { t } = useI18n()
+const ui = useUiStore()
 
 type JsonRecord = Record<string, JsonValue>
 
@@ -128,6 +130,7 @@ watch(
   >
     <div
       class="flex min-h-0 flex-col"
+      :class="ui.isMobilePointer ? 'h-full' : ''"
       data-transcript-chrome="true"
       data-plan-state-viewer="true"
       tabindex="-1"
@@ -154,7 +157,10 @@ watch(
         </IconButton>
       </div>
 
-      <div class="min-h-[12rem] overflow-auto py-3 sm:max-h-[70vh]">
+      <div
+        class="overflow-auto py-3"
+        :class="ui.isMobilePointer ? 'min-h-0 flex-1' : 'min-h-[12rem] max-h-[70dvh]'"
+      >
         <div v-if="loading && !markdown" class="flex items-center gap-2 py-8 text-sm text-muted-foreground">
           <RiLoader4Line class="h-4 w-4 animate-spin" />
           {{ t('chat.planViewer.loading') }}

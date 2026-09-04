@@ -890,5 +890,8 @@
   "Default speed mode": "Modo de velocidade padrão",
   "Default verbosity": "Verbosidade padrão",
   "Clear a mode to inherit the model’s native default.": "Limpe um modo para herdar o padrão nativo do modelo.",
-  "Save runtime default": "Salvar padrão do tempo de execução"
+  "Save runtime default": "Salvar padrão do tempo de execução",
+  "Move up": "Mover para cima",
+  "Move down": "Mover para baixo",
+  "Duplicate": "Duplicar"
 }

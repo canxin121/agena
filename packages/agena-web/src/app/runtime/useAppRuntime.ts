@@ -17,42 +17,6 @@ import { installKeyboardTapFix } from '@/lib/keyboardTapFix'
 import { installKeyboardShortcuts } from '@/app/runtime/installKeyboardShortcuts'
 import { readSessionIdFromFullPath, readSessionIdFromQuery } from '@/app/navigation/sessionQuery'
 
-function applyDeviceClasses(info: { isMobile: boolean; isMobilePointer: boolean; isTouchPointer: boolean }) {
-  if (typeof document === 'undefined') return
-  const root = document.documentElement
-  const hasClass = (name: string) => root.classList.contains(name)
-  const setClass = (name: string, on: boolean) => {
-    if (on && !hasClass(name)) root.classList.add(name)
-    if (!on && hasClass(name)) root.classList.remove(name)
-  }
-  setClass('device-mobile', info.isMobile)
-  setClass('device-desktop', !info.isMobile)
-  setClass('touch-pointer', info.isTouchPointer)
-  setClass('coarse-pointer', info.isMobilePointer)
-}
-
-function getDeviceInfo() {
-  const width = typeof window !== 'undefined' ? window.innerWidth : 0
-  const narrow = width > 0 && width < 768
-  let isMobile = false
-  if (typeof navigator !== 'undefined' && typeof window !== 'undefined') {
-    isMobile =
-      /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || '') ||
-      window.matchMedia?.('(pointer: coarse)')?.matches === true
-  }
-  const touch =
-    typeof window !== 'undefined' &&
-    (window.matchMedia?.('(pointer: coarse)')?.matches === true || navigator.maxTouchPoints > 0)
-  const coarse = isMobile || (touch && narrow)
-  return {
-    isCompactLayout: narrow,
-    isNarrow: narrow,
-    isMobile,
-    isMobilePointer: coarse,
-    isTouchPointer: touch,
-  }
-}
-
 export function useAppRuntime() {
   const route = useRoute()
 
@@ -292,20 +256,6 @@ export function useAppRuntime() {
     }
   }
 
-  function applyDevice() {
-    const info = getDeviceInfo()
-
-    applyDeviceClasses(info)
-    ui.setIsCompactLayout(info.isCompactLayout)
-    ui.setIsMobileDevice(info.isMobile)
-    ui.setIsTouchPointer(info.isTouchPointer)
-    ui.setIsMobilePointer(info.isMobilePointer)
-  }
-
-  // Prime device state before first paint so mobile/desktop side panels mount
-  // against the correct layout branch during refresh.
-  applyDevice()
-
   async function ensureSelectedSessionFromQuery() {
     const sid = readSessionIdFromQuery(route.query) || readSessionIdFromFullPath(route.fullPath)
 
@@ -341,8 +291,6 @@ export function useAppRuntime() {
   }
 
   onMounted(async () => {
-    window.addEventListener('resize', applyDevice)
-
     cleanupKeyboard = installKeyboardInsets({ enabled: true })
     cleanupShortcuts = installKeyboardShortcuts()
     cleanupKeyboardTapFix = installKeyboardTapFix({ enabled: true })
@@ -468,8 +416,6 @@ export function useAppRuntime() {
       window.clearInterval(sseDebugTimer)
       sseDebugTimer = null
     }
-    window.removeEventListener('resize', applyDevice)
-
     if (visibilityHandler) {
       document.removeEventListener('visibilitychange', visibilityHandler)
       visibilityHandler = null

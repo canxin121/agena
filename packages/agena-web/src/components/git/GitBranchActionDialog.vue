@@ -46,6 +46,7 @@ function chooseBranch(value: string) {
         :model-value="branch"
         class="h-9 font-mono text-xs"
         :placeholder="t('git.ui.branchAction.branchNamePlaceholder')"
+        :aria-label="t('git.ui.branchAction.branchNamePlaceholder')"
         @update:model-value="onUpdateBranch"
       />
 

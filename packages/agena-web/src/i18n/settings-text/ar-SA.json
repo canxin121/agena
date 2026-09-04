@@ -890,5 +890,8 @@
   "Default speed mode": "وضع السرعة الافتراضي",
   "Default verbosity": "مستوى الإسهاب الافتراضي",
   "Clear a mode to inherit the model’s native default.": "امسح وضعًا لاستخدام الإعداد الافتراضي الأصلي للنموذج.",
-  "Save runtime default": "حفظ افتراضي وقت التشغيل"
+  "Save runtime default": "حفظ افتراضي وقت التشغيل",
+  "Move up": "نقل لأعلى",
+  "Move down": "نقل لأسفل",
+  "Duplicate": "تكرار"
 }

@@ -51,8 +51,8 @@
   }
 }
 
-/* iOS safe area env() wiring */
-@supports (-webkit-touch-callout: none) {
+/* Standard safe-area env() wiring (iOS Safari + Android Chromium/PWA). */
+@supports (padding: env(safe-area-inset-top)) {
   :root {
     --oc-safe-area-top: env(safe-area-inset-top, 0);
     --oc-safe-area-right: env(safe-area-inset-right, 0);

@@ -540,25 +540,29 @@ async function handleTabStripDrop(event: DragEvent) {
           :data-workspace-tab-main="windowTab.mainTab"
           :class="tabClass(windowTab.id)"
           :draggable="canDragTabs"
-          role="button"
-          tabindex="0"
-          :title="windowTitle(windowTab)"
-          @click="void activateTab(windowTab.id)"
-          @keydown.enter.prevent="void activateTab(windowTab.id)"
-          @keydown.space.prevent="void activateTab(windowTab.id)"
           @contextmenu.prevent.stop="openTabContextMenu($event, windowTab.id)"
           @dragstart="handleTabDragStart($event, windowTab.id)"
           @dragend="handleTabDragEnd($event)"
         >
-          <div class="flex min-w-0 flex-1 select-none items-center gap-2 px-2 py-1.5 text-left">
+          <button
+            type="button"
+            class="flex min-w-0 flex-1 select-none items-center gap-2 rounded-md px-2 py-1.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+            :title="windowTitle(windowTab)"
+            :aria-pressed="isWindowActive(windowTab.id)"
+            @click="void activateTab(windowTab.id)"
+          >
             <component :is="TAB_ICONS[windowTab.mainTab]" class="h-3.5 w-3.5 flex-shrink-0" />
             <span class="truncate text-[12px] font-medium">{{ windowTitle(windowTab) }}</span>
-          </div>
+          </button>
 
           <button
             type="button"
             class="mr-1 inline-flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground transition-opacity hover:bg-secondary/80 hover:text-foreground"
-            :class="isWindowActive(windowTab.id) ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'"
+            :class="
+              isWindowActive(windowTab.id)
+                ? 'opacity-100'
+                : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100'
+            "
             :title="String(t('header.windowTabs.closeCurrent'))"
             :aria-label="String(t('header.windowTabs.closeCurrent'))"
             @click.stop="void closeTab(windowTab.id)"

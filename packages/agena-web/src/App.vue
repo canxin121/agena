@@ -1,19 +1,25 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, watch, watchEffect } from 'vue'
+import { useI18n } from 'vue-i18n'
 
 import { useAuthStore } from './stores/auth'
 import { useHealthStore } from './stores/health'
 import { useSettingsStore } from './stores/settings'
 
 import { applyAppearanceSettingsToDom } from './lib/appearance'
+import { useDeviceRuntime } from './app/runtime/useDeviceRuntime'
 
 import LoginPage from './pages/LoginPage.vue'
 import MainLayout from './layout/MainLayout.vue'
+import AppConfirmHost from './components/AppConfirmHost.vue'
+import AppTextPromptHost from './components/AppTextPromptHost.vue'
 import ToastHost from './components/ToastHost.vue'
 
 const auth = useAuthStore()
 const health = useHealthStore()
 const settings = useSettingsStore()
+const { t } = useI18n()
+useDeviceRuntime()
 
 const backendReady = computed(() => health.data !== null)
 const showLogin = computed(() => !showLoading.value && (auth.needsLogin || !backendReady.value))
@@ -24,6 +30,11 @@ const showLoading = computed(() => health.data === null || !auth.checked)
 
 let probeTimer: ReturnType<typeof setInterval> | null = null
 let probeBusy = false
+let systemThemeMedia: MediaQueryList | null = null
+
+function handleSystemThemeChange() {
+  applyAppearanceSettingsToDom(settings.data)
+}
 
 async function refreshBootState() {
   if (probeBusy) return
@@ -54,6 +65,10 @@ function scheduleProbe() {
 
 onMounted(() => {
   void refreshBootState()
+  if (typeof window.matchMedia === 'function') {
+    systemThemeMedia = window.matchMedia('(prefers-color-scheme: light)')
+    systemThemeMedia.addEventListener?.('change', handleSystemThemeChange)
+  }
 })
 
 watch(
@@ -70,6 +85,8 @@ watch(
 
 onBeforeUnmount(() => {
   clearProbeTimer()
+  systemThemeMedia?.removeEventListener?.('change', handleSystemThemeChange)
+  systemThemeMedia = null
 })
 
 watchEffect(() => {
@@ -81,7 +98,15 @@ watchEffect(() => {
 <template>
   <div class="app-root">
     <ToastHost />
-    <div v-if="showLoading" class="flex h-full w-full items-center justify-center bg-background">
+    <AppConfirmHost />
+    <AppTextPromptHost />
+    <div
+      v-if="showLoading"
+      role="status"
+      aria-live="polite"
+      :aria-label="String(t('common.loading'))"
+      class="flex h-full w-full items-center justify-center bg-background"
+    >
       <div class="h-6 w-6 animate-spin rounded-full border-2 border-primary/30 border-t-primary" />
     </div>
     <LoginPage v-else-if="showLogin" />

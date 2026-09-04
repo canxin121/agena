@@ -1155,7 +1155,12 @@ watch(
 </script>
 
 <template>
-  <div class="monaco-diff-host" data-oc-text-editor-root="true" :data-files-theme="props.useFilesTheme ? '1' : '0'">
+  <div
+    class="monaco-diff-host"
+    dir="ltr"
+    data-oc-text-editor-root="true"
+    :data-files-theme="props.useFilesTheme ? '1' : '0'"
+  >
     <EditorFindBar
       v-if="isFindVisible"
       ref="findBarRef"

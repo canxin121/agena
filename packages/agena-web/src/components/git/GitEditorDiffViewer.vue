@@ -5,6 +5,7 @@ import { useI18n } from 'vue-i18n'
 
 import MonacoDiffEditor from '@/components/MonacoDiffEditor.vue'
 import { apiJson } from '@/lib/api'
+import { confirmAction } from '@/lib/appConfirm'
 import IconButton from '@/components/ui/IconButton.vue'
 import { buildUnifiedDiffModel } from '@/features/git/diff/unifiedDiff'
 import { useUiStore } from '@/stores/ui'
@@ -226,14 +227,14 @@ async function runHunkAction(hunk: DiffHunkView, mode: HunkActionMode) {
   }
 }
 
-function handleEditorHunkAction(payload: { id: string; kind: HunkActionMode }) {
+async function handleEditorHunkAction(payload: { id: string; kind: HunkActionMode }) {
   const hunkId = String(payload?.id || '').trim()
   if (!hunkId) return
   const hunk = hunkById.value.get(hunkId)
   if (!hunk) return
 
-  if (payload.kind === 'discard' && typeof window !== 'undefined') {
-    const confirmed = window.confirm('Discard this hunk? This cannot be undone.')
+  if (payload.kind === 'discard') {
+    const confirmed = await confirmAction(String(t('git.ui.diffViewer.confirmDiscardHunk')))
     if (!confirmed) return
   }
 
@@ -414,24 +415,28 @@ watch(
     <div v-else-if="isImageDiff" class="images">
       <div class="image-panel">
         <div class="image-title">{{ leftLabel }}</div>
-        <img
+        <button
           v-if="displayOriginal"
-          :src="displayOriginal"
-          class="preview cursor-zoom-in"
-          :alt="leftLabel"
+          type="button"
+          class="preview-button"
+          :aria-label="`${t('common.open')}: ${leftLabel}`"
           @click="openImageDiffPreview('left')"
-        />
+        >
+          <img :src="displayOriginal" class="preview cursor-zoom-in" alt="" aria-hidden="true" />
+        </button>
         <div v-else class="hint">{{ t('git.ui.diffViewer.noOriginal') }}</div>
       </div>
       <div class="image-panel">
         <div class="image-title">{{ rightLabel }}</div>
-        <img
+        <button
           v-if="displayModified"
-          :src="displayModified"
-          class="preview cursor-zoom-in"
-          :alt="rightLabel"
+          type="button"
+          class="preview-button"
+          :aria-label="`${t('common.open')}: ${rightLabel}`"
           @click="openImageDiffPreview('right')"
-        />
+        >
+          <img :src="displayModified" class="preview cursor-zoom-in" alt="" aria-hidden="true" />
+        </button>
         <div v-else class="hint">{{ t('git.ui.diffViewer.noModified') }}</div>
       </div>
     </div>
@@ -616,9 +621,23 @@ watch(
   background: oklch(var(--background));
   border: 1px solid oklch(var(--border) / 0.6);
   border-radius: 8px;
-  max-height: calc(100vh - 260px);
+  max-height: calc(100dvh - 260px);
   max-width: 100%;
   object-fit: contain;
+}
+
+.preview-button {
+  background: transparent;
+  border: 0;
+  border-radius: 8px;
+  justify-self: start;
+  max-width: 100%;
+  padding: 0;
+}
+
+.preview-button:focus-visible {
+  outline: 2px solid oklch(var(--ring));
+  outline-offset: 2px;
 }
 
 .hint {

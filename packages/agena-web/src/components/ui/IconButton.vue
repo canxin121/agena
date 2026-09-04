@@ -90,7 +90,7 @@ const spinnerSize = computed(() => {
       :title="nativeTitle"
       :variant="variant"
       :size="buttonSize"
-      :class="cn('shrink-0', props.class)"
+      :class="cn('oc-icon-button shrink-0', props.class)"
       :disabled="Boolean(attrs.disabled) || loading"
     >
       <RiLoader4Line v-if="loading" :class="cn(spinnerSize, 'animate-spin', spinnerClass)" />
@@ -106,7 +106,7 @@ const spinnerSize = computed(() => {
     :title="nativeTitle"
     :variant="variant"
     :size="buttonSize"
-    :class="cn('shrink-0', props.class)"
+    :class="cn('oc-icon-button shrink-0', props.class)"
     :disabled="Boolean(attrs.disabled) || loading"
   >
     <RiLoader4Line v-if="loading" :class="cn(spinnerSize, 'animate-spin', spinnerClass)" />

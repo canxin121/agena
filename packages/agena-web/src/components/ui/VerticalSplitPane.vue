@@ -22,6 +22,14 @@ const emit = defineEmits<{
 const isDragging = ref(false)
 const startY = ref(0)
 const startHeight = ref(0)
+const KEYBOARD_RESIZE_STEP_PX = 16
+
+function clampHeight(raw: number): number {
+  let next = raw
+  if (props.minHeight !== undefined) next = Math.max(props.minHeight, next)
+  if (props.maxHeight !== undefined) next = Math.min(props.maxHeight, next)
+  return next
+}
 
 function handlePointerDown(e: PointerEvent) {
   if (props.disabled) return
@@ -51,17 +59,21 @@ function handlePointerMove(e: PointerEvent) {
   e.preventDefault()
 
   const deltaY = startY.value - e.clientY // Dragging up increases height
-  let newHeight = startHeight.value + deltaY
+  emit('update:modelValue', clampHeight(startHeight.value + deltaY))
+}
 
-  if (props.minHeight !== undefined) {
-    newHeight = Math.max(props.minHeight, newHeight)
-  }
+function handleKeydown(event: KeyboardEvent) {
+  if (props.disabled) return
 
-  if (props.maxHeight !== undefined) {
-    newHeight = Math.min(props.maxHeight, newHeight)
-  }
+  let next: number | null = null
+  if (event.key === 'ArrowUp') next = props.modelValue + KEYBOARD_RESIZE_STEP_PX
+  if (event.key === 'ArrowDown') next = props.modelValue - KEYBOARD_RESIZE_STEP_PX
+  if (event.key === 'Home' && props.minHeight !== undefined) next = props.minHeight
+  if (event.key === 'End' && props.maxHeight !== undefined) next = props.maxHeight
+  if (next === null) return
 
-  emit('update:modelValue', newHeight)
+  event.preventDefault()
+  emit('update:modelValue', clampHeight(next))
 }
 
 function handlePointerUp(e: PointerEvent) {
@@ -113,9 +125,17 @@ onBeforeUnmount(() => {
     <!-- Drag Handle -->
     <div
       v-if="!collapseTop"
-      class="relative z-20 flex items-center justify-center shrink-0 h-3 -my-1.5 cursor-row-resize select-none touch-none group"
+      role="separator"
+      aria-orientation="horizontal"
+      :aria-valuenow="Math.round(modelValue)"
+      :aria-valuemin="minHeight !== undefined ? Math.round(minHeight) : undefined"
+      :aria-valuemax="maxHeight !== undefined ? Math.round(maxHeight) : undefined"
+      :aria-disabled="disabled ? 'true' : undefined"
+      :tabindex="disabled ? -1 : 0"
+      class="relative z-20 flex items-center justify-center shrink-0 h-3 -my-1.5 cursor-row-resize select-none touch-none group outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
       :class="{ 'pointer-events-none opacity-50': disabled }"
       @pointerdown="handlePointerDown"
+      @keydown="handleKeydown"
       @dblclick="$emit('dblclick')"
     >
       <!-- Hit area and visible line -->

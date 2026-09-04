@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch, type Component } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch, type Component } from 'vue'
 import { RiArrowDownSLine } from '@remixicon/vue'
 import { useI18n } from 'vue-i18n'
 
@@ -7,6 +7,7 @@ import OptionMenu from '@/components/ui/OptionMenu.vue'
 import type { OptionMenuGroup, OptionMenuItem } from '@/components/ui/optionMenu.types'
 import type { PickerOption } from '@/components/ui/pickerOption.types'
 import { cn } from '@/lib/utils'
+import { useUiStore } from '@/stores/ui'
 
 type OptionMenuExpose = {
   containsTarget?: (target: Node | null) => boolean
@@ -45,7 +46,6 @@ const props = withDefaults(
     triggerClass: '',
     maxInitialOptions: 60,
     desktopFixed: true,
-    isMobilePointer: false,
   },
 )
 
@@ -54,11 +54,13 @@ const emit = defineEmits<{
 }>()
 
 const { t } = useI18n()
+const ui = useUiStore()
 
 const triggerEl = ref<HTMLElement | null>(null)
 const menuRef = ref<OptionMenuExpose | null>(null)
 const open = ref(false)
 const query = ref('')
+const effectiveIsMobilePointer = computed(() => props.isMobilePointer ?? ui.isMobilePointer)
 
 const selected = computed(() => String(props.modelValue || '').trim())
 const q = computed(() => query.value.trim().toLowerCase())
@@ -67,6 +69,11 @@ const effectiveSearchPlaceholder = computed(() => {
   const raw = String(props.searchPlaceholder || '').trim()
   if (!raw || raw === 'Search...') return t('common.optionPicker.searchPlaceholder')
   return raw
+})
+const triggerAriaLabel = computed(() => {
+  const pickerTitle = String(props.title || '').trim()
+  const value = String(selectedDisplayLabel.value || '').trim()
+  return pickerTitle && value ? `${pickerTitle}: ${value}` : pickerTitle || value
 })
 
 const selectedDisplayLabel = computed(() => {
@@ -184,12 +191,17 @@ function handleOutsidePointer(event: MouseEvent | TouchEvent) {
   open.value = false
 }
 
-watch(open, (isOpen) => {
+watch(open, (isOpen, wasOpen) => {
   if (!isOpen) {
     query.value = ''
     if (pointerHandler) {
       document.removeEventListener('pointerdown', pointerHandler, true)
       pointerHandler = null
+    }
+    if (wasOpen) {
+      void nextTick(() => {
+        triggerEl.value?.focus({ preventScroll: true })
+      })
     }
     return
   }
@@ -268,7 +280,9 @@ function optionLabel(opt: PickerOption): string {
       type="button"
       :disabled="disabled"
       :class="triggerClasses"
-      @mousedown.prevent
+      :aria-label="triggerAriaLabel"
+      aria-haspopup="menu"
+      :aria-expanded="open"
       @click.stop="toggleOpen"
     >
       <span class="min-w-0 flex items-center gap-2">
@@ -290,7 +304,7 @@ function optionLabel(opt: PickerOption): string {
       :search-placeholder="effectiveSearchPlaceholder"
       :empty-text="emptyText"
       :helper-text="helperText"
-      :is-mobile-pointer="isMobilePointer"
+      :is-mobile-pointer="effectiveIsMobilePointer"
       :desktop-fixed="desktopFixed"
       :desktop-anchor-el="desktopFixed ? triggerEl : null"
       desktop-placement="bottom-start"

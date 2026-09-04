@@ -55,6 +55,7 @@ function onUpdateCheckout(ev: Event) {
           :model-value="branchName"
           class="h-9 font-mono text-xs"
           placeholder="feature/foo"
+          :aria-label="t('git.ui.dialogs.createBranchFrom.fields.branchName')"
           @update:model-value="(v) => onUpdateText('branchName', v)"
         />
       </div>
@@ -66,6 +67,7 @@ function onUpdateCheckout(ev: Event) {
           :model-value="startPoint"
           class="h-9 font-mono text-xs"
           placeholder="HEAD"
+          :aria-label="t('git.ui.dialogs.createBranchFrom.fields.startPoint')"
           @update:model-value="(v) => onUpdateText('startPoint', v)"
         />
       </div>

@@ -2,6 +2,7 @@
 import { computed, isRef, nextTick, onBeforeUnmount, ref, watch, type CSSProperties } from 'vue'
 import { RiAttachmentLine, RiCloseLine, RiFileLine, RiFileUploadLine, RiLoader4Line } from '@remixicon/vue'
 import { useI18n } from 'vue-i18n'
+import { DialogContent, DialogOverlay, DialogPortal, DialogRoot, DialogTitle } from 'radix-vue'
 
 import Button from '@/components/ui/Button.vue'
 import IconButton from '@/components/ui/IconButton.vue'
@@ -64,6 +65,7 @@ const emit = defineEmits<{
 }>()
 
 const panelEl = ref<HTMLElement | null>(null)
+let returnFocusEl: HTMLElement | null = null
 
 const isMobileSheet = computed(() => Boolean(props.isMobilePointer))
 
@@ -129,6 +131,23 @@ function badgeTextForFilename(filename: string): string {
 
 function close() {
   emit('update:open', false)
+}
+
+function captureReturnFocus() {
+  if (typeof document === 'undefined') return
+  const active = document.activeElement
+  returnFocusEl = active instanceof HTMLElement ? active : null
+}
+
+async function restoreReturnFocus() {
+  const target = returnFocusEl
+  returnFocusEl = null
+  if (!target || typeof document === 'undefined') return
+  await nextTick()
+  if (!target.isConnected) return
+  const active = document.activeElement
+  if (active instanceof HTMLElement && active !== document.body && active !== document.documentElement) return
+  target.focus({ preventScroll: true })
 }
 
 function unwrapRefCandidate(value: unknown): unknown {
@@ -287,6 +306,10 @@ function onDocumentKeydown(event: KeyboardEvent) {
   close()
 }
 
+function onMobileDialogOpenChange(next: boolean) {
+  if (!next && props.open) close()
+}
+
 let desktopEventsBound = false
 function bindDesktopEvents() {
   if (desktopEventsBound || typeof window === 'undefined' || typeof document === 'undefined') return
@@ -308,9 +331,10 @@ function unbindDesktopEvents() {
 
 // Mobile sheet positioning.
 const MOBILE_SHEET_MARGIN_PX = 8
-const MOBILE_SHEET_MIN_MAX_HEIGHT_PX = 180
 const mobileSheetStyle = ref<CSSProperties>({
   top: `${MOBILE_SHEET_MARGIN_PX}px`,
+  left: '50%',
+  width: `calc(100% - ${MOBILE_SHEET_MARGIN_PX * 2}px)`,
   maxHeight: `calc(100dvh - ${MOBILE_SHEET_MARGIN_PX * 2}px)`,
 })
 
@@ -328,6 +352,27 @@ function resolveViewportHeight(): number {
   return window.innerHeight
 }
 
+function resolveViewportWidth(): number {
+  if (typeof window === 'undefined') return 0
+  const vvWidth = window.visualViewport?.width
+  if (typeof vvWidth === 'number' && Number.isFinite(vvWidth) && vvWidth > 0) return vvWidth
+  return window.innerWidth
+}
+
+function resolveViewportLeft(): number {
+  if (typeof window === 'undefined') return 0
+  const vvLeft = window.visualViewport?.offsetLeft
+  if (typeof vvLeft === 'number' && Number.isFinite(vvLeft) && vvLeft > 0) return vvLeft
+  return 0
+}
+
+function resolveViewportTop(): number {
+  if (typeof window === 'undefined') return 0
+  const vvTop = window.visualViewport?.offsetTop
+  if (typeof vvTop === 'number' && Number.isFinite(vvTop) && vvTop > 0) return vvTop
+  return 0
+}
+
 async function syncMobileSheetPosition() {
   if (!props.open || !isMobileSheet.value) return
   if (typeof window === 'undefined' || typeof document === 'undefined') return
@@ -339,13 +384,21 @@ async function syncMobileSheetPosition() {
 
   const viewportHeight = resolveViewportHeight()
   if (!viewportHeight) return
+  const viewportTop = resolveViewportTop()
+  const viewportWidth = resolveViewportWidth()
+  const viewportLeft = resolveViewportLeft()
 
   const safeTop = cssVarPx('--oc-safe-area-top', 0)
   const safeBottom = cssVarPx('--oc-safe-area-bottom', 0)
+  const safeLeft = cssVarPx('--oc-safe-area-left', 0)
+  const safeRight = cssVarPx('--oc-safe-area-right', 0)
 
-  const topInset = safeTop + MOBILE_SHEET_MARGIN_PX
-  const bottomInset = safeBottom + MOBILE_SHEET_MARGIN_PX
-  const maxHeight = Math.max(MOBILE_SHEET_MIN_MAX_HEIGHT_PX, viewportHeight - topInset - bottomInset)
+  const topInset = viewportTop + safeTop + MOBILE_SHEET_MARGIN_PX
+  const bottomEdge = viewportTop + viewportHeight - safeBottom - MOBILE_SHEET_MARGIN_PX
+  const maxHeight = Math.max(0, bottomEdge - topInset)
+  const usableWidth = Math.max(0, viewportWidth - safeLeft - safeRight)
+  const panelWidth = Math.max(0, usableWidth - MOBILE_SHEET_MARGIN_PX * 2)
+  const panelCenter = viewportLeft + safeLeft + usableWidth / 2
   const panelHeight = Math.min(maxHeight, Math.max(0, panel.scrollHeight))
 
   const centeredOffset = Math.max(0, Math.round((maxHeight - panelHeight) / 2))
@@ -353,6 +406,8 @@ async function syncMobileSheetPosition() {
 
   mobileSheetStyle.value = {
     top: `${Math.round(top)}px`,
+    left: `${Math.round(panelCenter)}px`,
+    width: `${Math.round(panelWidth)}px`,
     maxHeight: `${Math.round(maxHeight)}px`,
   }
 }
@@ -384,6 +439,7 @@ watch(
   () => props.open,
   (open) => {
     if (open) {
+      captureReturnFocus()
       const margin = viewportMarginPx.value
       // Reset the desktop style so we avoid flashing stale positions.
       desktopStyle.value = {
@@ -404,6 +460,7 @@ watch(
 
     unbindDesktopEvents()
     unbindMobileViewportEvents()
+    void restoreReturnFocus()
   },
   { immediate: true },
 )
@@ -536,19 +593,21 @@ onBeforeUnmount(() => {
               :key="f.id"
               class="flex items-center gap-3 rounded-lg border border-border/60 bg-background/60 px-3 py-2"
             >
+              <button
+                v-if="isImageFile(f)"
+                type="button"
+                class="h-9 w-9 shrink-0 overflow-hidden rounded-lg border border-border/50 bg-muted/10 outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                :aria-label="`${t('common.open')}: ${f.filename}`"
+                @click.stop="openAttachmentImage(f)"
+              >
+                <img :src="f.url" alt="" aria-hidden="true" class="h-full w-full object-cover cursor-zoom-in" draggable="false" />
+              </button>
               <div
+                v-else
                 class="h-9 w-9 shrink-0 rounded-lg border border-border/50 bg-muted/10 overflow-hidden flex items-center justify-center"
                 aria-hidden="true"
               >
-                <img
-                  v-if="isImageFile(f)"
-                  :src="f.url"
-                  :alt="f.filename"
-                  class="h-full w-full object-cover cursor-zoom-in"
-                  draggable="false"
-                  @click.stop="openAttachmentImage(f)"
-                />
-                <span v-else class="text-[10px] font-mono text-muted-foreground uppercase">
+                <span class="text-[10px] font-mono text-muted-foreground uppercase">
                   {{ badgeTextForFilename(f.filename) }}
                 </span>
               </div>
@@ -588,20 +647,23 @@ onBeforeUnmount(() => {
     </div>
   </Teleport>
 
-  <div v-if="open && isMobileSheet" class="fixed inset-0 z-50" @pointerdown.stop @click="close">
-    <div class="absolute inset-0 bg-black/55 backdrop-blur-sm" />
-    <div
-      ref="panelEl"
-      class="absolute left-1/2 w-[calc(100%-1rem)] max-w-[24rem] -translate-x-1/2 rounded-xl border border-border/70 bg-background/95 shadow-xl backdrop-blur overflow-hidden flex flex-col"
-      :style="mobileSheetStyle"
-      @pointerdown.stop
-      @click.stop
-    >
+  <DialogRoot :open="open && isMobileSheet" @update:open="onMobileDialogOpenChange">
+    <DialogPortal>
+      <DialogOverlay class="fixed inset-0 z-[64] bg-black/55 backdrop-blur-sm" />
+      <DialogContent as-child>
+        <div
+          ref="panelEl"
+          tabindex="-1"
+          class="fixed z-[65] max-w-[24rem] -translate-x-1/2 rounded-xl border border-border/70 bg-background/95 shadow-xl backdrop-blur overflow-hidden flex flex-col outline-none"
+          :style="mobileSheetStyle"
+          @pointerdown.stop
+          @click.stop
+        >
       <div class="flex items-center justify-between gap-3 px-4 py-3 border-b border-border/40">
         <div class="min-w-0">
           <div class="flex items-center gap-2">
             <RiAttachmentLine class="h-4.5 w-4.5 text-muted-foreground" />
-            <div class="text-sm font-semibold truncate">{{ effectiveTitle }}</div>
+            <DialogTitle class="text-sm font-semibold truncate">{{ effectiveTitle }}</DialogTitle>
           </div>
           <div class="mt-1 text-[12px] text-muted-foreground font-mono">
             <span v-if="busy" class="inline-flex items-center gap-1">
@@ -674,19 +736,21 @@ onBeforeUnmount(() => {
               :key="f.id"
               class="flex items-center gap-3 rounded-lg border border-border/60 bg-background/60 px-3 py-2"
             >
+              <button
+                v-if="isImageFile(f)"
+                type="button"
+                class="h-10 w-10 shrink-0 overflow-hidden rounded-lg border border-border/50 bg-muted/10 outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                :aria-label="`${t('common.open')}: ${f.filename}`"
+                @click.stop="openAttachmentImage(f)"
+              >
+                <img :src="f.url" alt="" aria-hidden="true" class="h-full w-full object-cover cursor-zoom-in" draggable="false" />
+              </button>
               <div
+                v-else
                 class="h-10 w-10 shrink-0 rounded-lg border border-border/50 bg-muted/10 overflow-hidden flex items-center justify-center"
                 aria-hidden="true"
               >
-                <img
-                  v-if="isImageFile(f)"
-                  :src="f.url"
-                  :alt="f.filename"
-                  class="h-full w-full object-cover cursor-zoom-in"
-                  draggable="false"
-                  @click.stop="openAttachmentImage(f)"
-                />
-                <span v-else class="text-[10px] font-mono text-muted-foreground uppercase">
+                <span class="text-[10px] font-mono text-muted-foreground uppercase">
                   {{ badgeTextForFilename(f.filename) }}
                 </span>
               </div>
@@ -723,6 +787,8 @@ onBeforeUnmount(() => {
           </div>
         </div>
       </div>
-    </div>
-  </div>
+        </div>
+      </DialogContent>
+    </DialogPortal>
+  </DialogRoot>
 </template>

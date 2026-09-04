@@ -5,8 +5,10 @@ import { useI18n } from 'vue-i18n'
 import Button from '@/components/ui/Button.vue'
 import FormDialog from '@/components/ui/FormDialog.vue'
 import PathPicker from '@/components/ui/PathPicker.vue'
+import { useUiStore } from '@/stores/ui'
 
 const { t } = useI18n()
+const ui = useUiStore()
 
 const props = defineProps<{
   open: boolean
@@ -35,6 +37,12 @@ const confirmButtonDisabled = computed(() => {
   if (props.confirmDisabled !== undefined) return props.confirmDisabled
   return !pathModel.value.trim()
 })
+
+const browserLayoutClass = computed(() =>
+  ui.isMobilePointer
+    ? 'flex h-full min-h-0 flex-col'
+    : 'flex h-[min(56dvh,34rem)] min-h-[14rem] flex-col',
+)
 </script>
 
 <template>
@@ -58,7 +66,7 @@ const confirmButtonDisabled = computed(() => {
           :show-gitignored="true"
           :allow-create-directory="allowCreateDirectory ?? true"
           input-class="h-9 font-mono"
-          browser-class="flex min-h-0 h-full flex-col sm:h-[min(56vh,34rem)] sm:min-h-[14rem]"
+          :browser-class="browserLayoutClass"
         />
       </div>
       <div class="flex flex-none items-center justify-end gap-2">

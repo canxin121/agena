@@ -115,8 +115,8 @@ function handleContextMenu(event: MouseEvent) {
   >
     <template #icon>
       <ListItemSelectionIndicator v-if="multiSelectEnabled" :selected="multiSelected" />
-      <span
-        role="button"
+      <button
+        type="button"
         class="h-3.5 w-3.5 flex-shrink-0 inline-flex items-center justify-center rounded text-muted-foreground hover:text-foreground hover:dark:bg-accent/40 hover:bg-primary/6 cursor-pointer active:scale-95 transition"
         :aria-label="
           collapsed
@@ -127,7 +127,7 @@ function handleContextMenu(event: MouseEvent) {
       >
         <RiArrowRightSLine v-if="collapsed" class="h-3 w-3" />
         <RiArrowDownSLine v-else class="h-3 w-3" />
-      </span>
+      </button>
     </template>
 
     <div class="flex min-w-0 flex-col justify-center gap-0.5 py-px">

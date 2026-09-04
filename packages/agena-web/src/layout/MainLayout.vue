@@ -119,7 +119,11 @@ watch(
 const mobileBottomNavInset =
   'calc(var(--oc-bottom-nav-height, 56px) + var(--oc-safe-area-bottom, 0px) - clamp(0px, var(--oc-keyboard-inset, 0px), var(--oc-bottom-nav-height, 56px)))'
 
-const showBottomNav = computed(() => ui.isCompactLayout && ui.isMobileDevice && !isEmbeddedWorkspacePane.value)
+// Compact layout removes the desktop sidebar, so it must always expose the
+// primary tab navigation. Restricting BottomNav to physical mobile devices
+// leaves narrow desktop browser windows with no visible Chat/Files/Preview/
+// Terminal/Git navigation at all.
+const showBottomNav = computed(() => ui.isCompactLayout && !isEmbeddedWorkspacePane.value)
 const compactBottomInset = computed(() => (showBottomNav.value ? mobileBottomNavInset : '0px'))
 const showDesktopSidebarHost = computed(() => !ui.isCompactLayout && !isEmbeddedWorkspacePane.value)
 const useWorkspaceWindowLayout = computed(() => !ui.isCompactLayout && !isEmbeddedWorkspacePane.value)

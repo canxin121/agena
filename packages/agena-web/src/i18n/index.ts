@@ -69,6 +69,7 @@ export function setAppLocale(locale: AppLocale) {
   if (typeof document !== 'undefined') {
     try {
       document.documentElement.lang = locale
+      document.documentElement.dir = locale === 'ar-SA' ? 'rtl' : 'ltr'
     } catch {
       // ignore
     }

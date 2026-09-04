@@ -8,6 +8,7 @@ import IconButton from '@/components/ui/IconButton.vue'
 import Input from '@/components/ui/Input.vue'
 import OptionPicker from '@/components/ui/OptionPicker.vue'
 import { apiJson } from '@/lib/api'
+import { confirmAction } from '@/lib/appConfirm'
 import { settingsText as st } from '@/i18n/settingsText'
 
 type McpAuthMode = 'none' | 'oauth' | 'mixed'
@@ -170,7 +171,7 @@ async function copyEndpoint(label: string, value: string | undefined) {
 }
 
 async function refresh(force = false) {
-  if (!force && controlDirty.value && !window.confirm(st('Discard unsaved MCP changes and refresh?'))) return
+  if (!force && controlDirty.value && !(await confirmAction(st('Discard unsaved MCP changes and refresh?')))) return
   loading.value = true
   error.value = ''
   try {
@@ -224,7 +225,7 @@ async function saveControlDraft() {
   const highRisk =
     enabled.value &&
     (authMode.value === 'none' || anonymousAccess.value === 'read_only' || clientRegistration.value === 'cimd_and_dcr')
-  if (highRisk && !window.confirm(st('Apply this high-risk MCP configuration?'))) return
+  if (highRisk && !(await confirmAction(st('Apply this high-risk MCP configuration?')))) return
   await updateControl({
     enabled: enabled.value,
     authMode: authMode.value,

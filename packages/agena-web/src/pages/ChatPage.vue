@@ -9,6 +9,7 @@ import type { ChatPageViewContext } from './chat/chatPageViewContext'
 
 import { copyTextToClipboard } from '@/lib/clipboard'
 import { apiJson } from '@/lib/api'
+import { promptForText } from '@/lib/appTextPrompt'
 import { readSessionIdFromFullPath, readSessionIdFromQuery } from '@/app/navigation/sessionQuery'
 import { useChatStore } from '@/stores/chat'
 import * as chatApi from '@/stores/chat/api'
@@ -219,8 +220,6 @@ const modelTriggerRef = ref<HTMLElement | null>(null)
 const thinkingTriggerRef = ref<HTMLElement | null>(null)
 const speedTriggerRef = ref<HTMLElement | null>(null)
 
-const composerPickerStyle = ref<Record<string, string>>({ left: '8px' })
-
 // Composer sizing + fullscreen layout.
 const COMPOSER_DIVIDER_HIT_PX = 12
 const composerShellHeight = ref(0)
@@ -319,12 +318,7 @@ function handleDraftInput() {
 
 modelSelection = useChatModelSelection({
   chat,
-  composerControlsRef,
   composerPickerOpen,
-  composerPickerStyle,
-  modelTriggerRef,
-  thinkingTriggerRef,
-  speedTriggerRef,
   modelPickerQuery,
   onOpenComposerPicker: () => {
     closePromptHistory()
@@ -731,6 +725,7 @@ const composerLayout = useChatComposerLayout({
 
 const {
   composerTargetHeight,
+  composerMaxHeight,
   composerSplitTopCollapsed,
   handleComposerResize,
   toggleEditorFullscreen,
@@ -1736,7 +1731,13 @@ async function executeBuiltInCommand(command: BuiltInCommand, rawArgs = ''): Pro
         toasts.push('error', 'A session is required for /rewind.')
         return
       }
-      const requested = args || window.prompt('Rewind to message ID')?.trim() || ''
+      const requested =
+        args ||
+        (await promptForText({
+          title: String(t('chat.commandPalette.rewindPromptTitle')),
+          placeholder: String(t('chat.commandPalette.rewindPromptPlaceholder')),
+        })) ||
+        ''
       if (!requested) return
       await chat.revertToMessage(sid, requested)
       return
@@ -2331,6 +2332,7 @@ const viewCtx = {
   composerFullscreenActive,
   composerSplitTopCollapsed,
   composerTargetHeight,
+  composerMaxHeight,
   handleComposerResize,
   resetComposerHeight,
   toggleEditorFullscreen,

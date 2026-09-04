@@ -6,6 +6,7 @@ import Button from '@/components/ui/Button.vue'
 import IconButton from '@/components/ui/IconButton.vue'
 import Input from '@/components/ui/Input.vue'
 import OptionPicker from '@/components/ui/OptionPicker.vue'
+import { confirmAction } from '@/lib/appConfirm'
 import {
   deleteRuntimeSetting,
   readRuntimeSettingSources,
@@ -379,12 +380,12 @@ async function save() {
 async function removeHarness() {
   if (
     !selectedName.value ||
-    !window.confirm(
+    !(await confirmAction(
       st('Delete {selectedKind} harness {selectedName}?', {
         selectedKind: selectedKind.value,
         selectedName: selectedName.value,
       }),
-    )
+    ))
   )
     return
   const next = { ...maps.value[selectedKind.value] }
@@ -396,9 +397,9 @@ async function removeHarness() {
 
 async function clearKind() {
   if (
-    !window.confirm(
+    !(await confirmAction(
       st('Clear {targetLayer} {settingPath}?', { targetLayer: targetLayer.value, settingPath: settingPath.value }),
-    )
+    ))
   )
     return
   try {

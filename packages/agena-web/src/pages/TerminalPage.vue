@@ -2494,7 +2494,7 @@ watch(el, () => {
         <!-- Terminal Area -->
         <div class="flex-1 bg-[#101415] min-h-[300px] flex flex-col">
           <div class="relative flex-1 min-h-0">
-            <div ref="el" class="absolute inset-0" />
+            <div ref="el" dir="ltr" class="absolute inset-0" />
           </div>
           <TerminalKeybar
             v-if="ui.isMobilePointer"

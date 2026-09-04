@@ -2,6 +2,17 @@
 import { computed, isRef, nextTick, onBeforeUnmount, ref, watch, type CSSProperties } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { RiArrowDownSLine, RiCheckLine, RiCloseLine, RiMore2Line, RiRefreshLine } from '@remixicon/vue'
+import {
+  DialogContent,
+  DialogOverlay,
+  DialogPortal,
+  DialogRoot,
+  DialogTitle,
+  PopoverAnchor,
+  PopoverContent,
+  PopoverPortal,
+  PopoverRoot,
+} from 'radix-vue'
 
 import ConfirmPopover from '@/components/ui/ConfirmPopover.vue'
 import IconButton from '@/components/ui/IconButton.vue'
@@ -25,6 +36,8 @@ type DesktopAnchorLike =
       getBoundingClientRect?: () => DOMRect | undefined
     }
   | null
+
+type DesktopMeasurable = HTMLElement | { getBoundingClientRect: () => DOMRect }
 
 const props = withDefaults(
   defineProps<{
@@ -139,20 +152,6 @@ const normalizedQuery = computed(() =>
 )
 const effectivePageSize = computed(() => Math.max(1, Math.floor(Number(props.pageSize) || 80)))
 
-const desktopPlacementClass = computed(() => {
-  switch (props.desktopPlacement) {
-    case 'top-start':
-      return 'left-0 bottom-full mb-2'
-    case 'top-end':
-      return 'right-0 bottom-full mb-2'
-    case 'bottom-end':
-      return 'right-0 top-full mt-2'
-    case 'bottom-start':
-    default:
-      return 'left-0 top-full mt-2'
-  }
-})
-
 const MOBILE_SHEET_MARGIN_PX = 8
 
 function toNonNegativePx(value: unknown, fallback: number): number {
@@ -163,40 +162,25 @@ function toNonNegativePx(value: unknown, fallback: number): number {
 
 const panelGapPx = computed(() => toNonNegativePx(props.desktopGapPx, 8))
 const panelViewportMarginPx = computed(() => toNonNegativePx(props.desktopViewportMarginPx, 8))
-
-const desktopFixedStyle = ref<CSSProperties>({
-  left: `${panelViewportMarginPx.value}px`,
-  top: `${panelViewportMarginPx.value}px`,
-  visibility: 'hidden',
-})
+const desktopPopoverSide = computed<'top' | 'bottom'>(() =>
+  props.desktopPlacement.startsWith('top') ? 'top' : 'bottom',
+)
+const desktopPopoverAlign = computed<'start' | 'end'>(() =>
+  props.desktopPlacement.endsWith('end') ? 'end' : 'start',
+)
 
 const mobileSheetStyle = ref<CSSProperties>({
   top: `${MOBILE_SHEET_MARGIN_PX}px`,
+  left: '50%',
+  width: `calc(100% - ${MOBILE_SHEET_MARGIN_PX * 2}px)`,
   maxHeight: `calc(100dvh - ${MOBILE_SHEET_MARGIN_PX * 2}px)`,
 })
 
-let desktopFixedEventsBound = false
-let dismissEventsBound = false
 let mobileViewportEventsBound = false
 let releaseActionLock: (() => void) | null = null
-const onViewportChange = () => {
-  void syncDesktopFixedPosition()
-}
+let returnFocusEl: HTMLElement | null = null
 const onMobileViewportChange = () => {
   void syncMobileSheetPosition()
-}
-
-function onDocumentClick(event: MouseEvent) {
-  if (!props.open || isMobileSheet.value) return
-  const target = event.target as Node | null
-  if (containsTarget(target)) return
-  closeMenu()
-}
-
-function onDocumentKeydown(event: KeyboardEvent) {
-  if (!props.open || isMobileSheet.value) return
-  if (event.key !== 'Escape') return
-  closeMenu()
 }
 
 function unwrapAnchorCandidate(value: unknown): unknown {
@@ -227,31 +211,6 @@ function resolveAnchorElCandidate(value: unknown): HTMLElement | null {
   return null
 }
 
-function resolveAnchorRectCandidate(value: unknown): DOMRect | null {
-  const anchorEl = resolveAnchorElCandidate(value)
-  if (anchorEl) return anchorEl.getBoundingClientRect()
-
-  const raw = unwrapAnchorCandidate(value)
-  if (!raw || typeof raw !== 'object') return null
-
-  const getRect = (raw as { getBoundingClientRect?: () => DOMRect | undefined }).getBoundingClientRect
-  if (typeof getRect === 'function') {
-    const rect = getRect()
-    if (rect) return rect
-  }
-
-  const triggerEl = unwrapAnchorCandidate((raw as { triggerEl?: unknown }).triggerEl)
-  if (triggerEl && typeof triggerEl === 'object') {
-    const triggerGetRect = (triggerEl as { getBoundingClientRect?: () => DOMRect | undefined }).getBoundingClientRect
-    if (typeof triggerGetRect === 'function') {
-      const rect = triggerGetRect()
-      if (rect) return rect
-    }
-  }
-
-  return null
-}
-
 function resolveDesktopAnchor(): HTMLElement | null {
   const anchor = resolveAnchorElCandidate(props.desktopAnchorEl as unknown)
   if (anchor) return anchor
@@ -261,13 +220,34 @@ function resolveDesktopAnchor(): HTMLElement | null {
   return root
 }
 
-function resolveDesktopAnchorRect(): DOMRect | null {
-  const anchorRect = resolveAnchorRectCandidate(props.desktopAnchorEl as unknown)
-  if (anchorRect) return anchorRect
-  const fallbackAnchor = resolveDesktopAnchor()
-  if (!fallbackAnchor) return null
-  return fallbackAnchor.getBoundingClientRect()
+function resolveDesktopMeasurable(): DesktopMeasurable | undefined {
+  const anchorEl = resolveAnchorElCandidate(props.desktopAnchorEl as unknown)
+  if (anchorEl) return anchorEl
+
+  const raw = unwrapAnchorCandidate(props.desktopAnchorEl as unknown)
+  if (raw && typeof raw === 'object') {
+    const getRect = (raw as { getBoundingClientRect?: () => DOMRect | undefined }).getBoundingClientRect
+    if (typeof getRect === 'function') {
+      return {
+        getBoundingClientRect: () => getRect.call(raw) || new DOMRect(),
+      }
+    }
+
+    const triggerEl = unwrapAnchorCandidate((raw as { triggerEl?: unknown }).triggerEl)
+    if (triggerEl && typeof triggerEl === 'object') {
+      const triggerGetRect = (triggerEl as { getBoundingClientRect?: () => DOMRect | undefined }).getBoundingClientRect
+      if (typeof triggerGetRect === 'function') {
+        return {
+          getBoundingClientRect: () => triggerGetRect.call(triggerEl) || new DOMRect(),
+        }
+      }
+    }
+  }
+
+  return resolveDesktopAnchor() || undefined
 }
+
+const desktopPopoverAnchor = computed<DesktopMeasurable | undefined>(() => resolveDesktopMeasurable())
 
 function clearActionLock() {
   if (!releaseActionLock) return
@@ -280,69 +260,6 @@ function syncActionLock() {
   if (!props.open || isMobileSheet.value) return
   const anchor = resolveDesktopAnchor()
   releaseActionLock = lockListItemActionsForAnchor(anchor)
-}
-
-function resetDesktopFixedStyle() {
-  const margin = panelViewportMarginPx.value
-  desktopFixedStyle.value = {
-    ...(props.desktopStyle || {}),
-    left: `${margin}px`,
-    top: `${margin}px`,
-    visibility: 'hidden',
-  }
-}
-
-async function waitForAnimationFrame(): Promise<void> {
-  if (typeof window === 'undefined' || typeof window.requestAnimationFrame !== 'function') return
-  await new Promise<void>((resolve) => {
-    window.requestAnimationFrame(() => resolve())
-  })
-}
-
-function clamp(value: number, min: number, max: number): number {
-  if (max < min) return min
-  return Math.max(min, Math.min(value, max))
-}
-
-function computeDesktopFixedStyle(): CSSProperties | null {
-  const panel = panelEl.value
-  const anchorRect = resolveDesktopAnchorRect()
-  if (!panel || !anchorRect) return null
-
-  const panelRect = panel.getBoundingClientRect()
-  const viewportWidth = resolveViewportWidth()
-  const viewportHeight = resolveViewportHeight()
-  const viewportLeft = resolveViewportLeft()
-  const viewportTop = resolveViewportTop()
-  const gap = panelGapPx.value
-  const margin = panelViewportMarginPx.value
-
-  const alignEnd = props.desktopPlacement.endsWith('end')
-  const placeTop = props.desktopPlacement.startsWith('top')
-
-  const minLeft = viewportLeft + margin
-  const maxLeft = viewportLeft + viewportWidth - panelRect.width - margin
-  const minTop = viewportTop + margin
-  const maxTop = viewportTop + viewportHeight - panelRect.height - margin
-
-  let left = alignEnd ? anchorRect.right - panelRect.width : anchorRect.left
-  let top = placeTop ? anchorRect.top - panelRect.height - gap : anchorRect.bottom + gap
-
-  if (!placeTop && top + panelRect.height > viewportTop + viewportHeight - margin) {
-    top = anchorRect.top - panelRect.height - gap
-  } else if (placeTop && top < viewportTop + margin) {
-    top = anchorRect.bottom + gap
-  }
-
-  left = clamp(left, minLeft, maxLeft)
-  top = clamp(top, minTop, maxTop)
-
-  return {
-    ...(props.desktopStyle || {}),
-    left: `${Math.round(left)}px`,
-    top: `${Math.round(top)}px`,
-    visibility: 'visible',
-  }
 }
 
 function cssVarPx(name: string, fallback: number): number {
@@ -388,23 +305,6 @@ function resolveViewportTop(): number {
   return 0
 }
 
-async function syncDesktopFixedPosition() {
-  if (!props.desktopFixed || !props.open || isMobileSheet.value) return
-  if (typeof window === 'undefined') return
-
-  await nextTick()
-
-  const firstPass = computeDesktopFixedStyle()
-  if (!firstPass) return
-  desktopFixedStyle.value = firstPass
-
-  await waitForAnimationFrame()
-  if (!props.desktopFixed || !props.open || isMobileSheet.value) return
-  const secondPass = computeDesktopFixedStyle()
-  if (!secondPass) return
-  desktopFixedStyle.value = secondPass
-}
-
 async function syncMobileSheetPosition() {
   if (!props.open || !isMobileSheet.value) return
   if (typeof window === 'undefined' || typeof document === 'undefined') return
@@ -417,13 +317,20 @@ async function syncMobileSheetPosition() {
   const viewportHeight = resolveViewportHeight()
   if (!viewportHeight) return
   const viewportTop = resolveViewportTop()
+  const viewportWidth = resolveViewportWidth()
+  const viewportLeft = resolveViewportLeft()
 
   const safeTop = cssVarPx('--oc-safe-area-top', 0)
   const safeBottom = cssVarPx('--oc-safe-area-bottom', 0)
+  const safeLeft = cssVarPx('--oc-safe-area-left', 0)
+  const safeRight = cssVarPx('--oc-safe-area-right', 0)
 
   const topInset = viewportTop + safeTop + MOBILE_SHEET_MARGIN_PX
   const bottomEdge = viewportTop + viewportHeight - safeBottom - MOBILE_SHEET_MARGIN_PX
   const maxHeight = Math.max(0, bottomEdge - topInset)
+  const usableWidth = Math.max(0, viewportWidth - safeLeft - safeRight)
+  const panelWidth = Math.max(0, usableWidth - MOBILE_SHEET_MARGIN_PX * 2)
+  const panelCenter = viewportLeft + safeLeft + usableWidth / 2
   const panelHeight = Math.min(maxHeight, Math.max(0, panel.scrollHeight))
 
   const centeredOffset = Math.max(0, Math.round((maxHeight - panelHeight) / 2))
@@ -433,22 +340,10 @@ async function syncMobileSheetPosition() {
 
   mobileSheetStyle.value = {
     top: `${Math.round(top)}px`,
+    left: `${Math.round(panelCenter)}px`,
+    width: `${Math.round(panelWidth)}px`,
     maxHeight: `${Math.round(maxHeight)}px`,
   }
-}
-
-function bindDesktopFixedEvents() {
-  if (desktopFixedEventsBound || typeof window === 'undefined') return
-  window.addEventListener('resize', onViewportChange)
-  window.addEventListener('scroll', onViewportChange, true)
-  desktopFixedEventsBound = true
-}
-
-function unbindDesktopFixedEvents() {
-  if (!desktopFixedEventsBound || typeof window === 'undefined') return
-  window.removeEventListener('resize', onViewportChange)
-  window.removeEventListener('scroll', onViewportChange, true)
-  desktopFixedEventsBound = false
 }
 
 function bindMobileViewportEvents() {
@@ -467,20 +362,6 @@ function unbindMobileViewportEvents() {
   window.visualViewport?.removeEventListener('resize', onMobileViewportChange)
   window.visualViewport?.removeEventListener('scroll', onMobileViewportChange)
   mobileViewportEventsBound = false
-}
-
-function bindDismissEvents() {
-  if (dismissEventsBound || typeof document === 'undefined') return
-  document.addEventListener('click', onDocumentClick)
-  document.addEventListener('keydown', onDocumentKeydown)
-  dismissEventsBound = true
-}
-
-function unbindDismissEvents() {
-  if (!dismissEventsBound || typeof document === 'undefined') return
-  document.removeEventListener('click', onDocumentClick)
-  document.removeEventListener('keydown', onDocumentKeydown)
-  dismissEventsBound = false
 }
 
 function itemHaystack(item: OptionMenuItem): string {
@@ -673,21 +554,38 @@ watch(
     if (!props.open) return
     if (isMobileSheet.value) {
       void syncMobileSheetPosition()
-      return
     }
-    if (props.desktopFixed) void syncDesktopFixedPosition()
   },
 )
 
 const desktopInputClass = computed(() => 'h-8 text-xs')
 const mobileInputClass = computed(() => 'h-9 text-sm')
-const desktopPanelStyle = computed<CSSProperties | undefined>(() =>
-  props.desktopFixed ? desktopFixedStyle.value : props.desktopStyle,
-)
 
 function closeMenu() {
   emit('update:open', false)
   emit('close')
+}
+
+function onRadixSurfaceOpenChange(next: boolean) {
+  if (!next && props.open) closeMenu()
+}
+
+function captureReturnFocus() {
+  if (typeof document === 'undefined') return
+  const active = document.activeElement
+  returnFocusEl = active instanceof HTMLElement ? active : null
+}
+
+async function restoreReturnFocus() {
+  const target = returnFocusEl
+  returnFocusEl = null
+  if (!target || typeof document === 'undefined') return
+  await nextTick()
+  if (!target.isConnected) return
+
+  const active = document.activeElement
+  if (active instanceof HTMLElement && active !== document.body && active !== document.documentElement) return
+  target.focus({ preventScroll: true })
 }
 
 function selectItem(item: OptionMenuItem) {
@@ -734,6 +632,12 @@ async function focusSearch() {
   input?.focus()
 }
 
+async function focusMobilePanel() {
+  await nextTick()
+  if (!props.open || !isMobileSheet.value) return
+  panelEl.value?.focus({ preventScroll: true })
+}
+
 function containsTarget(target: Node | null): boolean {
   if (!target) return false
   return Boolean(rootEl.value?.contains(target) || panelEl.value?.contains(target))
@@ -745,27 +649,21 @@ watch(
     syncActionLock()
 
     if (open) {
+      captureReturnFocus()
       if (isMobileSheet.value) {
         bindMobileViewportEvents()
         void syncMobileSheetPosition()
-      } else {
-        bindDismissEvents()
+        void focusMobilePanel()
       }
       if (props.paginated) currentPage.value = 1
-      if (props.desktopFixed && !isMobileSheet.value) {
-        resetDesktopFixedStyle()
-        bindDesktopFixedEvents()
-        void syncDesktopFixedPosition()
-      }
       if (props.autoFocusSearch && props.searchable && !isMobileSheet.value) {
         void focusSearch()
       }
       return
     }
 
-    unbindDismissEvents()
-    unbindDesktopFixedEvents()
     unbindMobileViewportEvents()
+    void restoreReturnFocus()
   },
   { immediate: true },
 )
@@ -777,18 +675,11 @@ watch(
 
     if (!props.open) return
     if (mobile) {
-      unbindDismissEvents()
-      unbindDesktopFixedEvents()
       bindMobileViewportEvents()
       void syncMobileSheetPosition()
+      void focusMobilePanel()
     } else {
       unbindMobileViewportEvents()
-      bindDismissEvents()
-      if (props.desktopFixed) {
-        resetDesktopFixedStyle()
-        bindDesktopFixedEvents()
-        void syncDesktopFixedPosition()
-      }
     }
   },
 )
@@ -805,18 +696,13 @@ watch(
       props.open,
       isMobileSheet.value,
     ] as const,
-  ([fixed, _placement, _anchor, _style, _gap, _margin, open, mobile]) => {
+  ([_fixed, _placement, _anchor, _style, _gap, _margin, _open, _mobile]) => {
     syncActionLock()
-    if (!fixed || !open || mobile) return
-    resetDesktopFixedStyle()
-    void syncDesktopFixedPosition()
   },
 )
 
 onBeforeUnmount(() => {
   clearActionLock()
-  unbindDismissEvents()
-  unbindDesktopFixedEvents()
   unbindMobileViewportEvents()
 })
 
@@ -825,24 +711,26 @@ defineExpose({ containsTarget, focusSearch })
 
 <template>
   <div ref="rootEl" class="contents">
-    <Teleport to="body" :disabled="!desktopFixed">
-      <div
-        v-if="open && !isMobileSheet"
-        ref="panelEl"
-        data-oc-keyboard-tap="keep"
-        :class="
-          cn(
-            desktopFixed
-              ? 'pointer-events-auto fixed z-[60] rounded-xl border border-border/70 bg-background/95 shadow-xl backdrop-blur overflow-hidden'
-              : 'pointer-events-auto absolute z-[60] rounded-xl border border-border/70 bg-background/95 shadow-xl backdrop-blur overflow-hidden',
-            desktopFixed ? '' : desktopPlacementClass,
-            desktopClass,
-          )
-        "
-        :style="desktopPanelStyle"
-        @pointerdown.stop
-        @click.stop
-      >
+    <PopoverRoot :open="open && !isMobileSheet" @update:open="onRadixSurfaceOpenChange">
+      <PopoverAnchor :element="desktopPopoverAnchor" />
+      <PopoverPortal :disabled="!desktopFixed">
+        <PopoverContent
+          as-child
+          :side="desktopPopoverSide"
+          :align="desktopPopoverAlign"
+          :side-offset="panelGapPx"
+          :collision-padding="panelViewportMarginPx"
+          update-position-strategy="always"
+          :prioritize-position="true"
+        >
+          <div
+            ref="panelEl"
+            data-oc-keyboard-tap="keep"
+            :class="cn('pointer-events-auto z-[75] rounded-xl border border-border/70 bg-background/95 shadow-xl backdrop-blur overflow-hidden', desktopClass)"
+            :style="desktopStyle"
+            @pointerdown.stop
+            @click.stop
+          >
         <div v-if="title || showRefreshButton" class="flex items-center gap-2 px-3 py-2 border-b border-border/40">
           <div v-if="title" class="min-w-0 flex-1 text-xs font-semibold text-foreground truncate">{{ title }}</div>
           <div v-else class="flex-1" />
@@ -1002,27 +890,26 @@ defineExpose({ containsTarget, focusSearch })
             @update:page="setPagerPage"
           />
         </div>
-      </div>
-    </Teleport>
+          </div>
+        </PopoverContent>
+      </PopoverPortal>
+    </PopoverRoot>
 
-    <Teleport to="body">
-      <div
-        v-if="open && isMobileSheet"
-        class="fixed inset-0 z-50"
-        data-oc-keyboard-tap="keep"
-        @pointerdown.stop
-        @click="closeMenu"
-      >
-        <div class="absolute inset-0 bg-black/55 backdrop-blur-sm" />
-        <div
-          ref="panelEl"
-          class="absolute left-1/2 w-[calc(100%-1rem)] max-w-[21rem] -translate-x-1/2 rounded-xl border border-border/70 bg-background/95 shadow-xl backdrop-blur overflow-hidden flex flex-col"
-          :style="mobileSheetStyle"
-          @pointerdown.stop
-          @click.stop
-        >
+    <DialogRoot :open="open && isMobileSheet" @update:open="onRadixSurfaceOpenChange">
+      <DialogPortal>
+        <DialogOverlay class="fixed inset-0 z-[74] bg-black/55 backdrop-blur-sm" />
+        <DialogContent as-child>
+          <div
+            ref="panelEl"
+            data-oc-keyboard-tap="keep"
+            tabindex="-1"
+            class="fixed z-[75] max-w-[21rem] -translate-x-1/2 rounded-xl border border-border/70 bg-background/95 shadow-xl backdrop-blur overflow-hidden flex flex-col outline-none"
+            :style="mobileSheetStyle"
+            @pointerdown.stop
+            @click.stop
+          >
           <div class="flex items-center justify-between gap-3 px-3 py-2 border-b border-border/40">
-            <div class="text-sm font-semibold">{{ mobileTitle || title || t('common.options') }}</div>
+            <DialogTitle class="text-sm font-semibold">{{ mobileTitle || title || t('common.options') }}</DialogTitle>
             <div class="flex items-center gap-1">
               <IconButton
                 v-if="showRefreshButton"
@@ -1188,8 +1075,9 @@ defineExpose({ containsTarget, focusSearch })
               @update:page="setPagerPage"
             />
           </div>
-        </div>
-      </div>
-    </Teleport>
+          </div>
+        </DialogContent>
+      </DialogPortal>
+    </DialogRoot>
   </div>
 </template>

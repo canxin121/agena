@@ -62,10 +62,13 @@ export function useChatComposerLayout(opts: {
   const STORAGE_COMPOSER_USER_HEIGHT = localStorageKeys.chat.composerUserHeight
   const DEFAULT_COMPOSER_HEIGHT = 240
   const DEFAULT_MOBILE_COMPOSER_HEIGHT = 160
+  const MIN_DESKTOP_COMPOSER_HEIGHT = 190
+  const MIN_DESKTOP_TRANSCRIPT_HEIGHT = 160
 
   // Height state
   const composerUserHeight = ref<number>(DEFAULT_COMPOSER_HEIGHT)
   const composerTargetHeight = ref<number>(DEFAULT_COMPOSER_HEIGHT)
+  const composerMaxHeight = ref<number | undefined>(undefined)
 
   // Mobile fullscreen: keep the editor pinned to the top.
   //
@@ -137,11 +140,50 @@ export function useChatComposerLayout(opts: {
     // ignore
   }
 
-  // Override for mobile: enforce a compact fixed height initially.
-  if (ui.isCompactLayout) {
-    composerTargetHeight.value = DEFAULT_MOBILE_COMPOSER_HEIGHT
-    composerUserHeight.value = DEFAULT_MOBILE_COMPOSER_HEIGHT
+  function pageHeight(): number {
+    const el = pageRef.value
+    const measured = el ? Math.round(el.getBoundingClientRect().height) : 0
+    if (Number.isFinite(measured) && measured > 0) return measured
+    if (typeof window === 'undefined') return 0
+    return Math.max(0, Math.round(window.innerHeight || 0))
   }
+
+  function regularComposerMaxHeight(): number | undefined {
+    const height = pageHeight()
+    if (!(height > 0)) return undefined
+    return Math.max(MIN_DESKTOP_COMPOSER_HEIGHT, height - MIN_DESKTOP_TRANSCRIPT_HEIGHT)
+  }
+
+  function regularComposerTargetHeight(): number {
+    const maxHeight = regularComposerMaxHeight()
+    const preferred = Math.max(MIN_DESKTOP_COMPOSER_HEIGHT, composerUserHeight.value)
+    return typeof maxHeight === 'number' ? Math.min(preferred, maxHeight) : preferred
+  }
+
+  function syncRegularComposerHeight() {
+    if (ui.isCompactLayout || editorFullscreen.value) return
+    const maxHeight = regularComposerMaxHeight()
+    composerMaxHeight.value = maxHeight
+    composerTargetHeight.value = regularComposerTargetHeight()
+  }
+
+  // Compact mode uses a fixed, small editor while retaining the user's
+  // persisted desktop preference for when the window becomes wide again.
+  if (ui.isCompactLayout) composerTargetHeight.value = DEFAULT_MOBILE_COMPOSER_HEIGHT
+  else syncRegularComposerHeight()
+
+  watch(
+    () => ui.isCompactLayout,
+    (compact) => {
+      if (editorFullscreen.value) return
+      if (compact) {
+        composerMaxHeight.value = undefined
+        composerTargetHeight.value = DEFAULT_MOBILE_COMPOSER_HEIGHT
+        return
+      }
+      syncRegularComposerHeight()
+    },
+  )
 
   function persistUserHeight(h: number) {
     try {
@@ -154,26 +196,33 @@ export function useChatComposerLayout(opts: {
     if (ui.isCompactLayout) return
 
     // If we are dragging, we update the target height immediately
-    composerTargetHeight.value = newHeight
+    const maxHeight = regularComposerMaxHeight()
+    const nextHeight = Math.max(
+      MIN_DESKTOP_COMPOSER_HEIGHT,
+      typeof maxHeight === 'number' ? Math.min(newHeight, maxHeight) : newHeight,
+    )
+    composerTargetHeight.value = nextHeight
+    composerMaxHeight.value = maxHeight
 
     // If not in fullscreen (or if we decide dragging exits fullscreen/updates user pref), update user height
     if (!editorFullscreen.value) {
-      composerUserHeight.value = newHeight
-      persistUserHeight(newHeight)
+      composerUserHeight.value = nextHeight
+      persistUserHeight(nextHeight)
     }
   }
 
   function resetComposerHeight() {
     if (ui.isCompactLayout || editorFullscreen.value) return
     composerUserHeight.value = DEFAULT_COMPOSER_HEIGHT
-    composerTargetHeight.value = DEFAULT_COMPOSER_HEIGHT
+    composerTargetHeight.value = regularComposerTargetHeight()
+    composerMaxHeight.value = regularComposerMaxHeight()
     persistUserHeight(DEFAULT_COMPOSER_HEIGHT)
   }
 
   function applyComposerUserHeight() {
     if (ui.isCompactLayout) return
     if (!editorFullscreen.value) {
-      composerTargetHeight.value = composerUserHeight.value
+      syncRegularComposerHeight()
     }
   }
 
@@ -222,8 +271,10 @@ export function useChatComposerLayout(opts: {
       }
     }
 
-    // Animate/Restore back to user height
-    composerTargetHeight.value = composerUserHeight.value
+    // Animate/restore to the layout-appropriate regular height. A persisted
+    // desktop preference must never overflow a newly compact/smaller window.
+    composerTargetHeight.value = ui.isCompactLayout ? DEFAULT_MOBILE_COMPOSER_HEIGHT : regularComposerTargetHeight()
+    composerMaxHeight.value = ui.isCompactLayout ? undefined : regularComposerMaxHeight()
 
     setTimeout(() => {
       editorFullscreen.value = false
@@ -271,9 +322,7 @@ export function useChatComposerLayout(opts: {
 
       // Track chat page size changes that don't emit window.resize (iOS keyboard, dvh changes,
       // bottom-nav padding tweaks).
-      pageObserver = new ResizeObserver(() => {
-        syncFullscreenHeight()
-      })
+      pageObserver = new ResizeObserver(() => handleWindowResize())
       if (pageRef.value) {
         pageObserver.observe(pageRef.value)
       }
@@ -285,7 +334,16 @@ export function useChatComposerLayout(opts: {
   })
 
   function handleWindowResize() {
-    syncFullscreenHeight()
+    if (editorFullscreen.value && !editorClosing.value) {
+      syncFullscreenHeight()
+      return
+    }
+    if (ui.isCompactLayout) {
+      composerMaxHeight.value = undefined
+      composerTargetHeight.value = DEFAULT_MOBILE_COMPOSER_HEIGHT
+      return
+    }
+    syncRegularComposerHeight()
   }
 
   onBeforeUnmount(() => {
@@ -323,6 +381,7 @@ export function useChatComposerLayout(opts: {
     composerCollapsedHeight: ref(0), // Unused but kept for type compat if needed
     composerUserHeight,
     composerTargetHeight,
+    composerMaxHeight,
     composerSplitTopCollapsed,
     startComposerResize,
     applyComposerUserHeight,

@@ -261,6 +261,7 @@ function textInputType() {
       v-else-if="['text', 'secret_reference', 'path', 'url', 'duration'].includes(node.kind)"
       class="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
       :type="textInputType()"
+      :aria-label="node.title || node.id"
       :value="typeof modelValue === 'string' ? modelValue : ''"
       :minlength="node.constraints?.min_length || undefined"
       :maxlength="node.constraints?.max_length || undefined"
@@ -273,6 +274,7 @@ function textInputType() {
       v-else-if="node.kind === 'integer' || node.kind === 'number'"
       class="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
       type="number"
+      :aria-label="node.title || node.id"
       :step="node.kind === 'integer' ? 1 : node.constraints?.multiple_of || 'any'"
       :min="node.constraints?.minimum ?? undefined"
       :max="node.constraints?.maximum ?? undefined"
@@ -283,6 +285,7 @@ function textInputType() {
     <select
       v-else-if="node.kind === 'choice'"
       class="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
+      :aria-label="node.title || node.id"
       :value="enumKey(modelValue)"
       @change="selectOption(($event.target as HTMLSelectElement).value, options)"
     >
@@ -391,6 +394,7 @@ function textInputType() {
           v-model="recordKey"
           class="h-9 min-w-0 flex-1 rounded-md border border-input bg-background px-3 text-sm"
           :placeholder="$st('New entry name')"
+          :aria-label="$st('New entry name')"
           @keydown.enter.prevent="addRecordEntry"
         />
         <Button size="sm" variant="outline" type="button" :disabled="!recordKey.trim()" @click="addRecordEntry">{{
@@ -402,6 +406,7 @@ function textInputType() {
     <div v-else-if="node.kind === 'tagged_variant'" class="space-y-4 rounded-md border border-border/70 p-3">
       <select
         class="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
+        :aria-label="node.title || node.id"
         :value="selectedVariant?.id || ''"
         @change="selectVariant(($event.target as HTMLSelectElement).value)"
       >
@@ -434,6 +439,7 @@ function textInputType() {
       <textarea
         v-model="jsonDraft"
         class="min-h-36 w-full rounded-md border border-input bg-background px-3 py-2 font-mono text-xs"
+        :aria-label="node.title || node.id"
         @blur="commitJson"
         @keydown.meta.enter.prevent="commitJson"
         @keydown.ctrl.enter.prevent="commitJson"

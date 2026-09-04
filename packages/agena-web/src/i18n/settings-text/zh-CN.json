@@ -890,5 +890,8 @@
   "Default speed mode": "默认速度模式",
   "Default verbosity": "默认详细程度",
   "Clear a mode to inherit the model’s native default.": "清除某个模式即可继承模型原生默认值。",
-  "Save runtime default": "保存运行时默认值"
+  "Save runtime default": "保存运行时默认值",
+  "Move up": "上移",
+  "Move down": "下移",
+  "Duplicate": "复制"
 }

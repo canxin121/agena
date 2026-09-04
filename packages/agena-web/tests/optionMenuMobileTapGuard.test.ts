@@ -8,10 +8,13 @@ test('OptionMenu captures pointer/click and avoids click-through', () => {
   const optionMenuSource = readFileSync(optionMenuFile, 'utf8')
 
   assert.ok(optionMenuSource.includes('data-oc-keyboard-tap="keep"'))
-  assert.ok(optionMenuSource.includes('pointer-events-auto fixed'))
+  assert.ok(optionMenuSource.includes('pointer-events-auto'))
   assert.ok(optionMenuSource.includes('@pointerdown.stop'))
   assert.ok(optionMenuSource.includes('@click.stop'))
-  assert.match(optionMenuSource, /<Teleport to="body">[\s\S]*v-if="open && isMobileSheet"/)
+  assert.match(optionMenuSource, /<DialogRoot :open="open && isMobileSheet"/)
+  assert.match(optionMenuSource, /<DialogOverlay class="fixed inset-0 z-\[74\]/)
+  assert.match(optionMenuSource, /<DialogContent as-child>/)
+  assert.match(optionMenuSource, /<PopoverContent[\s\S]*as-child/)
   assert.ok(optionMenuSource.includes('const viewportTop = resolveViewportTop()'))
   assert.ok(
     optionMenuSource.includes('const bottomEdge = viewportTop + viewportHeight - safeBottom - MOBILE_SHEET_MARGIN_PX'),

@@ -404,6 +404,8 @@
     @apply border border-border;
     max-width: 100%;
     overflow-x: auto;
+    direction: ltr;
+    text-align: left;
   }
   .prose :where(pre code) {
     @apply font-mono bg-transparent p-0 text-foreground;
@@ -504,6 +506,8 @@
   .oc-md-pre {
     @apply overflow-x-auto font-mono p-4 leading-relaxed;
     font-size: 1em;
+    direction: ltr;
+    text-align: left;
   }
   .oc-md-pre code {
     @apply bg-transparent p-0;
@@ -684,6 +688,32 @@
     @apply disabled:pointer-events-none disabled:opacity-45;
   }
 
+  /*
+    Coarse-pointer devices cannot rely on hover-revealed 20-24px controls.
+    Preserve desktop density, but give touch/tablet users stable targets and
+    visible secondary actions even when the viewport is wide enough to use the
+    desktop shell.
+  */
+  :root.touch-pointer .oc-vscode-icon-button {
+    min-width: 2rem;
+    min-height: 2rem;
+  }
+
+  :root.touch-pointer .oc-icon-button {
+    min-width: 2rem;
+    min-height: 2rem;
+  }
+
+  :root.touch-pointer [data-oc-list-item-frame] {
+    min-height: 2.25rem;
+  }
+
+  :root.touch-pointer [data-oc-list-item-frame] .oc-list-item-actions {
+    max-width: 100%;
+    opacity: 1;
+    pointer-events: auto;
+  }
+
   .oc-vscode-section {
     @apply border-b border-sidebar-border/40;
   }
@@ -725,6 +755,10 @@
   .oc-vscode-row-actions {
     @apply ml-1 flex items-center gap-0.5 opacity-0 transition-opacity;
     @apply pointer-events-none;
+  }
+
+  :root.touch-pointer .oc-vscode-row-actions {
+    @apply pointer-events-auto opacity-100;
   }
 
   .oc-vscode-row:hover .oc-vscode-row-actions,

@@ -1,4 +1,4 @@
-import type { CSSProperties, ComputedRef, Ref, Component } from 'vue'
+import type { ComputedRef, Ref, Component } from 'vue'
 
 import type { RenderBlock, TranscriptDisplayPart } from '@/components/chat/messageList.types'
 import type { OptionMenuGroup, OptionMenuItem } from '@/components/ui/optionMenu.types'
@@ -150,6 +150,7 @@ export type ChatPageViewContext = {
   // the message list and making the composer "jump".
   composerSplitTopCollapsed: MaybeRef<boolean>
   composerTargetHeight: MaybeRef<number>
+  composerMaxHeight: MaybeRef<number | undefined>
   handleComposerResize: (height: number) => void
   resetComposerHeight: () => void
   toggleEditorFullscreen: () => void
@@ -199,7 +200,6 @@ export type ChatPageViewContext = {
   runComposerActionMenu: (item: OptionMenuItem) => void | Promise<void>
 
   composerPickerOpen: MaybeRef<null | 'model' | 'thinking' | 'speed'>
-  composerPickerStyle: MaybeRef<CSSProperties>
   composerPickerTitle: MaybeRef<string>
   composerPickerSearchable: MaybeRef<boolean>
   composerPickerSearchPlaceholder: MaybeRef<string>

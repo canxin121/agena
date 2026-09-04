@@ -509,6 +509,7 @@ export default {
   },
   login: {
     title: 'Agena',
+    unlockDescription: '输入密码以解锁 Agena。',
     subtitle: '选择后端。如果后端已锁定，输入密码继续。',
     backendLoadingTitle: '后端加载中，请稍候',
     backendLoadingDescription: '正在初始化桌面后端，页面会在就绪后自动恢复。',
@@ -2233,6 +2234,8 @@ export default {
       empty: '未找到命令',
       aliases: '别名',
       hint: '上下切换 | 回车选择 | Esc 关闭',
+      rewindPromptTitle: '回退到消息 ID',
+      rewindPromptPlaceholder: '消息 ID',
       builtIns: {
         help: '打开上下文帮助',
         commands: '打开命令面板',
@@ -3181,6 +3184,9 @@ export default {
         prompt: '提示',
       },
       searchRemotes: '搜索远端',
+      protectedBranchCommitConfirm: '分支“{branch}”受保护。仍要提交吗？',
+      protectedBranchNewBranchTitle: '创建新分支',
+      protectedBranchNewBranchDescription: '分支“{branch}”受保护。请输入用于此次提交的新分支名称。',
 
       diffViewer: {
         labels: {
@@ -3190,6 +3196,7 @@ export default {
         noOriginal: '（无原始内容）',
         noModified: '（无修改内容）',
         loading: 'Diff 加载中...',
+        confirmDiscardHunk: '放弃此更改块？此操作无法撤销。',
         actions: {
           openFile: '打开文件',
           revealInFiles: '在文件中定位',

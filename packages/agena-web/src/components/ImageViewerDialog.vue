@@ -384,7 +384,7 @@ onBeforeUnmount(() => {
         class="fixed inset-0 z-[80] bg-black/85 backdrop-blur-sm data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0"
       />
       <DialogContent
-        class="fixed inset-0 z-[81] flex min-h-0 flex-col bg-black/20 text-white outline-none data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0"
+        class="fixed inset-0 z-[81] flex min-h-0 flex-col bg-black/20 pt-[var(--oc-safe-area-top,0px)] pr-[var(--oc-safe-area-right,0px)] pb-[var(--oc-safe-area-bottom,0px)] pl-[var(--oc-safe-area-left,0px)] text-white outline-none data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0"
       >
         <DialogTitle class="sr-only">Image viewer</DialogTitle>
         <div class="flex items-center gap-2 border-b border-white/15 bg-black/40 px-3 py-2">
@@ -486,14 +486,14 @@ onBeforeUnmount(() => {
             @touchend="onTouchEnd"
             @touchcancel="onTouchEnd"
           >
-            <div class="flex min-h-full w-full items-center justify-center p-4 sm:p-6">
+            <div class="flex h-full min-h-0 w-full items-center justify-center p-4 sm:p-6">
               <img
                 v-if="activeItem"
                 ref="imageEl"
                 :key="activeItem.key || activeItem.src"
                 :src="activeItem.src"
                 :alt="activeItem.alt || activeItem.title || ''"
-                class="max-h-[calc(100dvh-7.5rem)] max-w-full select-none object-contain"
+                class="max-h-full max-w-full select-none object-contain"
                 :style="activeImageStyle"
                 draggable="false"
                 @load="onImageLoaded"

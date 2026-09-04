@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, useSlots } from 'vue'
 import { cn } from '@/lib/utils'
 
 type ListItemActionVisibility = 'hover' | 'always'
@@ -36,6 +36,16 @@ const emit = defineEmits<{
   (e: 'click', event: MouseEvent): void
 }>()
 
+const slots = useSlots()
+
+// Rows frequently expose secondary actions (more, delete, favorite, etc.).
+// Rendering those actions inside the default <button> root creates nested
+// buttons, which is invalid HTML and produces inconsistent pointer/focus
+// behavior across browsers. When actions exist, use a neutral flex root and
+// keep the primary row action as a real button alongside the action buttons.
+const usesButtonSurrogate = computed(() => props.as === 'button' && Boolean(slots.actions))
+const resolvedAs = computed(() => (usesButtonSurrogate.value ? 'div' : props.as))
+
 const rootClass = computed(() => {
   const densityClass = props.density === 'compact' ? 'py-0.5 pl-2 pr-1.5' : 'py-1 pl-2 pr-1.5'
   return cn(
@@ -60,18 +70,25 @@ const actionsClass = computed(() => {
     floatingClass,
   )
 })
+
+function handleRootClick(event: MouseEvent) {
+  // The split primary button stops propagation. In split mode this fallback
+  // keeps non-interactive leading affordances (icons/selection indicators)
+  // clickable as part of the row without wrapping real controls in a button.
+  emit('click', event)
+}
 </script>
 
 <template>
   <component
-    :is="as"
-    type="button"
+    :is="resolvedAs"
+    :type="resolvedAs === 'button' ? 'button' : undefined"
     data-oc-list-item-frame
     data-oc-actions-lock-frame
     :class="rootClass"
     :style="{ paddingLeft: typeof indent === 'number' ? `${indent}px` : undefined }"
-    :disabled="disabled"
-    @click="emit('click', $event)"
+    :disabled="resolvedAs === 'button' ? disabled : undefined"
+    @click="handleRootClick"
   >
     <div
       v-if="$slots.leading"
@@ -80,16 +97,38 @@ const actionsClass = computed(() => {
       <slot name="leading" />
     </div>
 
-    <div :class="cn('flex min-w-0 flex-1 flex-col justify-center overflow-visible', contentClass)">
-      <slot />
-    </div>
-
-    <div
-      v-if="$slots.meta"
-      :class="cn('flex shrink-0 items-center gap-1 text-[10px] text-muted-foreground', metaClass)"
+    <button
+      v-if="usesButtonSurrogate"
+      type="button"
+      data-oc-list-item-primary
+      class="flex min-w-0 flex-1 items-center gap-2 self-stretch bg-transparent p-0 text-left text-inherit outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+      :disabled="disabled"
+      @click.stop="emit('click', $event)"
     >
-      <slot name="meta" />
-    </div>
+      <div :class="cn('flex min-w-0 flex-1 flex-col justify-center overflow-visible', contentClass)">
+        <slot />
+      </div>
+
+      <div
+        v-if="$slots.meta"
+        :class="cn('flex shrink-0 items-center gap-1 text-[10px] text-muted-foreground', metaClass)"
+      >
+        <slot name="meta" />
+      </div>
+    </button>
+
+    <template v-else>
+      <div :class="cn('flex min-w-0 flex-1 flex-col justify-center overflow-visible', contentClass)">
+        <slot />
+      </div>
+
+      <div
+        v-if="$slots.meta"
+        :class="cn('flex shrink-0 items-center gap-1 text-[10px] text-muted-foreground', metaClass)"
+      >
+        <slot name="meta" />
+      </div>
+    </template>
 
     <div v-if="$slots.actions" :class="cn('oc-list-item-actions', actionsClass)" @click.stop>
       <slot name="actions" />

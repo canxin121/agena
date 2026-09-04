@@ -82,12 +82,7 @@ function withSelectedMode(options: ModelModeOption[], selected: string): ModelMo
 
 export function useChatModelSelection(opts: {
   chat: ChatLike
-  composerControlsRef: Ref<HTMLDivElement | null>
   composerPickerOpen: Ref<null | PickerKind>
-  composerPickerStyle: Ref<Record<string, string>>
-  modelTriggerRef: Ref<HTMLElement | null>
-  thinkingTriggerRef: Ref<HTMLElement | null>
-  speedTriggerRef: Ref<HTMLElement | null>
   modelPickerQuery: Ref<string>
   onOpenComposerPicker: () => void
   commandOpen: Ref<boolean>
@@ -96,12 +91,7 @@ export function useChatModelSelection(opts: {
 }) {
   const {
     chat,
-    composerControlsRef,
     composerPickerOpen,
-    composerPickerStyle,
-    modelTriggerRef,
-    thinkingTriggerRef,
-    speedTriggerRef,
     modelPickerQuery,
     onOpenComposerPicker,
     commandOpen,
@@ -263,12 +253,7 @@ export function useChatModelSelection(opts: {
   )
 
   const picker = useModelSelectionPickerUi({
-    composerControlsRef,
     composerPickerOpen,
-    composerPickerStyle,
-    modelTriggerRef,
-    thinkingTriggerRef,
-    speedTriggerRef,
     modelPickerQuery,
     onOpenComposerPicker,
     commandOpen,
@@ -513,7 +498,6 @@ export function useChatModelSelection(opts: {
     speedModeHint,
     modelMetaFor,
     composerPickerOpen,
-    composerPickerStyle,
     modelPickerQuery,
     toggleComposerPicker: picker.toggleComposerPicker,
     chooseModelSlug,

@@ -509,6 +509,7 @@ export default {
   },
   login: {
     title: 'Agena',
+    unlockDescription: 'Enter your password to unlock Agena.',
     subtitle: "Choose a backend. If it's locked, enter your password to continue.",
     backendLoadingTitle: 'Backend is starting, please wait',
     backendLoadingDescription:
@@ -2238,6 +2239,8 @@ export default {
       empty: 'No commands found',
       aliases: 'Aliases',
       hint: 'Up/Down navigate | Enter select | Esc close',
+      rewindPromptTitle: 'Rewind to message ID',
+      rewindPromptPlaceholder: 'Message ID',
       builtIns: {
         help: 'Open context help',
         commands: 'Open the command palette',
@@ -3187,6 +3190,9 @@ export default {
         prompt: 'Prompt',
       },
       searchRemotes: 'Search remotes',
+      protectedBranchCommitConfirm: 'Branch "{branch}" is protected. Commit anyway?',
+      protectedBranchNewBranchTitle: 'Create a new branch',
+      protectedBranchNewBranchDescription: 'Branch "{branch}" is protected. Enter a new branch name for this commit.',
 
       diffViewer: {
         labels: {
@@ -3196,6 +3202,7 @@ export default {
         noOriginal: '(no original)',
         noModified: '(no modified)',
         loading: 'Loading diff...',
+        confirmDiscardHunk: 'Discard this hunk? This cannot be undone.',
         actions: {
           openFile: 'Open file',
           revealInFiles: 'Reveal in Files',

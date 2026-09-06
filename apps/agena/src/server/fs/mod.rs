@@ -4,12 +4,15 @@ use crate::{ApiResult, AppError};
 
 use crate::server::path_utils::{home_dir_env, normalize_directory_path};
 
+mod file_write;
 mod fs_content;
 mod fs_core;
+mod fs_http;
 mod fs_search;
 
 pub use fs_content::*;
 pub use fs_core::*;
+pub use fs_http::{fs_upload_http, fs_write_http};
 pub use fs_search::*;
 
 const DEFAULT_FILE_SEARCH_LIMIT: usize = 60;

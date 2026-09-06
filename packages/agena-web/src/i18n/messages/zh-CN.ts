@@ -3963,7 +3963,10 @@ export default {
       hunkUnstaged: '已取消暂存 hunk',
       hunkDiscarded: '已丢弃 hunk',
       saveCurrentFileBeforeReplaceAcrossFiles: '跨文件替换前请先保存当前文件',
+      searchAgainBeforeReplace: '请重新搜索后再替换。',
       replaceAcrossFiles: {
+        partial: '已替换 {files} 个文件中的 {matches} 处匹配，在 {path} 停止：{error}',
+        truncated: '部分文件未包含在本次替换中，请重新搜索并检查剩余匹配。',
         replacedMatch: '已替换 {count} 处匹配{suffix}',
         replacedMatches: '已替换 {count} 处匹配{suffix}',
         skippedFileSuffix: '，跳过 {count} 个文件',

@@ -3971,7 +3971,11 @@ export default {
       hunkUnstaged: 'Hunk unstaged',
       hunkDiscarded: 'Hunk discarded',
       saveCurrentFileBeforeReplaceAcrossFiles: 'Save current file before replacing across files',
+      searchAgainBeforeReplace: 'Run the search again before replacing.',
       replaceAcrossFiles: {
+        partial: 'Replaced {matches} matches in {files} files before stopping at {path}: {error}',
+        truncated:
+          'Some files were outside this replacement batch. Run another search to review the remaining matches.',
         replacedMatch: 'Replaced {count} match{suffix}',
         replacedMatches: 'Replaced {count} matches{suffix}',
         skippedFileSuffix: ', skipped {count} file',

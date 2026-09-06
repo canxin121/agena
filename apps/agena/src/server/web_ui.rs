@@ -8,6 +8,7 @@ use anyhow::{Context, Result, bail};
 use axum::{
     Json, Router,
     http::{StatusCode, Uri},
+    routing::any,
 };
 use serde_json::json;
 use tower_http::services::{ServeDir, ServeFile};
@@ -87,6 +88,18 @@ fn push_candidate(candidates: &mut Vec<PathBuf>, seen: &mut HashSet<PathBuf>, ca
 }
 
 pub(crate) fn attach(app: Router, ui_dir: Option<PathBuf>) -> Router {
+    // Unknown server endpoints must stay 404 in both UI and API-only mode.
+    // Otherwise a removed OAuth endpoint can look successful by serving the
+    // SPA shell (or the API-only landing response) with HTTP 200.
+    let app = app
+        .route("/api", any(api_not_found))
+        .route("/api/{*path}", any(api_not_found))
+        .route("/auth", any(api_not_found))
+        .route("/auth/{*path}", any(api_not_found))
+        .route("/oauth", any(api_not_found))
+        .route("/oauth/{*path}", any(api_not_found))
+        .route("/.well-known", any(api_not_found))
+        .route("/.well-known/{*path}", any(api_not_found));
     match ui_dir {
         Some(directory) => {
             tracing::info!(
@@ -132,7 +145,6 @@ mod tests {
     use axum::{
         body::{Body, to_bytes},
         http::{Request, header},
-        routing::any,
     };
     use tower::ServiceExt;
 
@@ -200,17 +212,22 @@ mod tests {
     #[tokio::test]
     async fn server_namespaces_keep_json_not_found_responses() {
         let fixture = fixture();
-        let app = attach(
-            Router::new()
-                .route("/api/{*path}", any(api_not_found))
-                .route("/auth/{*path}", any(api_not_found)),
-            Some(fixture.path().to_path_buf()),
-        );
-
-        for path in ["/api/v1/missing", "/auth/missing"] {
-            let response = request(app.clone(), path).await;
-            assert_eq!(response.status(), StatusCode::NOT_FOUND);
-            assert!(body(response).await.contains("route_not_found"));
+        for ui_dir in [Some(fixture.path().to_path_buf()), None] {
+            let app = attach(Router::new(), ui_dir);
+            for path in [
+                "/api",
+                "/api/v1/missing",
+                "/auth",
+                "/auth/missing",
+                "/oauth",
+                "/oauth/register",
+                "/.well-known",
+                "/.well-known/missing",
+            ] {
+                let response = request(app.clone(), path).await;
+                assert_eq!(response.status(), StatusCode::NOT_FOUND, "{path}");
+                assert!(body(response).await.contains("route_not_found"));
+            }
         }
     }
 

@@ -1,18 +1,19 @@
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     path::{Path, PathBuf},
-    sync::Arc,
     time::Instant,
 };
 
-use axum::{
-    Json,
-    extract::{Query, State},
-    http::HeaderMap,
-};
+use axum::{Json, extract::Query, http::HeaderMap};
 use ignore::WalkBuilder;
 use regex::{Regex, RegexBuilder};
 use serde::{Deserialize, Serialize};
+
+mod replacement;
+pub use replacement::fs_content_replace;
+
+#[cfg(test)]
+mod tests;
 
 use super::fs_core::{ProjectDirQuery, resolve_project_directory};
 use super::fs_search::{default_respect_gitignore, normalize_relative_search_path};
@@ -64,6 +65,7 @@ pub struct ContentSearchMatch {
 pub struct ContentSearchFileResult {
     pub path: String,
     pub relative_path: String,
+    pub revision: String,
     pub match_count: usize,
     pub matches: Vec<ContentSearchMatch>,
 }
@@ -80,16 +82,17 @@ pub struct ContentSearchResponse {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ContentReplaceMatchRef {
     pub path: Option<String>,
     pub start_offset: Option<usize>,
     pub end_offset: Option<usize>,
     pub expected: Option<String>,
+    pub expected_revision: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ContentReplaceBody {
     pub query: Option<String>,
     pub replace: Option<String>,
@@ -105,6 +108,7 @@ pub struct ContentReplaceBody {
     pub whole_word: bool,
     #[serde(default)]
     pub paths: Vec<String>,
+    pub expected_revisions: Option<HashMap<String, String>>,
     pub r#match: Option<ContentReplaceMatchRef>,
 }
 
@@ -269,6 +273,10 @@ async fn normalize_content_scope_paths(
     let mut truncated = paths.len() > MAX_CONTENT_REPLACE_PATHS;
 
     for raw in paths.iter().take(MAX_CONTENT_REPLACE_PATHS) {
+        if out.len() >= MAX_CONTENT_REPLACE_PATHS {
+            truncated = true;
+            break;
+        }
         let resolved = resolve_path_within_workspace(root, raw)?;
 
         let meta = match tokio::fs::metadata(&resolved).await {
@@ -320,23 +328,14 @@ async fn normalize_content_scope_paths(
 }
 
 async fn read_searchable_text(path: &Path) -> ApiResult<Option<String>> {
-    let meta = match tokio::fs::metadata(path).await {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
-            return Err(AppError::forbidden_error(
-                "inspect a file for content search",
-                &error,
-            ));
-        }
-        Err(error) => return Err(AppError::internal_error(&error)),
-    };
-    if !meta.is_file() || meta.len() > MAX_CONTENT_SEARCH_FILE_BYTES {
-        return Ok(None);
-    }
-
-    let bytes = match tokio::fs::read(path).await {
-        Ok(bytes) => bytes,
+    let bytes = match super::file_write::read_file_bounded(
+        path.to_path_buf(),
+        MAX_CONTENT_SEARCH_FILE_BYTES,
+    )
+    .await
+    {
+        Ok(super::file_write::FileRead::Contents(bytes)) => bytes,
+        Ok(_) => return Ok(None),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
             return Err(AppError::forbidden_error(
@@ -485,12 +484,11 @@ fn collect_content_matches(
 }
 
 pub async fn fs_content_search(
-    State(state): State<Arc<crate::AppState>>,
     headers: HeaderMap,
     Query(q): Query<ProjectDirQuery>,
     Json(body): Json<ContentSearchBody>,
 ) -> ApiResult<Json<ContentSearchResponse>> {
-    let root = resolve_project_directory(state.as_ref(), &headers, q.directory.as_deref()).await?;
+    let root = resolve_project_directory(&headers, q.directory.as_deref()).await?;
 
     let query = body
         .query
@@ -567,6 +565,7 @@ pub async fn fs_content_search(
         files.push(ContentSearchFileResult {
             path: to_api_path(&path),
             relative_path,
+            revision: replacement::content_revision(content.as_bytes()),
             match_count: matches.len(),
             matches,
         });
@@ -596,183 +595,5 @@ pub async fn fs_content_search(
         match_count: total_matches,
         files,
         truncated,
-    }))
-}
-
-pub async fn fs_content_replace(
-    State(state): State<Arc<crate::AppState>>,
-    headers: HeaderMap,
-    Query(q): Query<ProjectDirQuery>,
-    Json(body): Json<ContentReplaceBody>,
-) -> ApiResult<Json<ContentReplaceResponse>> {
-    let root = resolve_project_directory(state.as_ref(), &headers, q.directory.as_deref()).await?;
-    let replacement = body
-        .replace
-        .ok_or_else(|| AppError::bad_request("Replace text is required"))?;
-
-    if let Some(target) = body.r#match {
-        let path = target
-            .path
-            .as_deref()
-            .map(str::trim)
-            .filter(|p| !p.is_empty())
-            .ok_or_else(|| AppError::bad_request("Match path is required"))?;
-        let expected = target
-            .expected
-            .ok_or_else(|| AppError::bad_request("Match expected text is required"))?;
-        let start_offset = target
-            .start_offset
-            .ok_or_else(|| AppError::bad_request("Match startOffset is required"))?;
-        let end_offset = target
-            .end_offset
-            .ok_or_else(|| AppError::bad_request("Match endOffset is required"))?;
-
-        if end_offset <= start_offset {
-            return Err(AppError::bad_request("Invalid match range"));
-        }
-
-        let resolved = resolve_path_within_workspace(&root, path)?;
-        let Some(content) = read_searchable_text(&resolved).await? else {
-            return Err(AppError::bad_request(
-                "Target file is not a searchable text file",
-            ));
-        };
-
-        if end_offset > content.len()
-            || !content.is_char_boundary(start_offset)
-            || !content.is_char_boundary(end_offset)
-        {
-            return Err(AppError::bad_request("Match range is no longer valid"));
-        }
-
-        let current = &content[start_offset..end_offset];
-        if current != expected {
-            return Err(AppError::bad_request(
-                "Selected match changed; run search again before replacing",
-            ));
-        }
-
-        let mut updated =
-            String::with_capacity(content.len() + replacement.len().saturating_sub(expected.len()));
-        updated.push_str(&content[..start_offset]);
-        updated.push_str(&replacement);
-        updated.push_str(&content[end_offset..]);
-
-        tokio::fs::write(&resolved, updated)
-            .await
-            .map_err(|err| match err.kind() {
-                std::io::ErrorKind::PermissionDenied => AppError::forbidden("Access denied"),
-                _ => AppError::internal_error(&err),
-            })?;
-
-        let relative_path = normalize_relative_search_path(&root, &resolved);
-        return Ok(Json(ContentReplaceResponse {
-            root: to_api_path(&root),
-            file_count: 1,
-            replacement_count: 1,
-            skipped: 0,
-            truncated: false,
-            files: vec![ContentReplaceFileResult {
-                path: to_api_path(&resolved),
-                relative_path,
-                replacements: 1,
-            }],
-        }));
-    }
-
-    let query = body
-        .query
-        .as_deref()
-        .map(str::trim)
-        .filter(|q| !q.is_empty())
-        .ok_or_else(|| AppError::bad_request("Search query is required"))?;
-
-    let regex = build_content_regex(query, body.is_regex, body.case_sensitive, body.whole_word)?;
-    let started = Instant::now();
-
-    let (candidates, discovery_truncated) = if body.paths.is_empty() {
-        walk_workspace_files(
-            &root,
-            body.include_hidden,
-            body.respect_gitignore,
-            MAX_CONTENT_REPLACE_PATHS,
-        )
-    } else {
-        normalize_content_scope_paths(&root, &body.paths, true, false).await?
-    };
-
-    let mut files = Vec::new();
-    let mut changed_paths = Vec::new();
-    let mut total_replacements = 0usize;
-    let mut skipped = 0usize;
-
-    for path in candidates {
-        let Some(content) = read_searchable_text(&path).await? else {
-            skipped += 1;
-            continue;
-        };
-
-        let replacements = regex.find_iter(&content).count();
-        if replacements == 0 {
-            continue;
-        }
-
-        let updated = regex
-            .replace_all(&content, replacement.as_str())
-            .into_owned();
-        if updated == content {
-            continue;
-        }
-
-        if let Err(err) = tokio::fs::write(&path, updated).await {
-            if !changed_paths.is_empty() {}
-            tracing::error!(
-                completed_files = changed_paths.len(),
-                completed_replacements = total_replacements,
-                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
-                    "write a file during bulk content replacement",
-                    &err,
-                ),
-                "bulk content replacement stopped after a partial write"
-            );
-            return Err(match err.kind() {
-                std::io::ErrorKind::PermissionDenied => {
-                    AppError::forbidden_error("write a file during bulk content replacement", &err)
-                }
-                _ => AppError::internal_error(&err),
-            });
-        }
-
-        total_replacements += replacements;
-        changed_paths.push(path.clone());
-        let relative_path = normalize_relative_search_path(&root, &path);
-        files.push(ContentReplaceFileResult {
-            path: to_api_path(&path),
-            relative_path,
-            replacements,
-        });
-    }
-
-    if !changed_paths.is_empty() {}
-
-    files.sort_by(|a, b| a.relative_path.cmp(&b.relative_path));
-
-    tracing::debug!(
-        "fs_content_replace root={} q='{}' files={} replacements={} skipped={} elapsed_ms={}",
-        root.to_string_lossy(),
-        query,
-        files.len(),
-        total_replacements,
-        skipped,
-        started.elapsed().as_millis()
-    );
-
-    Ok(Json(ContentReplaceResponse {
-        root: to_api_path(&root),
-        file_count: files.len(),
-        replacement_count: total_replacements,
-        skipped,
-        truncated: discovery_truncated,
-        files,
     }))
 }

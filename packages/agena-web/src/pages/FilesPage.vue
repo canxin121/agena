@@ -90,6 +90,11 @@ import {
   writeFile,
 } from '@/features/files/api/filesApi'
 import type { FsContentSearchFileResult, FsContentSearchMatch } from '@/features/files/api/filesApi'
+import {
+  contentReplacementProgress,
+  contentSearchRevisions,
+  refreshContentReplacement,
+} from '@/features/files/contentReplacement'
 import { invalidateFileReadCache, readFileChunkCached } from '@/features/files/fileReadCache'
 import { useUnifiedMultiSelect } from '@/composables/useUnifiedMultiSelect'
 import { isEmbeddedWorkspacePaneContext } from '@/app/windowScope'
@@ -383,6 +388,8 @@ const contentSearchLoading = ref(false)
 const contentSearchReplacing = ref(false)
 const contentSearchError = ref<string | null>(null)
 const contentSearchFiles = ref<FsContentSearchFileResult[]>([])
+let contentSearchRequest = 0
+let contentReplaceRequest = 0
 const contentSearchMatchCount = ref(0)
 const contentSearchTruncated = ref(false)
 
@@ -2511,6 +2518,8 @@ function clearFileSearch() {
 }
 
 function resetContentSearchResults() {
+  contentSearchRequest += 1
+  contentSearchLoading.value = false
   contentSearchFiles.value = []
   contentSearchMatchCount.value = 0
   contentSearchTruncated.value = false
@@ -2526,6 +2535,7 @@ async function runContentSearch() {
     return
   }
 
+  const request = ++contentSearchRequest
   contentSearchLoading.value = true
   contentSearchError.value = null
   try {
@@ -2546,6 +2556,7 @@ async function runContentSearch() {
       contextChars: 56,
     })
 
+    if (request !== contentSearchRequest || root.value !== rootPath) return
     const files = Array.isArray(resp.files)
       ? resp.files.map((file) => ({
           ...file,
@@ -2565,10 +2576,11 @@ async function runContentSearch() {
     contentSearchMatchCount.value = visibleFiles.reduce((sum, file) => sum + Number(file.matchCount || 0), 0)
     contentSearchTruncated.value = Boolean(resp.truncated)
   } catch (err) {
+    if (request !== contentSearchRequest || root.value !== rootPath) return
     resetContentSearchResults()
     contentSearchError.value = err instanceof Error ? err.message : String(err)
   } finally {
-    contentSearchLoading.value = false
+    if (request === contentSearchRequest) contentSearchLoading.value = false
   }
 }
 
@@ -2593,12 +2605,20 @@ async function openContentSearchResult(path: string) {
 
 async function replaceContentSearchMatch(file: FsContentSearchFileResult, match: FsContentSearchMatch) {
   const rootPath = root.value
-  if (!rootPath) return
+  if (!rootPath || contentSearchReplacing.value || contentSearchLoading.value) return
+  if (
+    !contentSearchRevisions([file]) ||
+    !contentSearchFiles.value.some((current) => current.path === file.path && current.revision === file.revision)
+  ) {
+    toasts.push('error', t('files.toasts.searchAgainBeforeReplace'))
+    return
+  }
   if (dirty.value) {
     toasts.push('error', t('files.toasts.saveCurrentFileBeforeReplaceAcrossFiles'))
     return
   }
 
+  const request = ++contentReplaceRequest
   contentSearchReplacing.value = true
   try {
     const resp = await replaceFileContent({
@@ -2609,36 +2629,59 @@ async function replaceContentSearchMatch(file: FsContentSearchFileResult, match:
         startOffset: match.startOffset,
         endOffset: match.endOffset,
         expected: match.matched,
+        expectedRevision: file.revision,
       },
     })
 
     const replaced = Number(resp.replacementCount || 0)
     if (replaced > 0) {
-      invalidateFileReadCache({ directory: rootPath })
       toasts.push('success', t('files.toasts.matchReplaced'))
     }
 
-    if (selectedFile.value?.type === 'file' && normalizePath(selectedFile.value.path) === normalizePath(file.path)) {
-      await openFile(selectedFile.value)
-    }
-
-    await runContentSearch()
+    await refreshAfterContentReplacement(
+      rootPath,
+      resp.files.map((file) => file.path),
+    )
   } catch (err) {
     toasts.push('error', err instanceof Error ? err.message : String(err))
+    await refreshAfterContentReplacement(rootPath)
   } finally {
-    contentSearchReplacing.value = false
+    if (request === contentReplaceRequest) contentSearchReplacing.value = false
   }
+}
+
+async function refreshAfterContentReplacement(directory: string, changedPaths?: readonly string[]) {
+  await refreshContentReplacement({
+    directory,
+    changedPaths,
+    current: () => ({
+      directory: root.value || null,
+      path: selectedFile.value?.type === 'file' ? selectedFile.value.path : null,
+      dirty: dirty.value,
+    }),
+    normalizePath,
+    invalidate: (directory) => invalidateFileReadCache({ directory }),
+    refreshFile: () => refreshCurrentFile({ source: 'auto', silent: true }),
+    refreshSearch: runContentSearch,
+  })
 }
 
 async function replaceAllContentSearchMatches() {
   const rootPath = root.value
   const q = contentSearchQuery.value.trim()
-  if (!rootPath || !q || !contentSearchFiles.value.length) return
+  if (!rootPath || !q || !contentSearchFiles.value.length || contentSearchReplacing.value || contentSearchLoading.value)
+    return
+  const expectedRevisions = contentSearchRevisions(contentSearchFiles.value)
+  if (!expectedRevisions) {
+    toasts.push('error', t('files.toasts.searchAgainBeforeReplace'))
+    return
+  }
   if (dirty.value) {
     toasts.push('error', t('files.toasts.saveCurrentFileBeforeReplaceAcrossFiles'))
     return
   }
 
+  const request = ++contentReplaceRequest
   contentSearchReplacing.value = true
   try {
     const resp = await replaceFileContent({
@@ -2651,12 +2694,12 @@ async function replaceAllContentSearchMatches() {
       caseSensitive: contentSearchCaseSensitive.value,
       wholeWord: contentSearchWholeWord.value,
       paths: contentSearchFiles.value.map((file) => file.path),
+      expectedRevisions,
     })
 
     const replacements = Number(resp.replacementCount || 0)
     const skipped = Number(resp.skipped || 0)
     if (replacements > 0) {
-      invalidateFileReadCache({ directory: rootPath })
       const suffix =
         skipped > 0
           ? skipped === 1
@@ -2673,19 +2716,30 @@ async function replaceAllContentSearchMatches() {
       toasts.push('info', t('files.toasts.noMatchesReplaced'))
     }
 
-    if (selectedFile.value?.type === 'file') {
-      const selectedPath = normalizePath(selectedFile.value.path)
-      const changed = (resp.files || []).some((item) => normalizePath(item.path) === selectedPath)
-      if (changed) {
-        await openFile(selectedFile.value)
-      }
+    if (resp.truncated) {
+      toasts.push('info', t('files.toasts.replaceAcrossFiles.truncated'))
     }
-
-    await runContentSearch()
+    await refreshAfterContentReplacement(
+      rootPath,
+      resp.files.map((file) => file.path),
+    )
   } catch (err) {
-    toasts.push('error', err instanceof Error ? err.message : String(err))
+    const progress = contentReplacementProgress(err)
+    const error = err instanceof Error ? err.message : String(err)
+    toasts.push(
+      'error',
+      progress
+        ? t('files.toasts.replaceAcrossFiles.partial', {
+            matches: progress.completed.replacementCount,
+            files: progress.completed.fileCount,
+            path: progress.failedPath,
+            error,
+          })
+        : error,
+    )
+    await refreshAfterContentReplacement(rootPath)
   } finally {
-    contentSearchReplacing.value = false
+    if (request === contentReplaceRequest) contentSearchReplacing.value = false
   }
 }
 
@@ -3891,6 +3945,7 @@ async function restoreForRoot(next: string) {
   contentSearchWholeWord.value = false
   contentSearchRegex.value = false
   contentSearchLoading.value = false
+  contentReplaceRequest += 1
   contentSearchReplacing.value = false
   resetContentSearchResults()
   showMobileViewer.value = false
@@ -4094,13 +4149,17 @@ watch(
 )
 
 watch(
-  () => contentSearchQuery.value,
-  (q) => {
-    if (!q.trim()) {
-      contentSearchLoading.value = false
-      resetContentSearchResults()
-    }
-  },
+  [
+    contentSearchQuery,
+    contentSearchCaseSensitive,
+    contentSearchWholeWord,
+    contentSearchRegex,
+    contentSearchScopePath,
+    showHidden,
+    respectGitignore,
+  ],
+  resetContentSearchResults,
+  { flush: 'sync' },
 )
 
 async function refresh() {
@@ -4573,7 +4632,7 @@ onMounted(async () => {
                                       v-if="contentSearchReplaceOpen"
                                       type="button"
                                       class="oc-vscode-icon-button h-5 w-12 text-[10px]"
-                                      :disabled="contentSearchReplacing"
+                                      :disabled="contentSearchReplacing || contentSearchLoading"
                                       @click="replaceContentSearchMatch(file, match)"
                                     >
                                       {{ t('common.replace') }}

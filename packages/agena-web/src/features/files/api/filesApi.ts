@@ -1,4 +1,4 @@
-import { apiJson, apiText } from '@/lib/api'
+import { apiJson, apiText } from '../../../lib/api'
 import type { GitBlameResponse, GitDiffResponse } from '@/types/git'
 
 export type FsListEntry = {
@@ -53,6 +53,7 @@ export type FsContentSearchMatch = {
 export type FsContentSearchFileResult = {
   path: string
   relativePath: string
+  revision: string
   matchCount: number
   matches: FsContentSearchMatch[]
 }
@@ -71,6 +72,7 @@ export type FsContentReplaceResponse = {
   fileCount: number
   replacementCount: number
   skipped: number
+  truncated: boolean
   files: Array<{ path: string; relativePath: string; replacements: number }>
 }
 
@@ -111,22 +113,25 @@ export async function searchFileContent(input: {
   maxMatchesPerFile?: number
   contextChars?: number
 }): Promise<FsContentSearchResponse> {
-  return apiJson<FsContentSearchResponse>(`/api/v1/workbench/fs/search-content?directory=${encodeURIComponent(input.directory)}`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      query: input.query,
-      paths: input.paths,
-      includeHidden: input.includeHidden,
-      respectGitignore: input.respectGitignore,
-      isRegex: input.isRegex,
-      caseSensitive: input.caseSensitive,
-      wholeWord: input.wholeWord,
-      maxResults: input.maxResults,
-      maxMatchesPerFile: input.maxMatchesPerFile,
-      contextChars: input.contextChars,
-    }),
-  })
+  return apiJson<FsContentSearchResponse>(
+    `/api/v1/workbench/fs/search-content?directory=${encodeURIComponent(input.directory)}`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        query: input.query,
+        paths: input.paths,
+        includeHidden: input.includeHidden,
+        respectGitignore: input.respectGitignore,
+        isRegex: input.isRegex,
+        caseSensitive: input.caseSensitive,
+        wholeWord: input.wholeWord,
+        maxResults: input.maxResults,
+        maxMatchesPerFile: input.maxMatchesPerFile,
+        contextChars: input.contextChars,
+      }),
+    },
+  )
 }
 
 export async function replaceFileContent(input: {
@@ -139,32 +144,40 @@ export async function replaceFileContent(input: {
   caseSensitive?: boolean
   wholeWord?: boolean
   paths?: string[]
+  expectedRevisions?: Record<string, string>
   match?: {
     path: string
     startOffset: number
     endOffset: number
     expected: string
+    expectedRevision?: string
   }
 }): Promise<FsContentReplaceResponse> {
-  return apiJson<FsContentReplaceResponse>(`/api/v1/workbench/fs/replace-content?directory=${encodeURIComponent(input.directory)}`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      query: input.query,
-      replace: input.replace,
-      includeHidden: input.includeHidden,
-      respectGitignore: input.respectGitignore,
-      isRegex: input.isRegex,
-      caseSensitive: input.caseSensitive,
-      wholeWord: input.wholeWord,
-      paths: input.paths,
-      match: input.match,
-    }),
-  })
+  return apiJson<FsContentReplaceResponse>(
+    `/api/v1/workbench/fs/replace-content?directory=${encodeURIComponent(input.directory)}`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        query: input.query,
+        replace: input.replace,
+        includeHidden: input.includeHidden,
+        respectGitignore: input.respectGitignore,
+        isRegex: input.isRegex,
+        caseSensitive: input.caseSensitive,
+        wholeWord: input.wholeWord,
+        paths: input.paths,
+        expectedRevisions: input.expectedRevisions,
+        match: input.match,
+      }),
+    },
+  )
 }
 
 export async function readFileText(input: { directory: string; path: string }): Promise<string> {
-  return apiText(`/api/v1/workbench/fs/read?directory=${encodeURIComponent(input.directory)}&path=${encodeURIComponent(input.path)}`)
+  return apiText(
+    `/api/v1/workbench/fs/read?directory=${encodeURIComponent(input.directory)}&path=${encodeURIComponent(input.path)}`,
+  )
 }
 
 export async function readFileChunk(input: {

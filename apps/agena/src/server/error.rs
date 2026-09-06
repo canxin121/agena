@@ -19,6 +19,9 @@ pub enum AppError {
     BadRequest { message: String },
 
     #[error("{message}")]
+    Conflict { message: String },
+
+    #[error("{message}")]
     Forbidden { message: String },
 
     #[error("{message}")]
@@ -26,6 +29,12 @@ pub enum AppError {
 
     #[error("{message}")]
     PayloadTooLarge { message: String },
+
+    #[error("{message}")]
+    UnsupportedMediaType { message: String },
+
+    #[error("{message}")]
+    UnprocessableEntity { message: String },
 
     #[error("{message}")]
     TooManyRequests { message: String },
@@ -48,6 +57,29 @@ impl AppError {
         Self::Forbidden {
             message: message.into(),
         }
+    }
+
+    pub fn conflict(message: impl Into<String>) -> Self {
+        Self::Conflict {
+            message: message.into(),
+        }
+    }
+
+    pub(crate) fn into_response_with_details(self, details: impl Serialize) -> Response {
+        #[derive(Serialize)]
+        struct DetailedError<T> {
+            #[serde(flatten)]
+            error: ErrorBody,
+            details: T,
+        }
+        (
+            self.status_code(),
+            Json(DetailedError {
+                error: self.body(),
+                details,
+            }),
+        )
+            .into_response()
     }
 
     pub fn forbidden_error(
@@ -82,6 +114,18 @@ impl AppError {
         }
     }
 
+    pub fn unsupported_media_type(message: impl Into<String>) -> Self {
+        Self::UnsupportedMediaType {
+            message: message.into(),
+        }
+    }
+
+    pub fn unprocessable_entity(message: impl Into<String>) -> Self {
+        Self::UnprocessableEntity {
+            message: message.into(),
+        }
+    }
+
     pub fn bad_gateway(message: impl Into<String>) -> Self {
         Self::BadGateway {
             message: message.into(),
@@ -111,9 +155,12 @@ impl AppError {
     fn status_code(&self) -> StatusCode {
         match self {
             Self::BadRequest { .. } => StatusCode::BAD_REQUEST,
+            Self::Conflict { .. } => StatusCode::CONFLICT,
             Self::Forbidden { .. } => StatusCode::FORBIDDEN,
             Self::NotFound { .. } => StatusCode::NOT_FOUND,
             Self::PayloadTooLarge { .. } => StatusCode::PAYLOAD_TOO_LARGE,
+            Self::UnsupportedMediaType { .. } => StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            Self::UnprocessableEntity { .. } => StatusCode::UNPROCESSABLE_ENTITY,
             Self::TooManyRequests { .. } => StatusCode::TOO_MANY_REQUESTS,
             Self::BadGateway { .. } => StatusCode::BAD_GATEWAY,
             Self::Internal { .. } => StatusCode::INTERNAL_SERVER_ERROR,
@@ -123,9 +170,12 @@ impl AppError {
     fn body(&self) -> ErrorBody {
         match self {
             Self::BadRequest { message }
+            | Self::Conflict { message }
             | Self::Forbidden { message }
             | Self::NotFound { message }
             | Self::PayloadTooLarge { message }
+            | Self::UnsupportedMediaType { message }
+            | Self::UnprocessableEntity { message }
             | Self::TooManyRequests { message } => {
                 let safe = agena_failure::diagnostic::scrubbed_preserve(message, 240);
                 ErrorBody {

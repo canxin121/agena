@@ -1,9 +1,9 @@
-use std::{collections::HashSet, ffi::OsStr, path::PathBuf, sync::Arc};
+use std::{collections::HashSet, ffi::OsStr, path::PathBuf};
 
 use axum::{
     Json,
     body::{Body, Bytes},
-    extract::{Query, State},
+    extract::Query,
     http::{HeaderMap, StatusCode},
     response::Response,
 };
@@ -16,6 +16,9 @@ use super::{
     home_dir_env, normalize_directory_path, normalize_for_workspace_compare, resolve_path,
     to_api_path,
 };
+
+#[cfg(test)]
+mod tests;
 
 fn absolute_fs_path(resolved: PathBuf, context: &'static str) -> ApiResult<PathBuf> {
     if resolved.is_absolute() {
@@ -110,7 +113,6 @@ pub struct ProjectDirQuery {
 }
 
 pub async fn resolve_project_directory(
-    _state: &crate::AppState,
     headers: &HeaderMap,
     query_directory: Option<&str>,
 ) -> ApiResult<PathBuf> {
@@ -132,12 +134,11 @@ pub async fn resolve_project_directory(
 }
 
 async fn resolve_workspace_path_from_context(
-    state: &crate::AppState,
     headers: &HeaderMap,
     query_directory: Option<&str>,
     target: &str,
 ) -> ApiResult<(PathBuf, PathBuf)> {
-    let base = resolve_project_directory(state, headers, query_directory).await?;
+    let base = resolve_project_directory(headers, query_directory).await?;
 
     let target_trimmed = target.trim();
     if target_trimmed.is_empty() {
@@ -189,7 +190,6 @@ pub struct MkdirBody {
 }
 
 pub async fn fs_mkdir(
-    State(state): State<Arc<crate::AppState>>,
     headers: HeaderMap,
     Query(q): Query<ProjectDirQuery>,
     Json(body): Json<MkdirBody>,
@@ -201,13 +201,8 @@ pub async fn fs_mkdir(
         .filter(|p| !p.is_empty())
         .ok_or_else(|| AppError::bad_request("Path is required"))?;
 
-    let (_, resolved) = resolve_workspace_path_from_context(
-        state.as_ref(),
-        &headers,
-        q.directory.as_deref(),
-        dir_path,
-    )
-    .await?;
+    let (_, resolved) =
+        resolve_workspace_path_from_context(&headers, q.directory.as_deref(), dir_path).await?;
 
     tokio::fs::create_dir_all(&resolved)
         .await
@@ -231,6 +226,20 @@ pub(crate) const MAX_UPLOAD_BYTES: usize = MAX_READ_BYTES as usize;
 const DEFAULT_READ_CHUNK_LIMIT: usize = 256 * 1024;
 const MAX_READ_CHUNK_LIMIT: usize = 2 * 1024 * 1024;
 
+async fn read_regular_file(path: PathBuf, context: &'static str) -> ApiResult<Vec<u8>> {
+    use super::file_write::{FileRead, read_file_bounded};
+
+    match read_file_bounded(path, MAX_READ_BYTES)
+        .await
+        .map_err(|error| {
+            mapped_fs_io_error(context, error, "File not found", "Access to file denied")
+        })? {
+        FileRead::Contents(bytes) => Ok(bytes),
+        FileRead::NotFile => Err(AppError::bad_request("Specified path is not a file")),
+        FileRead::TooLarge => Err(AppError::payload_too_large("File too large")),
+    }
+}
+
 pub async fn fs_read(Query(q): Query<ReadQuery>) -> ApiResult<Response> {
     let file_path = q.path.unwrap_or_default();
     let file_path = file_path.trim();
@@ -247,30 +256,9 @@ pub async fn fs_read(Query(q): Query<ReadQuery>) -> ApiResult<Response> {
 
     let abs = absolute_fs_path(resolved, "resolve the current directory for a file read")?;
 
-    let meta = tokio::fs::metadata(&abs).await.map_err(|error| {
-        mapped_fs_io_error(
-            "inspect a file before reading it",
-            error,
-            "File not found",
-            "Access to file denied",
-        )
-    })?;
-
-    if !meta.is_file() {
-        return Err(AppError::bad_request("Specified path is not a file"));
-    }
-    if meta.len() > MAX_READ_BYTES {
-        return Err(AppError::payload_too_large("File too large"));
-    }
-
-    let content = tokio::fs::read_to_string(&abs).await.map_err(|error| {
-        mapped_fs_io_error(
-            "read a UTF-8 file",
-            error,
-            "File not found",
-            "Access to file denied",
-        )
-    })?;
+    let bytes = read_regular_file(abs, "read a UTF-8 file").await?;
+    let content = String::from_utf8(bytes)
+        .map_err(|_| AppError::bad_request("Specified file is not UTF-8 text"))?;
 
     Ok(Response::builder()
         .status(StatusCode::OK)
@@ -300,7 +288,7 @@ pub struct ReadChunkResponse {
     pub next_offset: Option<usize>,
 }
 
-fn decode_utf8_chunk(bytes: &[u8]) -> ApiResult<(String, usize)> {
+fn decode_utf8_chunk(bytes: &[u8], at_eof: bool) -> ApiResult<(String, usize)> {
     if bytes.is_empty() {
         return Ok((String::new(), 0));
     }
@@ -308,7 +296,7 @@ fn decode_utf8_chunk(bytes: &[u8]) -> ApiResult<(String, usize)> {
     match std::str::from_utf8(bytes) {
         Ok(content) => Ok((content.to_string(), bytes.len())),
         Err(err) => {
-            if err.error_len().is_some() {
+            if err.error_len().is_some() || at_eof {
                 return Err(AppError::bad_request("Specified file is not UTF-8 text"));
             }
 
@@ -362,18 +350,18 @@ pub async fn fs_read_chunk(Query(q): Query<ReadChunkQuery>) -> ApiResult<Json<Re
         return Err(AppError::bad_request("Offset is out of range"));
     }
 
-    let limit = q
+    let requested_limit = q
         .limit
         .unwrap_or(DEFAULT_READ_CHUNK_LIMIT)
         .min(MAX_READ_CHUNK_LIMIT);
 
-    if limit == 0 {
+    if requested_limit == 0 {
         let has_more = offset < total_bytes;
         return Ok(Json(ReadChunkResponse {
             path: to_api_path(&abs),
             content: String::new(),
             offset,
-            limit,
+            limit: 0,
             loaded_bytes: offset,
             total_bytes,
             has_more,
@@ -381,7 +369,14 @@ pub async fn fs_read_chunk(Query(q): Query<ReadChunkQuery>) -> ApiResult<Json<Re
         }));
     }
 
-    let mut file = tokio::fs::File::open(&abs).await.map_err(|error| {
+    // One UTF-8 code point can occupy four bytes. Preserve limit=0 as the
+    // metadata-only request, but every positive chunk must be able to advance.
+    let limit = requested_limit.max(4);
+    let mut options = tokio::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    options.custom_flags(libc::O_NONBLOCK);
+    let mut file = options.open(&abs).await.map_err(|error| {
         mapped_fs_io_error(
             "open a file for a chunked read",
             error,
@@ -390,21 +385,42 @@ pub async fn fs_read_chunk(Query(q): Query<ReadChunkQuery>) -> ApiResult<Json<Re
         )
     })?;
 
+    // Bind the read to the opened file's metadata. Checking only the path
+    // before open can read a different file after a concurrent rename.
+    let opened_meta = file.metadata().await.map_err(|error| {
+        AppError::internal_error_with_context("inspect an opened file for a chunked read", &error)
+    })?;
+    if !opened_meta.is_file() {
+        return Err(AppError::bad_request("Specified path is not a file"));
+    }
+    if opened_meta.len() != total_bytes_u64 {
+        return Err(AppError::bad_request(
+            "File changed while reading; reload the file",
+        ));
+    }
+
     file.seek(SeekFrom::Start(offset as u64))
         .await
         .map_err(|error| {
             AppError::internal_error_with_context("seek within a chunked file read", &error)
         })?;
 
-    let mut buffer = Vec::with_capacity(limit);
-    file.take(limit as u64)
+    let expected_bytes = (total_bytes - offset).min(limit);
+    let mut buffer = Vec::with_capacity(expected_bytes);
+    file.take(expected_bytes as u64)
         .read_to_end(&mut buffer)
         .await
         .map_err(|error| {
             AppError::internal_error_with_context("read a bounded file chunk", &error)
         })?;
 
-    let (content, consumed_bytes) = decode_utf8_chunk(&buffer)?;
+    if buffer.len() != expected_bytes {
+        return Err(AppError::bad_request(
+            "File changed while reading; reload the file",
+        ));
+    }
+    let at_eof = offset + buffer.len() == total_bytes;
+    let (content, consumed_bytes) = decode_utf8_chunk(&buffer, at_eof)?;
     let loaded_bytes = offset.saturating_add(consumed_bytes);
     let has_more = (loaded_bytes as u64) < total_bytes_u64;
 
@@ -474,31 +490,8 @@ pub async fn fs_raw(Query(q): Query<ReadQuery>) -> ApiResult<Response> {
         "resolve the current directory for a raw file read",
     )?;
 
-    let meta = tokio::fs::metadata(&abs).await.map_err(|error| {
-        mapped_fs_io_error(
-            "inspect a file before reading its raw content",
-            error,
-            "File not found",
-            "Access to file denied",
-        )
-    })?;
-
-    if !meta.is_file() {
-        return Err(AppError::bad_request("Specified path is not a file"));
-    }
-    if meta.len() > MAX_READ_BYTES {
-        return Err(AppError::payload_too_large("File too large"));
-    }
-
     let mime = mime_for_ext(&abs);
-    let content = tokio::fs::read(&abs).await.map_err(|error| {
-        mapped_fs_io_error(
-            "read raw file content",
-            error,
-            "File not found",
-            "Access to file denied",
-        )
-    })?;
+    let content = read_regular_file(abs.clone(), "read raw file content").await?;
 
     Ok(Response::builder()
         .status(StatusCode::OK)
@@ -546,11 +539,7 @@ fn content_disposition_inline(path: &Path) -> String {
     content_disposition_for(path, "inline")
 }
 
-pub async fn fs_download(
-    State(state): State<Arc<crate::AppState>>,
-    headers: HeaderMap,
-    Query(q): Query<FsPathQuery>,
-) -> ApiResult<Response> {
+pub async fn fs_download(headers: HeaderMap, Query(q): Query<FsPathQuery>) -> ApiResult<Response> {
     let file_path = q
         .path
         .as_deref()
@@ -558,39 +547,11 @@ pub async fn fs_download(
         .filter(|p| !p.is_empty())
         .ok_or_else(|| AppError::bad_request("Path is required"))?;
 
-    let (_, abs) = resolve_workspace_path_from_context(
-        state.as_ref(),
-        &headers,
-        q.directory.as_deref(),
-        file_path,
-    )
-    .await?;
-
-    let meta = tokio::fs::metadata(&abs).await.map_err(|error| {
-        mapped_fs_io_error(
-            "inspect a file before downloading it",
-            error,
-            "File not found",
-            "Access to file denied",
-        )
-    })?;
-
-    if !meta.is_file() {
-        return Err(AppError::bad_request("Specified path is not a file"));
-    }
-    if meta.len() > MAX_READ_BYTES {
-        return Err(AppError::payload_too_large("File too large"));
-    }
+    let (_, abs) =
+        resolve_workspace_path_from_context(&headers, q.directory.as_deref(), file_path).await?;
 
     let mime = mime_for_ext(&abs);
-    let content = tokio::fs::read(&abs).await.map_err(|error| {
-        mapped_fs_io_error(
-            "read a file for download",
-            error,
-            "File not found",
-            "Access to file denied",
-        )
-    })?;
+    let content = read_regular_file(abs.clone(), "read a file for download").await?;
 
     Ok(Response::builder()
         .status(StatusCode::OK)
@@ -617,7 +578,6 @@ pub struct UploadResponse {
 }
 
 pub async fn fs_upload(
-    State(state): State<Arc<crate::AppState>>,
     headers: HeaderMap,
     Query(q): Query<UploadQuery>,
     payload: Bytes,
@@ -634,38 +594,8 @@ pub async fn fs_upload(
         return Err(AppError::payload_too_large("File too large"));
     }
 
-    let (_, resolved) = resolve_workspace_path_from_context(
-        state.as_ref(),
-        &headers,
-        q.directory.as_deref(),
-        file_path,
-    )
-    .await?;
-
-    if !q.overwrite {
-        match tokio::fs::symlink_metadata(&resolved).await {
-            Ok(meta) => {
-                if meta.is_dir() {
-                    return Err(AppError::bad_request("Target path is a directory"));
-                }
-                return Err(AppError::bad_request("File already exists"));
-            }
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
-                return Err(permission_or_internal_fs_error(
-                    "inspect an upload target",
-                    error,
-                    "Access denied",
-                ));
-            }
-            Err(error) => {
-                return Err(AppError::internal_error_with_context(
-                    "inspect an upload target",
-                    &error,
-                ));
-            }
-        }
-    }
+    let (_, resolved) =
+        resolve_workspace_path_from_context(&headers, q.directory.as_deref(), file_path).await?;
 
     if let Some(parent) = resolved.parent() {
         tokio::fs::create_dir_all(parent).await.map_err(|error| {
@@ -677,13 +607,17 @@ pub async fn fs_upload(
         })?;
     }
 
-    tokio::fs::write(&resolved, payload.as_ref())
+    super::file_write::write_file_atomically(resolved.clone(), payload, q.overwrite)
         .await
         .map_err(|error| match error.kind() {
             std::io::ErrorKind::PermissionDenied => {
                 permission_or_internal_fs_error("write an uploaded file", error, "Access denied")
             }
             std::io::ErrorKind::IsADirectory => AppError::bad_request("Target path is a directory"),
+            std::io::ErrorKind::AlreadyExists => AppError::bad_request("File already exists"),
+            std::io::ErrorKind::InvalidInput => {
+                AppError::bad_request("Target path is not a regular file")
+            }
             _ => AppError::internal_error_with_context("write an uploaded file", &error),
         })?;
 
@@ -701,7 +635,6 @@ pub struct WriteBody {
 }
 
 pub async fn fs_write(
-    State(state): State<Arc<crate::AppState>>,
     headers: HeaderMap,
     Query(q): Query<ProjectDirQuery>,
     Json(body): Json<WriteBody>,
@@ -720,13 +653,8 @@ pub async fn fs_write(
         return Err(AppError::payload_too_large("Content too large"));
     }
 
-    let (_, resolved) = resolve_workspace_path_from_context(
-        state.as_ref(),
-        &headers,
-        q.directory.as_deref(),
-        file_path,
-    )
-    .await?;
+    let (_, resolved) =
+        resolve_workspace_path_from_context(&headers, q.directory.as_deref(), file_path).await?;
 
     if let Some(parent) = resolved.parent() {
         tokio::fs::create_dir_all(parent).await.map_err(|error| {
@@ -738,7 +666,7 @@ pub async fn fs_write(
         })?;
     }
 
-    tokio::fs::write(&resolved, content)
+    super::file_write::write_file_atomically(resolved.clone(), Bytes::from(content), true)
         .await
         .map_err(|error| {
             permission_or_internal_fs_error("write a filesystem file", error, "Access denied")
@@ -756,7 +684,6 @@ pub struct DeleteBody {
 }
 
 pub async fn fs_delete(
-    State(state): State<Arc<crate::AppState>>,
     headers: HeaderMap,
     Query(q): Query<ProjectDirQuery>,
     Json(body): Json<DeleteBody>,
@@ -768,13 +695,8 @@ pub async fn fs_delete(
         .filter(|p| !p.is_empty())
         .ok_or_else(|| AppError::bad_request("Path is required"))?;
 
-    let (_, resolved) = resolve_workspace_path_from_context(
-        state.as_ref(),
-        &headers,
-        q.directory.as_deref(),
-        target_path,
-    )
-    .await?;
+    let (_, resolved) =
+        resolve_workspace_path_from_context(&headers, q.directory.as_deref(), target_path).await?;
 
     let meta = match tokio::fs::symlink_metadata(&resolved).await {
         Ok(m) => Some(m),
@@ -802,15 +724,11 @@ pub async fn fs_delete(
         }));
     }
 
-    let meta = meta.unwrap();
-    if meta.is_dir() {
-        tokio::fs::remove_dir_all(&resolved).await
-    } else {
-        tokio::fs::remove_file(&resolved).await
-    }
-    .map_err(|error| {
-        permission_or_internal_fs_error("delete a filesystem entry", error, "Access denied")
-    })?;
+    super::file_write::remove_path(resolved.clone())
+        .await
+        .map_err(|error| {
+            permission_or_internal_fs_error("delete a filesystem entry", error, "Access denied")
+        })?;
 
     Ok(Json(SuccessPathResponse {
         success: true,
@@ -827,7 +745,6 @@ pub struct RenameBody {
 }
 
 pub async fn fs_rename(
-    State(state): State<Arc<crate::AppState>>,
     headers: HeaderMap,
     Query(q): Query<ProjectDirQuery>,
     Json(body): Json<RenameBody>,
@@ -845,20 +762,10 @@ pub async fn fs_rename(
         .filter(|p| !p.is_empty())
         .ok_or_else(|| AppError::bad_request("newPath is required"))?;
 
-    let (base_old, resolved_old) = resolve_workspace_path_from_context(
-        state.as_ref(),
-        &headers,
-        q.directory.as_deref(),
-        old_path,
-    )
-    .await?;
-    let (base_new, resolved_new) = resolve_workspace_path_from_context(
-        state.as_ref(),
-        &headers,
-        q.directory.as_deref(),
-        new_path,
-    )
-    .await?;
+    let (base_old, resolved_old) =
+        resolve_workspace_path_from_context(&headers, q.directory.as_deref(), old_path).await?;
+    let (base_new, resolved_new) =
+        resolve_workspace_path_from_context(&headers, q.directory.as_deref(), new_path).await?;
 
     if normalize_for_workspace_compare(&base_old) != normalize_for_workspace_compare(&base_new) {
         return Err(AppError::bad_request(
@@ -866,7 +773,7 @@ pub async fn fs_rename(
         ));
     }
 
-    tokio::fs::rename(&resolved_old, &resolved_new)
+    super::file_write::rename_path(resolved_old.clone(), resolved_new.clone())
         .await
         .map_err(|error| {
             mapped_fs_io_error(

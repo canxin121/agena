@@ -6,14 +6,17 @@ use agena_runtime::bootstrap_application_services;
 use anyhow::{Context, Result, anyhow};
 use axum::{
     Router, middleware,
-    routing::{any, get, post, put},
+    routing::{get, post, put},
 };
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use crate::server::{diagnostics::health, state::AppState};
 
-fn fs_router() -> Router<Arc<AppState>> {
+#[cfg(test)]
+mod tests;
+
+fn fs_router<S: Clone + Send + Sync + 'static>() -> Router<S> {
     Router::new()
         .route("/api/v1/workbench/fs/home", get(crate::server::fs::fs_home))
         .route("/api/v1/workbench/fs/list", get(crate::server::fs::fs_list))
@@ -36,7 +39,11 @@ fn fs_router() -> Router<Arc<AppState>> {
         )
         .route(
             "/api/v1/workbench/fs/write",
-            post(crate::server::fs::fs_write),
+            post(crate::server::fs::fs_write_http),
+        )
+        .route(
+            "/api/v1/workbench/fs/upload",
+            post(crate::server::fs::fs_upload_http),
         )
         .route(
             "/api/v1/workbench/fs/mkdir",
@@ -71,10 +78,6 @@ fn server_api_router() -> Router<Arc<AppState>> {
             "/api/v1/server/mcp/oauth/password",
             put(crate::server::mcp::set_mcp_oauth_password)
                 .delete(crate::server::mcp::clear_mcp_oauth_password),
-        )
-        .route(
-            "/api/v1/workbench/fs/upload",
-            post(crate::server::fs::fs_upload),
         )
         .route(
             "/api/v1/workbench/preview",
@@ -741,10 +744,6 @@ pub(crate) async fn run(args: crate::server::ServerArgs) -> Result<()> {
     let app = public_router
         .merge(agena_api)
         .merge(server_api_routes)
-        .route("/api", any(crate::server::web_ui::api_not_found))
-        .route("/api/{*path}", any(crate::server::web_ui::api_not_found))
-        .route("/auth", any(crate::server::web_ui::api_not_found))
-        .route("/auth/{*path}", any(crate::server::web_ui::api_not_found))
         .merge(crate::server::mcp::router(mcp_state));
     let app = app.layer(TraceLayer::new_for_http());
     let app = crate::server::web_ui::attach(app, ui_dir);

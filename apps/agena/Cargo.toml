@@ -43,8 +43,10 @@ http-body-util = { workspace = true }
 ignore = { workspace = true }
 jsonwebtoken = { workspace = true }
 libc = "0.2.186"
+mime = "0.3.17"
 portable-pty = { workspace = true }
 regex = { workspace = true }
+regex-automata = { version = "0.4.18", default-features = false, features = ["std"] }
 reqwest = { version = "0.13.4", default-features = true, features = ["json", "stream", "gzip", "brotli", "deflate"] }
 rustls = { workspace = true }
 rmcp = { workspace = true, features = ["server", "transport-streamable-http-server"] }
@@ -56,6 +58,7 @@ tokio = { workspace = true, features = ["full"] }
 tokio-tungstenite = { workspace = true }
 tower-http = { workspace = true, features = ["fs", "trace"] }
 thiserror = { workspace = true }
+tempfile = { workspace = true }
 argon2 = { workspace = true }
 time = { workspace = true, features = ["formatting"] }
 url = { workspace = true }
@@ -66,7 +69,6 @@ tracing-subscriber = { workspace = true, features = ["fmt", "env-filter", "ansi"
 
 [dev-dependencies]
 agena-plugin-sdk = { workspace = true, features = ["http"] }
-tempfile = { workspace = true }
 tower = { workspace = true }
 # Integration tests spawn the agena binary and reach into the SQLite database
 # to set up lease-staleness scenarios (see tests/server_restart.rs).

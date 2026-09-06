@@ -17,6 +17,11 @@ Deployment guides:
 - [Installation and upgrades](docs/installation.md)
 - [Public MCP server with built-in OAuth](docs/mcp-public-oauth.md)
 
+Engineering guides:
+
+- [Development validation](docs/development.md)
+- [Technical debt and reliability audit](docs/technical-debt-audit.md)
+
 ## Install
 
 macOS and Linux:

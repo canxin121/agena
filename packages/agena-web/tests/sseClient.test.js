@@ -178,7 +178,7 @@ test('connectSse: coalesces session_changed part_updated events within a frame',
   assert.equal(received[0].properties.part.text, 'world')
 })
 
-test('connectSse: does not coalesce chat-sidebar.delta events', async () => {
+test('connectSse: ignores removed type/properties wire envelopes', async () => {
   installDomLikeGlobals()
   const originalFetch = globalThis.fetch
 
@@ -227,9 +227,7 @@ test('connectSse: does not coalesce chat-sidebar.delta events', async () => {
   client.close()
   globalThis.fetch = originalFetch
 
-  assert.equal(received.length, 2)
-  assert.equal(received[0].type, 'chat-sidebar.delta')
-  assert.equal(received[1].type, 'chat-sidebar.delta')
+  assert.equal(received.length, 0)
 })
 
 test('connectSse: aborts stalled reads and increments stallCount', async () => {

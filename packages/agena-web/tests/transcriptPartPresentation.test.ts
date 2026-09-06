@@ -216,7 +216,7 @@ describe('TUI-parity part presentation', () => {
     expect(projected.userInputs[0]?.pending).toBe(false)
   })
 
-  test('keeps review body, input kind, question ids, and completed decisions', () => {
+  test('keeps review body, input kind, indexed answers, and completed decisions', () => {
     const projected = operationPresentation(
       operationPart({
         name: 'plan.review',
@@ -226,11 +226,10 @@ describe('TUI-parity part presentation', () => {
               request: {
                 request_id: 'review-1',
                 title: 'Review proposed plan',
-                input_kind: 'review',
+                kind: 'review',
                 body_markdown: '## Plan\n\n1. Update the renderer.\n2. Run tests.',
                 questions: [
                   {
-                    question_id: 'decision',
                     question: 'How should this plan proceed?',
                     options: [
                       { label: 'Approve', description: 'Run the plan' },
@@ -240,7 +239,7 @@ describe('TUI-parity part presentation', () => {
                   },
                 ],
               },
-              reply: { kind: 'submit', answers: { decision: ['Approve'] } },
+              reply: { kind: 'submit', answers: { '0': ['Approve'] } },
             },
           ],
         },
@@ -255,10 +254,10 @@ describe('TUI-parity part presentation', () => {
       pending: false,
     })
     expect(review?.questions[0]).toMatchObject({
-      questionId: 'decision',
+      questionId: '0',
       allowCustom: true,
     })
-    expect(review?.reply).toEqual({ kind: 'submit', answers: { decision: ['Approve'] } })
+    expect(review?.reply).toEqual({ kind: 'submit', answers: { '0': ['Approve'] } })
   })
 
   test('matches TUI lifecycle glyphs for denied and unavailable parts', () => {

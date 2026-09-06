@@ -29,8 +29,9 @@ test('useChatModelSelection: uses the runtime-wide default when the session has 
 test('useChatModelSelection: restores per-session manual model after session switch', async () => {
   const { chat, selection } = await createTestHarness({ selectedSessionId: 'session-1' })
 
-  selection.chooseModelSlug('manual-provider/manual-model')
+  selection.chooseModelSlug('manual-provider/manual-adapter/manual-model')
   assert.equal(selection.selectedProviderId.value, 'manual-provider')
+  assert.equal(selection.selectedAdapterId.value, 'manual-adapter')
   assert.equal(selection.selectedModelId.value, 'manual-model')
 
   chat.selectedSessionId = 'session-2'
@@ -52,6 +53,7 @@ test('useChatModelSelection: restores per-session manual model after session swi
   selection.applySessionSelection()
 
   assert.equal(selection.selectedProviderId.value, 'manual-provider')
+  assert.equal(selection.selectedAdapterId.value, 'manual-adapter')
   assert.equal(selection.selectedModelId.value, 'manual-model')
 })
 
@@ -69,7 +71,7 @@ test('useChatModelSelection: manual model overrides newer session run-config', a
   assert.equal(selection.selectedProviderId.value, 'session-provider')
   assert.equal(selection.selectedModelId.value, 'session-model')
 
-  selection.chooseModelSlug('manual-provider/manual-model')
+  selection.chooseModelSlug('manual-provider/manual-adapter/manual-model')
   chat.selectedSessionRunConfig = {
     providerID: 'new-session-provider',
     modelID: 'new-session-model',
@@ -78,6 +80,7 @@ test('useChatModelSelection: manual model overrides newer session run-config', a
   selection.applySessionSelection()
 
   assert.equal(selection.selectedProviderId.value, 'manual-provider')
+  assert.equal(selection.selectedAdapterId.value, 'manual-adapter')
   assert.equal(selection.selectedModelId.value, 'manual-model')
 })
 

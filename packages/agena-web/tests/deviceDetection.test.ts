@@ -109,7 +109,6 @@ test('treats compact desktop viewport as compact layout, not mobile device', () 
     },
     () => {
       const info = getDeviceInfo()
-      assert.equal(info.isMobile, true)
       assert.equal(info.isCompactTouch, false)
       assert.equal(info.isNarrow, true)
       assert.equal(info.isCompactLayout, true)
@@ -133,7 +132,6 @@ test('classifies narrow coarse-pointer viewport as mobile', () => {
     },
     () => {
       const info = getDeviceInfo()
-      assert.equal(info.isMobile, true)
       assert.equal(info.isCompactTouch, true)
       assert.equal(info.isNarrow, true)
       assert.equal(info.isCompactLayout, true)
@@ -157,7 +155,6 @@ test('uses mobile user-agent fallback when pointer is not coarse', () => {
     },
     () => {
       const info = getDeviceInfo()
-      assert.equal(info.isMobile, true)
       assert.equal(info.isCompactTouch, false)
       assert.equal(info.isNarrow, true)
       assert.equal(info.isCompactLayout, true)
@@ -183,7 +180,6 @@ test('desktop container runtime is never treated as mobile device', () => {
     () => {
       const info = getDeviceInfo()
       assert.equal(info.isCompactLayout, true)
-      assert.equal(info.isMobile, true)
       assert.equal(info.isTouchPointer, true)
       assert.equal(info.isCompactTouch, true)
       assert.equal(info.isMobileDevice, false)

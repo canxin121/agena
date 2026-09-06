@@ -36,7 +36,7 @@ test('global default model patch writes only providers.default_selection', () =>
   assert.equal('default' in buildDefaultModelSettingsPatch({ provider: 'openai', model: 'gpt-5' }).changes, false)
 })
 
-test('approval model patch uses the permission-specific identity field names', () => {
+test('approval model patch uses the canonical provider/adapter/model identity', () => {
   assert.deepEqual(
     buildApprovalModelSettingsPatch(
       { provider: 'anthropic', adapter: 'messages', model: 'claude-sonnet' },
@@ -46,9 +46,9 @@ test('approval model patch uses the permission-specific identity field names', (
       path: 'permission',
       changes: {
         approval_model: {
-          provider_id: 'anthropic',
-          adapter_id: 'messages',
-          model_id: 'claude-sonnet',
+          provider: 'anthropic',
+          adapter: 'messages',
+          model: 'claude-sonnet',
           thinking_mode: 'high',
         },
       },
@@ -66,9 +66,9 @@ test('settings read-back normalizes approval model identity and modes', () => {
       source: 'effective',
       path: 'permission.approval_model',
       value: {
-        provider_id: 'openai',
-        adapter_id: 'responses',
-        model_id: 'gpt-5',
+        provider: ' openai ',
+        adapter: ' responses ',
+        model: ' gpt-5 ',
         thinking_mode: 'high',
         speed_mode: 'fast',
         verbosity: 'compact',
@@ -90,9 +90,9 @@ test('settings read-back normalizes approval model identity and modes', () => {
 
 test('model identity comparison includes adapter identity', () => {
   const resource = normalizeServerModelIdentity({
-    provider_id: 'openai',
-    adapter_id: 'responses',
-    model_id: 'gpt-5',
+    provider: 'openai',
+    adapter: 'responses',
+    model: 'gpt-5',
   })
   assert.equal(sameServerModelIdentity(resource, { provider: 'openai', adapter: 'responses', model: 'gpt-5' }), true)
   assert.equal(

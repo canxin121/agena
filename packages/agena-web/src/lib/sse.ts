@@ -205,8 +205,8 @@ export function connectSse(opts: SseClientOptions): SseClient {
     lastErrorMessage: '',
   }
 
-  // Coalesce high-frequency events (message.part.updated) so UI work stays near 60fps.
-  // Inspired by OpenCode's own web/app event coalescing.
+  // Coalesce complete snapshots so UI work stays near 60fps. Ephemeral
+  // signals and lifecycle notifications must retain their arrival order.
   const queue: Array<SseEvent | undefined> = []
   const coalesced = new Map<string, number>()
   let timer: number | null = null
@@ -235,38 +235,7 @@ export function connectSse(opts: SseClientOptions): SseClient {
       }
       return null
     }
-    if (evt.type === 'runtime_signal') {
-      const sid = getNumeric(props, 'session_id') ?? -1
-      return `runtime_signal:${String(sid)}`
-    }
     return null
-  }
-
-  function mergeEvent(prev: SseEvent, next: SseEvent): SseEvent {
-    if (prev.type !== next.type) return next
-
-    if (next.type === 'session_changed') {
-      // Latest part payload wins (each PartResource is complete).
-      const prevProps = isRecord(prev.properties) ? prev.properties : {}
-      const nextProps = isRecord(next.properties) ? next.properties : {}
-      const mergedPart = {
-        ...(getRecord(prevProps, 'part') || {}),
-        ...(getRecord(nextProps, 'part') || {}),
-      }
-      const merged: SseEvent = {
-        ...prev,
-        ...next,
-        properties: {
-          ...prevProps,
-          ...nextProps,
-          ...(Object.keys(mergedPart).length ? { part: mergedPart } : {}),
-        },
-      }
-      return merged
-    }
-
-    // Runtime signals / meta updates: latest wins.
-    return next
   }
 
   function flush() {
@@ -298,15 +267,16 @@ export function connectSse(opts: SseClientOptions): SseClient {
     if (k) {
       const idx = coalesced.get(k)
       if (idx !== undefined) {
-        const prev = queue[idx]
-        queue[idx] = prev ? mergeEvent(prev, evt) : evt
-      } else {
-        coalesced.set(k, queue.length)
-        queue.push(evt)
+        // Move the surviving complete snapshot to its actual arrival position.
+        // Merging would retain optional fields omitted by the new snapshot.
+        queue[idx] = undefined
       }
+      coalesced.set(k, queue.length)
     } else {
-      queue.push(evt)
+      // A removal, signal, or recovery notification is an ordering barrier.
+      coalesced.clear()
     }
+    queue.push(evt)
     scheduleFlush()
   }
 
@@ -352,6 +322,8 @@ export function connectSse(opts: SseClientOptions): SseClient {
             const version = getNumeric(change, 'version')
             const updatedMs = getNumeric(change, 'updated_at_ms')
             if (typeof change.title === 'string') props.title = change.title
+            if (typeof change.favorite === 'boolean') props.favorite = change.favorite
+            if (typeof change.pinned === 'boolean') props.pinned = change.pinned
             if (version !== null) props.version = version
             if (updatedMs !== null) props.updated_at_ms = updatedMs
           }
@@ -365,7 +337,7 @@ export function connectSse(opts: SseClientOptions): SseClient {
           const payload = signal.payload
           const props: UnknownRecord = { kind: signalKind }
           if (sid !== null) props.session_id = sid
-          if (isRecord(payload)) props.payload = payload
+          if (payload !== undefined) props.payload = payload
           evt = { type: 'runtime_signal', properties: props }
         }
       } else if (kind === 'lagged') {
@@ -377,7 +349,6 @@ export function connectSse(opts: SseClientOptions): SseClient {
         evt = { type: 'subscription_closed', properties: {} }
       }
     }
-
 
     if (!evt || typeof evt.type !== 'string') return
     if (typeof meta?.lastEventId === 'string' && meta.lastEventId) {
@@ -457,6 +428,7 @@ export function connectSse(opts: SseClientOptions): SseClient {
         const reader = resp.body.getReader()
         const decoder = new TextDecoder()
         let buf = ''
+        let skipLeadingLf = false
         let allowCursorResetOnFirstId = true
         let lastByteAt = Date.now()
 
@@ -498,9 +470,14 @@ export function connectSse(opts: SseClientOptions): SseClient {
             lastByteAt = Date.now()
             stats.lastChunkAt = lastByteAt
 
-            buf += decoder.decode(value, { stream: true })
-            // Normalize line endings: CRLF -> LF, then CR -> LF
-            buf = buf.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
+            const decoded = decoder.decode(value, { stream: true })
+            if (decoded) {
+              // A CRLF pair can straddle reads. Remember the previous CR so
+              // its following LF cannot become an extra event separator.
+              const text = skipLeadingLf && decoded.startsWith('\n') ? decoded.slice(1) : decoded
+              skipLeadingLf = decoded.endsWith('\r')
+              buf += text.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
+            }
 
             const chunks = buf.split('\n\n')
             buf = chunks.pop() ?? ''

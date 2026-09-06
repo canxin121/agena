@@ -30,14 +30,15 @@ export function readSessionIdFromFullPath(fullPath: string): string {
   const raw = String(fullPath || '').trim()
   if (!raw) return ''
 
-  const qmark = raw.indexOf('?')
+  const path = raw.split('#', 1)[0] || ''
+  const qmark = path.indexOf('?')
   if (qmark < 0) return ''
-  const queryPart = raw.slice(qmark + 1)
+  const queryPart = path.slice(qmark + 1)
   if (!queryPart) return ''
 
   const params = new URLSearchParams(queryPart)
   return readSessionIdFromQuery({
-    sessionId: params.get('sessionId'),
+    sessionId: params.getAll(SESSION_QUERY_KEY),
   })
 }
 

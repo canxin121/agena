@@ -22,7 +22,7 @@ test('buildPreviewFrameSrc appends refresh token to proxy base path', () => {
 
 test('buildPreviewFrameSrc always uses proxy session path and hides target URL', () => {
   const src = buildPreviewFrameSrc('/api/v1/workbench/preview/s/demo-app/', 0)
-  assert.match(src, /^\/api\/workspace\/preview\/s\//)
+  assert.match(src, /^\/api\/v1\/workbench\/preview\/s\//)
   assert.equal(src.includes('http://localhost:5173/'), false)
   assert.equal(src.includes('localhost:5173'), false)
 })

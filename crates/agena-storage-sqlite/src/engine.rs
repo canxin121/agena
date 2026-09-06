@@ -27,7 +27,8 @@ use agena_storage::store::{
     NewBackgroundOperation, NewPart, NewSession, Part, PartCursor, PartDelta, PartRole, PartState,
     PartVisibility, PersistenceEngine, ReconcileOutcome, RunOutcome, SessionListQuery, SessionMeta,
     SessionMetadataPatch, SessionPartPage, SessionState, SessionSummary, SessionView, StoreError,
-    SubmitOutcome, UsageGroup, UsageQuery, UsageRecord, UsageStats, apply_part_transition,
+    SubmitOutcome, UsageGroup, UsageQuery, UsageRecord, UsageStats, prepare_part_update,
+    prepare_run_completion, validate_run_content,
 };
 use async_trait::async_trait;
 use sea_orm::{
@@ -2592,7 +2593,7 @@ impl PersistenceEngine for SqliteEngine {
                         "part {part_id} is shared; only its origin session may update it in place"
                     )));
                 }
-                apply_delta(&mut part, delta, now_ms)?;
+                part = prepare_part_update(part, delta, now_ms)?;
                 let updated_at = now_ms;
                 txn.execute(Statement::from_sql_and_values(
                     DatabaseBackend::Sqlite,
@@ -2647,18 +2648,6 @@ impl PersistenceEngine for SqliteEngine {
         run_write(db, move |txn| {
             Box::pin(async move {
                 ensure_lease_tx(txn, session_id, &owner_id, now_ms).await?;
-                if !outcome.status.is_terminal() {
-                    return Err(StoreError::InvalidState(
-                        "complete_run requires a terminal outcome".to_owned(),
-                    ));
-                }
-                if matches!(outcome.status, PartState::Failed | PartState::Cancelled)
-                    && outcome.abort_reason.is_none()
-                {
-                    return Err(StoreError::InvalidState(
-                        "terminal run markers require an abort_reason".to_owned(),
-                    ));
-                }
                 let mut part = load_part_by_id(txn, run_id)
                     .await?
                     .ok_or_else(|| StoreError::not_found(format!("run marker {run_id}")))?;
@@ -2672,22 +2661,7 @@ impl PersistenceEngine for SqliteEngine {
                         "run marker {run_id} is shared; only its origin session may complete it"
                     )));
                 }
-                let mut content = outcome.content.unwrap_or_else(|| part.content.clone());
-                if let serde_json::Value::Object(map) = &mut content {
-                    map.insert(
-                        "abort_reason".to_owned(),
-                        match outcome.abort_reason {
-                            Some(reason) => serde_json::Value::String(reason),
-                            None => serde_json::Value::Null,
-                        },
-                    );
-                }
-                part.content = content;
-                part.state = outcome.status;
-                part.finished_at_ms = Some(now_ms);
-                if let Some(provider_state) = outcome.provider_state {
-                    part.provider_state = Some(provider_state);
-                }
+                part = prepare_run_completion(part, outcome, now_ms)?;
                 txn.execute(Statement::from_sql_and_values(
                     DatabaseBackend::Sqlite,
                     "UPDATE agena_parts \
@@ -3374,6 +3348,7 @@ async fn submit_batch_tx(
         }
     }
 
+    validate_run_content(marker_state, &marker_content)?;
     let marker_id = next_part_id_tx(txn).await.map_err(map_db_err)?;
     let marker = marker_part(
         marker_id,
@@ -3438,61 +3413,6 @@ async fn run_parts_tx(txn: &DatabaseTransaction, run_id: i64) -> Result<Vec<Part
     .map(part_from_row)
     .collect::<Result<Vec<_>, _>>()
     .map_err(map_db_err)
-}
-
-/// Apply a streaming delta to a part in memory (mirrors the in-memory engine
-/// and the shared `apply_part_transition`).
-fn apply_delta(part: &mut Part, delta: PartDelta, now_ms: i64) -> Result<(), StoreError> {
-    if let Some(to) = delta.state {
-        apply_part_transition(part, to, now_ms, true)?;
-    }
-    if let Some(content) = delta.content {
-        part.content = content;
-    } else if let Some(delta_text) = delta.content_text_delta {
-        append_text_delta(&mut part.content, &delta_text)?;
-    }
-    if let Some(summary) = delta.summary {
-        part.summary = Some(summary);
-    }
-    if let Some(provider_state) = delta.provider_state {
-        part.provider_state = Some(provider_state);
-    }
-    if let Some(finished) = delta.finished_at_ms {
-        part.finished_at_ms = Some(finished);
-    }
-    if part.state.is_terminal() && part.finished_at_ms.is_none() {
-        part.finished_at_ms = Some(now_ms);
-    }
-    if part.state == PartState::InProgress {
-        // Retry clears the finished timestamp.
-        part.finished_at_ms = None;
-    }
-    part.revision += 1;
-    part.updated_at_ms = now_ms;
-    Ok(())
-}
-
-fn append_text_delta(content: &mut serde_json::Value, delta: &str) -> Result<(), StoreError> {
-    match content {
-        serde_json::Value::String(text) => {
-            text.push_str(delta);
-            Ok(())
-        }
-        serde_json::Value::Object(map)
-            if map
-                .get("text")
-                .and_then(serde_json::Value::as_str)
-                .is_some() =>
-        {
-            if let Some(serde_json::Value::String(text)) = map.get_mut("text") {
-                text.push_str(delta);
-            }
-            Ok(())
-        }
-        _ => Err(StoreError::InvalidState(
-            "content_text_delta requires a text-shaped content".to_owned(),
-        )),
-    }
 }
 
 async fn reap_stale_leases_tx(

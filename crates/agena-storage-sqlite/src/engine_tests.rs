@@ -23,6 +23,8 @@ use serde_json::json;
 
 use crate::{SeaWorkspaceRepository, SqliteEngine, initialize_schema};
 
+mod part_integrity;
+
 /// A workspace-scoped engine with a ready session that already holds a fresh
 /// lease under `owner-a` at `now_ms = 1_000_000`.
 async fn setup(db: Arc<sea_orm::DatabaseConnection>) -> (SqliteEngine, i64) {
@@ -2180,6 +2182,52 @@ async fn second_process_reads_committed_parts() {
     assert_eq!(view.parts.len(), 2);
     assert!(view.parts[0].is_run_marker());
     assert_eq!(view.parts[1].content["text"], "hello");
+}
+
+#[tokio::test]
+async fn subtask_updates_reject_missing_status_and_failure_fields_atomically() {
+    let (engine, parent_id) = setup(in_memory_db().await).await;
+    let child = engine
+        .create_subagent_session(parent_id, "shape".to_owned(), "sub".to_owned(), 1_000_000)
+        .await
+        .expect("child");
+    let mut accepted = Vec::new();
+    for status in [None, Some("failed"), Some("timed_out"), Some("interrupted")] {
+        for failure in [
+            None,
+            Some(json!(null)),
+            Some(json!({})),
+            Some(json!([])),
+            Some(json!({"id":"failure-1"})),
+            Some(json!({"id":"failure-1", "code":"execution_failed", "user":{}})),
+        ] {
+            let result = engine
+                .update_subtask_state(
+                    child.id,
+                    status.map(str::to_owned),
+                    Some(1_000_001),
+                    Some(1_000_002),
+                    failure.clone(),
+                )
+                .await;
+            if result.is_ok() {
+                accepted.push(format!("{status:?}: {failure:?}"));
+            }
+        }
+    }
+    assert!(
+        accepted.is_empty(),
+        "accepted invalid subtask updates: {accepted:?}"
+    );
+    let persisted = engine.session_meta(child.id).await.expect("read child");
+    assert_eq!(
+        persisted.version, child.version,
+        "rejected writes roll back version bumps"
+    );
+    assert_eq!(persisted.subtask_status, child.subtask_status);
+    assert_eq!(persisted.subtask_started_at_ms, None);
+    assert_eq!(persisted.subtask_finished_at_ms, None);
+    assert_eq!(persisted.subtask_failure, None);
 }
 
 #[tokio::test]

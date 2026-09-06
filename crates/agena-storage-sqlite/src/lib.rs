@@ -9,7 +9,8 @@
 //!
 //! - [`SeaModelCatalogRepository`], [`SeaWorkspaceRepository`],
 //!   [`SeaPermissionRuleRepository`] — SQLite-backed infrastructure repositories.
-//! - [`initialize_schema`] — create the v2 database schema (fresh DB only).
+//! - [`initialize_schema`] — validate the v2 database layout, create it only
+//!   for a fresh DB, and refresh compatible invariant-trigger corrections.
 //! - [`CURRENT_SCHEMA_VERSION`] — the schema version this build targets.
 //!
 //! The `schema_invariants` module installs database triggers that keep

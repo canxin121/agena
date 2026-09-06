@@ -15,7 +15,12 @@ use std::path::{Path, PathBuf};
 
 use sea_orm::{ConnectionTrait, DatabaseConnection, DbErr, Statement, TransactionTrait};
 
+use crate::schema_invariants::{outdated_invariant_triggers, refresh_invariant_triggers};
 use crate::{CURRENT_SCHEMA_VERSION, install_invariant_triggers};
+
+pub(crate) mod validation;
+
+use validation::{require_empty_database, validate_existing_schema};
 
 /// How long `initialize_schema` waits for a concurrent process to finish
 /// building the schema before giving up.
@@ -98,14 +103,23 @@ async fn schema_lock_path(db: &DatabaseConnection) -> Result<Option<PathBuf>, Db
 ///
 /// Serialized across processes by a filesystem lock so concurrent cold starts
 /// of the same database file cannot race the WAL switch or the DDL transaction.
-/// A version-0 database is created from scratch; a database already at
-/// [`CURRENT_SCHEMA_VERSION`] is left untouched. Every other version is
-/// rejected and must be recreated with the current schema.
+/// A version-0 database must be empty and is created from scratch. A database
+/// at [`CURRENT_SCHEMA_VERSION`] must match the supported table and index
+/// declarations; compatible trigger corrections are refreshed atomically.
+/// Other versions and incompatible structures are rejected without changing
+/// their schema or connection pragmas.
 pub async fn initialize_schema(db: &DatabaseConnection) -> Result<(), DbErr> {
     let _lock = SchemaLock::acquire(db).await?;
+    let current_version = read_schema_version(db).await?;
+    match current_version {
+        0 => require_empty_database(db).await?,
+        CURRENT_SCHEMA_VERSION => validate_existing_schema(db).await?,
+        version => return Err(incompatible_version(version)),
+    }
     // Connection hardening: WAL journal (no-op for in-memory databases),
-    // bounded busy timeout, and NORMAL durability so the WAL checkpoint
-    // window is small while every commit stays crash-safe.
+    // bounded busy timeout, and NORMAL synchronous mode. In WAL mode NORMAL
+    // preserves consistency, but a power failure can lose recent commits
+    // that have not been synced by a checkpoint.
     for pragma in [
         "PRAGMA journal_mode = WAL",
         "PRAGMA busy_timeout = 15000",
@@ -117,7 +131,6 @@ pub async fn initialize_schema(db: &DatabaseConnection) -> Result<(), DbErr> {
         ))
         .await?;
     }
-    let current_version = read_schema_version(db).await?;
     match current_version {
         0 => {
             let txn = db.begin().await?;
@@ -136,15 +149,29 @@ pub async fn initialize_schema(db: &DatabaseConnection) -> Result<(), DbErr> {
             .await?;
             txn.commit().await
         }
-        v if v == CURRENT_SCHEMA_VERSION => Ok(()),
-        v => Err(DbErr::Custom(format!(
-            "database schema version {v} is incompatible with the supported version {CURRENT_SCHEMA_VERSION}; \
-             Agena does not migrate incompatible databases, so create a fresh database"
-        ))),
+        _ if outdated_invariant_triggers(db).await?.is_empty() => Ok(()),
+        _ => {
+            let txn = crate::transaction::begin_with_write_lock(db).await?;
+            // Recheck under the write lock before touching any trigger.
+            let version = read_schema_version(&txn).await?;
+            if version != CURRENT_SCHEMA_VERSION {
+                return Err(incompatible_version(version));
+            }
+            validate_existing_schema(&txn).await?;
+            refresh_invariant_triggers(&txn).await?;
+            txn.commit().await
+        }
     }
 }
 
-async fn read_schema_version(db: &DatabaseConnection) -> Result<i64, DbErr> {
+fn incompatible_version(version: i64) -> DbErr {
+    DbErr::Custom(format!(
+        "database schema version {version} is incompatible with the supported version {CURRENT_SCHEMA_VERSION}; \
+         Agena does not migrate incompatible databases, so create a fresh database"
+    ))
+}
+
+async fn read_schema_version<C: ConnectionTrait>(db: &C) -> Result<i64, DbErr> {
     let row = db
         .query_one(Statement::from_string(
             db.get_database_backend(),

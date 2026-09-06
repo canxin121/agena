@@ -27,7 +27,7 @@ use super::{
     PersistenceEngine, ReconcileOutcome, RunOutcome, SessionListQuery, SessionMeta,
     SessionMetadataPatch, SessionPartPage, SessionState, SessionSummary, SessionView, StateInputs,
     StoreError, SubmitOutcome, UsageGroup, UsageQuery, UsageRecord, UsageStats,
-    apply_part_transition, derive_session_state,
+    derive_session_state, prepare_part_update, prepare_run_completion, validate_run_content,
 };
 use crate::store::jsonl;
 
@@ -189,6 +189,7 @@ impl InMemoryEngine {
             }
         }
 
+        validate_run_content(marker_state, &marker_content)?;
         let marker_id = self.next_part_id();
         let marker = Part {
             part_id: marker_id,
@@ -2069,32 +2070,8 @@ impl PersistenceEngine for InMemoryEngine {
                     "part {part_id} is shared; only its origin session {session_id} may update it in place"
                 )));
             }
-            if let Some(to) = delta.state {
-                apply_part_transition(part, to, now_ms, true)?;
-            }
-            if let Some(content) = delta.content {
-                part.content = content;
-            } else if let Some(delta_text) = delta.content_text_delta {
-                append_text_delta(&mut part.content, &delta_text)?;
-            }
-            if let Some(summary) = delta.summary {
-                part.summary = Some(summary);
-            }
-            if let Some(provider_state) = delta.provider_state {
-                part.provider_state = Some(provider_state);
-            }
-            if let Some(finished) = delta.finished_at_ms {
-                part.finished_at_ms = Some(finished);
-            }
-            if part.state.is_terminal() && part.finished_at_ms.is_none() {
-                part.finished_at_ms = Some(now_ms);
-            }
-            if part.state == PartState::InProgress {
-                // Retry clears the finished timestamp.
-                part.finished_at_ms = None;
-            }
-            part.revision += 1;
-            part.updated_at_ms = now_ms;
+            let updated = prepare_part_update(part.clone(), delta, now_ms)?;
+            *part = updated;
             part.clone()
         };
         self.bump_member_session_versions(&[part_id], now_ms)?;
@@ -2110,18 +2087,6 @@ impl PersistenceEngine for InMemoryEngine {
         now_ms: i64,
     ) -> Result<Part, StoreError> {
         self.ensure_lease(session_id, owner_id, now_ms)?;
-        if !outcome.status.is_terminal() {
-            return Err(StoreError::InvalidState(
-                "complete_run requires a terminal outcome".to_owned(),
-            ));
-        }
-        if matches!(outcome.status, PartState::Failed | PartState::Cancelled)
-            && outcome.abort_reason.is_none()
-        {
-            return Err(StoreError::InvalidState(
-                "terminal run markers require an abort_reason".to_owned(),
-            ));
-        }
         let updated = {
             let mut parts = self.parts.write().expect("parts lock");
             let part = parts
@@ -2137,24 +2102,8 @@ impl PersistenceEngine for InMemoryEngine {
                     "run marker {run_id} is shared; only its origin session may complete it"
                 )));
             }
-            let mut content = outcome.content.unwrap_or_else(|| part.content.clone());
-            if let Value::Object(map) = &mut content {
-                map.insert(
-                    "abort_reason".to_owned(),
-                    match outcome.abort_reason {
-                        Some(reason) => Value::String(reason),
-                        None => Value::Null,
-                    },
-                );
-            }
-            part.content = content;
-            part.state = outcome.status;
-            part.finished_at_ms = Some(now_ms);
-            if let Some(provider_state) = outcome.provider_state {
-                part.provider_state = Some(provider_state);
-            }
-            part.revision += 1;
-            part.updated_at_ms = now_ms;
+            let updated = prepare_run_completion(part.clone(), outcome, now_ms)?;
+            *part = updated;
             part.clone()
         };
         self.bump_member_session_versions(&[run_id], now_ms)?;
@@ -2518,24 +2467,6 @@ impl UsageQuery {
             return false;
         }
         true
-    }
-}
-
-fn append_text_delta(content: &mut Value, delta: &str) -> Result<(), StoreError> {
-    match content {
-        Value::String(text) => {
-            text.push_str(delta);
-            Ok(())
-        }
-        Value::Object(map) if map.get("text").and_then(Value::as_str).is_some() => {
-            if let Some(Value::String(text)) = map.get_mut("text") {
-                text.push_str(delta);
-            }
-            Ok(())
-        }
-        _ => Err(StoreError::InvalidState(
-            "content_text_delta requires a text-shaped content".to_owned(),
-        )),
     }
 }
 

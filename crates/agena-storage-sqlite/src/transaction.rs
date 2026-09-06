@@ -13,6 +13,9 @@ use sea_orm::{
     Value,
 };
 
+#[cfg(test)]
+mod failure_tests;
+
 /// Reserved `agena_sequences` row used purely to acquire the SQLite write lock.
 ///
 /// The write-lock fence inserts (or ignores) this row as the first statement of
@@ -51,11 +54,12 @@ pub async fn acquire_write_lock(transaction: &DatabaseTransaction) -> Result<(),
 
 /// Whether a `DbErr` is a transient SQLite lock conflict.
 ///
-/// `SQLITE_BUSY` (code 5) and `SQLITE_BUSY_SNAPSHOT` (code 31) mean another
-/// connection holds the write lock and the operation should be retried rather
-/// than reported as a terminal internal error. Detection prefers the structured
-/// SQLite error code and falls back to the message so it also catches wrapped
-/// or custom error paths.
+/// `SQLITE_BUSY` (5) and its extended codes, including `BUSY_RECOVERY` (261),
+/// `BUSY_SNAPSHOT` (517), and `BUSY_TIMEOUT` (773), share primary code 5 in
+/// the low byte. A snapshot conflict requires restarting the transaction;
+/// waiting or retrying a statement in the same snapshot cannot resolve it.
+/// Structured codes are authoritative. Message fallback is used only when the
+/// SQLx database error does not expose a numeric code.
 pub fn is_sqlite_busy(error: &DbErr) -> bool {
     let sqlx_error = match error {
         DbErr::Exec(sea_orm::RuntimeErr::SqlxError(error))
@@ -65,14 +69,13 @@ pub fn is_sqlite_busy(error: &DbErr) -> bool {
     };
     match sqlx_error {
         sea_orm::sqlx::Error::Database(error) => {
-            let message_matches = error
+            if let Some(code) = error.code().and_then(|code| code.parse::<u32>().ok()) {
+                return code & 0xff == 5;
+            }
+            error
                 .message()
                 .to_ascii_lowercase()
-                .contains("database is locked");
-            let code_matches = error
-                .code()
-                .is_some_and(|code| matches!(code.as_ref(), "5" | "31"));
-            message_matches || code_matches
+                .contains("database is locked")
         }
         _ => false,
     }
@@ -108,7 +111,7 @@ where
             Ok(value)
         }
         Err(error) => {
-            transaction.rollback().await?;
+            rollback_after_operation_error(transaction).await;
             Err(error)
         }
     }
@@ -132,9 +135,24 @@ where
             Ok(value)
         }
         Err(error) => {
-            transaction.rollback().await.map_err(E::from)?;
+            rollback_after_operation_error(transaction).await;
             Err(error)
         }
+    }
+}
+
+async fn rollback_after_operation_error(transaction: DatabaseTransaction) {
+    // SQLite can already have rolled back the transaction (e.g. RAISE(ROLLBACK)
+    // or an I/O failure). Keep the operation's original error and classification,
+    // including application-specific variants, even if explicit cleanup fails.
+    if let Err(error) = transaction.rollback().await {
+        tracing::error!(
+            diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                "roll back a failed SQLite transaction",
+                &error,
+            ),
+            "SQLite transaction rollback failed; preserving the operation error"
+        );
     }
 }
 
@@ -160,8 +178,8 @@ pub(crate) async fn begin_with_write_lock(
                     )));
                 }
                 if is_sqlite_busy(&error) && attempt < MAX_BUSY_RETRIES {
-                    attempt += 1;
                     tokio::time::sleep(busy_backoff(attempt)).await;
+                    attempt += 1;
                 } else {
                     return Err(error);
                 }
@@ -249,10 +267,10 @@ mod tests {
 
     #[tokio::test]
     async fn busy_detection_recognizes_sqlite_busy_and_rejects_others() {
-        // SQLITE_BUSY via structured code (5) and SQLITE_BUSY_SNAPSHOT (31).
+        // SQLITE_BUSY via structured code (5) and SQLITE_BUSY_SNAPSHOT (517).
         assert!(is_sqlite_busy(&db_error_with("5", "database is locked")));
         assert!(is_sqlite_busy(&db_error_with(
-            "31",
+            "517",
             "database table is locked"
         )));
         // An unrelated SQLite code and a custom error are not busy.
@@ -272,7 +290,7 @@ mod tests {
     /// Builds a `DbErr::Exec` carrying a fake `DatabaseError` with the given
     /// SQLite code and message. `SqliteError`'s constructors are private, so a
     /// test double over the public `DatabaseError` trait stands in for it.
-    fn db_error_with(code: &'static str, message: &'static str) -> sea_orm::DbErr {
+    pub(super) fn db_error_with(code: &'static str, message: &'static str) -> sea_orm::DbErr {
         sea_orm::DbErr::Exec(sea_orm::RuntimeErr::SqlxError(
             sea_orm::sqlx::Error::Database(Box::new(FakeDatabaseError { message, code })),
         ))

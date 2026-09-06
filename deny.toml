@@ -10,13 +10,12 @@ unmaintained = "workspace"
 unsound = "all"
 unused-ignored-advisory = "deny"
 ignore = [
-    # `rsa` is only pulled by sqlx-mysql; Agena enables sqlite only.
+    # jsonwebtoken's rust_crypto backend includes rsa, but MCP OAuth signs
+    # and accepts EdDSA only (server/mcp.rs rejects every other algorithm).
+    # The other lockfile path is sqlx-mysql; Agena enables sqlite only.
+    # No RSA private-key operation is used. Reassess this exception before
+    # enabling RSA token algorithms or a MySQL backend; no upstream fix exists.
     "RUSTSEC-2023-0071",
-    # Tantivy 0.26.1 (current latest) pins lru ^0.16.3, while the panic-safety
-    # fix is only available in lru >=0.18.2. Remove this as soon as Tantivy
-    # releases a compatible upgrade; unused-ignored-advisory = "deny" makes
-    # this exception fail closed once it is no longer needed.
-    "RUSTSEC-2026-0253",
 ]
 
 [licenses]

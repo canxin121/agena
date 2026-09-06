@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import pathlib
 import subprocess
-import sys
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -63,14 +62,7 @@ def main() -> None:
         ],
         cwd=ROOT,
     )
-    if sys.platform != "darwin":
-        subprocess.check_call(test_cmd, cwd=ROOT)
-    else:
-        print(
-            "Darwin host: construction tests compiled and linked; execution is deferred to the "
-            "Linux CI/Release gate because this development Mac has the known Rust libunwind "
-            "`failed to initiate panic, error 5` test-runtime abort."
-        )
+    subprocess.check_call(test_cmd, cwd=ROOT)
 
     print(
         "Runtime crypto/auth capabilities verified: Rustls/ring + bundled Mozilla roots "

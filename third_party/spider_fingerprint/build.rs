@@ -3,6 +3,7 @@
 // - SPIDER_FP_EXPAND_REFERRERS=1  => use merged_referrers.txt (large) instead of 20k list
 // - REFERRERS_REFRESH=1           => rebuild merged_referrers.txt from optional inputs
 // - REFERRERS_TRIM_TO_1M=1        => cap merged_referrers to 1,000,000 entries
+// - SPIDER_FP_REFRESH_CHROME=1   => explicitly refresh the checked-in Chrome corpus
 
 use std::{
     collections::HashSet,
@@ -611,19 +612,20 @@ fn gen_assets_if_enabled() {
     }
 }
 
+fn copy_chrome_fallback() {
+    let fallback = manifest_dir().join("chrome_versions.rs.fallback");
+    let output = PathBuf::from(std::env::var_os("OUT_DIR").expect("Cargo sets OUT_DIR"))
+        .join("chrome_versions.rs");
+    fs::copy(&fallback, &output).unwrap_or_else(|error| {
+        panic!("failed to copy checked-in Chrome versions {}: {error}", fallback.display())
+    });
+    println!("cargo:rerun-if-changed={}", fallback.display());
+}
+
 #[cfg(not(feature = "dynamic-versions"))]
 fn main() {
     println!("cargo:rustc-cfg=build_script_ran");
-
-    // Keep chrome fallback copy behavior
-    if let Ok(out_path) = std::env::var("OUT_DIR") {
-        let out_path = Path::new(&out_path).join("chrome_versions.rs");
-        let fallback_path = "chrome_versions.rs.fallback";
-        let _ = std::fs::copy(fallback_path, &out_path);
-    } else {
-        println!("out dir does not exist");
-    }
-    println!("cargo:rerun-if-changed=build/chrome_versions.rs.fallback");
+    copy_chrome_fallback();
 
     let manifest = manifest_dir();
 
@@ -659,6 +661,7 @@ fn main() {
 #[cfg(feature = "dynamic-versions")]
 fn main() {
     println!("cargo:rustc-cfg=build_script_ran");
+    println!("cargo:rerun-if-env-changed=SPIDER_FP_REFRESH_CHROME");
 
     let manifest = manifest_dir();
 
@@ -690,7 +693,15 @@ fn main() {
 
     gen_assets_if_enabled();
 
-    // Existing chrome dynamic versions logic (unchanged)
+    // Ordinary builds use the reviewed corpus even when upstream enables
+    // dynamic-versions. Network refreshes mutate the source tree and are an
+    // explicit maintenance action, never a side effect of cargo test/build.
+    if std::env::var("SPIDER_FP_REFRESH_CHROME").ok().as_deref() != Some("1") {
+        copy_chrome_fallback();
+        return;
+    }
+
+    // Upstream refresh logic, only for an explicitly requested corpus update.
     use std::collections::BTreeMap;
     use std::fs::{copy, rename, File};
     use std::io::BufWriter;
@@ -782,5 +793,5 @@ fn main() {
         }
     }
 
-    println!("cargo:rerun-if-changed=build/chrome_versions.rs.fallback");
+    println!("cargo:rerun-if-changed=chrome_versions.rs.fallback");
 }

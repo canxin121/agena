@@ -57,17 +57,23 @@ impl WasmTransport {
         let mut config = Config::new();
         config.consume_fuel(true);
         let engine = Engine::new(&config)
-            .map_err(|error| TransportError::Io(format!("configure wasm engine: {error}")))?;
+            .map_err(|error| TransportError::Io(format!("configure wasm engine: {error:#}")))?;
         let module = Module::new(&engine, bytes)
-            .map_err(|e| TransportError::Io(format!("compile wasm: {e}")))?;
+            .map_err(|e| TransportError::Io(format!("compile wasm: {e:#}")))?;
         let wasi = build_wasi_ctx();
         let mut store = Store::new(&engine, wasi);
+        // Wasmtime stores start with zero fuel. Instantiation can run guest
+        // code (the start function and memory/table initializers), so it needs
+        // its own bounded budget before the first dispatch ever occurs.
+        store.set_fuel(FUEL_PER_DISPATCH).map_err(|error| {
+            TransportError::Io(format!("set wasm initialization fuel: {error:#}"))
+        })?;
         let mut linker: Linker<WasiP1Ctx> = Linker::new(&engine);
         p1::add_to_linker_sync(&mut linker, |state: &mut WasiP1Ctx| state)
-            .map_err(|e| TransportError::Io(format!("link wasi preview1: {e}")))?;
+            .map_err(|e| TransportError::Io(format!("link wasi preview1: {e:#}")))?;
         let instance = linker
             .instantiate(&mut store, &module)
-            .map_err(|e| TransportError::Io(format!("instantiate wasm: {e}")))?;
+            .map_err(|e| TransportError::Io(format!("instantiate wasm: {e:#}")))?;
         let alloc: TypedFunc<i32, i32> = instance
             .get_typed_func(&mut store, "agena_alloc")
             .map_err(|_| {
@@ -133,7 +139,7 @@ impl PluginTransport for WasmTransport {
             inner
                 .store
                 .set_fuel(FUEL_PER_DISPATCH)
-                .map_err(|error| TransportError::Io(format!("reset wasm fuel: {error}")))?;
+                .map_err(|error| TransportError::Io(format!("reset wasm fuel: {error:#}")))?;
             let memory = inner
                 .instance
                 .get_memory(&mut inner.store, "memory")
@@ -142,11 +148,11 @@ impl PluginTransport for WasmTransport {
             let method_ptr = inner
                 .alloc
                 .call(&mut inner.store, method_bytes.len() as i32)
-                .map_err(|e| TransportError::Io(format!("agena_alloc method: {e}")))?;
+                .map_err(|e| TransportError::Io(format!("agena_alloc method: {e:#}")))?;
             let params_ptr = inner
                 .alloc
                 .call(&mut inner.store, params_bytes.len() as i32)
-                .map_err(|e| TransportError::Io(format!("agena_alloc params: {e}")))?;
+                .map_err(|e| TransportError::Io(format!("agena_alloc params: {e:#}")))?;
 
             if method_ptr < 0 || params_ptr < 0 {
                 return Err(TransportError::Io(
@@ -172,7 +178,7 @@ impl PluginTransport for WasmTransport {
                         params_bytes.len() as i32,
                     ),
                 )
-                .map_err(|e| TransportError::Io(format!("agena_dispatch: {e}")))?;
+                .map_err(|e| TransportError::Io(format!("agena_dispatch: {e:#}")))?;
             let packed = packed as u64;
             let result_ptr = (packed >> 32) as usize;
             let raw_len = (packed & 0xFFFF_FFFF) as u32;

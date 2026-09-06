@@ -9,7 +9,7 @@ pub async fn get_memory_overview(
 ) -> Result<impl IntoResponse, ServerError> {
     let workspace_root = state
         .application()
-        .runtime_status_response()
+        .runtime_diagnostics()
         .await
         .workspace_root;
     let directory = state.service().memory_directory();

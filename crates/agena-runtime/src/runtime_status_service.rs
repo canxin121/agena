@@ -32,7 +32,8 @@ pub struct RuntimeStatusSnapshot {
     pub model_catalog_refreshing: bool,
     pub background_tasks: Vec<RuntimeBackgroundTask>,
     pub automation_available: bool,
-    pub scheduled_jobs: Vec<agena_scheduler::ScheduledJob>,
+    pub scheduled_jobs:
+        Result<Vec<agena_scheduler::ScheduledJob>, crate::SessionExecutionControlError>,
     pub mcp: RuntimeMcpStatus,
     pub lsp: RuntimeLspStatus,
     pub skills: RuntimeSkillsStatus,

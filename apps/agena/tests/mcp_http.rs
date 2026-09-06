@@ -1,9 +1,11 @@
 #![cfg(unix)]
 
+mod support;
+
 use std::{
     fs::OpenOptions,
     path::Path,
-    process::{Child, Command, Stdio},
+    process::{Child, Stdio},
     time::Duration,
 };
 
@@ -99,7 +101,7 @@ async fn spawn_server(
         .open(log_path)
         .expect("open MCP HTTP server log");
     let stderr = log.try_clone().expect("clone MCP HTTP server log");
-    let mut command = Command::new(env!("CARGO_BIN_EXE_agena"));
+    let mut command = support::isolated_server_command(server_data);
     command
         .arg("--database-path")
         .arg(database)
@@ -217,8 +219,27 @@ async fn response_json(
     (status, headers, body)
 }
 
-async fn post_mcp(client: &Client, url: &str, request: Value) -> (StatusCode, Value) {
-    post_mcp_with_headers(client, url, request, &[]).await
+async fn post_mcp(client: &Client, url: &str, mut request: Value) -> (StatusCode, Value) {
+    let method = request["method"]
+        .as_str()
+        .expect("request method")
+        .to_owned();
+    let name = request["params"]["name"].as_str().map(str::to_owned);
+    if method != "initialize" {
+        request["params"]["_meta"] = json!({
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+            "io.modelcontextprotocol/clientInfo": {"name": "agena-http-test", "version": "1"},
+            "io.modelcontextprotocol/clientCapabilities": {}
+        });
+    }
+    let mut headers = vec![
+        ("MCP-Protocol-Version", "2026-07-28"),
+        ("Mcp-Method", method.as_str()),
+    ];
+    if let Some(name) = name.as_deref() {
+        headers.push(("Mcp-Name", name));
+    }
+    post_mcp_with_headers(client, url, request, &headers).await
 }
 
 async fn post_mcp_with_headers(
@@ -243,7 +264,7 @@ async fn post_mcp_with_headers(
     (status, body)
 }
 
-async fn post_mcp_raw(client: &Client, url: &str, body: &[u8]) -> (StatusCode, Value) {
+async fn post_mcp_raw(client: &Client, url: &str, body: &[u8]) -> (StatusCode, String) {
     let response = client
         .post(url)
         .header("content-type", "application/json")
@@ -252,7 +273,8 @@ async fn post_mcp_raw(client: &Client, url: &str, body: &[u8]) -> (StatusCode, V
         .send()
         .await
         .expect("send raw MCP request");
-    let (status, _, body) = response_json(response).await;
+    let status = response.status();
+    let body = response.text().await.expect("read raw MCP response");
     (status, body)
 }
 
@@ -262,7 +284,7 @@ fn initialize_request(id: i64) -> Value {
         "id": id,
         "method": "initialize",
         "params": {
-            "protocolVersion": "2025-06-18",
+            "protocolVersion": "2026-07-28",
             "capabilities": {},
             "clientInfo": {"name": "agena-http-test", "version": "1"}
         }
@@ -361,7 +383,7 @@ async fn anonymous_mcp_is_stateless_and_hides_interactive_tools() {
         json!({"jsonrpc":"2.0","id":"pre-init","method":"tools/list","params":{}}),
     )
     .await;
-    assert_eq!(status, StatusCode::OK);
+    assert_eq!(status, StatusCode::OK, "{pre_initialize_tools}");
     assert!(
         !pre_initialize_tools["result"]["tools"]
             .as_array()
@@ -455,7 +477,7 @@ async fn anonymous_mcp_is_stateless_and_hides_interactive_tools() {
 
     let (status, initialize) = post_mcp(&client, &mcp_url, initialize_request(1)).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(initialize["result"]["protocolVersion"], "2025-06-18");
+    assert_eq!(initialize["result"]["protocolVersion"], "2026-07-28");
 
     let (status, tools) = post_mcp(
         &client,
@@ -478,43 +500,56 @@ async fn anonymous_mcp_is_stateless_and_hides_interactive_tools() {
         !name.contains("interactive") && !tool_name_is_hidden_from_stateless_mcp(name)
     }));
 
-    // The compatibility seam is deliberately tools-only. Other legacy-era
-    // requests without per-request protocol metadata are rejected by rmcp's
-    // modern stateless header validator rather than being silently accepted.
-    let (status, unsupported) = post_mcp(
+    // Every stateless request must carry current per-request protocol
+    // metadata, including tools/list probes before initialization.
+    let (status, missing_metadata) = post_mcp_with_headers(
+        &client,
+        &mcp_url,
+        json!({"jsonrpc":"2.0","id":19,"method":"tools/list","params":{}}),
+        &[],
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(missing_metadata["error"]["code"], -32020);
+
+    let (status, unsupported) = post_mcp_with_headers(
         &client,
         &mcp_url,
         json!({"jsonrpc":"2.0","id":20,"method":"resources/list","params":{}}),
+        &[],
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(unsupported["error"]["code"], -32020);
 
-    let (status, unknown) = post_mcp(
+    let (status, unknown) = post_mcp_with_headers(
         &client,
         &mcp_url,
         json!({"jsonrpc":"2.0","id":21,"method":"agena/unknown","params":{}}),
+        &[],
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(unknown["error"]["code"], -32020);
 
     let (status, parse_error) = post_mcp_raw(&client, &mcp_url, br"{not-json").await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(parse_error["error"]["code"], -32700);
+    assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    assert!(parse_error.contains("fail to deserialize request body"));
 
-    let (status, batch) = post_mcp(
+    // Current rmcp accepts one JSON-RPC message per HTTP POST. The removed
+    // application compatibility layer must not revive JSON-RPC batching.
+    let (status, batch) = post_mcp_raw(
         &client,
         &mcp_url,
-        json!([
+        &serde_json::to_vec(&json!([
             initialize_request(22),
             {"jsonrpc":"2.0","id":23,"method":"tools/list","params":{}}
-        ]),
+        ]))
+        .expect("encode unsupported batch"),
     )
     .await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(batch.as_array().expect("JSON-RPC batch response").len(), 2);
-    assert!(batch[1]["result"]["tools"].is_array());
+    assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    assert!(batch.contains("fail to deserialize request body"));
 
     let (status, hidden_call) = post_mcp(
         &client,
@@ -527,7 +562,7 @@ async fn anonymous_mcp_is_stateless_and_hides_interactive_tools() {
         }),
     )
     .await;
-    assert_eq!(status, StatusCode::OK);
+    assert_eq!(status, StatusCode::NOT_FOUND);
     assert!(hidden_call["error"].is_object());
 
     let (status, hidden_session_call) = post_mcp(
@@ -541,7 +576,7 @@ async fn anonymous_mcp_is_stateless_and_hides_interactive_tools() {
         }),
     )
     .await;
-    assert_eq!(status, StatusCode::OK);
+    assert_eq!(status, StatusCode::NOT_FOUND);
     assert!(hidden_session_call["error"].is_object());
 
     for (id, name) in [(5, "plan.get"), (6, "settings.get"), (7, "mcp.tools.call")] {
@@ -556,7 +591,7 @@ async fn anonymous_mcp_is_stateless_and_hides_interactive_tools() {
             }),
         )
         .await;
-        assert_eq!(status, StatusCode::OK);
+        assert_eq!(status, StatusCode::NOT_FOUND);
         assert!(
             hidden_internal_call["error"].is_object(),
             "{name} must not be callable through stateless MCP"

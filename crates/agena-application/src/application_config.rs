@@ -67,9 +67,10 @@ impl Application {
 
         if response.reload_required {
             self.runtime_control().reload().await.map_err(|error| {
-                ApplicationError::internal(format!(
-                    "failed to reload runtime after config change: {error}"
-                ))
+                ApplicationError::runtime_control_error_with_context(
+                    "failed to reload runtime after config change",
+                    &error,
+                )
             })?;
         }
         Ok(response)
@@ -126,9 +127,10 @@ impl Application {
 
         if response.reload_required {
             self.runtime_control().reload().await.map_err(|error| {
-                ApplicationError::internal(format!(
-                    "failed to reload runtime after config change: {error}"
-                ))
+                ApplicationError::runtime_control_error_with_context(
+                    "failed to reload runtime after config change",
+                    &error,
+                )
             })?;
         }
         Ok(response)

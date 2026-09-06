@@ -1,4 +1,7 @@
 #![allow(unused_imports)]
+// Apple ld cannot encode all compact-unwind offsets for this large test
+// binary. This linker-only diagnostic does not indicate a Rust warning.
+#![cfg_attr(test, allow(linker_messages))]
 
 //! # agena-runtime
 //!
@@ -167,10 +170,7 @@ pub(crate) use agena_runtime_provider::provider_model_catalog_priorities;
 pub(crate) use agena_runtime_provider::{
     JsonEventPayload, ProviderJsonStreamError, json_events, json_events_with_done, json_lines,
 };
-pub(crate) use agena_runtime_provider::{
-    RUNTIME_CODEX_MCP_CLIENT_NAME, claude_code_api_user_agent, claude_user_web_fetch_user_agent,
-    codex_package_version, codex_user_agent, gemini_cli_user_agent, set_provider_client_versions,
-};
+pub(crate) use agena_runtime_provider::{ProviderClientIdentity, RUNTIME_CODEX_MCP_CLIENT_NAME};
 pub(crate) use agena_runtime_provider::{RUNTIME_CODEX_ORIGINATOR, runtime_codex_user_agent};
 pub(crate) use agena_runtime_provider::{configured_enabled_adapter_ids, configured_local_models};
 pub(crate) use agena_runtime_session::ContextGovernor;
@@ -299,7 +299,7 @@ pub(crate) use model_catalog_http::build_default_public_model_catalog_source;
 pub(crate) use model_catalog_live::{
     LiveProviderCatalogBuildError, build_live_provider_catalog_document,
 };
-pub use model_catalog_runtime_service::{ModelCatalogRefreshError, ModelCatalogRuntimeService};
+pub use model_catalog_runtime_service::ModelCatalogRuntimeService;
 pub(crate) use model_catalog_service::{ModelCatalogPublicSource, ModelCatalogService};
 pub(crate) use model_catalog_source::{
     ModelCatalogConfiguredPublicSource, ModelCatalogRemoteDocumentFetcher,
@@ -312,7 +312,7 @@ pub use oauth_callback::{
 };
 pub use output_format::{OutputFormat, OutputFormatParseError};
 pub(crate) use periodic::{run_periodic, wait_for_tick_or_shutdown};
-pub(crate) use plugin_composition::{compose_and_install_plugin_host, install_plugin_host_client};
+pub(crate) use plugin_composition::compose_plugin_host;
 pub(crate) use policy::RuntimeSchedulingPolicy;
 pub(crate) use process_state::RuntimeProcessState;
 pub(crate) use provider_composition::{
@@ -731,11 +731,13 @@ mod tests {
             None,
             true,
         );
-        registry.spawn(spec, move |_cancel| async move {
-            let _drop_signal = DropSignal(Some(dropped));
-            let _ = started.send(());
-            std::future::pending::<Result<RuntimeBackgroundTaskOutcome, String>>().await
-        });
+        registry
+            .spawn(spec, move |_cancel| async move {
+                let _drop_signal = DropSignal(Some(dropped));
+                let _ = started.send(());
+                std::future::pending::<Result<RuntimeBackgroundTaskOutcome, String>>().await
+            })
+            .unwrap();
         started_rx.await.expect("worker starts");
 
         drop(registry);
@@ -757,9 +759,11 @@ mod tests {
                 None,
                 false,
             );
-            let start = registry.spawn(spec, |_cancel| async {
-                Ok::<_, String>(RuntimeBackgroundTaskOutcome::succeeded("done"))
-            });
+            let start = registry
+                .spawn(spec, |_cancel| async {
+                    Ok::<_, String>(RuntimeBackgroundTaskOutcome::succeeded("done"))
+                })
+                .unwrap();
             assert!(start.started);
             tokio::time::sleep(std::time::Duration::from_millis(5)).await;
             let task = registry
@@ -784,9 +788,11 @@ mod tests {
                 false,
             );
             let diagnostic = "database error: token=secret internal stack";
-            let start = registry.spawn(spec, move |_cancel| async move {
-                Err::<RuntimeBackgroundTaskOutcome, _>(diagnostic.to_owned())
-            });
+            let start = registry
+                .spawn(spec, move |_cancel| async move {
+                    Err::<RuntimeBackgroundTaskOutcome, _>(diagnostic.to_owned())
+                })
+                .unwrap();
             tokio::time::timeout(std::time::Duration::from_secs(1), async {
                 loop {
                     let task = registry

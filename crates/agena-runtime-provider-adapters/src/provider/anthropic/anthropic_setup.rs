@@ -25,7 +25,7 @@ impl AnthropicAdapter {
         }
         extra_headers.insert(
             reqwest::header::USER_AGENT.as_str().to_owned(),
-            crate::claude_code_api_user_agent(),
+            options.client_identity.claude_code_api_user_agent(),
         );
         if options.profile == AnthropicProfile::GithubCopilot {
             extra_headers.insert(
@@ -61,7 +61,8 @@ impl AnthropicAdapter {
         Self {
             id,
             client,
-            api_key,
+            api_key: api_key.with_client_identity(options.client_identity.clone()),
+            client_identity: options.client_identity,
             base_url,
             default_model: ModelId::new(default_model),
             auth_data: options.auth_data,

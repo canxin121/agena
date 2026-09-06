@@ -102,6 +102,12 @@ impl RuntimeBackgroundTaskOutcome {
 pub enum RuntimeBackgroundTaskControlError {
     #[error("runtime is shutting down")]
     Shutdown,
+    #[error(
+        "runtime background task capacity ({limit}) is full; wait for a task to finish and retry"
+    )]
+    Capacity { limit: usize },
+    #[error("no Tokio runtime is available to execute the background task")]
+    ExecutorUnavailable,
     #[error("background task `{0}` not found")]
     NotFound(String),
     #[error("background task `{0}` is not running")]

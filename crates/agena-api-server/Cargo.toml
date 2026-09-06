@@ -45,6 +45,7 @@ uuid = { workspace = true }
 workspace = true
 
 [dev-dependencies]
+sea-orm = { workspace = true }
 agena-client = { workspace = true }
 agena-runtime-tools = { workspace = true }
 futures-util = { workspace = true }

@@ -23,7 +23,8 @@ use crate::registry::{PluginToolRegistry, RegisteredTool};
 use crate::scoped_registry::{PluginScopeKey, ScopedRegistry};
 use crate::sdk::host_api::{
     self, AskUserRequest, AskUserResponse, CancelSubtaskRequest, EventSubscription,
-    HostCallbackContext, HostClient, HostConfigReloadResponse, HostContextStatusRequest,
+    HostCallbackContext, HostClient, HostConfigReloadRequestResponse, HostConfigReloadResponse,
+    HostConfigReloadStatusRequest, HostConfigReloadStatusResponse, HostContextStatusRequest,
     HostContextStatusResponse, HostDisplayContributeRequest, HostDisplayRemoveRequest,
     HostDisplayRemoveResponse, HostEnterSnapshotRequest, HostExitSnapshotRequest,
     HostHookDescriptor, HostHookListResponse, HostHookRegistration, HostImageExecuteRequest,
@@ -67,10 +68,16 @@ use crate::services::{PluginServiceBinding, PluginServiceBindingKey};
 use crate::transport::PluginTransport;
 use crate::transport::inproc::InProcessTransport;
 
+mod call_completion;
+mod callback_rpc;
+pub use call_completion::{PluginCallCompletion, current_plugin_call_completion};
+mod contribution_registry;
+pub use callback_rpc::{PluginCallbackDispatcher, PluginCallbackRpcError};
 mod host_handle;
 mod host_scoped_client;
 mod plugin_host_build;
 mod plugin_host_core;
+mod process_scope;
 
 /// One plugin's observed run of the `agent.stop` hook. Callers (for example
 /// the session runtime) use these to surface hook execution as transcript
@@ -859,25 +866,26 @@ pub struct HostHandle {
     inner: tokio::sync::RwLock<Arc<dyn HostClient>>,
     /// Per-plugin bearer tokens for HTTP callbacks.
     tokens: tokio::sync::Mutex<HashMap<PluginKey, String>>,
+    callback_routes: Arc<callback_rpc::CallbackRoutes>,
     callback_base_url: Option<String>,
     tool_registry: Arc<RwLock<PluginToolRegistry>>,
     scoped_tools: Arc<ScopedRegistry<ToolKey, RegisteredTool>>,
     operation_registry: Arc<ScopedRegistry<String, PluginOperationCatalogItem>>,
     plugin_indices: Arc<RwLock<HashMap<PluginKey, usize>>>,
     plugin_names: Arc<RwLock<HashMap<PluginKey, String>>>,
-    hook_catalog: Arc<RwLock<BTreeMap<PluginKey, HostHookRegistration>>>,
+    hook_catalog: contribution_registry::ContributionRegistry<HostHookRegistration>,
     tool_registry_events: Arc<RwLock<VecDeque<ToolRegistryChangedEvent>>>,
     tool_registry_event_listener: Arc<RwLock<Option<ToolRegistryEventListener>>>,
     statuses: Arc<crate::status::StatusRegistry>,
     logs: Arc<PluginLogStore>,
-    display: Arc<RwLock<std::collections::BTreeMap<(PluginKey, String), HostDisplayContribution>>>,
+    display: contribution_registry::ContributionRegistry<HostDisplayContribution>,
     host_notifications: Arc<RwLock<std::collections::VecDeque<HostNotification>>>,
-    themes: Arc<RwLock<BTreeMap<(PluginKey, String), HostThemePalette>>>,
+    themes: contribution_registry::ContributionRegistry<HostThemePalette>,
     quotas: Arc<crate::quota::QuotaRegistry>,
     /// Plugin transport registry shared by the parent [`PluginHost`]. Lets
     /// the handle dispatch host->plugin calls (e.g. permission handler
     /// rendering) without holding a reference to PluginHost itself.
-    plugin_transports: Arc<tokio::sync::RwLock<HashMap<PluginKey, Arc<dyn PluginTransport>>>>,
+    plugin_transports: contribution_registry::ContributionRegistry<Arc<dyn PluginTransport>>,
     service_bindings: tokio::sync::RwLock<BTreeMap<PluginServiceBindingKey, PluginServiceBinding>>,
     effect_scopes: RwLock<HashMap<PluginKey, Arc<PluginEffectScope>>>,
     /// Short-lived callback authorities minted only while Host→Plugin work is
@@ -891,6 +899,7 @@ struct CallbackAuthorityRecord {
     plugin_id: PluginKey,
     generation: u64,
     context: HostCallbackContext,
+    completion: PluginCallCompletion,
 }
 
 type ToolRegistryEventListener = Arc<dyn Fn(ToolRegistryChangedEvent) + Send + Sync>;
@@ -935,7 +944,16 @@ struct HostConfigReadParams {
 }
 
 #[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 struct HostConfigReloadParams {
+    #[serde(rename = "context", default)]
+    _context: Option<HostCallbackContext>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HostConfigReloadStatusParams {
+    request: HostConfigReloadStatusRequest,
     #[serde(rename = "context", default)]
     _context: Option<HostCallbackContext>,
 }
@@ -1263,21 +1281,23 @@ fn tool_registry_event_visible_in_scope(
     }
 }
 
-fn callback_context_from_params(params: &serde_json::Value) -> Option<HostCallbackContext> {
-    let value = params.as_object()?.get("context")?.clone();
-    match serde_json::from_value(value) {
-        Ok(context) => Some(context),
-        Err(error) => {
-            tracing::warn!(
-                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
-                    "decode plugin host callback context",
-                    &error,
-                ),
-                "plugin callback omitted malformed host context"
-            );
-            None
-        }
-    }
+fn callback_context_from_params(
+    params: &serde_json::Value,
+) -> Result<Option<HostCallbackContext>, PluginError> {
+    params
+        .as_object()
+        .and_then(|object| object.get("context"))
+        .filter(|value| !value.is_null())
+        .map(|value| {
+            if !value.is_object() {
+                return Err(PluginError::invalid_params(
+                    "plugin callback context must be a JSON object",
+                ));
+            }
+            serde_json::from_value(value.clone())
+                .map_err(|error| PluginError::invalid_params_error(&error))
+        })
+        .transpose()
 }
 
 fn parse<T: DeserializeOwned>(v: serde_json::Value) -> Result<T, PluginError> {

@@ -13,55 +13,32 @@ use agena_plugin_host::{
 /// policy, including previous-plugin transport reuse.
 pub async fn compose_plugin_host(
     static_plugins: Vec<StaticPluginRegistration>,
-    plugin_config: PluginsConfig,
-    workspace_root: &Path,
-    previous_host: Option<Arc<PluginHost>>,
-    previous_config: Option<&PluginsConfig>,
+    inputs: crate::PluginCompositionInputs<
+        PluginsConfig,
+        &Path,
+        Option<Arc<PluginHost>>,
+        Option<PluginsConfig>,
+        Option<Arc<agena_mcp_client::McpConnectionManager>>,
+    >,
     agena_version: impl Into<String>,
 ) -> Result<Arc<PluginHost>, agena_plugin_host::HostError> {
-    let previous_plugins = previous_config
+    let previous_plugins = inputs
+        .previous_config
+        .as_ref()
         .map(PluginHostBuildConfig::previous_plugins)
         .unwrap_or_default();
-    PluginHost::new(PluginHostBuildConfig {
-        static_plugins,
-        config: plugin_config,
-        workspace_root: workspace_root.to_path_buf(),
-        agena_version: agena_version.into(),
-        callback_base_url: None,
-        host_client: None,
-        previous: previous_host,
-        previous_plugins,
-    })
-    .await
-}
-
-/// Install a caller-supplied concrete callback adapter into a composed host.
-pub async fn install_plugin_host_client(
-    host_handle: Arc<agena_plugin_host::host::HostHandle>,
-    client: Arc<dyn agena_plugin_host::sdk::host_api::HostClient>,
-) {
-    host_handle.install_client(client).await;
-}
-
-/// Compose and install the process-visible host slot. Concrete callers supply
-/// only registrations that bind their process-specific tool implementations.
-pub async fn compose_and_install_plugin_host(
-    static_plugins: Vec<StaticPluginRegistration>,
-    plugin_config: PluginsConfig,
-    workspace_root: &Path,
-    previous_host: Option<Arc<PluginHost>>,
-    previous_config: Option<&PluginsConfig>,
-    agena_version: impl Into<String>,
-) -> Result<Arc<PluginHost>, agena_plugin_host::HostError> {
-    let host = compose_plugin_host(
-        static_plugins,
-        plugin_config,
-        workspace_root,
-        previous_host,
-        previous_config,
-        agena_version,
+    PluginHost::new_with_callback_dispatcher(
+        PluginHostBuildConfig {
+            static_plugins,
+            config: inputs.plugin_config,
+            workspace_root: inputs.workspace_root.to_path_buf(),
+            agena_version: agena_version.into(),
+            callback_base_url: Some(inputs.callback_base_url),
+            host_client: Some(inputs.host_client),
+            previous: inputs.previous_host,
+            previous_plugins,
+        },
+        inputs.callback_dispatcher,
     )
-    .await?;
-    crate::install_plugin_host(Arc::clone(&host));
-    Ok(host)
+    .await
 }

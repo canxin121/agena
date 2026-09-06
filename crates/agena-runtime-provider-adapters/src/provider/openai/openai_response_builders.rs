@@ -782,7 +782,7 @@ impl OpenAiTransport {
         utils::ensure_header_case_insensitive(
             &mut headers,
             reqwest::header::USER_AGENT.as_str(),
-            crate::codex_user_agent,
+            || self.client_identity.codex_user_agent(),
         );
 
         if self.supports_codex_compat_headers()
@@ -820,7 +820,7 @@ impl OpenAiTransport {
             utils::ensure_header_case_insensitive(
                 &mut headers,
                 reqwest::header::USER_AGENT.as_str(),
-                crate::codex_user_agent,
+                || self.client_identity.codex_user_agent(),
             );
             utils::ensure_header_case_insensitive(&mut headers, "Openai-Intent", || {
                 "conversation-edits".to_owned()

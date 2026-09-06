@@ -65,6 +65,7 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["fmt", "env-filter", "ansi"] }
 
 [dev-dependencies]
+agena-plugin-sdk = { workspace = true, features = ["http"] }
 tempfile = { workspace = true }
 tower = { workspace = true }
 # Integration tests spawn the agena binary and reach into the SQLite database

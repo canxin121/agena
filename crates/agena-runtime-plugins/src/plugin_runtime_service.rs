@@ -4,16 +4,13 @@
 //! port without retaining or traversing a concrete runtime snapshot.
 
 use async_trait::async_trait;
-use thiserror::Error;
 
-#[derive(Debug, Clone, Error, PartialEq, Eq)]
-/// Error from the plugin runtime RPC service.
-pub enum PluginRuntimeRpcError {
-    #[error("invalid or missing plugin callback bearer token")]
-    InvalidCallbackToken,
-    #[error("plugin callback request is missing callback context")]
-    MissingCallbackContext,
-}
+#[cfg(test)]
+mod http_handoff_tests;
+#[cfg(test)]
+mod http_stream_tests;
+
+pub use agena_plugin_host::PluginCallbackRpcError as PluginRuntimeRpcError;
 
 #[derive(Debug, Clone)]
 /// Descriptor of a plugin tool.
@@ -100,97 +97,7 @@ pub async fn dispatch_plugin_rpc(
     callback_token: Option<String>,
     request: agena_plugin_host::sdk::rpc::Request,
 ) -> Result<agena_plugin_host::sdk::rpc::Response, PluginRuntimeRpcError> {
-    use agena_plugin_host::sdk::rpc::{
-        ErrorObject, JsonRpcVersion, Response, ResponsePayload, codes,
-    };
-
-    if !host
-        .host_handle()
-        .validate_callback_token(plugin_id, callback_token.as_deref())
+    host.host_handle()
+        .dispatch_callback_rpc(plugin_id, callback_token.as_deref(), request)
         .await
-    {
-        return Err(PluginRuntimeRpcError::InvalidCallbackToken);
-    }
-    let id = request.id.clone();
-    if host
-        .plugins()
-        .iter()
-        .all(|plugin| plugin.key().to_string() != plugin_id)
-    {
-        return Ok(Response {
-            jsonrpc: JsonRpcVersion,
-            id,
-            payload: ResponsePayload::Err {
-                error: ErrorObject {
-                    code: codes::HOST_UNAVAILABLE,
-                    message: format!("unknown plugin id: {plugin_id}"),
-                    data: None,
-                },
-            },
-        });
-    }
-    let params = request.params.unwrap_or(serde_json::Value::Null);
-    let callback_context_present = params
-        .as_object()
-        .and_then(|object| object.get("context"))
-        .and_then(|value| {
-            serde_json::from_value::<agena_plugin_host::sdk::host_api::HostCallbackContext>(
-                value.clone(),
-            )
-            .ok()
-        })
-        .is_some();
-    if !callback_context_present {
-        return Err(PluginRuntimeRpcError::MissingCallbackContext);
-    }
-    let handle = host.host_handle();
-    match handle
-        .ingest_stream_event_for_plugin(plugin_id, &request.method, params.clone())
-        .await
-    {
-        Ok(true) => {
-            return Ok(Response {
-                jsonrpc: JsonRpcVersion,
-                id,
-                payload: ResponsePayload::Ok {
-                    result: serde_json::Value::Object(Default::default()),
-                },
-            });
-        }
-        Ok(false) => {}
-        Err(error) => {
-            return Ok(Response {
-                jsonrpc: JsonRpcVersion,
-                id,
-                payload: ResponsePayload::Err {
-                    error: ErrorObject {
-                        code: codes::PLUGIN_GENERIC,
-                        message: error.to_string(),
-                        data: error.rpc_error_data(),
-                    },
-                },
-            });
-        }
-    }
-    match handle
-        .handle_call_for_plugin(plugin_id, &request.method, params)
-        .await
-    {
-        Ok(result) => Ok(Response {
-            jsonrpc: JsonRpcVersion,
-            id,
-            payload: ResponsePayload::Ok { result },
-        }),
-        Err(error) => Ok(Response {
-            jsonrpc: JsonRpcVersion,
-            id,
-            payload: ResponsePayload::Err {
-                error: ErrorObject {
-                    code: codes::PLUGIN_GENERIC,
-                    message: error.to_string(),
-                    data: error.rpc_error_data(),
-                },
-            },
-        }),
-    }
 }

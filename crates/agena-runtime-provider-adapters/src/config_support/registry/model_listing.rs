@@ -1,11 +1,12 @@
 use agena_domain::{AdapterId, ProviderId};
 
 use super::{
-    BTreeMap, ConfigEnvironment, ConfigError, GitlabRoutedBackend, HttpAdapterKind,
-    LIST_MODELS_DEFAULT_MODEL_ID, ProviderAdapterDefinition, ProviderAdapterModelsResult,
-    ProviderAuthConfig, ResolvedProviderAdapterConfig, ResolvedProviderConfig,
-    build_adapter_provider, gitlab_credential_proxy_base_url, gitlab_proxy_base_url,
-    parse_adapter_model_ref, provider_endpoint_root, resolve_http_adapter_base_url,
+    AdapterBuildContext, BTreeMap, ConfigEnvironment, ConfigError, GitlabRoutedBackend,
+    HttpAdapterKind, LIST_MODELS_DEFAULT_MODEL_ID, ProviderAdapterDefinition,
+    ProviderAdapterModelsResult, ProviderAuthConfig, ResolvedProviderAdapterConfig,
+    ResolvedProviderConfig, build_adapter_provider, gitlab_credential_proxy_base_url,
+    gitlab_proxy_base_url, parse_adapter_model_ref, provider_endpoint_root,
+    resolve_http_adapter_base_url,
 };
 
 pub async fn list_provider_adapter_models(
@@ -14,6 +15,7 @@ pub async fn list_provider_adapter_models(
     adapters: &BTreeMap<String, ResolvedProviderAdapterConfig>,
     client: reqwest::Client,
     env: &dyn ConfigEnvironment,
+    client_identity: &crate::ProviderClientIdentity,
 ) -> Vec<ProviderAdapterModelsResult> {
     let mut results = Vec::new();
     for (adapter_id, adapter) in adapters {
@@ -38,9 +40,12 @@ pub async fn list_provider_adapter_models(
             adapter,
             LIST_MODELS_DEFAULT_MODEL_ID,
             auth,
-            client.clone(),
-            env,
-            None,
+            AdapterBuildContext {
+                client: client.clone(),
+                env,
+                config_path: None,
+                client_identity,
+            },
         ) {
             Ok(provider) => provider,
             Err(err) => {

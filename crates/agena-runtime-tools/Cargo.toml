@@ -54,3 +54,6 @@ url = { workspace = true }
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+sea-orm = { workspace = true }

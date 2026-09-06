@@ -8,6 +8,7 @@ use crate::RuntimeBackgroundTask;
 /// Mutable record/index state used by a background-task registry.
 #[derive(Default)]
 pub(crate) struct RuntimeBackgroundTaskState {
+    pub(crate) shutdown: bool,
     pub(crate) order: VecDeque<String>,
     pub(crate) tasks: HashMap<String, RuntimeBackgroundTask>,
     pub(crate) controls: HashMap<String, CancellationToken>,

@@ -28,6 +28,7 @@ pub mod logs;
 pub mod manifest_io;
 pub mod profiles;
 pub mod quota;
+mod registration_owner;
 pub mod registry;
 pub mod scoped_registry;
 pub mod services;
@@ -66,6 +67,10 @@ pub use host::{
     PluginHostBuildConfig, PluginInspect, PluginOperationCatalogItem, PluginServiceImportInspect,
     PluginServiceInspect, PluginSurfaceCatalog, PluginTerminalSurfaceCatalog,
     PluginToolInvokeResponse, PluginToolInvokeStatus, StaticPluginRegistration, ToolInvokeStream,
+};
+pub use host::{
+    PluginCallCompletion, PluginCallbackDispatcher, PluginCallbackRpcError,
+    current_plugin_call_completion,
 };
 #[cfg(feature = "signing")]
 pub use loader::{verify_sha256, verify_signature, verify_signature_bytes};

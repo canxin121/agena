@@ -23,6 +23,15 @@ pub enum SchedulerError {
 
     #[error("invalid scheduled job update: {0}")]
     InvalidUpdate(String),
+
+    #[error("scheduled job {0} changed concurrently; reload before retrying")]
+    Conflict(uuid::Uuid),
+
+    #[error("scheduler persistence failed: {0}")]
+    Persistence(#[from] sea_orm::DbErr),
+
+    #[error("invalid scheduler data: {0}")]
+    Serialization(#[from] serde_json::Error),
 }
 
 /// Result alias for scheduler operations.

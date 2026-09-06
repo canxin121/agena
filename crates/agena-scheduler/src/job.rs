@@ -38,7 +38,7 @@ fn scheduler_outcome_failure(
 /// Kind of a scheduled job.
 pub enum JobKind {
     /// Recurring job driven by a cron expression.  After
-    /// `max_age_days` we fire one last time and delete the job.
+    /// `max_age_days` we fire one last time and retain the completed job.
     Cron {
         expression: String,
         max_age_days: u32,
@@ -477,9 +477,20 @@ impl ScheduledJob {
                     self.completed = true;
                     return Ok(JobOutcome::Expired);
                 }
-                let next = compute_next_fire(expression, fired_at, timezone)?;
-                self.next_fire_at = Some(next);
-                Ok(JobOutcome::Continued)
+                match compute_next_fire(expression, fired_at, timezone) {
+                    Ok(next) => {
+                        self.next_fire_at = Some(next);
+                        Ok(JobOutcome::Continued)
+                    }
+                    Err(SchedulerError::NoFutureFire { .. }) => {
+                        // A finite cron expression completing its final
+                        // occurrence is a normal terminal state.
+                        self.next_fire_at = None;
+                        self.completed = true;
+                        Ok(JobOutcome::Expired)
+                    }
+                    Err(error) => Err(error),
+                }
             }
         }
     }
@@ -495,18 +506,19 @@ impl ScheduledJob {
     }
 
     pub fn record_delivery(&mut self, triggered_at: DateTime<Utc>, result: JobDeliveryResult) {
-        self.record_delivery_attempt(triggered_at, None, result);
+        self.record_delivery_attempt(triggered_at, Utc::now(), None, result);
     }
 
     fn record_delivery_attempt(
         &mut self,
         triggered_at: DateTime<Utc>,
+        finished_at: DateTime<Utc>,
         delivery: Option<&JobDeliveryAttempt>,
         result: JobDeliveryResult,
     ) {
         let record = JobRunRecord {
             triggered_at,
-            finished_at: Utc::now(),
+            finished_at,
             status: result.status,
             scheduled_for: delivery.map(|delivery| delivery.scheduled_for),
             delivery_key: delivery.map(|delivery| delivery.delivery_key.clone()),
@@ -583,8 +595,9 @@ impl ScheduledJob {
         Ok(ClaimDueDelivery::Deliver(delivery))
     }
 
-    /// Finalize one previously persisted claim. A failed result keeps the
-    /// claim (and its stable delivery key) until bounded retries are exhausted.
+    /// Finalize one previously persisted claim at completion time `now`.
+    /// A failed result keeps the claim (and its stable delivery key) until
+    /// bounded retries are exhausted. Backoff starts after completion.
     pub fn finish_delivery(
         &mut self,
         now: DateTime<Utc>,
@@ -600,7 +613,7 @@ impl ScheduledJob {
             ));
         }
 
-        self.record_delivery_attempt(now, Some(delivery), result.clone());
+        self.record_delivery_attempt(delivery.claimed_at, now, Some(delivery), result.clone());
         if result.status == JobRunStatus::Failed
             && delivery.attempt < self.retry_policy.normalized().max_attempts
         {
@@ -629,6 +642,7 @@ impl ScheduledJob {
         };
         self.record_delivery_attempt(
             now,
+            now,
             Some(&delivery),
             JobDeliveryResult::skipped(
                 None,
@@ -652,7 +666,14 @@ impl ScheduledJob {
                 self.completed = true;
             }
             JobKind::Cron { expression, .. } => {
-                self.next_fire_at = Some(compute_next_fire(expression, now, timezone)?);
+                match compute_next_fire(expression, now, timezone) {
+                    Ok(next) => self.next_fire_at = Some(next),
+                    Err(SchedulerError::NoFutureFire { .. }) => {
+                        self.next_fire_at = None;
+                        self.completed = true;
+                    }
+                    Err(error) => return Err(error),
+                }
             }
         }
         Ok(())
@@ -809,6 +830,86 @@ mod tests {
         assert_eq!(
             job.last_run.as_ref().and_then(|run| run.session_id),
             Some(9)
+        );
+    }
+
+    #[test]
+    fn finite_cron_keeps_the_final_delivery_and_expires_after_a_misfire() {
+        let scheduled_for = Utc
+            .with_ymd_and_hms(2026, 8, 14, 15, 0, 0)
+            .single()
+            .unwrap();
+        for misfire in [
+            None,
+            Some(MisfirePolicy::Skip),
+            Some(MisfirePolicy::Reschedule),
+        ] {
+            let mut job = ScheduledJob::new_once(scheduled_for, "last occurrence");
+            job.kind = super::JobKind::Cron {
+                expression: "0 0 15 14 8 * 2026".into(),
+                max_age_days: 7,
+            };
+            job.created_at = scheduled_for - Duration::days(1);
+            if let Some(policy) = misfire {
+                job.misfire_policy = policy;
+                assert_eq!(
+                    job.claim_due_delivery(scheduled_for + Duration::minutes(5))
+                        .unwrap(),
+                    ClaimDueDelivery::StateUpdated
+                );
+                assert_eq!(job.last_run.as_ref().unwrap().status, JobRunStatus::Skipped);
+            } else {
+                let ClaimDueDelivery::Deliver(delivery) =
+                    job.claim_due_delivery(scheduled_for).unwrap()
+                else {
+                    panic!("due");
+                };
+                assert_eq!(
+                    job.finish_delivery(
+                        scheduled_for,
+                        &delivery,
+                        JobDeliveryResult::submitted(None)
+                    )
+                    .unwrap(),
+                    JobOutcome::Expired
+                );
+                assert_eq!(
+                    job.last_run.as_ref().unwrap().status,
+                    JobRunStatus::Submitted
+                );
+            }
+            assert!(job.completed);
+            assert!(job.pending_delivery.is_none());
+            assert!(job.next_fire_at.is_none());
+        }
+    }
+
+    #[test]
+    fn long_deliveries_keep_start_and_completion_times_and_back_off_after_completion() {
+        let started = Utc::now();
+        let finished = started + Duration::minutes(5);
+        let mut job = ScheduledJob::new_once(started, "slow delivery");
+        let ClaimDueDelivery::Deliver(delivery) = job.claim_due_delivery(started).unwrap() else {
+            panic!("delivery must be due");
+        };
+        let result = JobDeliveryResult::failed(
+            None,
+            scheduler_outcome_failure(
+                "scheduler.delivery_failed",
+                agena_failure::FailureCategory::DependencyUnavailable,
+                "delivery failed after waiting for the dependency",
+            ),
+        );
+        assert_eq!(
+            job.finish_delivery(finished, &delivery, result).unwrap(),
+            JobOutcome::RetryScheduled
+        );
+        let record = job.last_run.as_ref().unwrap();
+        assert_eq!(record.triggered_at, started);
+        assert_eq!(record.finished_at, finished);
+        assert_eq!(
+            job.retry_at,
+            Some(finished + job.retry_policy.delay_after_attempt(1))
         );
     }
 

@@ -20,6 +20,8 @@ use agena_plugin_host::{
 };
 use agena_tool::SnapshotBackend;
 
+mod cron_persistence;
+
 #[derive(Default)]
 struct ChokePointPlugin;
 

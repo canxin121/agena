@@ -77,6 +77,7 @@ pub enum ScopedRegistryError {
         scope: PluginScopeKey,
         parent: PluginScopeKey,
     },
+    GenerationExhausted,
     Owner(PluginEffectScopeError),
 }
 
@@ -95,6 +96,7 @@ impl fmt::Display for ScopedRegistryError {
                 f,
                 "scope parent `{parent}` would create a cycle for `{scope}`"
             ),
+            Self::GenerationExhausted => f.write_str("scoped registry generation is exhausted"),
             Self::Owner(error) => error.fmt(f),
         }
     }
@@ -104,7 +106,10 @@ impl std::error::Error for ScopedRegistryError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Owner(error) => Some(error),
-            Self::InvalidScope(_) | Self::DuplicateEntry { .. } | Self::ParentCycle { .. } => None,
+            Self::InvalidScope(_)
+            | Self::DuplicateEntry { .. }
+            | Self::ParentCycle { .. }
+            | Self::GenerationExhausted => None,
         }
     }
 }
@@ -141,11 +146,10 @@ pub struct ScopedRegistryEntryDescriptor<K> {
 #[derive(Clone)]
 struct Entry<V> {
     owner: PluginKey,
-    owner_generation: u64,
     owner_scope: std::sync::Weak<PluginEffectScope>,
     generation: u64,
     value: V,
-    effect: Option<PluginEffectHandle>,
+    effect: PluginEffectHandle,
 }
 
 struct RegistryData<K, V> {
@@ -223,81 +227,14 @@ where
         effect_kind: &'static str,
         label: impl Into<String>,
     ) -> Result<ScopedRegistryRegistration<K, V>, ScopedRegistryError> {
-        let label = label.into();
-        let (generation, layer) = {
-            let mut data = self.lock();
-            if let Some(scope) = &scope {
-                data.known_scopes.insert(scope.clone());
-                if data
-                    .overlays
-                    .get(scope)
-                    .is_some_and(|items| items.contains_key(&key))
-                {
-                    return Err(ScopedRegistryError::DuplicateEntry {
-                        scope: Some(scope.clone()),
-                    });
-                }
-            } else if data.global.contains_key(&key) {
-                return Err(ScopedRegistryError::DuplicateEntry { scope: None });
-            }
-            let generation = data.next_generation;
-            data.next_generation = data.next_generation.saturating_add(1);
-            let entry = Entry {
-                owner: owner.plugin_id().clone(),
-                owner_generation: owner.generation(),
-                owner_scope: Arc::downgrade(owner),
-                generation,
-                value,
-                effect: None,
-            };
-            let layer = match &scope {
-                Some(scope) => {
-                    data.overlays
-                        .entry(scope.clone())
-                        .or_default()
-                        .insert(key.clone(), entry);
-                    ScopedRegistryLayer::Scope {
-                        scope: scope.clone(),
-                    }
-                }
-                None => {
-                    data.global.insert(key.clone(), entry);
-                    ScopedRegistryLayer::Global
-                }
-            };
-            (generation, layer)
-        };
-
-        let registry = self.clone();
-        let disposer_key = key.clone();
-        let disposer_layer = layer.clone();
-        let effect = match owner.own_sync(effect_kind, label, move || {
-            registry.remove_exact(&disposer_layer, &disposer_key, generation);
-            Ok(())
-        }) {
-            Ok(effect) => effect,
-            Err(error) => {
-                self.remove_exact(&layer, &key, generation);
-                return Err(error.into());
-            }
-        };
-        self.set_effect_handle(&layer, &key, generation, effect.clone());
-
-        Ok(ScopedRegistryRegistration {
-            registry: Arc::downgrade(&self.inner),
-            key,
-            layer,
-            generation,
-            owner: Arc::downgrade(owner),
-            effect,
-        })
+        self.insert_owned(owner, scope, key, value, (effect_kind, label.into()), false)
+            .map(|(registration, _)| registration)
     }
 
     /// Replace an entry in one exact layer when it is owned by the same plugin
-    /// generation, otherwise preserve duplicate isolation. This is the scoped
-    /// equivalent of updating a Cordis fiber-owned registration: visibility
-    /// swaps atomically, the old disposer is released without running, and an
-    /// old generation can never delete the replacement later.
+    /// generation, otherwise preserve duplicate isolation. Admission, value
+    /// publication, and retirement of the old effect share the registry lock.
+    /// A rejected replacement never becomes visible or needs rollback.
     pub fn replace_owned(
         &self,
         owner: &Arc<PluginEffectScope>,
@@ -313,69 +250,72 @@ where
         ),
         ScopedRegistryError,
     > {
-        let label = label.into();
+        self.insert_owned(owner, scope, key, value, (effect_kind, label.into()), true)
+    }
+
+    fn insert_owned(
+        &self,
+        owner: &Arc<PluginEffectScope>,
+        scope: Option<PluginScopeKey>,
+        key: K,
+        value: V,
+        effect: (&'static str, String),
+        replace: bool,
+    ) -> Result<
+        (
+            ScopedRegistryRegistration<K, V>,
+            Option<ScopedRegistryValue<V>>,
+        ),
+        ScopedRegistryError,
+    > {
+        let (effect_kind, label) = effect;
         let layer = scope
             .as_ref()
             .map(|scope| ScopedRegistryLayer::Scope {
                 scope: scope.clone(),
             })
             .unwrap_or(ScopedRegistryLayer::Global);
-        let (generation, replaced) = {
-            let mut data = self.lock();
-            if let Some(scope) = &scope {
-                data.known_scopes.insert(scope.clone());
-            }
-            let existing = entry_for_layer(&data, &layer, &key).cloned();
-            if let Some(existing) = existing.as_ref()
-                && (existing.owner != *owner.plugin_id()
-                    || existing.owner_generation != owner.generation())
-            {
-                return Err(ScopedRegistryError::DuplicateEntry {
-                    scope: scope.clone(),
-                });
-            }
-            let generation = data.next_generation;
-            data.next_generation = data.next_generation.saturating_add(1);
-            insert_entry(
-                &mut data,
-                &layer,
-                key.clone(),
-                Entry {
-                    owner: owner.plugin_id().clone(),
-                    owner_generation: owner.generation(),
-                    owner_scope: Arc::downgrade(owner),
-                    generation,
-                    value,
-                    effect: None,
-                },
-            );
-            let replaced = existing
-                .as_ref()
-                .map(|entry| scoped_value(entry, layer.clone()));
-            (generation, (existing, replaced))
-        };
-
-        let registry = self.clone();
+        // Prepare generic key clones before taking the lock or admitting an
+        // effect; user-defined Clone implementations can themselves do work.
+        let registry_key = key.clone();
         let disposer_key = key.clone();
         let disposer_layer = layer.clone();
-        let effect = match owner.own_sync(effect_kind, label, move || {
+        let registry = self.clone();
+        let mut data = self.lock();
+        let existing = entry_for_layer(&data, &layer, &key);
+        if let Some(existing) = existing
+            && (!replace || !entry_owned_by(existing, owner))
+        {
+            return Err(ScopedRegistryError::DuplicateEntry { scope });
+        }
+        let replaced = existing.map(|entry| scoped_value(entry, layer.clone()));
+        let old_effect = existing.map(|entry| entry.effect.clone());
+        let _lease = owner.lease()?;
+        let generation = data.next_generation;
+        let next_generation = generation
+            .checked_add(1)
+            .ok_or(ScopedRegistryError::GenerationExhausted)?;
+        let effect = owner.own_sync(effect_kind, label, move || {
             registry.remove_exact(&disposer_layer, &disposer_key, generation);
             Ok(())
-        }) {
-            Ok(effect) => effect,
-            Err(error) => {
-                let (old_entry, _) = replaced;
-                let mut data = self.lock();
-                remove_exact_inner(&mut data, &layer, &key, generation);
-                if let Some(old_entry) = old_entry {
-                    insert_entry(&mut data, &layer, key.clone(), old_entry);
-                }
-                return Err(error.into());
-            }
-        };
-        self.set_effect_handle(&layer, &key, generation, effect.clone());
-        if let Some(old_effect) = replaced.0.as_ref().and_then(|entry| entry.effect.as_ref()) {
-            owner.release_handle(old_effect);
+        })?;
+        // No entry, scope metadata, or generation changes until admission has
+        // succeeded. Every visible entry already has its cleanup handle.
+        insert_entry(
+            &mut data,
+            &layer,
+            registry_key,
+            Entry {
+                owner: owner.plugin_id().clone(),
+                owner_scope: Arc::downgrade(owner),
+                generation,
+                value,
+                effect: effect.clone(),
+            },
+        );
+        data.next_generation = next_generation;
+        if let Some(old_effect) = old_effect {
+            owner.release_handle(&old_effect);
         }
         Ok((
             ScopedRegistryRegistration {
@@ -386,7 +326,7 @@ where
                 owner: Arc::downgrade(owner),
                 effect,
             },
-            replaced.1,
+            replaced,
         ))
     }
 
@@ -406,17 +346,13 @@ where
         let entry = {
             let mut data = self.lock();
             let existing = entry_for_layer(&data, &layer, key)?.clone();
-            if existing.owner != *owner.plugin_id()
-                || existing.owner_generation != owner.generation()
-            {
+            if !entry_owned_by(&existing, owner) {
                 return None;
             }
             remove_exact_inner(&mut data, &layer, key, existing.generation);
             existing
         };
-        if let Some(effect) = entry.effect.as_ref() {
-            owner.release_handle(effect);
-        }
+        owner.release_handle(&entry.effect);
         Some(scoped_value(&entry, layer))
     }
 
@@ -459,10 +395,8 @@ where
         removed
             .into_iter()
             .map(|(entry, layer)| {
-                if let (Some(owner), Some(effect)) =
-                    (entry.owner_scope.upgrade(), entry.effect.as_ref())
-                {
-                    owner.release_handle(effect);
+                if let Some(owner) = entry.owner_scope.upgrade() {
+                    owner.release_handle(&entry.effect);
                 }
                 scoped_value(&entry, layer)
             })
@@ -552,6 +486,40 @@ where
         entries
     }
 
+    /// Snapshot exact layers for one quiescent owner, preserving overlays
+    /// that would be hidden by a different owner in a normal visible lookup.
+    pub(crate) fn owned_entries(
+        &self,
+        owner: &PluginEffectScope,
+    ) -> Vec<(K, ScopedRegistryValue<V>)> {
+        let data = self.lock();
+        let mut entries = Vec::new();
+        for (key, entry) in &data.global {
+            if entry_owned_by(entry, owner) {
+                entries.push((
+                    key.clone(),
+                    scoped_value(entry, ScopedRegistryLayer::Global),
+                ));
+            }
+        }
+        for (scope, layer) in &data.overlays {
+            for (key, entry) in layer {
+                if entry_owned_by(entry, owner) {
+                    entries.push((
+                        key.clone(),
+                        scoped_value(
+                            entry,
+                            ScopedRegistryLayer::Scope {
+                                scope: scope.clone(),
+                            },
+                        ),
+                    ));
+                }
+            }
+        }
+        entries
+    }
+
     pub fn parent(&self, scope: &PluginScopeKey) -> Option<PluginScopeKey> {
         self.lock().parents.get(scope).cloned()
     }
@@ -562,11 +530,11 @@ where
         parent: PluginScopeKey,
     ) -> Result<(), ScopedRegistryError> {
         let mut data = self.lock();
-        data.known_scopes.insert(scope.clone());
-        data.known_scopes.insert(parent.clone());
         if would_cycle(&data, &scope, &parent) {
             return Err(ScopedRegistryError::ParentCycle { scope, parent });
         }
+        data.known_scopes.insert(scope.clone());
+        data.known_scopes.insert(parent.clone());
         data.parents.insert(scope, parent);
         Ok(())
     }
@@ -587,21 +555,6 @@ where
 
     fn remove_exact(&self, layer: &ScopedRegistryLayer, key: &K, generation: u64) -> bool {
         remove_exact_inner(&mut self.lock(), layer, key, generation)
-    }
-
-    fn set_effect_handle(
-        &self,
-        layer: &ScopedRegistryLayer,
-        key: &K,
-        generation: u64,
-        effect: PluginEffectHandle,
-    ) {
-        let mut data = self.lock();
-        if let Some(entry) = entry_for_layer_mut(&mut data, layer, key)
-            && entry.generation == generation
-        {
-            entry.effect = Some(effect);
-        }
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, RegistryData<K, V>> {
@@ -655,6 +608,10 @@ where
     }
 }
 
+fn entry_owned_by<V>(entry: &Entry<V>, owner: &PluginEffectScope) -> bool {
+    std::ptr::eq(entry.owner_scope.as_ptr(), owner)
+}
+
 fn scoped_value<V: Clone>(entry: &Entry<V>, layer: ScopedRegistryLayer) -> ScopedRegistryValue<V> {
     ScopedRegistryValue {
         owner: entry.owner.clone(),
@@ -675,20 +632,6 @@ where
     match layer {
         ScopedRegistryLayer::Global => data.global.get(key),
         ScopedRegistryLayer::Scope { scope } => data.overlays.get(scope)?.get(key),
-    }
-}
-
-fn entry_for_layer_mut<'a, K, V>(
-    data: &'a mut RegistryData<K, V>,
-    layer: &ScopedRegistryLayer,
-    key: &K,
-) -> Option<&'a mut Entry<V>>
-where
-    K: Ord,
-{
-    match layer {
-        ScopedRegistryLayer::Global => data.global.get_mut(key),
-        ScopedRegistryLayer::Scope { scope } => data.overlays.get_mut(scope)?.get_mut(key),
     }
 }
 
@@ -820,6 +763,9 @@ fn would_cycle<K, V>(
     }
     false
 }
+
+#[cfg(test)]
+mod atomicity_tests;
 
 #[cfg(test)]
 mod tests {

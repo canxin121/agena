@@ -31,14 +31,17 @@ wasmtime-wasi = { workspace = true, optional = true }
 sha2 = { workspace = true, optional = true }
 hex = { workspace = true, optional = true }
 ed25519-dalek = { workspace = true, optional = true }
+which = { workspace = true, optional = true }
 
 [features]
 default = []
 wasm = ["dep:wasmtime", "dep:wasmtime-wasi", "dep:sha2", "dep:hex"]
-signing = ["dep:sha2", "dep:hex", "dep:ed25519-dalek"]
+signing = ["dep:sha2", "dep:hex", "dep:ed25519-dalek", "dep:which"]
 
 [dev-dependencies]
 schemars = { workspace = true }
+tempfile = { workspace = true }
+wat = { workspace = true }
 
 [lints]
 workspace = true

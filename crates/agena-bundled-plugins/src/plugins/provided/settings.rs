@@ -19,7 +19,7 @@ use crate::config::{
     set_layered_file_setting, validate_layered_file_settings,
 };
 use agena_plugin_host::PluginError;
-use agena_plugin_host::sdk::host_api::{HostClient, HostConfigReloadResponse};
+use agena_plugin_host::sdk::host_api::{HostClient, HostConfigReloadRequestResponse};
 use agena_plugin_host::sdk::{PathRequest, Result as SdkResult, ToolInvokeOutput, ToolTag};
 
 pub(crate) const SETTINGS_PLUGIN_ID: &str = "agena.settings";
@@ -788,23 +788,26 @@ impl SettingsPlugin {
     {
         let mut payload =
             serde_json::to_value(&response).map_err(|err| PluginError::internal_error(&err))?;
-        let reload_report = match payload
+        let reload_request = match payload
             .get("reload_required")
             .and_then(JsonValue::as_bool)
             .unwrap_or(false)
             && reload
         {
-            true => Some(self.host()?.reload_config().await?),
+            true => Some(self.host()?.request_config_reload().await?),
             false => None,
         };
-        if let Some(report) = reload_report {
-            insert_reload_report(&mut payload, report);
-        }
+        let text = if let Some(request) = reload_request {
+            insert_reload_request(&mut payload, request);
+            format!("{text} Runtime reload queued.")
+        } else {
+            text.to_owned()
+        };
         insert_settings_layer(&mut payload, layer);
         redact_settings_payload(&mut payload);
         Ok(ToolInvokeOutput::from_parts(
             title,
-            text,
+            text.clone(),
             text,
             Some(payload),
             std::collections::BTreeMap::from([("agena.effect".to_string(), "config".to_string())]),
@@ -901,14 +904,13 @@ fn resolve_effective_settings_path(
     }
 }
 
-fn insert_reload_report(payload: &mut JsonValue, report: HostConfigReloadResponse) {
+fn insert_reload_request(payload: &mut JsonValue, request: HostConfigReloadRequestResponse) {
     if let Some(object) = payload.as_object_mut() {
         object.insert(
-            "reload".to_string(),
+            "reload_task".to_string(),
             serde_json::json!({
-                "previous_generation": report.previous_generation,
-                "generation": report.generation,
-                "loaded_at": report.loaded_at,
+                "task_id": request.task_id,
+                "started": request.started,
             }),
         );
     }

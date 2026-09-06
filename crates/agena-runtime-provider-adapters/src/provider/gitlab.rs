@@ -26,9 +26,14 @@ const PROVIDER_ID: &str = "gitlab";
 const ADAPTER_KIND: &str = "gitlab";
 const DIRECT_ACCESS_CACHE_TTL: Duration = Duration::from_secs(25 * 60);
 
-pub fn default_ai_gateway_headers() -> HashMap<String, String> {
+pub fn default_ai_gateway_headers(
+    client_identity: &crate::ProviderClientIdentity,
+) -> HashMap<String, String> {
     HashMap::from([
-        ("User-Agent".to_owned(), crate::claude_code_api_user_agent()),
+        (
+            "User-Agent".to_owned(),
+            client_identity.claude_code_api_user_agent(),
+        ),
         (
             "anthropic-beta".to_owned(),
             "context-1m-2025-08-07".to_owned(),
@@ -45,6 +50,7 @@ pub fn default_feature_flags() -> HashMap<String, bool> {
 
 /// Provider for GitLab.
 pub struct GitlabProvider {
+    client_identity: crate::ProviderClientIdentity,
     client: reqwest::Client,
     api_key: ManagedCredential,
     instance_url: String,
@@ -57,11 +63,14 @@ pub struct GitlabProvider {
 
 impl GitlabProvider {
     pub fn from_managed_token_with_config(
+        client_identity: crate::ProviderClientIdentity,
         client: reqwest::Client,
         token: ManagedCredential,
         config: GitlabProviderConfig,
     ) -> Result<Self, ProviderError> {
+        let token = token.with_client_identity(client_identity.clone());
         Ok(Self {
+            client_identity,
             client,
             api_key: token,
             instance_url: normalize_url(config.instance_url),
@@ -402,6 +411,7 @@ impl GitlabProvider {
                     self.openai_proxy_base_url(),
                     model,
                     OpenAiResponsesAdapterOptions {
+                        client_identity: self.client_identity.clone(),
                         extra_headers: token.headers,
                         ..OpenAiResponsesAdapterOptions::default()
                     },
@@ -418,6 +428,7 @@ impl GitlabProvider {
                 self.openai_proxy_base_url(),
                 model,
                 OpenAiChatCompletionsAdapterOptions {
+                    client_identity: self.client_identity.clone(),
                     capability_family: CapabilityFamily::OpenAiCompatible,
                     auth_header: "authorization".to_owned(),
                     auth_scheme: Some("Bearer".to_owned()),
@@ -435,6 +446,7 @@ impl GitlabProvider {
             self.anthropic_proxy_base_url(),
             model,
             AnthropicAdapterOptions {
+                client_identity: self.client_identity.clone(),
                 auth_header: "authorization".to_owned(),
                 auth_scheme: Some("Bearer".to_owned()),
                 extra_headers: token.headers,
@@ -487,6 +499,7 @@ impl GitlabProvider {
                     self.openai_proxy_base_url(),
                     model,
                     OpenAiResponsesAdapterOptions {
+                        client_identity: self.client_identity.clone(),
                         extra_headers: token.headers,
                         ..OpenAiResponsesAdapterOptions::default()
                     },
@@ -507,6 +520,7 @@ impl GitlabProvider {
                 self.openai_proxy_base_url(),
                 model,
                 OpenAiChatCompletionsAdapterOptions {
+                    client_identity: self.client_identity.clone(),
                     capability_family: CapabilityFamily::OpenAiCompatible,
                     auth_header: "authorization".to_owned(),
                     auth_scheme: Some("Bearer".to_owned()),
@@ -524,6 +538,7 @@ impl GitlabProvider {
             self.anthropic_proxy_base_url(),
             model,
             AnthropicAdapterOptions {
+                client_identity: self.client_identity.clone(),
                 auth_header: "authorization".to_owned(),
                 auth_scheme: Some("Bearer".to_owned()),
                 extra_headers: token.headers,

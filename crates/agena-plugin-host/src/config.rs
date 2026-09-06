@@ -182,8 +182,9 @@ pub enum PluginPackage {
         cwd: Option<PathBuf>,
         #[serde(default)]
         restart: RestartPolicy,
-        /// Optional sha256 of the binary at `command`. Requires the
-        /// `signing` cargo feature.
+        /// Optional sha256 of the executable resolved using the child's PATH
+        /// and cwd. Its absolute path is retained and checked before every
+        /// spawn, including supervised restarts. Requires `signing`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         sha256: Option<String>,
     },
@@ -451,8 +452,12 @@ impl Default for RestartPolicy {
 #[serde(rename_all = "kebab-case")]
 /// Mode of plugin restart.
 pub enum RestartMode {
+    /// Never restart automatically, including after protocol failures.
     Never,
+    /// Restart after a nonzero/signal exit or a broken protocol/pipe. A clean
+    /// exit with an intact protocol leaves the plugin stopped.
     OnFailure,
+    /// Restart after any exit, subject to the retry budget and safe cleanup.
     Always,
 }
 

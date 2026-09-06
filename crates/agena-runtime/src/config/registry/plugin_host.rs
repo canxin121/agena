@@ -10,6 +10,7 @@ pub async fn build_provider_registry_from_inputs(
     config_path: Option<&Path>,
     plugins: &PluginHost,
     catalog: Option<&ModelCatalogSnapshot>,
+    client_identity: &crate::ProviderClientIdentity,
 ) -> Result<ProviderRegistry, ConfigError> {
     let mut registry =
         agena_runtime_provider_adapters::config_support::registry::build_provider_registry_from_configs(
@@ -17,6 +18,7 @@ pub async fn build_provider_registry_from_inputs(
             catalog,
             &ProcessEnvironment,
             config_path,
+            client_identity,
         )?;
     let current = agena_runtime::provider_descriptors_from_ids(registry.provider_ids());
     let Some(patch) = agena_runtime::dispatch_provider_list_patch(plugins, current)

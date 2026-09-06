@@ -56,7 +56,7 @@ impl AnthropicAdapter {
             utils::ensure_header_case_insensitive(
                 &mut headers,
                 reqwest::header::USER_AGENT.as_str(),
-                crate::claude_code_api_user_agent,
+                || self.client_identity.claude_code_api_user_agent(),
             );
             utils::ensure_header_case_insensitive(&mut headers, "openai-intent", || {
                 "conversation-edits".to_owned()

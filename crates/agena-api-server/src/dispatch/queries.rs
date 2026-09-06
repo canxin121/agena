@@ -69,7 +69,7 @@ pub async fn dispatch_query(
             database_connected: true,
             server: state.server().clone(),
         })),
-        Query::Runtime => Ok(QueryResult::Runtime(state.runtime_status_response().await)),
+        Query::Runtime => Ok(QueryResult::Runtime(state.runtime_status_response().await?)),
         Query::ListActivities(params) => {
             let service = state.runtime_activities()?;
             let filter = agena_application::service::activity_filter_from_params(&params);

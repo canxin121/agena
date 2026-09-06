@@ -287,6 +287,7 @@ pub enum PluginReloadReason {
     ServiceBindingChanged,
     BlockerChanged,
     InProcessStatic,
+    RuntimeUnavailable,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

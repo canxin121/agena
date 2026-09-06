@@ -24,7 +24,9 @@ impl GeminiAdapter {
         options: GeminiAdapterOptions,
     ) -> Self {
         let default_model = ModelId::new(default_model);
-        let user_agent = crate::gemini_cli_user_agent(default_model.as_ref());
+        let user_agent = options
+            .client_identity
+            .gemini_cli_user_agent(default_model.as_ref());
         let mut extra_headers =
             HashMap::from([(reqwest::header::USER_AGENT.as_str().to_owned(), user_agent)]);
         if options
@@ -48,7 +50,8 @@ impl GeminiAdapter {
         };
         Self {
             client,
-            api_key,
+            api_key: api_key.with_client_identity(options.client_identity.clone()),
+            client_identity: options.client_identity,
             base_url: utils::normalize_base_url(base_url.into().as_str()),
             default_model,
             auth_mode,
@@ -135,14 +138,20 @@ impl GeminiAdapter {
     ) -> HashMap<String, String> {
         let mut headers =
             utils::merged_request_headers(&self.extra_headers, &request.request_override.headers);
-        let default_user_agent = crate::gemini_cli_user_agent(self.default_model.as_ref());
+        let default_user_agent = self
+            .client_identity
+            .gemini_cli_user_agent(self.default_model.as_ref());
         let generated_user_agent = headers.iter().find_map(|(key, value)| {
             (key.eq_ignore_ascii_case(reqwest::header::USER_AGENT.as_str())
                 && value == &default_user_agent)
                 .then(|| key.clone())
         });
         if let Some(key) = generated_user_agent {
-            headers.insert(key, crate::gemini_cli_user_agent(request.model.as_ref()));
+            headers.insert(
+                key,
+                self.client_identity
+                    .gemini_cli_user_agent(request.model.as_ref()),
+            );
         }
         headers
     }

@@ -750,9 +750,19 @@ impl ProviderStudioSaveError {
     /// Preserve every `anyhow` context/source layer before projecting the
     /// diagnostic into the user-safe Provider Studio failure channel.
     pub(crate) fn other_anyhow(error: anyhow::Error) -> Self {
-        Self::other(agena_failure::diagnostic::format_error_chain(
-            error.as_ref(),
-        ))
+        let diagnostic = agena_failure::diagnostic::format_error_chain(error.as_ref());
+        if matches!(
+            error.downcast_ref::<agena_runtime::RuntimeControlServiceError>(),
+            Some(agena_runtime::RuntimeControlServiceError::Shutdown)
+        ) {
+            return Self::Other(
+                crate::ApplicationError::service_unavailable(diagnostic)
+                    .failure
+                    .as_ref()
+                    .into(),
+            );
+        }
+        Self::other(diagnostic)
     }
 }
 
@@ -789,6 +799,52 @@ fn provider_backend_problem(
         presentation,
     );
     failure.into()
+}
+
+#[cfg(test)]
+mod reload_error_tests {
+    use super::ProviderStudioSaveError;
+    use agena_failure::{FailureCategory, RecoveryDirective, RetryDirective};
+    use agena_runtime::RuntimeControlServiceError;
+
+    #[test]
+    fn nested_reload_context_keeps_shutdown_retry_and_ordinary_failure_details() {
+        for (error, category, retry) in [
+            (
+                RuntimeControlServiceError::Shutdown,
+                FailureCategory::DependencyUnavailable,
+                RetryDirective::Backoff,
+            ),
+            (
+                RuntimeControlServiceError::new("candidate config unreadable"),
+                FailureCategory::Internal,
+                RetryDirective::Unknown,
+            ),
+        ] {
+            let error = anyhow::Error::new(error)
+                .context("failed to reload runtime after provider settings change")
+                .context("save provider draft");
+            let ProviderStudioSaveError::Other(problem) =
+                ProviderStudioSaveError::other_anyhow(error)
+            else {
+                panic!("reload failures belong to the structured problem projection");
+            };
+            assert_eq!(problem.category, category);
+            assert_eq!(problem.retry, retry);
+            assert_eq!(problem.recovery, RecoveryDirective::Retry);
+            if category == FailureCategory::Internal {
+                assert!(problem.user.fallback.contains("save provider draft"));
+                // Public diagnostics condense intermediate wrapper layers;
+                // the operation and actionable root cause must survive.
+                assert!(
+                    problem
+                        .user
+                        .fallback
+                        .contains("candidate config unreadable")
+                );
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

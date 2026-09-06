@@ -9,12 +9,11 @@ use portable_atomic::AtomicU64;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-use agena_api::{
-    Scope,
-    live::{
-        PartResource, RuntimeSignalResource, SessionChangeResource, SessionPartsResource,
-        ToolDetailResource, ToolDetailSection, ToolHumanPresentationResource,
-    },
+#[cfg(any(feature = "ws", feature = "sse"))]
+use agena_api::Scope;
+use agena_api::live::{
+    PartResource, RuntimeSignalResource, SessionChangeResource, SessionPartsResource,
+    ToolDetailResource, ToolDetailSection, ToolHumanPresentationResource,
 };
 use agena_runtime::{RuntimeLiveSignal, RuntimeLiveSignalItem};
 use agena_runtime_contracts::part_content::ToolCallContent;
@@ -147,6 +146,7 @@ fn change_visible_to_user(change: &SessionChange) -> bool {
     }
 }
 
+#[cfg(any(feature = "ws", feature = "sse"))]
 pub(crate) async fn matches_scope(
     item: &LiveItem,
     scope: &Scope,

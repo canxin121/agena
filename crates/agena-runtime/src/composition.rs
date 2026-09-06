@@ -26,6 +26,9 @@ pub(crate) struct PluginCompositionInputs<
     pub(crate) previous_host: PreviousHost,
     pub(crate) previous_config: PreviousConfig,
     pub(crate) mcp_manager: Mcp,
+    pub(crate) callback_base_url: String,
+    pub(crate) callback_dispatcher: agena_plugin_host::PluginCallbackDispatcher,
+    pub(crate) host_client: Arc<dyn agena_plugin_sdk::host_api::HostClient>,
 }
 
 /// Typed inputs for session/service composition. Concrete session, provider,

@@ -63,16 +63,16 @@ where
     }
 
     /// Cancel registered background operations and stop maintenance loops in
-    /// lifecycle order.
-    pub fn shutdown(&self) {
-        self.background_tasks.cancel_all();
-        self.task_control.shutdown();
+    /// lifecycle order. Only the first caller owns shutdown notifications.
+    pub fn shutdown(&self) -> bool {
+        self.background_tasks.shutdown();
+        self.task_control.shutdown()
     }
 }
 
 impl<S, E> Drop for RuntimeControlState<S, E> {
     fn drop(&mut self) {
-        self.background_tasks.cancel_all();
+        self.background_tasks.shutdown();
         self.task_control.shutdown();
     }
 }

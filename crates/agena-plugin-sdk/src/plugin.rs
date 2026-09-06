@@ -13,6 +13,7 @@ use crate::identity::PluginKey;
 use crate::manifest::{PluginManifest, SettingsContract};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 /// Context passed to a plugin at initialization.
 pub struct InitContext {
     pub agena_version: String,
@@ -51,6 +52,22 @@ mod init_context_tests {
         assert!(encoded.get("config").is_none());
         let decoded: InitContext = serde_json::from_value(encoded).expect("decode init context");
         assert_eq!(decoded.settings["mode"], "safe");
+    }
+
+    #[test]
+    fn init_context_rejects_legacy_config_and_unknown_fields() {
+        let valid = serde_json::json!({
+            "agena_version": "test",
+            "workspace_root": "/test",
+            "plugin_id": "example.plugin",
+            "settings": {},
+            "protocol_version": crate::rpc::PROTOCOL_VERSION,
+        });
+        for field in ["config", "unknown"] {
+            let mut params = valid.clone();
+            params[field] = serde_json::json!({});
+            assert!(serde_json::from_value::<InitContext>(params).is_err());
+        }
     }
 }
 

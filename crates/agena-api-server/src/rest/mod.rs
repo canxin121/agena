@@ -404,7 +404,7 @@ pub async fn metrics(State(state): State<AppState>) -> impl IntoResponse {
 pub async fn get_runtime_status(
     State(state): State<AppState>,
 ) -> Result<impl IntoResponse, ServerError> {
-    Ok(Json(state.application().runtime_status_response().await))
+    Ok(Json(state.application().runtime_status_response().await?))
 }
 
 pub async fn get_usage_stats(
@@ -621,27 +621,32 @@ pub async fn plugin_rpc(
 fn server_error_from_runtime_background_task(
     error: agena_runtime::RuntimeBackgroundTaskControlError,
 ) -> ServerError {
-    match error {
-        agena_runtime::RuntimeBackgroundTaskControlError::Shutdown => {
-            ServerError::service_unavailable("runtime is shutting down".to_owned())
-        }
-        agena_runtime::RuntimeBackgroundTaskControlError::NotFound(task_id) => {
-            ServerError::not_found_with_diagnostic(
-                "The background task was not found.",
-                format!("background task `{task_id}` not found"),
-            )
-        }
-        agena_runtime::RuntimeBackgroundTaskControlError::NotRunning(task_id) => {
-            ServerError::conflict_with_diagnostic(
-                "The background task is not running.",
-                format!("background task `{task_id}` is not running"),
-            )
-        }
-        agena_runtime::RuntimeBackgroundTaskControlError::NotCancellable(task_id) => {
-            ServerError::conflict_with_diagnostic(
-                "The background task cannot be cancelled.",
-                format!("background task `{task_id}` cannot be cancelled"),
-            )
+    agena_application::ApplicationError::from(error).into()
+}
+
+#[cfg(test)]
+mod background_task_error_tests {
+    use super::*;
+    use agena_runtime::RuntimeBackgroundTaskControlError as Error;
+    use axum::http::StatusCode;
+
+    #[test]
+    fn control_failures_preserve_retryable_missing_and_conflict_http_statuses() {
+        for (error, expected) in [
+            (
+                Error::Capacity { limit: 64 },
+                StatusCode::SERVICE_UNAVAILABLE,
+            ),
+            (Error::ExecutorUnavailable, StatusCode::SERVICE_UNAVAILABLE),
+            (Error::Shutdown, StatusCode::SERVICE_UNAVAILABLE),
+            (Error::NotFound("missing".into()), StatusCode::NOT_FOUND),
+            (Error::NotRunning("finished".into()), StatusCode::CONFLICT),
+            (Error::NotCancellable("owned".into()), StatusCode::CONFLICT),
+        ] {
+            assert_eq!(
+                server_error_from_runtime_background_task(error).status(),
+                expected
+            );
         }
     }
 }
@@ -658,7 +663,7 @@ async fn reload_settings_if_needed(
         .runtime_control()
         .reload()
         .await
-        .map_err(|error| ServerError::internal_error(&error))?;
+        .map_err(|error| server_error_from_application(error.into()))?;
     METRIC_RUNTIME_RELOADS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     response.reload = Some(ConfigSettingsReloadResponse {
         previous_generation: report.previous_generation,

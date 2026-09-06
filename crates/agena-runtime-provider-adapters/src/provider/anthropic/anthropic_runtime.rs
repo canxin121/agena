@@ -749,7 +749,7 @@ impl ModelRuntime for AnthropicAdapter {
 mod tests {
     use super::*;
     use crate::provider::ManagedCredential;
-    use tokio::io::AsyncWriteExt;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     #[tokio::test]
     async fn list_models_exposes_the_original_id_for_cpa_anthropic_aliases() {
@@ -759,6 +759,17 @@ mod tests {
         let address = listener.local_addr().expect("fixture address");
         let server = tokio::spawn(async move {
             let (mut stream, _) = listener.accept().await.expect("accept request");
+            // Drain the request before closing the socket after the response.
+            // Closing with unread request bytes can reset the connection and
+            // discard the response body on macOS.
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 1024];
+            while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                let read = stream.read(&mut buffer).await.expect("read request");
+                assert!(read > 0, "request ended before its headers");
+                request.extend_from_slice(&buffer[..read]);
+            }
+            assert!(request.starts_with(b"GET /v1/models "));
             let payload = serde_json::json!({
                 "data": [{
                     "id": "claude-fable-5-dd-arret-6.5-tpg",

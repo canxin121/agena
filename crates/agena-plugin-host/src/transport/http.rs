@@ -1,15 +1,13 @@
 //! HTTP transport — POSTs JSON-RPC envelopes to a remote plugin server.
 
 use portable_atomic::AtomicI64;
-use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
 use futures_util::StreamExt as _;
 use reqwest::Client;
-use tokio::sync::{Mutex, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
@@ -17,37 +15,28 @@ use crate::config::HttpAuth;
 use crate::error::TransportError;
 use crate::sdk::PluginError;
 use crate::sdk::rpc::{JsonRpcVersion, Request, RequestId, Response, ResponsePayload, method};
-use crate::sdk::{
-    ToolInvokeInput, ToolInvokeStreamHandle, ToolStreamChunk, ToolStreamEnd, ToolStreamError,
-};
+use crate::sdk::{ToolInvokeInput, ToolInvokeStreamHandle};
 use crate::transport::{PluginTransport, ToolStreamHandle};
 
+mod hosted;
+mod streams;
+use streams::{StreamEvent, StreamRegistry};
+
 const MAX_HTTP_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
-const MAX_BUFFERED_STREAMS: usize = 128;
-const MAX_BUFFERED_STREAM_EVENTS: usize = 64;
 
 /// Plugin transport over HTTP callbacks.
 pub struct HttpTransport {
     client: Client,
     url: Url,
     auth_header: Option<String>,
-    stream_callbacks: bool,
+    stream_callbacks: AtomicBool,
+    binding: std::sync::Mutex<Option<hosted::HttpBinding>>,
+    handoff: tokio::sync::Mutex<()>,
     next_id: AtomicI64,
-    active_streams: Arc<Mutex<HashMap<String, ActiveStreamState>>>,
-    buffered_streams: Arc<Mutex<HashMap<String, Vec<BufferedStreamEvent>>>>,
+    streams: Arc<StreamRegistry>,
     shutdown: CancellationToken,
-}
-
-struct ActiveStreamState {
-    chunks: mpsc::Sender<ToolStreamChunk>,
-    end: oneshot::Sender<Result<ToolStreamEnd, PluginError>>,
-    monitor_stop: CancellationToken,
-}
-
-enum BufferedStreamEvent {
-    Chunk(ToolStreamChunk),
-    End(ToolStreamEnd),
-    Error(ToolStreamError),
+    instance_id: String,
+    expected_revision: std::sync::Mutex<Option<String>>,
 }
 
 impl HttpTransport {
@@ -84,11 +73,14 @@ impl HttpTransport {
                 .expect("plugin HTTP client with static configuration should build"),
             url,
             auth_header,
-            stream_callbacks,
+            stream_callbacks: AtomicBool::new(stream_callbacks),
+            binding: std::sync::Mutex::new(None),
+            handoff: tokio::sync::Mutex::new(()),
             next_id: AtomicI64::new(1),
-            active_streams: Arc::new(Mutex::new(HashMap::new())),
-            buffered_streams: Arc::new(Mutex::new(HashMap::new())),
+            streams: Arc::new(StreamRegistry::default()),
             shutdown: CancellationToken::new(),
+            instance_id: uuid::Uuid::new_v4().simple().to_string(),
+            expected_revision: std::sync::Mutex::new(None),
         }
     }
 
@@ -97,7 +89,22 @@ impl HttpTransport {
             .client
             .post(self.url.clone())
             .timeout(Duration::from_secs(60))
+            .header(
+                crate::sdk::drivers::http::INSTANCE_HEADER,
+                &self.instance_id,
+            )
             .json(req);
+        if req.method == method::META_INIT {
+            let revision = self
+                .expected_revision
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .clone();
+            builder = builder.header(
+                crate::sdk::drivers::http::EXPECTED_REVISION_HEADER,
+                revision.as_deref().unwrap_or("-"),
+            );
+        }
         if let Some(h) = &self.auth_header {
             builder = builder.header("authorization", h);
         }
@@ -131,7 +138,13 @@ impl HttpTransport {
                 }
                 body.extend_from_slice(&chunk);
             }
-            serde_json::from_slice(&body).map_err(TransportError::from)
+            let response: Response = serde_json::from_slice(&body)?;
+            if response.id != req.id {
+                return Err(TransportError::Rpc(
+                    "plugin HTTP response ID does not match its request".into(),
+                ));
+            }
+            Ok(response)
         };
         tokio::select! {
             biased;
@@ -145,188 +158,68 @@ impl HttpTransport {
     fn next_request_id(&self) -> i64 {
         self.next_id.fetch_add(1, Ordering::Relaxed)
     }
-
-    async fn deliver_stream_chunk(&self, chunk: ToolStreamChunk) {
-        let stream_id = chunk.stream_id.clone();
-        let sender = {
-            let active = self.active_streams.lock().await;
-            active.get(&stream_id).map(|state| state.chunks.clone())
-        };
-        if let Some(sender) = sender {
-            match sender.try_send(chunk) {
-                Ok(()) => {}
-                Err(mpsc::error::TrySendError::Closed(_)) => {
-                    self.remove_abandoned_stream(stream_id.as_str()).await;
-                }
-                Err(mpsc::error::TrySendError::Full(_)) => {
-                    let state = self.active_streams.lock().await.remove(stream_id.as_str());
-                    if let Some(state) = state {
-                        state.monitor_stop.cancel();
-                        if state
-                            .end
-                            .send(Err(PluginError::internal(
-                                "plugin stream consumer exceeded the 64-chunk buffer",
-                            )))
-                            .is_err()
-                        {
-                            tracing::debug!(
-                                stream_id,
-                                "overflowed HTTP plugin stream terminal receiver was already dropped"
-                            );
-                        }
-                    }
-                }
-            }
-            return;
-        }
-        let mut buffered = self.buffered_streams.lock().await;
-        if !buffered.contains_key(stream_id.as_str()) && buffered.len() >= MAX_BUFFERED_STREAMS {
-            tracing::warn!(
-                stream_id,
-                "dropping an HTTP plugin stream event because the pre-registration buffer is full"
-            );
-            return;
-        }
-        let events = buffered.entry(stream_id.clone()).or_default();
-        if events.len() >= MAX_BUFFERED_STREAM_EVENTS {
-            events.clear();
-            events.push(BufferedStreamEvent::Error(ToolStreamError {
-                stream_id,
-                error: PluginError::internal(
-                    "plugin stream exceeded the 64-event pre-registration buffer",
-                ),
-            }));
-        } else {
-            events.push(BufferedStreamEvent::Chunk(chunk));
-        }
-    }
-
-    async fn finish_stream(&self, stream_id: String, result: Result<ToolStreamEnd, PluginError>) {
-        let state = {
-            let mut active = self.active_streams.lock().await;
-            active.remove(&stream_id)
-        };
-        if let Some(state) = state {
-            state.monitor_stop.cancel();
-            if state.end.send(result).is_err() {
-                tracing::debug!(
-                    stream_id,
-                    "HTTP plugin stream terminal-result receiver was dropped"
-                );
-            }
-            return;
-        }
-        let event = match result {
-            Ok(end) => BufferedStreamEvent::End(end),
-            Err(error) => BufferedStreamEvent::Error(ToolStreamError {
-                stream_id: stream_id.clone(),
-                error,
-            }),
-        };
-        let mut buffered = self.buffered_streams.lock().await;
-        if !buffered.contains_key(stream_id.as_str()) && buffered.len() >= MAX_BUFFERED_STREAMS {
-            tracing::warn!(
-                stream_id,
-                "dropping an HTTP plugin stream terminal event because the pre-registration buffer is full"
-            );
-            return;
-        }
-        let events = buffered.entry(stream_id).or_default();
-        if events.len() >= MAX_BUFFERED_STREAM_EVENTS {
-            events.clear();
-        }
-        events.push(event);
-    }
-
-    async fn register_stream(
-        &self,
-        stream_id: String,
-        chunks: mpsc::Sender<ToolStreamChunk>,
-        end: oneshot::Sender<Result<ToolStreamEnd, PluginError>>,
-    ) {
-        let monitor_stop = CancellationToken::new();
-        {
-            let mut active = self.active_streams.lock().await;
-            active.insert(
-                stream_id.clone(),
-                ActiveStreamState {
-                    chunks: chunks.clone(),
-                    end,
-                    monitor_stop: monitor_stop.clone(),
-                },
-            );
-        }
-        let weak_active = Arc::downgrade(&self.active_streams);
-        let weak_buffered = Arc::downgrade(&self.buffered_streams);
-        let shutdown = self.shutdown.clone();
-        let abandoned_stream_id = stream_id.clone();
-        tokio::spawn(async move {
-            tokio::select! {
-                biased;
-                _ = monitor_stop.cancelled() => {}
-                _ = shutdown.cancelled() => {}
-                _ = chunks.closed() => {
-                    if let Some(active) = weak_active.upgrade()
-                        && let Some(state) = active.lock().await.remove(abandoned_stream_id.as_str())
-                    {
-                        state.monitor_stop.cancel();
-                    }
-                    if let Some(buffered) = weak_buffered.upgrade() {
-                        buffered.lock().await.remove(abandoned_stream_id.as_str());
-                    }
-                }
-            }
-        });
-        self.drain_buffered_stream_events(stream_id).await;
-    }
-
-    async fn remove_abandoned_stream(&self, stream_id: &str) {
-        if let Some(state) = self.active_streams.lock().await.remove(stream_id) {
-            state.monitor_stop.cancel();
-        }
-        self.buffered_streams.lock().await.remove(stream_id);
-    }
-
-    async fn drain_buffered_stream_events(&self, stream_id: String) {
-        let events = {
-            let mut buffered = self.buffered_streams.lock().await;
-            buffered.remove(&stream_id).unwrap_or_default()
-        };
-        for event in events {
-            match event {
-                BufferedStreamEvent::Chunk(chunk) => self.deliver_stream_chunk(chunk).await,
-                BufferedStreamEvent::End(end) => {
-                    self.finish_stream(stream_id.clone(), Ok(end)).await
-                }
-                BufferedStreamEvent::Error(err) => {
-                    self.finish_stream(stream_id.clone(), Err(err.error)).await;
-                }
-            }
-        }
-    }
-
-    async fn fail_active_streams(&self, error: PluginError) {
-        let active = {
-            let mut active = self.active_streams.lock().await;
-            active.drain().map(|(_, state)| state).collect::<Vec<_>>()
-        };
-        {
-            let mut buffered = self.buffered_streams.lock().await;
-            buffered.clear();
-        }
-        for state in active {
-            state.monitor_stop.cancel();
-            if state.end.send(Err(error.clone())).is_err() {
-                tracing::debug!(
-                    "failed HTTP plugin stream receiver was already dropped during transport shutdown"
-                );
-            }
-        }
-    }
 }
 
 #[async_trait]
 impl PluginTransport for HttpTransport {
+    async fn bind_host(
+        &self,
+        host: Arc<crate::host::HostHandle>,
+        scope: Arc<crate::effect_scope::PluginEffectScope>,
+    ) -> Result<(), TransportError> {
+        self.bind_initial_host(host, scope).await
+    }
+
+    async fn initialize(
+        &self,
+        initialization: super::initialization::PluginInitialization,
+    ) -> Result<crate::sdk::InitOutcome, TransportError> {
+        let state = self
+            .dispatch(method::META_HTTP_STATE, serde_json::json!({}))
+            .await?;
+        if !state.is_object() {
+            return Err(TransportError::Rpc(
+                "HTTP instance state must be an object".into(),
+            ));
+        }
+        let state: crate::sdk::drivers::http::HttpInstanceState = serde_json::from_value(state)?;
+        if state.version != crate::sdk::drivers::http::HTTP_INSTANCE_VERSION {
+            return Err(TransportError::Rpc(
+                "HTTP plugin instance protocol is incompatible".into(),
+            ));
+        }
+        *self
+            .expected_revision
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = state.revision;
+        let outcome = initialization.initialize(self).await?;
+        if let Some(binding) = self.binding().as_mut() {
+            binding.initialized = true;
+        }
+        Ok(outcome)
+    }
+
+    async fn can_reuse(&self, owner: &Arc<crate::effect_scope::PluginEffectScope>) -> bool {
+        self.reusable_binding(owner).is_some()
+    }
+
+    async fn try_rebind_host(
+        &self,
+        host: Arc<crate::host::HostHandle>,
+        scope: Arc<crate::effect_scope::PluginEffectScope>,
+        previous_scope: Arc<crate::effect_scope::PluginEffectScope>,
+        _: super::initialization::PluginInitialization,
+    ) -> Result<bool, TransportError> {
+        tokio::time::timeout(
+            Duration::from_secs(30),
+            self.rebind_host(host, scope, previous_scope),
+        )
+        .await
+        .map_err(|error| {
+            TransportError::timeout_error("HTTP plugin host handoff exceeded 30 seconds", &error)
+        })?
+    }
+
     async fn dispatch(
         &self,
         method: &str,
@@ -339,7 +232,7 @@ impl PluginTransport for HttpTransport {
             params: Some(params),
             context: crate::sdk::host_api::current_host_callback_context(),
         };
-        let resp = self.send(&req).await?;
+        let resp = self.run_bound(&req, self.send(&req)).await?;
         match resp.payload {
             ResponsePayload::Ok { result } => Ok(result),
             ResponsePayload::Err { error } => {
@@ -353,39 +246,38 @@ impl PluginTransport for HttpTransport {
         &self,
         input: ToolInvokeInput,
     ) -> Result<Option<ToolStreamHandle>, TransportError> {
-        if !self.stream_callbacks {
+        if !self.stream_callbacks.load(Ordering::Acquire) {
             return Ok(None);
         }
+        let context = crate::sdk::host_api::current_host_callback_context().unwrap_or_default();
         let req = Request {
             jsonrpc: JsonRpcVersion,
             id: RequestId::Num(self.next_request_id()),
             method: method::HOOK_TOOL_INVOKE_STREAM.to_string(),
             params: Some(serde_json::to_value(&input)?),
-            context: crate::sdk::host_api::current_host_callback_context(),
+            context: Some(context),
         };
-        let resp = self.send(&req).await?;
-        let handle: ToolInvokeStreamHandle = match resp.payload {
-            ResponsePayload::Ok { result } => {
-                serde_json::from_value(result).map_err(TransportError::from)?
-            }
-            ResponsePayload::Err { error } => {
-                let pe = super::plugin_error_from_rpc(
-                    error,
-                    "decode HTTP plugin streaming-dispatch error",
-                );
-                return Err(TransportError::Plugin(pe));
-            }
-        };
+        self.run_bound(&req, async {
+            let pending = self
+                .streams
+                .begin(req.context.clone().unwrap_or_default())?;
+            let resp = self.send(&req).await?;
+            let handle: ToolInvokeStreamHandle = match resp.payload {
+                ResponsePayload::Ok { result } => {
+                    serde_json::from_value(result).map_err(TransportError::from)?
+                }
+                ResponsePayload::Err { error } => {
+                    let pe = super::plugin_error_from_rpc(
+                        error,
+                        "decode HTTP plugin streaming-dispatch error",
+                    );
+                    return Err(TransportError::Plugin(pe));
+                }
+            };
 
-        let (chunk_tx, chunk_rx) = mpsc::channel::<ToolStreamChunk>(64);
-        let (end_tx, end_rx) = oneshot::channel::<Result<ToolStreamEnd, PluginError>>();
-        self.register_stream(handle.stream_id.clone(), chunk_tx, end_tx)
-            .await;
-        Ok(Some(ToolStreamHandle {
-            stream_id: handle.stream_id,
-            chunks: chunk_rx,
-            end: end_rx,
-        }))
+            Ok(Some(pending.register(handle.stream_id)?))
+        })
+        .await
     }
 
     async fn ingest_stream_event(
@@ -393,41 +285,40 @@ impl PluginTransport for HttpTransport {
         method: &str,
         params: serde_json::Value,
     ) -> Result<bool, TransportError> {
-        match method {
-            method::TOOL_STREAM_CHUNK => {
-                let chunk: ToolStreamChunk =
-                    serde_json::from_value(params).map_err(TransportError::from)?;
-                self.deliver_stream_chunk(chunk).await;
-                Ok(true)
-            }
-            method::TOOL_STREAM_END => {
-                let end: ToolStreamEnd =
-                    serde_json::from_value(params).map_err(TransportError::from)?;
-                self.finish_stream(end.stream_id.clone(), Ok(end)).await;
-                Ok(true)
-            }
-            method::TOOL_STREAM_ERROR => {
-                let err: ToolStreamError =
-                    serde_json::from_value(params).map_err(TransportError::from)?;
-                self.finish_stream(err.stream_id.clone(), Err(err.error))
-                    .await;
-                Ok(true)
-            }
-            _ => Ok(false),
+        if !matches!(
+            method,
+            method::TOOL_STREAM_CHUNK | method::TOOL_STREAM_END | method::TOOL_STREAM_ERROR
+        ) {
+            return Ok(false);
         }
+        let context = params
+            .get("context")
+            .filter(|context| context.is_object())
+            .ok_or_else(|| {
+                PluginError::invalid_params(
+                    "HTTP plugin stream callback context must be a JSON object",
+                )
+            })?;
+        let context = serde_json::from_value(context.clone())?;
+        let event = match method {
+            method::TOOL_STREAM_CHUNK => StreamEvent::Chunk(serde_json::from_value(params)?),
+            method::TOOL_STREAM_END => StreamEvent::End(serde_json::from_value(params)?),
+            method::TOOL_STREAM_ERROR => StreamEvent::Error(serde_json::from_value(params)?),
+            _ => unreachable!("stream method was checked above"),
+        };
+        self.streams.ingest(context, event)?;
+        Ok(true)
     }
 
     async fn close(&self) -> Result<(), TransportError> {
-        self.shutdown.cancel();
-        self.fail_active_streams(PluginError::internal("plugin transport closed"))
-            .await;
+        self.close_local("plugin transport closed");
         Ok(())
     }
 }
 
 impl Drop for HttpTransport {
     fn drop(&mut self) {
-        self.shutdown.cancel();
+        self.close_local("plugin transport dropped");
     }
 }
 
@@ -461,70 +352,4 @@ fn base64_encode(data: &[u8]) -> String {
         }
     }
     out
-}
-
-#[cfg(test)]
-mod tests {
-    use std::collections::BTreeMap;
-    use std::time::Duration;
-
-    use super::{HttpTransport, PluginTransport, ToolStreamChunk};
-    use crate::config::HttpAuth;
-
-    fn transport() -> HttpTransport {
-        HttpTransport::new(
-            "http://127.0.0.1:1/rpc".parse().expect("test URL"),
-            HttpAuth::None,
-            &|_| None,
-            true,
-        )
-    }
-
-    #[tokio::test]
-    async fn slow_stream_consumer_fails_instead_of_blocking_event_ingress() {
-        let transport = transport();
-        let (chunks, _chunk_rx) = tokio::sync::mpsc::channel(64);
-        let (end, end_rx) = tokio::sync::oneshot::channel();
-        transport
-            .register_stream("stream-1".to_string(), chunks, end)
-            .await;
-
-        for index in 0..=64 {
-            transport
-                .deliver_stream_chunk(ToolStreamChunk {
-                    stream_id: "stream-1".to_string(),
-                    text_delta: Some(format!("chunk-{index}")),
-                    metadata: BTreeMap::new(),
-                })
-                .await;
-        }
-
-        let result = tokio::time::timeout(Duration::from_secs(1), end_rx)
-            .await
-            .expect("overflow is reported promptly")
-            .expect("terminal sender remains available");
-        assert!(result.is_err());
-        assert!(transport.active_streams.lock().await.is_empty());
-    }
-
-    #[tokio::test]
-    async fn dropping_stream_receivers_reclaims_registration() {
-        let transport = transport();
-        let (chunks, chunk_rx) = tokio::sync::mpsc::channel(64);
-        let (end, end_rx) = tokio::sync::oneshot::channel();
-        transport
-            .register_stream("stream-2".to_string(), chunks, end)
-            .await;
-
-        drop(chunk_rx);
-        drop(end_rx);
-        tokio::time::timeout(Duration::from_secs(1), async {
-            while !transport.active_streams.lock().await.is_empty() {
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .expect("abandoned stream registration is reclaimed");
-        transport.close().await.expect("transport closes");
-    }
 }

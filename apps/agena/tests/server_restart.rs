@@ -1,5 +1,7 @@
 #![cfg(unix)]
 
+mod support;
+
 use std::{
     collections::VecDeque,
     fs::OpenOptions,
@@ -350,7 +352,7 @@ fn spawn_server(
         .open(log_path)
         .expect("open server integration log");
     let stderr = log.try_clone().expect("clone server integration log");
-    let mut command = ProcessCommand::new(env!("CARGO_BIN_EXE_agena"));
+    let mut command = support::isolated_server_command(server_data_dir);
     command
         .arg("--database-path")
         .arg(database_path)
@@ -539,6 +541,11 @@ fn write_isolated_project_config(workspace: &Path, provider_base_url: &str) {
     std::fs::create_dir_all(&config_dir).expect("create project config directory");
     let config = serde_json::json!({
         "providers": {
+            "default_selection": {
+                "provider": "fake",
+                "adapter": "openai_responses",
+                "model": "fake-model"
+            },
             "fake": {
                 "auth": {
                     "mode": "api",

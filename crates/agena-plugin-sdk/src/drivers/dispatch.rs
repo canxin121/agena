@@ -336,6 +336,14 @@ impl<P: Plugin> PluginDispatcher<P> {
     /// [`ToolStreamEnd`] (or error). Transports translate these into the
     /// `tool.stream.chunk` / `tool.stream.end` notifications.
     pub fn dispatch_stream(self: &std::sync::Arc<Self>, input: ToolInvokeInput) -> StreamHandle {
+        self.dispatch_stream_with_lifetime(input, ())
+    }
+
+    pub(crate) fn dispatch_stream_with_lifetime(
+        self: &std::sync::Arc<Self>,
+        input: ToolInvokeInput,
+        lifetime: impl Send + 'static,
+    ) -> StreamHandle {
         let stream_id = format!("stream-{}", _random_id());
         let (tx, rx) = tokio::sync::mpsc::channel::<ToolStreamChunk>(64);
         let (mut end_tx, end_rx) = tokio::sync::oneshot::channel::<Result<ToolStreamEnd>>();
@@ -343,6 +351,9 @@ impl<P: Plugin> PluginDispatcher<P> {
         let plugin = std::sync::Arc::clone(&self.plugin);
         let inherited_context = crate::host_api::current_host_callback_context();
         tokio::spawn(async move {
+            // Lifecycle owners wait until the plugin future itself is dropped,
+            // including cancellation triggered by a closed terminal receiver.
+            let _lifetime = lifetime;
             let ctx = crate::host_api::HostCallbackContext {
                 session_id: Some(input.session_id),
                 call_id: Some(input.call_id),

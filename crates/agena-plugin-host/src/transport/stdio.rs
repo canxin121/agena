@@ -11,17 +11,16 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
-use agena_process::ManagedChild;
 use agena_stdio_codec::ContentLengthCodec;
 use async_trait::async_trait;
 use bytes::Bytes;
 use dashmap::DashMap;
-use futures_util::{SinkExt as _, StreamExt as _};
-use tokio::io::{AsyncBufReadExt, BufReader};
+use futures_util::{FutureExt as _, SinkExt as _, StreamExt as _};
 use tokio::process::Command;
 use tokio::sync::{Mutex, Semaphore, mpsc, oneshot};
 use tokio_util::codec::{FramedRead, FramedWrite};
 use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
 
 use crate::config::{RestartMode, RestartPolicy};
 use crate::error::TransportError;
@@ -52,14 +51,24 @@ const HOST_CALLBACK_CONCURRENCY: usize = 64;
 const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
 const MAX_BUFFERED_STREAMS: usize = 128;
-const MAX_BUFFERED_STREAM_EVENTS: usize = 64;
+const MAX_BUFFERED_STREAM_CHUNKS: usize = 64;
 
-#[derive(Clone)]
+mod hosted;
+mod lifecycle;
+mod stderr;
+mod streams;
+#[cfg(feature = "signing")]
+mod verification;
+
 struct SpawnSpec {
     command: String,
     args: Vec<String>,
     env: HashMap<String, String>,
     cwd: Option<PathBuf>,
+    #[cfg(feature = "signing")]
+    sha256: Option<String>,
+    #[cfg(feature = "signing")]
+    resolved_command: std::sync::OnceLock<Result<verification::ResolvedCommand, String>>,
 }
 
 /// Plugin transport over a stdio subprocess.
@@ -80,33 +89,31 @@ struct Inner {
     child_generation: AtomicU64,
     next_id: AtomicI64,
     pending: DashMap<RequestId, oneshot::Sender<Response>>,
-    active_streams: Mutex<HashMap<String, ActiveStreamState>>,
-    buffered_streams: Mutex<HashMap<String, Vec<BufferedStreamEvent>>>,
+    streams: Mutex<streams::StreamRegistry>,
     host_handler: Mutex<Option<HostHandler>>,
     host_call_slots: Arc<Semaphore>,
     shutdown: CancellationToken,
     closed: std::sync::atomic::AtomicBool,
+    close_outcome: Mutex<Option<Result<(), String>>>,
+    hosted: Mutex<Option<hosted::HostedState>>,
     restart_attempts: AtomicU32,
     plugin_id: Option<PluginKey>,
-    status_sink: Option<Arc<StatusRegistry>>,
+    status_sink: std::sync::RwLock<Option<Arc<StatusRegistry>>>,
     log_sink: Option<Arc<PluginLogStore>>,
 }
 
 struct ChildHandles {
     generation: u64,
-    child: ManagedChild,
     writer: mpsc::Sender<WriteRequest>,
+    stop: CancellationToken,
+    ready: bool,
+    finished:
+        futures_util::future::Shared<futures_util::future::BoxFuture<'static, Result<(), String>>>,
 }
 
 struct WriteRequest {
     body: Bytes,
     completion: oneshot::Sender<Result<(), String>>,
-}
-
-struct ActiveStreamState {
-    chunks: mpsc::Sender<ToolStreamChunk>,
-    end: oneshot::Sender<Result<ToolStreamEnd, PluginError>>,
-    monitor_stop: CancellationToken,
 }
 
 /// Remove an in-flight request slot when its dispatch future is dropped by a
@@ -129,13 +136,6 @@ impl Drop for PendingRequestGuard {
     }
 }
 
-#[derive(Debug)]
-enum BufferedStreamEvent {
-    Chunk(ToolStreamChunk),
-    End(ToolStreamEnd),
-    Error(ToolStreamError),
-}
-
 impl StdioTransport {
     pub async fn spawn(
         command: &str,
@@ -151,6 +151,7 @@ impl StdioTransport {
             cwd,
             host_handler,
             RestartPolicy::default(),
+            None,
             None,
             None,
             None,
@@ -176,6 +177,7 @@ impl StdioTransport {
             None,
             None,
             None,
+            None,
         )
         .await
     }
@@ -191,31 +193,43 @@ impl StdioTransport {
         plugin_id: Option<PluginKey>,
         status_sink: Option<Arc<StatusRegistry>>,
         log_sink: Option<Arc<PluginLogStore>>,
+        sha256: Option<&str>,
     ) -> Result<Self, TransportError> {
+        #[cfg(not(feature = "signing"))]
+        if sha256.is_some() {
+            return Err(TransportError::Io(
+                "stdio.sha256 set but the `signing` feature is disabled".into(),
+            ));
+        }
         let spawn_spec = SpawnSpec {
             command: command.to_string(),
             args: args.to_vec(),
             env: env.clone(),
             cwd: cwd.cloned(),
+            #[cfg(feature = "signing")]
+            sha256: sha256.map(str::to_owned),
+            #[cfg(feature = "signing")]
+            resolved_command: Default::default(),
         };
 
         let inner = Arc::new(Inner {
-            spawn_spec: spawn_spec.clone(),
+            spawn_spec,
             restart_policy,
             handles: Mutex::new(None),
             spawn_lock: Mutex::new(()),
             child_generation: AtomicU64::new(0),
             next_id: AtomicI64::new(1),
             pending: DashMap::new(),
-            active_streams: Mutex::new(HashMap::new()),
-            buffered_streams: Mutex::new(HashMap::new()),
+            streams: Mutex::new(streams::StreamRegistry::default()),
             host_handler: Mutex::new(host_handler),
             host_call_slots: Arc::new(Semaphore::new(HOST_CALLBACK_CONCURRENCY)),
             shutdown: CancellationToken::new(),
             closed: std::sync::atomic::AtomicBool::new(false),
+            close_outcome: Mutex::new(None),
+            hosted: Mutex::new(None),
             restart_attempts: AtomicU32::new(0),
             plugin_id,
-            status_sink,
+            status_sink: std::sync::RwLock::new(status_sink),
             log_sink,
         });
 
@@ -292,7 +306,59 @@ impl Inner {
             }
         }
 
-        let mut cmd = Command::new(&self.spawn_spec.command);
+        let (command, cwd) = (
+            PathBuf::from(&self.spawn_spec.command),
+            self.spawn_spec.cwd.clone(),
+        );
+        #[cfg(feature = "signing")]
+        let (command, cwd) = if let Some(expected) = self.spawn_spec.sha256.clone() {
+            let this = Arc::clone(&self);
+            let verification = tokio::task::spawn_blocking(move || {
+                let resolved = this
+                    .spawn_spec
+                    .resolved_command
+                    .get_or_init(|| {
+                        verification::resolve(
+                            &this.spawn_spec.command,
+                            &this.spawn_spec.env,
+                            this.spawn_spec.cwd.as_deref(),
+                        )
+                    })
+                    .clone()?;
+                crate::loader::verify_sha256(&resolved.executable, &expected)?;
+                Ok::<_, String>(resolved)
+            })
+            .await
+            .map_err(|error| format!("stdio executable verification worker failed: {error}"))
+            .and_then(|result| result);
+            let resolved = match verification {
+                Ok(resolved) => resolved,
+                Err(error) => {
+                    self.record_spawn_failure(&error);
+                    return Err(TransportError::Io(error));
+                }
+            };
+            // A close may arrive while the executable is being hashed. Its
+            // cancellation must prevent this generation from starting.
+            if self.closed.load(Ordering::SeqCst) {
+                return Err(TransportError::disconnected(
+                    "stdio plugin closed during executable verification",
+                ));
+            }
+            (resolved.executable, Some(resolved.cwd))
+        } else {
+            (command, cwd)
+        };
+        let restart_initialization = if is_restart {
+            self.hosted
+                .lock()
+                .await
+                .as_ref()
+                .and_then(|state| state.initialization.clone())
+        } else {
+            None
+        };
+        let mut cmd = Command::new(command);
         cmd.args(&self.spawn_spec.args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -300,22 +366,14 @@ impl Inner {
         for (k, v) in &self.spawn_spec.env {
             cmd.env(k, v);
         }
-        if let Some(cwd) = &self.spawn_spec.cwd {
+        if let Some(cwd) = &cwd {
             cmd.current_dir(cwd);
         }
         let mut child = match agena_process::spawn(cmd) {
             Ok(child) => child,
             Err(err) => {
                 let message = err.to_string();
-                self.record_status(|sink, plugin_id| {
-                    sink.record_spawn_failure(plugin_id, message.clone());
-                });
-                self.record_log(
-                    "error",
-                    "host",
-                    format!("spawn failed: {message}"),
-                    serde_json::Value::Null,
-                );
+                self.record_spawn_failure(&message);
                 return Err(err.into());
             }
         };
@@ -335,8 +393,11 @@ impl Inner {
         // mailbox preserves frame ordering and applies backpressure without
         // coupling a blocked pipe write to the child/restart state mutex.
         let (writer, mut write_requests) = mpsc::channel::<WriteRequest>(64);
-        let writer_shutdown = self.shutdown.clone();
-        tokio::spawn(async move {
+        let tasks = TaskTracker::new();
+        let generation_stop = self.shutdown.child_token();
+        let writer_shutdown = generation_stop.clone();
+        let (writer_failed_tx, writer_failed) = oneshot::channel();
+        tasks.spawn(async move {
             let mut stdin = FramedWrite::new(stdin, ContentLengthCodec::new(MAX_FRAME_BYTES));
             loop {
                 let request = tokio::select! {
@@ -378,191 +439,142 @@ impl Inner {
                             )
                         })
                     });
-                let failed = result.is_err();
+                let failure = result.as_ref().err().cloned();
                 if request.completion.send(result).is_err() {
                     tracing::debug!(
                         target: "agena_plugin_host::stdio",
                         "plugin stdin write-result receiver was dropped"
                     );
                 }
-                if failed {
+                if let Some(error) = failure {
+                    let _ = writer_failed_tx.send(error);
                     break;
                 }
             }
         });
 
-        // Publish lifecycle state before a short-lived child can make its
-        // stdout reader observe EOF. Otherwise the exit task can run while
-        // handles is still None, then startup publishes an already-dead child.
+        // Publish handles and status before a short-lived child can exit.
+        let (finished_tx, finished) = oneshot::channel();
+        let finished = async move {
+            finished.await.map_err(|error| {
+                format!("stdio plugin supervisor stopped before cleanup: {error}")
+            })?
+        }
+        .boxed()
+        .shared();
         *self.handles.lock().await = Some(ChildHandles {
             generation,
-            child,
             writer,
+            stop: generation_stop.clone(),
+            ready: restart_initialization.is_none(),
+            finished,
         });
+        if restart_initialization.is_none() {
+            self.record_status(|sink, plugin_id| sink.record_started(plugin_id, pid, is_restart));
+        }
+        self.record_log(
+            "info",
+            "host",
+            format!(
+                "plugin {} (pid={})",
+                if is_restart { "restarted" } else { "started" },
+                pid.unwrap_or_default()
+            ),
+            serde_json::Value::Null,
+        );
 
-        // stdout reader
+        let (reader_finished_tx, reader_finished) = oneshot::channel();
         {
             let this = Arc::clone(&self);
-            tokio::spawn(async move {
+            let stop = generation_stop.clone();
+            let callbacks = tasks.clone();
+            tasks.spawn(async move {
                 let mut reader = FramedRead::new(stdout, ContentLengthCodec::new(MAX_FRAME_BYTES));
-                loop {
+                let outcome = loop {
                     let frame = tokio::select! {
                         biased;
-                        _ = this.shutdown.cancelled() => break,
+                        _ = stop.cancelled() => return,
                         frame = reader.next() => frame,
                     };
                     match frame {
                         Some(Ok(body)) => match serde_json::from_slice::<Frame>(body.as_ref()) {
-                            Ok(frame) => this.handle_inbound(frame).await,
+                            Ok(frame) => {
+                                tokio::select! {
+                                    biased;
+                                    _ = stop.cancelled() => return,
+                                    _ = this.handle_inbound(frame, generation, &stop, &callbacks) => {}
+                                }
+                            }
                             Err(error) => {
-                                tracing::warn!(
-                                    target: "agena_plugin_host::stdio",
+                                break lifecycle::ReaderEnd::Failure(format!(
                                     "stdio JSON-RPC decode error: {error}"
-                                );
-                                break;
+                                ));
                             }
                         },
-                        None => break,
+                        None => break lifecycle::ReaderEnd::Eof,
                         Some(Err(error)) => {
-                            tracing::warn!(
-                                target: "agena_plugin_host::stdio",
+                            break lifecycle::ReaderEnd::Failure(format!(
                                 "stdio framing error: {error}"
-                            );
-                            break;
+                            ));
                         }
                     }
-                }
-                // Reader exited -> child likely gone. Tear down and respawn.
-                this.handle_child_exit(generation).await;
+                };
+                let _ = reader_finished_tx.send(outcome);
             });
         }
-
-        // stderr drain → tracing
         if let Some(stderr) = stderr {
-            let plugin_id = self.plugin_id.clone();
-            let log_sink = self.log_sink.clone();
-            let shutdown = self.shutdown.clone();
-            tokio::spawn(async move {
-                let mut reader = BufReader::new(stderr).lines();
-                loop {
-                    let line = tokio::select! {
-                        biased;
-                        _ = shutdown.cancelled() => return,
-                        line = reader.next_line() => line,
-                    };
-                    let Ok(Some(line)) = line else { return };
-                    tracing::info!(target: "agena_plugin_host::stdio_err", "{line}");
-                    if let (Some(sink), Some(plugin_id)) = (log_sink.as_ref(), plugin_id.as_ref()) {
-                        sink.append(
-                            plugin_id,
-                            "info",
-                            "stderr",
-                            line.clone(),
-                            serde_json::Value::Null,
-                        );
-                    }
+            tasks.spawn(Arc::clone(&self).drain_stderr(stderr, generation_stop.clone()));
+        }
+        tasks.close();
+        tokio::spawn(Arc::clone(&self).supervise_child(
+            generation,
+            child,
+            lifecycle::ChildTasks {
+                reader: reader_finished,
+                writer: writer_failed,
+                stop: generation_stop.clone(),
+                tracker: tasks,
+            },
+            finished_tx,
+        ));
+
+        if let Some(initialization) = restart_initialization {
+            let initialized = async {
+                self.prepare_hosted_generation(generation).await?;
+                initialization
+                    .reinitialize(&hosted::GenerationTransport {
+                        inner: Arc::clone(&self),
+                        generation,
+                    })
+                    .await?;
+                Ok::<_, TransportError>(())
+            };
+            let result = tokio::select! {
+                biased;
+                _ = self.shutdown.cancelled() => Err(TransportError::disconnected("plugin closed during restart initialization")),
+                result = initialized => result,
+            };
+            if let Err(error) = result {
+                if !self.closed.load(Ordering::SeqCst) {
+                    self.record_spawn_failure(&error.to_string());
                 }
-            });
+                generation_stop.cancel();
+                return Err(error);
+            }
+            self.mark_generation_ready(generation).await?;
+            self.record_status(|sink, plugin_id| sink.record_started(plugin_id, pid, is_restart));
         }
 
-        self.record_status(|sink, plugin_id| {
-            sink.record_started(plugin_id, pid, is_restart);
-        });
-        self.record_log(
-            "info",
-            "host",
-            if is_restart {
-                format!(
-                    "plugin started after restart (pid={})",
-                    pid.unwrap_or_default()
-                )
-            } else {
-                format!("plugin started (pid={})", pid.unwrap_or_default())
-            },
-            serde_json::Value::Null,
-        );
         Ok(())
     }
 
-    async fn handle_child_exit(self: Arc<Self>, generation: u64) {
-        if self.closed.load(Ordering::SeqCst) {
-            return;
-        }
-        // Drop current handles + fail every in-flight request.
-        let Some(exit_code) = ({
-            let mut handles_lock = self.handles.lock().await;
-            match handles_lock.as_mut() {
-                Some(handles) if handles.generation == generation => {
-                    let exit_code = match handles.child.try_wait() {
-                        Ok(status) => status.and_then(|status| status.code()),
-                        Err(error) => {
-                            self.record_log(
-                                "error",
-                                "host",
-                                agena_failure::diagnostic::format_error_chain_with_context(
-                                    "inspect the exited stdio plugin process",
-                                    &error,
-                                ),
-                                serde_json::Value::Null,
-                            );
-                            None
-                        }
-                    };
-                    *handles_lock = None;
-                    Some(exit_code)
-                }
-                // A stale reader must never tear down a newer generation.
-                _ => None,
-            }
-        }) else {
-            return;
-        };
-        self.fail_pending("plugin disconnected");
-        self.fail_active_streams(PluginError::internal("plugin disconnected"))
-            .await;
-
-        let will_restart = matches!(
-            self.restart_policy.policy,
-            RestartMode::OnFailure | RestartMode::Always
-        );
-        self.record_status(|sink, plugin_id| {
-            sink.record_exit(plugin_id, will_restart, exit_code, None);
-        });
-        self.record_log(
-            if will_restart { "warn" } else { "error" },
-            "host",
-            if will_restart {
-                format!(
-                    "plugin exited with code {}; scheduling restart",
-                    exit_code
-                        .map(|code| code.to_string())
-                        .unwrap_or_else(|| "<unknown>".into())
-                )
-            } else {
-                format!(
-                    "plugin exited with code {}",
-                    exit_code
-                        .map(|code| code.to_string())
-                        .unwrap_or_else(|| "<unknown>".into())
-                )
-            },
-            serde_json::Value::Null,
-        );
-
-        match self.restart_policy.policy {
-            RestartMode::Never => {}
-            RestartMode::OnFailure | RestartMode::Always => {
-                if let Err(err) = Inner::spawn_child(&self, true).await {
-                    tracing::warn!(
-                        target: "agena_plugin_host::stdio",
-                        "respawn failed: {err}"
-                    );
-                }
-            }
-        }
-    }
-
-    async fn handle_inbound(self: &Arc<Self>, frame: Frame) {
+    async fn handle_inbound(
+        self: &Arc<Self>,
+        frame: Frame,
+        generation: u64,
+        stop: &CancellationToken,
+        tasks: &TaskTracker,
+    ) {
         match frame {
             Frame::Response(resp) => {
                 if let Some((_, tx)) = self.pending.remove(&resp.id)
@@ -590,7 +602,10 @@ impl Inner {
                     };
                     match serde_json::to_vec(&response) {
                         Ok(body) => {
-                            if let Err(error) = self.write_frame(&body).await {
+                            if let Err(error) = self
+                                .write_frame_for_generation(&body, Some(generation))
+                                .await
+                            {
                                 tracing::warn!(
                                     target: "agena_plugin_host::stdio",
                                     diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
@@ -615,7 +630,8 @@ impl Inner {
                     return;
                 };
                 let inner = Arc::clone(self);
-                tokio::spawn(async move {
+                let stop = stop.clone();
+                tasks.spawn(async move {
                     let _callback_slot = callback_slot;
                     let id = req.id.clone();
                     let callback = async {
@@ -631,7 +647,7 @@ impl Inner {
                     };
                     let result = tokio::select! {
                         biased;
-                        _ = inner.shutdown.cancelled() => return,
+                        _ = stop.cancelled() => return,
                         result = callback => result,
                     };
                     let resp = match result {
@@ -665,7 +681,10 @@ impl Inner {
                             return;
                         }
                     };
-                    if let Err(error) = inner.write_frame(&body).await {
+                    if let Err(error) = inner
+                        .write_frame_for_generation(&body, Some(generation))
+                        .await
+                    {
                         tracing::error!(
                             diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
                                 "write host callback response to stdio plugin",
@@ -688,24 +707,49 @@ impl Inner {
                         return;
                     };
                     let inner = Arc::clone(self);
-                    tokio::spawn(async move {
+                    let stop = stop.clone();
+                    tasks.spawn(async move {
                         let _callback_slot = callback_slot;
-                        inner.handle_notification(notif).await;
+                        tokio::select! {
+                            biased;
+                            _ = stop.cancelled() => {}
+                            _ = inner.handle_notification(notif) => {}
+                        }
                     });
                 }
             }
         }
     }
 
-    async fn write_frame(&self, body: &[u8]) -> Result<(), TransportError> {
-        let writer = {
+    async fn write_frame(&self, body: &[u8]) -> Result<u64, TransportError> {
+        self.write_frame_for_generation(body, None).await
+    }
+
+    async fn write_frame_for_generation(
+        &self,
+        body: &[u8],
+        expected: Option<u64>,
+    ) -> Result<u64, TransportError> {
+        let (writer, generation, stop) = {
             let handles = self.handles.lock().await;
-            handles
+            let handles = handles
                 .as_ref()
-                .map(|handles| handles.writer.clone())
+                .filter(|handles| {
+                    !self.closed.load(Ordering::SeqCst)
+                        && !handles.stop.is_cancelled()
+                        && expected
+                            .map_or(handles.ready, |generation| generation == handles.generation)
+                })
                 .ok_or_else(|| {
-                    TransportError::disconnected("stdio plugin child has no active stdin writer")
-                })?
+                    TransportError::disconnected(
+                        "stdio plugin child has no matching active stdin writer",
+                    )
+                })?;
+            (
+                handles.writer.clone(),
+                handles.generation,
+                handles.stop.clone(),
+            )
         };
         let (completion, result) = oneshot::channel();
         let write = async {
@@ -733,9 +777,6 @@ impl Inner {
         };
         tokio::select! {
             biased;
-            _ = self.shutdown.cancelled() => Err(TransportError::disconnected(
-                "stdio plugin transport was shut down while writing a frame",
-            )),
             result = tokio::time::timeout(WRITE_TIMEOUT, write) => {
                 result.map_err(|error| {
                     TransportError::Io(
@@ -748,12 +789,86 @@ impl Inner {
                         ),
                     )
                 })?
-            }
+            },
+            _ = stop.cancelled() => Err(TransportError::disconnected(
+                "stdio plugin transport was shut down while writing a frame",
+            )),
         }
+        .map(|()| generation)
     }
 
     fn next_id(&self) -> i64 {
         self.next_id.fetch_add(1, Ordering::Relaxed)
+    }
+
+    async fn begin_request(
+        &self,
+        request_id: RequestId,
+        response: oneshot::Sender<Response>,
+        expected_generation: Option<u64>,
+    ) -> Result<(u64, CancellationToken), TransportError> {
+        // Publish the response slot against one specific child while holding
+        // the same lock used to remove that child on exit. An exit must not
+        // fail this request and then let its frame reach a replacement child.
+        let handles = self.handles.lock().await;
+        let handles = handles
+            .as_ref()
+            .filter(|handles| {
+                !self.closed.load(Ordering::SeqCst)
+                    && !handles.stop.is_cancelled()
+                    && expected_generation
+                        .map_or(handles.ready, |generation| generation == handles.generation)
+            })
+            .ok_or_else(|| {
+                TransportError::disconnected("stdio plugin has no active child for this request")
+            })?;
+        self.pending.insert(request_id, response);
+        Ok((handles.generation, handles.stop.clone()))
+    }
+
+    pub(super) async fn dispatch_to_generation(
+        self: &Arc<Self>,
+        expected_generation: Option<u64>,
+        method: &str,
+        params: serde_json::Value,
+    ) -> Result<serde_json::Value, TransportError> {
+        let id = self.next_id();
+        let req_id = RequestId::Num(id);
+        let req = Request {
+            jsonrpc: JsonRpcVersion,
+            id: req_id.clone(),
+            method: method.to_string(),
+            params: Some(params),
+            context: crate::sdk::host_api::current_host_callback_context(),
+        };
+        let body = serde_json::to_vec(&req)?;
+        let (tx, rx) = oneshot::channel();
+        let (generation, stop) = self
+            .begin_request(req_id.clone(), tx, expected_generation)
+            .await?;
+        let _pending_guard = PendingRequestGuard::new(Arc::clone(self), req_id.clone());
+        self.write_frame_for_generation(&body, Some(generation))
+            .await?;
+        let response = tokio::select! {
+            biased;
+            response = rx => response,
+            _ = stop.cancelled() => return Err(TransportError::disconnected("stdio plugin exited while awaiting a response")),
+        };
+        let resp = response.map_err(|error| {
+            TransportError::disconnected_error(
+                format!(
+                    "stdio plugin response channel closed before method `{method}` request {id} completed"
+                ),
+                &error,
+            )
+        })?;
+        match resp.payload {
+            ResponsePayload::Ok { result } => Ok(result),
+            ResponsePayload::Err { error } => {
+                let pe = super::plugin_error_from_rpc(error, "decode stdio plugin dispatch error");
+                Err(TransportError::Plugin(pe))
+            }
+        }
     }
 
     fn fail_pending(&self, message: &str) {
@@ -790,10 +905,25 @@ impl Inner {
     where
         F: FnOnce(&StatusRegistry, &PluginKey),
     {
-        if let (Some(sink), Some(plugin_id)) = (self.status_sink.as_ref(), self.plugin_id.as_ref())
-        {
+        let binding = self
+            .status_sink
+            .read()
+            .unwrap_or_else(|error| error.into_inner());
+        if let (Some(sink), Some(plugin_id)) = (binding.as_ref(), self.plugin_id.as_ref()) {
             mutate(sink.as_ref(), plugin_id);
         }
+    }
+
+    fn record_spawn_failure(&self, message: &str) {
+        self.record_status(|sink, plugin_id| {
+            sink.record_spawn_failure(plugin_id, message.to_owned());
+        });
+        self.record_log(
+            "error",
+            "host",
+            format!("spawn failed: {message}"),
+            serde_json::Value::Null,
+        );
     }
 
     fn record_log(
@@ -846,188 +976,6 @@ impl Inner {
             }
         }
     }
-
-    async fn deliver_stream_chunk(&self, chunk: ToolStreamChunk) {
-        let stream_id = chunk.stream_id.clone();
-        let sender = {
-            let active = self.active_streams.lock().await;
-            active.get(&stream_id).map(|state| state.chunks.clone())
-        };
-        if let Some(sender) = sender {
-            match sender.try_send(chunk) {
-                Ok(()) => {}
-                Err(mpsc::error::TrySendError::Closed(_)) => {
-                    self.remove_abandoned_stream(stream_id.as_str()).await;
-                }
-                Err(mpsc::error::TrySendError::Full(_)) => {
-                    let state = {
-                        let mut active = self.active_streams.lock().await;
-                        active.remove(stream_id.as_str())
-                    };
-                    if let Some(state) = state {
-                        state.monitor_stop.cancel();
-                        if state
-                            .end
-                            .send(Err(PluginError::internal(
-                                "plugin stream consumer exceeded the 64-chunk buffer",
-                            )))
-                            .is_err()
-                        {
-                            tracing::debug!(
-                                target: "agena_plugin_host::stdio",
-                                stream_id,
-                                "overflowed stdio plugin stream terminal receiver was already dropped"
-                            );
-                        }
-                    }
-                }
-            }
-            return;
-        }
-        let mut buffered = self.buffered_streams.lock().await;
-        if !buffered.contains_key(stream_id.as_str()) && buffered.len() >= MAX_BUFFERED_STREAMS {
-            tracing::warn!(
-                target: "agena_plugin_host::stdio",
-                stream_id,
-                "dropping an event for an unknown plugin stream because the pre-registration buffer is full"
-            );
-            return;
-        }
-        let events = buffered.entry(stream_id.clone()).or_default();
-        if events.len() >= MAX_BUFFERED_STREAM_EVENTS {
-            events.clear();
-            events.push(BufferedStreamEvent::Error(ToolStreamError {
-                stream_id,
-                error: PluginError::internal(
-                    "plugin stream exceeded the 64-event pre-registration buffer",
-                ),
-            }));
-        } else {
-            events.push(BufferedStreamEvent::Chunk(chunk));
-        }
-    }
-
-    async fn finish_stream(&self, stream_id: String, result: Result<ToolStreamEnd, PluginError>) {
-        let state = {
-            let mut active = self.active_streams.lock().await;
-            active.remove(&stream_id)
-        };
-        if let Some(state) = state {
-            state.monitor_stop.cancel();
-            if state.end.send(result).is_err() {
-                tracing::debug!(
-                    target: "agena_plugin_host::stdio",
-                    stream_id,
-                    "stdio plugin stream terminal-result receiver was dropped"
-                );
-            }
-            return;
-        }
-        let event = match result {
-            Ok(end) => BufferedStreamEvent::End(end),
-            Err(error) => BufferedStreamEvent::Error(ToolStreamError {
-                stream_id: stream_id.clone(),
-                error,
-            }),
-        };
-        let mut buffered = self.buffered_streams.lock().await;
-        if !buffered.contains_key(stream_id.as_str()) && buffered.len() >= MAX_BUFFERED_STREAMS {
-            tracing::warn!(
-                target: "agena_plugin_host::stdio",
-                stream_id,
-                "dropping a terminal event for an unknown plugin stream because the pre-registration buffer is full"
-            );
-            return;
-        }
-        let events = buffered.entry(stream_id).or_default();
-        if events.len() >= MAX_BUFFERED_STREAM_EVENTS {
-            events.clear();
-        }
-        events.push(event);
-    }
-
-    async fn register_stream(
-        self: &Arc<Self>,
-        stream_id: String,
-        chunks: mpsc::Sender<ToolStreamChunk>,
-        end: oneshot::Sender<Result<ToolStreamEnd, PluginError>>,
-    ) {
-        let monitor_stop = CancellationToken::new();
-        {
-            let mut active = self.active_streams.lock().await;
-            active.insert(
-                stream_id.clone(),
-                ActiveStreamState {
-                    chunks: chunks.clone(),
-                    end,
-                    monitor_stop: monitor_stop.clone(),
-                },
-            );
-        }
-        let weak = Arc::downgrade(self);
-        let shutdown = self.shutdown.clone();
-        let abandoned_stream_id = stream_id.clone();
-        tokio::spawn(async move {
-            tokio::select! {
-                biased;
-                _ = monitor_stop.cancelled() => {}
-                _ = shutdown.cancelled() => {}
-                _ = chunks.closed() => {
-                    if let Some(inner) = weak.upgrade() {
-                        inner.remove_abandoned_stream(abandoned_stream_id.as_str()).await;
-                    }
-                }
-            }
-        });
-        self.drain_buffered_stream_events(stream_id).await;
-    }
-
-    async fn remove_abandoned_stream(&self, stream_id: &str) {
-        if let Some(state) = self.active_streams.lock().await.remove(stream_id) {
-            state.monitor_stop.cancel();
-        }
-        self.buffered_streams.lock().await.remove(stream_id);
-    }
-
-    async fn fail_active_streams(&self, error: PluginError) {
-        let active = {
-            let mut active = self.active_streams.lock().await;
-            active.drain().map(|(_, state)| state).collect::<Vec<_>>()
-        };
-        {
-            let mut buffered = self.buffered_streams.lock().await;
-            buffered.clear();
-        }
-        for state in active {
-            state.monitor_stop.cancel();
-            if state.end.send(Err(error.clone())).is_err() {
-                tracing::debug!(
-                    target: "agena_plugin_host::stdio",
-                    "failed stdio plugin stream receiver was already dropped during transport shutdown"
-                );
-            }
-        }
-    }
-
-    async fn drain_buffered_stream_events(&self, stream_id: String) {
-        let events = {
-            let mut buffered = self.buffered_streams.lock().await;
-            buffered.remove(&stream_id).unwrap_or_default()
-        };
-        for event in events {
-            match event {
-                BufferedStreamEvent::Chunk(chunk) => self.deliver_stream_chunk(chunk).await,
-                BufferedStreamEvent::End(end) => {
-                    self.finish_stream(stream_id.clone(), Ok(end)).await;
-                    break;
-                }
-                BufferedStreamEvent::Error(err) => {
-                    self.finish_stream(stream_id.clone(), Err(err.error)).await;
-                    break;
-                }
-            }
-        }
-    }
 }
 
 fn parse_notification<T: serde::de::DeserializeOwned>(notif: &Notification) -> Option<T> {
@@ -1058,40 +1006,51 @@ fn exp_backoff(min: Duration, max: Duration, attempt: u32) -> Duration {
 
 #[async_trait]
 impl PluginTransport for StdioTransport {
+    async fn bind_host(
+        &self,
+        host: Arc<crate::host::HostHandle>,
+        scope: Arc<crate::effect_scope::PluginEffectScope>,
+    ) -> Result<(), TransportError> {
+        self.inner
+            .bind_host_inner(host, scope, None, None)
+            .await
+            .map(|_| ())
+    }
+
+    async fn initialize(
+        &self,
+        initialization: super::initialization::PluginInitialization,
+    ) -> Result<crate::sdk::InitOutcome, TransportError> {
+        self.inner.initialize_hosted(initialization).await
+    }
+
+    async fn can_reuse(&self, owner: &Arc<crate::effect_scope::PluginEffectScope>) -> bool {
+        let hosted = self.inner.hosted.lock().await;
+        let handles = self.inner.handles.lock().await;
+        self.inner
+            .can_reuse_hosted(hosted.as_ref(), handles.as_ref(), owner)
+    }
+
+    async fn try_rebind_host(
+        &self,
+        host: Arc<crate::host::HostHandle>,
+        scope: Arc<crate::effect_scope::PluginEffectScope>,
+        previous_scope: Arc<crate::effect_scope::PluginEffectScope>,
+        initialization: super::initialization::PluginInitialization,
+    ) -> Result<bool, TransportError> {
+        self.inner
+            .bind_host_inner(host, scope, Some(previous_scope), Some(initialization))
+            .await
+    }
+
     async fn dispatch(
         &self,
         method: &str,
         params: serde_json::Value,
     ) -> Result<serde_json::Value, TransportError> {
-        let id = self.inner.next_id();
-        let req_id = RequestId::Num(id);
-        let req = Request {
-            jsonrpc: JsonRpcVersion,
-            id: req_id.clone(),
-            method: method.to_string(),
-            params: Some(params),
-            context: crate::sdk::host_api::current_host_callback_context(),
-        };
-        let body = serde_json::to_vec(&req)?;
-        let (tx, rx) = oneshot::channel();
-        self.inner.pending.insert(req_id.clone(), tx);
-        let _pending_guard = PendingRequestGuard::new(Arc::clone(&self.inner), req_id.clone());
-        self.inner.write_frame(&body).await?;
-        let resp = rx.await.map_err(|error| {
-            TransportError::disconnected_error(
-                format!(
-                    "stdio plugin response channel closed before method `{method}` request {id} completed"
-                ),
-                &error,
-            )
-        })?;
-        match resp.payload {
-            ResponsePayload::Ok { result } => Ok(result),
-            ResponsePayload::Err { error } => {
-                let pe = super::plugin_error_from_rpc(error, "decode stdio plugin dispatch error");
-                Err(TransportError::Plugin(pe))
-            }
-        }
+        self.inner
+            .dispatch_to_generation(None, method, params)
+            .await
     }
 
     async fn notify(&self, method: &str, params: serde_json::Value) -> Result<(), TransportError> {
@@ -1101,7 +1060,7 @@ impl PluginTransport for StdioTransport {
             params: Some(params),
         };
         let body = serde_json::to_vec(&n)?;
-        self.inner.write_frame(&body).await
+        self.inner.write_frame(&body).await.map(|_| ())
     }
 
     async fn invoke_stream(
@@ -1119,9 +1078,11 @@ impl PluginTransport for StdioTransport {
         };
         let body = serde_json::to_vec(&req)?;
         let (tx, rx) = oneshot::channel();
-        self.inner.pending.insert(req_id.clone(), tx);
+        let (generation, _stop) = self.inner.begin_request(req_id.clone(), tx, None).await?;
         let _pending_guard = PendingRequestGuard::new(Arc::clone(&self.inner), req_id.clone());
-        self.inner.write_frame(&body).await?;
+        self.inner
+            .write_frame_for_generation(&body, Some(generation))
+            .await?;
         let resp = rx.await.map_err(|error| {
             TransportError::disconnected_error(
                 format!(
@@ -1146,8 +1107,8 @@ impl PluginTransport for StdioTransport {
         let (chunk_tx, chunk_rx) = mpsc::channel::<ToolStreamChunk>(64);
         let (end_tx, end_rx) = oneshot::channel::<Result<ToolStreamEnd, PluginError>>();
         self.inner
-            .register_stream(handle.stream_id.clone(), chunk_tx, end_tx)
-            .await;
+            .register_stream(handle.stream_id.clone(), chunk_tx, end_tx, generation)
+            .await?;
         Ok(Some(crate::transport::ToolStreamHandle {
             stream_id: handle.stream_id,
             chunks: chunk_rx,
@@ -1158,6 +1119,10 @@ impl PluginTransport for StdioTransport {
     async fn close(&self) -> Result<(), TransportError> {
         self.inner.closed.store(true, Ordering::SeqCst);
         self.inner.shutdown.cancel();
+        let mut close_outcome = self.inner.close_outcome.lock().await;
+        if let Some(outcome) = close_outcome.as_ref() {
+            return outcome.clone().map_err(TransportError::Io);
+        }
         self.inner.fail_pending("plugin transport closed");
         // A spawn already past its closed check may still be installing a
         // child. Wait for that transaction, then take exactly the published
@@ -1167,9 +1132,32 @@ impl PluginTransport for StdioTransport {
             .fail_active_streams(PluginError::internal("plugin transport closed"))
             .await;
         let _spawn_guard = self.inner.spawn_lock.lock().await;
-        let handles = { self.inner.handles.lock().await.take() };
-        if let Some(mut h) = handles {
-            h.child.start_kill().map_err(TransportError::from)?;
+        // Keep cleanup observable if the caller cancels this close future.
+        // Callback tasks may still need handles, so never hold that lock
+        // while awaiting their supervisor.
+        let finished = self
+            .inner
+            .handles
+            .lock()
+            .await
+            .as_ref()
+            .map(|handles| handles.finished.clone());
+        let cleanup = if let Some(finished) = finished {
+            match tokio::time::timeout(lifecycle::CLOSE_TIMEOUT, finished).await {
+                Ok(result) => result,
+                Err(error) => Err(format!("timed out closing stdio plugin: {error}")),
+            }
+        } else {
+            Ok(())
+        };
+        self.inner.handles.lock().await.take();
+        self.inner
+            .fail_active_streams(PluginError::internal("plugin transport closed"))
+            .await;
+        *close_outcome = Some(cleanup.clone());
+        if let Err(error) = cleanup {
+            self.inner.record_spawn_failure(&error);
+            return Err(TransportError::Io(error));
         }
         self.inner.record_status(|sink, plugin_id| {
             sink.record_stopped(plugin_id);
@@ -1186,20 +1174,12 @@ impl PluginTransport for StdioTransport {
 
 impl Drop for StdioTransport {
     fn drop(&mut self) {
-        self.inner.closed.store(true, Ordering::SeqCst);
+        let already_closed = self.inner.closed.swap(true, Ordering::SeqCst);
         self.inner.shutdown.cancel();
         self.inner.fail_pending("plugin transport dropped");
-        if let Ok(mut handles) = self.inner.handles.try_lock()
-            && let Some(handles) = handles.as_mut()
-            && let Err(error) = handles.child.start_kill()
-        {
-            tracing::error!(
-                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
-                    "failed to kill the stdio plugin process tree while dropping its transport",
-                    &error,
-                ),
-                "stdio plugin transport cleanup failed"
-            );
+        if !already_closed {
+            self.inner
+                .record_status(|sink, plugin_id| sink.record_stopped(plugin_id));
         }
     }
 }

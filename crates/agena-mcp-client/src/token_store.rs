@@ -401,7 +401,7 @@ fn oauth_keyring_key(server: &str) -> String {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
-    use std::sync::Arc;
+    use std::sync::Mutex;
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     use agena_keyring_store::{SecretStore, SecretStoreError};

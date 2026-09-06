@@ -3,7 +3,10 @@
 //! JSON-RPC; the `HostHandle` in `agena-plugin-host` routes those calls
 //! through this client.
 
-use std::{future::Future, sync::Arc};
+use std::{
+    future::Future,
+    sync::{Arc, OnceLock},
+};
 
 use agena_plugin_sdk::PluginKey;
 use async_trait::async_trait;
@@ -18,16 +21,18 @@ use agena_domain::ToolInvocation;
 use agena_domain::{StructuredObject, UserInputOption, UserInputQuestion};
 use agena_plugin_host::sdk::host_api::{
     AskUserRequest, AskUserResponse, CancelSubtaskRequest, EventSubscription, HostCallbackContext,
-    HostClient, HostConfigReloadResponse, HostContextStatusRequest, HostContextStatusResponse,
-    HostEnterSnapshotRequest, HostExitSnapshotRequest, HostGetSessionRequest,
-    HostGetSessionResponse, HostImageExecuteRequest, HostImageExecuteResponse, HostImageOperation,
-    HostLspDiagnostic, HostLspListDiagnosticsRequest, HostLspListDiagnosticsResponse,
-    HostLspListServersResponse, HostLspServer, HostMcpAddServerRequest, HostMcpListServersResponse,
-    HostMcpRemoveServerRequest, HostMcpRemoveServerResponse, HostMcpServerSpec, HostPluginStatus,
-    HostPluginStatusGetRequest, HostPluginStatusGetResponse, HostPluginStatusListResponse,
-    HostRenameSessionRequest, HostRenameSessionResponse, HostSchedulerCreateRequest,
-    HostSchedulerCreateResponse, HostSchedulerDeleteRequest, HostSchedulerDeleteResponse,
-    HostSchedulerJob, HostSchedulerListResponse, HostSecretDeleteRequest, HostSecretGetRequest,
+    HostClient, HostConfigReloadRequestResponse, HostConfigReloadResponse,
+    HostConfigReloadStatusRequest, HostConfigReloadStatusResponse, HostContextStatusRequest,
+    HostContextStatusResponse, HostEnterSnapshotRequest, HostExitSnapshotRequest,
+    HostGetSessionRequest, HostGetSessionResponse, HostImageExecuteRequest,
+    HostImageExecuteResponse, HostImageOperation, HostLspDiagnostic, HostLspListDiagnosticsRequest,
+    HostLspListDiagnosticsResponse, HostLspListServersResponse, HostLspServer,
+    HostMcpAddServerRequest, HostMcpListServersResponse, HostMcpRemoveServerRequest,
+    HostMcpRemoveServerResponse, HostMcpServerSpec, HostPluginStatus, HostPluginStatusGetRequest,
+    HostPluginStatusGetResponse, HostPluginStatusListResponse, HostRenameSessionRequest,
+    HostRenameSessionResponse, HostSchedulerCreateRequest, HostSchedulerCreateResponse,
+    HostSchedulerDeleteRequest, HostSchedulerDeleteResponse, HostSchedulerJob,
+    HostSchedulerListResponse, HostSecretDeleteRequest, HostSecretGetRequest,
     HostSecretGetResponse, HostSecretListResponse, HostSecretSetRequest, HostSession,
     HostSetSessionModelRequest, HostSetSessionModelResponse, HostSnapshotListResponse,
     HostSnapshotSummary, HostStorageDeleteRequest, HostStorageGetRequest, HostStorageGetResponse,
@@ -48,43 +53,21 @@ mod mappers;
 use image::*;
 use mappers::*;
 
-pub(crate) fn host_client_for(runtime: Arc<AgenaRuntime>) -> Arc<dyn HostClient> {
-    Arc::new(RuntimeHostClient { runtime })
-}
-
 pub fn install_plugin_host_event_publisher(
     host_handle: Arc<agena_plugin_host::host::HostHandle>,
-    runtime: Arc<AgenaRuntime>,
+    runtime: &AgenaRuntime,
 ) {
+    let live_signals = Arc::downgrade(&runtime.live_signals);
     let listener = Arc::new(
         move |event: agena_plugin_host::sdk::host_api::ToolRegistryChangedEvent| {
-            let runtime = runtime.clone();
-            if let Ok(_handle) = tokio::runtime::Handle::try_current() {
-                agena_runtime::spawn_detached(async move {
-                    publish_tool_registry_changed_event(runtime, event).await;
-                });
-            } else {
-                tracing::debug!(
-                    target: "agena_plugin_host::events",
-                    "skipping tool-registry event publish: no tokio runtime available"
-                );
+            if let Some(live_signals) = live_signals.upgrade() {
+                live_signals.emit(agena_runtime::RuntimeLiveSignal::ToolRegistryChanged(
+                    Box::new(event),
+                ));
             }
         },
     );
     host_handle.set_tool_registry_event_listener(Some(listener));
-}
-
-async fn publish_tool_registry_changed_event(
-    runtime: Arc<AgenaRuntime>,
-    event: agena_plugin_host::sdk::host_api::ToolRegistryChangedEvent,
-) {
-    // v2 has no event log (14.3): tool-registry changes are ephemeral live
-    // signals for in-process presentation consumers, never persisted.
-    runtime
-        .live_signals
-        .emit(agena_runtime::RuntimeLiveSignal::ToolRegistryChanged(
-            Box::new(event),
-        ));
 }
 
 fn plugin_error(error: impl std::error::Error + 'static) -> PluginError {
@@ -134,23 +117,55 @@ fn plugin_error_from_app(error: crate::AppError) -> PluginError {
     }
 }
 
-struct RuntimeHostClient {
-    runtime: Arc<AgenaRuntime>,
+pub(super) struct RuntimeHostClient {
+    generation: u64,
+    config: serde_json::Value,
+    runtime: OnceLock<super::builder::WeakAgenaRuntime>,
 }
 
 impl RuntimeHostClient {
-    fn snapshot(&self) -> Arc<crate::runtime::RuntimeSnapshot> {
-        self.runtime.current_snapshot()
+    pub(super) fn candidate(generation: u64, config: serde_json::Value) -> Arc<Self> {
+        Arc::new(Self {
+            generation,
+            config,
+            runtime: OnceLock::new(),
+        })
+    }
+
+    pub(super) fn bind_runtime(&self, runtime: &AgenaRuntime) {
+        self.runtime.get_or_init(|| runtime.downgrade());
+    }
+
+    fn runtime(&self) -> Result<AgenaRuntime, PluginError> {
+        let runtime = self
+            .runtime
+            .get()
+            .and_then(|runtime| runtime.upgrade())
+            .ok_or_else(|| {
+                host_unavailable("runtime services are not ready or have been released")
+            })?;
+        if runtime.current_snapshot().generation() < self.generation {
+            return Err(host_unavailable(
+                "runtime services are not ready for this candidate generation",
+            ));
+        }
+        Ok(runtime)
+    }
+
+    fn snapshot(&self) -> Result<Arc<crate::runtime::RuntimeSnapshot>, PluginError> {
+        Ok(self.runtime()?.current_snapshot())
     }
 
     fn session_manager(&self) -> Result<Arc<crate::session::SessionManager>, PluginError> {
-        self.snapshot()
+        self.snapshot()?
             .session_manager()
             .ok_or_else(|| host_unavailable("session manager is not enabled in this runtime"))
     }
 
     fn optional_session_manager(&self) -> Option<Arc<crate::session::SessionManager>> {
-        self.snapshot().session_manager()
+        self.snapshot()
+            .ok()
+            .and_then(|snapshot| snapshot.session_manager())
     }
 
     fn tool_executor(&self) -> Result<crate::tool::ToolExecutor, PluginError> {
@@ -175,7 +190,7 @@ impl RuntimeHostClient {
         feature: impl FnOnce(&crate::runtime::RuntimeSnapshot) -> Option<T>,
         unavailable: &'static str,
     ) -> Result<T, PluginError> {
-        let snapshot = self.snapshot();
+        let snapshot = self.snapshot()?;
         feature(snapshot.as_ref()).ok_or_else(|| host_unavailable(unavailable))
     }
 
@@ -272,16 +287,16 @@ impl RuntimeHostClient {
         .map_err(map_storage_error)
     }
 
-    fn plugin_storage(&self) -> Arc<dyn PluginStorage> {
-        self.snapshot().plugin_storage()
+    fn plugin_storage(&self) -> Result<Arc<dyn PluginStorage>, PluginError> {
+        Ok(self.snapshot()?.plugin_storage())
     }
 
-    fn plugin_secret_store(&self) -> Arc<dyn PluginSecretStore> {
-        self.snapshot().plugin_secret_store()
+    fn plugin_secret_store(&self) -> Result<Arc<dyn PluginSecretStore>, PluginError> {
+        Ok(self.snapshot()?.plugin_secret_store())
     }
 
-    fn plugin_manager(&self) -> Arc<agena_plugin_host::PluginHost> {
-        self.snapshot().plugin_manager()
+    fn plugin_manager(&self) -> Result<Arc<agena_plugin_host::PluginHost>, PluginError> {
+        Ok(self.snapshot()?.plugin_manager())
     }
 
     fn use_plugin_storage<T>(
@@ -291,7 +306,7 @@ impl RuntimeHostClient {
         use_store: impl FnOnce(&dyn PluginStorage, &StorageLocator) -> Result<T, PluginStorageError>,
     ) -> Result<T, PluginError> {
         let locator = self.storage_locator(scope, visibility)?;
-        let store = self.plugin_storage();
+        let store = self.plugin_storage()?;
         use_store(store.as_ref(), &locator).map_err(map_storage_error)
     }
 
@@ -300,7 +315,7 @@ impl RuntimeHostClient {
         use_store: impl FnOnce(&dyn PluginSecretStore, &PluginKey) -> Result<T, PluginStorageError>,
     ) -> Result<T, PluginError> {
         let plugin_id = self.callback_plugin_key()?;
-        let store = self.plugin_secret_store();
+        let store = self.plugin_secret_store()?;
         use_store(store.as_ref(), &plugin_id).map_err(map_storage_error)
     }
 
@@ -343,17 +358,15 @@ impl HostClient for RuntimeHostClient {
         let plugin_id = current_host_callback_context()
             .and_then(|context| context.plugin_id)
             .unwrap_or_else(|| "<unknown>".into());
-        let _ = self
-            .runtime
-            .current_snapshot()
-            .plugin_manager()
-            .append_plugin_log(
+        if let Ok(host) = self.plugin_manager() {
+            let _ = host.append_plugin_log(
                 plugin_id,
                 format!("{level:?}").to_lowercase(),
                 "plugin",
                 message,
                 fields,
             );
+        }
     }
 
     async fn publish_event(&self, env: EventEnvelope) -> Result<(), PluginError> {
@@ -365,7 +378,7 @@ impl HostClient for RuntimeHostClient {
         });
         // v2 has no event log (14.3): plugin events are ephemeral live
         // signals for in-process presentation consumers, never persisted.
-        self.runtime
+        self.runtime()?
             .live_signals
             .emit(agena_runtime::RuntimeLiveSignal::Plugin {
                 session_id: env.session_id,
@@ -380,7 +393,7 @@ impl HostClient for RuntimeHostClient {
         &self,
         activity: agena_domain::BackgroundActivity,
     ) -> Result<(), PluginError> {
-        self.runtime.activities.registry.upsert(activity);
+        self.runtime()?.activities.registry.upsert(activity);
         Ok(())
     }
 
@@ -389,7 +402,7 @@ impl HostClient for RuntimeHostClient {
         kind: agena_domain::BackgroundActivityKind,
         adapter: Arc<dyn agena_plugin_sdk::activity::ActivitySourceAdapter>,
     ) -> Result<(), PluginError> {
-        self.runtime.activities.register_source(kind, adapter);
+        self.runtime()?.activities.register_source(kind, adapter);
         Ok(())
     }
 
@@ -405,24 +418,77 @@ impl HostClient for RuntimeHostClient {
     }
 
     async fn read_config(&self, path: Option<String>) -> Result<serde_json::Value, PluginError> {
-        let snapshot = self.runtime.current_snapshot();
-        let value = snapshot
-            .config_value()
-            .map_err(|e| PluginError::invalid_params_error(&e))?;
-        agena_domain::get_json_path(&value, path.as_deref())
+        agena_domain::get_json_path(&self.config, path.as_deref())
             .map_err(|e| PluginError::invalid_params_error(&e))
     }
 
     async fn reload_config(&self) -> Result<HostConfigReloadResponse, PluginError> {
-        let report = self
-            .runtime
-            .reload()
-            .await
-            .map_err(|e| PluginError::internal_error(&e))?;
-        Ok(HostConfigReloadResponse {
-            previous_generation: report.previous_generation,
-            generation: report.generation,
-            loaded_at: report.loaded_at.to_rfc3339(),
+        self.runtime()?;
+        Err(PluginError::not_implemented(
+            "synchronous reload from a plugin callback is not supported; use host/config.reload.request, return from the originating call, then query host/config.reload.status",
+        ))
+    }
+
+    async fn request_config_reload(&self) -> Result<HostConfigReloadRequestResponse, PluginError> {
+        let runtime = self.runtime()?;
+        let completion = agena_plugin_host::current_plugin_call_completion()
+            .ok_or_else(|| host_unavailable("reload requests require an admitted plugin call"))?;
+        let start = runtime
+            .start_plugin_reload_task(completion)
+            .map_err(|error| {
+                let mut failure = PluginError::from_kind_with_public_detail(
+                    agena_plugin_sdk::PluginErrorKind::HostUnavailable,
+                    &error,
+                    error.to_string(),
+                );
+                if matches!(
+                    error,
+                    crate::RuntimeBackgroundTaskControlError::Capacity { .. }
+                ) {
+                    failure.failure.recovery = agena_failure::RecoveryDirective::Retry;
+                }
+                failure
+            })?;
+        Ok(HostConfigReloadRequestResponse {
+            task_id: start.task.id,
+            started: start.started,
+        })
+    }
+
+    async fn config_reload_status(
+        &self,
+        request: HostConfigReloadStatusRequest,
+    ) -> Result<HostConfigReloadStatusResponse, PluginError> {
+        use crate::RuntimeBackgroundTaskStatus;
+        use agena_plugin_sdk::host_api::HostConfigReloadState;
+        let task = self
+            .runtime()?
+            .background_tasks()
+            .into_iter()
+            .find(|task| {
+                task.id == request.task_id
+                    && task.kind == crate::RuntimeBackgroundTaskKind::RuntimeReload
+            })
+            .ok_or_else(|| {
+                PluginError::invalid_params("reload task is unknown or its history has expired")
+            })?;
+        let state = match task.status {
+            RuntimeBackgroundTaskStatus::Running => HostConfigReloadState::Running {},
+            RuntimeBackgroundTaskStatus::Succeeded => HostConfigReloadState::Succeeded {},
+            RuntimeBackgroundTaskStatus::Cancelled => HostConfigReloadState::Cancelled {},
+            RuntimeBackgroundTaskStatus::Failed => HostConfigReloadState::Failed {
+                problem: task
+                    .failure
+                    .as_ref()
+                    .ok_or_else(|| {
+                        PluginError::internal("failed reload task has no failure diagnostic")
+                    })?
+                    .into(),
+            },
+        };
+        Ok(HostConfigReloadStatusResponse {
+            task_id: task.id,
+            state,
         })
     }
 
@@ -431,7 +497,7 @@ impl HostClient for RuntimeHostClient {
         tool: String,
         input: serde_json::Value,
     ) -> Result<ToolInvokeOutput, PluginError> {
-        let host = self.plugin_manager();
+        let host = self.plugin_manager()?;
         let resolution = if let Some(resolution) = host.lookup_tool_for_name(&tool) {
             resolution
         } else {
@@ -804,7 +870,7 @@ impl HostClient for RuntimeHostClient {
             .get_session(callback_session_id)
             .await
             .map_err(plugin_error)?;
-        let snapshot = self.snapshot();
+        let snapshot = self.snapshot()?;
         let model = session
             .runtime()
             .effective_model_ref()
@@ -1091,7 +1157,7 @@ impl HostClient for RuntimeHostClient {
     }
 
     async fn plugin_status_list(&self) -> Result<HostPluginStatusListResponse, PluginError> {
-        let host = self.plugin_manager();
+        let host = self.plugin_manager()?;
         let statuses = host
             .plugin_statuses()
             .into_iter()
@@ -1104,7 +1170,7 @@ impl HostClient for RuntimeHostClient {
         &self,
         req: HostPluginStatusGetRequest,
     ) -> Result<HostPluginStatusGetResponse, PluginError> {
-        let host = self.plugin_manager();
+        let host = self.plugin_manager()?;
         Ok(HostPluginStatusGetResponse {
             status: host
                 .plugin_status_by_key(&req.plugin_id)
@@ -1190,7 +1256,10 @@ impl HostClient for RuntimeHostClient {
             |executor| executor.scheduler().cloned(),
             "scheduler is not enabled in this runtime",
         )?;
-        let jobs = scheduler.list().await;
+        let jobs = scheduler
+            .list()
+            .await
+            .map_err(|error| PluginError::internal_error(&error))?;
         let entries = jobs.into_iter().map(scheduler_job_to_sdk).collect();
         Ok(HostSchedulerListResponse { jobs: entries })
     }
@@ -1236,7 +1305,10 @@ impl HostClient for RuntimeHostClient {
             }
         };
         let id = job.id;
-        scheduler.add(job).await;
+        scheduler
+            .add(job)
+            .await
+            .map_err(|error| PluginError::internal_error(&error))?;
         Ok(HostSchedulerCreateResponse { id: id.to_string() })
     }
 
@@ -1250,7 +1322,10 @@ impl HostClient for RuntimeHostClient {
         )?;
         let id = uuid::Uuid::parse_str(&req.id)
             .map_err(|err| PluginError::invalid_params(format!("invalid scheduler id: {err}")))?;
-        let removed = scheduler.remove(id).await;
+        let removed = scheduler
+            .remove(id)
+            .await
+            .map_err(|error| PluginError::internal_error(&error))?;
         Ok(HostSchedulerDeleteResponse { removed })
     }
 

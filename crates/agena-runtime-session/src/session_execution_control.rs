@@ -104,7 +104,9 @@ pub trait SessionExecutionControl: Send + Sync {
 
     /// Lists scheduler-owned automation jobs visible to the composed session
     /// service. The job contract is independent of core transcript state.
-    async fn list_scheduled_jobs(&self) -> Vec<agena_scheduler::ScheduledJob>;
+    async fn list_scheduled_jobs(
+        &self,
+    ) -> Result<Vec<agena_scheduler::ScheduledJob>, SessionExecutionControlError>;
 
     /// Whether the composed service currently has scheduler support.
     fn scheduler_available(&self) -> bool;
@@ -173,8 +175,10 @@ mod tests {
             ))
         }
 
-        async fn list_scheduled_jobs(&self) -> Vec<agena_scheduler::ScheduledJob> {
-            Vec::new()
+        async fn list_scheduled_jobs(
+            &self,
+        ) -> Result<Vec<agena_scheduler::ScheduledJob>, SessionExecutionControlError> {
+            Ok(Vec::new())
         }
 
         fn scheduler_available(&self) -> bool {

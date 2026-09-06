@@ -36,10 +36,11 @@ reqwest = { workspace = true, features = ["json", "rustls"], optional = true }
 default = []
 cdylib = ["dep:abi_stable", "tokio/rt-multi-thread", "tokio/macros"]
 stdio = ["dep:agena-stdio-codec", "dep:bytes", "dep:futures-util", "dep:tokio-util", "tokio/rt-multi-thread", "tokio/macros", "tokio/io-util", "tokio/io-std", "tokio/time"]
-http = ["tokio/rt-multi-thread", "tokio/macros", "dep:axum", "dep:reqwest"]
+http = ["tokio/rt-multi-thread", "tokio/macros", "tokio/time", "dep:axum", "dep:reqwest", "dep:tokio-util", "tokio-util/rt"]
 
 [dev-dependencies]
 trybuild = "1.0"
+tokio = { workspace = true, features = ["test-util"] }
 
 # Trybuild copies the workspace's source patches into its generated fixture
 # workspace. Keep those patches resolvable there without compiling unrelated

@@ -28,7 +28,7 @@ pub async fn exchange_gitlab_oauth_code(
         client,
         code,
         pkce_verifier,
-        oauth_http_client(false),
+        oauth_http_client(),
         "gitlab oauth token exchange failed",
         |_| None,
     )
@@ -50,7 +50,7 @@ pub async fn refresh_gitlab_token(
     refresh_oauth_token(
         client,
         refresh_token,
-        oauth_http_client(false),
+        oauth_http_client(),
         "gitlab oauth token refresh failed",
         |_| None,
     )

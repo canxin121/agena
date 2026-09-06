@@ -259,37 +259,42 @@ pub fn shutdown_local_browser() -> Result<bool, CrawlError> {
 }
 
 fn kill_browser_tree(child: &mut Child) -> Result<(), CrawlError> {
-    // Signal the main process first, then the process group on Unix / the
-    // process tree on Windows so helper processes do not survive.
+    if child.try_wait()?.is_some() {
+        // A reaped PID may be reused. Never signal its old process group.
+        return Ok(());
+    }
+    // Signal the Unix group before its leader can disappear. Use the syscall
+    // so an already absent group (ESRCH) can be distinguished from a genuine
+    // permission/system failure; a shell utility only gives an exit code.
+    #[cfg(unix)]
+    {
+        let pid = i32::try_from(child.id()).map_err(|error| {
+            CrawlError::InvalidInput(format!("invalid managed browser process id: {error}"))
+        })?;
+        // SAFETY: spawn() creates this owned child's process group with PGID
+        // equal to its positive PID. No borrowed data or pointers cross FFI.
+        let result = unsafe { libc::kill(-pid, libc::SIGKILL) };
+        if result == 0 {
+            return Ok(());
+        }
+        let error = std::io::Error::last_os_error();
+        if error.raw_os_error() != Some(libc::ESRCH) {
+            // Still attempt to stop the owned main process, but never hide a
+            // real group failure just because that one process later exits.
+            let _ = child.kill();
+            return Err(CrawlError::InvalidInput(format!(
+                "failed to kill local browser process group {pid}: {error}"
+            )));
+        }
+    }
+    // The group may already be gone, or the platform has no group syscall.
+    // Child::kill also covers a still-running leader that changed its group.
     let mut failures = Vec::new();
     if let Err(error) = child.kill() {
         failures.push(agena_failure::diagnostic::format_error_chain_with_context(
             "failed to kill the local browser process",
             &error,
         ));
-    }
-    #[cfg(unix)]
-    {
-        match Command::new("kill")
-            .arg("-9")
-            .arg(format!("-{}", child.id()))
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-        {
-            Ok(status) if status.success() => {}
-            Ok(status) => failures.push(format!(
-                "failed to kill local browser process group {}: kill exited with status {status}",
-                child.id()
-            )),
-            Err(error) => {
-                failures.push(agena_failure::diagnostic::format_error_chain_with_context(
-                    "failed to invoke kill for the local browser process group",
-                    &error,
-                ))
-            }
-        }
     }
     #[cfg(windows)]
     {
@@ -537,6 +542,31 @@ fn browser_candidates() -> &'static [&'static str] {
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
+    #[test]
+    fn owned_process_group_shutdown_handles_immediate_and_prior_exit() {
+        use std::os::unix::process::CommandExt;
+
+        for already_exited in [false, true] {
+            let mut command = Command::new("/bin/sh");
+            command.args([
+                "-c",
+                if already_exited {
+                    "exit 0"
+                } else {
+                    "exec sleep 30"
+                },
+            ]);
+            command.process_group(0);
+            let mut child = command.spawn().expect("spawn an owned process group");
+            if already_exited {
+                child.wait().expect("reap the exited fixture");
+            }
+            shutdown_browser_process(&mut child).expect("shut down the group");
+            assert!(child.try_wait().unwrap().is_some());
+        }
+    }
+
     #[test]
     fn lifecycle_spawn_running_shutdown_round_trip() {
         // Chrome is an optional runtime dependency; skip when unavailable.
@@ -546,9 +576,9 @@ mod tests {
         };
         assert!(!endpoint.is_empty());
         assert!(local_browser_running().expect("inspect running browser"));
-        assert!(shutdown_local_browser().unwrap_or_default());
+        assert!(shutdown_local_browser().expect("shut down managed browser"));
         assert!(!local_browser_running().expect("inspect stopped browser"));
         // Shutting down again is a no-op and reports nothing was closed.
-        assert!(!shutdown_local_browser().unwrap_or_default());
+        assert!(!shutdown_local_browser().expect("repeat managed browser shutdown"));
     }
 }

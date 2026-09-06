@@ -289,7 +289,7 @@ impl ApplicationService {
             ApplicationError::internal("session disappeared while loading execution state")
         })?;
 
-        let scheduler_jobs = list_scheduled_jobs(execution_control).await;
+        let scheduler_jobs = list_scheduled_jobs(execution_control).await?;
         let transcript = if include_parts {
             session_transcript_parts(session_queries, session_id).await?
         } else {
@@ -478,8 +478,11 @@ fn provider_catalog_error(error: ProviderCatalogError) -> ApplicationError {
 
 pub async fn list_scheduled_jobs(
     execution_control: &dyn agena_runtime::SessionExecutionControl,
-) -> Vec<agena_scheduler::ScheduledJob> {
-    execution_control.list_scheduled_jobs().await
+) -> ApplicationResult<Vec<agena_scheduler::ScheduledJob>> {
+    execution_control
+        .list_scheduled_jobs()
+        .await
+        .map_err(execution_control_error)
 }
 
 fn session_automation_resource(

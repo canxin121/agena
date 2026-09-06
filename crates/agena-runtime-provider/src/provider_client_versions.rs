@@ -1,10 +1,8 @@
 //! Explicit Runtime-owned provider-client version refresh.
 
-use std::sync::LazyLock;
 use std::time::Duration;
 
 use agena_provider::ProviderClientVersions;
-use parking_lot::RwLock;
 use serde::Deserialize;
 
 const CLIENT_VERSION_FETCH_TIMEOUT_SECS: u64 = 5;
@@ -15,52 +13,49 @@ const GEMINI_VERSION_URL: &str = "https://registry.npmjs.org/@google%2Fgemini-cl
 /// Stable client identity used by Runtime-owned MCP and provider transports.
 pub const RUNTIME_CODEX_MCP_CLIENT_NAME: &str = "codex-mcp-client";
 
-static ACTIVE_CLIENT_VERSIONS: LazyLock<RwLock<ProviderClientVersions>> =
-    LazyLock::new(|| RwLock::new(ProviderClientVersions::default()));
-
-pub fn provider_client_versions() -> ProviderClientVersions {
-    ACTIVE_CLIENT_VERSIONS.read().clone()
+/// Immutable client identity owned by a runtime generation or standalone
+/// provider. Candidate construction never changes another owner's requests.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ProviderClientIdentity {
+    versions: ProviderClientVersions,
 }
 
-/// Install the client versions resolved by the concrete configuration adapter.
-/// Runtime owns the process-wide state; no parallel copy is exposed.
-pub fn set_provider_client_versions(versions: ProviderClientVersions) {
-    *ACTIVE_CLIENT_VERSIONS.write() = versions;
-}
+impl ProviderClientIdentity {
+    pub fn new(versions: ProviderClientVersions) -> Self {
+        Self { versions }
+    }
 
-pub fn codex_package_version() -> String {
-    provider_client_versions().codex
-}
+    pub fn codex_package_version(&self) -> String {
+        self.versions.codex.clone()
+    }
 
-pub fn codex_user_agent() -> String {
-    crate::runtime_codex_user_agent(codex_package_version().as_str())
-}
+    pub fn codex_user_agent(&self) -> String {
+        crate::runtime_codex_user_agent(&self.versions.codex)
+    }
 
-pub fn claude_code_api_user_agent() -> String {
-    format!(
-        "claude-cli/{} (external, cli)",
-        provider_client_versions().claude
-    )
-}
+    pub fn claude_code_api_user_agent(&self) -> String {
+        format!("claude-cli/{} (external, cli)", self.versions.claude)
+    }
 
-pub fn claude_code_user_agent() -> String {
-    format!("claude-code/{}", provider_client_versions().claude)
-}
+    pub fn claude_code_user_agent(&self) -> String {
+        format!("claude-code/{}", self.versions.claude)
+    }
 
-pub fn claude_user_web_fetch_user_agent() -> String {
-    format!(
-        "Claude-User ({}; +https://support.anthropic.com/)",
-        claude_code_user_agent()
-    )
-}
+    pub fn claude_user_web_fetch_user_agent(&self) -> String {
+        format!(
+            "Claude-User ({}; +https://support.anthropic.com/)",
+            self.claude_code_user_agent()
+        )
+    }
 
-pub fn gemini_cli_user_agent(model: &str) -> String {
-    let version = provider_client_versions().gemini;
-    format!(
-        "GeminiCLI/{version}/{model} ({}; {}; terminal)",
-        gemini_node_platform(),
-        gemini_node_architecture()
-    )
+    pub fn gemini_cli_user_agent(&self, model: &str) -> String {
+        format!(
+            "GeminiCLI/{}/{model} ({}; {}; terminal)",
+            self.versions.gemini,
+            gemini_node_platform(),
+            gemini_node_architecture()
+        )
+    }
 }
 
 fn gemini_node_platform() -> &'static str {
@@ -174,9 +169,8 @@ fn valid_client_version(version: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        claude_code_api_user_agent, codex_user_agent, gemini_cli_user_agent,
-        gemini_node_architecture, gemini_node_platform, latest_version_result,
-        valid_client_version,
+        ProviderClientIdentity, gemini_node_architecture, gemini_node_platform,
+        latest_version_result, valid_client_version,
     };
     use crate::RUNTIME_CODEX_ORIGINATOR;
 
@@ -198,7 +192,7 @@ mod tests {
 
     #[test]
     fn codex_user_agent_uses_the_official_originator_and_shape() {
-        let user_agent = codex_user_agent();
+        let user_agent = ProviderClientIdentity::default().codex_user_agent();
         assert!(user_agent.starts_with(&format!("{RUNTIME_CODEX_ORIGINATOR}/")));
         assert!(user_agent.contains(" ("));
         assert!(user_agent.contains("; "));
@@ -208,7 +202,7 @@ mod tests {
 
     #[test]
     fn claude_user_agent_uses_the_official_external_cli_identity() {
-        let user_agent = claude_code_api_user_agent();
+        let user_agent = ProviderClientIdentity::default().claude_code_api_user_agent();
         assert!(user_agent.starts_with("claude-cli/"));
         assert!(user_agent.ends_with(" (external, cli)"));
         assert!(!user_agent.contains("agena"));
@@ -216,7 +210,8 @@ mod tests {
 
     #[test]
     fn gemini_user_agent_uses_the_official_node_platform_shape() {
-        let user_agent = gemini_cli_user_agent("gemini-3.1-pro-preview");
+        let user_agent =
+            ProviderClientIdentity::default().gemini_cli_user_agent("gemini-3.1-pro-preview");
         assert!(user_agent.starts_with("GeminiCLI/"));
         assert!(user_agent.contains("/gemini-3.1-pro-preview ("));
         assert!(user_agent.contains(&format!(

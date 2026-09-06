@@ -39,7 +39,7 @@ This document is deterministically generated from the real `agena-bundled-plugin
 
 ## agena.chatgpt
 
-**Version** `0.1.0` · **Tools** 17
+**Version** `0.1.2-beta.1` · **Tools** 17
 
 OpenAI Responses and image service tools exposed as ordinary Agena tools.
 
@@ -1624,7 +1624,7 @@ OpenAI Responses and image service tools exposed as ordinary Agena tools.
 
 ## agena.claude
 
-**Version** `0.1.0` · **Tools** 11
+**Version** `0.1.2-beta.1` · **Tools** 11
 
 Anthropic Claude server and client tools exposed as ordinary Agena tools.
 
@@ -2895,7 +2895,7 @@ Anthropic Claude server and client tools exposed as ordinary Agena tools.
 
 ## agena.code
 
-**Version** `0.1.0` · **Tools** 2
+**Version** `0.1.2-beta.1` · **Tools** 2
 
 Structured code search and syntax inspection tools.
 
@@ -3093,7 +3093,7 @@ Structured code search and syntax inspection tools.
 
 ## agena.cron
 
-**Version** `0.1.0` · **Tools** 7
+**Version** `0.1.2-beta.1` · **Tools** 7
 
 Cron-style and one-shot wakeup scheduling tools.
 
@@ -3523,7 +3523,7 @@ Cron-style and one-shot wakeup scheduling tools.
 
 ## agena.fs
 
-**Version** `0.1.0` · **Tools** 9
+**Version** `0.1.2-beta.1` · **Tools** 9
 
 Filesystem command tools for read/search and explicit edits.
 
@@ -4063,7 +4063,7 @@ Filesystem command tools for read/search and explicit edits.
 
 ## agena.gemini
 
-**Version** `0.1.0` · **Tools** 11
+**Version** `0.1.2-beta.1` · **Tools** 11
 
 Google Gemini Interactions and image capabilities exposed as ordinary Agena tools.
 
@@ -4938,7 +4938,7 @@ Google Gemini Interactions and image capabilities exposed as ordinary Agena tool
 
 ## agena.interaction
 
-**Version** `0.1.0` · **Tools** 2
+**Version** `0.1.2-beta.1` · **Tools** 2
 
 User interaction tools.
 
@@ -5119,7 +5119,7 @@ User interaction tools.
 
 ## agena.lsp
 
-**Version** `0.1.0` · **Tools** 5
+**Version** `0.1.2-beta.1` · **Tools** 5
 
 LSP read-only observability and navigation tools.
 
@@ -5324,7 +5324,7 @@ LSP read-only observability and navigation tools.
 
 ## agena.mcp
 
-**Version** `0.1.0` · **Tools** 9 · **Condition** `runtime:mcp-manager`
+**Version** `0.1.2-beta.1` · **Tools** 9 · **Condition** `runtime:mcp-manager`
 
 MCP discovery and bridge tools.
 
@@ -5663,7 +5663,7 @@ MCP discovery and bridge tools.
 
 ## agena.memory
 
-**Version** `0.1.0` · **Tools** 5
+**Version** `0.1.2-beta.1` · **Tools** 5
 
 Persistent memory with searchable retrieval and write tools.
 
@@ -5882,7 +5882,7 @@ Persistent memory with searchable retrieval and write tools.
 
 ## agena.monitor
 
-**Version** `0.1.0` · **Tools** 2
+**Version** `0.1.2-beta.1` · **Tools** 2
 
 Continuous-stream background monitoring tools.
 
@@ -6006,7 +6006,7 @@ Continuous-stream background monitoring tools.
 
 ## agena.notebook
 
-**Version** `0.1.0` · **Tools** 1
+**Version** `0.1.2-beta.1` · **Tools** 1
 
 Revision-safe Jupyter notebook cell editing.
 
@@ -6107,7 +6107,7 @@ Revision-safe Jupyter notebook cell editing.
 
 ## agena.plan
 
-**Version** `0.1.0` · **Tools** 6
+**Version** `0.1.2-beta.1` · **Tools** 6
 
 Plan orchestration and plan-autorun tools.
 
@@ -6509,7 +6509,7 @@ Plan orchestration and plan-autorun tools.
 
 ## agena.report
 
-**Version** `0.1.0` · **Tools** 1
+**Version** `0.1.2-beta.1` · **Tools** 1
 
 Structured review and verification findings.
 
@@ -6619,7 +6619,7 @@ Structured review and verification findings.
 
 ## agena.session
 
-**Version** `0.1.0` · **Tools** 5
+**Version** `0.1.2-beta.1` · **Tools** 5
 
 Inspect and manage the current runtime session and its environment, model, and token state.
 
@@ -6724,7 +6724,7 @@ Inspect and manage the current runtime session and its environment, model, and t
 
 ## agena.settings
 
-**Version** `0.1.0` · **Tools** 7
+**Version** `0.1.2-beta.1` · **Tools** 7
 
 Inspect and edit Agena's global and workspace agena.json settings.
 
@@ -7257,7 +7257,7 @@ Inspect and edit Agena's global and workspace agena.json settings.
 
 ## agena.shell
 
-**Version** `0.1.0` · **Tools** 4
+**Version** `0.1.2-beta.1` · **Tools** 4
 
 Shell command execution and background process tools.
 
@@ -7580,7 +7580,7 @@ Shell command execution and background process tools.
 
 ## agena.skills
 
-**Version** `0.1.0` · **Tools** 7
+**Version** `0.1.2-beta.1` · **Tools** 7
 
 Discover and read plain-text skills and slash commands.
 
@@ -7862,7 +7862,7 @@ Discover and read plain-text skills and slash commands.
 
 ## agena.snapshot
 
-**Version** `0.1.0` · **Tools** 3
+**Version** `0.1.2-beta.1` · **Tools** 3
 
 Managed snapshot tools backed by Rift or git worktree.
 
@@ -7987,7 +7987,7 @@ Managed snapshot tools backed by Rift or git worktree.
 
 ## agena.tasks
 
-**Version** `0.1.0` · **Tools** 7
+**Version** `0.1.2-beta.1` · **Tools** 7
 
 Delegated subtask orchestration tools.
 
@@ -8258,7 +8258,7 @@ Delegated subtask orchestration tools.
 | `prompt` | `string` | ✓ | — | Full instruction payload for the delegated subtask. |
 | `run_in_background` | `boolean` | — | `false` | Run the subtask in the background (default false). When false (default)<br>the subtask runs inline and this call returns its final result before<br>the tool call returns. When true, the tool returns immediately with a<br>task id and the result is delivered as a `system_notification` when the<br>subtask settles — do not poll tasks.get/tasks.output waiting for it. |
 | `selection` | `TaskModelSelection / null` | — | — | Optional model and mode overrides. Explicit values take precedence over<br>the parent session. |
-| `skills` | `array<string>` | — | — | Optional Skill names or aliases to attach to the delegated subtask's<br>first user message as immutable Skill references. The child session<br>receives the resolved Skill instructions as task guidance and should<br>apply them while completing the task. Use skills appropriate to the<br>task: for example a read-only review task can attach a review/read-only<br>skill, an exploration task can attach an explore skill. Unknown names<br>or aliases are rejected before the subtask starts. |
+| `skills` | `array<string>` | — | — | Optional Skill names or aliases to attach to the delegated subtask's<br>first user message as lazy Skill references. The child model receives<br>catalog metadata and can call `agena.skills.get` when it needs the Skill<br>body. Use skills appropriate to the task: for example a read-only review<br>task can attach a review/read-only skill, an exploration task can attach<br>an explore skill. Unknown names or aliases are rejected before the<br>subtask starts. |
 | `task_id` | `string / null` | — | — | Resume an existing subtask session instead of creating a new one. |
 | `timeout_ms` | `integer / null` | — | — | Overall task timeout. A timeout cancels the child execution and returns<br>a structured `timed_out` task result. |
 
@@ -8384,7 +8384,7 @@ Delegated subtask orchestration tools.
       "x-agena-order": "000006"
     },
     "skills": {
-      "description": "Optional Skill names or aliases to attach to the delegated subtask's\nfirst user message as immutable Skill references. The child session\nreceives the resolved Skill instructions as task guidance and should\napply them while completing the task. Use skills appropriate to the\ntask: for example a read-only review task can attach a review/read-only\nskill, an exploration task can attach an explore skill. Unknown names\nor aliases are rejected before the subtask starts.",
+      "description": "Optional Skill names or aliases to attach to the delegated subtask's\nfirst user message as lazy Skill references. The child model receives\ncatalog metadata and can call `agena.skills.get` when it needs the Skill\nbody. Use skills appropriate to the task: for example a read-only review\ntask can attach a review/read-only skill, an exploration task can attach\nan explore skill. Unknown names or aliases are rejected before the\nsubtask starts.",
       "items": {
         "type": "string"
       },
@@ -8424,7 +8424,7 @@ Delegated subtask orchestration tools.
 
 ## agena.tools
 
-**Version** `0.1.0` · **Tools** 7
+**Version** `0.1.2-beta.1` · **Tools** 7
 
 Tool API discovery functions. The runtime resolves tools_call directly to its execution target.
 
@@ -9027,7 +9027,7 @@ Tool API discovery functions. The runtime resolves tools_call directly to its ex
 
 ## agena.web
 
-**Version** `0.1.0` · **Tools** 13
+**Version** `0.1.2-beta.1` · **Tools** 13
 
 Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication, and optional browser rendering.
 

@@ -34,6 +34,14 @@ const LIST_MODELS_DEFAULT_MODEL_ID: &str = "__list_models__";
 static CLINE_API_PROTOCOL_PATHS: LazyLock<ProviderProtocolPathsConfig> =
     LazyLock::new(cline_api_protocol_paths);
 
+/// Infrastructure and immutable identity selected by the composition owner.
+pub(crate) struct AdapterBuildContext<'a> {
+    pub(crate) client: reqwest::Client,
+    pub(crate) env: &'a dyn ConfigEnvironment,
+    pub(crate) config_path: Option<&'a Path>,
+    pub(crate) client_identity: &'a crate::ProviderClientIdentity,
+}
+
 #[derive(Debug, Clone)]
 /// Model probe result for one adapter.
 pub struct ProviderAdapterModelsResult {

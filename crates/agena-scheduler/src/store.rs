@@ -1,146 +1,142 @@
-//! Job persistence stores (`SqliteJobStore`, `InMemoryJobStore`).
+//! Job persistence, optimistic edits, and renewable delivery ownership.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use parking_lot::RwLock;
 use sea_orm::{ConnectionTrait, DatabaseBackend, DatabaseConnection, Statement, TransactionTrait};
 use uuid::Uuid;
 
+use crate::error::{SchedulerError, SchedulerResult};
 use crate::job::{ScheduledJob, SchedulerHistoryEntry};
 
-/// The global audit ledger is deliberately bounded to protect the dedicated
-/// scheduler database from unbounded growth while retaining a useful cross-job,
-/// post-deletion diagnostic/export window.
 pub const MAX_RETAINED_HISTORY_ENTRIES: usize = 1_000;
 
+/// A worker renews every 30 seconds. An abandoned claim becomes recoverable
+/// after 90 seconds, retaining its business delivery key for sink deduplication.
+/// `claimed_at_ms` in schema v1 holds the most recent renewal; the original
+/// attempt start time remains in `job_json.pending_delivery.claimed_at`.
+pub const CLAIM_LEASE_MILLIS: i64 = 90_000;
+pub(crate) const CLAIM_HEARTBEAT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// A read snapshot with an opaque compare token. The exact stored JSON and
+/// claim owner detect concurrent edits, including changes that do not alter
+/// next_fire_at. Heartbeats do not invalidate a configuration edit.
+#[derive(Debug, Clone)]
+pub struct JobSnapshot {
+    pub job: ScheduledJob,
+    json: String,
+    claim_key: Option<String>,
+    renewed_at_ms: Option<i64>,
+}
+
+impl JobSnapshot {
+    pub fn claim_key(&self) -> Option<&str> {
+        self.claim_key.as_deref()
+    }
+
+    fn available(&self, now_ms: i64) -> bool {
+        self.claim_key.is_none()
+            || self
+                .renewed_at_ms
+                .is_none_or(|time| time <= lease_cutoff(now_ms))
+    }
+
+    fn matches(&self, expected: &Self) -> bool {
+        self.json == expected.json && self.claim_key == expected.claim_key
+    }
+}
+
+fn lease_cutoff(now_ms: i64) -> i64 {
+    now_ms.saturating_sub(CLAIM_LEASE_MILLIS)
+}
+
+/// A failed database operation is distinct from an absent job or a lost
+/// optimistic race. State changes that produce a new last_run commit that
+/// record to the bounded history ledger in the same transaction.
 #[async_trait::async_trait]
-/// Persistence for scheduled jobs.
 pub trait JobStore: Send + Sync {
-    async fn put(&self, job: ScheduledJob);
-    async fn remove(&self, id: Uuid) -> bool;
-    async fn list(&self) -> Vec<ScheduledJob>;
-    async fn get(&self, id: Uuid) -> Option<ScheduledJob>;
-    /// Return only jobs that are due at `now_ms`, filtering in the store (SQL)
-    /// instead of decoding every job JSON. Mirrors `ScheduledJob::due`:
-    /// paused/completed and currently-claimed (`delivery_key IS NOT NULL`)
-    /// jobs are excluded; a job is due via `retry_at_ms` when set, else via
-    /// `next_fire_at_ms`.
-    async fn list_due(&self, now_ms: i64) -> Vec<ScheduledJob>;
-    /// Optimistically replace `id`'s row only if it still holds
-    /// `expected_next_fire_at_ms` (in milliseconds, as read by the caller).
-    /// Returns `false` when the row was changed concurrently, so a caller can
-    /// skip work another process already claimed.
-    async fn replace(
-        &self,
-        id: Uuid,
-        expected_next_fire_at_ms: Option<i64>,
-        job: ScheduledJob,
-    ) -> bool;
-    /// Atomically claim a due job: mark it as claimed (via `delivery_key`) so
-    /// no other process can also claim it. The claim only succeeds when the
-    /// row is unclaimed (`delivery_key IS NULL`) and still due
-    /// (`next_fire_at_ms` matches). Returns `false` when another process
-    /// already claimed it or its schedule changed.
+    /// Insert a new job. Existing IDs are rejected, never silently overwritten.
+    async fn put(&self, job: ScheduledJob) -> SchedulerResult<()>;
+    async fn remove(&self, id: Uuid) -> SchedulerResult<bool>;
+    async fn list(&self) -> SchedulerResult<Vec<JobSnapshot>>;
+    async fn get(&self, id: Uuid) -> SchedulerResult<Option<JobSnapshot>>;
+    /// Due unclaimed jobs and abandoned, unpaused claims. Callers claim each
+    /// candidate immediately before delivery, never a batch ahead of time.
+    async fn list_due(&self, now_ms: i64) -> SchedulerResult<Vec<JobSnapshot>>;
+    async fn replace(&self, expected: &JobSnapshot, job: ScheduledJob) -> SchedulerResult<bool>;
     async fn claim(
         &self,
-        id: Uuid,
-        expected_next_fire_at_ms: Option<i64>,
+        expected: &JobSnapshot,
         job: ScheduledJob,
-        delivery_key: String,
-        claimed_at_ms: i64,
-    ) -> bool;
-    /// Atomically finish (or requeue) a claimed job: clear its `delivery_key`
-    /// and set the next fire time. Returns `false` when the row is no longer
-    /// held by `delivery_key` (a stale finalize from a crashed attempt).
+        claim_key: String,
+        now_ms: i64,
+    ) -> SchedulerResult<bool>;
+    /// Renew only an unexpired claim still owned by this attempt. A worker
+    /// that loses ownership must drop its sink future and cannot finalize.
+    async fn renew(&self, id: Uuid, claim_key: &str, now_ms: i64) -> SchedulerResult<bool>;
     async fn finish(
         &self,
-        id: Uuid,
-        delivery_key: String,
+        expected: &JobSnapshot,
+        claim_key: &str,
         job: ScheduledJob,
-        next_fire_at_ms: Option<i64>,
-    ) -> bool;
-    async fn append_history(&self, entry: SchedulerHistoryEntry);
-    async fn list_history(&self, job_id: Option<Uuid>, limit: usize) -> Vec<SchedulerHistoryEntry>;
+        now_ms: i64,
+    ) -> SchedulerResult<bool>;
+    async fn append_history(&self, entry: SchedulerHistoryEntry) -> SchedulerResult<()>;
+    async fn list_history(
+        &self,
+        job_id: Option<Uuid>,
+        limit: usize,
+    ) -> SchedulerResult<Vec<SchedulerHistoryEntry>>;
 }
 
 #[derive(Default, Clone)]
-/// In-memory job store.
 pub struct InMemoryJobStore {
-    inner: Arc<RwLock<HashMap<Uuid, ScheduledJob>>>,
-    history: Arc<RwLock<VecDeque<SchedulerHistoryEntry>>>,
+    inner: Arc<RwLock<MemoryState>>,
 }
 
-/// Durable scheduler store backed by the dedicated scheduler SQLite database.
-/// The schema is created by `crate::schema::initialize_schema`.
-#[derive(Clone)]
-pub struct SqliteJobStore {
-    db: DatabaseConnection,
+#[derive(Default)]
+struct MemoryState {
+    jobs: HashMap<Uuid, JobSnapshot>,
+    // One lock makes job updates and their history entry observable together.
+    history: Vec<SchedulerHistoryEntry>,
 }
 
-impl SqliteJobStore {
-    pub fn new(db: DatabaseConnection) -> Self {
-        Self { db }
+impl MemoryState {
+    fn append_history(&mut self, entry: SchedulerHistoryEntry) {
+        self.history.push(entry);
+        // Stable sorting keeps insertion order as the tie breaker, like SQL id.
+        self.history.sort_by_key(|entry| entry.record.finished_at);
+        let excess = self
+            .history
+            .len()
+            .saturating_sub(MAX_RETAINED_HISTORY_ENTRIES);
+        self.history.drain(..excess);
     }
 
-    /// The derived hot-state columns for `job`, kept in sync with `job_json`
-    /// so the scheduler can filter due jobs in SQL without decoding JSON.
-    fn job_columns(job: &ScheduledJob) -> (Option<i64>, Option<i64>, i64, i64) {
-        (
-            job.next_fire_at.map(|value| value.timestamp_millis()),
-            job.retry_at.map(|value| value.timestamp_millis()),
-            i64::from(job.paused),
-            i64::from(job.completed),
-        )
-    }
-
-    async fn upsert(&self, job: &ScheduledJob) -> Result<(), sea_orm::DbErr> {
-        let json = serde_json::to_string(job)
-            .map_err(|error| sea_orm::DbErr::Custom(format!("serialize scheduled job: {error}")))?;
-        let (next_fire_at_ms, retry_at_ms, paused, completed) = Self::job_columns(job);
-        // `delivery_key` / `claimed_at_ms` are deliberately left untouched on
-        // conflict: `put` is only used for brand-new jobs, and an in-flight
-        // claim belongs to whoever set it.
-        self.db
-            .execute(Statement::from_sql_and_values(
-                DatabaseBackend::Sqlite,
-                "INSERT INTO agena_scheduler_jobs \
-                 (id, job_json, next_fire_at_ms, retry_at_ms, paused, completed, updated_at_ms) \
-                 VALUES (?, ?, ?, ?, ?, ?, ?) \
-                 ON CONFLICT(id) DO UPDATE SET \
-                   job_json = excluded.job_json, next_fire_at_ms = excluded.next_fire_at_ms, \
-                   retry_at_ms = excluded.retry_at_ms, paused = excluded.paused, \
-                   completed = excluded.completed, updated_at_ms = excluded.updated_at_ms",
-                [
-                    job.id.to_string().into(),
-                    json.into(),
-                    next_fire_at_ms.into(),
-                    retry_at_ms.into(),
-                    paused.into(),
-                    completed.into(),
-                    chrono::Utc::now().timestamp_millis().into(),
-                ],
-            ))
-            .await?;
-        Ok(())
-    }
-
-    fn decode(row: &sea_orm::QueryResult) -> Option<ScheduledJob> {
-        let json = match row.try_get::<String>("", "job_json") {
-            Ok(json) => json,
-            Err(error) => {
-                tracing::warn!(target: "agena_scheduler::store", %error, "invalid scheduler row");
-                return None;
-            }
-        };
-        match serde_json::from_str(&json) {
-            Ok(job) => Some(job),
-            Err(error) => {
-                tracing::warn!(target: "agena_scheduler::store", %error, "invalid scheduler job JSON");
-                None
-            }
+    fn save(&mut self, expected: &JobSnapshot, next: JobSnapshot) {
+        if let Some(entry) = new_history(expected, &next.job) {
+            self.append_history(entry);
         }
+        self.jobs.insert(next.job.id, next);
     }
+}
+
+fn new_history(expected: &JobSnapshot, job: &ScheduledJob) -> Option<SchedulerHistoryEntry> {
+    (expected.job.last_run != job.last_run)
+        .then(|| job.last_run.clone())
+        .flatten()
+        .map(|record| SchedulerHistoryEntry {
+            job_id: job.id,
+            record,
+        })
+}
+
+fn encode_update(expected: &JobSnapshot, job: &ScheduledJob) -> SchedulerResult<String> {
+    if expected.job.id != job.id {
+        return Err(SchedulerError::InvalidUpdate("job id cannot change".into()));
+    }
+    Ok(serde_json::to_string(job)?)
 }
 
 impl InMemoryJobStore {
@@ -151,362 +147,402 @@ impl InMemoryJobStore {
 
 #[async_trait::async_trait]
 impl JobStore for InMemoryJobStore {
-    async fn put(&self, job: ScheduledJob) {
-        self.inner.write().insert(job.id, job);
-    }
-    async fn remove(&self, id: Uuid) -> bool {
-        self.inner.write().remove(&id).is_some()
-    }
-    async fn list(&self) -> Vec<ScheduledJob> {
-        self.inner.read().values().cloned().collect()
-    }
-    async fn get(&self, id: Uuid) -> Option<ScheduledJob> {
-        self.inner.read().get(&id).cloned()
-    }
-    async fn list_due(&self, now_ms: i64) -> Vec<ScheduledJob> {
-        let now = chrono::DateTime::from_timestamp_millis(now_ms).unwrap_or_else(chrono::Utc::now);
-        self.inner
-            .read()
-            .values()
-            .filter(|job| job.due(now))
-            .cloned()
-            .collect()
-    }
-    async fn replace(
-        &self,
-        id: Uuid,
-        _expected_next_fire_at_ms: Option<i64>,
-        job: ScheduledJob,
-    ) -> bool {
-        let mut g = self.inner.write();
-        if !g.contains_key(&id) {
-            return false;
+    async fn put(&self, job: ScheduledJob) -> SchedulerResult<()> {
+        let json = serde_json::to_string(&job)?;
+        let mut state = self.inner.write();
+        if state.jobs.contains_key(&job.id) {
+            return Err(SchedulerError::Conflict(job.id));
         }
-        g.insert(id, job);
-        true
+        state.jobs.insert(
+            job.id,
+            JobSnapshot {
+                job,
+                json,
+                claim_key: None,
+                renewed_at_ms: None,
+            },
+        );
+        Ok(())
+    }
+
+    async fn remove(&self, id: Uuid) -> SchedulerResult<bool> {
+        Ok(self.inner.write().jobs.remove(&id).is_some())
+    }
+
+    async fn list(&self) -> SchedulerResult<Vec<JobSnapshot>> {
+        let mut jobs: Vec<_> = self.inner.read().jobs.values().cloned().collect();
+        jobs.sort_by_key(|entry| {
+            (
+                entry.job.next_fire_at.is_none(),
+                entry.job.next_fire_at,
+                entry.job.id,
+            )
+        });
+        Ok(jobs)
+    }
+
+    async fn get(&self, id: Uuid) -> SchedulerResult<Option<JobSnapshot>> {
+        Ok(self.inner.read().jobs.get(&id).cloned())
+    }
+
+    async fn list_due(&self, now_ms: i64) -> SchedulerResult<Vec<JobSnapshot>> {
+        let mut jobs: Vec<_> = self
+            .inner
+            .read()
+            .jobs
+            .values()
+            .filter(|entry| {
+                !entry.job.paused
+                    && !entry.job.completed
+                    && entry.available(now_ms)
+                    && (entry.claim_key.is_some()
+                        || entry
+                            .job
+                            .retry_at
+                            .or_else(|| {
+                                entry
+                                    .job
+                                    .pending_delivery
+                                    .is_none()
+                                    .then_some(entry.job.next_fire_at)
+                                    .flatten()
+                            })
+                            .is_some_and(|time| time.timestamp_millis() <= now_ms))
+            })
+            .cloned()
+            .collect();
+        jobs.sort_by_key(|entry| (entry.job.retry_at.or(entry.job.next_fire_at), entry.job.id));
+        Ok(jobs)
+    }
+
+    async fn replace(&self, expected: &JobSnapshot, job: ScheduledJob) -> SchedulerResult<bool> {
+        let json = encode_update(expected, &job)?;
+        let mut state = self.inner.write();
+        let Some(current) = state
+            .jobs
+            .get(&job.id)
+            .filter(|entry| entry.matches(expected))
+        else {
+            return Ok(false);
+        };
+        let next = JobSnapshot {
+            job,
+            json,
+            claim_key: current.claim_key.clone(),
+            renewed_at_ms: current.renewed_at_ms,
+        };
+        state.save(expected, next);
+        Ok(true)
     }
 
     async fn claim(
         &self,
-        id: Uuid,
-        _expected_next_fire_at_ms: Option<i64>,
+        expected: &JobSnapshot,
         job: ScheduledJob,
-        _delivery_key: String,
-        _claimed_at_ms: i64,
-    ) -> bool {
-        let mut g = self.inner.write();
-        let Some(existing) = g.get(&id) else {
-            return false;
-        };
-        if existing.pending_delivery.is_some() {
-            return false;
+        claim_key: String,
+        now_ms: i64,
+    ) -> SchedulerResult<bool> {
+        let json = encode_update(expected, &job)?;
+        let mut state = self.inner.write();
+        if !state
+            .jobs
+            .get(&job.id)
+            .is_some_and(|entry| entry.matches(expected) && entry.available(now_ms))
+        {
+            return Ok(false);
         }
-        g.insert(id, job);
-        true
+        state.jobs.insert(
+            job.id,
+            JobSnapshot {
+                job,
+                json,
+                claim_key: Some(claim_key),
+                renewed_at_ms: Some(now_ms),
+            },
+        );
+        Ok(true)
+    }
+
+    async fn renew(&self, id: Uuid, claim_key: &str, now_ms: i64) -> SchedulerResult<bool> {
+        let mut state = self.inner.write();
+        let Some(entry) = state.jobs.get_mut(&id) else {
+            return Ok(false);
+        };
+        if entry.claim_key() != Some(claim_key) || entry.available(now_ms) {
+            return Ok(false);
+        }
+        entry.renewed_at_ms = Some(entry.renewed_at_ms.unwrap_or(now_ms).max(now_ms));
+        Ok(true)
     }
 
     async fn finish(
         &self,
-        id: Uuid,
-        _delivery_key: String,
+        expected: &JobSnapshot,
+        claim_key: &str,
         job: ScheduledJob,
-        _next_fire_at_ms: Option<i64>,
-    ) -> bool {
-        let mut g = self.inner.write();
-        if !g.contains_key(&id) {
-            return false;
+        now_ms: i64,
+    ) -> SchedulerResult<bool> {
+        let json = encode_update(expected, &job)?;
+        let mut state = self.inner.write();
+        if !state.jobs.get(&job.id).is_some_and(|entry| {
+            entry.matches(expected)
+                && entry.claim_key() == Some(claim_key)
+                && !entry.available(now_ms)
+        }) {
+            return Ok(false);
         }
-        g.insert(id, job);
-        true
+        state.save(
+            expected,
+            JobSnapshot {
+                job,
+                json,
+                claim_key: None,
+                renewed_at_ms: None,
+            },
+        );
+        Ok(true)
     }
 
-    async fn append_history(&self, entry: SchedulerHistoryEntry) {
-        let mut history = self.history.write();
-        history.push_back(entry);
-        while history.len() > MAX_RETAINED_HISTORY_ENTRIES {
-            history.pop_front();
-        }
+    async fn append_history(&self, entry: SchedulerHistoryEntry) -> SchedulerResult<()> {
+        self.inner.write().append_history(entry);
+        Ok(())
     }
 
-    async fn list_history(&self, job_id: Option<Uuid>, limit: usize) -> Vec<SchedulerHistoryEntry> {
-        history_from_iter(self.history.read().iter(), job_id, limit)
+    async fn list_history(
+        &self,
+        job_id: Option<Uuid>,
+        limit: usize,
+    ) -> SchedulerResult<Vec<SchedulerHistoryEntry>> {
+        Ok(self
+            .inner
+            .read()
+            .history
+            .iter()
+            .rev()
+            .filter(|entry| job_id.is_none_or(|id| entry.job_id == id))
+            .take(limit.clamp(1, MAX_RETAINED_HISTORY_ENTRIES))
+            .cloned()
+            .collect())
+    }
+}
+
+#[derive(Clone)]
+pub struct SqliteJobStore {
+    db: DatabaseConnection,
+}
+
+impl SqliteJobStore {
+    pub fn new(db: DatabaseConnection) -> Self {
+        Self { db }
+    }
+
+    fn decode(row: &sea_orm::QueryResult) -> SchedulerResult<JobSnapshot> {
+        let json: String = row.try_get("", "job_json")?;
+        Ok(JobSnapshot {
+            job: serde_json::from_str(&json)?,
+            json,
+            claim_key: row.try_get("", "delivery_key")?,
+            renewed_at_ms: row.try_get("", "claimed_at_ms")?,
+        })
+    }
+
+    fn job_values(job: &ScheduledJob, json: String) -> Vec<sea_orm::Value> {
+        vec![
+            json.into(),
+            job.next_fire_at.map(|time| time.timestamp_millis()).into(),
+            job.retry_at.map(|time| time.timestamp_millis()).into(),
+            i64::from(job.paused).into(),
+            i64::from(job.completed).into(),
+            chrono::Utc::now().timestamp_millis().into(),
+        ]
+    }
+
+    async fn write_history(
+        db: &impl ConnectionTrait,
+        entry: &SchedulerHistoryEntry,
+    ) -> SchedulerResult<()> {
+        db.execute(Statement::from_sql_and_values(DatabaseBackend::Sqlite,
+            "INSERT INTO agena_scheduler_history (job_id, run_json, finished_at_ms) VALUES (?, ?, ?)",
+            [entry.job_id.to_string().into(), serde_json::to_string(&entry.record)?.into(), entry.record.finished_at.timestamp_millis().into()],
+        )).await?;
+        db.execute(Statement::from_sql_and_values(
+            DatabaseBackend::Sqlite,
+            "DELETE FROM agena_scheduler_history \
+             WHERE id IN (SELECT id FROM agena_scheduler_history \
+                          ORDER BY finished_at_ms ASC, id ASC LIMIT \
+                            (SELECT MAX(0, COUNT(*) - ?) FROM agena_scheduler_history))",
+            [(MAX_RETAINED_HISTORY_ENTRIES as i64).into()],
+        ))
+        .await?;
+        Ok(())
+    }
+
+    async fn update_with_history(
+        &self,
+        statement: Statement,
+        expected: &JobSnapshot,
+        job: &ScheduledJob,
+    ) -> SchedulerResult<bool> {
+        let txn = self.db.begin().await?;
+        let changed = txn.execute(statement).await?.rows_affected() > 0;
+        if changed && let Some(entry) = new_history(expected, job) {
+            Self::write_history(&txn, &entry).await?;
+        }
+        // Any statement failure returns early, dropping/rolling back the
+        // transaction. Never commit an update without its audit record.
+        txn.commit().await?;
+        Ok(changed)
     }
 }
 
 #[async_trait::async_trait]
 impl JobStore for SqliteJobStore {
-    async fn put(&self, job: ScheduledJob) {
-        if let Err(error) = self.upsert(&job).await {
-            tracing::error!(target: "agena_scheduler::store", job_id = %job.id, %error, "failed to persist scheduled job");
+    async fn put(&self, job: ScheduledJob) -> SchedulerResult<()> {
+        let mut values = Self::job_values(&job, serde_json::to_string(&job)?);
+        values.push(job.id.to_string().into());
+        let result = self.db.execute(Statement::from_sql_and_values(DatabaseBackend::Sqlite,
+            "INSERT INTO agena_scheduler_jobs (job_json, next_fire_at_ms, retry_at_ms, paused, completed, updated_at_ms, id) \
+             VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING", values,
+        )).await?;
+        if result.rows_affected() == 0 {
+            return Err(SchedulerError::Conflict(job.id));
         }
+        Ok(())
     }
 
-    async fn remove(&self, id: Uuid) -> bool {
-        match self
+    async fn remove(&self, id: Uuid) -> SchedulerResult<bool> {
+        Ok(self
             .db
             .execute(Statement::from_sql_and_values(
                 DatabaseBackend::Sqlite,
                 "DELETE FROM agena_scheduler_jobs WHERE id = ?",
                 [id.to_string().into()],
             ))
-            .await
-        {
-            Ok(result) => result.rows_affected() > 0,
-            Err(error) => {
-                tracing::error!(target: "agena_scheduler::store", job_id = %id, %error, "failed to delete scheduled job");
-                false
-            }
-        }
+            .await?
+            .rows_affected()
+            > 0)
     }
 
-    async fn list(&self) -> Vec<ScheduledJob> {
-        match self
-            .db
-            .query_all(Statement::from_string(
-                DatabaseBackend::Sqlite,
-                "SELECT job_json FROM agena_scheduler_jobs ORDER BY next_fire_at_ms IS NULL, next_fire_at_ms, id".to_string(),
-            ))
-            .await
-        {
-            Ok(rows) => rows.iter().filter_map(Self::decode).collect(),
-            Err(error) => {
-                tracing::error!(target: "agena_scheduler::store", %error, "failed to list scheduled jobs");
-                Vec::new()
-            }
-        }
+    async fn list(&self) -> SchedulerResult<Vec<JobSnapshot>> {
+        self.db.query_all(Statement::from_string(DatabaseBackend::Sqlite,
+            "SELECT job_json, delivery_key, claimed_at_ms FROM agena_scheduler_jobs ORDER BY next_fire_at_ms IS NULL, next_fire_at_ms, id",
+        )).await?.iter().map(Self::decode).collect()
     }
 
-    async fn list_due(&self, now_ms: i64) -> Vec<ScheduledJob> {
-        // Mirrors `ScheduledJob::due(now)`: paused/completed jobs and jobs
-        // currently claimed (`delivery_key IS NOT NULL`) are never due; a job
-        // is due via `retry_at_ms` when set, otherwise via `next_fire_at_ms`.
-        match self
-            .db
+    async fn get(&self, id: Uuid) -> SchedulerResult<Option<JobSnapshot>> {
+        self.db.query_one(Statement::from_sql_and_values(DatabaseBackend::Sqlite,
+            "SELECT job_json, delivery_key, claimed_at_ms FROM agena_scheduler_jobs WHERE id = ?", [id.to_string().into()],
+        )).await?.as_ref().map(Self::decode).transpose()
+    }
+
+    async fn list_due(&self, now_ms: i64) -> SchedulerResult<Vec<JobSnapshot>> {
+        self.db
             .query_all(Statement::from_sql_and_values(
                 DatabaseBackend::Sqlite,
-                "SELECT job_json FROM agena_scheduler_jobs \
-                 WHERE delivery_key IS NULL AND paused = 0 AND completed = 0 \
-                   AND (retry_at_ms IS NOT NULL AND retry_at_ms <= ? \
-                        OR retry_at_ms IS NULL AND next_fire_at_ms IS NOT NULL AND next_fire_at_ms <= ?) \
-                 ORDER BY COALESCE(retry_at_ms, next_fire_at_ms) ASC, id",
-                [now_ms.into(), now_ms.into()],
+                "SELECT job_json, delivery_key, claimed_at_ms FROM agena_scheduler_jobs \
+             WHERE paused = 0 AND completed = 0 AND ( \
+               delivery_key IS NULL AND (retry_at_ms IS NOT NULL AND retry_at_ms <= ? \
+                 OR retry_at_ms IS NULL AND next_fire_at_ms IS NOT NULL AND next_fire_at_ms <= ?) \
+               OR delivery_key IS NOT NULL AND (claimed_at_ms IS NULL OR claimed_at_ms <= ?)) \
+             ORDER BY COALESCE(retry_at_ms, next_fire_at_ms), id",
+                [now_ms.into(), now_ms.into(), lease_cutoff(now_ms).into()],
             ))
-            .await
-        {
-            Ok(rows) => rows.iter().filter_map(Self::decode).collect(),
-            Err(error) => {
-                tracing::error!(target: "agena_scheduler::store", %error, "failed to list due scheduled jobs");
-                Vec::new()
-            }
-        }
+            .await?
+            .iter()
+            .map(Self::decode)
+            .collect()
     }
 
-    async fn get(&self, id: Uuid) -> Option<ScheduledJob> {
-        match self
-            .db
-            .query_one(Statement::from_sql_and_values(
-                DatabaseBackend::Sqlite,
-                "SELECT job_json FROM agena_scheduler_jobs WHERE id = ?",
-                [id.to_string().into()],
-            ))
-            .await
-        {
-            Ok(row) => row.as_ref().and_then(Self::decode),
-            Err(error) => {
-                tracing::error!(target: "agena_scheduler::store", job_id = %id, %error, "failed to read scheduled job");
-                None
-            }
-        }
-    }
-
-    async fn replace(
-        &self,
-        id: Uuid,
-        expected_next_fire_at_ms: Option<i64>,
-        job: ScheduledJob,
-    ) -> bool {
-        let json = match serde_json::to_string(&job) {
-            Ok(json) => json,
-            Err(error) => {
-                tracing::error!(target: "agena_scheduler::store", job_id = %id, %error, "failed to serialize scheduled job for replace");
-                return false;
-            }
-        };
-        let (next_fire_at_ms, retry_at_ms, paused, completed) = Self::job_columns(&job);
-        let result = self
-            .db
-            .execute(Statement::from_sql_and_values(
-                DatabaseBackend::Sqlite,
-                "UPDATE agena_scheduler_jobs \
-                 SET job_json = ?, next_fire_at_ms = ?, retry_at_ms = ?, paused = ?, \
-                     completed = ?, updated_at_ms = ? \
-                 WHERE id = ? AND next_fire_at_ms IS ?",
-                [
-                    json.into(),
-                    next_fire_at_ms.into(),
-                    retry_at_ms.into(),
-                    paused.into(),
-                    completed.into(),
-                    chrono::Utc::now().timestamp_millis().into(),
-                    id.to_string().into(),
-                    expected_next_fire_at_ms.into(),
-                ],
-            ))
-            .await;
-        match result {
-            Ok(result) => result.rows_affected() > 0,
-            Err(error) => {
-                tracing::error!(target: "agena_scheduler::store", job_id = %id, %error, "failed to replace scheduled job");
-                false
-            }
-        }
+    async fn replace(&self, expected: &JobSnapshot, job: ScheduledJob) -> SchedulerResult<bool> {
+        let mut values = Self::job_values(&job, encode_update(expected, &job)?);
+        values.extend([
+            job.id.to_string().into(),
+            expected.json.clone().into(),
+            expected.claim_key.clone().into(),
+        ]);
+        self.update_with_history(Statement::from_sql_and_values(DatabaseBackend::Sqlite,
+            "UPDATE agena_scheduler_jobs SET job_json = ?, next_fire_at_ms = ?, retry_at_ms = ?, paused = ?, completed = ?, updated_at_ms = ? \
+             WHERE id = ? AND job_json = ? AND delivery_key IS ?", values,
+        ), expected, &job).await
     }
 
     async fn claim(
         &self,
-        id: Uuid,
-        expected_next_fire_at_ms: Option<i64>,
+        expected: &JobSnapshot,
         job: ScheduledJob,
-        delivery_key: String,
-        claimed_at_ms: i64,
-    ) -> bool {
-        let json = match serde_json::to_string(&job) {
-            Ok(json) => json,
-            Err(error) => {
-                tracing::error!(target: "agena_scheduler::store", job_id = %id, %error, "failed to serialize scheduled job for claim");
-                return false;
-            }
-        };
-        // Claiming clears `next_fire_at_ms` (the fire is in flight); only the
-        // other hot-state columns are carried forward from the job.
-        let (_, retry_at_ms, paused, completed) = Self::job_columns(&job);
-        let result = self
+        claim_key: String,
+        now_ms: i64,
+    ) -> SchedulerResult<bool> {
+        let mut values = Self::job_values(&job, encode_update(expected, &job)?);
+        values.extend([
+            claim_key.into(),
+            now_ms.into(),
+            job.id.to_string().into(),
+            expected.json.clone().into(),
+            expected.claim_key.clone().into(),
+            lease_cutoff(now_ms).into(),
+        ]);
+        Ok(self.db.execute(Statement::from_sql_and_values(DatabaseBackend::Sqlite,
+            "UPDATE agena_scheduler_jobs SET job_json = ?, next_fire_at_ms = ?, retry_at_ms = ?, paused = ?, completed = ?, updated_at_ms = ?, delivery_key = ?, claimed_at_ms = ? \
+             WHERE id = ? AND job_json = ? AND delivery_key IS ? \
+               AND (delivery_key IS NULL OR claimed_at_ms IS NULL OR claimed_at_ms <= ?)", values,
+        )).await?.rows_affected() > 0)
+    }
+
+    async fn renew(&self, id: Uuid, claim_key: &str, now_ms: i64) -> SchedulerResult<bool> {
+        Ok(self
             .db
             .execute(Statement::from_sql_and_values(
                 DatabaseBackend::Sqlite,
-                "UPDATE agena_scheduler_jobs \
-                 SET job_json = ?, next_fire_at_ms = NULL, retry_at_ms = ?, paused = ?, \
-                     completed = ?, delivery_key = ?, claimed_at_ms = ?, updated_at_ms = ? \
-                 WHERE id = ? AND delivery_key IS NULL AND next_fire_at_ms IS ?",
+                "UPDATE agena_scheduler_jobs SET claimed_at_ms = MAX(claimed_at_ms, ?) \
+             WHERE id = ? AND delivery_key = ? AND claimed_at_ms > ?",
                 [
-                    json.into(),
-                    retry_at_ms.into(),
-                    paused.into(),
-                    completed.into(),
-                    delivery_key.into(),
-                    claimed_at_ms.into(),
-                    chrono::Utc::now().timestamp_millis().into(),
+                    now_ms.into(),
                     id.to_string().into(),
-                    expected_next_fire_at_ms.into(),
+                    claim_key.into(),
+                    lease_cutoff(now_ms).into(),
                 ],
             ))
-            .await;
-        match result {
-            Ok(result) => result.rows_affected() > 0,
-            Err(error) => {
-                tracing::error!(target: "agena_scheduler::store", job_id = %id, %error, "failed to claim scheduled job");
-                false
-            }
-        }
+            .await?
+            .rows_affected()
+            > 0)
     }
 
     async fn finish(
         &self,
-        id: Uuid,
-        delivery_key: String,
+        expected: &JobSnapshot,
+        claim_key: &str,
         job: ScheduledJob,
-        next_fire_at_ms: Option<i64>,
-    ) -> bool {
-        let json = match serde_json::to_string(&job) {
-            Ok(json) => json,
-            Err(error) => {
-                tracing::error!(target: "agena_scheduler::store", job_id = %id, %error, "failed to serialize scheduled job for finish");
-                return false;
-            }
-        };
-        // The caller passes the authoritative post-finalization `next_fire_at`
-        // (it may differ from the job's transient state); derive only the
-        // other hot-state columns from the job itself.
-        let (_, retry_at_ms, paused, completed) = Self::job_columns(&job);
-        let result = self
-            .db
-            .execute(Statement::from_sql_and_values(
-                DatabaseBackend::Sqlite,
-                "UPDATE agena_scheduler_jobs \
-                 SET job_json = ?, next_fire_at_ms = ?, retry_at_ms = ?, paused = ?, \
-                     completed = ?, delivery_key = NULL, claimed_at_ms = NULL, updated_at_ms = ? \
-                 WHERE id = ? AND delivery_key = ?",
-                [
-                    json.into(),
-                    next_fire_at_ms.into(),
-                    retry_at_ms.into(),
-                    paused.into(),
-                    completed.into(),
-                    chrono::Utc::now().timestamp_millis().into(),
-                    id.to_string().into(),
-                    delivery_key.into(),
-                ],
-            ))
-            .await;
-        match result {
-            Ok(result) => result.rows_affected() > 0,
-            Err(error) => {
-                tracing::error!(target: "agena_scheduler::store", job_id = %id, %error, "failed to finalize scheduled job");
-                false
-            }
+        now_ms: i64,
+    ) -> SchedulerResult<bool> {
+        if expected.claim_key() != Some(claim_key) {
+            return Ok(false);
         }
+        let mut values = Self::job_values(&job, encode_update(expected, &job)?);
+        values.extend([
+            job.id.to_string().into(),
+            expected.json.clone().into(),
+            claim_key.into(),
+            lease_cutoff(now_ms).into(),
+        ]);
+        self.update_with_history(Statement::from_sql_and_values(DatabaseBackend::Sqlite,
+            "UPDATE agena_scheduler_jobs SET job_json = ?, next_fire_at_ms = ?, retry_at_ms = ?, paused = ?, completed = ?, updated_at_ms = ?, delivery_key = NULL, claimed_at_ms = NULL \
+             WHERE id = ? AND job_json = ? AND delivery_key = ? AND claimed_at_ms > ?", values,
+        ), expected, &job).await
     }
 
-    async fn append_history(&self, entry: SchedulerHistoryEntry) {
-        let json = match serde_json::to_string(&entry.record) {
-            Ok(json) => json,
-            Err(error) => {
-                tracing::error!(target: "agena_scheduler::store", job_id = %entry.job_id, %error, "failed to serialize scheduler history entry");
-                return;
-            }
-        };
-        let finished_at_ms = entry.record.finished_at.timestamp_millis();
-        // Insert and prune in one transaction so the bounded ledger cannot be
-        // left over its cap by a crash between the two statements.
-        let txn = match self.db.begin().await {
-            Ok(txn) => txn,
-            Err(error) => {
-                tracing::error!(target: "agena_scheduler::store", job_id = %entry.job_id, %error, "failed to begin scheduler history write");
-                return;
-            }
-        };
-        let insert = txn
-            .execute(Statement::from_sql_and_values(
-                DatabaseBackend::Sqlite,
-                "INSERT INTO agena_scheduler_history (job_id, run_json, finished_at_ms) VALUES (?, ?, ?)",
-                [entry.job_id.to_string().into(), json.into(), finished_at_ms.into()],
-            ))
-            .await;
-        let prune = txn
-            .execute(Statement::from_sql_and_values(
-                DatabaseBackend::Sqlite,
-                "DELETE FROM agena_scheduler_history \
-                 WHERE id IN (SELECT id FROM agena_scheduler_history \
-                              ORDER BY finished_at_ms ASC, id ASC LIMIT \
-                                (SELECT MAX(0, COUNT(*) - ?) FROM agena_scheduler_history))",
-                [(MAX_RETAINED_HISTORY_ENTRIES as i64).into()],
-            ))
-            .await;
-        match (insert, prune, txn.commit().await) {
-            (Err(error), ..) => {
-                tracing::error!(target: "agena_scheduler::store", job_id = %entry.job_id, %error, "failed to persist scheduler history entry");
-            }
-            (_, Err(error), _) => {
-                tracing::error!(target: "agena_scheduler::store", %error, "failed to prune scheduler history ledger");
-            }
-            (_, _, Err(error)) => {
-                tracing::error!(target: "agena_scheduler::store", %error, "failed to commit scheduler history write");
-            }
-            _ => {}
-        }
+    async fn append_history(&self, entry: SchedulerHistoryEntry) -> SchedulerResult<()> {
+        let txn = self.db.begin().await?;
+        Self::write_history(&txn, &entry).await?;
+        txn.commit().await?;
+        Ok(())
     }
 
-    async fn list_history(&self, job_id: Option<Uuid>, limit: usize) -> Vec<SchedulerHistoryEntry> {
+    async fn list_history(
+        &self,
+        job_id: Option<Uuid>,
+        limit: usize,
+    ) -> SchedulerResult<Vec<SchedulerHistoryEntry>> {
         let limit = limit.clamp(1, MAX_RETAINED_HISTORY_ENTRIES) as i64;
         let (sql, values) = if let Some(job_id) = job_id {
             (
@@ -519,308 +555,30 @@ impl JobStore for SqliteJobStore {
                 vec![limit.into()],
             )
         };
-        match self
-            .db
-            .query_all(Statement::from_sql_and_values(DatabaseBackend::Sqlite, sql, values))
-            .await
-        {
-            Ok(rows) => rows
-                .iter()
-                .filter_map(|row| {
-                    let job_id = match row.try_get::<String>("", "job_id") {
-                        Ok(job_id) => match job_id.parse() {
-                            Ok(job_id) => job_id,
-                            Err(error) => {
-                                tracing::warn!(
-                                    target: "agena_scheduler::store",
-                                    diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
-                                        "decode scheduler history job id",
-                                        &error,
-                                    ),
-                                    "skipping malformed scheduler history row"
-                                );
-                                return None;
-                            }
-                        },
-                        Err(error) => {
-                            tracing::warn!(
-                                target: "agena_scheduler::store",
-                                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
-                                    "read scheduler history job id column",
-                                    &error,
-                                ),
-                                "skipping malformed scheduler history row"
-                            );
-                            return None;
-                        }
-                    };
-                    let json = match row.try_get::<String>("", "run_json") {
-                        Ok(json) => json,
-                        Err(error) => {
-                            tracing::warn!(
-                                target: "agena_scheduler::store",
-                                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
-                                    "read scheduler history run JSON column",
-                                    &error,
-                                ),
-                                "skipping malformed scheduler history row"
-                            );
-                            return None;
-                        }
-                    };
-                    match serde_json::from_str(&json) {
-                        Ok(record) => Some(SchedulerHistoryEntry { job_id, record }),
-                        Err(error) => {
-                            tracing::warn!(
-                                target: "agena_scheduler::store",
-                                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
-                                    "decode scheduler history run JSON",
-                                    &error,
-                                ),
-                                "skipping malformed scheduler history row"
-                            );
-                            None
-                        }
-                    }
+        self.db
+            .query_all(Statement::from_sql_and_values(
+                DatabaseBackend::Sqlite,
+                sql,
+                values,
+            ))
+            .await?
+            .iter()
+            .map(|row| {
+                let id: String = row.try_get("", "job_id")?;
+                let job_id = id.parse().map_err(|error| {
+                    SchedulerError::Persistence(sea_orm::DbErr::Custom(format!(
+                        "invalid scheduler history job id: {error}"
+                    )))
+                })?;
+                let json: String = row.try_get("", "run_json")?;
+                Ok(SchedulerHistoryEntry {
+                    job_id,
+                    record: serde_json::from_str(&json)?,
                 })
-                .collect(),
-            Err(error) => {
-                tracing::error!(target: "agena_scheduler::store", %error, "failed to list scheduler history ledger");
-                Vec::new()
-            }
-        }
+            })
+            .collect()
     }
-}
-
-fn history_from_iter<'a>(
-    entries: impl DoubleEndedIterator<Item = &'a SchedulerHistoryEntry>,
-    job_id: Option<Uuid>,
-    limit: usize,
-) -> Vec<SchedulerHistoryEntry> {
-    entries
-        .rev()
-        .filter(|entry| job_id.is_none_or(|id| entry.job_id == id))
-        .take(limit.clamp(1, MAX_RETAINED_HISTORY_ENTRIES))
-        .cloned()
-        .collect()
 }
 
 #[cfg(test)]
-mod tests {
-    use chrono::{Duration, Utc};
-    use sea_orm::Database;
-
-    use super::*;
-    use crate::schema::initialize_schema;
-
-    async fn scheduler_database() -> DatabaseConnection {
-        let db = Database::connect("sqlite::memory:")
-            .await
-            .expect("connect sqlite");
-        initialize_schema(&db)
-            .await
-            .expect("initialize scheduler schema");
-        db
-    }
-
-    #[tokio::test]
-    async fn sqlite_store_survives_store_reconstruction() {
-        let db = scheduler_database().await;
-
-        let first = SqliteJobStore::new(db.clone());
-        let job = ScheduledJob::new_once(Utc::now() + Duration::minutes(5), "verify");
-        let id = job.id;
-        first.put(job.clone()).await;
-
-        let reconstructed = SqliteJobStore::new(db);
-        assert_eq!(
-            reconstructed.get(id).await.expect("persisted job").prompt,
-            "verify"
-        );
-        assert_eq!(reconstructed.list().await.len(), 1);
-
-        let mut updated = job;
-        let token = updated.next_fire_at.map(|value| value.timestamp_millis());
-        updated.prompt = "verify again".to_string();
-        assert!(reconstructed.replace(id, token, updated).await);
-        assert_eq!(
-            reconstructed.get(id).await.expect("updated job").prompt,
-            "verify again"
-        );
-        assert!(reconstructed.remove(id).await);
-        assert!(reconstructed.list().await.is_empty());
-    }
-
-    #[tokio::test]
-    async fn scheduler_wide_history_survives_job_deletion_and_store_reconstruction() {
-        let db = scheduler_database().await;
-
-        let store = SqliteJobStore::new(db.clone());
-        let job = ScheduledJob::new_once(Utc::now() + Duration::minutes(5), "audit me");
-        let job_id = job.id;
-        store.put(job).await;
-        let now = Utc::now();
-        store
-            .append_history(SchedulerHistoryEntry {
-                job_id,
-                record: crate::JobRunRecord {
-                    triggered_at: now,
-                    finished_at: now,
-                    status: crate::JobRunStatus::Submitted,
-                    scheduled_for: Some(now),
-                    delivery_key: Some("delivery-key".to_string()),
-                    attempt: Some(1),
-                    session_id: Some(7),
-                    failure: None,
-                },
-            })
-            .await;
-        assert!(store.remove(job_id).await);
-
-        let reconstructed = SqliteJobStore::new(db);
-        let history = reconstructed.list_history(Some(job_id), 10).await;
-        assert_eq!(history.len(), 1);
-        assert_eq!(history[0].job_id, job_id);
-        assert_eq!(
-            history[0].record.delivery_key.as_deref(),
-            Some("delivery-key")
-        );
-    }
-
-    #[tokio::test]
-    async fn in_memory_history_retention_is_globally_bounded() {
-        let store = InMemoryJobStore::new();
-        let job_id = Uuid::new_v4();
-        let now = Utc::now();
-        for index in 0..=MAX_RETAINED_HISTORY_ENTRIES {
-            store
-                .append_history(SchedulerHistoryEntry {
-                    job_id,
-                    record: crate::JobRunRecord {
-                        triggered_at: now + Duration::milliseconds(index as i64),
-                        finished_at: now + Duration::milliseconds(index as i64),
-                        status: crate::JobRunStatus::Submitted,
-                        scheduled_for: None,
-                        delivery_key: Some(index.to_string()),
-                        attempt: Some(1),
-                        session_id: None,
-                        failure: None,
-                    },
-                })
-                .await;
-        }
-        let history = store
-            .list_history(Some(job_id), MAX_RETAINED_HISTORY_ENTRIES + 10)
-            .await;
-        assert_eq!(history.len(), MAX_RETAINED_HISTORY_ENTRIES);
-        assert_eq!(
-            history
-                .last()
-                .and_then(|entry| entry.record.delivery_key.as_deref()),
-            Some("1")
-        );
-    }
-
-    #[tokio::test]
-    async fn sqlite_claim_is_exclusive_across_connections() {
-        let db = scheduler_database().await;
-
-        let store_a = SqliteJobStore::new(db.clone());
-        let store_b = SqliteJobStore::new(db);
-        let mut job = ScheduledJob::new_once(Utc::now() + Duration::minutes(5), "claim");
-        job.next_fire_at = Some(Utc::now() - Duration::seconds(1)); // make it due
-        let id = job.id;
-        store_a.put(job.clone()).await;
-        let token = job.next_fire_at.map(|value| value.timestamp_millis());
-
-        // Two processes claim the same due job concurrently. The first wins;
-        // the second sees the row already claimed (delivery_key IS NOT NULL).
-        let (claim_a, claim_b) = tokio::join!(
-            store_a.claim(id, token, job.clone(), "delivery-a".to_owned(), 1),
-            store_b.claim(id, token, job.clone(), "delivery-b".to_owned(), 1),
-        );
-        assert!(claim_a ^ claim_b, "exactly one claim must succeed");
-    }
-
-    #[tokio::test]
-    async fn sqlite_finish_clears_delivery_and_requeues() {
-        let db = scheduler_database().await;
-
-        let store = SqliteJobStore::new(db);
-        let mut job = ScheduledJob::new_once(Utc::now() + Duration::minutes(5), "finish");
-        job.next_fire_at = Some(Utc::now() - Duration::seconds(1));
-        let id = job.id;
-        store.put(job.clone()).await;
-        let token = job.next_fire_at.map(|value| value.timestamp_millis());
-
-        assert!(
-            store
-                .claim(id, token, job.clone(), "delivery-1".to_owned(), 1)
-                .await
-        );
-        // A second claim on the claimed job must fail.
-        assert!(
-            !store
-                .claim(id, None, job.clone(), "delivery-2".to_owned(), 2)
-                .await
-        );
-        // Finish requeues it; the delivery key is cleared.
-        let next = job.next_fire_at.map(|value| value.timestamp_millis());
-        assert!(store.finish(id, "delivery-1".to_owned(), job, next).await);
-        let reloaded = store.get(id).await.expect("reload");
-        assert!(reloaded.pending_delivery.is_none());
-    }
-
-    #[tokio::test]
-    async fn sqlite_list_due_filters_in_sql_mirroring_due() {
-        let db = scheduler_database().await;
-
-        let store = SqliteJobStore::new(db);
-        let now = Utc::now();
-        let now_ms = now.timestamp_millis();
-
-        // Paused job — never due even when its fire time is in the past.
-        let mut paused = ScheduledJob::new_once(now - Duration::seconds(1), "paused");
-        paused.pause();
-        // Completed (terminal) job — never due.
-        let mut completed = ScheduledJob::new_once(now - Duration::seconds(1), "completed");
-        let _ = completed.advance(now);
-        // Future job — not due.
-        let future = ScheduledJob::new_once(now + Duration::days(1), "future");
-        // Retry pending with retry_at in the past — due via retry_at_ms.
-        let mut retry = ScheduledJob::new_once(now + Duration::days(1), "retry");
-        retry.retry_at = Some(now - Duration::seconds(1));
-        retry.pending_delivery = Some(crate::JobDeliveryAttempt {
-            delivery_key: "retry-key".to_string(),
-            scheduled_for: now,
-            attempt: 2,
-            claimed_at: now,
-        });
-
-        for job in [&paused, &completed, &future, &retry] {
-            store.put(job.clone()).await;
-        }
-
-        // A due job that another process has claimed (delivery_key set) must be
-        // excluded; a fresh unclaimed due job must be included.
-        let due = ScheduledJob::new_once(now - Duration::seconds(1), "due");
-        let due_token = due.next_fire_at.map(|value| value.timestamp_millis());
-        store.put(due.clone()).await;
-        assert!(
-            store
-                .claim(due.id, due_token, due.clone(), "claimed".to_owned(), now_ms)
-                .await
-        );
-        let due2 = ScheduledJob::new_once(now - Duration::seconds(1), "due2");
-        store.put(due2.clone()).await;
-
-        let mut found: Vec<String> = store
-            .list_due(now_ms)
-            .await
-            .into_iter()
-            .map(|job| job.prompt)
-            .collect();
-        found.sort();
-        assert_eq!(found, vec!["due2".to_string(), "retry".to_string()]);
-    }
-}
+mod tests;

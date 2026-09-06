@@ -49,8 +49,12 @@ pub(crate) struct SnapshotDatabases {
 }
 
 pub(crate) struct RuntimeSnapshot {
+    client_identity: crate::ProviderClientIdentity,
     state: SnapshotState,
     resolution_meta: ConfigResolutionMeta,
+    pub(super) host_client: Arc<super::host_client::RuntimeHostClient>,
+    callback_server: Arc<super::callback_server::PluginCallbackServer>,
+    pending_session_reconfiguration: parking_lot::Mutex<Option<PendingSessionReconfiguration>>,
 }
 
 impl RuntimeSnapshot {
@@ -129,33 +133,34 @@ impl RuntimeSnapshot {
             agena_bundled_plugins::plugins::sources::bundled_plugin_entries(),
         )
         .map_err(AppError::Config)?;
-        agena_runtime::set_provider_client_versions(agena_provider::ProviderClientVersions {
-            codex: resolution
-                .config
-                .runtime
-                .providers
-                .client_versions
-                .codex
-                .clone(),
-            claude: resolution
-                .config
-                .runtime
-                .providers
-                .client_versions
-                .claude
-                .clone(),
-            gemini: resolution
-                .config
-                .runtime
-                .providers
-                .client_versions
-                .gemini
-                .clone(),
-        });
+        let client_identity =
+            crate::ProviderClientIdentity::new(agena_provider::ProviderClientVersions {
+                codex: resolution
+                    .config
+                    .runtime
+                    .providers
+                    .client_versions
+                    .codex
+                    .clone(),
+                claude: resolution
+                    .config
+                    .runtime
+                    .providers
+                    .client_versions
+                    .claude
+                    .clone(),
+                gemini: resolution
+                    .config
+                    .runtime
+                    .providers
+                    .client_versions
+                    .gemini
+                    .clone(),
+            });
         let mcp_manager = agena_runtime::build_configured_mcp_manager(
             &resolution.config.plugins,
             agena_runtime::RUNTIME_CODEX_MCP_CLIENT_NAME,
-            agena_runtime::codex_package_version(),
+            client_identity.codex_package_version(),
             workspace_root,
         )
         .await
@@ -169,6 +174,14 @@ impl RuntimeSnapshot {
                 )
             })
             .unwrap_or((None, None));
+        let callback_server = match &previous {
+            Some(previous) => previous.callback_server.clone(),
+            None => super::callback_server::PluginCallbackServer::start().await?,
+        };
+        let host_client = super::host_client::RuntimeHostClient::candidate(
+            generation,
+            agena_runtime::config_resolution_json_value(&resolution)?,
+        );
         let plugins = build_plugin_services(agena_runtime::PluginCompositionInputs {
             plugin_config: resolution.config.plugins.clone(),
             workspace_root: resolution
@@ -179,22 +192,31 @@ impl RuntimeSnapshot {
             previous_host,
             previous_config,
             mcp_manager: mcp_manager.clone(),
+            callback_base_url: callback_server.base_url.clone(),
+            callback_dispatcher: callback_server.dispatcher.clone(),
+            host_client: host_client.clone(),
         })
         .await?;
-        let (catalog_source_providers, model_catalog) =
-            build_model_catalog_services(agena_runtime::ModelCatalogCompositionInputs {
+        // Own successful plugin initialization across every later service
+        // build error and cancellation, before awaiting provider composition.
+        let plugin_shutdown = agena_runtime::plugin_shutdown_guard(Arc::clone(&plugins));
+        let (catalog_source_providers, model_catalog) = build_model_catalog_services(
+            agena_runtime::ModelCatalogCompositionInputs {
                 providers: &resolution.config.providers,
                 config_path: resolution.meta.config_path.as_path(),
                 plugins: plugins.as_ref(),
                 database: database.clone(),
-            })
-            .await?;
+            },
+            &client_identity,
+        )
+        .await?;
         let catalog_snapshot = model_catalog.snapshot();
         let providers = build_runtime_provider_registry(
             &resolution.config.providers,
             resolution.meta.config_path.as_path(),
             plugins.as_ref(),
             &catalog_snapshot,
+            &client_identity,
         )
         .await?;
         // Notify plugins of the resolved config (best-effort).
@@ -205,29 +227,33 @@ impl RuntimeSnapshot {
             &resolution.config.plugins,
             workspace_root,
             agena_runtime::RUNTIME_CODEX_ORIGINATOR,
-            agena_runtime::codex_package_version(),
+            client_identity.codex_package_version(),
         )
         .map_err(AppError::Config)?;
         let session_build_config =
             agena_runtime::session_build_config_from_resolved(&resolution.config);
-        let session_manager = database.as_ref().map(|db| {
-            build_or_reconfigure_session_manager(agena_runtime::SessionCompositionInputs {
-                existing: existing_session_manager,
-                database: db,
-                providers: Arc::clone(&providers),
-                plugins: Arc::clone(&plugins),
-                lsp_registry: lsp_registry.clone(),
-                workspace_root,
-                config: &session_build_config,
-                mcp_manager: mcp_manager.clone(),
-                monitor_registry: monitor_registry.clone(),
-                scheduler_database: scheduler_database.clone(),
-            })
-        });
+        let (session_manager, pending_session_reconfiguration) = if let Some(db) = database.as_ref()
+        {
+            let (manager, pending) =
+                build_or_prepare_session_manager(agena_runtime::SessionCompositionInputs {
+                    existing: existing_session_manager,
+                    database: db,
+                    providers: Arc::clone(&providers),
+                    plugins: Arc::clone(&plugins),
+                    lsp_registry: lsp_registry.clone(),
+                    workspace_root,
+                    config: &session_build_config,
+                    mcp_manager: mcp_manager.clone(),
+                    monitor_registry: monitor_registry.clone(),
+                    scheduler_database: scheduler_database.clone(),
+                });
+            (Some(manager), pending)
+        } else {
+            (None, None)
+        };
         // v2 has no persisted event store to resume (14.3): interrupted-run
         // reconciliation is deferred to `SessionManager::get_session` on open
         // (17.4), so there is nothing to do here.
-        let plugin_shutdown = agena_runtime::plugin_shutdown_guard(Arc::clone(&plugins));
         let services = agena_runtime::RuntimeServiceBundle::new(
             providers,
             catalog_source_providers,
@@ -258,7 +284,27 @@ impl RuntimeSnapshot {
                 },
             ),
             resolution_meta: meta,
+            client_identity,
+            host_client,
+            callback_server,
+            pending_session_reconfiguration: parking_lot::Mutex::new(
+                pending_session_reconfiguration,
+            ),
         })
+    }
+
+    /// Apply a prepared shared-manager update only while the caller owns the
+    /// runtime publication guard. Dropping an unpublished snapshot leaves the
+    /// live manager and its generation ownership unchanged.
+    pub(super) fn publish_session_configuration(&self) {
+        let pending = self.pending_session_reconfiguration.lock().take();
+        if let Some(pending) = pending {
+            pending.publish(&self.session_manager().expect("prepared session manager"));
+        }
+    }
+
+    pub(super) fn client_identity(&self) -> &crate::ProviderClientIdentity {
+        &self.client_identity
     }
 
     pub(crate) fn generation(&self) -> u64 {

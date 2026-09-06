@@ -14,6 +14,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use futures_util::FutureExt as _;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
@@ -231,7 +232,7 @@ impl PluginEffectScope {
     where
         F: FnOnce() -> Result<(), String> + Send + 'static,
     {
-        self.register(kind, label, EffectDisposer::Sync(Box::new(disposer)))
+        self.register(kind, label, EffectDisposer::Sync(Box::new(disposer)), false)
     }
 
     pub fn own_async<F, Fut>(
@@ -248,7 +249,20 @@ impl PluginEffectScope {
             kind,
             label,
             EffectDisposer::Async(Box::new(move || Box::pin(disposer()))),
+            false,
         )
+    }
+
+    pub(crate) fn replace_sync<F>(
+        self: &Arc<Self>,
+        kind: impl Into<String>,
+        label: impl Into<String>,
+        disposer: F,
+    ) -> Result<PluginEffectHandle, PluginEffectScopeError>
+    where
+        F: FnOnce() -> Result<(), String> + Send + 'static,
+    {
+        self.register(kind, label, EffectDisposer::Sync(Box::new(disposer)), true)
     }
 
     pub fn own_child(
@@ -271,6 +285,7 @@ impl PluginEffectScope {
         kind: impl Into<String>,
         label: impl Into<String>,
         disposer: EffectDisposer,
+        replace: bool,
     ) -> Result<PluginEffectHandle, PluginEffectScopeError> {
         if !self.is_accepting() {
             return Err(PluginEffectScopeError::Closed);
@@ -292,6 +307,18 @@ impl PluginEffectScope {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         if !self.is_accepting() || data.dispose_started {
             return Err(PluginEffectScopeError::Closed);
+        }
+        // Retire the previous disposer only after the replacement has been
+        // admitted under the same lock. Rejection retains all old ownership.
+        if replace
+            && let Some(index) = data.live.iter().rposition(|effect| {
+                effect.descriptor.kind == kind && effect.descriptor.label == label
+            })
+        {
+            let mut previous = data.live.remove(index);
+            previous.descriptor.state = PluginEffectState::Disposed;
+            previous.disposer = None;
+            data.completed.push(previous.descriptor);
         }
         data.live.push(OwnedEffect {
             descriptor,
@@ -369,10 +396,22 @@ impl PluginEffectScope {
         })
     }
 
+    /// Stop callbacks before snapshotting registrations for a host handoff.
+    /// Disposers remain intact until `dispose` is called.
+    pub async fn quiesce(&self) {
+        self.stop_admission();
+        self.wait_idle().await;
+    }
+
+    pub(crate) fn stop_admission(&self) {
+        self.accepting.store(false, Ordering::Release);
+        self.cancellation.cancel();
+    }
+
     /// Close admission, wait for accepted leases, then run live disposers in
     /// reverse registration order. Concurrent callers share one terminal
     /// report and effects never re-enter the live stack after disposal.
-    pub async fn dispose(&self) -> PluginEffectDisposeReport {
+    pub async fn dispose(self: &Arc<Self>) -> PluginEffectDisposeReport {
         let leader = {
             let mut data = self
                 .data
@@ -395,16 +434,24 @@ impl PluginEffectScope {
             }
         };
 
-        if !leader {
-            loop {
-                let notified = self.disposed.notified();
-                if let Some(report) = self.finished_report() {
-                    return report;
-                }
-                notified.await;
-            }
+        if leader {
+            // Cleanup owns its progress. Cancelling any caller only abandons
+            // that caller's wait, never a half-run disposer or its followers.
+            let scope = Arc::clone(self);
+            tokio::spawn(async move {
+                scope.finish_disposal().await;
+            });
         }
+        loop {
+            let notified = self.disposed.notified();
+            if let Some(report) = self.finished_report() {
+                return report;
+            }
+            notified.await;
+        }
+    }
 
+    async fn finish_disposal(&self) {
         self.wait_idle().await;
         loop {
             let next = {
@@ -420,11 +467,24 @@ impl PluginEffectScope {
             let Some(mut effect) = next else {
                 break;
             };
-            let result = match effect.disposer.take() {
-                Some(EffectDisposer::Sync(disposer)) => disposer(),
-                Some(EffectDisposer::Async(disposer)) => disposer().await,
-                None => Ok(()),
+            let invoke = async {
+                match effect.disposer.take() {
+                    Some(EffectDisposer::Sync(disposer)) => disposer(),
+                    Some(EffectDisposer::Async(disposer)) => disposer().await,
+                    None => Ok(()),
+                }
             };
+            let result = std::panic::AssertUnwindSafe(invoke)
+                .catch_unwind()
+                .await
+                .unwrap_or_else(|payload| {
+                    let message = payload
+                        .downcast_ref::<String>()
+                        .map(String::as_str)
+                        .or_else(|| payload.downcast_ref::<&str>().copied())
+                        .unwrap_or("non-string panic payload");
+                    Err(format!("effect disposer panicked: {message}"))
+                });
             let mut data = self
                 .data
                 .lock()
@@ -443,7 +503,7 @@ impl PluginEffectScope {
             data.completed.push(effect.descriptor);
         }
 
-        let report = {
+        {
             let mut data = self
                 .data
                 .lock()
@@ -454,13 +514,8 @@ impl PluginEffectScope {
             } else {
                 PluginEffectScopeState::Failed
             };
-            PluginEffectDisposeReport {
-                generation: self.generation,
-                errors: data.errors.clone(),
-            }
-        };
+        }
         self.disposed.notify_waiters();
-        report
     }
 
     fn finished_report(&self) -> Option<PluginEffectDisposeReport> {
@@ -638,6 +693,95 @@ mod tests {
         assert!(left.await.unwrap().errors.is_empty());
         assert!(right.await.unwrap().errors.is_empty());
         assert_eq!(runs.load(Ordering::Acquire), 1);
+    }
+
+    #[tokio::test]
+    async fn cancelling_a_dispose_waiter_does_not_abandon_cleanup() {
+        let scope = scope();
+        let entered = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        let completed = Arc::new(AtomicUsize::new(0));
+        let (started, resume, done) = (entered.clone(), release.clone(), completed.clone());
+        scope
+            .own_async("test", "paused cleanup", move || async move {
+                started.notify_one();
+                resume.notified().await;
+                done.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            })
+            .unwrap();
+        let first = {
+            let scope = scope.clone();
+            tokio::spawn(async move { scope.dispose().await })
+        };
+        entered.notified().await;
+        first.abort();
+        assert!(first.await.unwrap_err().is_cancelled());
+        release.notify_one();
+        let result = tokio::time::timeout(std::time::Duration::from_secs(1), scope.dispose()).await;
+        assert!(
+            result
+                .expect("another waiter must observe completed disposal")
+                .errors
+                .is_empty()
+        );
+        assert_eq!(completed.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn disposer_panics_are_reported_without_abandoning_other_resources() {
+        use futures_util::FutureExt;
+        let scope = scope();
+        let completed = Arc::new(AtomicUsize::new(0));
+        let done = completed.clone();
+        scope
+            .own_sync("test", "healthy", move || {
+                done.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            })
+            .unwrap();
+        scope
+            .own_sync("test", "sync panic", || panic!("sync disposer panic"))
+            .unwrap();
+        scope
+            .own_async("test", "async panic", || async {
+                tokio::task::yield_now().await;
+                panic!("async disposer panic")
+            })
+            .unwrap();
+        let result = std::panic::AssertUnwindSafe(scope.dispose())
+            .catch_unwind()
+            .await;
+        let report = result.expect("disposer panic must become a recorded cleanup failure");
+        assert_eq!(report.errors.len(), 2);
+        assert_eq!(completed.load(Ordering::SeqCst), 1);
+        assert_eq!(scope.state(), PluginEffectScopeState::Failed);
+        assert_eq!(scope.dispose().await.errors, report.errors);
+    }
+
+    #[tokio::test]
+    async fn rejected_replacement_keeps_the_previous_disposers() {
+        let scope = scope();
+        let completed = Arc::new(AtomicUsize::new(0));
+        let sync = completed.clone();
+        scope
+            .own_sync("test", "sync", move || {
+                sync.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            })
+            .unwrap();
+        let asynchronous = completed.clone();
+        scope
+            .own_async("test", "async", move || async move {
+                asynchronous.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            })
+            .unwrap();
+        scope.quiesce().await;
+        assert!(scope.replace_sync("test", "sync", || Ok(())).is_err());
+        assert!(scope.replace_sync("test", "async", || Ok(())).is_err());
+        assert!(scope.dispose().await.errors.is_empty());
+        assert_eq!(completed.load(Ordering::SeqCst), 2);
     }
 
     #[tokio::test]

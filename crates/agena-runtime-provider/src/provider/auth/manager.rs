@@ -22,12 +22,21 @@ struct StoredOAuthCredential {
 
 /// Manages provider authentication state.
 pub struct AuthManager<S: AuthStore> {
+    client_identity: crate::ProviderClientIdentity,
     store: S,
 }
 
 impl<S: AuthStore> AuthManager<S> {
     pub fn new(store: S) -> Self {
-        Self { store }
+        Self {
+            store,
+            client_identity: Default::default(),
+        }
+    }
+
+    pub fn with_client_identity(mut self, identity: crate::ProviderClientIdentity) -> Self {
+        self.client_identity = identity;
+        self
     }
 
     pub fn remove(&self, provider_id: &str) -> Result<(), ProviderError> {
@@ -73,6 +82,7 @@ impl<S: AuthStore> AuthManager<S> {
         let pkce_verifier = pkce_verifier.into();
         let redirect_uri = redirect_uri.into();
         let token = exchange_openai_oauth_code(
+            &self.client_identity,
             code.as_str(),
             pkce_verifier.as_str(),
             redirect_uri.as_str(),
@@ -93,7 +103,7 @@ impl<S: AuthStore> AuthManager<S> {
     }
 
     pub async fn start_openai_headless_login(&self) -> Result<DeviceCodeStart, ProviderError> {
-        start_openai_headless_device_code().await
+        start_openai_headless_device_code(&self.client_identity).await
     }
 
     pub async fn poll_openai_headless_login(
@@ -104,8 +114,12 @@ impl<S: AuthStore> AuthManager<S> {
     ) -> Result<Option<AuthData>, ProviderError> {
         let device_code = device_code.into();
         let user_code = user_code.into();
-        let token =
-            poll_openai_headless_device_code(device_code.as_str(), user_code.as_str()).await?;
+        let token = poll_openai_headless_device_code(
+            &self.client_identity,
+            device_code.as_str(),
+            user_code.as_str(),
+        )
+        .await?;
         let Some(token) = token else {
             return Ok(None);
         };
@@ -126,7 +140,7 @@ impl<S: AuthStore> AuthManager<S> {
 
     pub async fn refresh_openai_login(&self, provider_id: &str) -> Result<AuthData, ProviderError> {
         let stored = self.stored_oauth_credential(provider_id)?;
-        let token = refresh_openai_token(stored.refresh.as_str()).await?;
+        let token = refresh_openai_token(&self.client_identity, stored.refresh.as_str()).await?;
         let auth = oauth_auth_data_with_user(
             provider_id,
             CredentialIssuer::OpenaiChatgpt,

@@ -4,7 +4,7 @@ use super::{
     OpenAiChatCompletionsAdapter, OpenAiChatCompletionsAdapterOptions, OpenAiProfile,
     OpenAiRealtimeAdapter, OpenAiRealtimeAdapterOptions, OpenAiResponsesAdapter,
     OpenAiResponsesAdapterOptions, OpenAiResponsesBackend, OpenAiTransport, OpenAiTransportOptions,
-    ProviderError, append_query_param, normalize_domain, openai_client_version, utils,
+    ProviderError, append_query_param, normalize_domain, utils,
 };
 use crate::provider::chat_wire::ChatCompletionResponse;
 use agena_domain::ModelThinkingMode;
@@ -13,6 +13,7 @@ use std::collections::BTreeMap;
 impl From<OpenAiResponsesAdapterOptions> for OpenAiTransportOptions {
     fn from(options: OpenAiResponsesAdapterOptions) -> Self {
         Self {
+            client_identity: options.client_identity.clone(),
             backend: options.backend,
             auth_data: options.auth_data,
             profile: options.profile,
@@ -29,6 +30,7 @@ impl From<OpenAiResponsesAdapterOptions> for OpenAiTransportOptions {
 impl From<OpenAiChatCompletionsAdapterOptions> for OpenAiTransportOptions {
     fn from(options: OpenAiChatCompletionsAdapterOptions) -> Self {
         Self {
+            client_identity: options.client_identity.clone(),
             backend: OpenAiResponsesBackend::Api,
             auth_data: options.auth_data,
             profile: options.profile,
@@ -45,6 +47,7 @@ impl From<OpenAiChatCompletionsAdapterOptions> for OpenAiTransportOptions {
 impl From<&OpenAiRealtimeAdapterOptions> for OpenAiTransportOptions {
     fn from(options: &OpenAiRealtimeAdapterOptions) -> Self {
         Self {
+            client_identity: options.client_identity.clone(),
             backend: OpenAiResponsesBackend::Api,
             auth_data: options.auth_data.clone(),
             profile: OpenAiProfile::Standard,
@@ -142,7 +145,7 @@ impl OpenAiTransport {
         let mut extra_headers = HashMap::from([
             (
                 reqwest::header::USER_AGENT.as_str().to_owned(),
-                crate::codex_user_agent(),
+                options.client_identity.codex_user_agent(),
             ),
             ("originator".to_owned(), CHATGPT_CODEX_ORIGINATOR.to_owned()),
         ]);
@@ -165,7 +168,8 @@ impl OpenAiTransport {
         Self {
             id,
             client,
-            api_key,
+            api_key: api_key.with_client_identity(options.client_identity.clone()),
+            client_identity: options.client_identity,
             base_url: utils::normalize_base_url(base_url.into().as_str()),
             default_model: ModelId::new(default_model),
             backend: options.backend,
@@ -238,7 +242,7 @@ impl OpenAiTransport {
             Ok(append_query_param(
                 endpoint.as_str(),
                 "client_version",
-                openai_client_version().as_str(),
+                self.client_identity.codex_package_version().as_str(),
             ))
         } else {
             Ok(endpoint)

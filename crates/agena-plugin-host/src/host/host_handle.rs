@@ -1,4 +1,4 @@
-fn recover_mutex<'a, T>(
+pub(super) fn recover_mutex<'a, T>(
     lock: &'a std::sync::Mutex<T>,
     label: &'static str,
 ) -> std::sync::MutexGuard<'a, T> {
@@ -8,7 +8,7 @@ fn recover_mutex<'a, T>(
     })
 }
 
-fn recover_read<'a, T>(
+pub(super) fn recover_read<'a, T>(
     lock: &'a std::sync::RwLock<T>,
     label: &'static str,
 ) -> std::sync::RwLockReadGuard<'a, T> {
@@ -18,7 +18,7 @@ fn recover_read<'a, T>(
     })
 }
 
-fn recover_write<'a, T>(
+pub(super) fn recover_write<'a, T>(
     lock: &'a std::sync::RwLock<T>,
     label: &'static str,
 ) -> std::sync::RwLockWriteGuard<'a, T> {
@@ -45,7 +45,13 @@ fn host_unavailable_error(context: &str, error: &(dyn std::error::Error + 'stati
 pub(super) struct CallbackAuthorityLease {
     authorities: Arc<Mutex<HashMap<String, CallbackAuthorityRecord>>>,
     token: String,
+    pub(super) completion: super::call_completion::CallCompletionLease,
 }
+
+#[cfg(test)]
+mod lifecycle_tests;
+#[cfg(test)]
+mod stream_authority_tests;
 
 impl Drop for CallbackAuthorityLease {
     fn drop(&mut self) {
@@ -91,22 +97,31 @@ impl HostHandle {
             inner: tokio::sync::RwLock::new(inner),
 
             tokens: tokio::sync::Mutex::new(HashMap::new()),
+            callback_routes: Arc::new(super::callback_rpc::CallbackRoutes::default()),
             callback_base_url,
             tool_registry,
             scoped_tools: Arc::new(ScopedRegistry::new()),
             operation_registry: Arc::new(ScopedRegistry::new()),
             plugin_indices,
             plugin_names,
-            hook_catalog: Arc::new(RwLock::new(BTreeMap::new())),
+            hook_catalog: super::contribution_registry::ContributionRegistry::new(
+                "plugin hook catalog",
+            ),
             tool_registry_events: Arc::new(RwLock::new(VecDeque::new())),
             tool_registry_event_listener: Arc::new(RwLock::new(None)),
             statuses,
             logs,
-            display: Arc::new(RwLock::new(std::collections::BTreeMap::new())),
+            display: super::contribution_registry::ContributionRegistry::new(
+                "plugin display registry",
+            ),
             host_notifications: Arc::new(RwLock::new(std::collections::VecDeque::new())),
-            themes: Arc::new(RwLock::new(std::collections::BTreeMap::new())),
+            themes: super::contribution_registry::ContributionRegistry::new(
+                "plugin theme registry",
+            ),
             quotas: Arc::new(crate::quota::QuotaRegistry::default()),
-            plugin_transports: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
+            plugin_transports: super::contribution_registry::ContributionRegistry::new(
+                "plugin transport registry",
+            ),
             service_bindings: tokio::sync::RwLock::new(BTreeMap::new()),
             effect_scopes: RwLock::new(HashMap::new()),
             callback_authorities: Arc::new(Mutex::new(HashMap::new())),
@@ -118,21 +133,15 @@ impl HostHandle {
         plugin_id: &PluginKey,
         manifest: &crate::sdk::PluginManifest,
     ) -> Result<(), PluginError> {
-        if !manifest.tools.is_empty() {
-            let registry = Arc::clone(&self.tool_registry);
-            let owned_plugin = plugin_id.clone();
-            self.replace_effect_sync(
-                plugin_id,
-                "host.manifest.tools",
-                "manifest".to_string(),
-                move || {
-                    recover_write(&registry, "plugin tool registry manifest disposer")
-                        .remove_plugin(&owned_plugin);
-                    Ok(())
-                },
-            )?;
-        }
         let effect_scope = self.ensure_effect_scope(plugin_id);
+        let _lease = effect_scope
+            .lease()
+            .map_err(|error| host_unavailable_error("own manifest resources", &error))?;
+        self.own_manifest_tools(
+            &effect_scope,
+            manifest,
+            &mut recover_write(&self.tool_registry, "plugin tool registry"),
+        )?;
         for operation in &manifest.operations {
             let registry_name = operation_registry_name(plugin_id, operation.id.as_str());
             let item = PluginOperationCatalogItem {
@@ -236,14 +245,15 @@ impl HostHandle {
     }
 
     fn ensure_effect_scope(&self, plugin_id: &PluginKey) -> Arc<PluginEffectScope> {
-        if let Some(scope) = recover_read(&self.effect_scopes, "plugin effect scope registry")
-            .get(plugin_id)
-            .filter(|scope| scope.state() == crate::effect_scope::PluginEffectScopeState::Active)
-            .cloned()
-        {
+        if let Some(scope) = self.callback_effect_owner(plugin_id) {
             return scope;
         }
-        self.begin_plugin_instance(plugin_id.clone())
+        let mut scopes = recover_write(&self.effect_scopes, "plugin effect scope registry");
+        Arc::clone(
+            scopes
+                .entry(plugin_id.clone())
+                .or_insert_with(|| PluginEffectScope::new(plugin_id.clone())),
+        )
     }
 
     pub fn is_current_effect_scope(
@@ -279,36 +289,10 @@ impl HostHandle {
         F: FnOnce() -> Result<(), String> + Send + 'static,
     {
         let scope = self.ensure_effect_scope(plugin_id);
-        scope.release(kind, label.as_str());
         scope
-            .own_sync(kind, label, disposer)
+            .replace_sync(kind, label, disposer)
             .map(|_| ())
             .map_err(|error| host_unavailable_error("own a synchronous plugin effect", &error))
-    }
-
-    fn replace_effect_async<F, Fut>(
-        &self,
-        plugin_id: &PluginKey,
-        kind: &'static str,
-        label: String,
-        disposer: F,
-    ) -> Result<(), PluginError>
-    where
-        F: FnOnce() -> Fut + Send + 'static,
-        Fut: std::future::Future<Output = Result<(), String>> + Send + 'static,
-    {
-        let scope = self.ensure_effect_scope(plugin_id);
-        scope.release(kind, label.as_str());
-        scope
-            .own_async(kind, label, disposer)
-            .map(|_| ())
-            .map_err(|error| host_unavailable_error("own an asynchronous plugin effect", &error))
-    }
-
-    fn release_effect(&self, plugin_id: &PluginKey, kind: &str, label: &str) -> bool {
-        recover_read(&self.effect_scopes, "plugin effect scope registry")
-            .get(plugin_id)
-            .is_some_and(|scope| scope.release(kind, label))
     }
 
     /// Register a plugin transport so the handle can route streaming events.
@@ -316,30 +300,11 @@ impl HostHandle {
         &self,
         plugin_id: PluginKey,
         transport: Arc<dyn PluginTransport>,
-    ) {
+    ) -> Result<(), PluginError> {
+        let owner = self.ensure_effect_scope(&plugin_id);
         self.plugin_transports
-            .write()
-            .await
-            .insert(plugin_id.clone(), transport);
-        let transports = Arc::clone(&self.plugin_transports);
-        let owned_plugin = plugin_id.clone();
-        if let Err(error) = self.replace_effect_async(
-            &plugin_id,
-            "host.transport",
-            "primary".to_string(),
-            move || async move {
-                transports.write().await.remove(&owned_plugin);
-                Ok(())
-            },
-        ) {
-            self.logs.append(
-                &plugin_id,
-                "error",
-                "effects",
-                format!("failed to own plugin transport: {error}"),
-                serde_json::Value::Null,
-            );
-        }
+            .insert(&owner, "host.transport", "primary".into(), transport)
+            .map_err(|error| host_unavailable_error("register a plugin transport", &error))
     }
 
     pub async fn install_service_bindings(
@@ -368,8 +333,14 @@ impl HostHandle {
     where
         F: std::future::Future<Output = T>,
     {
-        let (context, _lease) = self.issue_callback_authority(plugin_id, context);
-        host_api::run_in_host_callback_context(context, future).await
+        let (context, lease) = self.issue_callback_authority(plugin_id, context);
+        lease
+            .completion
+            .completion
+            .scope(host_api::run_in_isolated_host_callback_context(
+                context, future,
+            ))
+            .await
     }
 
     pub(super) fn issue_callback_authority(
@@ -389,6 +360,7 @@ impl HostHandle {
             });
         context.plugin_id = Some(plugin_id.to_string());
         context.authority_token = None;
+        let completion = super::call_completion::CallCompletionLease::for_outbound_call();
         let token = format!("ctx-{}", uuid::Uuid::new_v4().simple());
         recover_mutex(
             &self.callback_authorities,
@@ -400,6 +372,7 @@ impl HostHandle {
                 plugin_id: plugin_id.clone(),
                 generation,
                 context: context.clone(),
+                completion: completion.completion.clone(),
             },
         );
         context.authority_token = Some(token.clone());
@@ -408,6 +381,7 @@ impl HostHandle {
             CallbackAuthorityLease {
                 authorities: Arc::clone(&self.callback_authorities),
                 token,
+                completion,
             },
         )
     }
@@ -552,10 +526,7 @@ impl HostHandle {
         })?;
         let transport = self
             .plugin_transports
-            .read()
-            .await
-            .get(&provider_key)
-            .cloned()
+            .get(&provider_key, "primary")
             .ok_or_else(|| {
                 PluginError::from_kind(
                     PluginErrorKind::HostUnavailable,
@@ -605,15 +576,31 @@ impl HostHandle {
         let Some(plugin_key) = plugin_id.parse().ok() else {
             return Ok(false);
         };
-        let transport = self
-            .plugin_transports
-            .read()
-            .await
-            .get(&plugin_key)
-            .cloned();
+        let transport = self.plugin_transports.get(&plugin_key, "primary");
         let Some(transport) = transport else {
             return Ok(false);
         };
+        if matches!(
+            method,
+            method::TOOL_STREAM_CHUNK | method::TOOL_STREAM_END | method::TOOL_STREAM_ERROR
+        ) {
+            let context = self.validated_callback_context(
+                Some(plugin_id.to_owned()),
+                callback_context_from_params(&params)?,
+            )?;
+            if context.authority_token.is_none() {
+                return Err(PluginError::from_kind(
+                    PluginErrorKind::PolicyDenied,
+                    "plugin stream callback requires an originating host authority",
+                ));
+            }
+            return host_api::run_in_isolated_host_callback_context(
+                context,
+                transport.ingest_stream_event(method, params),
+            )
+            .await
+            .map_err(transport_to_plugin_error);
+        }
         transport
             .ingest_stream_event(method, params)
             .await
@@ -628,29 +615,14 @@ impl HostHandle {
         Arc::clone(&self.logs)
     }
 
-    pub fn set_plugin_hook_catalog(&self, registration: HostHookRegistration) {
-        let plugin_id = registration.plugin_id.clone();
-        recover_write(&self.hook_catalog, "plugin hook catalog")
-            .insert(plugin_id.clone(), registration);
-        let catalog = Arc::clone(&self.hook_catalog);
-        let owned_plugin = plugin_id.clone();
-        if let Err(error) = self.replace_effect_sync(
-            &plugin_id,
-            "host.hooks",
-            "manifest".to_string(),
-            move || {
-                recover_write(&catalog, "plugin hook catalog disposer").remove(&owned_plugin);
-                Ok(())
-            },
-        ) {
-            self.logs.append(
-                &plugin_id,
-                "error",
-                "effects",
-                format!("failed to own hook catalog registration: {error}"),
-                serde_json::Value::Null,
-            );
-        }
+    pub fn set_plugin_hook_catalog(
+        &self,
+        registration: HostHookRegistration,
+    ) -> Result<(), PluginError> {
+        let owner = self.ensure_effect_scope(&registration.plugin_id);
+        self.hook_catalog
+            .insert(&owner, "host.hooks", "manifest".into(), registration)
+            .map_err(|error| host_unavailable_error("register a plugin hook catalog", &error))
     }
 
     pub fn set_tool_registry_event_listener(&self, listener: Option<ToolRegistryEventListener>) {
@@ -810,24 +782,33 @@ impl HostHandle {
                 serde_json::json!({ "generation": scope.generation() }),
             );
         }
-        if !self.is_current_effect_scope(plugin_id, scope) {
+        // Acquire every asynchronous lock before checking the current owner.
+        // Keep the generation read lock through the synchronous cleanup so
+        // begin_plugin_instance cannot publish a successor midway through it.
+        let mut tokens = self.tokens.lock().await;
+        let mut bindings = self.service_bindings.write().await;
+        let scopes = recover_read(&self.effect_scopes, "plugin effect scope registry");
+        if !scopes
+            .get(plugin_id)
+            .is_some_and(|current| Arc::ptr_eq(current, scope))
+        {
             return;
         }
-        self.tokens.lock().await.remove(plugin_id);
-        self.plugin_transports.write().await.remove(plugin_id);
-        self.service_bindings.write().await.retain(|key, binding| {
+        if let Some(token) = tokens.remove(plugin_id) {
+            self.callback_routes.remove(&token);
+        }
+        self.plugin_transports.remove_plugin(plugin_id);
+        bindings.retain(|key, binding| {
             key.consumer != plugin_id.to_string() && binding.provider != plugin_id.to_string()
         });
         recover_write(&self.plugin_indices, "plugin index registry").remove(plugin_id);
         recover_write(&self.plugin_names, "plugin name registry").remove(plugin_id);
-        recover_write(&self.hook_catalog, "plugin hook catalog").remove(plugin_id);
+        self.hook_catalog.remove_plugin(plugin_id);
         recover_write(&self.tool_registry, "plugin tool registry").remove_plugin(plugin_id);
         recover_write(&self.tool_registry_events, "tool registry events")
             .retain(|event| &event.plugin != plugin_id);
-        recover_write(&self.display, "plugin display registry")
-            .retain(|(owner, _), _| owner != plugin_id);
-        recover_write(&self.themes, "plugin theme registry")
-            .retain(|_, theme| &theme.plugin_id != plugin_id);
+        self.display.remove_plugin(plugin_id);
+        self.themes.remove_plugin(plugin_id);
         recover_write(&self.host_notifications, "plugin host notification queue")
             .retain(|notification| notification.plugin_id != plugin_id.to_string());
         self.quotas.remove_plugin(plugin_id);
@@ -845,49 +826,6 @@ impl HostHandle {
         self.callback_base_url
             .as_ref()
             .map(|base| format!("{}/plugin-rpc/{}", base.trim_end_matches('/'), plugin_id))
-    }
-
-    pub async fn callback_token(&self, plugin_id: &str) -> Option<String> {
-        self.callback_base_url.as_ref()?;
-        let plugin_key: PluginKey = match plugin_id.parse() {
-            Ok(plugin_key) => plugin_key,
-            Err(error) => {
-                tracing::warn!(
-                    plugin_id,
-                    diagnostic = %error,
-                    "plugin callback token was not issued because the plugin id is invalid"
-                );
-                return None;
-            }
-        };
-        let mut tokens = self.tokens.lock().await;
-        Some(
-            tokens
-                .entry(plugin_key)
-                .or_insert_with(|| format!("cb-{}", uuid::Uuid::new_v4().simple()))
-                .clone(),
-        )
-    }
-
-    pub async fn validate_callback_token(&self, plugin_id: &str, token: Option<&str>) -> bool {
-        let Some(token) = token else {
-            return false;
-        };
-        let plugin_key = match plugin_id.parse() {
-            Ok(plugin_key) => plugin_key,
-            Err(error) => {
-                tracing::debug!(
-                    plugin_id,
-                    diagnostic = %error,
-                    "plugin callback token validation rejected an invalid plugin id"
-                );
-                return false;
-            }
-        };
-        let tokens = self.tokens.lock().await;
-        tokens
-            .get(&plugin_key)
-            .is_some_and(|expected| expected == token)
     }
 
     pub fn scoped_host_client(
@@ -925,12 +863,15 @@ impl HostHandle {
         self: &Arc<Self>,
         plugin_id: impl Into<String>,
     ) -> crate::transport::stdio::HostHandler {
-        let this = Arc::clone(self);
+        let this = Arc::downgrade(self);
         let plugin_id = plugin_id.into();
         Arc::new(move |method: String, params: serde_json::Value| {
-            let this = Arc::clone(&this);
+            let this = this.clone();
             let plugin_id = plugin_id.clone();
             Box::pin(async move {
+                let this = this
+                    .upgrade()
+                    .ok_or_else(|| host_unavailable("plugin host has been dropped"))?;
                 this.handle_call_for_plugin(plugin_id.to_string().as_str(), &method, params)
                     .await
             })
@@ -953,8 +894,10 @@ impl HostHandle {
     ) -> Result<serde_json::Value, PluginError> {
         let inner = self.inner.read().await.clone();
         let plugin_id = (!plugin_id.is_empty()).then(|| plugin_id.to_string());
-        let callback_context = self
-            .validated_callback_context(plugin_id.clone(), callback_context_from_params(&params))?;
+        let callback_context = self.validated_callback_context(
+            plugin_id.clone(),
+            callback_context_from_params(&params)?,
+        )?;
         // Per-plugin quota guard. Skipped for callbacks that aren't tied to
         // any plugin (i.e. handle_call without a plugin_id) since those
         // can't be attributed to a quota bucket.
@@ -973,473 +916,560 @@ impl HostHandle {
             }
             None => None,
         };
-        host_api::run_in_host_callback_context(callback_context, async {
-            match method {
-                method::HOST_LOG => {
-                    let p: HostLogParams = parse(params)?;
-                    host_api::run_in_host_callback_context(
-                        scoped_context(plugin_id, None),
-                        inner.log(p.level, p.message, p.fields),
-                    )
-                    .await;
-                    Ok(serde_json::Value::Object(Default::default()))
-                }
-                method::HOST_EVENT_PUBLISH => {
-                    let env: EventEnvelope = parse(params)?;
-                    host_api::run_in_host_callback_context(
-                        scoped_context(plugin_id, None),
-                        inner.publish_event(env),
-                    )
-                    .await?;
-                    Ok(serde_json::Value::Object(Default::default()))
-                }
-                method::HOST_EVENT_SUBSCRIBE => {
-                    let p: HostSubscribeParams = parse(params)?;
-                    let sub: EventSubscription = host_api::run_in_host_callback_context(
-                        scoped_context(plugin_id, None),
-                        inner.subscribe_events(p.filter),
-                    )
-                    .await?;
-                    Ok(serde_json::json!({ "subscription_id": sub.id }))
-                }
-                method::HOST_EVENT_UNSUBSCRIBE => {
-                    let p: HostUnsubscribeParams = parse(params)?;
-                    host_api::run_in_host_callback_context(
-                        scoped_context(plugin_id, None),
-                        inner.unsubscribe_events(p.subscription_id),
-                    )
-                    .await?;
-                    Ok(serde_json::Value::Object(Default::default()))
-                }
-                method::HOST_CONFIG_READ => {
-                    let p: HostConfigReadParams = parse(params)?;
-                    host_api::run_in_host_callback_context(
-                        scoped_context(plugin_id, None),
-                        inner.read_config(p.path),
-                    )
-                    .await
-                }
-                method::HOST_CONFIG_RELOAD => {
-                    let _p: HostConfigReloadParams = parse(params)?;
-                    let out = host_api::run_in_host_callback_context(
-                        scoped_context(plugin_id, None),
-                        inner.reload_config(),
-                    )
-                    .await?;
-                    serde_json::to_value(out).map_err(|e| PluginError::invalid_params_error(&e))
-                }
-                method::HOST_TOOL_INVOKE => {
-                    let p: HostInvokeToolParams = parse(params)?;
-                    let out = host_api::run_in_host_callback_context(
-                        scoped_context(plugin_id, None),
-                        inner.invoke_tool(p.tool, p.input),
-                    )
-                    .await?;
-                    serde_json::to_value(&out).map_err(|e| PluginError::invalid_params_error(&e))
-                }
-                method::HOST_SERVICE_INVOKE => {
-                    let p: HostInvokeServiceParams = parse(params)?;
-                    let consumer = plugin_id.as_deref().ok_or_else(|| {
-                        PluginError::invalid_params(
-                            "service invocation requires an attributed consumer plugin",
+        let completion_context = callback_context.clone();
+        self.run_in_callback_completion(
+            &completion_context,
+            host_api::run_in_isolated_host_callback_context(callback_context, async {
+                match method {
+                    method::HOST_LOG => {
+                        let p: HostLogParams = parse(params)?;
+                        host_api::run_in_host_callback_context(
+                            scoped_context(plugin_id, None),
+                            inner.log(p.level, p.message, p.fields),
                         )
-                    })?;
-                    let out = self
-                        .invoke_service_for_plugin(
-                            consumer,
-                            p.request,
-                            host_api::current_host_callback_context(),
+                        .await;
+                        Ok(serde_json::Value::Object(Default::default()))
+                    }
+                    method::HOST_EVENT_PUBLISH => {
+                        let env: EventEnvelope = parse(params)?;
+                        host_api::run_in_host_callback_context(
+                            scoped_context(plugin_id, None),
+                            inner.publish_event(env),
                         )
                         .await?;
-                    serde_json::to_value(&out).map_err(|e| PluginError::invalid_params_error(&e))
+                        Ok(serde_json::Value::Object(Default::default()))
+                    }
+                    method::HOST_EVENT_SUBSCRIBE => {
+                        let p: HostSubscribeParams = parse(params)?;
+                        let sub: EventSubscription = host_api::run_in_host_callback_context(
+                            scoped_context(plugin_id, None),
+                            inner.subscribe_events(p.filter),
+                        )
+                        .await?;
+                        Ok(serde_json::json!({ "subscription_id": sub.id }))
+                    }
+                    method::HOST_EVENT_UNSUBSCRIBE => {
+                        let p: HostUnsubscribeParams = parse(params)?;
+                        host_api::run_in_host_callback_context(
+                            scoped_context(plugin_id, None),
+                            inner.unsubscribe_events(p.subscription_id),
+                        )
+                        .await?;
+                        Ok(serde_json::Value::Object(Default::default()))
+                    }
+                    method::HOST_CONFIG_READ => {
+                        let p: HostConfigReadParams = parse(params)?;
+                        host_api::run_in_host_callback_context(
+                            scoped_context(plugin_id, None),
+                            inner.read_config(p.path),
+                        )
+                        .await
+                    }
+                    method::HOST_CONFIG_RELOAD => {
+                        let _p: HostConfigReloadParams = parse(params)?;
+                        let out = host_api::run_in_host_callback_context(
+                            scoped_context(plugin_id, None),
+                            inner.reload_config(),
+                        )
+                        .await?;
+                        serde_json::to_value(out).map_err(|e| PluginError::invalid_params_error(&e))
+                    }
+                    method::HOST_CONFIG_RELOAD_REQUEST => {
+                        let _p: HostConfigReloadParams = parse(params)?;
+                        let out = inner.request_config_reload().await?;
+                        serde_json::to_value(out).map_err(|e| PluginError::invalid_params_error(&e))
+                    }
+                    method::HOST_CONFIG_RELOAD_STATUS => {
+                        let p: super::HostConfigReloadStatusParams = parse(params)?;
+                        let out = inner.config_reload_status(p.request).await?;
+                        serde_json::to_value(out).map_err(|e| PluginError::invalid_params_error(&e))
+                    }
+                    method::HOST_TOOL_INVOKE => {
+                        let p: HostInvokeToolParams = parse(params)?;
+                        let out = host_api::run_in_host_callback_context(
+                            scoped_context(plugin_id, None),
+                            inner.invoke_tool(p.tool, p.input),
+                        )
+                        .await?;
+                        serde_json::to_value(&out)
+                            .map_err(|e| PluginError::invalid_params_error(&e))
+                    }
+                    method::HOST_SERVICE_INVOKE => {
+                        let p: HostInvokeServiceParams = parse(params)?;
+                        let consumer = plugin_id.as_deref().ok_or_else(|| {
+                            PluginError::invalid_params(
+                                "service invocation requires an attributed consumer plugin",
+                            )
+                        })?;
+                        let out = self
+                            .invoke_service_for_plugin(
+                                consumer,
+                                p.request,
+                                host_api::current_host_callback_context(),
+                            )
+                            .await?;
+                        serde_json::to_value(&out)
+                            .map_err(|e| PluginError::invalid_params_error(&e))
+                    }
+                    method::HOST_ASK_USER => {
+                        let p: HostAskUserParams = parse(params)?;
+                        let out = host_api::run_in_host_callback_context(
+                            scoped_context(plugin_id, None),
+                            inner.ask_user(p.request),
+                        )
+                        .await?;
+                        serde_json::to_value(&out)
+                            .map_err(|e| PluginError::invalid_params_error(&e))
+                    }
+                    method::HOST_SUBTASK_RUN => {
+                        let p: HostRunSubtaskParams = parse(params)?;
+                        let out = host_api::run_in_host_callback_context(
+                            scoped_context(plugin_id, None),
+                            inner.run_subtask(p.request),
+                        )
+                        .await?;
+                        serde_json::to_value(&out)
+                            .map_err(|e| PluginError::invalid_params_error(&e))
+                    }
+                    method::HOST_SUBTASK_CANCEL => {
+                        let p: HostCancelSubtaskParams = parse(params)?;
+                        let out = host_api::run_in_host_callback_context(
+                            scoped_context(plugin_id, None),
+                            inner.cancel_subtask(p.request),
+                        )
+                        .await?;
+                        serde_json::to_value(&out)
+                            .map_err(|e| PluginError::invalid_params_error(&e))
+                    }
+                    method::HOST_SUBTASK_MESSAGE => {
+                        let p: HostMessageSubtaskParams = parse(params)?;
+                        let out = host_api::run_in_host_callback_context(
+                            scoped_context(plugin_id, None),
+                            inner.message_subtask(p.request),
+                        )
+                        .await?;
+                        serde_json::to_value(&out)
+                            .map_err(|e| PluginError::invalid_params_error(&e))
+                    }
+                    method::HOST_SUBTASK_OUTPUT => {
+                        let p: HostReadSubtaskOutputParams = parse(params)?;
+                        let out = host_api::run_in_host_callback_context(
+                            scoped_context(plugin_id, None),
+                            inner.read_subtask_output(p.request),
+                        )
+                        .await?;
+                        serde_json::to_value(&out)
+                            .map_err(|e| PluginError::invalid_params_error(&e))
+                    }
+                    method::HOST_TOOL_LIST => {
+                        let _p: HostListToolsParams = parse(params)?;
+                        let out = host_api::run_in_host_callback_context(
+                            scoped_context(plugin_id, None),
+                            inner.list_tools(),
+                        )
+                        .await?;
+                        serde_json::to_value(&out)
+                            .map_err(|e| PluginError::invalid_params_error(&e))
+                    }
+                    method::HOST_CONTEXT_STATUS => {
+                        let p: HostContextStatusParams = parse(params)?;
+                        let out = host_api::run_in_host_callback_context(
+                            scoped_context(plugin_id, None),
+                            inner.get_context_status(p.request),
+                        )
+                        .await?;
+                        serde_json::to_value(&out)
+                            .map_err(|e| PluginError::invalid_params_error(&e))
+                    }
+                    method::HOST_SESSION_SET_MODEL => {
+                        let p: HostSetSessionModelParams = parse(params)?;
+                        let out = host_api::run_in_host_callback_context(
+                            scoped_context(plugin_id, None),
+                            inner.set_session_model(p.request),
+                        )
+                        .await?;
+                        serde_json::to_value(&out)
+                            .map_err(|e| PluginError::invalid_params_error(&e))
+                    }
+                    method::HOST_IMAGE_EXECUTE => {
+                        let p: HostImageExecuteParams = parse(params)?;
+                        let out = host_api::run_in_host_callback_context(
+                            scoped_context(plugin_id, None),
+                            inner.image_execute(p.request),
+                        )
+                        .await?;
+                        serde_json::to_value(&out)
+                            .map_err(|e| PluginError::invalid_params_error(&e))
+                    }
+                    method::HOST_SNAPSHOT_ENTER => {
+                        let p: HostEnterSnapshotParams = parse(params)?;
+                        let out = host_api::run_in_host_callback_context(
+                            scoped_context(plugin_id, None),
+                            inner.enter_snapshot(p.request),
+                        )
+                        .await?;
+                        serde_json::to_value(&out)
+                            .map_err(|e| PluginError::invalid_params_error(&e))
+                    }
+                    method::HOST_SNAPSHOT_EXIT => {
+                        let p: HostExitSnapshotParams = parse(params)?;
+                        let out = host_api::run_in_host_callback_context(
+                            scoped_context(plugin_id, None),
+                            inner.exit_snapshot(p.request),
+                        )
+                        .await?;
+                        serde_json::to_value(&out)
+                            .map_err(|e| PluginError::invalid_params_error(&e))
+                    }
+                    method::HOST_MONITOR_START => {
+                        let p: HostMonitorStartParams = parse(params)?;
+                        let out = host_api::run_in_host_callback_context(
+                            scoped_context(plugin_id, None),
+                            inner.monitor_start(p.request),
+                        )
+                        .await?;
+                        serde_json::to_value(&out)
+                            .map_err(|e| PluginError::invalid_params_error(&e))
+                    }
+                    method::HOST_MONITOR_LIST => {
+                        let _p: HostMonitorListParams = parse(params)?;
+                        let out = host_api::run_in_host_callback_context(
+                            scoped_context(plugin_id, None),
+                            inner.monitor_list(),
+                        )
+                        .await?;
+                        serde_json::to_value(&out)
+                            .map_err(|e| PluginError::invalid_params_error(&e))
+                    }
+                    method::HOST_MONITOR_READ => {
+                        let p: HostMonitorReadParams = parse(params)?;
+                        let out = host_api::run_in_host_callback_context(
+                            scoped_context(plugin_id, None),
+                            inner.monitor_read(p.request),
+                        )
+                        .await?;
+                        serde_json::to_value(&out)
+                            .map_err(|e| PluginError::invalid_params_error(&e))
+                    }
+                    method::HOST_MONITOR_STOP => {
+                        let p: HostMonitorStopParams = parse(params)?;
+                        let out = host_api::run_in_host_callback_context(
+                            scoped_context(plugin_id, None),
+                            inner.monitor_stop(p.request),
+                        )
+                        .await?;
+                        serde_json::to_value(&out)
+                            .map_err(|e| PluginError::invalid_params_error(&e))
+                    }
+                    method::HOST_TOOL_REGISTRY_REGISTER => {
+                        let p: HostToolRegisterParams = parse(params)?;
+                        let plugin_id = plugin_id.ok_or_else(|| {
+                            host_unavailable("tool.registry.register requires plugin id")
+                        })?;
+                        let response = self.tool_upsert_for_plugin(&plugin_id, p.request.tool)?;
+                        serde_json::to_value(&response)
+                            .map_err(|e| PluginError::invalid_params_error(&e))
+                    }
+                    method::HOST_TOOL_REGISTRY_UPDATE => {
+                        let p: HostToolUpdateParams = parse(params)?;
+                        let plugin_id = plugin_id.ok_or_else(|| {
+                            host_unavailable("tool.registry.update requires plugin id")
+                        })?;
+                        let response = self.tool_upsert_for_plugin(&plugin_id, p.request.tool)?;
+                        serde_json::to_value(&response)
+                            .map_err(|e| PluginError::invalid_params_error(&e))
+                    }
+                    method::HOST_TOOL_REGISTRY_REMOVE => {
+                        let p: HostToolRemoveParams = parse(params)?;
+                        let plugin_id = plugin_id.ok_or_else(|| {
+                            host_unavailable("tool.registry.remove requires plugin id")
+                        })?;
+                        let response = self.tool_remove_for_plugin(
+                            &plugin_id,
+                            &p.request.name,
+                            p.request.by_model_name,
+                        )?;
+                        serde_json::to_value(&response)
+                            .map_err(|e| PluginError::invalid_params_error(&e))
+                    }
+                    method::HOST_TOOL_REGISTRY_LIST => {
+                        let response = self.registered_tool_list_response()?;
+                        serde_json::to_value(&response)
+                            .map_err(|e| PluginError::invalid_params_error(&e))
+                    }
+                    method::HOST_STORAGE_GET => {
+                        let p: HostStorageGetParams = parse(params)?;
+                        let out = host_api::run_in_host_callback_context(
+                            scoped_context(plugin_id, None),
+                            inner.storage_get(p.request),
+                        )
+                        .await?;
+                        serde_json::to_value(&out)
+                            .map_err(|e| PluginError::invalid_params_error(&e))
+                    }
+                    method::HOST_STORAGE_SET => {
+                        let p: HostStorageSetParams = parse(params)?;
+                        host_api::run_in_host_callback_context(
+                            scoped_context(plugin_id, None),
+                            inner.storage_set(p.request),
+                        )
+                        .await?;
+                        Ok(serde_json::Value::Object(Default::default()))
+                    }
+                    method::HOST_STORAGE_DELETE => {
+                        let p: HostStorageDeleteParams = parse(params)?;
+                        host_api::run_in_host_callback_context(
+                            scoped_context(plugin_id, None),
+                            inner.storage_delete(p.request),
+                        )
+                        .await?;
+                        Ok(serde_json::Value::Object(Default::default()))
+                    }
+                    method::HOST_STORAGE_LIST => {
+                        let p: HostStorageListParams = parse(params)?;
+                        let out = host_api::run_in_host_callback_context(
+                            scoped_context(plugin_id, None),
+                            inner.storage_list(p.request),
+                        )
+                        .await?;
+                        serde_json::to_value(&out)
+                            .map_err(|e| PluginError::invalid_params_error(&e))
+                    }
+                    method::HOST_SECRET_GET => {
+                        let p: HostSecretGetParams = parse(params)?;
+                        let out = host_api::run_in_host_callback_context(
+                            scoped_context(plugin_id, None),
+                            inner.secret_get(p.request),
+                        )
+                        .await?;
+                        serde_json::to_value(&out)
+                            .map_err(|e| PluginError::invalid_params_error(&e))
+                    }
+                    method::HOST_SECRET_SET => {
+                        let p: HostSecretSetParams = parse(params)?;
+                        host_api::run_in_host_callback_context(
+                            scoped_context(plugin_id, None),
+                            inner.secret_set(p.request),
+                        )
+                        .await?;
+                        Ok(serde_json::Value::Object(Default::default()))
+                    }
+                    method::HOST_SECRET_DELETE => {
+                        let p: HostSecretDeleteParams = parse(params)?;
+                        host_api::run_in_host_callback_context(
+                            scoped_context(plugin_id, None),
+                            inner.secret_delete(p.request),
+                        )
+                        .await?;
+                        Ok(serde_json::Value::Object(Default::default()))
+                    }
+                    method::HOST_SECRET_LIST => {
+                        let _p: HostSecretListParams = parse(params)?;
+                        let out = host_api::run_in_host_callback_context(
+                            scoped_context(plugin_id, None),
+                            inner.secret_list(),
+                        )
+                        .await?;
+                        serde_json::to_value(&out)
+                            .map_err(|e| PluginError::invalid_params_error(&e))
+                    }
+                    method::HOST_PLUGIN_STATUS_LIST => {
+                        let response = self.plugin_status_list_response();
+                        serde_json::to_value(&response)
+                            .map_err(|e| PluginError::invalid_params_error(&e))
+                    }
+                    method::HOST_PLUGIN_STATUS_GET => {
+                        let p: HostPluginStatusGetParams = parse(params)?;
+                        let response = self.plugin_status_get_response(&p.request.plugin_id);
+                        serde_json::to_value(&response)
+                            .map_err(|e| PluginError::invalid_params_error(&e))
+                    }
+                    method::HOST_LSP_LIST_SERVERS => {
+                        let _p: HostLspListServersParams = parse(params)?;
+                        let out = host_api::run_in_host_callback_context(
+                            scoped_context(plugin_id, None),
+                            inner.lsp_list_servers(),
+                        )
+                        .await?;
+                        serde_json::to_value(&out)
+                            .map_err(|e| PluginError::invalid_params_error(&e))
+                    }
+                    method::HOST_LSP_LIST_DIAGNOSTICS => {
+                        let p: HostLspListDiagnosticsParams = parse(params)?;
+                        let out = host_api::run_in_host_callback_context(
+                            scoped_context(plugin_id, None),
+                            inner.lsp_list_diagnostics(p.request),
+                        )
+                        .await?;
+                        serde_json::to_value(&out)
+                            .map_err(|e| PluginError::invalid_params_error(&e))
+                    }
+                    method::HOST_SNAPSHOT_LIST => {
+                        let _p: HostSnapshotListParams = parse(params)?;
+                        let out = host_api::run_in_host_callback_context(
+                            scoped_context(plugin_id, None),
+                            inner.snapshot_list(),
+                        )
+                        .await?;
+                        serde_json::to_value(&out)
+                            .map_err(|e| PluginError::invalid_params_error(&e))
+                    }
+                    method::HOST_SCHEDULER_LIST => {
+                        let _p: HostSchedulerListParams = parse(params)?;
+                        let out = host_api::run_in_host_callback_context(
+                            scoped_context(plugin_id, None),
+                            inner.scheduler_list(),
+                        )
+                        .await?;
+                        serde_json::to_value(&out)
+                            .map_err(|e| PluginError::invalid_params_error(&e))
+                    }
+                    method::HOST_SCHEDULER_CREATE => {
+                        let p: HostSchedulerCreateParams = parse(params)?;
+                        let out = host_api::run_in_host_callback_context(
+                            scoped_context(plugin_id, None),
+                            inner.scheduler_create(p.request),
+                        )
+                        .await?;
+                        serde_json::to_value(&out)
+                            .map_err(|e| PluginError::invalid_params_error(&e))
+                    }
+                    method::HOST_SCHEDULER_DELETE => {
+                        let p: HostSchedulerDeleteParams = parse(params)?;
+                        let out = host_api::run_in_host_callback_context(
+                            scoped_context(plugin_id, None),
+                            inner.scheduler_delete(p.request),
+                        )
+                        .await?;
+                        serde_json::to_value(&out)
+                            .map_err(|e| PluginError::invalid_params_error(&e))
+                    }
+                    method::HOST_HOOK_LIST => {
+                        let response = self.hook_list_response().await;
+                        serde_json::to_value(&response)
+                            .map_err(|e| PluginError::invalid_params_error(&e))
+                    }
+                    method::HOST_MCP_LIST_SERVERS => {
+                        let _p: HostMcpListServersParams = parse(params)?;
+                        let out = host_api::run_in_host_callback_context(
+                            scoped_context(plugin_id, None),
+                            inner.mcp_list_servers(),
+                        )
+                        .await?;
+                        serde_json::to_value(&out)
+                            .map_err(|e| PluginError::invalid_params_error(&e))
+                    }
+                    method::HOST_MCP_ADD_SERVER => {
+                        let p: HostMcpAddServerParams = parse(params)?;
+                        host_api::run_in_host_callback_context(
+                            scoped_context(plugin_id, None),
+                            inner.mcp_add_server(p.request),
+                        )
+                        .await?;
+                        Ok(serde_json::Value::Object(Default::default()))
+                    }
+                    method::HOST_MCP_REMOVE_SERVER => {
+                        let p: HostMcpRemoveServerParams = parse(params)?;
+                        let out = host_api::run_in_host_callback_context(
+                            scoped_context(plugin_id, None),
+                            inner.mcp_remove_server(p.request),
+                        )
+                        .await?;
+                        serde_json::to_value(&out)
+                            .map_err(|e| PluginError::invalid_params_error(&e))
+                    }
+                    method::HOST_UI_DISPLAY_CONTRIBUTE => {
+                        let plugin_id = plugin_id.ok_or_else(|| {
+                            host_unavailable("ui.display.contribute requires plugin id")
+                        })?;
+                        let p: HostDisplayContributeParams = parse(params)?;
+                        self.display_contribute(&plugin_id, p.request)?;
+                        Ok(serde_json::Value::Object(Default::default()))
+                    }
+                    method::HOST_UI_DISPLAY_REMOVE => {
+                        let plugin_id = plugin_id.ok_or_else(|| {
+                            host_unavailable("ui.display.remove requires plugin id")
+                        })?;
+                        let p: HostDisplayRemoveParams = parse(params)?;
+                        let removed = self.display_remove(&plugin_id, &p.request.contribution_id);
+                        serde_json::to_value(&HostDisplayRemoveResponse { removed })
+                            .map_err(|e| PluginError::invalid_params_error(&e))
+                    }
+                    method::HOST_NOTIFY => {
+                        let plugin_id = plugin_id
+                            .ok_or_else(|| host_unavailable("notify requires plugin id"))?;
+                        let p: HostNotifyParams = parse(params)?;
+                        self.push_host_notification(&plugin_id, p.request);
+                        Ok(serde_json::Value::Object(Default::default()))
+                    }
+                    method::HOST_UI_THEME_REGISTER => {
+                        let plugin_id = plugin_id.ok_or_else(|| {
+                            host_unavailable("ui.theme.register requires plugin id")
+                        })?;
+                        let p: HostThemeRegisterParams = parse(params)?;
+                        self.theme_register(&plugin_id, p.request)?;
+                        Ok(serde_json::Value::Object(Default::default()))
+                    }
+                    method::HOST_UI_THEME_LIST => {
+                        let response = self.theme_list_response();
+                        serde_json::to_value(&response)
+                            .map_err(|e| PluginError::invalid_params_error(&e))
+                    }
+                    method::HOST_UI_THEME_REMOVE => {
+                        let plugin_id = plugin_id.ok_or_else(|| {
+                            host_unavailable("ui.theme.remove requires plugin id")
+                        })?;
+                        let p: HostThemeRemoveParams = parse(params)?;
+                        let removed = self.theme_remove(&plugin_id, &p.request.id);
+                        serde_json::to_value(&HostThemeRemoveResponse { removed })
+                            .map_err(|e| PluginError::invalid_params_error(&e))
+                    }
+                    other => Err(PluginError::not_implemented(other)),
                 }
-                method::HOST_ASK_USER => {
-                    let p: HostAskUserParams = parse(params)?;
-                    let out = host_api::run_in_host_callback_context(
-                        scoped_context(plugin_id, None),
-                        inner.ask_user(p.request),
-                    )
-                    .await?;
-                    serde_json::to_value(&out).map_err(|e| PluginError::invalid_params_error(&e))
-                }
-                method::HOST_SUBTASK_RUN => {
-                    let p: HostRunSubtaskParams = parse(params)?;
-                    let out = host_api::run_in_host_callback_context(
-                        scoped_context(plugin_id, None),
-                        inner.run_subtask(p.request),
-                    )
-                    .await?;
-                    serde_json::to_value(&out).map_err(|e| PluginError::invalid_params_error(&e))
-                }
-                method::HOST_SUBTASK_CANCEL => {
-                    let p: HostCancelSubtaskParams = parse(params)?;
-                    let out = host_api::run_in_host_callback_context(
-                        scoped_context(plugin_id, None),
-                        inner.cancel_subtask(p.request),
-                    )
-                    .await?;
-                    serde_json::to_value(&out).map_err(|e| PluginError::invalid_params_error(&e))
-                }
-                method::HOST_SUBTASK_MESSAGE => {
-                    let p: HostMessageSubtaskParams = parse(params)?;
-                    let out = host_api::run_in_host_callback_context(
-                        scoped_context(plugin_id, None),
-                        inner.message_subtask(p.request),
-                    )
-                    .await?;
-                    serde_json::to_value(&out).map_err(|e| PluginError::invalid_params_error(&e))
-                }
-                method::HOST_SUBTASK_OUTPUT => {
-                    let p: HostReadSubtaskOutputParams = parse(params)?;
-                    let out = host_api::run_in_host_callback_context(
-                        scoped_context(plugin_id, None),
-                        inner.read_subtask_output(p.request),
-                    )
-                    .await?;
-                    serde_json::to_value(&out).map_err(|e| PluginError::invalid_params_error(&e))
-                }
-                method::HOST_TOOL_LIST => {
-                    let _p: HostListToolsParams = parse(params)?;
-                    let out = host_api::run_in_host_callback_context(
-                        scoped_context(plugin_id, None),
-                        inner.list_tools(),
-                    )
-                    .await?;
-                    serde_json::to_value(&out).map_err(|e| PluginError::invalid_params_error(&e))
-                }
-                method::HOST_CONTEXT_STATUS => {
-                    let p: HostContextStatusParams = parse(params)?;
-                    let out = host_api::run_in_host_callback_context(
-                        scoped_context(plugin_id, None),
-                        inner.get_context_status(p.request),
-                    )
-                    .await?;
-                    serde_json::to_value(&out).map_err(|e| PluginError::invalid_params_error(&e))
-                }
-                method::HOST_SESSION_SET_MODEL => {
-                    let p: HostSetSessionModelParams = parse(params)?;
-                    let out = host_api::run_in_host_callback_context(
-                        scoped_context(plugin_id, None),
-                        inner.set_session_model(p.request),
-                    )
-                    .await?;
-                    serde_json::to_value(&out).map_err(|e| PluginError::invalid_params_error(&e))
-                }
-                method::HOST_IMAGE_EXECUTE => {
-                    let p: HostImageExecuteParams = parse(params)?;
-                    let out = host_api::run_in_host_callback_context(
-                        scoped_context(plugin_id, None),
-                        inner.image_execute(p.request),
-                    )
-                    .await?;
-                    serde_json::to_value(&out).map_err(|e| PluginError::invalid_params_error(&e))
-                }
-                method::HOST_SNAPSHOT_ENTER => {
-                    let p: HostEnterSnapshotParams = parse(params)?;
-                    let out = host_api::run_in_host_callback_context(
-                        scoped_context(plugin_id, None),
-                        inner.enter_snapshot(p.request),
-                    )
-                    .await?;
-                    serde_json::to_value(&out).map_err(|e| PluginError::invalid_params_error(&e))
-                }
-                method::HOST_SNAPSHOT_EXIT => {
-                    let p: HostExitSnapshotParams = parse(params)?;
-                    let out = host_api::run_in_host_callback_context(
-                        scoped_context(plugin_id, None),
-                        inner.exit_snapshot(p.request),
-                    )
-                    .await?;
-                    serde_json::to_value(&out).map_err(|e| PluginError::invalid_params_error(&e))
-                }
-                method::HOST_MONITOR_START => {
-                    let p: HostMonitorStartParams = parse(params)?;
-                    let out = host_api::run_in_host_callback_context(
-                        scoped_context(plugin_id, None),
-                        inner.monitor_start(p.request),
-                    )
-                    .await?;
-                    serde_json::to_value(&out).map_err(|e| PluginError::invalid_params_error(&e))
-                }
-                method::HOST_MONITOR_LIST => {
-                    let _p: HostMonitorListParams = parse(params)?;
-                    let out = host_api::run_in_host_callback_context(
-                        scoped_context(plugin_id, None),
-                        inner.monitor_list(),
-                    )
-                    .await?;
-                    serde_json::to_value(&out).map_err(|e| PluginError::invalid_params_error(&e))
-                }
-                method::HOST_MONITOR_READ => {
-                    let p: HostMonitorReadParams = parse(params)?;
-                    let out = host_api::run_in_host_callback_context(
-                        scoped_context(plugin_id, None),
-                        inner.monitor_read(p.request),
-                    )
-                    .await?;
-                    serde_json::to_value(&out).map_err(|e| PluginError::invalid_params_error(&e))
-                }
-                method::HOST_MONITOR_STOP => {
-                    let p: HostMonitorStopParams = parse(params)?;
-                    let out = host_api::run_in_host_callback_context(
-                        scoped_context(plugin_id, None),
-                        inner.monitor_stop(p.request),
-                    )
-                    .await?;
-                    serde_json::to_value(&out).map_err(|e| PluginError::invalid_params_error(&e))
-                }
-                method::HOST_TOOL_REGISTRY_REGISTER => {
-                    let p: HostToolRegisterParams = parse(params)?;
-                    let plugin_id = plugin_id.ok_or_else(|| {
-                        host_unavailable("tool.registry.register requires plugin id")
-                    })?;
-                    let response = self.tool_upsert_for_plugin(&plugin_id, p.request.tool)?;
-                    serde_json::to_value(&response)
-                        .map_err(|e| PluginError::invalid_params_error(&e))
-                }
-                method::HOST_TOOL_REGISTRY_UPDATE => {
-                    let p: HostToolUpdateParams = parse(params)?;
-                    let plugin_id = plugin_id.ok_or_else(|| {
-                        host_unavailable("tool.registry.update requires plugin id")
-                    })?;
-                    let response = self.tool_upsert_for_plugin(&plugin_id, p.request.tool)?;
-                    serde_json::to_value(&response)
-                        .map_err(|e| PluginError::invalid_params_error(&e))
-                }
-                method::HOST_TOOL_REGISTRY_REMOVE => {
-                    let p: HostToolRemoveParams = parse(params)?;
-                    let plugin_id = plugin_id.ok_or_else(|| {
-                        host_unavailable("tool.registry.remove requires plugin id")
-                    })?;
-                    let response = self.tool_remove_for_plugin(
-                        &plugin_id,
-                        &p.request.name,
-                        p.request.by_model_name,
-                    )?;
-                    serde_json::to_value(&response)
-                        .map_err(|e| PluginError::invalid_params_error(&e))
-                }
-                method::HOST_TOOL_REGISTRY_LIST => {
-                    let response = self.registered_tool_list_response()?;
-                    serde_json::to_value(&response)
-                        .map_err(|e| PluginError::invalid_params_error(&e))
-                }
-                method::HOST_STORAGE_GET => {
-                    let p: HostStorageGetParams = parse(params)?;
-                    let out = host_api::run_in_host_callback_context(
-                        scoped_context(plugin_id, None),
-                        inner.storage_get(p.request),
-                    )
-                    .await?;
-                    serde_json::to_value(&out).map_err(|e| PluginError::invalid_params_error(&e))
-                }
-                method::HOST_STORAGE_SET => {
-                    let p: HostStorageSetParams = parse(params)?;
-                    host_api::run_in_host_callback_context(
-                        scoped_context(plugin_id, None),
-                        inner.storage_set(p.request),
-                    )
-                    .await?;
-                    Ok(serde_json::Value::Object(Default::default()))
-                }
-                method::HOST_STORAGE_DELETE => {
-                    let p: HostStorageDeleteParams = parse(params)?;
-                    host_api::run_in_host_callback_context(
-                        scoped_context(plugin_id, None),
-                        inner.storage_delete(p.request),
-                    )
-                    .await?;
-                    Ok(serde_json::Value::Object(Default::default()))
-                }
-                method::HOST_STORAGE_LIST => {
-                    let p: HostStorageListParams = parse(params)?;
-                    let out = host_api::run_in_host_callback_context(
-                        scoped_context(plugin_id, None),
-                        inner.storage_list(p.request),
-                    )
-                    .await?;
-                    serde_json::to_value(&out).map_err(|e| PluginError::invalid_params_error(&e))
-                }
-                method::HOST_SECRET_GET => {
-                    let p: HostSecretGetParams = parse(params)?;
-                    let out = host_api::run_in_host_callback_context(
-                        scoped_context(plugin_id, None),
-                        inner.secret_get(p.request),
-                    )
-                    .await?;
-                    serde_json::to_value(&out).map_err(|e| PluginError::invalid_params_error(&e))
-                }
-                method::HOST_SECRET_SET => {
-                    let p: HostSecretSetParams = parse(params)?;
-                    host_api::run_in_host_callback_context(
-                        scoped_context(plugin_id, None),
-                        inner.secret_set(p.request),
-                    )
-                    .await?;
-                    Ok(serde_json::Value::Object(Default::default()))
-                }
-                method::HOST_SECRET_DELETE => {
-                    let p: HostSecretDeleteParams = parse(params)?;
-                    host_api::run_in_host_callback_context(
-                        scoped_context(plugin_id, None),
-                        inner.secret_delete(p.request),
-                    )
-                    .await?;
-                    Ok(serde_json::Value::Object(Default::default()))
-                }
-                method::HOST_SECRET_LIST => {
-                    let _p: HostSecretListParams = parse(params)?;
-                    let out = host_api::run_in_host_callback_context(
-                        scoped_context(plugin_id, None),
-                        inner.secret_list(),
-                    )
-                    .await?;
-                    serde_json::to_value(&out).map_err(|e| PluginError::invalid_params_error(&e))
-                }
-                method::HOST_PLUGIN_STATUS_LIST => {
-                    let response = self.plugin_status_list_response();
-                    serde_json::to_value(&response)
-                        .map_err(|e| PluginError::invalid_params_error(&e))
-                }
-                method::HOST_PLUGIN_STATUS_GET => {
-                    let p: HostPluginStatusGetParams = parse(params)?;
-                    let response = self.plugin_status_get_response(&p.request.plugin_id);
-                    serde_json::to_value(&response)
-                        .map_err(|e| PluginError::invalid_params_error(&e))
-                }
-                method::HOST_LSP_LIST_SERVERS => {
-                    let _p: HostLspListServersParams = parse(params)?;
-                    let out = host_api::run_in_host_callback_context(
-                        scoped_context(plugin_id, None),
-                        inner.lsp_list_servers(),
-                    )
-                    .await?;
-                    serde_json::to_value(&out).map_err(|e| PluginError::invalid_params_error(&e))
-                }
-                method::HOST_LSP_LIST_DIAGNOSTICS => {
-                    let p: HostLspListDiagnosticsParams = parse(params)?;
-                    let out = host_api::run_in_host_callback_context(
-                        scoped_context(plugin_id, None),
-                        inner.lsp_list_diagnostics(p.request),
-                    )
-                    .await?;
-                    serde_json::to_value(&out).map_err(|e| PluginError::invalid_params_error(&e))
-                }
-                method::HOST_SNAPSHOT_LIST => {
-                    let _p: HostSnapshotListParams = parse(params)?;
-                    let out = host_api::run_in_host_callback_context(
-                        scoped_context(plugin_id, None),
-                        inner.snapshot_list(),
-                    )
-                    .await?;
-                    serde_json::to_value(&out).map_err(|e| PluginError::invalid_params_error(&e))
-                }
-                method::HOST_SCHEDULER_LIST => {
-                    let _p: HostSchedulerListParams = parse(params)?;
-                    let out = host_api::run_in_host_callback_context(
-                        scoped_context(plugin_id, None),
-                        inner.scheduler_list(),
-                    )
-                    .await?;
-                    serde_json::to_value(&out).map_err(|e| PluginError::invalid_params_error(&e))
-                }
-                method::HOST_SCHEDULER_CREATE => {
-                    let p: HostSchedulerCreateParams = parse(params)?;
-                    let out = host_api::run_in_host_callback_context(
-                        scoped_context(plugin_id, None),
-                        inner.scheduler_create(p.request),
-                    )
-                    .await?;
-                    serde_json::to_value(&out).map_err(|e| PluginError::invalid_params_error(&e))
-                }
-                method::HOST_SCHEDULER_DELETE => {
-                    let p: HostSchedulerDeleteParams = parse(params)?;
-                    let out = host_api::run_in_host_callback_context(
-                        scoped_context(plugin_id, None),
-                        inner.scheduler_delete(p.request),
-                    )
-                    .await?;
-                    serde_json::to_value(&out).map_err(|e| PluginError::invalid_params_error(&e))
-                }
-                method::HOST_HOOK_LIST => {
-                    let response = self.hook_list_response().await;
-                    serde_json::to_value(&response)
-                        .map_err(|e| PluginError::invalid_params_error(&e))
-                }
-                method::HOST_MCP_LIST_SERVERS => {
-                    let _p: HostMcpListServersParams = parse(params)?;
-                    let out = host_api::run_in_host_callback_context(
-                        scoped_context(plugin_id, None),
-                        inner.mcp_list_servers(),
-                    )
-                    .await?;
-                    serde_json::to_value(&out).map_err(|e| PluginError::invalid_params_error(&e))
-                }
-                method::HOST_MCP_ADD_SERVER => {
-                    let p: HostMcpAddServerParams = parse(params)?;
-                    host_api::run_in_host_callback_context(
-                        scoped_context(plugin_id, None),
-                        inner.mcp_add_server(p.request),
-                    )
-                    .await?;
-                    Ok(serde_json::Value::Object(Default::default()))
-                }
-                method::HOST_MCP_REMOVE_SERVER => {
-                    let p: HostMcpRemoveServerParams = parse(params)?;
-                    let out = host_api::run_in_host_callback_context(
-                        scoped_context(plugin_id, None),
-                        inner.mcp_remove_server(p.request),
-                    )
-                    .await?;
-                    serde_json::to_value(&out).map_err(|e| PluginError::invalid_params_error(&e))
-                }
-                method::HOST_UI_DISPLAY_CONTRIBUTE => {
-                    let plugin_id = plugin_id.ok_or_else(|| {
-                        host_unavailable("ui.display.contribute requires plugin id")
-                    })?;
-                    let p: HostDisplayContributeParams = parse(params)?;
-                    self.display_contribute(&plugin_id, p.request);
-                    Ok(serde_json::Value::Object(Default::default()))
-                }
-                method::HOST_UI_DISPLAY_REMOVE => {
-                    let plugin_id = plugin_id
-                        .ok_or_else(|| host_unavailable("ui.display.remove requires plugin id"))?;
-                    let p: HostDisplayRemoveParams = parse(params)?;
-                    let removed = self.display_remove(&plugin_id, &p.request.contribution_id);
-                    serde_json::to_value(&HostDisplayRemoveResponse { removed })
-                        .map_err(|e| PluginError::invalid_params_error(&e))
-                }
-                method::HOST_NOTIFY => {
-                    let plugin_id =
-                        plugin_id.ok_or_else(|| host_unavailable("notify requires plugin id"))?;
-                    let p: HostNotifyParams = parse(params)?;
-                    self.push_host_notification(&plugin_id, p.request);
-                    Ok(serde_json::Value::Object(Default::default()))
-                }
-                method::HOST_UI_THEME_REGISTER => {
-                    let plugin_id = plugin_id
-                        .ok_or_else(|| host_unavailable("ui.theme.register requires plugin id"))?;
-                    let p: HostThemeRegisterParams = parse(params)?;
-                    self.theme_register(&plugin_id, p.request)?;
-                    Ok(serde_json::Value::Object(Default::default()))
-                }
-                method::HOST_UI_THEME_LIST => {
-                    let response = self.theme_list_response();
-                    serde_json::to_value(&response)
-                        .map_err(|e| PluginError::invalid_params_error(&e))
-                }
-                method::HOST_UI_THEME_REMOVE => {
-                    let plugin_id = plugin_id
-                        .ok_or_else(|| host_unavailable("ui.theme.remove requires plugin id"))?;
-                    let p: HostThemeRemoveParams = parse(params)?;
-                    let removed = self.theme_remove(&plugin_id, &p.request.id);
-                    serde_json::to_value(&HostThemeRemoveResponse { removed })
-                        .map_err(|e| PluginError::invalid_params_error(&e))
-                }
-                other => Err(PluginError::not_implemented(other)),
-            }
-        })
+            }),
+        )
         .await
+    }
+
+    fn own_global_tool(
+        &self,
+        owner: &Arc<PluginEffectScope>,
+        key: &ToolKey,
+        kind: &'static str,
+    ) -> Result<crate::registration_owner::RegistrationOwner, PluginError> {
+        let registry = Arc::downgrade(&self.tool_registry);
+        let cleanup_key = key.clone();
+        crate::registration_owner::RegistrationOwner::new(
+            owner,
+            kind,
+            key.name().to_string(),
+            move |id| {
+                if let Some(registry) = registry.upgrade() {
+                    recover_write(&registry, "plugin tool registry disposer")
+                        .remove_exact(&cleanup_key, &id);
+                }
+                Ok(())
+            },
+        )
+        .map_err(|error| host_unavailable_error("own a plugin tool registration", &error))
+    }
+
+    pub(super) fn own_manifest_tools(
+        &self,
+        owner: &Arc<PluginEffectScope>,
+        manifest: &crate::sdk::PluginManifest,
+        registry: &mut PluginToolRegistry,
+    ) -> Result<(), PluginError> {
+        for definition in &manifest.tools {
+            let key = ToolKey::new(owner.plugin_id().clone(), definition.name.clone())?;
+            // Init and live handoff may already have replaced a default. Its
+            // current process owner must retain the replacement's ownership.
+            if registry.lookup_tool_by_key(&key).is_some() && !registry.has_owner(&key) {
+                let ownership = self.own_global_tool(owner, &key, "host.manifest.tools")?;
+                registry.assign_owner(key, ownership);
+            }
+        }
+        Ok(())
     }
 
     pub(super) fn tool_upsert_for_plugin(
@@ -1459,12 +1489,19 @@ impl HostHandle {
             .map_err(PluginError::invalid_params)?;
         let tool_key = tool.tool_key().clone();
         let plugin_tool_name = tool.tool_name().to_string();
+        let owner = self.ensure_effect_scope(&plugin_key);
+        let _lease = owner
+            .lease()
+            .map_err(|error| host_unavailable_error("register a plugin tool", &error))?;
         let scope = current_tool_scope();
 
         if let Some(scope) = scope {
-            let owner = self.effect_scope(&plugin_key).ok_or_else(|| {
-                host_unavailable(format!("plugin `{plugin_id}` has no active effect scope"))
-            })?;
+            let owner = self
+                .callback_effect_owner(&plugin_key)
+                .or_else(|| self.effect_scope(&plugin_key))
+                .ok_or_else(|| {
+                    host_unavailable(format!("plugin `{plugin_id}` has no active effect scope"))
+                })?;
             let existed = self.scoped_tools.resolve(Some(&scope), &tool_key).is_some()
                 || recover_read(&self.tool_registry, "plugin tool registry")
                     .lookup_tool_by_key(&tool_key)
@@ -1509,9 +1546,8 @@ impl HostHandle {
         } else {
             ToolRegistryChangeKind::Registered
         };
-        let tool = tool_registry
-            .upsert_from_plugin(&plugin_key, tool.definition)
-            .map_err(PluginError::invalid_params)?;
+        let ownership = self.own_global_tool(&owner, &tool_key, "host.tool")?;
+        let tool = tool_registry.upsert_owned(tool, ownership);
         let event = ToolRegistryChangedEvent {
             kind,
             generation: tool_registry.generation(),
@@ -1521,19 +1557,13 @@ impl HostHandle {
             scope: None,
             tool: Some(tool.definition.clone()),
         };
+        let generation = tool_registry.generation();
+        drop(tool_registry);
         self.record_tool_registry_event(event.clone());
-        let registry = Arc::clone(&self.tool_registry);
-        let owned_plugin = plugin_key.clone();
-        let owned_name = plugin_tool_name.clone();
-        self.replace_effect_sync(&plugin_key, "host.tool", plugin_tool_name, move || {
-            recover_write(&registry, "plugin tool registry disposer")
-                .remove_from_plugin(&owned_plugin, owned_name.as_str());
-            Ok(())
-        })?;
         Ok(HostToolMutationResponse {
-            generation: tool_registry.generation(),
+            generation,
             model_name: Some(tool.canonical_name()),
-            tool: Some(tool.definition.clone()),
+            tool: Some(tool.definition),
             event: Some(event),
         })
     }
@@ -1559,9 +1589,12 @@ impl HostHandle {
         let tool_name = tool_key.name().to_string();
 
         if let Some(scope) = current_tool_scope() {
-            let owner = self.effect_scope(&plugin_key).ok_or_else(|| {
-                host_unavailable(format!("plugin `{plugin_id}` has no active effect scope"))
-            })?;
+            let owner = self
+                .callback_effect_owner(&plugin_key)
+                .or_else(|| self.effect_scope(&plugin_key))
+                .ok_or_else(|| {
+                    host_unavailable(format!("plugin `{plugin_id}` has no active effect scope"))
+                })?;
             let removed = self
                 .scoped_tools
                 .remove_owned(&owner, Some(&scope), &tool_key)
@@ -1600,25 +1633,24 @@ impl HostHandle {
 
         let mut tool_registry = recover_write(&self.tool_registry, "plugin tool registry");
         let removed = tool_registry.remove_from_plugin(&plugin_key, tool_name.as_str());
+        let generation = tool_registry.generation();
         let event = removed.as_ref().map(|tool| ToolRegistryChangedEvent {
             kind: ToolRegistryChangeKind::Removed,
-            generation: tool_registry.generation(),
+            generation,
             timestamp_ms: unix_timestamp_ms(),
             plugin: tool.plugin_key().clone(),
             tool_key: tool.tool_key().clone(),
             scope: None,
             tool: Some(tool.definition.clone()),
         });
+        drop(tool_registry);
         if let Some(event) = event.as_ref() {
             self.record_tool_registry_event(event.clone());
         }
-        if removed.is_some() {
-            self.release_effect(&plugin_key, "host.tool", tool_name.as_str());
-        }
         Ok(HostToolMutationResponse {
-            generation: tool_registry.generation(),
+            generation,
             model_name: removed.as_ref().map(RegisteredTool::canonical_name),
-            tool: removed.map(|tool| tool.definition.clone()),
+            tool: removed.map(|tool| tool.definition),
             event,
         })
     }
@@ -1717,57 +1749,35 @@ impl HostHandle {
     }
 
     pub(super) async fn hook_list_response(&self) -> HostHookListResponse {
-        let hooks = recover_read(&self.hook_catalog, "plugin hook catalog")
-            .values()
-            .cloned()
-            .collect();
+        let hooks = self.hook_catalog.values();
         HostHookListResponse { hooks }
     }
 
-    pub(super) fn display_contribute(&self, plugin_id: &str, req: HostDisplayContributeRequest) {
-        let Ok(plugin_id) = plugin_id.parse::<PluginKey>() else {
-            return;
-        };
-        let contribution_id = req.contribution.id.clone();
-        let key = (plugin_id.clone(), req.contribution.id.clone());
-        recover_write(&self.display, "plugin display registry").insert(
-            key,
-            HostDisplayContribution {
-                plugin_id: plugin_id.clone(),
-                contribution: req.contribution,
-            },
-        );
-        let display = Arc::clone(&self.display);
-        let owned_plugin = plugin_id.clone();
-        let owned_id = contribution_id.clone();
-        if let Err(error) =
-            self.replace_effect_sync(&plugin_id, "host.display", contribution_id, move || {
-                recover_write(&display, "plugin display registry disposer")
-                    .remove(&(owned_plugin, owned_id));
-                Ok(())
-            })
-        {
-            self.logs.append(
-                &plugin_id,
-                "error",
-                "effects",
-                format!("failed to own display contribution: {error}"),
-                serde_json::Value::Null,
-            );
-        }
+    pub(super) fn display_contribute(
+        &self,
+        plugin_id: &str,
+        req: HostDisplayContributeRequest,
+    ) -> Result<(), PluginError> {
+        let plugin_id = plugin_id.parse::<PluginKey>()?;
+        let owner = self.ensure_effect_scope(&plugin_id);
+        self.display
+            .insert(
+                &owner,
+                "host.display",
+                req.contribution.id.clone(),
+                HostDisplayContribution {
+                    plugin_id,
+                    contribution: req.contribution,
+                },
+            )
+            .map_err(|error| host_unavailable_error("register a display contribution", &error))
     }
 
     pub(super) fn display_remove(&self, plugin_id: &str, contribution_id: &str) -> bool {
         let Ok(plugin_id) = plugin_id.parse::<PluginKey>() else {
             return false;
         };
-        let removed = recover_write(&self.display, "plugin display registry")
-            .remove(&(plugin_id.clone(), contribution_id.to_string()))
-            .is_some();
-        if removed {
-            self.release_effect(&plugin_id, "host.display", contribution_id);
-        }
-        removed
+        self.display.remove(&plugin_id, contribution_id)
     }
 
     /// Record a plugin notification intent through the unified `host.notify`
@@ -1802,11 +1812,7 @@ impl HostHandle {
     }
 
     pub fn display_list_response(&self) -> Vec<HostDisplayContribution> {
-        let mut contributions: Vec<HostDisplayContribution> =
-            recover_read(&self.display, "plugin display registry")
-                .values()
-                .cloned()
-                .collect();
+        let mut contributions = self.display.values();
         contributions.sort_by(|a, b| {
             b.contribution
                 .priority
@@ -1828,48 +1834,31 @@ impl HostHandle {
                 "theme id must be non-empty and must not contain leading or trailing whitespace",
             ));
         }
-        let theme_id = req.id.clone();
-        let mut guard = recover_write(&self.themes, "plugin theme registry");
-        let key = (plugin_id.clone(), theme_id.clone());
-        guard.insert(
-            key,
-            HostThemePalette {
-                id: theme_id.clone(),
-                plugin_id: plugin_id.clone(),
-                display_name: req.display_name,
-                colors: req.colors,
-            },
-        );
-        drop(guard);
-        let themes = Arc::clone(&self.themes);
-        let owned_plugin = plugin_id.clone();
-        let owned_id = theme_id.clone();
-        self.replace_effect_sync(&plugin_id, "host.theme", theme_id, move || {
-            recover_write(&themes, "plugin theme registry disposer")
-                .remove(&(owned_plugin, owned_id));
-            Ok(())
-        })?;
-        Ok(())
+        let owner = self.ensure_effect_scope(&plugin_id);
+        self.themes
+            .insert(
+                &owner,
+                "host.theme",
+                req.id.clone(),
+                HostThemePalette {
+                    id: req.id,
+                    plugin_id,
+                    display_name: req.display_name,
+                    colors: req.colors,
+                },
+            )
+            .map_err(|error| host_unavailable_error("register a theme", &error))
     }
 
     pub(super) fn theme_remove(&self, plugin_id: &str, id: &str) -> bool {
         let Ok(plugin_id) = plugin_id.parse::<PluginKey>() else {
             return false;
         };
-        let removed = recover_write(&self.themes, "plugin theme registry")
-            .remove(&(plugin_id.clone(), id.to_owned()))
-            .is_some();
-        if removed {
-            self.release_effect(&plugin_id, "host.theme", id);
-        }
-        removed
+        self.themes.remove(&plugin_id, id)
     }
 
     pub fn theme_list_response(&self) -> HostThemeListResponse {
-        let themes: Vec<HostThemePalette> = recover_read(&self.themes, "plugin theme registry")
-            .values()
-            .cloned()
-            .collect();
+        let themes = self.themes.values();
         HostThemeListResponse { themes }
     }
 }
@@ -2008,6 +1997,40 @@ mod effect_ownership_tests {
             .validated_callback_context(Some(plugin_id.to_string()), Some(issued))
             .expect_err("revoked authority token must not replay");
         assert_eq!(expired.kind, PluginErrorKind::PolicyDenied);
+    }
+
+    #[tokio::test]
+    async fn late_callback_cannot_implicitly_restart_a_disposed_scope() {
+        let plugin_id: PluginKey = "example.disposed".parse().unwrap();
+        let (handle, tools, _) = test_handle(&plugin_id);
+        let scope = handle.begin_plugin_instance(plugin_id.clone());
+        scope.dispose().await;
+        let result = handle.tool_upsert_for_plugin(&plugin_id.to_string(), tool("late"));
+        assert!(result.is_err());
+        assert!(tools.read().unwrap().registered_tools_owned().is_empty());
+        assert!(Arc::ptr_eq(
+            &scope,
+            &handle.effect_scope(&plugin_id).unwrap()
+        ));
+    }
+
+    #[test]
+    fn tool_registry_listener_can_read_the_published_registration() {
+        let plugin_id: PluginKey = "example.listener".parse().unwrap();
+        let (handle, tools, _) = test_handle(&plugin_id);
+        let observed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let callback_observed = observed.clone();
+        handle.set_tool_registry_event_listener(Some(Arc::new(move |event| {
+            let registry = tools
+                .try_read()
+                .expect("listener must run outside the registry write lock");
+            assert!(registry.lookup_tool_by_key(&event.tool_key).is_some());
+            callback_observed.store(true, std::sync::atomic::Ordering::SeqCst);
+        })));
+        handle
+            .tool_upsert_for_plugin(&plugin_id.to_string(), tool("published"))
+            .unwrap();
+        assert!(observed.load(std::sync::atomic::Ordering::SeqCst));
     }
 
     #[tokio::test]
@@ -2231,19 +2254,21 @@ mod effect_ownership_tests {
         handle
             .tool_upsert_for_plugin(plugin_id_text.as_str(), tool("dynamic"))
             .expect("register dynamic tool");
-        handle.display_contribute(
-            plugin_id_text.as_str(),
-            HostDisplayContributeRequest {
-                contribution: crate::sdk::PluginDisplayContribution {
-                    id: "status".to_string(),
-                    kind: crate::sdk::ContributionKind::StatusLineText,
-                    priority: 0,
-                    content: crate::sdk::PluginDisplayContent::Text {
-                        text: "ready".to_string(),
+        handle
+            .display_contribute(
+                plugin_id_text.as_str(),
+                HostDisplayContributeRequest {
+                    contribution: crate::sdk::PluginDisplayContribution {
+                        id: "status".to_string(),
+                        kind: crate::sdk::ContributionKind::StatusLineText,
+                        priority: 0,
+                        content: crate::sdk::PluginDisplayContent::Text {
+                            text: "ready".to_string(),
+                        },
                     },
                 },
-            },
-        );
+            )
+            .unwrap();
         handle
             .theme_register(
                 plugin_id_text.as_str(),

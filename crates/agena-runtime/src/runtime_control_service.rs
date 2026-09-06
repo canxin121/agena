@@ -16,10 +16,12 @@ use crate::{
 };
 
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
-#[error("runtime control failed: {message}")]
 /// Error from the runtime control service.
-pub struct RuntimeControlServiceError {
-    message: String,
+pub enum RuntimeControlServiceError {
+    #[error("runtime is shut down")]
+    Shutdown,
+    #[error("runtime control failed: {message}")]
+    Operation { message: String },
 }
 
 /// Object-safe work item for a runtime-managed background task.  The concrete
@@ -39,7 +41,7 @@ pub type RuntimeBackgroundTaskWork = Box<
 
 impl RuntimeControlServiceError {
     pub fn new(message: impl Into<String>) -> Self {
-        Self {
+        Self::Operation {
             message: message.into(),
         }
     }

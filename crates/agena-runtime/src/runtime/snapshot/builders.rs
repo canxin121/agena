@@ -15,9 +15,28 @@ type ToolCompositionInputs<'a> = agena_runtime::ToolCompositionInputs<
     Option<Arc<SessionManager>>,
 >;
 
-pub(super) fn build_or_reconfigure_session_manager(
+pub(super) struct PendingSessionReconfiguration {
+    providers: Arc<ProviderRegistry>,
+    processor: SessionProcessor,
+    executor: ToolExecutor,
+    config: agena_runtime::RuntimeSessionManagerConfig,
+}
+
+impl PendingSessionReconfiguration {
+    pub(super) fn publish(self, manager: &SessionManager) {
+        manager.reconfigure(
+            self.providers,
+            ContextGovernor::new(ContextPolicy::default()),
+            self.processor,
+            self.executor,
+            self.config,
+        );
+    }
+}
+
+pub(super) fn build_or_prepare_session_manager(
     inputs: SessionCompositionInputs<'_>,
-) -> Arc<SessionManager> {
+) -> (Arc<SessionManager>, Option<PendingSessionReconfiguration>) {
     let agena_runtime::SessionCompositionInputs {
         existing,
         database: db,
@@ -56,14 +75,17 @@ pub(super) fn build_or_reconfigure_session_manager(
             },
             permission_inspector,
         );
-        manager.reconfigure(
-            Arc::clone(&providers),
-            ContextGovernor::new(ContextPolicy::default()),
-            processor,
-            executor,
-            config,
+        // The shared manager is already serving the published snapshot. Keep
+        // its replacement execution state private until lifecycle publication.
+        return (
+            manager,
+            Some(PendingSessionReconfiguration {
+                providers,
+                processor,
+                executor,
+                config,
+            }),
         );
-        return manager;
     }
 
     let bootstrap_executor = build_tool_executor(
@@ -103,7 +125,7 @@ pub(super) fn build_or_reconfigure_session_manager(
         executor,
         config,
     );
-    manager
+    (manager, None)
 }
 
 pub(super) async fn build_model_catalog_services(
@@ -113,6 +135,7 @@ pub(super) async fn build_model_catalog_services(
         &PluginHost,
         Option<Arc<DatabaseConnection>>,
     >,
+    client_identity: &crate::ProviderClientIdentity,
 ) -> Result<
     (
         Arc<ProviderRegistry>,
@@ -132,6 +155,7 @@ pub(super) async fn build_model_catalog_services(
             Some(config_path),
             plugins,
             None,
+            client_identity,
         )
         .await?,
     );
@@ -146,6 +170,7 @@ pub(super) async fn build_runtime_provider_registry(
     config_path: &Path,
     plugins: &PluginHost,
     catalog_snapshot: &agena_provider::ModelCatalogSnapshot,
+    client_identity: &crate::ProviderClientIdentity,
 ) -> Result<Arc<ProviderRegistry>, crate::AppError> {
     Ok(Arc::new(
         crate::config::build_provider_registry_from_inputs(
@@ -153,6 +178,7 @@ pub(super) async fn build_runtime_provider_registry(
             Some(config_path),
             plugins,
             Some(catalog_snapshot),
+            client_identity,
         )
         .await?,
     ))
@@ -167,25 +193,13 @@ pub(super) async fn build_plugin_services(
         Option<Arc<agena_mcp_client::McpConnectionManager>>,
     >,
 ) -> Result<Arc<PluginHost>, crate::AppError> {
-    let agena_runtime::PluginCompositionInputs {
-        plugin_config,
-        workspace_root,
-        previous_host,
-        previous_config,
-        mcp_manager,
-    } = inputs;
-    let static_plugins =
-        agena_bundled_plugins::plugins::sources::static_plugin_registrations(mcp_manager);
-    let plugins = agena_runtime::compose_and_install_plugin_host(
-        static_plugins,
-        plugin_config,
-        workspace_root,
-        previous_host,
-        previous_config.as_ref(),
-        agena_runtime::codex_package_version(),
-    )
-    .await
-    .map_err(|error| crate::AppError::Config(format!("plugin host: {error}")))?;
+    let static_plugins = agena_bundled_plugins::plugins::sources::static_plugin_registrations(
+        inputs.mcp_manager.clone(),
+    );
+    let plugins =
+        agena_runtime::compose_plugin_host(static_plugins, inputs, env!("CARGO_PKG_VERSION"))
+            .await
+            .map_err(|error| crate::AppError::Config(format!("plugin host: {error}")))?;
     Ok(plugins)
 }
 

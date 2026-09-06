@@ -37,6 +37,7 @@ pub mod error;
 pub mod ipc;
 #[cfg(feature = "jsonrpc")]
 pub mod jsonrpc;
+#[cfg(any(feature = "http", feature = "ws", feature = "sse"))]
 mod live;
 #[cfg(feature = "http")]
 pub mod rest;
@@ -532,7 +533,10 @@ pub fn transport_router(state: AppState) -> Router {
     router.with_state(state)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "http"))]
+mod background_task_tests;
+
+#[cfg(all(test, feature = "http"))]
 mod router_contract_tests {
     use std::collections::{BTreeMap, VecDeque};
 
@@ -551,13 +555,16 @@ mod router_contract_tests {
     use agena_notification::NotificationService;
     use agena_runtime::{RuntimeBootstrapRequest, bootstrap_application_services};
     use axum::body::to_bytes;
-    use futures_util::{SinkExt, StreamExt};
+    #[cfg(feature = "ws")]
+    use futures_util::SinkExt;
+    use futures_util::StreamExt;
     use http::Request;
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
         net::{TcpListener, TcpStream},
         sync::{mpsc, oneshot},
     };
+    #[cfg(feature = "ws")]
     use tokio_tungstenite::{connect_async, tungstenite::Message};
     use tower::ServiceExt;
 
@@ -573,6 +580,59 @@ mod router_contract_tests {
             "agena-api-server-test-global-{}.json",
             std::process::id()
         ))
+    }
+
+    #[tokio::test]
+    async fn runtime_route_surfaces_scheduler_failure_with_the_shared_problem_envelope() {
+        use sea_orm::ConnectionTrait;
+        let workspace = tempfile::tempdir().unwrap();
+        let scheduler_path = workspace.path().join("scheduler.db");
+        let runtime = bootstrap_application_services(RuntimeBootstrapRequest {
+            workspace_root: Some(workspace.path().to_path_buf()),
+            config_path: Some(workspace.path().join("global.json")),
+            database_url: Some("sqlite::memory:".to_owned()),
+            scheduler_database_path: Some(scheduler_path.clone()),
+            initialize_schema: true,
+            ..RuntimeBootstrapRequest::default()
+        })
+        .await
+        .unwrap();
+        let application = application_for_test(&runtime);
+        let healthy = application.runtime_status_response().await.unwrap();
+        assert!(healthy.automation.enabled);
+        let app = router(AppState::from_application(application));
+        let db =
+            sea_orm::Database::connect(format!("sqlite://{}?mode=rw", scheduler_path.display()))
+                .await
+                .unwrap();
+        db.execute(sea_orm::Statement::from_string(
+            sea_orm::DatabaseBackend::Sqlite,
+            "DROP TABLE agena_scheduler_jobs",
+        ))
+        .await
+        .unwrap();
+        let response = app
+            .oneshot(
+                Request::get("/api/v1/runtime")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), http::StatusCode::INTERNAL_SERVER_ERROR);
+        let body = to_bytes(response.into_body(), 64 * 1024).await.unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(
+            value.get("problem").is_some(),
+            "expected a shared problem, got {value}"
+        );
+        assert!(
+            value.get("automation").is_none(),
+            "a failed read must not report zero jobs"
+        );
+        assert!(value.get("diagnostic").is_none());
+        runtime.shutdown();
+        db.close().await.unwrap();
     }
 
     async fn wait_for_test_runtime_startup_quiescence(
@@ -1260,6 +1320,7 @@ mod router_contract_tests {
         let _ = std::fs::remove_dir_all(workspace_path);
     }
 
+    #[cfg(feature = "ws")]
     #[tokio::test]
     async fn websocket_upgrade_serves_shared_hello_and_pong_frames() {
         let runtime = bootstrap_application_services(RuntimeBootstrapRequest {
@@ -1676,6 +1737,7 @@ mod router_contract_tests {
         assert_eq!(response.status(), http::StatusCode::NOT_FOUND);
     }
 
+    #[cfg(feature = "sse")]
     #[tokio::test]
     async fn notifications_sse_contract_streams_replay_then_resumed() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -2515,6 +2577,7 @@ mod router_contract_tests {
         provider.await.expect("empty fake provider exits");
     }
 
+    #[cfg(feature = "sse")]
     #[tokio::test]
     async fn disconnected_client_does_not_cancel_server_owned_completion() {
         let (release_tx, release_rx) = oneshot::channel();

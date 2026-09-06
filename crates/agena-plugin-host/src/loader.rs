@@ -10,9 +10,8 @@ use crate::config::{ConfiguredPlugin, PluginPackage, PluginSignature};
 use crate::error::{HostError, TransportError};
 use crate::host::{HostHandle, LoadedPlugin};
 use crate::registry::validate_tool_definition;
-use crate::sdk::host_api::HostCallbackContext;
 use crate::sdk::rpc::method;
-use crate::sdk::{InitContext, InitOutcome, PluginKey, PluginManifest};
+use crate::sdk::{PluginKey, PluginManifest};
 use crate::transport::{
     PluginTransport, cdylib::CdylibTransport, http::HttpTransport, quiescent::QuiescentTransport,
     stdio::StdioTransport,
@@ -178,18 +177,6 @@ pub async fn prepare_entry(
             sha256,
             ..
         } => {
-            #[cfg(feature = "signing")]
-            {
-                if let Some(expected) = sha256 {
-                    let cmd_path = std::path::Path::new(command);
-                    if cmd_path.exists() {
-                        verify_sha256(cmd_path, expected).map_err(|e| HostError::Load {
-                            plugin: plugin_id.to_string(),
-                            message: e,
-                        })?;
-                    }
-                }
-            }
             #[cfg(not(feature = "signing"))]
             {
                 if sha256.is_some() {
@@ -219,6 +206,7 @@ pub async fn prepare_entry(
                 Some(plugin_key),
                 Some(status_sink),
                 Some(log_sink),
+                sha256.as_deref(),
             )
             .await
             .map_err(|e| HostError::Load {
@@ -315,10 +303,7 @@ async fn prepare_transport(
     transport: Arc<dyn PluginTransport>,
 ) -> Result<PreparedPlugin, HostError> {
     transport
-        .attach_host(
-            host_handle
-                .scoped_host_client_for_scope(plugin_id.to_string(), Arc::clone(&effect_scope)),
-        )
+        .bind_host(Arc::clone(host_handle), Arc::clone(&effect_scope))
         .await
         .map_err(|e| HostError::Load {
             plugin: plugin_id.to_string(),
@@ -376,52 +361,21 @@ pub async fn activate_entry(
 ) -> Result<LoadedPlugin, HostError> {
     let plugin_id = prepared.key().to_string();
     let plugin_key = prepared.key();
-    let init_ctx = InitContext {
-        agena_version: agena_version.to_string(),
-        workspace_root: workspace_root.to_path_buf(),
-        plugin_id: plugin_key.clone(),
-        host_callback_url: host_handle.callback_url(&plugin_id),
-        host_callback_token: host_handle.callback_token(&plugin_id).await,
-        settings: prepared.configured_plugin.settings().clone(),
-        protocol_version: crate::sdk::rpc::PROTOCOL_VERSION,
-    };
-    let init_params = serde_json::to_value(&init_ctx).map_err(|error| HostError::Init {
-        plugin: plugin_id.clone(),
-        message: agena_failure::diagnostic::format_error_chain(&error),
-    })?;
-    let init_dispatch = host_handle.run_in_authorized_callback_context(
-        &plugin_key,
-        HostCallbackContext {
-            workspace_root: Some(workspace_root.to_string_lossy().to_string()),
-            ..HostCallbackContext::default()
-        },
-        prepared.transport.dispatch(method::META_INIT, init_params),
-    );
-    let outcome_value = tokio::time::timeout(TRANSPORT_INITIALIZATION_TIMEOUT, init_dispatch)
+    let outcome = prepared
+        .transport
+        .initialize(crate::transport::initialization::PluginInitialization {
+            host: Arc::downgrade(host_handle),
+            plugin_id: plugin_key.clone(),
+            manifest: prepared.manifest.clone(),
+            agena_version: agena_version.to_owned(),
+            workspace_root: workspace_root.to_path_buf(),
+            settings: prepared.configured_plugin.settings().clone(),
+        })
         .await
         .map_err(|error| HostError::Init {
             plugin: plugin_id.clone(),
-            message: agena_failure::diagnostic::format_error_chain_with_context(
-                "meta/init timed out after 30 seconds",
-                &error,
-            ),
-        })?
-        .map_err(|error| HostError::Init {
-            plugin: plugin_id.clone(),
             message: agena_failure::diagnostic::format_error_chain(&error),
         })?;
-    let outcome: InitOutcome =
-        serde_json::from_value(outcome_value).map_err(|error| HostError::Init {
-            plugin: plugin_id.clone(),
-            message: agena_failure::diagnostic::format_error_chain(&error),
-        })?;
-    validate_manifest(&plugin_id, &plugin_key, &outcome.manifest, "meta/init")?;
-    if outcome.manifest != prepared.manifest {
-        return Err(HostError::Init {
-            plugin: plugin_id,
-            message: "plugin manifest changed between `meta/manifest` and `meta/init`; manifests must be immutable during initialization".to_string(),
-        });
-    }
     Ok(LoadedPlugin::new_with_scope(
         prepared.kind,
         prepared.configured_plugin,
@@ -840,30 +794,57 @@ fn expand_agena_property_aliases(schema: &mut JsonValue) {
 }
 
 pub async fn shutdown_transport(transport: Arc<dyn PluginTransport>) -> Result<(), TransportError> {
-    tokio::time::timeout(
+    let primary = match tokio::time::timeout(
         TRANSPORT_SHUTDOWN_TIMEOUT.saturating_mul(2),
         transport.shutdown(),
     )
     .await
-    .map_err(|error| {
-        TransportError::timeout_error(
+    {
+        Ok(Ok(())) => return Ok(()),
+        Ok(Err(error)) => error,
+        Err(error) => TransportError::timeout_error(
             format!(
                 "plugin transport shutdown did not complete within {}ms",
                 TRANSPORT_SHUTDOWN_TIMEOUT.saturating_mul(2).as_millis()
             ),
             &error,
-        )
-    })?
+        ),
+    };
+    // QuiescentTransport::close reaches the underlying transport before
+    // waiting for accepted requests. A graceful timeout must still cancel
+    // pending I/O and terminate a stdio child retained by the loaded host.
+    match tokio::time::timeout(TRANSPORT_SHUTDOWN_TIMEOUT, transport.close()).await {
+        Ok(Ok(())) => Err(primary),
+        Ok(Err(error)) => Err(TransportError::Io(format!(
+            "{primary}; forced transport cleanup also failed: {error}"
+        ))),
+        Err(error) => Err(TransportError::Io(format!(
+            "{primary}; forced transport cleanup timed out: {error}"
+        ))),
+    }
 }
 
 /// Verify the sha256 of a file against an expected hex digest. Used by both
 /// the wasm transport (for safety) and the signing helpers.
 #[cfg(any(feature = "wasm", feature = "signing"))]
 pub fn verify_sha256(path: &std::path::Path, expected_hex: &str) -> Result<(), String> {
+    use std::io::Read;
+
     use sha2::{Digest, Sha256};
-    let bytes = std::fs::read(path).map_err(|e| format!("read `{}`: {e}", path.display()))?;
-    let digest = Sha256::digest(&bytes);
-    let got = hex::encode(digest);
+    let mut file =
+        std::fs::File::open(path).map_err(|e| format!("read `{}`: {e}", path.display()))?;
+    let mut digest = Sha256::new();
+    let mut buffer = [0u8; 8192];
+    loop {
+        let count = match file.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(count) => count,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(format!("read `{}`: {error}", path.display())),
+        };
+        digest.update(&buffer[..count]);
+    }
+    let got = hex::encode(digest.finalize());
     if got.eq_ignore_ascii_case(expected_hex) {
         Ok(())
     } else {
@@ -900,7 +881,7 @@ pub fn verify_signature_bytes(
     sig: &crate::config::PluginSignature,
     trusted_keys: &std::collections::BTreeMap<String, String>,
 ) -> Result<(), String> {
-    use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+    use ed25519_dalek::{Signature, VerifyingKey};
     let key_hex = trusted_keys
         .get(&sig.key_id)
         .ok_or_else(|| format!("unknown trusted key id `{}`", sig.key_id))?;
@@ -917,7 +898,9 @@ pub fn verify_signature_bytes(
         .try_into()
         .map_err(|_| "signature must be 64 bytes".to_string())?;
     let signature = Signature::from_bytes(&sig_array);
-    verifier.verify(bytes, &signature).map_err(|error| {
+    // Reject small-order public keys and signature points: a relaxed Ed25519
+    // verification can accept arbitrary bytes under a weak trusted key.
+    verifier.verify_strict(bytes, &signature).map_err(|error| {
         agena_failure::diagnostic::format_error_chain_with_context(
             "ed25519 plugin signature verification failed",
             &error,

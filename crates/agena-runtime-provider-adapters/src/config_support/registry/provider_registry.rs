@@ -5,20 +5,21 @@ use agena_provider::{
 };
 
 use super::{
-    AmazonBedrockAdapter, AnthropicAdapter, AnthropicAdapterOptions, Arc, AuthData,
-    CatalogedModelsProvider, ConfigEnvironment, ConfigError, GeminiAdapter, GeminiAdapterOptions,
-    GitlabProvider, GitlabRoutedAdapter, GitlabRoutedBackend, HttpAdapterKind, ManagedCredential,
-    ModelCatalogSnapshot, ModelId, ModelRuntime, MultiAdapterProvider, OllamaAdapter,
-    OpenAiChatCompletionsAdapter, OpenAiChatCompletionsAdapterOptions, OpenAiRealtimeAdapter,
-    OpenAiRealtimeAdapterOptions, OpenAiResponsesAdapter, OpenAiResponsesAdapterOptions, Path,
-    ProviderAdapterDefinition, ProviderAuthConfig, ProviderModelRoute, ProviderRegistry,
-    ResolvedProviderAdapterConfig, ResolvedProviderConfig, api_auth_has_direct_source,
-    api_auth_managed_credential, copilot_base_url, gitlab_auth_managed_credential,
-    gitlab_credential_instance_url, gitlab_credential_runtime_config, gitlab_runtime_config,
-    http_adapter_default_user_agent, http_adapter_extra_headers, openai_adapter_api_credential,
-    openai_adapter_capability_family, parse_adapter_model_ref, require_provider_auth_credential,
-    required_api_auth_credential, resolve_adapter_default_models, resolve_http_adapter_base_url,
-    runtime_adapter_provider_id, static_bedrock_credentials, to_hash_map,
+    AdapterBuildContext, AmazonBedrockAdapter, AnthropicAdapter, AnthropicAdapterOptions, Arc,
+    AuthData, CatalogedModelsProvider, ConfigEnvironment, ConfigError, GeminiAdapter,
+    GeminiAdapterOptions, GitlabProvider, GitlabRoutedAdapter, GitlabRoutedBackend,
+    HttpAdapterKind, ManagedCredential, ModelCatalogSnapshot, ModelId, ModelRuntime,
+    MultiAdapterProvider, OllamaAdapter, OpenAiChatCompletionsAdapter,
+    OpenAiChatCompletionsAdapterOptions, OpenAiRealtimeAdapter, OpenAiRealtimeAdapterOptions,
+    OpenAiResponsesAdapter, OpenAiResponsesAdapterOptions, Path, ProviderAdapterDefinition,
+    ProviderAuthConfig, ProviderModelRoute, ProviderRegistry, ResolvedProviderAdapterConfig,
+    ResolvedProviderConfig, api_auth_has_direct_source, api_auth_managed_credential,
+    copilot_base_url, gitlab_auth_managed_credential, gitlab_credential_instance_url,
+    gitlab_credential_runtime_config, gitlab_runtime_config, http_adapter_default_user_agent,
+    http_adapter_extra_headers, openai_adapter_api_credential, openai_adapter_capability_family,
+    parse_adapter_model_ref, require_provider_auth_credential, required_api_auth_credential,
+    resolve_adapter_default_models, resolve_http_adapter_base_url, runtime_adapter_provider_id,
+    static_bedrock_credentials, to_hash_map,
 };
 
 fn config_adapter_error(error: crate::ProviderError) -> ConfigError {
@@ -30,6 +31,7 @@ pub fn build_provider_registry_from_configs(
     catalog: Option<&ModelCatalogSnapshot>,
     env: &dyn ConfigEnvironment,
     config_path: Option<&Path>,
+    client_identity: &crate::ProviderClientIdentity,
 ) -> Result<ProviderRegistry, ConfigError> {
     let mut registry = ProviderRegistry::new();
 
@@ -53,6 +55,7 @@ pub fn build_provider_registry_from_configs(
             env,
             catalog,
             config_path,
+            client_identity,
         )?;
         registry.register_arc(provider);
     }
@@ -67,6 +70,7 @@ pub(crate) fn build_provider(
     env: &dyn ConfigEnvironment,
     catalog: Option<&ModelCatalogSnapshot>,
     config_path: Option<&Path>,
+    client_identity: &crate::ProviderClientIdentity,
 ) -> Result<Arc<dyn ModelRuntime>, ConfigError> {
     let adapter_defaults = resolve_adapter_default_models(provider_id, resolved)?;
     let adapters = resolved
@@ -85,9 +89,12 @@ pub(crate) fn build_provider(
                         .expect("adapter default should exist")
                         .as_ref(),
                     &resolved.auth,
-                    client.clone(),
-                    env,
-                    config_path,
+                    AdapterBuildContext {
+                        client: client.clone(),
+                        env,
+                        config_path,
+                        client_identity,
+                    },
                 )?,
             ))
         })
@@ -282,10 +289,12 @@ fn build_gitlab_routed_openai_adapter(
     config_path: Option<&Path>,
     adapter_default_model: &str,
     backend: GitlabRoutedBackend,
+    client_identity: &crate::ProviderClientIdentity,
 ) -> Result<Arc<dyn ModelRuntime>, ConfigError> {
     let inner = match auth {
         ProviderAuthConfig::Credential(credential_auth) if credential_auth.gitlab().is_some() => {
             GitlabProvider::from_managed_token_with_config(
+                client_identity.clone(),
                 client,
                 require_provider_auth_credential(
                     provider_id,
@@ -299,16 +308,21 @@ fn build_gitlab_routed_openai_adapter(
                     config_path,
                 )?
                 .credential,
-                gitlab_credential_runtime_config(credential_auth, adapter_default_model),
+                gitlab_credential_runtime_config(
+                    credential_auth,
+                    adapter_default_model,
+                    client_identity,
+                ),
             )
             .map_err(config_adapter_error)?
         }
         ProviderAuthConfig::Api(api) if api.gitlab().is_some() => {
             let gitlab = api.gitlab().expect("guard ensures gitlab api auth");
             GitlabProvider::from_managed_token_with_config(
+                client_identity.clone(),
                 client,
                 gitlab_auth_managed_credential(provider_id, auth, env, config_path)?.credential,
-                gitlab_runtime_config(&gitlab, adapter_default_model),
+                gitlab_runtime_config(&gitlab, adapter_default_model, client_identity),
             )
             .map_err(config_adapter_error)?
         }
@@ -334,10 +348,14 @@ pub(crate) fn build_adapter_provider(
     config: &ResolvedProviderAdapterConfig,
     adapter_default_model: &str,
     auth: &ProviderAuthConfig,
-    client: reqwest::Client,
-    env: &dyn ConfigEnvironment,
-    config_path: Option<&Path>,
+    context: AdapterBuildContext<'_>,
 ) -> Result<Arc<dyn ModelRuntime>, ConfigError> {
+    let AdapterBuildContext {
+        client,
+        env,
+        config_path,
+        client_identity,
+    } = context;
     let runtime_provider_id = runtime_adapter_provider_id(provider_id, adapter_id);
     let provider: Arc<dyn ModelRuntime> = match &config.definition {
         ProviderAdapterDefinition::Ollama(adapter) => Arc::new(OllamaAdapter::new(
@@ -356,6 +374,7 @@ pub(crate) fn build_adapter_provider(
                 Arc::new(GitlabRoutedAdapter {
                     inner: Arc::new(
                         GitlabProvider::from_managed_token_with_config(
+                            client_identity.clone(),
                             client,
                             require_provider_auth_credential(
                                 provider_id,
@@ -372,6 +391,7 @@ pub(crate) fn build_adapter_provider(
                             gitlab_credential_runtime_config(
                                 credential_auth,
                                 adapter_default_model,
+                                client_identity,
                             ),
                         )
                         .map_err(config_adapter_error)?,
@@ -385,10 +405,11 @@ pub(crate) fn build_adapter_provider(
                 Arc::new(GitlabRoutedAdapter {
                     inner: Arc::new(
                         GitlabProvider::from_managed_token_with_config(
+                            client_identity.clone(),
                             client,
                             gitlab_auth_managed_credential(provider_id, auth, env, config_path)?
                                 .credential,
-                            gitlab_runtime_config(&gitlab, adapter_default_model),
+                            gitlab_runtime_config(&gitlab, adapter_default_model, client_identity),
                         )
                         .map_err(config_adapter_error)?,
                     ),
@@ -411,6 +432,7 @@ pub(crate) fn build_adapter_provider(
                     resolve_http_adapter_base_url(provider_id, auth, HttpAdapterKind::OpenAi)?,
                     adapter_default_model.to_owned(),
                     OpenAiResponsesAdapterOptions {
+                        client_identity: client_identity.clone(),
                         backend: adapter.options.backend.into(),
                         auth_data: credential.auth_data,
                         profile: OpenAiProfile::Standard,
@@ -427,6 +449,7 @@ pub(crate) fn build_adapter_provider(
                         extra_headers: http_adapter_extra_headers(
                             adapter,
                             Some(http_adapter_default_user_agent(
+                                client_identity,
                                 auth,
                                 HttpAdapterKind::OpenAi,
                                 adapter_default_model,
@@ -455,6 +478,7 @@ pub(crate) fn build_adapter_provider(
                         "https://chatgpt.com/backend-api/codex".to_owned(),
                         adapter_default_model.to_owned(),
                         OpenAiResponsesAdapterOptions {
+                            client_identity: client_identity.clone(),
                             backend: adapter.options.backend.into(),
                             auth_data: credential.auth_data,
                             profile: OpenAiProfile::Standard,
@@ -465,6 +489,7 @@ pub(crate) fn build_adapter_provider(
                             extra_headers: http_adapter_extra_headers(
                                 adapter,
                                 Some(http_adapter_default_user_agent(
+                                    client_identity,
                                     auth,
                                     HttpAdapterKind::OpenAi,
                                     adapter_default_model,
@@ -492,6 +517,7 @@ pub(crate) fn build_adapter_provider(
                         "https://api.githubcopilot.com".to_owned(),
                         adapter_default_model.to_owned(),
                         OpenAiResponsesAdapterOptions {
+                            client_identity: client_identity.clone(),
                             backend: adapter.options.backend.into(),
                             auth_data: credential.auth_data,
                             profile: OpenAiProfile::GithubCopilot,
@@ -502,6 +528,7 @@ pub(crate) fn build_adapter_provider(
                             extra_headers: http_adapter_extra_headers(
                                 adapter,
                                 Some(http_adapter_default_user_agent(
+                                    client_identity,
                                     auth,
                                     HttpAdapterKind::OpenAi,
                                     adapter_default_model,
@@ -528,6 +555,7 @@ pub(crate) fn build_adapter_provider(
                         resolve_http_adapter_base_url(provider_id, auth, HttpAdapterKind::OpenAi)?,
                         adapter_default_model.to_owned(),
                         OpenAiResponsesAdapterOptions {
+                            client_identity: client_identity.clone(),
                             backend: adapter.options.backend.into(),
                             auth_data: credential.auth_data,
                             profile: OpenAiProfile::Standard,
@@ -544,6 +572,7 @@ pub(crate) fn build_adapter_provider(
                             extra_headers: http_adapter_extra_headers(
                                 adapter,
                                 Some(http_adapter_default_user_agent(
+                                    client_identity,
                                     auth,
                                     HttpAdapterKind::OpenAi,
                                     adapter_default_model,
@@ -583,6 +612,7 @@ pub(crate) fn build_adapter_provider(
                     config_path,
                     adapter_default_model,
                     GitlabRoutedBackend::OpenAiChatCompletions,
+                    client_identity,
                 )?
             } else {
                 let connection = resolve_openai_connection(
@@ -601,6 +631,7 @@ pub(crate) fn build_adapter_provider(
                     connection.base_url,
                     adapter_default_model.to_owned(),
                     OpenAiChatCompletionsAdapterOptions {
+                        client_identity: client_identity.clone(),
                         auth_data: connection.auth_data,
                         profile: connection.profile,
                         models_url: adapter.options.models_url.clone(),
@@ -610,6 +641,7 @@ pub(crate) fn build_adapter_provider(
                         extra_headers: http_adapter_extra_headers(
                             adapter,
                             Some(http_adapter_default_user_agent(
+                                client_identity,
                                 auth,
                                 HttpAdapterKind::OpenAi,
                                 adapter_default_model,
@@ -637,6 +669,7 @@ pub(crate) fn build_adapter_provider(
                 connection.base_url,
                 adapter_default_model.to_owned(),
                 OpenAiRealtimeAdapterOptions {
+                    client_identity: client_identity.clone(),
                     auth_data: connection.auth_data,
                     models_url: adapter.options.models_url.clone(),
                     auth_header: adapter.options.auth_header.clone(),
@@ -645,6 +678,7 @@ pub(crate) fn build_adapter_provider(
                     extra_headers: http_adapter_extra_headers(
                         adapter,
                         Some(http_adapter_default_user_agent(
+                            client_identity,
                             auth,
                             HttpAdapterKind::OpenAi,
                             adapter_default_model,
@@ -661,6 +695,7 @@ pub(crate) fn build_adapter_provider(
                 Arc::new(GitlabRoutedAdapter {
                     inner: Arc::new(
                         GitlabProvider::from_managed_token_with_config(
+                            client_identity.clone(),
                             client,
                             require_provider_auth_credential(
                                 provider_id,
@@ -677,6 +712,7 @@ pub(crate) fn build_adapter_provider(
                             gitlab_credential_runtime_config(
                                 credential_auth,
                                 adapter_default_model,
+                                client_identity,
                             ),
                         )
                         .map_err(config_adapter_error)?,
@@ -690,10 +726,11 @@ pub(crate) fn build_adapter_provider(
                 Arc::new(GitlabRoutedAdapter {
                     inner: Arc::new(
                         GitlabProvider::from_managed_token_with_config(
+                            client_identity.clone(),
                             client,
                             gitlab_auth_managed_credential(provider_id, auth, env, config_path)?
                                 .credential,
-                            gitlab_runtime_config(&gitlab, adapter_default_model),
+                            gitlab_runtime_config(&gitlab, adapter_default_model, client_identity),
                         )
                         .map_err(config_adapter_error)?,
                     ),
@@ -726,6 +763,7 @@ pub(crate) fn build_adapter_provider(
                     base_url,
                     adapter_default_model.to_owned(),
                     AnthropicAdapterOptions {
+                        client_identity: client_identity.clone(),
                         auth_data: credential.auth_data,
                         auth_header: adapter.options.auth_header.clone(),
                         auth_scheme: adapter.options.auth_scheme.clone(),
@@ -737,6 +775,7 @@ pub(crate) fn build_adapter_provider(
                         extra_headers: http_adapter_extra_headers(
                             adapter,
                             Some(http_adapter_default_user_agent(
+                                client_identity,
                                 auth,
                                 HttpAdapterKind::Anthropic,
                                 adapter_default_model,
@@ -763,6 +802,7 @@ pub(crate) fn build_adapter_provider(
                 resolve_http_adapter_base_url(provider_id, auth, HttpAdapterKind::Anthropic)?,
                 adapter_default_model.to_owned(),
                 AnthropicAdapterOptions {
+                    client_identity: client_identity.clone(),
                     auth_data: None,
                     auth_header: adapter.options.auth_header.clone(),
                     auth_scheme: adapter.options.auth_scheme.clone(),
@@ -774,6 +814,7 @@ pub(crate) fn build_adapter_provider(
                     extra_headers: http_adapter_extra_headers(
                         adapter,
                         Some(http_adapter_default_user_agent(
+                            client_identity,
                             auth,
                             HttpAdapterKind::Anthropic,
                             adapter_default_model,
@@ -799,6 +840,7 @@ pub(crate) fn build_adapter_provider(
                 resolve_http_adapter_base_url(provider_id, auth, HttpAdapterKind::Gemini)?,
                 adapter_default_model.to_owned(),
                 GeminiAdapterOptions {
+                    client_identity: client_identity.clone(),
                     auth_header: adapter
                         .options
                         .auth_header
@@ -808,6 +850,7 @@ pub(crate) fn build_adapter_provider(
                     extra_headers: http_adapter_extra_headers(
                         adapter,
                         Some(http_adapter_default_user_agent(
+                            client_identity,
                             auth,
                             HttpAdapterKind::Gemini,
                             adapter_default_model,
@@ -871,8 +914,13 @@ pub(crate) fn build_adapter_provider(
                 }
             };
             Arc::new(
-                GitlabProvider::from_managed_token_with_config(client, credential, runtime_config)
-                    .map_err(config_adapter_error)?,
+                GitlabProvider::from_managed_token_with_config(
+                    client_identity.clone(),
+                    client,
+                    credential,
+                    runtime_config,
+                )
+                .map_err(config_adapter_error)?,
             )
         }
         ProviderAdapterDefinition::AmazonBedrock(_) => Arc::new(match auth {

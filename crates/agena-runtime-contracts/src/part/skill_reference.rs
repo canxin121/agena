@@ -102,7 +102,7 @@ mod tests {
         assert!(rendered.contains("sha256"));
         assert_eq!(rendered.matches("</agena_skill_references>").count(), 1);
         assert_eq!(part.summary(), "Skill: review");
-        let reference_without_body = serde_json::from_value::<SkillReference>(serde_json::json!({
+        serde_json::from_value::<SkillReference>(serde_json::json!({
             "name": "review",
             "description": "Review changes",
             "content_hash": "sha256",

@@ -4,20 +4,34 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::Utc;
-use tokio::sync::Notify;
 use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
 
-use crate::error::SchedulerResult;
-use crate::job::{JobDeliveryAttempt, JobOutcome, JobSink, ScheduledJob, SchedulerHistoryEntry};
-use crate::store::JobStore;
+use crate::error::{SchedulerError, SchedulerResult};
+use crate::job::{
+    JobDeliveryAttempt, JobDeliveryResult, JobSink, ScheduledJob, SchedulerHistoryEntry,
+};
+use crate::store::{CLAIM_HEARTBEAT, JobSnapshot, JobStore};
 
 /// Background scheduler that fires jobs on their schedule.
 pub struct Scheduler {
     store: Arc<dyn JobStore>,
     sink: Arc<dyn JobSink>,
     tick: Duration,
-    stop: Arc<Notify>,
-    handle: parking_lot::Mutex<Option<JoinHandle<()>>>,
+    handle: parking_lot::Mutex<Option<RunningScheduler>>,
+}
+
+struct RunningScheduler {
+    stop: CancellationToken,
+    handle: JoinHandle<()>,
+}
+
+// Own only the worker's dependencies. Holding an Arc<Scheduler> across a
+// delivery would prevent its Drop from ever cancelling a wedged sink.
+struct SchedulerWorker {
+    store: Arc<dyn JobStore>,
+    sink: Arc<dyn JobSink>,
+    tick: Duration,
 }
 
 impl Scheduler {
@@ -26,71 +40,108 @@ impl Scheduler {
             store,
             sink,
             tick,
-            stop: Arc::new(Notify::new()),
             handle: parking_lot::Mutex::new(None),
         })
     }
 
-    /// Spawn the background task; idempotent.
+    /// Spawn the background task; idempotent while it is running. A finished
+    /// task can be started again with a fresh cancellation token.
     pub fn start(self: &Arc<Self>) {
         let mut g = self.handle.lock();
-        if g.is_some() {
+        if g.as_ref()
+            .is_some_and(|running| !running.handle.is_finished())
+        {
             return;
         }
-        let scheduler = Arc::downgrade(self);
-        *g = Some(tokio::spawn(async move { Self::run_loop(scheduler).await }));
+        let worker = SchedulerWorker {
+            store: Arc::clone(&self.store),
+            sink: Arc::clone(&self.sink),
+            tick: self.tick,
+        };
+        let stop = CancellationToken::new();
+        *g = Some(RunningScheduler {
+            stop: stop.clone(),
+            handle: tokio::spawn(worker.run_loop(stop)),
+        });
     }
 
+    /// Request a graceful stop. Already claimed deliveries are finalized
+    /// before the task exits; no later poll is admitted. `start` can launch
+    /// another loop after this task has exited.
     pub fn stop(&self) {
-        self.stop.notify_waiters();
+        if let Some(running) = self.handle.lock().as_ref() {
+            running.stop.cancel();
+        }
     }
 
-    pub async fn add(&self, job: ScheduledJob) {
-        self.store.put(job).await;
+    pub async fn add(&self, job: ScheduledJob) -> SchedulerResult<()> {
+        self.store.put(job).await
     }
 
-    pub async fn remove(&self, id: uuid::Uuid) -> bool {
+    pub async fn remove(&self, id: uuid::Uuid) -> SchedulerResult<bool> {
         self.store.remove(id).await
     }
 
-    pub async fn list(&self) -> Vec<ScheduledJob> {
-        self.store.list().await
+    pub async fn list(&self) -> SchedulerResult<Vec<ScheduledJob>> {
+        Ok(self
+            .store
+            .list()
+            .await?
+            .into_iter()
+            .map(|snapshot| snapshot.job)
+            .collect())
     }
 
-    pub async fn get(&self, id: uuid::Uuid) -> Option<ScheduledJob> {
-        self.store.get(id).await
+    pub async fn get(&self, id: uuid::Uuid) -> SchedulerResult<Option<ScheduledJob>> {
+        Ok(self.store.get(id).await?.map(|snapshot| snapshot.job))
     }
 
-    /// Return the globally retained scheduler audit ledger, newest first.
-    /// Records survive deletion of the job that produced them. The backing
-    /// store bounds retention, so callers must treat this as diagnostics/export
-    /// history rather than an unbounded event archive.
+    /// Bounded global audit history, newest first, retained after job deletion.
     pub async fn history(
         &self,
         job_id: Option<uuid::Uuid>,
         limit: usize,
-    ) -> Vec<SchedulerHistoryEntry> {
+    ) -> SchedulerResult<Vec<SchedulerHistoryEntry>> {
         self.store.list_history(job_id, limit).await
     }
 
+    async fn persist_edit(
+        &self,
+        expected: &JobSnapshot,
+        job: ScheduledJob,
+    ) -> SchedulerResult<ScheduledJob> {
+        if !self.store.replace(expected, job.clone()).await? {
+            return Err(SchedulerError::Conflict(job.id));
+        }
+        Ok(job)
+    }
+
     pub async fn pause(&self, id: uuid::Uuid) -> SchedulerResult<Option<ScheduledJob>> {
-        let Some(mut job) = self.store.get(id).await else {
+        let Some(expected) = self.store.get(id).await? else {
             return Ok(None);
         };
-        let token = job.next_fire_at.map(|value| value.timestamp_millis());
+        let mut job = expected.job.clone();
         if job.pause() {
-            self.store.replace(id, token, job.clone()).await;
+            return self.persist_edit(&expected, job).await.map(Some);
         }
         Ok(Some(job))
     }
 
     pub async fn resume(&self, id: uuid::Uuid) -> SchedulerResult<Option<ScheduledJob>> {
-        let Some(mut job) = self.store.get(id).await else {
+        let Some(expected) = self.store.get(id).await? else {
             return Ok(None);
         };
-        let token = job.next_fire_at.map(|value| value.timestamp_millis());
-        if job.resume(Utc::now())? {
-            self.store.replace(id, token, job.clone()).await;
+        let mut job = expected.job.clone();
+        let changed = if expected.claim_key().is_some() && job.paused && !job.completed {
+            // A running (or abandoned) occurrence keeps its pending delivery.
+            // Clearing it would invalidate completion or lose crash recovery.
+            job.paused = false;
+            true
+        } else {
+            job.resume(Utc::now())?
+        };
+        if changed {
+            return self.persist_edit(&expected, job).await.map(Some);
         }
         Ok(Some(job))
     }
@@ -104,10 +155,10 @@ impl Scheduler {
         misfire_policy: Option<crate::job::MisfirePolicy>,
         retry_policy: Option<crate::job::RetryPolicy>,
     ) -> SchedulerResult<Option<ScheduledJob>> {
-        let Some(mut job) = self.store.get(id).await else {
+        let Some(expected) = self.store.get(id).await? else {
             return Ok(None);
         };
-        let token = job.next_fire_at.map(|value| value.timestamp_millis());
+        let mut job = expected.job.clone();
         if job.update(
             prompt,
             expression,
@@ -116,174 +167,183 @@ impl Scheduler {
             retry_policy,
             Utc::now(),
         )? {
-            self.store.replace(id, token, job.clone()).await;
+            return self.persist_edit(&expected, job).await.map(Some);
         }
         Ok(Some(job))
     }
+}
 
-    async fn run_loop(scheduler: std::sync::Weak<Self>) {
-        loop {
-            let Some(current) = scheduler.upgrade() else {
-                break;
-            };
-            let due = current.claim_due().await;
-            for (mut job, delivery, token, delivery_key) in due {
-                let now = Utc::now();
-                let result = current.sink.deliver(&job, &delivery).await;
-                match job.finish_delivery(now, &delivery, result) {
-                    Ok(JobOutcome::Continued) => {
-                        current
-                            .persist_completed_delivery(job, token, &delivery_key)
-                            .await;
-                    }
-                    Ok(JobOutcome::Expired) => {
-                        // Keep terminal jobs, including their bounded run
-                        // history, until a user explicitly deletes them.
-                        current
-                            .persist_completed_delivery(job, token, &delivery_key)
-                            .await;
-                    }
-                    Ok(JobOutcome::RetryScheduled) => {
-                        // The failed attempt and retry deadline are durable;
-                        // a later poll will reclaim the same delivery key.
-                        current
-                            .persist_completed_delivery(job, token, &delivery_key)
-                            .await;
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            target: "agena_scheduler",
-                            "delivery finalization failed for job {}: {e}",
-                            job.id
-                        );
-                        current.store.remove(job.id).await;
-                    }
-                }
-            }
-            let tick = current.tick;
-            let stop = Arc::clone(&current.stop);
-            drop(current);
-            tokio::select! {
-                _ = tokio::time::sleep(tick) => {}
-                _ = stop.notified() => break,
-            }
-        }
-    }
+struct ClaimedDelivery {
+    job: ScheduledJob,
+    delivery: JobDeliveryAttempt,
+    claim_key: String,
+}
 
-    /// Persist every due-state transition before invoking the delivery sink.
-    /// A returned `Deliver` item is therefore already claimed durably; a
-    /// process loss before the sink finishes can be recovered as a retry.
-    ///
-    /// The returned `Option<i64>` is the job's `next_fire_at` (in millis) as
-    /// observed before claiming — the optimistic-lock token for the follow-up
-    /// `store.claim` so a concurrent process cannot double-claim. The trailing
-    /// `String` is the delivery key used to finalize (or requeue) the claim.
-    async fn claim_due(&self) -> Vec<(ScheduledJob, JobDeliveryAttempt, Option<i64>, String)> {
-        let now = Utc::now();
-        let mut deliveries = Vec::new();
-        // The store filters to due candidates in SQL, so the hot loop decodes
-        // only the jobs that might fire this tick.
-        for mut job in self.store.list_due(now.timestamp_millis()).await {
-            // Capture the pre-claim next_fire_at as the optimistic token.
-            let token = job.next_fire_at.map(|value| value.timestamp_millis());
-            // In-memory re-check guards against any clock drift between the
-            // SQL filter and the state machine (a candidate that is no longer
-            // due is skipped exactly as before).
-            if !job.due(now) {
-                continue;
-            }
-            match job.claim_due_delivery(now) {
-                Ok(crate::job::ClaimDueDelivery::NotDue) => {}
-                Ok(crate::job::ClaimDueDelivery::StateUpdated) => {
-                    let record = job.last_run.clone();
-                    if self.store.replace(job.id, token, job.clone()).await {
-                        if let Some(record) = record {
-                            self.store
-                                .append_history(SchedulerHistoryEntry {
-                                    job_id: job.id,
-                                    record,
-                                })
-                                .await;
+impl SchedulerWorker {
+    async fn run_loop(self, stop: CancellationToken) {
+        while !stop.is_cancelled() {
+            match self.store.list_due(Utc::now().timestamp_millis()).await {
+                Ok(candidates) => {
+                    for candidate in candidates {
+                        if stop.is_cancelled() {
+                            break;
                         }
-                    } else {
-                        tracing::warn!(
-                            target: "agena_scheduler",
-                            "job disappeared while recording scheduler state transition"
-                        );
-                    }
-                }
-                Ok(crate::job::ClaimDueDelivery::Deliver(delivery)) => {
-                    let delivery_key = format!("{}:{}", job.id, delivery.attempt);
-                    if self
-                        .store
-                        .claim(
-                            job.id,
-                            token,
-                            job.clone(),
-                            delivery_key.clone(),
-                            delivery.claimed_at.timestamp_millis(),
-                        )
-                        .await
-                    {
-                        deliveries.push((job, delivery, token, delivery_key));
-                    } else {
-                        tracing::warn!(
-                            target: "agena_scheduler",
-                            "job was already claimed by another process"
-                        );
+                        let id = candidate.job.id;
+                        // Claim just before delivery. Later candidates must not
+                        // lose their lease while queued behind a slow sink.
+                        let result = match self.claim_candidate(candidate, Utc::now()).await {
+                            Ok(Some(claim)) => {
+                                self.deliver_with_lease(claim, CLAIM_HEARTBEAT).await
+                            }
+                            Ok(None) => Ok(()),
+                            Err(error) => Err(error),
+                        };
+                        if let Err(error) = result {
+                            // Preserve the durable row. An abandoned claim is
+                            // recoverable; deleting it here silently loses work.
+                            tracing::error!(target: "agena_scheduler", job_id = %id, %error, "scheduled delivery failed; durable state retained");
+                        }
                     }
                 }
                 Err(error) => {
-                    tracing::warn!(
-                        target: "agena_scheduler",
-                        job_id = %job.id,
-                        %error,
-                        "failed to prepare due scheduled job"
-                    );
+                    tracing::error!(target: "agena_scheduler", %error, "failed to poll scheduled jobs")
+                }
+            }
+            tokio::select! {
+                _ = tokio::time::sleep(self.tick) => {}
+                _ = stop.cancelled() => break,
+            }
+        }
+    }
+
+    async fn claim_candidate(
+        &self,
+        expected: JobSnapshot,
+        now: chrono::DateTime<Utc>,
+    ) -> SchedulerResult<Option<ClaimedDelivery>> {
+        let mut job = expected.job.clone();
+        // Expired ownership is selected by the store. A pending delivery
+        // deliberately fails ordinary due(), but is recoverable with its key.
+        if expected.claim_key().is_none() && !job.due(now) {
+            return Ok(None);
+        }
+        match job.claim_due_delivery(now)? {
+            crate::job::ClaimDueDelivery::NotDue => Ok(None),
+            crate::job::ClaimDueDelivery::StateUpdated => {
+                self.store.replace(&expected, job).await?;
+                Ok(None)
+            }
+            crate::job::ClaimDueDelivery::Deliver(delivery) => {
+                let claim_key = uuid::Uuid::new_v4().to_string();
+                if self
+                    .store
+                    .claim(
+                        &expected,
+                        job.clone(),
+                        claim_key.clone(),
+                        now.timestamp_millis(),
+                    )
+                    .await?
+                {
+                    Ok(Some(ClaimedDelivery {
+                        job,
+                        delivery,
+                        claim_key,
+                    }))
+                } else {
+                    Ok(None) // A concurrent edit or claimant won the comparison.
                 }
             }
         }
-        deliveries
     }
 
-    /// Preserve a run in the central ledger only after the updated job state
-    /// itself has been durably replaced.  That ordering prevents an audit
-    /// entry from claiming a completed delivery whose claim/finalization did
-    /// not reach the same store.
-    async fn persist_completed_delivery(
+    async fn deliver_with_lease(
         &self,
-        job: ScheduledJob,
-        _token: Option<i64>,
-        delivery_key: &str,
-    ) {
-        let record = job.last_run.clone();
-        let id = job.id;
-        let next_fire_at_ms = job.next_fire_at.map(|value| value.timestamp_millis());
+        claim: ClaimedDelivery,
+        heartbeat: Duration,
+    ) -> SchedulerResult<()> {
+        let id = claim.job.id;
         if !self
             .store
-            .finish(id, delivery_key.to_owned(), job, next_fire_at_ms)
-            .await
+            .renew(id, &claim.claim_key, Utc::now().timestamp_millis())
+            .await?
         {
-            tracing::warn!(
-                target: "agena_scheduler",
-                job_id = %id,
-                "job disappeared while persisting scheduler delivery finalization"
-            );
-            return;
+            return Err(SchedulerError::Conflict(id));
         }
-        if let Some(record) = record {
-            self.store
-                .append_history(SchedulerHistoryEntry { job_id: id, record })
+        let work = async {
+            let result = self.sink.deliver(&claim.job, &claim.delivery).await;
+            self.persist_completed_delivery(&claim, result, Utc::now())
+                .await
+        };
+        let renewals = async {
+            loop {
+                tokio::time::sleep(heartbeat).await;
+                let renewed = tokio::time::timeout(
+                    CLAIM_HEARTBEAT,
+                    self.store
+                        .renew(id, &claim.claim_key, Utc::now().timestamp_millis()),
+                )
                 .await;
+                match renewed {
+                    Ok(Ok(true)) => {}
+                    Ok(Err(error)) => return Err(error),
+                    Ok(Ok(false)) | Err(_) => return Err(SchedulerError::Conflict(id)),
+                }
+            }
+        };
+        // Poll both futures while renewal waits for a connection: work may
+        // own the very transaction it needs. A finished commit takes priority
+        // over a renewal that now sees the deliberately released claim.
+        // A lost lease drops work, including any in-flight sink future.
+        tokio::select! {
+            biased;
+            result = work => result,
+            result = renewals => result,
         }
+    }
+
+    async fn persist_completed_delivery(
+        &self,
+        claim: &ClaimedDelivery,
+        result: JobDeliveryResult,
+        finished_at: chrono::DateTime<Utc>,
+    ) -> SchedulerResult<()> {
+        let id = claim.job.id;
+        // Merge against current configuration, not the pre-delivery copy.
+        // Bounded retries tolerate ordinary pause/update races without making
+        // a continuously edited job monopolize the scheduler.
+        for _ in 0..8 {
+            let Some(expected) = self.store.get(id).await? else {
+                return Ok(());
+            };
+            if expected.claim_key() != Some(claim.claim_key.as_str()) {
+                return Err(SchedulerError::Conflict(id));
+            }
+            let mut job = expected.job.clone();
+            job.finish_delivery(finished_at, &claim.delivery, result.clone())?;
+            if self
+                .store
+                .finish(
+                    &expected,
+                    &claim.claim_key,
+                    job,
+                    Utc::now().timestamp_millis(),
+                )
+                .await?
+            {
+                return Ok(());
+            }
+            tokio::task::yield_now().await;
+        }
+        Err(SchedulerError::Conflict(id))
     }
 }
 
 impl Drop for Scheduler {
     fn drop(&mut self) {
-        self.stop.notify_waiters();
-        if let Some(handle) = self.handle.get_mut().take() {
-            handle.abort();
+        if let Some(running) = self.handle.get_mut().take() {
+            running.stop.cancel();
+            running.handle.abort();
         }
     }
 }
@@ -320,36 +380,4 @@ pub fn must<T>(r: SchedulerResult<T>) -> T {
 }
 
 #[cfg(test)]
-mod tests {
-    use std::sync::Arc;
-    use std::time::Duration;
-
-    use crate::{JobDeliveryAttempt, JobDeliveryResult, JobSink, ScheduledJob};
-
-    use super::build_in_memory;
-
-    struct NoopSink;
-
-    #[async_trait::async_trait]
-    impl JobSink for NoopSink {
-        async fn deliver(
-            &self,
-            _job: &ScheduledJob,
-            _delivery: &JobDeliveryAttempt,
-        ) -> JobDeliveryResult {
-            JobDeliveryResult::submitted(None)
-        }
-    }
-
-    #[tokio::test]
-    async fn background_loop_does_not_keep_scheduler_alive() {
-        let scheduler = build_in_memory(Arc::new(NoopSink), Duration::from_secs(60));
-        scheduler.start();
-        let weak = Arc::downgrade(&scheduler);
-
-        drop(scheduler);
-        tokio::task::yield_now().await;
-
-        assert!(weak.upgrade().is_none());
-    }
-}
+mod tests;

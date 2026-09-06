@@ -38,7 +38,7 @@ impl HostError {
     }
 }
 
-#[derive(Debug, Error)]
+#[derive(Debug, Clone, Error)]
 /// Error from a plugin transport.
 pub enum TransportError {
     #[error("transport cancelled")]

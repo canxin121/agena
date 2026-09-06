@@ -5504,7 +5504,7 @@ mod transcript_expansion_tests {
 
 #[cfg(test)]
 mod live_transcript_tests {
-    use super::super::{PendingUserMessage, TranscriptState, Utc};
+    use super::super::{PendingUserMessage, TranscriptState};
     use super::parts_fixtures;
     use agena_api::resource::SessionTranscriptPart;
     use agena_domain::{ComposerDocument, ComposerNode};

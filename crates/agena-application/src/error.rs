@@ -163,6 +163,23 @@ impl ApplicationError {
         ))
     }
 
+    /// Retain an operation label without erasing a stopped runtime's retryable
+    /// service-unavailability classification.
+    pub fn runtime_control_error_with_context(
+        context: impl AsRef<str>,
+        error: &agena_runtime::RuntimeControlServiceError,
+    ) -> Self {
+        let diagnostic = agena_failure::diagnostic::format_error_chain_with_context(context, error);
+        match error {
+            agena_runtime::RuntimeControlServiceError::Shutdown => {
+                Self::service_unavailable(diagnostic)
+            }
+            agena_runtime::RuntimeControlServiceError::Operation { .. } => {
+                Self::internal(diagnostic)
+            }
+        }
+    }
+
     pub fn diagnostic_message(&self) -> Option<&str> {
         self.diagnostic.as_deref()
     }
@@ -238,9 +255,95 @@ impl std::fmt::Display for ApplicationError {
 
 impl std::error::Error for ApplicationError {}
 
+impl From<agena_runtime::RuntimeControlServiceError> for ApplicationError {
+    fn from(error: agena_runtime::RuntimeControlServiceError) -> Self {
+        match error {
+            error @ agena_runtime::RuntimeControlServiceError::Shutdown => {
+                Self::service_unavailable(error)
+            }
+            error @ agena_runtime::RuntimeControlServiceError::Operation { .. } => {
+                Self::internal_error(&error)
+            }
+        }
+    }
+}
+
+impl From<agena_runtime::RuntimeBackgroundTaskControlError> for ApplicationError {
+    fn from(error: agena_runtime::RuntimeBackgroundTaskControlError) -> Self {
+        use agena_runtime::RuntimeBackgroundTaskControlError as Error;
+        match error {
+            error @ (Error::Shutdown | Error::Capacity { .. } | Error::ExecutorUnavailable) => {
+                Self::service_unavailable(error)
+            }
+            Error::NotFound(task_id) => Self::not_found_with_diagnostic(
+                "The background task was not found.",
+                format!("background task `{task_id}` not found"),
+            ),
+            Error::NotRunning(task_id) => Self::conflict_with_diagnostic(
+                "The background task is not running.",
+                format!("background task `{task_id}` is not running"),
+            ),
+            Error::NotCancellable(task_id) => Self::conflict_with_diagnostic(
+                "The background task cannot be cancelled.",
+                format!("background task `{task_id}` cannot be cancelled"),
+            ),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::ApplicationError;
+
+    #[test]
+    fn runtime_shutdown_keeps_retry_semantics_and_operation_diagnostics() {
+        use agena_failure::{FailureCategory, RecoveryDirective, RetryDirective};
+        use agena_runtime::RuntimeControlServiceError as Error;
+
+        let direct = ApplicationError::from(Error::Shutdown);
+        let contextual = ApplicationError::runtime_control_error_with_context(
+            "failed to reload runtime after config change",
+            &Error::Shutdown,
+        );
+        for error in [&direct, &contextual] {
+            assert_eq!(
+                error.failure.category,
+                FailureCategory::DependencyUnavailable
+            );
+            assert_eq!(error.failure.retry, RetryDirective::Backoff);
+            assert_eq!(error.failure.recovery, RecoveryDirective::Retry);
+            assert!(
+                error
+                    .diagnostic_message()
+                    .unwrap()
+                    .contains("runtime is shut down")
+            );
+        }
+        assert!(
+            contextual
+                .diagnostic_message()
+                .unwrap()
+                .contains("after config change")
+        );
+
+        let operation = Error::from_error(&std::io::Error::other("candidate config unreadable"));
+        let direct = ApplicationError::from(operation.clone());
+        let contextual = ApplicationError::runtime_control_error_with_context(
+            "failed to reload runtime after config change",
+            &operation,
+        );
+        for error in [&direct, &contextual] {
+            assert_eq!(error.failure.category, FailureCategory::Internal);
+            assert_eq!(error.failure.retry, RetryDirective::Unknown);
+            assert!(
+                error
+                    .diagnostic_message()
+                    .unwrap()
+                    .contains("candidate config unreadable")
+            );
+        }
+        assert!(contextual.to_string().contains("after config change"));
+    }
 
     #[test]
     fn internal_diagnostics_surface_scrubbed_root_cause() {

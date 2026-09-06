@@ -38,18 +38,20 @@ pub(crate) enum HttpAdapterKind {
 }
 
 pub(crate) fn http_adapter_default_user_agent(
+    client_identity: &crate::ProviderClientIdentity,
     auth: &ProviderAuthConfig,
     adapter: HttpAdapterKind,
     default_model: &str,
 ) -> String {
-    credential_user_agent(auth, default_model).unwrap_or_else(|| match adapter {
-        HttpAdapterKind::OpenAi => crate::codex_user_agent(),
-        HttpAdapterKind::Anthropic => crate::claude_code_api_user_agent(),
-        HttpAdapterKind::Gemini => crate::gemini_cli_user_agent(default_model),
+    credential_user_agent(client_identity, auth, default_model).unwrap_or_else(|| match adapter {
+        HttpAdapterKind::OpenAi => client_identity.codex_user_agent(),
+        HttpAdapterKind::Anthropic => client_identity.claude_code_api_user_agent(),
+        HttpAdapterKind::Gemini => client_identity.gemini_cli_user_agent(default_model),
     })
 }
 
 pub(crate) fn credential_user_agent(
+    client_identity: &crate::ProviderClientIdentity,
     auth: &ProviderAuthConfig,
     default_model: &str,
 ) -> Option<String> {
@@ -58,9 +60,9 @@ pub(crate) fn credential_user_agent(
     };
 
     match config.issuer() {
-        agena_provider::CredentialIssuer::OpenaiChatgpt => Some(crate::codex_user_agent()),
+        agena_provider::CredentialIssuer::OpenaiChatgpt => Some(client_identity.codex_user_agent()),
         agena_provider::CredentialIssuer::GoogleAdc => {
-            Some(crate::gemini_cli_user_agent(default_model))
+            Some(client_identity.gemini_cli_user_agent(default_model))
         }
         _ => None,
     }
@@ -291,13 +293,14 @@ pub(crate) fn gitlab_proxy_base_url(
 pub(crate) fn gitlab_runtime_config(
     config: &agena_runtime_config::ProviderGitlabAuthConfig,
     default_model: &str,
+    client_identity: &crate::ProviderClientIdentity,
 ) -> GitlabProviderConfig {
     GitlabProviderConfig {
         instance_url: gitlab_instance_url(config),
         ai_gateway_url: gitlab_ai_gateway_url(config),
         default_model: default_model.to_owned(),
         ai_gateway_headers: if config.ai_gateway_headers.is_empty() {
-            default_gitlab_ai_gateway_headers()
+            default_gitlab_ai_gateway_headers(client_identity)
         } else {
             to_hash_map(&config.ai_gateway_headers)
         },
@@ -434,6 +437,7 @@ pub(crate) fn gitlab_credential_proxy_base_url(
 pub(crate) fn gitlab_credential_runtime_config(
     config: &ProviderCredentialAuthConfig,
     default_model: &str,
+    client_identity: &crate::ProviderClientIdentity,
 ) -> GitlabProviderConfig {
     let gitlab = config
         .gitlab()
@@ -443,7 +447,7 @@ pub(crate) fn gitlab_credential_runtime_config(
         ai_gateway_url: gitlab_credential_ai_gateway_url(config),
         default_model: default_model.to_owned(),
         ai_gateway_headers: if gitlab.ai_gateway_headers.is_empty() {
-            default_gitlab_ai_gateway_headers()
+            default_gitlab_ai_gateway_headers(client_identity)
         } else {
             to_hash_map(&gitlab.ai_gateway_headers)
         },

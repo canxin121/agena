@@ -12,9 +12,12 @@
 //! callers wire that to their session manager so the prompt is enqueued
 //! into the target session.
 //!
-//! Cron parsing uses the `cron` crate (5- or 6-field expressions).
+//! Cron parsing uses the `cron` crate (6 fields, with an optional year field).
 //! Recurring jobs auto-expire after `max_age_days` (default 7) — they
-//! fire one final time, are deleted, and the runtime is bounded.
+//! fire one final time and remain available as completed jobs for audit.
+//! Delivery claims renew every 30 seconds and become recoverable after a
+//! 90-second lease expires. Recovery is at least once; sinks must deduplicate
+//! using the stable [`JobDeliveryAttempt::delivery_key`].
 
 pub mod error;
 pub mod job;
@@ -29,4 +32,4 @@ pub use job::{
     SchedulerHistoryEntry,
 };
 pub use scheduler::Scheduler;
-pub use store::{InMemoryJobStore, JobStore, SqliteJobStore};
+pub use store::{InMemoryJobStore, JobSnapshot, JobStore, SqliteJobStore};

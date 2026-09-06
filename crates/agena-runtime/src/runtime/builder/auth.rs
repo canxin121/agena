@@ -22,9 +22,11 @@ pub(super) fn auth_internal(
 pub(super) fn auth_manager_for_runtime(
     runtime: &AgenaRuntime,
 ) -> crate::provider::auth::AuthManager<crate::config::ProviderConfigCredentialStore> {
+    let snapshot = runtime.current_snapshot();
     crate::provider::auth::AuthManager::new(crate::config::ProviderConfigCredentialStore::new(
-        runtime.current_snapshot().config_path().to_path_buf(),
+        snapshot.config_path().to_path_buf(),
     ))
+    .with_client_identity(snapshot.client_identity().clone())
 }
 
 pub(super) fn auth_provider_is_configured(

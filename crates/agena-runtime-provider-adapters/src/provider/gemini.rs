@@ -34,6 +34,7 @@ const GEMINI_FINAL_PART_SIGNATURE_KEY: &str = "$final_part";
 #[derive(Clone)]
 /// Adapter for Gemini.
 pub struct GeminiAdapter {
+    client_identity: crate::ProviderClientIdentity,
     client: reqwest::Client,
     api_key: ManagedCredential,
     base_url: String,
@@ -58,6 +59,7 @@ enum GeminiAuthMode {
 #[derive(Clone)]
 /// Options for the Gemini adapter.
 pub struct GeminiAdapterOptions {
+    pub client_identity: crate::ProviderClientIdentity,
     pub auth_header: Option<(String, Option<String>)>,
     pub auth_query_parameter: Option<String>,
     pub extra_headers: HashMap<String, String>,
@@ -68,6 +70,7 @@ pub struct GeminiAdapterOptions {
 impl Default for GeminiAdapterOptions {
     fn default() -> Self {
         Self {
+            client_identity: Default::default(),
             auth_header: None,
             auth_query_parameter: None,
             extra_headers: HashMap::new(),
@@ -946,6 +949,9 @@ fn merge_gemini_provider_metadata(
     }
     (!merged.is_empty()).then_some(serde_json::Value::Object(merged))
 }
+
+#[cfg(test)]
+mod client_identity_tests;
 
 #[cfg(test)]
 mod tests {

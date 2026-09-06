@@ -51,6 +51,55 @@ fn plugin_tool_registry_read<'a>(
 }
 
 impl PluginHost {
+    // Even hooks without session/tool privileges need an originating call
+    // authority, so control callbacks can defer retirement until they return.
+    async fn call_hook_with_default_context(
+        &self,
+        plugin: &LoadedPlugin,
+        method: &str,
+        params: serde_json::Value,
+        timeout: Duration,
+    ) -> Result<serde_json::Value, TransportError> {
+        self._host_handle
+            .run_in_authorized_callback_context(
+                &plugin.key(),
+                HostCallbackContext::default(),
+                call_with_timeout(plugin, method, params, timeout),
+            )
+            .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn chain_patch_with_default_context<I, P, F>(
+        &self,
+        method: &str,
+        subscription: HookSubscription,
+        timeout: Duration,
+        input: I,
+        apply: F,
+        session_id: Option<i64>,
+        runs: &mut Vec<HookRunRecord>,
+    ) -> Result<I, TransportError>
+    where
+        I: serde::Serialize + Clone,
+        P: serde::de::DeserializeOwned,
+        F: FnMut(&mut I, P),
+    {
+        dispatcher::chain_patch_in_context(
+            &self.plugins,
+            method,
+            subscription,
+            timeout,
+            input,
+            apply,
+            |_, _| Some(HostCallbackContext::default()),
+            Some(&self._host_handle),
+            session_id,
+            runs,
+        )
+        .await
+    }
+
     pub fn new_empty() -> Arc<Self> {
         let tool_registry = Arc::new(RwLock::new(PluginToolRegistry::new()));
         let statuses = Arc::new(crate::status::StatusRegistry::new());
@@ -578,14 +627,15 @@ impl PluginHost {
         input.tool_name = registered_tool.tool_name().to_owned();
         let params = serde_json::to_value(&input)
             .map_err(|error| PluginError::invalid_params_error(&error))?;
-        let value = call_with_timeout(
-            &plugin,
-            method::HOOK_TOOL_RENDER,
-            params,
-            self.timeouts.fast_or(Duration::from_secs(2)),
-        )
-        .await
-        .map_err(transport_to_plugin_error)?;
+        let value = self
+            .call_hook_with_default_context(
+                &plugin,
+                method::HOOK_TOOL_RENDER,
+                params,
+                self.timeouts.fast_or(Duration::from_secs(2)),
+            )
+            .await
+            .map_err(transport_to_plugin_error)?;
         serde_json::from_value(value).map_err(|error| PluginError::invalid_params_error(&error))
     }
 
@@ -921,12 +971,15 @@ impl PluginHost {
         let (context, callback_authority) = self
             ._host_handle
             .issue_callback_authority(&plugin.key(), context);
-        if let Some(stream) = host_api::run_in_host_callback_context(
-            context.clone(),
-            plugin.transport.invoke_stream(input.clone()),
-        )
-        .await
-        .map_err(transport_to_plugin_error)?
+        if let Some(stream) = callback_authority
+            .completion
+            .completion
+            .scope(host_api::run_in_isolated_host_callback_context(
+                context.clone(),
+                plugin.transport.invoke_stream(input.clone()),
+            ))
+            .await
+            .map_err(transport_to_plugin_error)?
         {
             let stream_id = stream.stream_id;
             let chunks = stream.chunks;
@@ -959,12 +1012,15 @@ impl PluginHost {
         let timeout = self.tool_invoke_timeout(registered_tool);
         let params =
             serde_json::to_value(&input).map_err(|e| PluginError::invalid_params_error(&e))?;
-        let invoke_result = host_api::run_in_host_callback_context(
-            context,
-            call_with_timeout(&plugin, method::HOOK_TOOL_INVOKE, params, timeout),
-        )
-        .await
-        .map_err(transport_to_plugin_error)?;
+        let invoke_result = callback_authority
+            .completion
+            .completion
+            .scope(host_api::run_in_isolated_host_callback_context(
+                context,
+                call_with_timeout(&plugin, method::HOOK_TOOL_INVOKE, params, timeout),
+            ))
+            .await
+            .map_err(transport_to_plugin_error)?;
         let result: ToolInvokeOutput = serde_json::from_value(invoke_result)
             .map_err(|e| PluginError::invalid_params_error(&e))?;
 
@@ -1024,7 +1080,12 @@ impl PluginHost {
             let params = serde_json::to_value(&input)?;
             let result = await_transport_with_cancellation(
                 cancellation.clone(),
-                call_with_timeout(plugin, method::HOOK_SHELL_ENV, params, timeout),
+                self.call_hook_with_default_context(
+                    plugin,
+                    method::HOOK_SHELL_ENV,
+                    params,
+                    timeout,
+                ),
             )
             .await
             .map_err(transport_to_plugin_error)?;
@@ -1055,24 +1116,24 @@ impl PluginHost {
         let timeout = self.timeouts.chat_or(Duration::from_secs(5));
         let session_id = Some(input.session_id);
         let mut runs = Vec::new();
-        let result = dispatcher::chain_patch::<ChatMessageInput, ChatMessagePatch, _>(
-            &self.plugins,
-            method::HOOK_CHAT_MESSAGE,
-            HookSubscription::CHAT_MESSAGE,
-            timeout,
-            input,
-            |inp, patch| {
-                if let Some(m) = patch.message {
-                    inp.message = m;
-                }
-                if patch.drop {
-                    inp.message.content = serde_json::Value::Null;
-                }
-            },
-            session_id,
-            &mut runs,
-        )
-        .await;
+        let result = self
+            .chain_patch_with_default_context::<ChatMessageInput, ChatMessagePatch, _>(
+                method::HOOK_CHAT_MESSAGE,
+                HookSubscription::CHAT_MESSAGE,
+                timeout,
+                input,
+                |inp, patch| {
+                    if let Some(m) = patch.message {
+                        inp.message = m;
+                    }
+                    if patch.drop {
+                        inp.message.content = serde_json::Value::Null;
+                    }
+                },
+                session_id,
+                &mut runs,
+            )
+            .await;
         // chat.message activity is intentionally not recorded (not part of
         // the transcript hook-run scope); the runs are discarded.
         let _ = runs;
@@ -1096,8 +1157,7 @@ impl PluginHost {
         let mut runs = Vec::new();
         let result = await_transport_with_cancellation(
             cancellation,
-            dispatcher::chain_patch::<ChatParamsInput, ChatParamsPatch, _>(
-                &self.plugins,
+            self.chain_patch_with_default_context::<ChatParamsInput, ChatParamsPatch, _>(
                 method::HOOK_CHAT_PARAMS,
                 HookSubscription::CHAT_PARAMS,
                 timeout,
@@ -1132,8 +1192,7 @@ impl PluginHost {
         let mut runs = Vec::new();
         let result = await_transport_with_cancellation(
             cancellation,
-            dispatcher::chain_patch::<ChatHeadersInput, ChatHeadersPatch, _>(
-                &self.plugins,
+            self.chain_patch_with_default_context::<ChatHeadersInput, ChatHeadersPatch, _>(
                 method::HOOK_CHAT_HEADERS,
                 HookSubscription::CHAT_HEADERS,
                 timeout,
@@ -1358,7 +1417,10 @@ impl PluginHost {
             let plugin_id = plugin.key().to_string();
             let params =
                 serde_json::to_value(&input).map_err(|e| PluginError::invalid_params_error(&e))?;
-            let v = match call_with_timeout(plugin, method::HOOK_AUTH, params, timeout).await {
+            let v = match self
+                .call_hook_with_default_context(plugin, method::HOOK_AUTH, params, timeout)
+                .await
+            {
                 Ok(v) => v,
                 Err(err) => {
                     self.push_hook_runs(vec![dispatcher::transport_failure_record(
@@ -1402,7 +1464,8 @@ impl PluginHost {
             let plugin_id = plugin.key().to_string();
             let params =
                 serde_json::to_value(&input).map_err(|e| PluginError::invalid_params_error(&e))?;
-            let v = match call_with_timeout(plugin, method::HOOK_PROVIDER_LIST, params, timeout)
+            let v = match self
+                .call_hook_with_default_context(plugin, method::HOOK_PROVIDER_LIST, params, timeout)
                 .await
             {
                 Ok(v) => v,
@@ -1441,21 +1504,21 @@ impl PluginHost {
     pub async fn dispatch_config(&self, input: ConfigInput) -> Result<ConfigInput, PluginError> {
         let timeout = self.timeouts.fast_or(Duration::from_secs(2));
         let mut runs = Vec::new();
-        let result = dispatcher::chain_patch::<ConfigInput, ConfigPatch, _>(
-            &self.plugins,
-            method::HOOK_CONFIG,
-            HookSubscription::CONFIG,
-            timeout,
-            input,
-            |inp, patch| {
-                if let Some(m) = patch.merge {
-                    merge_json(&mut inp.current, m);
-                }
-            },
-            None,
-            &mut runs,
-        )
-        .await;
+        let result = self
+            .chain_patch_with_default_context::<ConfigInput, ConfigPatch, _>(
+                method::HOOK_CONFIG,
+                HookSubscription::CONFIG,
+                timeout,
+                input,
+                |inp, patch| {
+                    if let Some(m) = patch.merge {
+                        merge_json(&mut inp.current, m);
+                    }
+                },
+                None,
+                &mut runs,
+            )
+            .await;
         self.push_hook_runs(runs);
         result.map_err(transport_to_plugin_error)
     }
@@ -1548,7 +1611,8 @@ impl PluginHost {
             let plugin_id = plugin.key().to_string();
             let params =
                 serde_json::to_value(&input).map_err(|e| PluginError::invalid_params_error(&e))?;
-            let v = match call_with_timeout(plugin, method::HOOK_SESSION_START, params, timeout)
+            let v = match self
+                .call_hook_with_default_context(plugin, method::HOOK_SESSION_START, params, timeout)
                 .await
             {
                 Ok(v) => v,
@@ -1691,7 +1755,12 @@ impl PluginHost {
                 .map_err(|e| PluginError::invalid_params_error(&e))?;
             let v = match await_transport_with_cancellation(
                 cancellation.clone(),
-                call_with_timeout(plugin, method::HOOK_USER_PROMPT_SUBMIT, params, timeout),
+                self.call_hook_with_default_context(
+                    plugin,
+                    method::HOOK_USER_PROMPT_SUBMIT,
+                    params,
+                    timeout,
+                ),
             )
             .await
             {
@@ -2137,8 +2206,7 @@ impl PluginHost {
         let session_id = Some(input.session_id);
         let mut runs = Vec::new();
         let result =
-            dispatcher::chain_patch::<ChatMessagesTransformInput, ChatMessagesTransformPatch, _>(
-                &self.plugins,
+            self.chain_patch_with_default_context::<ChatMessagesTransformInput, ChatMessagesTransformPatch, _>(
                 method::HOOK_CHAT_MESSAGES_TRANSFORM,
                 HookSubscription::CHAT_MESSAGES_TRANSFORM,
                 timeout,
@@ -2219,11 +2287,14 @@ impl PluginHost {
 
     /// Async shutdown — sends `meta/shutdown` and closes every transport.
     /// Plugins whose transport has been transferred to a successor host during
-    /// hot-reload are skipped.
+    /// hot-reload keep running; this host still disposes its old registrations.
     pub async fn shutdown(&self) {
         let transferred = self.transferred_to_successor.lock().await.clone();
         for plugin in &self.plugins {
             if transferred.contains(&plugin.key()) {
+                self._host_handle
+                    .dispose_plugin_resources(&plugin.key())
+                    .await;
                 continue;
             }
             let plugin_id = plugin.key();

@@ -55,6 +55,15 @@ impl AgenaRuntime {
     /// Runtime-private composition entrypoint. External consumers use the
     /// stable `bootstrap_application_services` capability result instead.
     pub(crate) async fn new(config: RuntimeCompositionConfig) -> Result<Arc<Self>, AppError> {
+        Self::new_with_maintenance(config, true).await
+    }
+
+    /// Isolated runtime tests can disable automatic maintenance while keeping
+    /// ordinary lifecycle admission active.
+    pub(super) async fn new_with_maintenance(
+        config: RuntimeCompositionConfig,
+        automatic_maintenance: bool,
+    ) -> Result<Arc<Self>, AppError> {
         let mut config = config;
         let workspace_root = config.resolve_workspace_root()?;
         let RuntimeCompositionConfig {
@@ -186,21 +195,24 @@ impl AgenaRuntime {
         background_completion.set_manager(initial_snapshot.session_manager());
 
         let runtime = AgenaRuntime {
-            inner: Arc::new(agena_runtime::RuntimeProcessState::new(
-                loader,
-                load_request,
-                workspace_root,
-                database,
-                scheduler_database,
-                RuntimeControlState::new(initial_snapshot.clone(), tracing_reload_handle),
-            )),
-            activities: Arc::new(crate::activity::ActivityRuntimeState::new(
-                activity_registry.clone(),
-                monitor_service,
-            )),
-            live_signals: Arc::new(agena_runtime::LiveSignalHub::new(256)),
-            subtask_bridge: Arc::new(std::sync::Mutex::new(None)),
-            background_completion,
+            shared: Arc::new(AgenaRuntimeShared {
+                inner: Arc::new(agena_runtime::RuntimeProcessState::new(
+                    loader,
+                    load_request,
+                    workspace_root,
+                    database,
+                    scheduler_database,
+                    RuntimeControlState::new(initial_snapshot.clone(), tracing_reload_handle),
+                )),
+                activities: Arc::new(crate::activity::ActivityRuntimeState::new(
+                    activity_registry.clone(),
+                    monitor_service,
+                )),
+                live_signals: Arc::new(agena_runtime::LiveSignalHub::new(256)),
+                subtask_bridge: Arc::new(std::sync::Mutex::new(None)),
+                background_completion,
+                automatic_maintenance,
+            }),
         };
 
         // Project runtime maintenance tasks (marketplace sync, catalog
@@ -220,6 +232,11 @@ impl AgenaRuntime {
         // stream. v2 has no event bus (14.3): the drain emits observer
         // notifications only, never persisted, never replayed.
         let runtime = Arc::new(runtime);
+        // Finish fallible publication preflight before starting maintenance
+        // futures, which intentionally retain runtime handles until shutdown.
+        agena_runtime::ownership_audit::record_runtime_ownership(
+            runtime.inner.workspace_root.as_path(),
+        )?;
         {
             let live_signals = Arc::clone(&runtime.live_signals);
             let mut rx = activity_rx;
@@ -230,22 +247,21 @@ impl AgenaRuntime {
             });
         }
 
-        // Install the runtime-backed HostClient into the plugin host so
-        // plugin → host callbacks (log/read_config/etc.) actually do work.
+        // The candidate client already serves generation configuration during
+        // init. Runtime-dependent operations become available at publication.
         {
             let host_handle = initial_snapshot.plugin_manager().host_handle();
-            let client = super::host_client::host_client_for(runtime.clone());
-            agena_runtime::install_plugin_host_client(Arc::clone(&host_handle), client).await;
-            super::host_client::install_plugin_host_event_publisher(host_handle, runtime.clone());
+            initial_snapshot.host_client.bind_runtime(&runtime);
+            super::host_client::install_plugin_host_event_publisher(host_handle, &runtime);
         }
 
         runtime.apply_tracing_filter(initial_snapshot.tracing_config());
-        runtime.spawn_background_tasks();
+        if automatic_maintenance {
+            runtime.spawn_background_tasks();
+        }
         runtime.spawn_subtask_activity_bridge();
         runtime.spawn_background_delivery_recovery();
-        agena_runtime::ownership_audit::record_runtime_ownership(
-            runtime.inner.workspace_root.as_path(),
-        )?;
+        agena_runtime::install_plugin_host(initial_snapshot.plugin_manager());
         Ok(runtime)
     }
 
@@ -705,7 +721,11 @@ impl agena_runtime::RuntimeActivityService for AgenaRuntime {
             }
 
             if let Some(scheduler) = manager.tool_executor().scheduler().cloned() {
-                for job in scheduler.list().await {
+                for job in scheduler
+                    .list()
+                    .await
+                    .map_err(|error| agena_runtime::ActivityControlError::internal_error(&error))?
+                {
                     if filter.active_only && job.completed {
                         continue;
                     }
@@ -944,7 +964,11 @@ impl agena_runtime::RuntimeActivityService for AgenaRuntime {
         let mut activity = self.get_activity(activity_id).await?;
         let scheduler = activity_scheduler(self)?;
         let job_id = cron_activity_job_id(activity_id)?;
-        if !scheduler.remove(job_id).await {
+        if !scheduler
+            .remove(job_id)
+            .await
+            .map_err(|error| agena_runtime::ActivityControlError::internal_error(&error))?
+        {
             return Err(agena_runtime::ActivityControlError::not_found(activity_id));
         }
         activity.status = agena_domain::BackgroundActivityStatus::Stopped;
@@ -970,8 +994,16 @@ impl agena_runtime::RuntimeActivityService for AgenaRuntime {
     async fn clear_finished(&self) -> Result<usize, agena_runtime::ActivityControlError> {
         let mut removed = self.activities.registry.clear_finished().len();
         if let Ok(scheduler) = activity_scheduler(self) {
-            for job in scheduler.list().await {
-                if job.completed && scheduler.remove(job.id).await {
+            for job in scheduler
+                .list()
+                .await
+                .map_err(|error| agena_runtime::ActivityControlError::internal_error(&error))?
+            {
+                if job.completed
+                    && scheduler.remove(job.id).await.map_err(|error| {
+                        agena_runtime::ActivityControlError::internal_error(&error)
+                    })?
+                {
                     removed += 1;
                 }
             }
@@ -1036,10 +1068,11 @@ impl agena_runtime::ModelCatalogRuntimeService for AgenaRuntime {
     fn start_model_catalog_refresh(
         &self,
         origin: agena_runtime::RuntimeBackgroundTaskOrigin,
-    ) -> Result<agena_runtime::RuntimeBackgroundTaskStart, agena_runtime::ModelCatalogRefreshError>
-    {
+    ) -> Result<
+        agena_runtime::RuntimeBackgroundTaskStart,
+        agena_runtime::RuntimeBackgroundTaskControlError,
+    > {
         AgenaRuntime::start_model_catalog_refresh(self, origin)
-            .map_err(|error| agena_runtime::ModelCatalogRefreshError::from_error(&error))
     }
 }
 
@@ -1568,7 +1601,7 @@ impl agena_runtime::RuntimeDraftAuthenticationService for AgenaRuntime {
     {
         match kind {
             agena_runtime::RuntimeDraftAuthKind::OpenaiChatgpt => {
-                let user_agent = agena_runtime::codex_user_agent();
+                let user_agent = self.current_snapshot().client_identity().codex_user_agent();
                 agena_runtime::finish_openai_draft_auth_browser(
                     user_agent.as_str(),
                     code.as_str(),
@@ -1602,7 +1635,7 @@ impl agena_runtime::RuntimeDraftAuthenticationService for AgenaRuntime {
     {
         match kind {
             agena_runtime::RuntimeDraftAuthKind::OpenaiChatgpt => {
-                let user_agent = agena_runtime::codex_user_agent();
+                let user_agent = self.current_snapshot().client_identity().codex_user_agent();
                 agena_runtime::start_openai_draft_auth_device(user_agent.as_str()).await
             }
             agena_runtime::RuntimeDraftAuthKind::GithubCopilot => {
@@ -1629,7 +1662,7 @@ impl agena_runtime::RuntimeDraftAuthenticationService for AgenaRuntime {
     > {
         match kind {
             agena_runtime::RuntimeDraftAuthKind::OpenaiChatgpt => {
-                let user_agent = agena_runtime::codex_user_agent();
+                let user_agent = self.current_snapshot().client_identity().codex_user_agent();
                 agena_runtime::poll_openai_draft_auth_device(
                     user_agent.as_str(),
                     device_code.as_str(),
@@ -1828,7 +1861,10 @@ impl agena_runtime::RuntimeControlService for AgenaRuntime {
     ) -> Result<agena_runtime::RuntimeReloadReport, agena_runtime::RuntimeControlServiceError> {
         AgenaRuntime::reload(self)
             .await
-            .map_err(|error| agena_runtime::RuntimeControlServiceError::from_error(&error))
+            .map_err(|error| match error {
+                AppError::Cancelled => agena_runtime::RuntimeControlServiceError::Shutdown,
+                error => agena_runtime::RuntimeControlServiceError::from_error(&error),
+            })
     }
 
     async fn fetch_provider_client_versions(
@@ -1882,9 +1918,10 @@ impl agena_runtime::RuntimeControlService for AgenaRuntime {
             dedupe_key,
             cancellable,
             move |cancel| async move {
-                work(cancel)
-                    .await
-                    .map_err(|error| AppError::config_error(&error))
+                work(cancel).await.map_err(|error| match error {
+                    agena_runtime::RuntimeControlServiceError::Shutdown => AppError::Cancelled,
+                    error => AppError::config_error(&error),
+                })
             },
         )
     }
@@ -2048,7 +2085,7 @@ impl agena_runtime::RuntimeStatusService for AgenaRuntime {
                 agena_runtime::SessionExecutionControl::scheduler_available(manager.as_ref()),
                 agena_runtime::SessionExecutionControl::list_scheduled_jobs(manager.as_ref()).await,
             ),
-            None => (None, false, Vec::new()),
+            None => (None, false, Ok(Vec::new())),
         };
         let plugin_manager = snapshot.plugin_manager();
         agena_runtime::RuntimeStatusSnapshot {
@@ -2112,9 +2149,9 @@ impl AgenaRuntime {
     async fn list_adapter_models_target(
         &self,
         target: crate::config::ProviderAdapterModelsTarget,
+        snapshot: Arc<RuntimeSnapshot>,
     ) -> Result<agena_provider::ProviderAdapterModelsListing, agena_provider::ProviderCatalogError>
     {
-        let snapshot = self.current_snapshot();
         let network = snapshot
             .provider_configs()
             .get(target.provider_id.as_str())
@@ -2133,6 +2170,7 @@ impl AgenaRuntime {
             &target.adapters,
             client,
             &crate::config::ProcessEnvironment,
+            snapshot.client_identity(),
         )
         .await;
         Ok(agena_provider::ProviderAdapterModelsListing {
@@ -2177,6 +2215,35 @@ fn runtime_database_error(error: agena_runtime::RuntimeDatabaseCompositionError)
 
 #[derive(Clone)]
 pub(crate) struct AgenaRuntime {
+    // All clones refer to one shared owner, including clones wrapped in a new
+    // Arc by capability adapters. Weak callbacks must target this owner.
+    shared: Arc<AgenaRuntimeShared>,
+}
+
+impl std::ops::Deref for AgenaRuntime {
+    type Target = AgenaRuntimeShared;
+
+    fn deref(&self) -> &Self::Target {
+        &self.shared
+    }
+}
+
+#[derive(Clone)]
+pub(super) struct WeakAgenaRuntime(std::sync::Weak<AgenaRuntimeShared>);
+
+impl WeakAgenaRuntime {
+    pub(super) fn upgrade(&self) -> Option<AgenaRuntime> {
+        self.0.upgrade().map(|shared| AgenaRuntime { shared })
+    }
+}
+
+impl AgenaRuntime {
+    pub(super) fn downgrade(&self) -> WeakAgenaRuntime {
+        WeakAgenaRuntime(Arc::downgrade(&self.shared))
+    }
+}
+
+pub(crate) struct AgenaRuntimeShared {
     pub(crate) inner: Arc<AgenaRuntimeInner>,
     pub(crate) activities: Arc<crate::activity::ActivityRuntimeState>,
     pub(crate) live_signals: Arc<crate::live_signal::LiveSignalHub>,
@@ -2188,6 +2255,7 @@ pub(crate) struct AgenaRuntime {
     /// `subtask_bridge`; the completion signals reach it through the monitor
     /// `on_finished` callback and the facade `SessionMetaUpdated` events.
     background_completion: crate::activity::BackgroundCompletionBridge,
+    automatic_maintenance: bool,
 }
 
 pub(crate) type AgenaRuntimeInner = agena_runtime::RuntimeProcessState<
@@ -2318,16 +2386,18 @@ impl AgenaRuntime {
     }
 
     pub fn shutdown(&self) {
+        // Close admission and order shutdown after any admitted publication
+        // before selecting the session notification host. Concurrent/repeated
+        // calls share the same first-transition decision.
+        if !self.inner.control_state.shutdown() {
+            return;
+        }
         if let Some(session_manager) = self.session_manager() {
             match tokio::runtime::Handle::try_current() {
                 Ok(_handle) => {
-                    agena_runtime::spawn_detached(async move {
-                        session_manager
-                            .broadcast_active_session_end(
-                                agena_plugin_host::SessionEndReason::Other,
-                            )
-                            .await;
-                    });
+                    let broadcast = session_manager
+                        .broadcast_active_session_end(agena_plugin_host::SessionEndReason::Other);
+                    agena_runtime::spawn_detached(broadcast);
                 }
                 Err(error) => {
                     tracing::warn!(
@@ -2341,7 +2411,6 @@ impl AgenaRuntime {
                 }
             }
         }
-        self.inner.control_state.shutdown();
     }
 
     pub async fn reload(&self) -> Result<RuntimeReloadReport, AppError> {
@@ -2352,10 +2421,17 @@ impl AgenaRuntime {
         &self,
         cause: RuntimeReloadCause,
     ) -> Result<RuntimeReloadReport, AppError> {
-        let _guard = self.inner.control_state.reload_gate().acquire().await;
+        let control = self.inner.control_state.task_control();
+        let _guard = tokio::select! {
+            biased;
+            _ = control.cancelled() => return Err(AppError::Cancelled),
+            guard = self.inner.control_state.reload_gate().acquire() => guard,
+        };
         let previous = self.current_snapshot();
-        let next = Arc::new(
-            RuntimeSnapshot::build_with_previous(
+        let next = Arc::new(tokio::select! {
+            biased;
+            _ = control.cancelled() => return Err(AppError::Cancelled),
+            result = RuntimeSnapshot::build_with_previous(
                 previous.generation() + 1,
                 &self.inner.loader,
                 &self.inner.load_request,
@@ -2367,31 +2443,51 @@ impl AgenaRuntime {
                 previous.session_manager(),
                 Arc::clone(&previous),
                 self.activities.monitor.clone(),
-            )
-            .await?,
-        );
+            ) => result?,
+        });
+        self.publish_reload_candidate(previous, next, cause)
+    }
 
-        self.apply_tracing_filter(next.tracing_config());
+    /// Commit a completed candidate while the caller owns the reload gate.
+    /// The lifecycle guard orders all synchronous publication against shutdown.
+    pub(super) fn publish_reload_candidate(
+        &self,
+        previous: Arc<RuntimeSnapshot>,
+        next: Arc<RuntimeSnapshot>,
+        cause: RuntimeReloadCause,
+    ) -> Result<RuntimeReloadReport, AppError> {
         let previous_generation = previous.generation();
-        // Install runtime-backed HostClient into the new snapshot's plugin
-        // host so post-reload plugin callbacks keep working.
         {
+            let _publication = self
+                .inner
+                .control_state
+                .task_control()
+                .running_guard()
+                .ok_or(AppError::Cancelled)?;
+            self.apply_tracing_filter(next.tracing_config());
+            // Bind before publication; the client's generation check becomes
+            // ready with the snapshot swap. Shutdown cannot overtake this
+            // synchronous publication after the final lifecycle check.
+            next.host_client.bind_runtime(self);
+            next.publish_session_configuration();
+            let _ = self.inner.control_state.swap_snapshot(next.clone());
             let host_handle = next.plugin_manager().host_handle();
-            let client = super::host_client::host_client_for(Arc::new(self.clone()));
-            agena_runtime::install_plugin_host_client(Arc::clone(&host_handle), client).await;
-            super::host_client::install_plugin_host_event_publisher(
-                host_handle,
-                Arc::new(self.clone()),
-            );
+            super::host_client::install_plugin_host_event_publisher(host_handle, self);
+            agena_runtime::install_plugin_host(next.plugin_manager());
         }
-        let _ = self.inner.control_state.swap_snapshot(next.clone());
-        self.start_model_catalog_refresh_if_needed(RuntimeBackgroundTaskOrigin::System)
-            .map_err(|error| {
-                AppError::Internal(agena_failure::diagnostic::format_error_chain_with_context(
+        if let Err(error) =
+            self.start_model_catalog_refresh_if_needed(RuntimeBackgroundTaskOrigin::System)
+        {
+            // Publication is complete. Failure to enqueue this independent
+            // maintenance operation belongs to the catalog status, and must
+            // not turn an already-published reload into a failed task.
+            next.model_catalog().record_refresh_failure(
+                agena_failure::diagnostic::format_error_chain_with_context(
                     "failed to start model catalog refresh after runtime reload",
                     &error,
-                ))
-            })?;
+                ),
+            );
+        }
 
         Ok(RuntimeReloadReport {
             cause,
@@ -2447,11 +2543,20 @@ impl AgenaRuntime {
         }
 
         let spec = RuntimeBackgroundTaskSpec::new(kind, origin, title, dedupe_key, cancellable);
-        Ok(self
-            .inner
+        self.inner
             .control_state
             .background_tasks()
-            .spawn(spec, work))
+            .spawn(spec, move |cancel| async move {
+                // Cancellation can arrive after the registry has polled its
+                // token in this turn. Preserve an explicit cancellation from
+                // the work branch instead of recording it as a failed task.
+                match work(cancel).await {
+                    Err(AppError::Cancelled) => Ok(RuntimeBackgroundTaskOutcome::cancelled(
+                        "Runtime operation cancelled.",
+                    )),
+                    result => result,
+                }
+            })
     }
 
     pub fn start_runtime_reload_task(
@@ -2493,6 +2598,33 @@ impl AgenaRuntime {
         )
     }
 
+    /// A plugin cannot await its own retirement. Keep the accepted control
+    /// task outside its callback context and defer mutation until the entire
+    /// originating call has returned (including nested calls/streams).
+    pub(crate) fn start_plugin_reload_task(
+        &self,
+        after: agena_plugin_host::PluginCallCompletion,
+    ) -> Result<RuntimeBackgroundTaskStart, RuntimeBackgroundTaskControlError> {
+        let runtime = self.clone();
+        self.spawn_background_task(
+            RuntimeBackgroundTaskKind::RuntimeReload,
+            RuntimeBackgroundTaskOrigin::System,
+            "Reload runtime after plugin call",
+            Some(format!("plugin_reload:{}", after.id())),
+            false,
+            move |_| async move {
+                after.wait().await;
+                let report = runtime
+                    .reload_with_cause(RuntimeReloadCause::Manual)
+                    .await?;
+                Ok(RuntimeBackgroundTaskOutcome::succeeded(format!(
+                    "Runtime reloaded to generation {}.",
+                    report.generation
+                )))
+            },
+        )
+    }
+
     pub fn start_model_catalog_refresh(
         &self,
         origin: RuntimeBackgroundTaskOrigin,
@@ -2504,7 +2636,7 @@ impl AgenaRuntime {
         &self,
         origin: RuntimeBackgroundTaskOrigin,
     ) -> Result<Option<RuntimeBackgroundTaskStart>, RuntimeBackgroundTaskControlError> {
-        if self.is_shutdown() {
+        if !self.automatic_maintenance || self.is_shutdown() {
             return Ok(None);
         }
 
@@ -2568,7 +2700,9 @@ impl AgenaRuntime {
                 }
                 .await;
 
-                if let Err(error) = &result {
+                if let Err(error) = &result
+                    && !matches!(error, AppError::Cancelled)
+                {
                     runtime
                         .current_snapshot()
                         .model_catalog()

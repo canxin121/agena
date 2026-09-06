@@ -1,7 +1,9 @@
 use std::{fmt::Display, future::Future, marker::PhantomData, sync::Arc};
 
 use chrono::Utc;
+use futures_util::FutureExt;
 use parking_lot::Mutex;
+use std::panic::AssertUnwindSafe;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
@@ -12,6 +14,10 @@ use crate::{
 };
 
 const DEFAULT_TASK_HISTORY_LIMIT: usize = 64;
+pub(crate) const DEFAULT_ACTIVE_TASK_LIMIT: usize = 64;
+
+#[cfg(test)]
+mod tests;
 
 /// Observer hook called when a runtime background task starts or reaches a
 /// terminal state. Lets the runtime surface maintenance tasks through the
@@ -26,6 +32,7 @@ pub trait RuntimeBackgroundTaskListener: Send + Sync {
 pub(crate) struct RuntimeBackgroundTaskRegistry<E> {
     inner: Arc<Mutex<RuntimeBackgroundTaskState>>,
     history_limit: usize,
+    active_limit: usize,
     marker: PhantomData<fn() -> E>,
 }
 
@@ -34,6 +41,7 @@ impl<E> Clone for RuntimeBackgroundTaskRegistry<E> {
         Self {
             inner: Arc::clone(&self.inner),
             history_limit: self.history_limit,
+            active_limit: self.active_limit,
             marker: PhantomData,
         }
     }
@@ -44,6 +52,7 @@ impl<E> Default for RuntimeBackgroundTaskRegistry<E> {
         Self {
             inner: Arc::new(Mutex::new(RuntimeBackgroundTaskState::default())),
             history_limit: DEFAULT_TASK_HISTORY_LIMIT,
+            active_limit: DEFAULT_ACTIVE_TASK_LIMIT,
             marker: PhantomData,
         }
     }
@@ -54,7 +63,8 @@ impl<E> RuntimeBackgroundTaskRegistry<E> {
     /// listener is supported per registry; later calls replace the previous
     /// one.
     pub(crate) fn set_listener(&self, listener: Arc<dyn RuntimeBackgroundTaskListener>) {
-        self.inner.lock().listener = Some(listener);
+        let previous = self.inner.lock().listener.replace(listener);
+        drop(previous);
     }
 
     pub(crate) fn list(&self) -> Vec<RuntimeBackgroundTask> {
@@ -74,9 +84,11 @@ impl<E> RuntimeBackgroundTaskRegistry<E> {
             .any(|task| task.kind == kind && task.is_running())
     }
 
-    pub(crate) fn cancel_all(&self) {
+    /// Close admission atomically with registration, then cancel all accepted work.
+    pub(crate) fn shutdown(&self) {
         let tokens = {
-            let state = self.inner.lock();
+            let mut state = self.inner.lock();
+            state.shutdown = true;
             state.controls.values().cloned().collect::<Vec<_>>()
         };
         for token in tokens {
@@ -91,9 +103,6 @@ impl<E> RuntimeBackgroundTaskRegistry<E> {
         let (task, token) =
             {
                 let mut state = self.inner.lock();
-                let token = state.controls.get(task_id).cloned().ok_or_else(|| {
-                    RuntimeBackgroundTaskControlError::NotRunning(task_id.to_owned())
-                })?;
                 let task = state.tasks.get_mut(task_id).ok_or_else(|| {
                     RuntimeBackgroundTaskControlError::NotFound(task_id.to_owned())
                 })?;
@@ -108,7 +117,11 @@ impl<E> RuntimeBackgroundTaskRegistry<E> {
                     ));
                 }
                 task.message = Some("Cancellation requested.".to_owned());
-                (task.clone(), token)
+                let task = task.clone();
+                let token = state.controls.get(task_id).cloned().ok_or_else(|| {
+                    RuntimeBackgroundTaskControlError::NotRunning(task_id.to_owned())
+                })?;
+                (task, token)
             };
         token.cancel();
         Ok(task)
@@ -118,25 +131,35 @@ impl<E> RuntimeBackgroundTaskRegistry<E> {
         &self,
         spec: RuntimeBackgroundTaskSpec,
         work: F,
-    ) -> RuntimeBackgroundTaskStart
+    ) -> Result<RuntimeBackgroundTaskStart, RuntimeBackgroundTaskControlError>
     where
         E: Display + Send + 'static,
         F: FnOnce(CancellationToken) -> Fut + Send + 'static,
         Fut: Future<Output = Result<RuntimeBackgroundTaskOutcome, E>> + Send + 'static,
     {
-        let (task, token, started) = {
+        let (task, token, executor, listener) = {
             let mut state = self.inner.lock();
+            if state.shutdown {
+                return Err(RuntimeBackgroundTaskControlError::Shutdown);
+            }
             if let Some(dedupe_key) = spec.dedupe_key()
                 && let Some(existing_id) = state.active_by_key.get(dedupe_key)
                 && let Some(existing) = state.tasks.get(existing_id)
                 && existing.is_running()
             {
-                return RuntimeBackgroundTaskStart {
+                return Ok(RuntimeBackgroundTaskStart {
                     started: false,
                     task: existing.clone(),
-                };
+                });
             }
 
+            if state.controls.len() >= self.active_limit {
+                return Err(RuntimeBackgroundTaskControlError::Capacity {
+                    limit: self.active_limit,
+                });
+            }
+            let executor = tokio::runtime::Handle::try_current()
+                .map_err(|_| RuntimeBackgroundTaskControlError::ExecutorUnavailable)?;
             let now = Utc::now();
             let task = RuntimeBackgroundTask {
                 id: format!("rtask_{}", Uuid::new_v4().simple()),
@@ -162,135 +185,187 @@ impl<E> RuntimeBackgroundTaskRegistry<E> {
                 state.dedupe_keys.insert(task.id.clone(), dedupe_key);
             }
             state.trim_history(self.history_limit);
-            (task, token, true)
+            (task, token, executor, state.listener.clone())
         };
 
-        if started {
-            let registry = Arc::downgrade(&self.inner);
-            let history_limit = self.history_limit;
-            let task_id = task.id.clone();
-            let listener = self.inner.lock().listener.clone();
-            if let Some(listener) = listener {
-                listener.on_started(&task);
+        // Observers may inspect/cancel tasks. Never call them while locked,
+        // and never let an observer panic strand an accepted task.
+        if let Some(listener) = listener {
+            notify_listener(&listener, &task, true);
+        }
+        let (start_tx, start_rx) = tokio::sync::oneshot::channel();
+        let task_id = task.id.clone();
+        let mut finalizer = WorkerFinalizer {
+            registry: Arc::downgrade(&self.inner),
+            history_limit: self.history_limit,
+            task_id: Some(task_id.clone()),
+        };
+        let worker = executor.spawn(async move {
+            if start_rx.await.is_err() {
+                return;
             }
-            let (start_tx, start_rx) = tokio::sync::oneshot::channel();
-            let worker_task_id = task_id.clone();
-            let log_task_id = task_id.clone();
-            let worker = tokio::spawn(async move {
-                if start_rx.await.is_err() {
-                    return;
-                }
-                let completion = tokio::select! {
+            let outcome = AssertUnwindSafe(async {
+                tokio::select! {
+                    biased;
                     _ = token.cancelled() => RuntimeBackgroundTaskCompletion::Cancelled {
-                        message: Some("Cancelled by operator.".to_owned()),
+                        message: Some("Cancellation requested.".to_owned()),
                     },
-                    result = work(token.clone()) => match result {
-                        Ok(RuntimeBackgroundTaskOutcome::Succeeded { message }) => {
-                            RuntimeBackgroundTaskCompletion::Succeeded { message }
-                        }
-                        Ok(RuntimeBackgroundTaskOutcome::Cancelled { message }) => {
-                            RuntimeBackgroundTaskCompletion::Cancelled { message }
-                        }
-                        Err(error) => {
-                            let diagnostic = error.to_string();
-                            let failure = agena_failure::Failure::new(
-                                agena_failure::FailureCode::new("background_task.internal"),
-                                agena_failure::FailureCategory::Internal,
-                                agena_failure::FailureResponsibility::System,
-                                agena_failure::RetryDirective::Unknown,
-                                agena_failure::RecoveryDirective::Retry,
-                                agena_failure::FailureImpact::BackgroundTaskFailed,
-                                // Surface the scrubbed root cause so a
-                                // background-task failure tells the user what
-                                // actually went wrong.
-                                agena_failure::UserPresentation::validated_with_context(
-                                    "background-task-failed",
-                                    &diagnostic,
-                                ),
-                            );
-                            tracing::error!(
-                                task_id = %log_task_id,
-                                failure_id = %failure.id,
-                                diagnostic = %diagnostic,
-                                "background task failed"
-                            );
-                            RuntimeBackgroundTaskCompletion::Failed { failure }
-                        }
+                    // The factory itself may perform work or panic. Construct it
+                    // lazily only after checking cancellation, inside the boundary.
+                    result = async { work(token.clone()).await } => match result {
+                        Ok(RuntimeBackgroundTaskOutcome::Succeeded { message }) =>
+                            RuntimeBackgroundTaskCompletion::Succeeded { message },
+                        Ok(RuntimeBackgroundTaskOutcome::Cancelled { message }) =>
+                            RuntimeBackgroundTaskCompletion::Cancelled { message },
+                        Err(error) => failed_task(&task_id, &error.to_string()),
                     },
-                };
-                if let Some(registry) = registry.upgrade() {
-                    Self::finish_inner(
-                        &registry,
-                        history_limit,
-                        worker_task_id.as_str(),
-                        completion,
-                    );
                 }
+            })
+            .catch_unwind()
+            .await;
+            let completion = outcome.unwrap_or_else(|payload| {
+                failed_task(
+                    &task_id,
+                    &format!(
+                        "background task panicked: {}",
+                        panic_message(payload.as_ref())
+                    ),
+                )
             });
-            self.inner
-                .lock()
-                .workers
-                .insert(task_id.clone(), worker.abort_handle());
-            if start_tx.send(()).is_err() {
-                tracing::debug!(
-                    task_id,
-                    "background task start acknowledgement receiver was dropped"
-                );
-            }
-        }
-
-        RuntimeBackgroundTaskStart { started, task }
-    }
-
-    fn finish_inner(
-        inner: &Arc<Mutex<RuntimeBackgroundTaskState>>,
-        history_limit: usize,
-        task_id: &str,
-        completion: RuntimeBackgroundTaskCompletion,
-    ) {
-        let finished = {
-            let mut state = inner.lock();
-            if let Some(task) = state.tasks.get_mut(task_id) {
-                task.finished_at = Some(Utc::now());
-                match completion {
-                    RuntimeBackgroundTaskCompletion::Succeeded { message } => {
-                        task.status = RuntimeBackgroundTaskStatus::Succeeded;
-                        task.message = message;
-                        task.failure = None;
-                    }
-                    RuntimeBackgroundTaskCompletion::Failed { failure } => {
-                        task.status = RuntimeBackgroundTaskStatus::Failed;
-                        task.message = None;
-                        task.failure = Some(failure);
-                    }
-                    RuntimeBackgroundTaskCompletion::Cancelled { message } => {
-                        task.status = RuntimeBackgroundTaskStatus::Cancelled;
-                        task.message = message;
-                        task.failure = None;
-                    }
-                }
-                Some(task.clone())
-            } else {
-                None
-            }
-        };
-
+            finalizer.finish(completion);
+        });
         {
-            let mut state = inner.lock();
-            state.controls.remove(task_id);
-            state.workers.remove(task_id);
-            if let Some(dedupe_key) = state.dedupe_keys.remove(task_id)
-                && state
-                    .active_by_key
-                    .get(&dedupe_key)
-                    .is_some_and(|id| id == task_id)
-            {
-                state.active_by_key.remove(&dedupe_key);
+            let mut state = self.inner.lock();
+            // Executor shutdown can drop the worker before registration here.
+            // Its finalizer has already removed the control in that case.
+            if state.controls.contains_key(&task.id) {
+                state.workers.insert(task.id.clone(), worker.abort_handle());
             }
-            state.trim_history(history_limit);
         }
-        if let (Some(listener), Some(task)) = (inner.lock().listener.clone(), finished) {
-            listener.on_finished(&task);
+        if start_tx.send(()).is_err() {
+            tracing::debug!(task_id = %task.id, "background task stopped before its start acknowledgement");
         }
+        Ok(RuntimeBackgroundTaskStart {
+            started: true,
+            task,
+        })
+    }
+}
+
+struct WorkerFinalizer {
+    registry: std::sync::Weak<Mutex<RuntimeBackgroundTaskState>>,
+    history_limit: usize,
+    task_id: Option<String>,
+}
+
+impl WorkerFinalizer {
+    fn finish(&mut self, completion: RuntimeBackgroundTaskCompletion) {
+        if let Some(task_id) = self.task_id.take()
+            && let Some(registry) = self.registry.upgrade()
+        {
+            finish_task(&registry, self.history_limit, &task_id, completion);
+        }
+    }
+}
+
+impl Drop for WorkerFinalizer {
+    fn drop(&mut self) {
+        self.finish(RuntimeBackgroundTaskCompletion::Cancelled {
+            message: Some("Background worker stopped before completion.".to_owned()),
+        });
+    }
+}
+
+fn panic_message(payload: &(dyn std::any::Any + Send)) -> &str {
+    payload
+        .downcast_ref::<&str>()
+        .copied()
+        .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+        .unwrap_or("non-string panic payload")
+}
+
+fn failed_task(task_id: &str, diagnostic: &str) -> RuntimeBackgroundTaskCompletion {
+    let failure = agena_failure::Failure::new(
+        agena_failure::FailureCode::new("background_task.internal"),
+        agena_failure::FailureCategory::Internal,
+        agena_failure::FailureResponsibility::System,
+        agena_failure::RetryDirective::Unknown,
+        agena_failure::RecoveryDirective::Retry,
+        agena_failure::FailureImpact::BackgroundTaskFailed,
+        agena_failure::UserPresentation::validated_with_context(
+            "background-task-failed",
+            diagnostic,
+        ),
+    );
+    tracing::error!(task_id, failure_id = %failure.id, diagnostic, "background task failed");
+    RuntimeBackgroundTaskCompletion::Failed { failure }
+}
+
+fn notify_listener(
+    listener: &Arc<dyn RuntimeBackgroundTaskListener>,
+    task: &RuntimeBackgroundTask,
+    started: bool,
+) {
+    let outcome = std::panic::catch_unwind(AssertUnwindSafe(|| {
+        if started {
+            listener.on_started(task);
+        } else {
+            listener.on_finished(task);
+        }
+    }));
+    if let Err(payload) = outcome {
+        tracing::error!(task_id = %task.id, started, diagnostic = panic_message(payload.as_ref()), "background task observer panicked");
+    }
+}
+
+fn finish_task(
+    inner: &Arc<Mutex<RuntimeBackgroundTaskState>>,
+    history_limit: usize,
+    task_id: &str,
+    completion: RuntimeBackgroundTaskCompletion,
+) {
+    let (finished, listener) = {
+        let mut state = inner.lock();
+        let Some(task) = state
+            .tasks
+            .get_mut(task_id)
+            .filter(|task| task.is_running())
+        else {
+            return;
+        };
+        task.finished_at = Some(Utc::now());
+        match completion {
+            RuntimeBackgroundTaskCompletion::Succeeded { message } => {
+                task.status = RuntimeBackgroundTaskStatus::Succeeded;
+                task.message = message;
+                task.failure = None;
+            }
+            RuntimeBackgroundTaskCompletion::Failed { failure } => {
+                task.status = RuntimeBackgroundTaskStatus::Failed;
+                task.message = None;
+                task.failure = Some(failure);
+            }
+            RuntimeBackgroundTaskCompletion::Cancelled { message } => {
+                task.status = RuntimeBackgroundTaskStatus::Cancelled;
+                task.message = message;
+                task.failure = None;
+            }
+        }
+        let finished = task.clone();
+        state.controls.remove(task_id);
+        state.workers.remove(task_id);
+        if let Some(dedupe_key) = state.dedupe_keys.remove(task_id)
+            && state
+                .active_by_key
+                .get(&dedupe_key)
+                .is_some_and(|id| id == task_id)
+        {
+            state.active_by_key.remove(&dedupe_key);
+        }
+        state.trim_history(history_limit);
+        (finished, state.listener.clone())
+    };
+    if let Some(listener) = listener {
+        notify_listener(&listener, &finished, false);
     }
 }

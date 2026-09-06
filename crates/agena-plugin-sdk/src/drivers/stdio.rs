@@ -28,7 +28,8 @@ use crate::hooks::{
 };
 use crate::host_api::{
     AskUserRequest, AskUserResponse, CancelSubtaskRequest, EventSubscription, HostClient,
-    HostConfigReloadResponse, HostContextStatusRequest, HostContextStatusResponse,
+    HostConfigReloadRequestResponse, HostConfigReloadResponse, HostConfigReloadStatusRequest,
+    HostConfigReloadStatusResponse, HostContextStatusRequest, HostContextStatusResponse,
     HostDisplayContributeRequest, HostDisplayRemoveRequest, HostDisplayRemoveResponse,
     HostEnterSnapshotRequest, HostExitSnapshotRequest, HostHookListResponse,
     HostImageExecuteRequest, HostImageExecuteResponse, HostLspListDiagnosticsRequest,
@@ -617,12 +618,7 @@ impl StdioHostClient {
             ResponsePayload::Ok { result } => {
                 serde_json::from_value(result).map_err(|e| PluginError::invalid_params_error(&e))
             }
-            ResponsePayload::Err { error } => {
-                let mut plugin_error =
-                    PluginError::from_kind(PluginErrorKind::Internal, error.message);
-                plugin_error.diagnostic.data = error.data;
-                Err(plugin_error)
-            }
+            ResponsePayload::Err { error } => Err(PluginError::from_rpc_error(error, method)),
         }
     }
 
@@ -722,6 +718,21 @@ impl HostClient for StdioHostClient {
             }),
         )
         .await
+    }
+
+    async fn request_config_reload(&self) -> crate::Result<HostConfigReloadRequestResponse> {
+        self.call(
+            method::HOST_CONFIG_RELOAD_REQUEST,
+            serde_json::json!({"context": crate::host_api::current_host_callback_context()}),
+        )
+        .await
+    }
+
+    async fn config_reload_status(
+        &self,
+        request: HostConfigReloadStatusRequest,
+    ) -> crate::Result<HostConfigReloadStatusResponse> {
+        self.call(method::HOST_CONFIG_RELOAD_STATUS, serde_json::json!({"request": request, "context": crate::host_api::current_host_callback_context()})).await
     }
 
     async fn invoke_tool(
@@ -1347,6 +1358,9 @@ fn error_object_from(e: PluginError) -> ErrorObject {
         data: e.rpc_error_data(),
     }
 }
+
+#[cfg(test)]
+mod reload_callback_tests;
 
 #[cfg(test)]
 mod authorization_error_code_tests {

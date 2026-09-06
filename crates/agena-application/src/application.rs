@@ -439,7 +439,7 @@ impl Application {
         let task = self
             .model_catalog_runtime
             .start_model_catalog_refresh(agena_runtime::RuntimeBackgroundTaskOrigin::User)
-            .map_err(|error| ApplicationError::internal_error(&error))?;
+            .map_err(ApplicationError::from)?;
         let catalog = self.model_catalog_runtime.model_catalog_response();
         Ok(ModelCatalogRefreshResponse {
             started: task.started,
@@ -482,7 +482,7 @@ impl Application {
             self.runtime_control
                 .reload()
                 .await
-                .map_err(|error| ApplicationError::internal_error(&error))?;
+                .map_err(ApplicationError::from)?;
         }
         Ok(versions)
     }
@@ -843,7 +843,9 @@ impl Application {
     /// Complete runtime status projection shared by the process-local Studio
     /// health surface and the WS/IPC protocol. REST and WS handlers call this
     /// instead of assembling the record themselves.
-    pub async fn runtime_status_response(&self) -> agena_api::resource::RuntimeStatusResponse {
+    pub async fn runtime_status_response(
+        &self,
+    ) -> Result<agena_api::resource::RuntimeStatusResponse, ApplicationError> {
         use agena_api::resource::{
             DefaultSelectionResource, ModelCatalogResponse, RuntimeAutomationResource,
             RuntimeLspResource, RuntimeLspServerResource, RuntimeMcpResource,
@@ -952,7 +954,9 @@ impl Application {
                 })
                 .collect(),
         };
-        let mut jobs = status.scheduled_jobs;
+        let mut jobs = status
+            .scheduled_jobs
+            .map_err(|error| ApplicationError::from_failure(error.failure))?;
         crate::service::sort_jobs_for_display(&mut jobs);
         let automation = RuntimeAutomationResource {
             enabled: status.automation_available,
@@ -963,7 +967,7 @@ impl Application {
                 .map(crate::service::scheduled_job_resource)
                 .collect(),
         };
-        RuntimeStatusResponse {
+        Ok(RuntimeStatusResponse {
             generation: status.generation,
             loaded_at: status.loaded_at,
             workspace_root: status.workspace_root.display().to_string(),
@@ -1003,7 +1007,7 @@ impl Application {
                     tool_registry_last_event: status.tool_registry_last_event,
                 },
             },
-        }
+        })
     }
 }
 
@@ -1013,7 +1017,7 @@ impl Application {
             .reload()
             .await
             .map(|_| ())
-            .map_err(|error| ApplicationError::internal_error(&error))
+            .map_err(ApplicationError::from)
     }
 }
 

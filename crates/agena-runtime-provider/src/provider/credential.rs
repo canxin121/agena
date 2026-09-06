@@ -26,6 +26,7 @@ static CREDENTIAL_IDENTITY_FAILURE_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 #[derive(Clone)]
 /// A managed provider credential.
 pub struct ManagedCredential {
+    client_identity: crate::ProviderClientIdentity,
     inner: Arc<ManagedCredentialInner>,
 }
 
@@ -73,6 +74,12 @@ struct SapAiCoreTokenResponse {
 }
 
 impl ManagedCredential {
+    /// Retain the calling provider's identity for later credential refreshes.
+    pub fn with_client_identity(mut self, identity: crate::ProviderClientIdentity) -> Self {
+        self.client_identity = identity;
+        self
+    }
+
     pub fn static_value(label: impl Into<String>, value: impl Into<String>) -> Self {
         Self::new(label.into(), CredentialSource::Static(value.into()))
     }
@@ -175,6 +182,7 @@ impl ManagedCredential {
 
     fn new(label: String, source: CredentialSource) -> Self {
         Self {
+            client_identity: Default::default(),
             inner: Arc::new(ManagedCredentialInner {
                 label,
                 source,
@@ -202,7 +210,11 @@ impl ManagedCredential {
             return Ok(entry.clone());
         }
 
-        let resolved = self.inner.source.resolve(force_refresh).await?;
+        let resolved = self
+            .inner
+            .source
+            .resolve(force_refresh, &self.client_identity)
+            .await?;
         if resolved.secret.trim().is_empty() {
             return Err(ProviderError::Config(format!(
                 "{} resolved to an empty credential",
@@ -299,7 +311,11 @@ impl CredentialSource {
         }
     }
 
-    async fn resolve(&self, force_refresh: bool) -> Result<CachedCredential, ProviderError> {
+    async fn resolve(
+        &self,
+        force_refresh: bool,
+        identity: &crate::ProviderClientIdentity,
+    ) -> Result<CachedCredential, ProviderError> {
         match self {
             Self::Static(secret) => Ok(CachedCredential {
                 secret: secret.clone(),
@@ -331,6 +347,7 @@ impl CredentialSource {
                 config_path,
             } => {
                 resolve_inline_auth_credential(
+                    identity,
                     auth.as_ref(),
                     provider_id.as_str(),
                     *selector,
@@ -624,6 +641,7 @@ fn auth_data_prompt_cache_identity(auth: &AuthData) -> Option<String> {
 }
 
 async fn resolve_inline_auth_credential(
+    identity: &crate::ProviderClientIdentity,
     auth: &Mutex<AuthData>,
     provider_id: &str,
     selector: AuthSecretSelector,
@@ -674,7 +692,8 @@ async fn resolve_inline_auth_credential(
             };
 
             let refreshed =
-                crate::provider::auth::refresh_openai_token(refresh_token.as_str()).await?;
+                crate::provider::auth::refresh_openai_token(identity, refresh_token.as_str())
+                    .await?;
             let updated = AuthData::OAuth {
                 issuer,
                 refresh: refreshed.refresh,

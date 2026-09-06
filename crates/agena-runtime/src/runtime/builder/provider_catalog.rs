@@ -358,7 +358,8 @@ impl agena_provider::ProviderCatalog for AgenaRuntime {
             ),
         }
         .map_err(|error| agena_provider::ProviderCatalogError::invalid_request_error(&error))?;
-        self.list_adapter_models_target(target).await
+        self.list_adapter_models_target(target, self.current_snapshot())
+            .await
     }
 
     async fn list_saved_adapter_models(
@@ -381,6 +382,6 @@ impl agena_provider::ProviderCatalog for AgenaRuntime {
             adapter_ids.as_slice(),
         )
         .map_err(|error| agena_provider::ProviderCatalogError::invalid_request_error(&error))?;
-        self.list_adapter_models_target(target).await
+        self.list_adapter_models_target(target, snapshot).await
     }
 }

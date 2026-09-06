@@ -221,7 +221,7 @@
           ]
         }
       ],
-      "version": "0.1.0"
+      "version": "0.1.2-beta.1"
     },
     {
       "conditional": null,
@@ -368,7 +368,7 @@
           ]
         }
       ],
-      "version": "0.1.0"
+      "version": "0.1.2-beta.1"
     },
     {
       "conditional": null,
@@ -404,7 +404,7 @@
           ]
         }
       ],
-      "version": "0.1.0"
+      "version": "0.1.2-beta.1"
     },
     {
       "conditional": null,
@@ -500,7 +500,7 @@
           ]
         }
       ],
-      "version": "0.1.0"
+      "version": "0.1.2-beta.1"
     },
     {
       "conditional": null,
@@ -620,7 +620,7 @@
           ]
         }
       ],
-      "version": "0.1.0"
+      "version": "0.1.2-beta.1"
     },
     {
       "conditional": null,
@@ -765,7 +765,7 @@
           ]
         }
       ],
-      "version": "0.1.0"
+      "version": "0.1.2-beta.1"
     },
     {
       "conditional": null,
@@ -798,7 +798,7 @@
           ]
         }
       ],
-      "version": "0.1.0"
+      "version": "0.1.2-beta.1"
     },
     {
       "conditional": null,
@@ -874,7 +874,7 @@
           ]
         }
       ],
-      "version": "0.1.0"
+      "version": "0.1.2-beta.1"
     },
     {
       "conditional": "runtime:mcp-manager",
@@ -999,7 +999,7 @@
           ]
         }
       ],
-      "version": "0.1.0"
+      "version": "0.1.2-beta.1"
     },
     {
       "conditional": null,
@@ -1073,7 +1073,7 @@
           ]
         }
       ],
-      "version": "0.1.0"
+      "version": "0.1.2-beta.1"
     },
     {
       "conditional": null,
@@ -1106,7 +1106,7 @@
           ]
         }
       ],
-      "version": "0.1.0"
+      "version": "0.1.2-beta.1"
     },
     {
       "conditional": null,
@@ -1128,7 +1128,7 @@
           ]
         }
       ],
-      "version": "0.1.0"
+      "version": "0.1.2-beta.1"
     },
     {
       "conditional": null,
@@ -1217,7 +1217,7 @@
           ]
         }
       ],
-      "version": "0.1.0"
+      "version": "0.1.2-beta.1"
     },
     {
       "conditional": null,
@@ -1239,7 +1239,7 @@
           ]
         }
       ],
-      "version": "0.1.0"
+      "version": "0.1.2-beta.1"
     },
     {
       "conditional": null,
@@ -1309,7 +1309,7 @@
           ]
         }
       ],
-      "version": "0.1.0"
+      "version": "0.1.2-beta.1"
     },
     {
       "conditional": null,
@@ -1421,7 +1421,7 @@
           ]
         }
       ],
-      "version": "0.1.0"
+      "version": "0.1.2-beta.1"
     },
     {
       "conditional": null,
@@ -1477,7 +1477,7 @@
           ]
         }
       ],
-      "version": "0.1.0"
+      "version": "0.1.2-beta.1"
     },
     {
       "conditional": null,
@@ -1573,7 +1573,7 @@
           ]
         }
       ],
-      "version": "0.1.0"
+      "version": "0.1.2-beta.1"
     },
     {
       "conditional": null,
@@ -1620,7 +1620,7 @@
           ]
         }
       ],
-      "version": "0.1.0"
+      "version": "0.1.2-beta.1"
     },
     {
       "conditional": null,
@@ -1707,9 +1707,9 @@
         {
           "canonical_name": "agena.tasks.run",
           "conditional": null,
-          "definition_identity": "912d0fa4b496e904b45cdd1faaa5d369b21a7ca889e70554522ccd62c4000cd1",
+          "definition_identity": "7a72c126116c677a9bbe904d84db11e98060f60d6f3e16965672b868bd7de2f7",
           "gateway": false,
-          "input_schema_sha256": "ae7fdb5983e324dd5d2efb8de1159e81a1dbf71e47db71478caf3b875234268a",
+          "input_schema_sha256": "6b2ff4c589248323f3f44c5ab3cb2805c1b769894aa1c77546f160bb3a034904",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "subtask",
@@ -1717,7 +1717,7 @@
           ]
         }
       ],
-      "version": "0.1.0"
+      "version": "0.1.2-beta.1"
     },
     {
       "conditional": null,
@@ -1812,7 +1812,7 @@
           ]
         }
       ],
-      "version": "0.1.0"
+      "version": "0.1.2-beta.1"
     },
     {
       "conditional": null,
@@ -1988,7 +1988,7 @@
           ]
         }
       ],
-      "version": "0.1.0"
+      "version": "0.1.2-beta.1"
     }
   ],
   "schema_version": 2,

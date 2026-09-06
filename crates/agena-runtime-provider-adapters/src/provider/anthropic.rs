@@ -33,6 +33,7 @@ const ADAPTER_KIND: &str = "anthropic";
 #[derive(Clone)]
 /// Adapter for Anthropic.
 pub struct AnthropicAdapter {
+    client_identity: crate::ProviderClientIdentity,
     id: String,
     client: reqwest::Client,
     api_key: ManagedCredential,
@@ -51,6 +52,7 @@ pub struct AnthropicAdapter {
 #[derive(Clone)]
 /// Options for the Anthropic adapter.
 pub struct AnthropicAdapterOptions {
+    pub client_identity: crate::ProviderClientIdentity,
     pub auth_data: Option<Arc<Mutex<AuthData>>>,
     pub auth_header: String,
     pub auth_scheme: Option<String>,
@@ -66,6 +68,7 @@ pub struct AnthropicAdapterOptions {
 impl Default for AnthropicAdapterOptions {
     fn default() -> Self {
         Self {
+            client_identity: Default::default(),
             auth_data: None,
             auth_header: "x-api-key".to_owned(),
             auth_scheme: None,

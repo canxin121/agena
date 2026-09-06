@@ -968,7 +968,6 @@ pub(crate) fn default_speed_mode_name(
 
 #[cfg(test)]
 mod tests {
-    use serde_json::Map as JsonMap;
     use serde_json::json;
     use std::collections::BTreeMap;
 

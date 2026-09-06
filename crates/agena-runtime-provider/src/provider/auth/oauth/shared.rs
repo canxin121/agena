@@ -370,28 +370,15 @@ pub(super) async fn ensure_http_success(
     })
 }
 
-pub(super) fn oauth_http_client(use_codex_user_agent: bool) -> &'static oauth2::reqwest::Client {
-    static DEFAULT_CLIENT: OnceLock<oauth2::reqwest::Client> = OnceLock::new();
-    static CODEX_CLIENT: OnceLock<oauth2::reqwest::Client> = OnceLock::new();
-
-    if use_codex_user_agent {
-        CODEX_CLIENT.get_or_init(|| {
-            oauth2::reqwest::ClientBuilder::new()
-                .redirect(oauth2::reqwest::redirect::Policy::none())
-                .user_agent(crate::codex_user_agent())
-                .timeout(OAUTH_HTTP_TIMEOUT)
-                .build()
-                .expect("oauth reqwest client should build")
-        })
-    } else {
-        DEFAULT_CLIENT.get_or_init(|| {
-            oauth2::reqwest::ClientBuilder::new()
-                .redirect(oauth2::reqwest::redirect::Policy::none())
-                .timeout(OAUTH_HTTP_TIMEOUT)
-                .build()
-                .expect("oauth reqwest client should build")
-        })
-    }
+pub(super) fn oauth_http_client() -> &'static oauth2::reqwest::Client {
+    static CLIENT: OnceLock<oauth2::reqwest::Client> = OnceLock::new();
+    CLIENT.get_or_init(|| {
+        oauth2::reqwest::ClientBuilder::new()
+            .redirect(oauth2::reqwest::redirect::Policy::none())
+            .timeout(OAUTH_HTTP_TIMEOUT)
+            .build()
+            .expect("oauth reqwest client should build")
+    })
 }
 
 fn oauth_token_response(

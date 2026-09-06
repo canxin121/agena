@@ -8,7 +8,7 @@ use crate::session::store::new_part_from_content;
 use agena_domain::{ModelRef, SessionUsage, SessionUsageLimitBasis};
 use agena_runtime_contracts::part_content::TypedContent;
 use agena_storage::store::{PartRole, PartState};
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 
 impl SessionManager {
     pub async fn reconcile_interrupted_executions(&self) -> Result<(), AppError> {
@@ -663,10 +663,25 @@ impl SessionManager {
             .await;
     }
 
-    pub async fn broadcast_active_session_end(&self, reason: agena_plugin_host::SessionEndReason) {
-        let session_ids = self.execution_registry.active_session_ids().await;
-        for session_id in session_ids {
-            self.broadcast_session_end(session_id, reason).await;
+    /// Capture one notification host now, before this work is queued. The
+    /// active-session list is read when polled; all entries in that batch use
+    /// this same host even if the manager is reconfigured during a notification.
+    pub fn broadcast_active_session_end(
+        &self,
+        reason: agena_plugin_host::SessionEndReason,
+    ) -> impl std::future::Future<Output = ()> + Send + 'static {
+        let registry = Arc::clone(&self.execution_registry);
+        let plugins = Arc::clone(self.execution_state().tool_executor.plugin_manager());
+        async move {
+            let session_ids = registry.active_session_ids().await;
+            for session_id in session_ids {
+                plugins
+                    .broadcast_session_end(agena_plugin_host::SessionEndInput {
+                        session_id,
+                        reason,
+                    })
+                    .await;
+            }
         }
     }
 
@@ -739,11 +754,17 @@ impl agena_runtime::SessionExecutionControl for SessionManager {
             .map_err(|error| agena_runtime::SessionExecutionControlError::internal_error(&error))
     }
 
-    async fn list_scheduled_jobs(&self) -> Vec<agena_scheduler::ScheduledJob> {
+    async fn list_scheduled_jobs(
+        &self,
+    ) -> Result<Vec<agena_scheduler::ScheduledJob>, agena_runtime::SessionExecutionControlError>
+    {
         let Some(scheduler) = self.tool_executor().scheduler().cloned() else {
-            return Vec::new();
+            return Ok(Vec::new());
         };
-        scheduler.list().await
+        scheduler
+            .list()
+            .await
+            .map_err(|error| agena_runtime::SessionExecutionControlError::internal_error(&error))
     }
 
     fn scheduler_available(&self) -> bool {

@@ -49,10 +49,6 @@ pub(super) fn normalize_domain(value: &str) -> String {
         .to_owned()
 }
 
-pub(super) fn openai_client_version() -> String {
-    crate::codex_package_version()
-}
-
 pub(super) fn append_query_param(endpoint: &str, key: &str, value: &str) -> String {
     let separator = if endpoint.contains('?') { '&' } else { '?' };
     format!("{endpoint}{separator}{key}={value}")

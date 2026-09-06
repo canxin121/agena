@@ -103,6 +103,7 @@ dependencies = [
  "agena-failure",
  "agena-git-http",
  "agena-mcp-server",
+ "agena-plugin-sdk",
  "agena-runtime",
  "agena-tui",
  "agena-tui-app",
@@ -190,6 +191,7 @@ dependencies = [
  "http 1.5.0",
  "portable-atomic",
  "reqwest 0.13.4",
+ "sea-orm",
  "semver",
  "serde",
  "serde_json",
@@ -617,6 +619,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.0",
+ "tempfile",
  "thiserror 2.0.20",
  "tokio",
  "tokio-util",
@@ -625,6 +628,8 @@ dependencies = [
  "uuid",
  "wasmtime",
  "wasmtime-wasi",
+ "wat",
+ "which",
 ]
 
 [[package]]
@@ -912,8 +917,10 @@ dependencies = [
  "agena-runtime-contracts",
  "agena-runtime-tools",
  "async-trait",
+ "axum",
  "blake3",
  "hex",
+ "reqwest 0.13.4",
  "serde_json",
  "tempfile",
  "thiserror 2.0.20",
@@ -1085,6 +1092,7 @@ dependencies = [
  "process_control",
  "regex",
  "schemars",
+ "sea-orm",
  "serde",
  "serde_json",
  "sha2 0.11.0",
@@ -1113,8 +1121,10 @@ dependencies = [
  "sea-orm",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.20",
  "tokio",
+ "tokio-util",
  "tracing",
  "uuid",
 ]
@@ -1433,6 +1443,7 @@ dependencies = [
  "chrono",
  "crw-extract",
  "governor",
+ "libc",
  "moka",
  "process_control",
  "redb",
@@ -12144,6 +12155,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "wast"
+version = "251.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5cc7467dda0a96142eb2c980329dfb62480b1e1d3622fdeb1a44e2bca6ceed74"
+dependencies = [
+ "bumpalo",
+ "leb128fmt",
+ "memchr",
+ "unicode-width 0.2.2",
+ "wasm-encoder",
+]
+
+[[package]]
+name = "wat"
+version = "1.251.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "81b1086c9e85b95bd6a229a928bc6c6d0662e42af0250c88d067b418831ea4d4"
+dependencies = [
+ "wast 251.0.0",
+]
+
+[[package]]
 name = "web-sys"
 version = "0.3.104"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -12882,7 +12915,7 @@ dependencies = [
  "anyhow",
  "log",
  "thiserror 1.0.69",
- "wast",
+ "wast 35.0.2",
 ]
 
 [[package]]

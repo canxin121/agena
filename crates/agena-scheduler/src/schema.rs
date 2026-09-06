@@ -159,8 +159,10 @@ async fn read_schema_version(db: &DatabaseConnection) -> Result<i64, DbErr> {
 /// (`retry_at_ms`, `paused`, `completed`) as columns alongside
 /// `next_fire_at_ms` so the scheduler's due scan can filter in SQL instead of
 /// decoding every job JSON every tick. `delivery_key` / `claimed_at_ms` are the
-/// cross-process claim lock. `job_json` remains the source of truth for the
-/// full in-memory state; the columns are derived copies written together.
+/// cross-process claim lease: `delivery_key` identifies one worker attempt,
+/// and `claimed_at_ms` is refreshed by its heartbeat. The stable business key
+/// and original claim time remain in `job_json.pending_delivery`. Other hot
+/// columns are derived copies of the JSON, written together with it.
 const TABLES: &[&str] = &[
     "CREATE TABLE IF NOT EXISTS agena_scheduler_jobs (id TEXT PRIMARY KEY, job_json JSON NOT NULL, next_fire_at_ms INTEGER NULL, retry_at_ms INTEGER NULL, delivery_key TEXT NULL, claimed_at_ms INTEGER NULL, paused INTEGER NOT NULL DEFAULT 0, completed INTEGER NOT NULL DEFAULT 0, updated_at_ms INTEGER NOT NULL)",
     "CREATE TABLE IF NOT EXISTS agena_scheduler_history (id INTEGER PRIMARY KEY AUTOINCREMENT, job_id TEXT NOT NULL, run_json JSON NOT NULL, finished_at_ms INTEGER NOT NULL)",

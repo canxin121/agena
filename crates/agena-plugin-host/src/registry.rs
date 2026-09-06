@@ -4,6 +4,8 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::effect_scope::PluginEffectScope;
+use crate::registration_owner::{RegistrationId, RegistrationOwner};
 use crate::sdk::{PluginKey, ToolDefinition, ToolKey, ToolTag};
 
 pub fn validate_tool_definition(
@@ -69,12 +71,26 @@ fn validate_schema_shape(
     Ok(())
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 /// Registry of tools provided by plugins.
 pub struct PluginToolRegistry {
     by_key: BTreeMap<ToolKey, RegisteredTool>,
     by_canonical_name: BTreeMap<String, ToolKey>,
     generation: u64,
+    owners: BTreeMap<ToolKey, RegistrationOwner>,
+}
+
+// A cloned registry is an independent snapshot. Its mutations must not
+// release effects that still own values in the original live registry.
+impl Clone for PluginToolRegistry {
+    fn clone(&self) -> Self {
+        Self {
+            by_key: self.by_key.clone(),
+            by_canonical_name: self.by_canonical_name.clone(),
+            generation: self.generation,
+            owners: BTreeMap::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -196,6 +212,7 @@ impl PluginToolRegistry {
             by_key: BTreeMap::new(),
             by_canonical_name: BTreeMap::new(),
             generation: 0,
+            owners: BTreeMap::new(),
         }
     }
 
@@ -220,15 +237,56 @@ impl PluginToolRegistry {
         plugin_key: &PluginKey,
         definition: ToolDefinition,
     ) -> Result<RegisteredTool, String> {
-        let key = validate_tool_definition(plugin_key, &definition)?;
-        self.by_canonical_name.remove(key.to_string().as_str());
-        self.by_key.remove(&key);
-        let tool = RegisteredTool { key, definition };
+        let tool = RegisteredTool::new(plugin_key.clone(), definition)?;
+        Ok(self.insert(tool, None))
+    }
+
+    pub(crate) fn upsert_owned(
+        &mut self,
+        tool: RegisteredTool,
+        owner: RegistrationOwner,
+    ) -> RegisteredTool {
+        self.insert(tool, Some(owner))
+    }
+
+    fn insert(&mut self, tool: RegisteredTool, owner: Option<RegistrationOwner>) -> RegisteredTool {
+        if let Some(previous) = self.owners.remove(tool.tool_key()) {
+            previous.release();
+        }
+        if let Some(owner) = owner {
+            self.owners.insert(tool.tool_key().clone(), owner);
+        }
         self.by_canonical_name
             .insert(tool.canonical_name(), tool.key.clone());
         self.by_key.insert(tool.key.clone(), tool.clone());
         self.generation += 1;
-        Ok(tool)
+        tool
+    }
+
+    pub(crate) fn has_owner(&self, key: &ToolKey) -> bool {
+        self.owners.contains_key(key)
+    }
+
+    pub(crate) fn assign_owner(&mut self, key: ToolKey, owner: RegistrationOwner) {
+        debug_assert!(self.by_key.contains_key(&key));
+        if let Some(previous) = self.owners.insert(key, owner) {
+            previous.release();
+        }
+    }
+
+    pub(crate) fn tools_owned_by(&self, owner: &PluginEffectScope) -> Vec<ToolDefinition> {
+        self.owners
+            .iter()
+            .filter(|(_, entry)| entry.belongs_to(owner))
+            .filter_map(|(key, _)| self.by_key.get(key))
+            .map(|tool| tool.definition.clone())
+            .collect()
+    }
+
+    pub(crate) fn remove_exact(&mut self, key: &ToolKey, id: &RegistrationId) {
+        if self.owners.get(key).is_some_and(|owner| owner.matches(id)) {
+            self.remove_from_plugin(key.plugin(), key.name());
+        }
     }
 
     pub fn remove_from_plugin(
@@ -252,6 +310,9 @@ impl PluginToolRegistry {
             }
         };
         let removed = self.by_key.remove(&key)?;
+        if let Some(owner) = self.owners.remove(&key) {
+            owner.release();
+        }
         self.by_canonical_name
             .remove(removed.canonical_name().as_str());
         self.generation += 1;
@@ -268,6 +329,9 @@ impl PluginToolRegistry {
         let mut removed = Vec::with_capacity(keys.len());
         for key in keys {
             if let Some(tool) = self.by_key.remove(&key) {
+                if let Some(owner) = self.owners.remove(&key) {
+                    owner.release();
+                }
                 self.by_canonical_name
                     .remove(tool.canonical_name().as_str());
                 removed.push(tool);

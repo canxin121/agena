@@ -204,16 +204,14 @@ impl StatusRegistry {
         self.update(plugin_id, |status| {
             status.state = if will_restart {
                 PluginRunState::Restarting
+            } else if exit_code == Some(0) && failure.is_none() {
+                PluginRunState::Stopped
             } else {
                 PluginRunState::Failed
             };
             status.pid = None;
-            if let Some(code) = exit_code {
-                status.last_exit_code = Some(code);
-            }
-            if let Some(failure) = failure {
-                status.last_failure = Some(failure);
-            }
+            status.last_exit_code = exit_code;
+            status.last_failure = failure;
         });
     }
 

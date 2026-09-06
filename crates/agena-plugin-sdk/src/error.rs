@@ -52,6 +52,24 @@ pub enum PluginErrorKind {
 }
 
 impl PluginError {
+    /// Recover a typed peer failure without replacing its identity, retry
+    /// semantics, public problem, or kind with a generic transport error.
+    pub fn from_rpc_error(error: crate::rpc::ErrorObject, context: &str) -> Self {
+        if let Some(data) = error.data.as_ref() {
+            match serde_json::from_value::<Self>(data.clone()) {
+                Ok(error) => return error,
+                Err(decode_error) => tracing::warn!(
+                    operation = context,
+                    diagnostic = %decode_error,
+                    "plugin JSON-RPC error data is not a typed failure; retaining it as diagnostics"
+                ),
+            }
+        }
+        let mut failure = Self::internal(error.message).with_hook(context);
+        failure.diagnostic.data = error.data;
+        failure
+    }
+
     pub fn internal(diagnostic: impl std::fmt::Display) -> Self {
         Self::from_kind(PluginErrorKind::Internal, diagnostic)
     }
@@ -351,6 +369,53 @@ pub type Result<T> = std::result::Result<T, PluginError>;
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn rpc_error_roundtrip_preserves_the_full_typed_failure() {
+        use super::*;
+        for kind in [
+            PluginErrorKind::HostUnavailable,
+            PluginErrorKind::PolicyDenied,
+            PluginErrorKind::Timeout,
+            PluginErrorKind::InvalidParams,
+            PluginErrorKind::NotImplemented,
+            PluginErrorKind::Panicked,
+        ] {
+            let expected = PluginError::from_kind_with_public_detail(
+                kind,
+                "private token=secret",
+                "The requested operation could not be completed.",
+            )
+            .with_hook("original/hook")
+            .with_plugin("test.owner");
+            let error = crate::rpc::ErrorObject {
+                code: crate::rpc::codes::PLUGIN_GENERIC,
+                message: "outer transport message".into(),
+                data: expected.rpc_error_data(),
+            };
+            assert_eq!(PluginError::from_rpc_error(error, "outer/hook"), expected);
+        }
+    }
+
+    #[test]
+    fn rpc_error_rejects_legacy_failure_shapes_and_preserves_untyped_diagnostics() {
+        use super::*;
+        for data in [
+            None,
+            Some(serde_json::json!({"kind":"host_unavailable", "message":"legacy", "data":{}})),
+            Some(serde_json::json!({"kind":"unknown", "failure":{}, "diagnostic":{}})),
+        ] {
+            let error = crate::rpc::ErrorObject {
+                code: crate::rpc::codes::PLUGIN_GENERIC,
+                message: "operation failed".into(),
+                data: data.clone(),
+            };
+            let actual = PluginError::from_rpc_error(error, "host/callback");
+            assert_eq!(actual.kind, PluginErrorKind::Internal);
+            assert_eq!(actual.diagnostic.data, data);
+            assert_eq!(actual.diagnostic.hook.as_deref(), Some("host/callback"));
+        }
+    }
+
     use super::PluginError;
 
     #[test]

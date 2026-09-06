@@ -713,7 +713,6 @@ mod tests {
             document_markdown: String::new(),
             steps: vec![
                 WorkflowPlanStep {
-                    id: None,
                     title: "First step".to_string(),
                     description: String::new(),
                     executor: WorkflowPlanExecutor::Ai,
@@ -721,19 +720,16 @@ mod tests {
                     note: String::new(),
                     checkpoints: vec![
                         WorkflowPlanCheckpoint {
-                            id: None,
                             text: "Check A".to_string(),
                             status: WorkflowPlanStepStatus::Pending,
                         },
                         WorkflowPlanCheckpoint {
-                            id: None,
                             text: "Check B".to_string(),
                             status: WorkflowPlanStepStatus::Pending,
                         },
                     ],
                 },
                 WorkflowPlanStep {
-                    id: None,
                     title: "Second step".to_string(),
                     description: String::new(),
                     executor: WorkflowPlanExecutor::Human,

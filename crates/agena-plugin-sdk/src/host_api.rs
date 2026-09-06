@@ -56,8 +56,27 @@ pub trait HostClient: Send + Sync + 'static {
 
     async fn read_config(&self, path: Option<String>) -> Result<serde_json::Value>;
 
-    /// Reload the runtime after persisted configuration has changed.
+    /// Synchronous reload is available only in hosts that can preserve the
+    /// calling plugin. Agena rejects it; use request_config_reload instead.
     async fn reload_config(&self) -> Result<HostConfigReloadResponse> {
+        Err(unavailable())
+    }
+
+    /// Queue a reload after the originating plugin call (including its nested
+    /// calls or stream) finishes. Return acceptance, never a completed report.
+    /// Do not wait for completion inside the originating call: it is a barrier.
+    /// An accepted task survives cancellation of that call; runtime shutdown
+    /// cancels pending work. Separate originating calls may queue separate tasks.
+    async fn request_config_reload(&self) -> Result<HostConfigReloadRequestResponse> {
+        Err(unavailable())
+    }
+
+    /// Query a previously accepted reload task. Task history is bounded; an
+    /// unknown/expired ID is reported as an error, never inferred as success.
+    async fn config_reload_status(
+        &self,
+        _request: HostConfigReloadStatusRequest,
+    ) -> Result<HostConfigReloadStatusResponse> {
         Err(unavailable())
     }
 
@@ -463,6 +482,9 @@ tokio::task_local! {
     static HOST_CALLBACK_CONTEXT: HostCallbackContext;
 }
 
+/// Patch the enclosing callback context, inheriting any unspecified fields.
+/// Independent requests and newly validated authorities should use
+/// [`run_in_isolated_host_callback_context`] instead.
 pub async fn run_in_host_callback_context<F>(patch: HostCallbackContext, fut: F) -> F::Output
 where
     F: Future,
@@ -487,6 +509,19 @@ where
         current.authority_token = Some(authority_token);
     }
     HOST_CALLBACK_CONTEXT.scope(current, fut).await
+}
+
+/// Run with exactly the supplied callback context. Unspecified fields remain
+/// absent, so an independent request cannot inherit privileges or an authority
+/// token from the enclosing call. The enclosing context is restored afterwards.
+pub async fn run_in_isolated_host_callback_context<F>(
+    context: HostCallbackContext,
+    fut: F,
+) -> F::Output
+where
+    F: Future,
+{
+    HOST_CALLBACK_CONTEXT.scope(context, fut).await
 }
 
 pub fn current_host_callback_context() -> Option<HostCallbackContext> {
@@ -1558,6 +1593,39 @@ pub struct HostConfigReloadResponse {
     pub previous_generation: u64,
     pub generation: u64,
     pub loaded_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HostConfigReloadRequestResponse {
+    pub task_id: String,
+    /// False means another request from this originating call already queued it.
+    pub started: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HostConfigReloadStatusRequest {
+    pub task_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HostConfigReloadStatusResponse {
+    pub task_id: String,
+    pub state: HostConfigReloadState,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
+pub enum HostConfigReloadState {
+    /// Includes waiting for the originating call to finish.
+    Running {},
+    Succeeded {},
+    Failed {
+        problem: agena_failure::UserProblem,
+    },
+    Cancelled {},
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

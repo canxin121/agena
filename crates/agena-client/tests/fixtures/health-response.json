@@ -2,5 +2,11 @@
   "status": "ok",
   "generation": 7,
   "loaded_at": "2026-01-02T03:04:05Z",
-  "database_connected": true
+  "database_connected": true,
+  "server": {
+    "id": "9fe2e22b-e2b8-4e2a-92c7-40e71da2015c",
+    "pid": 4242,
+    "started_at": "2026-01-02T03:00:00Z",
+    "protocol_version": 2
+  }
 }

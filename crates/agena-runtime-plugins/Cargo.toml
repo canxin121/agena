@@ -23,6 +23,8 @@ tokio = { workspace = true, features = ["fs", "io-util", "macros", "net", "proce
 tracing = { workspace = true }
 
 [dev-dependencies]
+axum = { workspace = true }
+reqwest = { workspace = true, features = ["json", "rustls"] }
 tempfile = { workspace = true }
 
 [features]

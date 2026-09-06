@@ -1,10 +1,11 @@
 //! Quiescent lifecycle wrapper for every plugin transport.
 //!
-//! A transport shutdown first closes admission, then waits for every accepted
+//! Graceful shutdown first closes admission, then waits for every accepted
 //! dispatch/notification/stream to settle, and only then runs the plugin's
 //! shutdown hook and closes the underlying transport. This is the host-side
 //! equivalent of an effect scope reaching quiescence rather than merely
-//! requesting cancellation.
+//! requesting cancellation. Forced close reaches the underlying transport
+//! first so a pending request cannot prevent process cleanup.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -29,7 +30,7 @@ struct ActivityState {
 
 #[derive(Default)]
 struct FinishState {
-    finished: bool,
+    outcome: Option<Result<(), TransportError>>,
 }
 
 impl ActivityState {
@@ -116,13 +117,14 @@ impl QuiescentTransport {
 
     async fn finish(&self, graceful: bool) -> Result<(), TransportError> {
         let mut finish = self.state.finish.lock().await;
-        if finish.finished {
-            return Ok(());
+        if let Some(outcome) = &finish.outcome {
+            self.state.wait_idle().await;
+            return outcome.clone();
         }
         self.state.accepting.store(false, Ordering::Release);
         self.state.closing.cancel();
-        self.state.wait_idle().await;
         if graceful {
+            self.state.wait_idle().await;
             // The shutdown hook runs outside admission tracking after all
             // ordinary calls settle, so it cannot race with a new invocation.
             let _ = self
@@ -134,13 +136,24 @@ impl QuiescentTransport {
                 .await;
         }
         let result = self.inner.close().await;
-        finish.finished = true;
+        // Cache the terminal transport outcome before awaiting wrappers. A
+        // cancelled waiter must not erase a cleanup failure or rerun close.
+        finish.outcome = Some(result.clone());
+        self.state.wait_idle().await;
         result
     }
 }
 
 #[async_trait]
 impl PluginTransport for QuiescentTransport {
+    async fn initialize(
+        &self,
+        initialization: super::initialization::PluginInitialization,
+    ) -> Result<crate::sdk::InitOutcome, TransportError> {
+        let _activity = self.state.enter()?;
+        self.inner.initialize(initialization).await
+    }
+
     async fn dispatch(
         &self,
         method: &str,
@@ -160,6 +173,34 @@ impl PluginTransport for QuiescentTransport {
         self.inner.attach_host(host).await
     }
 
+    async fn bind_host(
+        &self,
+        host: Arc<crate::host::HostHandle>,
+        scope: Arc<crate::effect_scope::PluginEffectScope>,
+    ) -> Result<(), TransportError> {
+        let _activity = self.state.enter()?;
+        self.inner.bind_host(host, scope).await
+    }
+
+    async fn can_reuse(&self, owner: &Arc<crate::effect_scope::PluginEffectScope>) -> bool {
+        self.is_accepting() && self.inner.can_reuse(owner).await
+    }
+
+    async fn try_rebind_host(
+        &self,
+        host: Arc<crate::host::HostHandle>,
+        scope: Arc<crate::effect_scope::PluginEffectScope>,
+        previous_scope: Arc<crate::effect_scope::PluginEffectScope>,
+        initialization: super::initialization::PluginInitialization,
+    ) -> Result<bool, TransportError> {
+        let Ok(_activity) = self.state.enter() else {
+            return Ok(false);
+        };
+        self.inner
+            .try_rebind_host(host, scope, previous_scope, initialization)
+            .await
+    }
+
     async fn invoke_stream(
         &self,
         input: ToolInvokeInput,
@@ -175,31 +216,45 @@ impl PluginTransport for QuiescentTransport {
         let stream_id_for_task = stream_id.clone();
         tokio::spawn(async move {
             let _activity = activity;
-            let mut forward_chunks = true;
-            while let Some(chunk) = inner.chunks.recv().await {
-                // A dropped consumer must not abandon the underlying stream:
-                // continue draining until the plugin reports a terminal result.
-                // Once shutdown begins, forwarding must also stop applying
-                // backpressure, otherwise an unread client channel could keep
-                // the plugin from ever becoming quiescent.
-                if !forward_chunks || closing.is_cancelled() {
-                    continue;
-                }
-                tokio::select! {
-                    biased;
-                    _ = closing.cancelled() => {}
-                    result = chunk_tx.send(chunk) => {
-                        if result.is_err() {
-                            forward_chunks = false;
+            let forward = async move {
+                let mut forward_chunks = true;
+                while let Some(chunk) = inner.chunks.recv().await {
+                    // A dropped consumer still drains until the transport
+                    // reports completion. Shutdown removes client backpressure.
+                    if !forward_chunks || closing.is_cancelled() {
+                        continue;
+                    }
+                    tokio::select! {
+                        biased;
+                        _ = closing.cancelled() => {}
+                        result = chunk_tx.send(chunk) => {
+                            if result.is_err() {
+                                forward_chunks = false;
+                            }
                         }
                     }
                 }
-            }
-            let result = inner.end.await.unwrap_or_else(|error| {
-                Err(PluginError::internal(format!(
-                    "plugin stream ended without a terminal result: {error}"
-                )))
-            });
+            };
+            tokio::pin!(forward);
+            let terminal = |result: Result<_, tokio::sync::oneshot::error::RecvError>| {
+                result.unwrap_or_else(|error| {
+                    Err(PluginError::internal(format!(
+                        "plugin stream ended without a terminal result: {error}"
+                    )))
+                })
+            };
+            let result = tokio::select! {
+                biased;
+                result = &mut inner.end => {
+                    let result = terminal(result);
+                    // A terminal failure (including handoff cancellation)
+                    // must reach the caller even if its chunk receiver is full.
+                    // Successful completion still delivers all queued chunks.
+                    if result.is_ok() { forward.await; }
+                    result
+                }
+                () = &mut forward => terminal(inner.end.await),
+            };
             if end_tx.send(result).is_err() {
                 tracing::debug!(
                     stream_id = %stream_id_for_task,
@@ -334,6 +389,114 @@ mod tests {
         transport.close().await.expect("first close");
         transport.close().await.expect("second close");
         assert!(!transport.is_accepting());
+    }
+
+    struct ClosingTransport {
+        entered: Notify,
+        closed: CancellationToken,
+        fail_close: bool,
+        close_count: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl PluginTransport for ClosingTransport {
+        async fn dispatch(
+            &self,
+            _: &str,
+            _: serde_json::Value,
+        ) -> Result<serde_json::Value, TransportError> {
+            self.entered.notify_one();
+            self.closed.cancelled().await;
+            Err(TransportError::disconnected("closed"))
+        }
+
+        async fn close(&self) -> Result<(), TransportError> {
+            self.close_count.fetch_add(1, Ordering::AcqRel);
+            self.closed.cancel();
+            if self.fail_close {
+                Err(TransportError::Io("injected cleanup failure".into()))
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn forced_close_reaches_the_transport_while_requests_are_pending() {
+        let inner = Arc::new(ClosingTransport {
+            entered: Notify::new(),
+            closed: CancellationToken::new(),
+            fail_close: false,
+            close_count: AtomicUsize::new(0),
+        });
+        let transport = Arc::new(QuiescentTransport::new(inner.clone()));
+        let request = tokio::spawn({
+            let transport = transport.clone();
+            async move {
+                transport
+                    .dispatch("test/wait", serde_json::Value::Null)
+                    .await
+            }
+        });
+        inner.entered.notified().await;
+        let close =
+            tokio::time::timeout(std::time::Duration::from_millis(100), transport.close()).await;
+        inner.closed.cancel();
+        assert!(request.await.unwrap().is_err());
+        close
+            .expect("force close must interrupt the underlying pending request")
+            .unwrap();
+        assert_eq!(inner.close_count.load(Ordering::Acquire), 1);
+        assert_eq!(transport.active_calls(), 0);
+    }
+
+    #[tokio::test]
+    async fn shutdown_deadline_still_closes_the_underlying_transport() {
+        let inner = Arc::new(ClosingTransport {
+            entered: Notify::new(),
+            closed: CancellationToken::new(),
+            fail_close: false,
+            close_count: AtomicUsize::new(0),
+        });
+        let transport = Arc::new(QuiescentTransport::new(inner.clone()));
+        let request = tokio::spawn({
+            let transport = transport.clone();
+            async move {
+                transport
+                    .dispatch("test/wait", serde_json::Value::Null)
+                    .await
+            }
+        });
+        inner.entered.notified().await;
+        let shutdown = crate::loader::shutdown_transport(transport.clone()).await;
+        let was_closed = inner.closed.is_cancelled();
+        inner.closed.cancel();
+        assert!(request.await.unwrap().is_err());
+        assert!(matches!(shutdown, Err(TransportError::Timeout(_))));
+        assert!(
+            was_closed,
+            "a graceful timeout must escalate to transport close"
+        );
+        assert_eq!(inner.close_count.load(Ordering::Acquire), 1);
+        assert_eq!(transport.active_calls(), 0);
+    }
+
+    #[tokio::test]
+    async fn repeated_close_keeps_the_cleanup_failure() {
+        let inner = Arc::new(ClosingTransport {
+            entered: Notify::new(),
+            closed: CancellationToken::new(),
+            fail_close: true,
+            close_count: AtomicUsize::new(0),
+        });
+        let transport = QuiescentTransport::new(inner.clone());
+        assert!(transport.close().await.is_err());
+        let repeated = transport.close().await;
+        assert_eq!(
+            repeated.unwrap_err().to_string(),
+            TransportError::Io("injected cleanup failure".into()).to_string()
+        );
+        assert_eq!(inner.close_count.load(Ordering::Acquire), 1);
     }
 
     struct StreamingTransport {

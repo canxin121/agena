@@ -12,6 +12,17 @@ use super::shared::{
 };
 use agena_provider::OAuthTokenResponse;
 
+/// Request-local identity keeps the shared HTTP pool independent of any
+/// runtime generation, including token refreshes and device authorization.
+fn openai_auth_post(
+    identity: &crate::ProviderClientIdentity,
+    endpoint: impl reqwest::IntoUrl,
+) -> reqwest::RequestBuilder {
+    provider_http_client()
+        .post(endpoint)
+        .header(reqwest::header::USER_AGENT, identity.codex_user_agent())
+}
+
 pub fn start_openai_browser_oauth(
     redirect_uri: &str,
 ) -> Result<OAuthAuthorizeStart, ProviderError> {
@@ -36,6 +47,7 @@ pub fn start_openai_browser_oauth(
 }
 
 pub async fn exchange_openai_oauth_code(
+    identity: &crate::ProviderClientIdentity,
     code: &str,
     pkce_verifier: &str,
     redirect_uri: &str,
@@ -51,6 +63,7 @@ pub async fn exchange_openai_oauth_code(
     };
 
     request_openai_oauth_token(
+        identity,
         encoded_form,
         "openai oauth token exchange failed",
         None,
@@ -60,6 +73,7 @@ pub async fn exchange_openai_oauth_code(
 }
 
 pub async fn refresh_openai_token(
+    identity: &crate::ProviderClientIdentity,
     refresh_token: &str,
 ) -> Result<OAuthTokenResponse, ProviderError> {
     let refresh_token = refresh_token.trim();
@@ -78,6 +92,7 @@ pub async fn refresh_openai_token(
     };
 
     request_openai_oauth_token(
+        identity,
         encoded_form,
         "openai oauth token refresh failed",
         Some(refresh_token),
@@ -86,7 +101,9 @@ pub async fn refresh_openai_token(
     .await
 }
 
-pub async fn start_openai_headless_device_code() -> Result<DeviceCodeStart, ProviderError> {
+pub async fn start_openai_headless_device_code(
+    identity: &crate::ProviderClientIdentity,
+) -> Result<DeviceCodeStart, ProviderError> {
     #[derive(Debug, Deserialize)]
     struct DeviceCodeResponse {
         device_auth_id: String,
@@ -95,15 +112,16 @@ pub async fn start_openai_headless_device_code() -> Result<DeviceCodeStart, Prov
         interval: Option<serde_json::Value>,
     }
 
-    let response = provider_http_client()
-        .post(format!("{OPENAI_ISSUER}/api/accounts/deviceauth/usercode"))
-        .header(reqwest::header::CONTENT_TYPE, "application/json")
-        .header(reqwest::header::USER_AGENT, crate::codex_user_agent())
-        .json(&serde_json::json!({
-            "client_id": OPENAI_CLIENT_ID,
-        }))
-        .send()
-        .await?;
+    let response = openai_auth_post(
+        identity,
+        format!("{OPENAI_ISSUER}/api/accounts/deviceauth/usercode"),
+    )
+    .header(reqwest::header::CONTENT_TYPE, "application/json")
+    .json(&serde_json::json!({
+        "client_id": OPENAI_CLIENT_ID,
+    }))
+    .send()
+    .await?;
 
     let response = ensure_http_success("openai", None, response).await?;
     let data: DeviceCodeResponse = response_json_bounded(response).await?;
@@ -116,6 +134,7 @@ pub async fn start_openai_headless_device_code() -> Result<DeviceCodeStart, Prov
 }
 
 pub async fn poll_openai_headless_device_code(
+    identity: &crate::ProviderClientIdentity,
     device_auth_id: &str,
     user_code: &str,
 ) -> Result<Option<OAuthTokenResponse>, ProviderError> {
@@ -136,16 +155,17 @@ pub async fn poll_openai_headless_device_code(
         expires_in: Option<u64>,
     }
 
-    let poll_response = provider_http_client()
-        .post(format!("{OPENAI_ISSUER}/api/accounts/deviceauth/token"))
-        .header(reqwest::header::CONTENT_TYPE, "application/json")
-        .header(reqwest::header::USER_AGENT, crate::codex_user_agent())
-        .json(&serde_json::json!({
-            "device_auth_id": device_auth_id,
-            "user_code": user_code,
-        }))
-        .send()
-        .await?;
+    let poll_response = openai_auth_post(
+        identity,
+        format!("{OPENAI_ISSUER}/api/accounts/deviceauth/token"),
+    )
+    .header(reqwest::header::CONTENT_TYPE, "application/json")
+    .json(&serde_json::json!({
+        "device_auth_id": device_auth_id,
+        "user_code": user_code,
+    }))
+    .send()
+    .await?;
 
     if poll_response.status() == reqwest::StatusCode::FORBIDDEN
         || poll_response.status() == reqwest::StatusCode::NOT_FOUND
@@ -169,13 +189,11 @@ pub async fn poll_openai_headless_device_code(
         form.finish()
     };
 
-    let token_response = provider_http_client()
-        .post(format!("{OPENAI_ISSUER}/oauth/token"))
+    let token_response = openai_auth_post(identity, format!("{OPENAI_ISSUER}/oauth/token"))
         .header(
             reqwest::header::CONTENT_TYPE,
             "application/x-www-form-urlencoded",
         )
-        .header(reqwest::header::USER_AGENT, crate::codex_user_agent())
         .body(encoded_form)
         .send()
         .await?;
@@ -228,18 +246,17 @@ struct OpenAiTokenResponseBody {
 }
 
 async fn request_openai_oauth_token(
+    identity: &crate::ProviderClientIdentity,
     encoded_form: String,
     error_context: &str,
     refresh_fallback: Option<&str>,
     refresh_flow: bool,
 ) -> Result<OAuthTokenResponse, ProviderError> {
-    let response = provider_http_client()
-        .post(format!("{OPENAI_ISSUER}/oauth/token"))
+    let response = openai_auth_post(identity, format!("{OPENAI_ISSUER}/oauth/token"))
         .header(
             reqwest::header::CONTENT_TYPE,
             "application/x-www-form-urlencoded",
         )
-        .header(reqwest::header::USER_AGENT, crate::codex_user_agent())
         .body(encoded_form)
         .send()
         .await?;
@@ -343,4 +360,44 @@ fn openai_refresh_failure_message(body: &str) -> Option<String> {
         _ => return None,
     };
     Some(message.to_owned())
+}
+
+#[cfg(test)]
+mod client_identity_tests {
+    use super::*;
+
+    #[test]
+    fn shared_oauth_client_keeps_each_request_identity() {
+        let identity = |version: &str| {
+            crate::ProviderClientIdentity::new(agena_provider::ProviderClientVersions {
+                codex: version.into(),
+                ..Default::default()
+            })
+        };
+        let old = identity("0.111.1");
+        let new = identity("0.222.2");
+        let pending = openai_auth_post(&old, format!("{OPENAI_ISSUER}/oauth/token"));
+        for path in [
+            "/oauth/token",
+            "/api/accounts/deviceauth/usercode",
+            "/api/accounts/deviceauth/token",
+        ] {
+            let request = openai_auth_post(&new, format!("{OPENAI_ISSUER}{path}"))
+                .build()
+                .unwrap();
+            assert!(
+                request.headers()[reqwest::header::USER_AGENT]
+                    .to_str()
+                    .unwrap()
+                    .starts_with("codex_cli_rs/0.222.2 ")
+            );
+        }
+        let request = pending.build().unwrap();
+        assert!(
+            request.headers()[reqwest::header::USER_AGENT]
+                .to_str()
+                .unwrap()
+                .starts_with("codex_cli_rs/0.111.1 ")
+        );
+    }
 }

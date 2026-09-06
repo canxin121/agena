@@ -135,6 +135,9 @@ pub mod method {
     pub const META_SHUTDOWN: &str = "meta/shutdown";
     pub const META_MANIFEST: &str = "meta/manifest";
     pub const META_PING: &str = "meta/ping";
+    /// HTTP-only atomic update of a retained plugin's callback destination.
+    pub const META_HOST_REBIND: &str = "meta/host.rebind";
+    pub const META_HTTP_STATE: &str = "meta/http.state";
 
     pub const HOOK_EVENT: &str = "hooks/event";
     pub const HOOK_TOOL_BEFORE: &str = "hooks/tool.execute.before";
@@ -181,6 +184,8 @@ pub mod method {
     pub const HOST_EVENT_UNSUBSCRIBE: &str = "host/event.unsubscribe";
     pub const HOST_CONFIG_READ: &str = "host/config.read";
     pub const HOST_CONFIG_RELOAD: &str = "host/config.reload";
+    pub const HOST_CONFIG_RELOAD_REQUEST: &str = "host/config.reload.request";
+    pub const HOST_CONFIG_RELOAD_STATUS: &str = "host/config.reload.status";
     pub const HOST_TOOL_INVOKE: &str = "host/tool.invoke";
     pub const HOST_SERVICE_INVOKE: &str = "host/service.invoke";
     pub const HOST_ASK_USER: &str = "host/ask_user";

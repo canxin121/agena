@@ -3,6 +3,53 @@ enum BuildCandidate {
     Reused(Arc<LoadedPlugin>),
 }
 
+/// A successfully rebound transport is still referenced by the predecessor.
+/// Dropping an unfinished build must close it explicitly: dropping the new
+/// HostHandle alone cannot end that process or update the predecessor status.
+#[derive(Default)]
+struct ReusedBuildGuard {
+    transfers: Vec<(Arc<PluginHost>, Arc<HostHandle>, Arc<LoadedPlugin>)>,
+    committed: bool,
+}
+
+impl Drop for ReusedBuildGuard {
+    fn drop(&mut self) {
+        if self.committed {
+            return;
+        }
+        for (previous, successor, plugin) in std::mem::take(&mut self.transfers) {
+            tokio::spawn(async move {
+                let plugin_id = plugin.key();
+                let mut diagnostic =
+                    "plugin host build did not complete after transport handoff".to_string();
+                if let Err(error) = crate::loader::close_transport_for_plugin(
+                    &plugin_id.to_string(),
+                    plugin.transport.as_ref(),
+                )
+                .await
+                {
+                    diagnostic.push_str(&format!("; cleanup: {error}"));
+                }
+                previous
+                    .statuses
+                    .record_spawn_failure(&plugin_id, &diagnostic);
+                previous.logs.append(
+                    &plugin_id,
+                    "error",
+                    "reload",
+                    diagnostic,
+                    serde_json::Value::Null,
+                );
+                successor.dispose_plugin_resources(&plugin_id).await;
+                previous
+                    ._host_handle
+                    .dispose_plugin_resources(&plugin_id)
+                    .await;
+            });
+        }
+    }
+}
+
 impl BuildCandidate {
     fn manifest(&self) -> &crate::sdk::PluginManifest {
         match self {
@@ -12,8 +59,54 @@ impl BuildCandidate {
     }
 }
 
+fn record_runtime_restart(
+    plan: &mut crate::activation::PluginReloadPlan,
+    plugin_id: &PluginKey,
+    reason: crate::activation::PluginReloadReason,
+    dependencies: &[PluginKey],
+) {
+    let Some(decision) = plan
+        .decisions
+        .iter_mut()
+        .find(|decision| &decision.plugin_id == plugin_id)
+    else {
+        return;
+    };
+    if decision.action == crate::activation::PluginReloadAction::Reuse {
+        decision.action = crate::activation::PluginReloadAction::Restart;
+    }
+    if !decision.reasons.contains(&reason) {
+        decision.reasons.push(reason);
+        decision.reasons.sort();
+    }
+    decision.triggered_by.extend_from_slice(dependencies);
+    decision.triggered_by.sort();
+    decision.triggered_by.dedup();
+}
+
 impl PluginHost {
     pub async fn new(build: PluginHostBuildConfig) -> Result<Arc<PluginHost>, HostError> {
+        let dispatcher = build
+            .previous
+            .as_ref()
+            .map(|host| host._host_handle.callback_dispatcher())
+            .unwrap_or_default();
+        Self::new_with_callback_dispatcher(build, dispatcher).await
+    }
+
+    /// Compose a host against a dispatcher that may already be serving its
+    /// first initialization callbacks. Reloads must preserve the lineage.
+    pub async fn new_with_callback_dispatcher(
+        build: PluginHostBuildConfig,
+        dispatcher: crate::PluginCallbackDispatcher,
+    ) -> Result<Arc<PluginHost>, HostError> {
+        if let Some(previous) = &build.previous
+            && !Arc::ptr_eq(&previous._host_handle.callback_routes, &dispatcher.routes)
+        {
+            return Err(HostError::Config(
+                "callback dispatcher must belong to the previous host lineage".into(),
+            ));
+        }
         let PluginHostBuildConfig {
             static_plugins,
             config,
@@ -57,6 +150,7 @@ impl PluginHost {
             Arc::clone(&logs_shared),
             callback_base_url,
         );
+        handle.callback_routes = dispatcher.routes;
         let quotas = Arc::new(crate::quota::QuotaRegistry::new(
             config.host.default_quota.clone(),
         ));
@@ -112,10 +206,23 @@ impl PluginHost {
             let plugin_key: PluginKey = id.parse().expect("activation planner validated ids");
             let reusable = reusable_plugin_ids.contains(id)
                 && !matches!(&configured.package, PluginPackage::Static { .. });
-            if reusable && let Some(previous_plugin) = previous_loaded.get(&plugin_key).cloned() {
-                prefetched_manifests.insert(id.clone(), previous_plugin.manifest.clone());
-                candidates.insert(id.clone(), BuildCandidate::Reused(previous_plugin));
-                continue;
+            if reusable {
+                if let Some(previous_plugin) = previous_loaded.get(&plugin_key).cloned()
+                    && previous_plugin
+                        .transport
+                        .can_reuse(&previous_plugin.effect_scope)
+                        .await
+                {
+                    prefetched_manifests.insert(id.clone(), previous_plugin.manifest.clone());
+                    candidates.insert(id.clone(), BuildCandidate::Reused(previous_plugin));
+                    continue;
+                }
+                record_runtime_restart(
+                    &mut reload_plan,
+                    &plugin_key,
+                    crate::activation::PluginReloadReason::RuntimeUnavailable,
+                    &[],
+                );
             }
             match prepare_entry(
                 id,
@@ -250,6 +357,8 @@ impl PluginHost {
         let mut loaded = Vec::<Arc<LoadedPlugin>>::new();
         let mut by_id = HashMap::<PluginKey, Arc<LoadedPlugin>>::new();
         let mut activated = BTreeSet::<String>::new();
+        let mut replaced_instances = BTreeSet::<String>::new();
+        let mut reused_build = ReusedBuildGuard::default();
 
         for id in effective_plan.ordered {
             let plugin_key: PluginKey = id.parse().expect("activation planner validated id");
@@ -289,133 +398,101 @@ impl PluginHost {
                 continue;
             };
 
-            if matches!(candidate, BuildCandidate::Reused(_))
-                && !service_epoch_unchanged(
-                    &id,
-                    &service_plan.bindings,
-                    &previous_service_bindings,
-                    &config.list,
-                    &previous_plugins,
-                )
-            {
-                let previous_manifest = candidate.manifest().clone();
-                let configured = config.list.get(&id).expect("configured plugin");
-                match prepare_entry(
-                    &id,
-                    configured,
-                    &mut static_registry,
-                    Arc::clone(&host_handle),
-                    &workspace_root,
-                    &env_lookup,
-                    &config.host.trusted_keys,
-                )
-                .await
-                {
-                    Ok(prepared) if prepared.manifest == previous_manifest => {
-                        candidate = BuildCandidate::Prepared(Box::new(prepared));
-                    }
-                    Ok(prepared) => {
-                        if let Err(error) = crate::loader::close_transport_for_plugin(
-                            &id,
-                            prepared.transport().as_ref(),
-                        )
-                        .await
-                        {
-                            tracing::error!(
-                                plugin = %id,
-                                diagnostic = %agena_failure::diagnostic::format_error_chain(&error),
-                                "failed to close a re-prepared plugin whose manifest changed during reload"
-                            );
-                        }
-                        let block = crate::activation::PluginActivationBlock {
-                            plugin_id: id.clone(),
-                            code: "manifest_changed_during_reload",
-                            message: "plugin manifest changed while rebuilding a service-dependent consumer; retry reload to resolve a fresh graph".to_string(),
-                            dependencies: Vec::new(),
-                        };
-                        activation_blocks.insert(id.clone(), block.clone());
-                        record_activation_block(&statuses_shared, &logs_shared, &block);
-                        continue;
-                    }
-                    Err(error) => {
-                        let block = crate::activation::PluginActivationBlock {
-                            plugin_id: id.clone(),
-                            code: "preparation_failed",
-                            message: "service dependency changed and the consumer could not be prepared again".to_string(),
-                            dependencies: Vec::new(),
-                        };
-                        activation_blocks.insert(id.clone(), block.clone());
-                        record_activation_block(&statuses_shared, &logs_shared, &block);
-                        logs_shared.append(
-                            &plugin_key,
-                            "error",
-                            "prepare",
-                            error.to_string(),
-                            serde_json::Value::Null,
-                        );
-                        continue;
-                    }
-                }
+            let replaced_dependencies = effective
+                .activation
+                .requires
+                .iter()
+                .filter(|dependency| replaced_instances.contains(&dependency.to_string()))
+                .cloned()
+                .collect::<Vec<_>>();
+            if !replaced_dependencies.is_empty() {
+                record_runtime_restart(
+                    &mut reload_plan,
+                    &plugin_key,
+                    crate::activation::PluginReloadReason::DependencyEpochChanged,
+                    &replaced_dependencies,
+                );
             }
-
-            let (plugin, reused_transport) = match candidate {
-                BuildCandidate::Reused(reused) => {
-                    tracing::info!(
-                        target: "agena_plugin_host",
-                        plugin = %id,
-                        "reusing existing plugin transport (config and dependency epochs unchanged)"
+            let mut force_prepare = false;
+            let plugin = loop {
+                let unavailable = if let BuildCandidate::Reused(plugin) = &candidate {
+                    !plugin.transport.can_reuse(&plugin.effect_scope).await
+                } else {
+                    false
+                };
+                if unavailable || force_prepare {
+                    record_runtime_restart(
+                        &mut reload_plan,
+                        &plugin_key,
+                        crate::activation::PluginReloadReason::RuntimeUnavailable,
+                        &[],
                     );
-                    if let Some(previous_host) = &previous {
-                        previous_host
-                            .transferred_to_successor
-                            .lock()
-                            .await
-                            .insert(plugin_key.clone());
-                    }
-                    reused
-                        .transport
-                        .attach_host(host_handle.scoped_host_client(id.clone()))
-                        .await
-                        .map_err(|error| HostError::Load {
-                            plugin: id.clone(),
-                            message: agena_failure::diagnostic::format_error_chain_with_context(
-                                "failed to attach the successor host to a reused plugin transport",
-                                &error,
-                            ),
-                        })?;
-                    if let Some(previous_status) = previous
-                        .as_ref()
-                        .and_then(|host| host.plugin_status_by_key(&plugin_key))
-                    {
-                        statuses_shared.set(previous_status);
-                    }
-                    (reused, true)
                 }
-                BuildCandidate::Prepared(prepared) => {
-                    let transport = prepared.transport();
-                    match activate_entry(*prepared, &host_handle, &agena_version, &workspace_root)
-                        .await
+                if matches!(candidate, BuildCandidate::Reused(_))
+                    && (force_prepare
+                        || unavailable
+                        || !replaced_dependencies.is_empty()
+                        || !service_epoch_unchanged(
+                            &id,
+                            &service_plan.bindings,
+                            &previous_service_bindings,
+                            &config.list,
+                            &previous_plugins,
+                        ))
+                {
+                    let previous_manifest = candidate.manifest().clone();
+                    let configured = config.list.get(&id).expect("configured plugin");
+                    match prepare_entry(
+                        &id,
+                        configured,
+                        &mut static_registry,
+                        Arc::clone(&host_handle),
+                        &workspace_root,
+                        &env_lookup,
+                        &config.host.trusted_keys,
+                    )
+                    .await
                     {
-                        Ok(plugin) => (Arc::new(plugin), false),
-                        Err(error) => {
-                            if let Err(close_error) =
-                                crate::loader::close_transport_for_plugin(&id, transport.as_ref())
-                                    .await
+                        Ok(prepared) if prepared.manifest == previous_manifest => {
+                            candidate = BuildCandidate::Prepared(Box::new(prepared));
+                        }
+                        Ok(prepared) => {
+                            if let Err(error) = crate::loader::close_transport_for_plugin(
+                                &id,
+                                prepared.transport().as_ref(),
+                            )
+                            .await
                             {
                                 tracing::error!(
                                     plugin = %id,
-                                    diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
-                                        "plugin transport cleanup also failed after plugin initialization failed",
-                                        &close_error,
-                                    ),
-                                    "plugin initialization and transport cleanup both failed"
+                                    diagnostic = %agena_failure::diagnostic::format_error_chain(&error),
+                                    "failed to close a re-prepared plugin whose manifest changed during reload"
                                 );
                             }
                             host_handle.rollback_failed_plugin(&plugin_key).await;
                             let block = crate::activation::PluginActivationBlock {
                                 plugin_id: id.clone(),
-                                code: "initialization_failed",
-                                message: "plugin failed during initialization".to_string(),
+                                code: "manifest_changed_during_reload",
+                                message: concat!(
+                                    "plugin manifest changed while replacing a reuse candidate; ",
+                                    "retry reload to resolve a fresh graph"
+                                )
+                                .to_string(),
+                                dependencies: Vec::new(),
+                            };
+                            activation_blocks.insert(id.clone(), block.clone());
+                            record_activation_block(&statuses_shared, &logs_shared, &block);
+                            break None;
+                        }
+                        Err(error) => {
+                            let block = crate::activation::PluginActivationBlock {
+                                plugin_id: id.clone(),
+                                code: "preparation_failed",
+                                message: concat!(
+                                    "plugin or dependency instance became unavailable for reuse ",
+                                    "and could not be prepared again"
+                                )
+                                .to_string(),
                                 dependencies: Vec::new(),
                             };
                             activation_blocks.insert(id.clone(), block.clone());
@@ -423,25 +500,149 @@ impl PluginHost {
                             logs_shared.append(
                                 &plugin_key,
                                 "error",
-                                "init",
-                                agena_failure::diagnostic::format_error_chain(&error),
+                                "prepare",
+                                error.to_string(),
                                 serde_json::Value::Null,
                             );
+                            break None;
+                        }
+                    }
+                }
+
+                // Install immutable defaults before init or live-state handoff.
+                // Dynamic registrations may intentionally replace these defaults.
+                tool_registry_shared
+                    .write()
+                    .map_err(|_| HostError::Config("plugin tool registry lock poisoned".into()))?
+                    .extend_from_plugin(&plugin_key, &candidate.manifest().tools)
+                    .map_err(|message| HostError::Load {
+                        plugin: plugin_key.to_string(),
+                        message,
+                    })?;
+
+                match candidate {
+                    BuildCandidate::Reused(reused) => {
+                        tracing::info!(
+                            target: "agena_plugin_host",
+                            plugin = %id,
+                            "reusing existing plugin transport (config and dependency epochs unchanged)"
+                        );
+                        let scope = host_handle.begin_plugin_instance(plugin_key.clone());
+                        if let Some(previous_status) = previous
+                            .as_ref()
+                            .and_then(|host| host.plugin_status_by_key(&plugin_key))
+                        {
+                            statuses_shared.set(previous_status);
+                        }
+                        let attach_context =
+                            "failed to attach the successor host to a reused plugin transport";
+                        let bound = reused
+                            .transport
+                            .try_rebind_host(
+                                Arc::clone(&host_handle),
+                                Arc::clone(&scope),
+                                Arc::clone(&reused.effect_scope),
+                                crate::transport::initialization::PluginInitialization {
+                                    host: Arc::downgrade(&host_handle),
+                                    plugin_id: plugin_key.clone(),
+                                    manifest: reused.manifest.clone(),
+                                    agena_version: agena_version.clone(),
+                                    workspace_root: workspace_root.clone(),
+                                    settings: reused.configured_plugin.settings().clone(),
+                                },
+                            )
+                            .await
+                            .map_err(|error| HostError::Load {
+                                plugin: id.clone(),
+                                message: agena_failure::diagnostic::format_error_chain_with_context(
+                                    attach_context,
+                                    &error,
+                                ),
+                            })?;
+                        if !bound {
+                            statuses_shared.set(crate::status::PluginStatus::initial(
+                                &plugin_key,
+                                reused.kind,
+                            ));
+                            force_prepare = true;
+                            candidate = BuildCandidate::Reused(reused);
                             continue;
+                        }
+                        if let Some(previous_host) = &previous {
+                            reused_build.transfers.push((
+                                Arc::clone(previous_host),
+                                Arc::clone(&host_handle),
+                                Arc::clone(&reused),
+                            ));
+                            previous_host
+                                .transferred_to_successor
+                                .lock()
+                                .await
+                                .insert(plugin_key.clone());
+                        }
+                        break Some(Arc::new(reused.rebind_effect_scope(scope)));
+                    }
+                    BuildCandidate::Prepared(prepared) => {
+                        let transport = prepared.transport();
+                        match activate_entry(
+                            *prepared,
+                            &host_handle,
+                            &agena_version,
+                            &workspace_root,
+                        )
+                        .await
+                        {
+                            Ok(plugin) => break Some(Arc::new(plugin)),
+                            Err(error) => {
+                                if let Err(close_error) = crate::loader::close_transport_for_plugin(
+                                    &id,
+                                    transport.as_ref(),
+                                )
+                                .await
+                                {
+                                    tracing::error!(
+                                        plugin = %id,
+                                        diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                                            "plugin transport cleanup also failed after plugin initialization failed",
+                                            &close_error,
+                                        ),
+                                        "plugin initialization and transport cleanup both failed"
+                                    );
+                                }
+                                host_handle.rollback_failed_plugin(&plugin_key).await;
+                                let block = crate::activation::PluginActivationBlock {
+                                    plugin_id: id.clone(),
+                                    code: "initialization_failed",
+                                    message: "plugin failed during initialization".to_string(),
+                                    dependencies: Vec::new(),
+                                };
+                                activation_blocks.insert(id.clone(), block.clone());
+                                record_activation_block(&statuses_shared, &logs_shared, &block);
+                                logs_shared.append(
+                                    &plugin_key,
+                                    "error",
+                                    "init",
+                                    agena_failure::diagnostic::format_error_chain(&error),
+                                    serde_json::Value::Null,
+                                );
+                                break None;
+                            }
                         }
                     }
                 }
             };
-            tool_registry_shared
-                .write()
-                .map_err(|_| HostError::Config("plugin tool registry lock poisoned".into()))?
-                .extend_from_plugin(&plugin.key(), &plugin.manifest.tools)
-                .map_err(|message| HostError::Load {
-                    plugin: plugin.key().to_string(),
-                    message,
-                })?;
-            if let Err(error) = host_handle.own_manifest_resources(&plugin.key(), &plugin.manifest)
-            {
+            let Some(plugin) = plugin else {
+                continue;
+            };
+            let registration = async {
+                host_handle.own_manifest_resources(&plugin.key(), &plugin.manifest)?;
+                host_handle.set_plugin_hook_catalog(hook_registration_for_plugin(&plugin))?;
+                host_handle
+                    .register_plugin_transport(plugin.key(), plugin.transport())
+                    .await
+            }
+            .await;
+            if let Err(error) = registration {
                 if let Err(close_error) =
                     crate::loader::close_transport_for_plugin(&id, plugin.transport().as_ref())
                         .await
@@ -455,7 +656,9 @@ impl PluginHost {
                         "plugin effect-scope registration and transport cleanup both failed"
                     );
                 }
-                host_handle.rollback_failed_plugin(&plugin.key()).await;
+                host_handle
+                    .rollback_failed_plugin_for_scope(&plugin.key(), &plugin.effect_scope)
+                    .await;
                 let block = crate::activation::PluginActivationBlock {
                     plugin_id: id.clone(),
                     code: "effect_scope_registration_failed",
@@ -472,17 +675,13 @@ impl PluginHost {
                 .write()
                 .map_err(|_| HostError::Config("plugin name registry lock poisoned".into()))?
                 .insert(plugin.key(), plugin.manifest.name.clone());
-            host_handle.set_plugin_hook_catalog(hook_registration_for_plugin(&plugin));
-            if !reused_transport {
-                statuses_shared.set(crate::status::PluginStatus::initial(
-                    &plugin.key(),
-                    plugin.kind,
-                ));
-            }
             by_id.insert(plugin.key(), Arc::clone(&plugin));
-            host_handle
-                .register_plugin_transport(plugin.key(), plugin.transport())
-                .await;
+            if !previous_loaded
+                .get(&plugin.key())
+                .is_some_and(|previous| Arc::ptr_eq(&previous.transport, &plugin.transport))
+            {
+                replaced_instances.insert(id.clone());
+            }
             loaded.push(plugin);
             activated.insert(id);
         }
@@ -718,7 +917,7 @@ impl PluginHost {
                     HostError::Config(agena_failure::diagnostic::format_error_chain(&error))
                 })?;
         }
-        Ok(Arc::new(PluginHost {
+        let host = Arc::new(PluginHost {
             plugins: loaded,
             plugins_by_id: by_id,
             tool_registry: tool_registry_shared,
@@ -739,7 +938,9 @@ impl PluginHost {
             _host_handle: host_handle,
             transferred_to_successor: tokio::sync::Mutex::new(Default::default()),
             hook_runs: Arc::new(std::sync::Mutex::new(Vec::new())),
-        }))
+        });
+        reused_build.committed = true;
+        Ok(host)
     }
 }
 

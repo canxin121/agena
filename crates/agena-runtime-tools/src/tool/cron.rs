@@ -50,7 +50,10 @@ pub(super) async fn execute_create_async(
     }
     let id = job.id;
     let next = job.next_fire_at.map(|t| t.to_rfc3339());
-    scheduler.add(job).await;
+    scheduler
+        .add(job)
+        .await
+        .map_err(|error| ToolError::plugin(format!("cron_create: {error}")))?;
 
     let view = ToolExecutionView::simple(
         "Create schedule",
@@ -78,7 +81,10 @@ pub(super) async fn execute_list_async(
     _input: &CronListToolInput,
 ) -> Result<ToolPayloadExecution, ToolError> {
     let scheduler = require_scheduler(executor)?;
-    let jobs = scheduler.list().await;
+    let jobs = scheduler
+        .list()
+        .await
+        .map_err(|error| ToolError::plugin(format!("cron_list: {error}")))?;
     let summaries: Vec<CronJobSummary> = jobs.into_iter().map(summarize).collect();
     let summary_text = if summaries.is_empty() {
         "no scheduled jobs".to_string()
@@ -112,7 +118,10 @@ pub(super) async fn execute_delete_async(
     let scheduler = require_scheduler(executor)?;
     let id = uuid::Uuid::parse_str(input.id.trim())
         .map_err(|e| ToolError::plugin(format!("cron_delete: invalid id: {e}")))?;
-    let removed = scheduler.remove(id).await;
+    let removed = scheduler
+        .remove(id)
+        .await
+        .map_err(|error| ToolError::plugin(format!("cron_delete: {error}")))?;
     let view = ToolExecutionView::simple(
         "Delete schedule",
         if removed { "Removed" } else { "Not found" },
@@ -252,6 +261,7 @@ pub(super) async fn execute_history_async(
     let mut entries = scheduler
         .history(filter_id, input.limit as usize)
         .await
+        .map_err(|error| ToolError::plugin(format!("cron_history: {error}")))?
         .into_iter()
         .map(|entry| CronRunSummary {
             job_id: entry.job_id.to_string(),

@@ -64,6 +64,7 @@ const REALTIME_ADAPTER_KIND: &str = "openai_realtime";
 #[doc(hidden)]
 /// Transport for OpenAI-compatible providers.
 pub struct OpenAiTransport {
+    client_identity: crate::ProviderClientIdentity,
     id: String,
     client: reqwest::Client,
     api_key: ManagedCredential,
@@ -101,6 +102,7 @@ pub struct OpenAiRealtimeAdapter {
 
 #[derive(Clone)]
 struct OpenAiTransportOptions {
+    client_identity: crate::ProviderClientIdentity,
     backend: OpenAiResponsesBackend,
     auth_data: Option<Arc<Mutex<AuthData>>>,
     profile: OpenAiProfile,
@@ -115,6 +117,7 @@ struct OpenAiTransportOptions {
 #[derive(Clone)]
 /// Options of the OpenAI Responses adapter.
 pub struct OpenAiResponsesAdapterOptions {
+    pub client_identity: crate::ProviderClientIdentity,
     pub backend: OpenAiResponsesBackend,
     pub auth_data: Option<Arc<Mutex<AuthData>>>,
     pub profile: OpenAiProfile,
@@ -129,6 +132,7 @@ pub struct OpenAiResponsesAdapterOptions {
 impl Default for OpenAiResponsesAdapterOptions {
     fn default() -> Self {
         Self {
+            client_identity: Default::default(),
             backend: OpenAiResponsesBackend::Api,
             auth_data: None,
             profile: OpenAiProfile::Standard,
@@ -145,6 +149,7 @@ impl Default for OpenAiResponsesAdapterOptions {
 #[derive(Clone)]
 /// Options of the OpenAI Chat Completions adapter.
 pub struct OpenAiChatCompletionsAdapterOptions {
+    pub client_identity: crate::ProviderClientIdentity,
     pub auth_data: Option<Arc<Mutex<AuthData>>>,
     pub profile: OpenAiProfile,
     pub models_url: Option<String>,
@@ -158,6 +163,7 @@ pub struct OpenAiChatCompletionsAdapterOptions {
 impl Default for OpenAiChatCompletionsAdapterOptions {
     fn default() -> Self {
         Self {
+            client_identity: Default::default(),
             auth_data: None,
             profile: OpenAiProfile::Standard,
             models_url: None,
@@ -173,6 +179,7 @@ impl Default for OpenAiChatCompletionsAdapterOptions {
 #[derive(Clone)]
 /// Options of the OpenAI Realtime adapter.
 pub struct OpenAiRealtimeAdapterOptions {
+    pub client_identity: crate::ProviderClientIdentity,
     pub auth_data: Option<Arc<Mutex<AuthData>>>,
     pub models_url: Option<String>,
     pub auth_header: String,
@@ -185,6 +192,7 @@ pub struct OpenAiRealtimeAdapterOptions {
 impl Default for OpenAiRealtimeAdapterOptions {
     fn default() -> Self {
         Self {
+            client_identity: Default::default(),
             auth_data: None,
             models_url: None,
             auth_header: "authorization".to_owned(),
@@ -501,6 +509,9 @@ impl<'a> RequestHeaderContext<'a> {
         self.initiator.unwrap_or("agent")
     }
 }
+
+#[cfg(test)]
+mod client_identity_tests;
 
 #[cfg(test)]
 mod tests {

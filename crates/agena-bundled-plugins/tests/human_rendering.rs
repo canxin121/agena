@@ -38,6 +38,12 @@ fn sample_payload(tool: &str) -> Value {
     });
 
     match tool {
+        "fs.output_read" => {
+            json!({"output_id":"out_fixture","text":"captured text","captured_bytes":13,"original_bytes":13,"capture_truncated":false})
+        }
+        "fs.output_search" => {
+            json!({"output_id":"out_fixture","matches":[{"offset":0,"preview":"captured text"}],"capture_truncated":false})
+        }
         "fs.read" => json!({
             "preview": "fn main() {}",
             "loaded_paths": ["src/main.rs"],
@@ -274,6 +280,13 @@ fn sample_payload(tool: &str) -> Value {
             "action": "run", "shell": "bash", "background": false, "status": "exited",
             "output": "all tests passed", "exit_code": 0, "process_id": "p-1"
         }),
+        "shell.write" | "shell.resize" | "shell.signal" => json!({
+            "action": tool.split('.').next_back().unwrap(), "background": true,
+            "status": "running", "process_id": "p-1", "output": "PROMPT> ",
+            "terminal": { "rows": 24, "cols": 80, "cursor_row": 0, "cursor_col": 8,
+                "cursor_visible": true, "alternate_screen": false, "bracketed_paste": false,
+                "application_cursor": false, "text": "PROMPT> ", "truncated": false }
+        }),
         "shell.list" => {
             json!({"action": "list", "processes": [{
                 "process_id": "p-1",
@@ -376,6 +389,12 @@ fn sample_payload(tool: &str) -> Value {
 
 fn sample_input(tool: &str) -> Value {
     match tool {
+        "fs.output_read" => {
+            json!({"output_id":"out_fixture","text":"captured text","captured_bytes":13,"original_bytes":13,"capture_truncated":false})
+        }
+        "fs.output_search" => {
+            json!({"output_id":"out_fixture","matches":[{"offset":0,"preview":"captured text"}],"capture_truncated":false})
+        }
         "fs.read" => json!({"file_path": "src/main.rs"}),
         "fs.read_many" => json!({"paths": ["src/lib.rs", "src/main.rs"]}),
         "fs.write" | "fs.replace" | "fs.stat" | "fs.view_image" => {
@@ -389,6 +408,11 @@ fn sample_input(tool: &str) -> Value {
         "code.syntax_tree" => json!({"path": "src/lib.rs", "language": "rust"}),
         "shell.run" => json!({"command": "cargo test"}),
         "shell.logs" | "shell.stop" => json!({"process_id": "p-1"}),
+        "shell.write" => {
+            json!({"process_id": "p-1", "chars": "hello\r", "reads": [], "writes": [], "network": []})
+        }
+        "shell.resize" => json!({"process_id": "p-1", "rows": 30, "cols": 100}),
+        "shell.signal" => json!({"process_id": "p-1", "signal": "interrupt"}),
         "monitor.start" => json!({"command": "cargo watch"}),
         "monitor.stop" => json!({"monitor_id": "mon-1"}),
         "interaction.ask" => json!({"questions": [{"question": "Continue?"}]}),
@@ -717,7 +741,7 @@ fn every_bundled_execution_tool_has_a_non_json_human_fallback() {
         }
     }
 
-    assert_eq!(checked, 137);
+    assert_eq!(checked, 142);
 }
 
 #[test]
@@ -758,7 +782,7 @@ fn every_bundled_execution_tool_has_a_tool_specific_human_projection() {
         }
     }
 
-    assert_eq!(checked, 137);
+    assert_eq!(checked, 142);
 }
 
 #[test]
@@ -793,7 +817,7 @@ fn every_bundled_execution_tool_has_a_typed_empty_state_projection() {
         }
     }
 
-    assert_eq!(checked, 137);
+    assert_eq!(checked, 142);
 }
 
 #[test]
@@ -895,7 +919,7 @@ fn every_bundled_execution_tool_has_a_human_initial_and_completed_title() {
         }
     }
 
-    assert_eq!(checked, 137);
+    assert_eq!(checked, 142);
 }
 
 #[test]
@@ -1890,5 +1914,87 @@ fn representative_plugin_payloads_render_complete_readable_facts() {
                 "{tool} should expose its returned artifact as media: {blocks:?}"
             );
         }
+    }
+}
+
+#[test]
+fn captured_output_views_keep_paging_loss_and_untrusted_text_visible() {
+    let text = "retained text\n````\n# untrusted heading\n";
+    let raw = RawOutput {
+        payload: Some(json!({
+            "output_id": "out_fixture", "text": text,
+            "captured_bytes": 2048, "original_bytes": 4096,
+            "next_offset": 80, "capture_truncated": true
+        })),
+        ..RawOutput::default()
+    };
+    let blocks = BuiltinHumanRenderer::new("fs.output_read")
+        .render_human(&render_context(), &raw)
+        .unwrap();
+    let has = |id: &str, needle: &str| {
+        blocks.iter().any(|block| matches!(block,
+        ViewBlock::Markdown { id: Some(block_id), text } if block_id == id && text.contains(needle)
+    ))
+    };
+    assert!(has("captured-output-meta", "80"));
+    assert!(has(
+        "captured-output-warning",
+        "Missing content was not searched"
+    ));
+    assert!(has("captured-output-text", "`````"));
+    assert!(has("captured-output-text", text));
+    let invocation = ToolInvocation::new(
+        "agena.fs.output_read",
+        StructuredObject::try_from(json!({"output_id":"out_fixture"})).unwrap(),
+    );
+    let initial = initial_tool_title(&invocation);
+    let completed = completed_tool_title(&invocation, &raw);
+    assert!(initial.starts_with("Read captured output"));
+    assert!(completed.starts_with(&initial));
+    assert!(completed.contains("more available"));
+    assert!(completed.contains("capture truncated"));
+}
+
+#[test]
+fn captured_output_search_has_match_locations_and_truthful_empty_state() {
+    for matches in [
+        json!([]),
+        json!([{"offset": 501, "preview":"MIDDLE_ERROR"}]),
+    ] {
+        let empty = matches.as_array().unwrap().is_empty();
+        let raw = RawOutput {
+            payload: Some(json!({
+                "output_id":"out_fixture", "matches": matches, "capture_truncated":true
+            })),
+            ..RawOutput::default()
+        };
+        let blocks = BuiltinHumanRenderer::new("fs.output_search")
+            .render_human(&render_context(), &raw)
+            .unwrap();
+        let expected = if empty {
+            "captured-output-empty"
+        } else {
+            "captured-output-matches"
+        };
+        assert!(
+            blocks
+                .iter()
+                .any(|block| block.block_id() == Some(expected))
+        );
+        assert!(
+            blocks
+                .iter()
+                .any(|block| block.block_id() == Some("captured-output-warning"))
+        );
+        let invocation = ToolInvocation::new(
+            "fs.output_search",
+            StructuredObject::try_from(json!({"output_id":"out_fixture","pattern":"MIDDLE_ERROR"}))
+                .unwrap(),
+        );
+        let initial = initial_tool_title(&invocation);
+        let completed = completed_tool_title(&invocation, &raw);
+        assert!(completed.starts_with(&initial));
+        assert_ne!(initial, completed);
+        assert!(completed.contains("capture truncated"));
     }
 }

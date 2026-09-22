@@ -40,7 +40,7 @@ Prefer using `plan.set` for implementation tasks unless they are simple. Use it 
 
 Only skip planning for simple tasks: single-line or few-line fixes, adding a single function with clear requirements, tasks with very specific detailed instructions, or pure research/read-only work. If unsure whether to plan, err on the side of planning.
 
-`plan.set` never blocks on the user: it saves the plan and returns. With `request_approval: true` (the default) the plan stays in the `planning` phase and you must call `plan.review` to request user approval before it becomes active. Pass `request_approval: false` to `plan.set` or `plan.phase` only when the user has already declared that the plan or the change needs no approval — never default to it.
+`plan.set` never blocks on the user: it saves the plan and returns. With `request_approval: true` (the default) the plan stays in the `planning` phase and you must call `plan.review` to request user approval before it becomes active. Pass `request_approval: false` to `plan.set` or `plan.phase` only when the user has already declared that the plan or change needs no approval AND trusted plan configuration permits unreviewed activation; the runtime rejects an unauthorized waiver. Never default to it. Plan reviews are revision-bound; after concurrent edits, read and review the new version.
 
 While the current plan is in the `planning` phase, mutating tools are blocked by the runtime. Explore with read-only tools — delegating parallel exploration to `tasks.run` when the scope spans multiple areas — clarify requirements with `ask`, and refine the plan with `plan.edit` (which never requests approval and never changes phase). When the plan is complete, call `plan.review` to request user approval."#
         .to_string()
@@ -93,7 +93,9 @@ pub(crate) fn render_background_section() -> String {
 
 `cron.create` schedules a recurring wake. Every fire is persisted as a typed `system_notification`; if you are active, it waits for the current provider/tool part to finish and is handed to you at the next safe part boundary. AI-created schedules retain the assistant run that created them instead of opening a new run. Always pass the IANA timezone from `<environment_context>` (for example `Asia/Shanghai`); cron wall-clock fields are evaluated in that timezone, while returned timestamps remain explicit RFC 3339 instants. Jobs are session-only and expire after seven days.
 
-Never poll: do not repeatedly call `shell.run`/`tasks.run` status or read logs just to wait for completion. After launching background work, continue with other useful work (or end your turn) and wait for the `system_notification`. When a `system_notification` arrives mid-task, act on it: incorporate the outcome into your ongoing work and report it when relevant. When it arrives after you finished a turn, pick up where you left off."#
+Never poll: do not repeatedly call `shell.run`/`tasks.run` status or read logs just to wait for completion. After launching background work, continue with other useful work (or end your turn) and wait for the `system_notification`. When a `system_notification` arrives mid-task, act on it: incorporate the outcome into your ongoing work and report it when relevant. When it arrives after you finished a turn, pick up where you left off.
+
+Interactive terminals are different: `shell.run` with `tty: true` retains a live terminal, which may be waiting for input rather than completing. Read its incremental output and screen, then use `shell.write` with the returned `process_id` to type or send keys. Input is exact: `\r` means Enter and `\u0003` means Ctrl-C. Empty `chars` or `shell.logs` may perform a bounded read to observe a prompt; this is allowed interactive I/O, not repeated completion polling. Omit `since_seq` on `shell.write` to consume unread output, or pass an explicit cursor for replay/paging. A quiet period or yield deadline is not process exit. Use `shell.resize` for terminal dimensions and `shell.signal`/`shell.stop` for interruption/cleanup. Declare the effects of subsequent input just as for the launch. Never resend an entire input blindly after a partial-write error."#
         .to_string()
 }
 
@@ -151,7 +153,13 @@ impl SessionManager {
             .into_iter()
             .map(|tool| compact_tool_call_name(&tool.canonical_name()))
             .collect::<Vec<_>>();
-        self.assemble_system_prompt_for_tool_names(tool_names, user_system)
+        let base = self.assemble_system_prompt_for_tool_names(tool_names, user_system);
+        let guidance = scoped_executor.project_instruction_section(&[]);
+        if guidance.is_empty() {
+            base
+        } else {
+            format!("{base}\n\n{guidance}")
+        }
     }
 
     /// Async catalog path used by model turns and other Tokio request flows.
@@ -172,7 +180,13 @@ impl SessionManager {
             .into_iter()
             .map(|tool| compact_tool_call_name(&tool.canonical_name()))
             .collect::<Vec<_>>();
-        self.assemble_system_prompt_for_tool_names(tool_names, user_system)
+        let base = self.assemble_system_prompt_for_tool_names(tool_names, user_system);
+        let guidance = scoped_executor.project_instruction_section(&[]);
+        if guidance.is_empty() {
+            base
+        } else {
+            format!("{base}\n\n{guidance}")
+        }
     }
 }
 

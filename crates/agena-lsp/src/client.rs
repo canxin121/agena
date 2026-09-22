@@ -2,6 +2,10 @@
 //! a background reader_loop demultiplexes inbound frames, request/response
 //! correlation lives in a DashMap keyed by request id.
 
+mod freshness;
+use freshness::PublishedDiagnostics;
+pub use freshness::{DiagnosticReport, DocumentReceipt};
+
 use portable_atomic::AtomicI64;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Weak};
@@ -85,7 +89,10 @@ struct Inner {
     next_id: AtomicI64,
     pending: DashMap<i64, oneshot::Sender<JsonRpcResponse>>,
     notifications: Mutex<Option<mpsc::Sender<ServerNotification>>>,
-    diagnostics: DashMap<Uri, Vec<Diagnostic>>,
+    diagnostics: DashMap<Uri, PublishedDiagnostics>,
+    diagnostics_changed: watch::Sender<u64>,
+    document_sync: Mutex<()>,
+    document_sequence: AtomicI64,
     initialized: arc_swap::ArcSwapOption<InitializeResult>,
     shutdown: watch::Sender<bool>,
     /// Track which URIs we've sent didOpen for (and their content hash +
@@ -97,7 +104,6 @@ struct Inner {
 struct OpenDocState {
     version: i32,
     content_hash: u64,
-    language_id: String,
 }
 
 impl LspClient {
@@ -109,6 +115,9 @@ impl LspClient {
             pending: DashMap::new(),
             notifications: Mutex::new(None),
             diagnostics: DashMap::new(),
+            diagnostics_changed: watch::channel(0).0,
+            document_sync: Mutex::new(()),
+            document_sequence: AtomicI64::new(1),
             initialized: arc_swap::ArcSwapOption::from(None),
             shutdown,
             open_docs: DashMap::new(),
@@ -134,7 +143,7 @@ impl LspClient {
         self.inner
             .diagnostics
             .get(uri)
-            .map(|v| v.value().clone())
+            .map(|v| v.value().entries.clone())
             .unwrap_or_default()
     }
 
@@ -144,7 +153,12 @@ impl LspClient {
         self.inner
             .diagnostics
             .iter()
-            .map(|entry| (entry.key().as_str().to_string(), entry.value().clone()))
+            .map(|entry| {
+                (
+                    entry.key().as_str().to_string(),
+                    entry.value().entries.clone(),
+                )
+            })
             .collect()
     }
 
@@ -274,59 +288,99 @@ impl LspClient {
         text: String,
         language_id: &str,
     ) -> LspResult<DocumentSyncStatus> {
+        self.sync_document_with_receipt(uri, text, language_id)
+            .await
+            .map(|receipt| receipt.status)
+    }
+    pub async fn sync_document_with_receipt(
+        &self,
+        uri: Uri,
+        text: String,
+        language_id: &str,
+    ) -> LspResult<DocumentReceipt> {
+        let _gate = self.inner.document_sync.lock().await;
         let hash = hash_str(&text);
-        let entry = self.inner.open_docs.get(&uri).map(|r| r.value().clone());
-        match entry {
-            None => {
-                let state = OpenDocState {
-                    version: 1,
-                    content_hash: hash,
-                    language_id: language_id.to_string(),
-                };
-                self.inner.open_docs.insert(uri.clone(), state);
-                let params = DidOpenTextDocumentParams {
+        let previous = self
+            .inner
+            .open_docs
+            .get(&uri)
+            .map(|entry| entry.value().clone());
+        if let Some(previous) = previous
+            .as_ref()
+            .filter(|previous| previous.content_hash == hash)
+        {
+            return Ok(DocumentReceipt {
+                status: DocumentSyncStatus::Unchanged,
+                version: previous.version,
+            });
+        }
+        let version = i32::try_from(self.inner.document_sequence.fetch_add(1, Ordering::SeqCst))
+            .map_err(|_| {
+                LspError::Protocol("LSP document version space exhausted; restart server".into())
+            })?;
+        self.inner.open_docs.insert(
+            uri.clone(),
+            OpenDocState {
+                version,
+                content_hash: hash,
+            },
+        );
+        let mut rollback = freshness::SyncRollback {
+            inner: Arc::clone(&self.inner),
+            uri: uri.clone(),
+            previous: previous.clone(),
+            armed: true,
+        };
+        let status = if previous.is_none() {
+            DocumentSyncStatus::Opened
+        } else {
+            DocumentSyncStatus::Changed
+        };
+        let result = if previous.is_none() {
+            self.notify(
+                "textDocument/didOpen",
+                DidOpenTextDocumentParams {
                     text_document: TextDocumentItem {
-                        uri,
-                        language_id: language_id.to_string(),
-                        version: 1,
+                        language_id: language_id.into(),
+                        uri: uri.clone(),
+                        version,
                         text,
                     },
-                };
-                self.notify("textDocument/didOpen", params)
-                    .await
-                    .map(|_| DocumentSyncStatus::Opened)
-            }
-            Some(prev) if prev.content_hash == hash => Ok(DocumentSyncStatus::Unchanged),
-            Some(prev) => {
-                let new_version = prev.version.saturating_add(1);
-                self.inner.open_docs.insert(
-                    uri.clone(),
-                    OpenDocState {
-                        version: new_version,
-                        content_hash: hash,
-                        language_id: prev.language_id.clone(),
-                    },
-                );
-                let params = DidChangeTextDocumentParams {
+                },
+            )
+            .await
+        } else {
+            self.notify(
+                "textDocument/didChange",
+                DidChangeTextDocumentParams {
                     text_document: VersionedTextDocumentIdentifier {
-                        uri,
-                        version: new_version,
+                        uri: uri.clone(),
+                        version,
                     },
                     content_changes: vec![TextDocumentContentChangeEvent {
                         range: None,
                         range_length: None,
                         text,
                     }],
-                };
-                self.notify("textDocument/didChange", params)
-                    .await
-                    .map(|_| DocumentSyncStatus::Changed)
-            }
-        }
+                },
+            )
+            .await
+        };
+        result?;
+        rollback.armed = false;
+        self.inner
+            .diagnostics_changed
+            .send_modify(|generation| *generation = generation.wrapping_add(1));
+        Ok(DocumentReceipt { status, version })
     }
 
     /// Tell the server to drop a document we previously opened.
     pub async fn close_document(&self, uri: Uri) -> LspResult<()> {
+        let _gate = self.inner.document_sync.lock().await;
+        self.inner.diagnostics.remove(&uri);
+        self.inner
+            .diagnostics_changed
+            .send_modify(|generation| *generation = generation.wrapping_add(1));
         if self.inner.open_docs.remove(&uri).is_some() {
             let params = DidCloseTextDocumentParams {
                 text_document: TextDocumentIdentifier { uri },
@@ -667,7 +721,24 @@ async fn handle_notification(inner: &Inner, n: JsonRpcNotification) {
     if n.method == "textDocument/publishDiagnostics"
         && let Ok(p) = serde_json::from_value::<PublishDiagnosticsParams>(params.clone())
     {
-        inner.diagnostics.insert(p.uri.clone(), p.diagnostics);
+        let mut existing =
+            inner
+                .diagnostics
+                .entry(p.uri.clone())
+                .or_insert_with(|| PublishedDiagnostics {
+                    version: p.version,
+                    entries: Vec::new(),
+                });
+        if !matches!((existing.version,p.version),(Some(old),Some(new)) if old>new) {
+            *existing = PublishedDiagnostics {
+                version: p.version,
+                entries: p.diagnostics,
+            };
+        }
+        drop(existing);
+        inner
+            .diagnostics_changed
+            .send_modify(|generation| *generation = generation.wrapping_add(1));
     }
     let subscriber = inner.notifications.lock().await.clone();
     if let Some(tx) = subscriber {

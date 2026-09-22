@@ -300,8 +300,53 @@ mod tests {
                 .is_some_and(|document| document.contains("Review the change carefully."))
         );
 
+        let resource = workspace
+            .path()
+            .join(".agena/skills/team_review/example.txt");
+        std::fs::write(&resource, "first resource").unwrap();
+        let request = super::SkillsReadResourceInput {
+            name: "team_review".into(),
+            path: "example.txt".into(),
+            max_bytes: 1024,
+        };
+        let first = plugin
+            .invoke_read_resource(&request)
+            .await
+            .unwrap()
+            .payload
+            .unwrap();
+        std::fs::write(&resource, "second resource").unwrap();
+        let second = plugin
+            .invoke_read_resource(&request)
+            .await
+            .unwrap()
+            .payload
+            .unwrap();
+        assert_ne!(first["content_hash"], second["content_hash"]);
+        assert_eq!(first["skill_content_hash"], second["skill_content_hash"]);
+        assert_eq!(first["content"], "first resource");
+
+        let before =
+            std::fs::read_to_string(workspace.path().join(".agena/skills/team_review/SKILL.md"))
+                .unwrap();
+        assert!(
+            plugin
+                .invoke_update(&SkillsUpdateInput {
+                    name: "team_review".into(),
+                    document: before.clone(),
+                    expected_revision: Some("stale".into())
+                })
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            std::fs::read_to_string(workspace.path().join(".agena/skills/team_review/SKILL.md"))
+                .unwrap(),
+            before
+        );
         plugin
             .invoke_update(&SkillsUpdateInput {
+                expected_revision: loaded.payload.as_ref().and_then(|p|p["revision"].as_str()).map(str::to_owned),
                 name: "team_review".to_string(),
                 document: "---\nname: team_review\ndescription: Review a proposed change\naliases: [review-team]\n---\nReview code, tests, and documentation.\n".to_string(),
             })
@@ -324,6 +369,11 @@ mod tests {
 
         plugin
             .invoke_delete(&SkillsDeleteInput {
+                expected_revision: updated
+                    .payload
+                    .as_ref()
+                    .and_then(|p| p["revision"].as_str())
+                    .map(str::to_owned),
                 name: "review-team".to_string(),
             })
             .await
@@ -352,6 +402,7 @@ mod tests {
 
         let error = plugin
             .invoke_update(&SkillsUpdateInput {
+                expected_revision: None,
                 name: "review".to_string(),
                 document: "---\nname: review\n---\nAttempt to replace a bundled Skill.\n"
                     .to_string(),
@@ -639,6 +690,8 @@ struct SkillWriteResult {
     name: String,
     path: PathBuf,
     operation: &'static str,
+    revision: Option<String>,
+    warning: Option<String>,
 }
 
 fn validate_managed_skill_name(name: &str) -> SdkResult<()> {
@@ -694,6 +747,18 @@ fn parse_managed_skill_document(document: &str) -> SdkResult<Skill> {
         }
     }
     Ok(skill)
+}
+
+fn skill_document_revision(document: &str) -> String {
+    hex::encode(Sha256::digest(document.as_bytes()))
+}
+fn check_skill_revision(document: &str, expected: Option<&str>) -> SdkResult<()> {
+    if expected != Some(skill_document_revision(document).as_str()) {
+        return Err(PluginError::invalid_params(
+            "Skill revision is missing or stale; call skills.get and supply its revision as expected_revision",
+        ));
+    }
+    Ok(())
 }
 
 fn write_skill_document(path: &Path, document: &str) -> SdkResult<()> {
@@ -815,22 +880,37 @@ fn format_skill_document(skill: &Skill) -> String {
 
 fn skill_write_output(
     result: SkillWriteResult,
-    generation: u64,
+    generation: Option<u64>,
     catalog_changed: bool,
 ) -> ToolInvokeOutput {
     let path = result.path.display().to_string();
+    let generation_label = generation
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "unknown (refresh failed)".into());
     let operation = result.operation;
+    let outcome_note = format!(
+        "Revision: {:?}{}",
+        result.revision,
+        result
+            .warning
+            .as_ref()
+            .map(|warning| format!("\nWarning: {warning}"))
+            .unwrap_or_default()
+    );
     ToolInvokeOutput::from_parts(
         format!("Skill {operation}: {}", result.name),
-        format!("{operation} · catalog generation {generation}"),
+        format!("{operation} · catalog generation {generation_label}"),
         format!(
-            "Skill '{}' was {operation} at {path}. Skill catalog generation {generation}.",
+            "Skill '{}' was {operation} at {path}. Skill catalog generation {generation_label}.\n{outcome_note}",
             result.name
         ),
         Some(serde_json::json!({
             "name": result.name,
             "path": path,
             "operation": operation,
+            "committed": true,
+            "revision": result.revision,
+            "catalog_warning": result.warning,
             "catalog_generation": generation,
             "catalog_changed": catalog_changed,
             "editable": operation != "deleted",
@@ -838,7 +918,7 @@ fn skill_write_output(
         BTreeMap::from([
             ("agena.effect".to_string(), "skill_catalog".to_string()),
             ("operation".to_string(), operation.to_string()),
-            ("catalog_generation".to_string(), generation.to_string()),
+            ("catalog_generation".to_string(), generation_label),
         ]),
         Vec::new(),
     )
@@ -877,16 +957,19 @@ struct SkillsGetInput {
 /// document format lets callers preserve a Skill's YAML frontmatter alongside
 /// its Markdown instructions instead of maintaining a second, lossy model.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
-#[input(trim("document"), non_empty("document"))]
+#[input(non_empty("document"))]
 #[serde(deny_unknown_fields)]
 struct SkillsCreateInput {
     document: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
-#[input(trim("name", "document"), non_empty("name", "document"))]
+#[input(trim("name"), non_empty("name", "document"))]
 #[serde(deny_unknown_fields)]
 struct SkillsUpdateInput {
+    /// Exact document revision from skills.get; required for update/delete.
+    #[serde(default)]
+    expected_revision: Option<String>,
     /// Canonical name (or alias) of the workspace-managed Skill to replace.
     name: String,
     /// Replacement `SKILL.md` document. Its frontmatter name must not change.
@@ -897,6 +980,9 @@ struct SkillsUpdateInput {
 #[input(trim("name"), non_empty("name"))]
 #[serde(deny_unknown_fields)]
 struct SkillsDeleteInput {
+    /// Exact document revision from skills.get; required for update/delete.
+    #[serde(default)]
+    expected_revision: Option<String>,
     /// Canonical name (or alias) of the workspace-managed Skill to remove.
     name: String,
 }
@@ -1135,6 +1221,8 @@ impl SkillsPlugin {
                 name,
                 path,
                 operation: "created",
+                revision: Some(skill_document_revision(document)),
+                warning: None,
             })
         })
         .map_err(skill_write_error)?
@@ -1144,6 +1232,7 @@ impl SkillsPlugin {
         &self,
         requested_name: &str,
         document: &str,
+        expected_revision: Option<&str>,
     ) -> SdkResult<SkillWriteResult> {
         let replacement = parse_managed_skill_document(document)?;
         let tools = self.discovered_tools()?;
@@ -1157,6 +1246,7 @@ impl SkillsPlugin {
         let lock_path = self.managed_skill_path(canonical_name)?;
         agena_runtime_tools::with_file_mutation_locks(std::slice::from_ref(&lock_path), || {
             let (existing, path) = self.managed_skill_document(canonical_name)?;
+            check_skill_revision(&existing, expected_revision)?;
             // Parse first so an invalid legacy document cannot be overwritten
             // by accident. Names stay stable even when an alias was used.
             let existing_skill = parse_managed_skill_document(existing.as_str())?;
@@ -1171,34 +1261,66 @@ impl SkillsPlugin {
                 name: canonical_name.to_owned(),
                 path,
                 operation: "updated",
+                revision: Some(skill_document_revision(document)),
+                warning: None,
             })
         })
         .map_err(skill_write_error)?
     }
 
-    fn delete_managed_skill(&self, requested_name: &str) -> SdkResult<SkillWriteResult> {
+    fn delete_managed_skill(
+        &self,
+        requested_name: &str,
+        expected_revision: Option<&str>,
+    ) -> SdkResult<SkillWriteResult> {
         let tools = self.discovered_tools()?;
         let (canonical_name, _) = Self::resolve_tool(&tools, requested_name)?;
         let lock_path = self.managed_skill_path(canonical_name)?;
         agena_runtime_tools::with_file_mutation_locks(std::slice::from_ref(&lock_path), || {
-            let (_, path) = self.managed_skill_document(canonical_name)?;
+            let (existing, path) = self.managed_skill_document(canonical_name)?;
+            check_skill_revision(&existing, expected_revision)?;
             std::fs::remove_file(&path).map_err(skill_write_error)?;
-            if let Some(parent) = path.parent()
-                && parent
-                    .read_dir()
-                    .map_err(skill_write_error)?
-                    .next()
-                    .is_none()
-            {
-                std::fs::remove_dir(parent).map_err(skill_write_error)?;
-            }
+            // Empty-directory cleanup is secondary: a deleted document must
+            // not be reported as uncommitted because cleanup failed.
+            let warning = path.parent().and_then(|parent| match parent.read_dir() {
+                Ok(mut entries) => {
+                    if entries.next().is_none() {
+                        std::fs::remove_dir(parent).err().map(|error| {
+                            format!("Skill deleted; empty directory cleanup failed: {error}")
+                        })
+                    } else {
+                        None
+                    }
+                }
+                Err(error) => Some(format!(
+                    "Skill deleted; directory inspection failed: {error}"
+                )),
+            });
             Ok(SkillWriteResult {
                 name: canonical_name.to_owned(),
                 path,
                 operation: "deleted",
+                revision: None,
+                warning,
             })
         })
         .map_err(skill_write_error)?
+    }
+
+    fn complete_skill_write(&self, mut result: SkillWriteResult) -> ToolInvokeOutput {
+        let refreshed = self
+            .invalidate_definition_catalog()
+            .and_then(|()| self.refresh_catalog());
+        match refreshed {
+            Ok(refresh) => skill_write_output(result, Some(refresh.generation), refresh.changed),
+            Err(error) => {
+                result.warning = Some(format!(
+                    "Skill {} committed, but catalog refresh failed: {}",
+                    result.operation, error.failure.user.fallback
+                ));
+                skill_write_output(result, None, false)
+            }
+        }
     }
 
     fn discovered_catalog(&self) -> SdkResult<DiscoveredCatalog> {
@@ -1773,8 +1895,9 @@ impl SkillsPlugin {
                 None => format_skill_document(&discovered_tool.skill),
             };
             enforce_skill_document_size(document.as_str())?;
+            let revision = skill_document_revision(&document);
             let text = format!(
-                "Name: {name}\nKind: {}\nSummary: {}\n\nBody:\n{}",
+                "Name: {name}\nRevision: {revision}\nKind: {}\nSummary: {}\n\nBody:\n{}",
                 discovered_tool.kind, summary, body
             );
             let payload = serde_json::json!({
@@ -1787,6 +1910,7 @@ impl SkillsPlugin {
                 "source": discovered_tool.origin.source_label(),
                 "content_hash": discovered_tool.skill.content_hash(),
                 "document": document,
+                "revision": revision,
                 "editable": is_workspace_managed_skill(workspace_root, name, discovered_tool),
             });
             Ok(ToolInvokeOutput::from_parts(
@@ -1814,13 +1938,7 @@ impl SkillsPlugin {
         let document = input.document.clone();
         self.run_blocking(move |plugin| {
             let result = plugin.create_managed_skill(document.as_str())?;
-            plugin.invalidate_definition_catalog()?;
-            let refresh = plugin.refresh_catalog()?;
-            Ok(skill_write_output(
-                result,
-                refresh.generation,
-                refresh.changed,
-            ))
+            Ok(plugin.complete_skill_write(result))
         })
         .await
     }
@@ -1833,16 +1951,15 @@ impl SkillsPlugin {
     )]
     async fn invoke_update(&self, input: &SkillsUpdateInput) -> SdkResult<ToolInvokeOutput> {
         let name = input.name.clone();
+        let expected_revision = input.expected_revision.clone();
         let document = input.document.clone();
         self.run_blocking(move |plugin| {
-            let result = plugin.update_managed_skill(name.as_str(), document.as_str())?;
-            plugin.invalidate_definition_catalog()?;
-            let refresh = plugin.refresh_catalog()?;
-            Ok(skill_write_output(
-                result,
-                refresh.generation,
-                refresh.changed,
-            ))
+            let result = plugin.update_managed_skill(
+                name.as_str(),
+                document.as_str(),
+                expected_revision.as_deref(),
+            )?;
+            Ok(plugin.complete_skill_write(result))
         })
         .await
     }
@@ -1855,15 +1972,11 @@ impl SkillsPlugin {
     )]
     async fn invoke_delete(&self, input: &SkillsDeleteInput) -> SdkResult<ToolInvokeOutput> {
         let name = input.name.clone();
+        let expected_revision = input.expected_revision.clone();
         self.run_blocking(move |plugin| {
-            let result = plugin.delete_managed_skill(name.as_str())?;
-            plugin.invalidate_definition_catalog()?;
-            let refresh = plugin.refresh_catalog()?;
-            Ok(skill_write_output(
-                result,
-                refresh.generation,
-                refresh.changed,
-            ))
+            let result =
+                plugin.delete_managed_skill(name.as_str(), expected_revision.as_deref())?;
+            Ok(plugin.complete_skill_write(result))
         })
         .await
     }
@@ -1904,7 +2017,8 @@ impl SkillsPlugin {
                     "path": resource_path,
                     "content": content,
                     "bytes": content.len(),
-                    "content_hash": discovered_tool.skill.content_hash(),
+                    "content_hash": hex::encode(Sha256::digest(content.as_bytes())),
+                    "skill_content_hash": discovered_tool.skill.content_hash(),
                     "source_path": discovered_tool.skill.source_path,
                     "source": discovered_tool.origin.source_label(),
                 })),

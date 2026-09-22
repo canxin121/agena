@@ -1,3 +1,5 @@
+mod downloads;
+use agena_plugin_host::sdk::PathRequest;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::future::Future;
 use std::net::IpAddr;
@@ -27,10 +29,19 @@ use agena_plugin_host::PluginError;
 use agena_plugin_host::sdk::attachment::{AttachmentItem, AttachmentKind, AttachmentSource};
 use agena_plugin_host::sdk::host_api::HostClient;
 use agena_plugin_host::sdk::{
-    ActivitySourceAdapter, Result as SdkResult, ToolInvokeOutput, async_trait,
+    ActivitySourceAdapter, Result as SdkResult, ToolInvokeContext, ToolInvokeOutput, async_trait,
 };
 
 pub(crate) const WEB_PLUGIN_ID: &str = "agena.web";
+
+fn browser_owner(context: &ToolInvokeContext<'_>) -> SdkResult<agena_runtime_tools::TerminalOwner> {
+    Ok(agena_runtime_tools::TerminalOwner {
+        workspace: Path::new(context.workspace_root)
+            .canonicalize()
+            .map_err(|error| PluginError::internal_error(&error))?,
+        session_id: Some(context.session_id),
+    })
+}
 
 fn plugin_internal_error_with_context(
     context: &str,
@@ -238,6 +249,9 @@ pub struct WebBrowserConfig {
     /// down automatically. `0` disables idle auto-close.
     #[serde(default = "default_web_browser_idle_timeout_secs")]
     pub idle_timeout_secs: u64,
+    /// Opt in to unredacted page console text. May contain sensitive page data.
+    #[serde(default)]
+    pub capture_console_text: bool,
 }
 
 impl Default for WebBrowserConfig {
@@ -247,6 +261,7 @@ impl Default for WebBrowserConfig {
             executable_path: None,
             wait: WebBrowserWaitConfig::default(),
             idle_timeout_secs: default_web_browser_idle_timeout_secs(),
+            capture_console_text: false,
         }
     }
 }
@@ -503,7 +518,7 @@ pub(crate) struct WebPlugin {
     state: OnceLock<WebPluginState>,
     workspace_root: OnceLock<PathBuf>,
     crawl_lock: Mutex<()>,
-    browser_download_lock: Mutex<()>,
+    browser_download_lock: Arc<Mutex<()>>,
     /// Activity-source registration must happen after the runtime installs
     /// its live host client. Static plugins are initialized while the host is
     /// still being assembled, so registering from `init` would hit the
@@ -526,6 +541,8 @@ impl Default for WebPlugin {
 /// terminal activity record reuses the same title/URL/start time.
 #[derive(Debug, Clone)]
 struct BrowserSessionMeta {
+    owner: agena_runtime_tools::TerminalOwner,
+    browser_context_id: Option<String>,
     title: String,
     url: String,
     started_at_ms: i64,
@@ -564,11 +581,21 @@ impl BrowserSessionLog {
     }
 
     fn append(&mut self, stream: &str, text: impl Into<String>) {
+        const MAX_LOG_BYTES: usize = 16 * 1024;
+        let mut text = text.into();
+        if text.len() > MAX_LOG_BYTES {
+            let mut end = MAX_LOG_BYTES - " [truncated]".len();
+            while !text.is_char_boundary(end) {
+                end -= 1;
+            }
+            text.truncate(end);
+            text.push_str(" [truncated]");
+        }
         let line = BackgroundActivityLogLine {
             seq: self.next_seq,
             stream: stream.to_string(),
             ts_ms: chrono::Utc::now().timestamp_millis(),
-            text: text.into(),
+            text,
         };
         self.next_seq = self.next_seq.saturating_add(1);
         if self.lines.len() >= BROWSER_LOG_CAPACITY {
@@ -619,6 +646,7 @@ struct BrowserActivityState {
     meta: Arc<tokio::sync::Mutex<BTreeMap<String, BrowserSessionMeta>>>,
     logs: Arc<tokio::sync::Mutex<BTreeMap<String, BrowserSessionLog>>>,
     root: Arc<tokio::sync::Mutex<Option<CdpClient>>>,
+    contexts: Arc<tokio::sync::Mutex<BTreeMap<(PathBuf, Option<i64>), String>>>,
 }
 
 impl BrowserActivityState {
@@ -629,6 +657,7 @@ impl BrowserActivityState {
             meta: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
             logs: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
             root: Arc::new(tokio::sync::Mutex::new(None)),
+            contexts: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
         }
     }
 
@@ -682,6 +711,9 @@ impl BrowserActivityState {
                 }),
             None => Ok(false),
         };
+        if !close_result? {
+            return Ok(false);
+        }
         self.clients.lock().await.remove(target_id);
         let finished_at_ms = chrono::Utc::now().timestamp_millis();
         let meta = self.meta.lock().await.remove(target_id);
@@ -709,7 +741,7 @@ impl BrowserActivityState {
             log_secondary_plugin_failure("publish stopped browser activity", &error);
         }
         self.logs.lock().await.remove(target_id);
-        close_result
+        Ok(true)
     }
 }
 
@@ -937,6 +969,9 @@ struct BrowserClickInput {
     #[serde(default, rename = "ref", skip_serializing_if = "Option::is_none")]
     #[schemars(range(min = 0, max = 199))]
     element_ref: Option<u16>,
+    /// ID of the snapshot that supplied ref. Required with ref; stale refs are rejected.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    snapshot_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, agena_plugin_sdk::ToolInput)]
@@ -953,6 +988,9 @@ struct BrowserTypeInput {
     #[serde(default, rename = "ref", skip_serializing_if = "Option::is_none")]
     #[schemars(range(min = 0, max = 199))]
     element_ref: Option<u16>,
+    /// ID of the snapshot that supplied ref. Required with ref; stale refs are rejected.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    snapshot_id: Option<String>,
     text: String,
     #[serde(default)]
     press_enter: bool,
@@ -1040,7 +1078,7 @@ impl WebPlugin {
             state: OnceLock::new(),
             workspace_root: OnceLock::new(),
             crawl_lock: Mutex::new(()),
-            browser_download_lock: Mutex::new(()),
+            browser_download_lock: Arc::new(Mutex::new(())),
             browser_activity_source: OnceCell::new(),
             browser_state: Arc::new(BrowserActivityState::new()),
             user_agent: "agena-web".to_owned(),
@@ -1319,6 +1357,70 @@ impl WebPlugin {
         })
     }
 
+    async fn require_browser_owner(
+        &self,
+        context: &ToolInvokeContext<'_>,
+        target: &str,
+    ) -> SdkResult<()> {
+        let owner = browser_owner(context)?;
+        if self
+            .browser_state
+            .meta
+            .lock()
+            .await
+            .get(target)
+            .is_none_or(|meta| meta.owner != owner)
+        {
+            return Err(PluginError::invalid_params(
+                "browser page not found or not owned by this Agena session; call browser_open",
+            ));
+        }
+        Ok(())
+    }
+
+    async fn browser_context_for_owner(
+        &self,
+        browser: &CdpClient,
+        owner: &agena_runtime_tools::TerminalOwner,
+    ) -> SdkResult<String> {
+        let key = (owner.workspace.clone(), owner.session_id);
+        let mut contexts = self.browser_state.contexts.lock().await;
+        let active = browser
+            .command("Target.getBrowserContexts", serde_json::json!({}))
+            .await?;
+        let live = active
+            .get("browserContextIds")
+            .and_then(serde_json::Value::as_array)
+            .ok_or_else(|| PluginError::internal("browser did not return context identities"))?;
+        contexts.retain(|_, id| live.iter().any(|value| value.as_str() == Some(id.as_str())));
+        if let Some(id) = contexts.get(&key).filter(|id| {
+            active
+                .get("browserContextIds")
+                .and_then(serde_json::Value::as_array)
+                .is_some_and(|ids| ids.iter().any(|value| value.as_str() == Some(id.as_str())))
+        }) {
+            return Ok(id.clone());
+        }
+        if contexts.len() >= 64 && !contexts.contains_key(&key) {
+            return Err(PluginError::invalid_params(
+                "browser context quota reached; close owned contexts before opening more",
+            ));
+        }
+        let result = browser
+            .command(
+                "Target.createBrowserContext",
+                serde_json::json!({"disposeOnDetach":true}),
+            )
+            .await?;
+        let id = result
+            .get("browserContextId")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| PluginError::internal("browser did not return a context id"))?
+            .to_owned();
+        contexts.insert(key, id.clone());
+        Ok(id)
+    }
+
     async fn browser_endpoint(&self) -> SdkResult<String> {
         let options = self.local_browser_options()?;
         let worker_permit = crate::BLOCKING_PLUGIN_WORKERS
@@ -1348,8 +1450,23 @@ impl WebPlugin {
         events: Option<mpsc::Sender<CdpEvent>>,
     ) -> SdkResult<CdpClient> {
         let Some(target_id) = target_id else {
+            if events.is_some() {
+                // Dedicated notification streams (such as downloads) must
+                // not replace the connection that owns browser contexts.
+                let endpoint = self.browser_endpoint().await?;
+                return CdpClient::connect(endpoint.as_str(), None, events).await;
+            }
+            let mut root = self.browser_state.root.lock().await;
+            if let Some(client) = root.as_ref().filter(|client| !client.is_closed()) {
+                return Ok(client.clone());
+            }
+            // Contexts use disposeOnDetach. Retain one root connection and
+            // coalesce initial connections, otherwise opening another page
+            // can tear down the previous caller's contexts and cookies.
             let endpoint = self.browser_endpoint().await?;
-            return CdpClient::connect(endpoint.as_str(), None, events).await;
+            let client = CdpClient::connect(endpoint.as_str(), None, None).await?;
+            *root = Some(client.clone());
+            return Ok(client);
         };
 
         let existing = {
@@ -1419,6 +1536,7 @@ impl WebPlugin {
         session_id: &str,
         mut rx: mpsc::Receiver<CdpEvent>,
     ) -> SdkResult<()> {
+        let capture_console_text = self.config()?.browser.capture_console_text;
         let state = Arc::clone(&self.browser_state);
         let host = self.state()?.host.clone();
         let session_id = session_id.to_string();
@@ -1480,6 +1598,24 @@ impl WebPlugin {
                             );
                         }
                     }
+                    "Runtime.consoleAPICalled" if !capture_console_text => {
+                        state
+                            .append_log(
+                                &session_id,
+                                "console",
+                                "Console event (page payload omitted)",
+                            )
+                            .await;
+                    }
+                    "Log.entryAdded" if !capture_console_text => {
+                        state
+                            .append_log(
+                                &session_id,
+                                "log",
+                                "Browser log event (page payload omitted)",
+                            )
+                            .await;
+                    }
                     "Runtime.consoleAPICalled" => {
                         let level = event
                             .params
@@ -1527,34 +1663,24 @@ impl WebPlugin {
         Ok(())
     }
 
+    fn screenshot_permission_paths(
+        &self,
+        input: &BrowserScreenshotInput,
+    ) -> SdkResult<Vec<PathRequest>> {
+        let path = match input.path.as_deref() {
+            Some(value) if Path::new(value).is_absolute() => PathBuf::from(value),
+            Some(value) => self.workspace_root()?.join(value),
+            None => self.workspace_root()?.join(".agena/artifacts/browser"),
+        };
+        Ok(vec![PathRequest::write(path.display().to_string())])
+    }
+
     async fn browser_snapshot_value(&self, target_id: &str) -> SdkResult<serde_json::Value> {
         let client = self.browser_client(Some(target_id)).await?;
         client
             .command("Runtime.enable", serde_json::json!({}))
             .await?;
-        let expression = r#"(() => {
-            const clean = value => String(value || '').replace(/\s+/g, ' ').trim();
-            const elements = Array.from(document.querySelectorAll('a,button,input,textarea,select,[role],[contenteditable="true"]'))
-                .slice(0, 200)
-                .map((el, index) => ({
-                    ref: index,
-                    tag: el.tagName.toLowerCase(),
-                    role: el.getAttribute('role'),
-                    type: el.getAttribute('type'),
-                    name: el.getAttribute('name'),
-                    id: el.id || null,
-                    text: clean(el.innerText || el.value || el.getAttribute('aria-label') || el.getAttribute('title')).slice(0, 300),
-                    disabled: Boolean(el.disabled),
-                }));
-            return {
-                url: location.href,
-                title: document.title,
-                ready_state: document.readyState,
-                text: clean(document.body ? document.body.innerText : '').slice(0, 50000),
-                elements,
-            };
-        })()"#;
-        client.evaluate(expression).await
+        client.evaluate(&browser_snapshot_expression()).await
     }
 
     /// Re-check the managed page's committed URL after an interaction as a
@@ -1723,7 +1849,8 @@ impl WebPlugin {
         let engines = search_engines(input.engine);
         let explicit_engine = !matches!(input.engine, None | Some(WebSearchEngineSelection::Auto));
         let mut attempted_engines = Vec::new();
-        let mut last_error = None;
+        let mut failures = Vec::new();
+        let mut successful_engines = 0;
         let mut selected_engine = WebSearchEngineSelection::Auto.label().to_string();
         let mut results = Vec::new();
 
@@ -1731,6 +1858,7 @@ impl WebPlugin {
             attempted_engines.push(engine.to_string());
             match self.search_with_engine(query, limit, engine, input).await {
                 Ok(engine_results) => {
+                    successful_engines += 1;
                     if explicit_engine || !engine_results.is_empty() {
                         selected_engine = engine.to_string();
                         results = engine_results;
@@ -1739,18 +1867,12 @@ impl WebPlugin {
                 }
                 Err(err) if explicit_engine => return Err(err),
                 Err(err) => {
-                    last_error = Some(format!("{engine}: {err}"));
+                    failures.push(format!("{engine}: {err}"));
                 }
             }
         }
 
-        if results.is_empty()
-            && !explicit_engine
-            && attempted_engines.len() == search_engines(input.engine).len()
-            && let Some(error) = last_error
-        {
-            tracing::debug!(target: "agena::web", %error, "auto web search exhausted engines");
-        }
+        ensure_search_available(successful_engines, &failures)?;
 
         let output = CrawlWebSearchOutput {
             query: query.to_string(),
@@ -1758,10 +1880,18 @@ impl WebPlugin {
             attempted_engines,
             results,
         };
-        let text = format_web_search(&output);
+        let mut text = format_web_search(&output);
+        if !failures.is_empty() {
+            text.push_str(&format!(
+                "\nSearch partially degraded: {} source(s) failed.",
+                failures.len()
+            ));
+        }
         let summary = format!("{} results · {}", output.results.len(), output.engine);
-        let payload =
+        let mut payload =
             serde_json::to_value(output).map_err(|err| PluginError::internal_error(&err))?;
+        payload["partial"] = serde_json::json!(!failures.is_empty());
+        payload["engine_errors"] = serde_json::json!(failures);
         Ok(ToolInvokeOutput::from_parts(
             format!("web search {query}"),
             summary,
@@ -1776,9 +1906,15 @@ impl WebPlugin {
         tags(network, interactive, mutate),
         name = "browser_open",
         summary = "Open a page in a managed interactive browser session.",
+        network(connect = input.url.clone()),
         read_only
     )]
-    async fn browser_open(&self, input: &BrowserOpenInput) -> SdkResult<ToolInvokeOutput> {
+    async fn browser_open(
+        &self,
+        context: &ToolInvokeContext<'_>,
+        input: &BrowserOpenInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        let owner = browser_owner(context)?;
         let url = prepare_fetch_url(input.url.as_str()).map_err(crawl_error_to_plugin)?;
         self.validate_network_target(&url).await?;
         if let Err(error) = self.ensure_browser_activity_source().await {
@@ -1793,11 +1929,11 @@ impl WebPlugin {
         }
         let preflight_redirects = self.browser_preflight_redirects(&url).await?;
         let browser = self.browser_client(None).await?;
-        *self.browser_state.root.lock().await = Some(browser.clone());
+        let browser_context_id = self.browser_context_for_owner(&browser, &owner).await?;
         let created = browser
             .command(
                 "Target.createTarget",
-                serde_json::json!({ "url": "about:blank" }),
+                serde_json::json!({ "url": "about:blank", "browserContextId": browser_context_id }),
             )
             .await?;
         let target_id = created
@@ -1853,6 +1989,8 @@ impl WebPlugin {
         let title_target = browser_title_target(&url);
         let started_at_ms = chrono::Utc::now().timestamp_millis();
         let meta = BrowserSessionMeta {
+            owner,
+            browser_context_id: Some(browser_context_id),
             title: format!("Browser · {title_target}"),
             url: url.to_string(),
             started_at_ms,
@@ -1915,7 +2053,12 @@ impl WebPlugin {
         Ok(ToolInvokeOutput::from_parts(
             format!("Open browser · {title_target}"),
             browser_snapshot_summary(&snapshot),
-            format!("Opened {} in browser session {}.", url, target_id),
+            format!(
+                "Opened {} in browser session {}.\n\n{}",
+                url,
+                target_id,
+                format_browser_snapshot(&snapshot)
+            ),
             Some(serde_json::json!({
                 "session_id": target_id,
                 "snapshot": snapshot,
@@ -1934,7 +2077,21 @@ impl WebPlugin {
         read_only,
         concurrency_safe
     )]
-    async fn browser_list(&self, _input: &BrowserListInput) -> SdkResult<ToolInvokeOutput> {
+    async fn browser_list(
+        &self,
+        context: &ToolInvokeContext<'_>,
+        _input: &BrowserListInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        let owner = browser_owner(context)?;
+        let owned: BTreeSet<String> = self
+            .browser_state
+            .meta
+            .lock()
+            .await
+            .iter()
+            .filter(|(_, meta)| meta.owner == owner)
+            .map(|(id, _)| id.clone())
+            .collect();
         // Listing must never start the managed browser. Report the current
         // process state first and only connect when it is already running.
         let worker_permit = crate::BLOCKING_PLUGIN_WORKERS
@@ -1980,6 +2137,7 @@ impl WebPlugin {
                     .iter()
                     .filter(|target| {
                         target.get("type").and_then(serde_json::Value::as_str) == Some("page")
+                            && target.get("targetId").and_then(serde_json::Value::as_str).is_some_and(|id|owned.contains(id))
                     })
                     .map(|target| {
                         serde_json::json!({
@@ -2011,7 +2169,13 @@ impl WebPlugin {
         summary = "Close one page target in the managed interactive browser.",
         mutating
     )]
-    async fn browser_close(&self, input: &BrowserSessionInput) -> SdkResult<ToolInvokeOutput> {
+    async fn browser_close(
+        &self,
+        context: &ToolInvokeContext<'_>,
+        input: &BrowserSessionInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        self.require_browser_owner(context, &input.session_id)
+            .await?;
         let host = self.state()?.host.clone();
         let closed = self
             .browser_state
@@ -2039,55 +2203,80 @@ impl WebPlugin {
     #[tool(
         tags(network, interactive, mutate),
         name = "browser_shutdown",
-        summary = "Shut down the managed browser process and all its sessions.",
-        help = "Closes the underlying Chrome/Chromium process used for rendered fetches and interactive browsing, and removes its temporary profile. All browser sessions are discarded; the next browser_open starts a fresh browser. Use this to release memory without exiting Agena.",
+        summary = "Close browser pages owned by the current Agena session without affecting other callers.",
+        help = "Caller-scoped shutdown closes owned pages only. The shared Chrome process and other sessions are not stopped. Global browser shutdown is reserved for trusted host lifecycle control.",
         mutating
     )]
-    async fn browser_shutdown(&self, _input: &BrowserListInput) -> SdkResult<ToolInvokeOutput> {
-        let finished_at_ms = chrono::Utc::now().timestamp_millis();
-        let sessions = std::mem::take(&mut *self.browser_state.meta.lock().await)
-            .into_iter()
-            .collect::<Vec<_>>();
-        for (session_id, meta) in sessions {
-            self.browser_state
-                .append_log(&session_id, "event", "Managed browser shut down.")
-                .await;
-            self.publish_browser_terminal(
-                &session_id,
-                Some(&meta),
-                finished_at_ms,
-                "Managed browser shut down.".to_string(),
-            )
-            .await;
-        }
-        self.browser_state.clients.lock().await.clear();
-        *self.browser_state.root.lock().await = None;
-        self.browser_state.logs.lock().await.clear();
-        let worker_permit = crate::BLOCKING_PLUGIN_WORKERS
-            .acquire()
+    async fn browser_shutdown(
+        &self,
+        context: &ToolInvokeContext<'_>,
+        _input: &BrowserListInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        let owner = browser_owner(context)?;
+        let targets = self
+            .browser_state
+            .meta
+            .lock()
             .await
-            .map_err(|error| {
-                plugin_internal_error_with_context("acquire browser shutdown worker", &error)
-            })?;
-        let closed = tokio::task::spawn_blocking(move || {
-            let _worker_permit = worker_permit;
-            shutdown_local_browser()
-        })
-        .await
-        .map_err(|error| {
-            plugin_internal_error_with_context("browser shutdown task failed", &error)
-        })?
-        .map_err(crawl_error_to_plugin)?;
+            .iter()
+            .filter(|(_, meta)| meta.owner == owner)
+            .map(|(id, _)| id.clone())
+            .collect::<Vec<_>>();
+        let mut closed = Vec::new();
+        let mut failures = Vec::new();
+        if !targets.is_empty() {
+            let host = self.state()?.host.clone();
+            for id in targets {
+                match self
+                    .browser_state
+                    .close_session(&id, "Closed by owning session", host.as_ref())
+                    .await
+                {
+                    Ok(true) => closed.push(id),
+                    Ok(false) => failures.push(format!("{id}: not acknowledged")),
+                    Err(error) => failures.push(format!("{id}: {}", error.failure.user.fallback)),
+                }
+            }
+        }
+        let key = (owner.workspace.clone(), owner.session_id);
+        if failures.is_empty() {
+            let context_id = self.browser_state.contexts.lock().await.get(&key).cloned();
+            if let Some(context_id) = context_id {
+                let root = self.browser_state.root.lock().await.clone();
+                match root {
+                    Some(root) => match root
+                        .command(
+                            "Target.disposeBrowserContext",
+                            serde_json::json!({"browserContextId":context_id}),
+                        )
+                        .await
+                    {
+                        Ok(_) => {
+                            self.browser_state.contexts.lock().await.remove(&key);
+                        }
+                        Err(error) => failures.push(format!(
+                            "owned context cleanup failed: {}",
+                            error.failure.user.fallback
+                        )),
+                    },
+                    None => failures.push(
+                        "owned context cleanup could not reach the browser; state retained".into(),
+                    ),
+                }
+            }
+        }
         Ok(ToolInvokeOutput::from_parts(
-            "browser shutdown",
-            if closed { "Closed" } else { "Not running" },
-            if closed {
-                "Closed the managed browser process and removed its profile."
-            } else {
-                "No managed browser process was running."
-            },
-            Some(serde_json::json!({ "closed": closed })),
-            std::collections::BTreeMap::new(),
+            "Close owned browser pages",
+            format!("{} closed · {} failures", closed.len(), failures.len()),
+            format!(
+                "Closed {} page(s) owned by this Agena session. Shared browser process was not shut down.\n{}",
+                closed.len(),
+                failures.join("\n")
+            ),
+            Some(
+                serde_json::json!({"closed_sessions":closed,"failures":failures,"process_shutdown":false}),
+            ),
+            Default::default(),
             Vec::new(),
         ))
     }
@@ -2099,7 +2288,13 @@ impl WebPlugin {
         read_only,
         concurrency_safe
     )]
-    async fn browser_snapshot(&self, input: &BrowserSessionInput) -> SdkResult<ToolInvokeOutput> {
+    async fn browser_snapshot(
+        &self,
+        context: &ToolInvokeContext<'_>,
+        input: &BrowserSessionInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        self.require_browser_owner(context, &input.session_id)
+            .await?;
         let snapshot = self
             .browser_snapshot_value(input.session_id.as_str())
             .await?;
@@ -2123,8 +2318,18 @@ impl WebPlugin {
         summary = "Click a browser element selected by CSS or the latest snapshot ref.",
         mutating
     )]
-    async fn browser_click(&self, input: &BrowserClickInput) -> SdkResult<ToolInvokeOutput> {
-        let target = browser_element_expression(input.selector.as_deref(), input.element_ref)?;
+    async fn browser_click(
+        &self,
+        context: &ToolInvokeContext<'_>,
+        input: &BrowserClickInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        self.require_browser_owner(context, &input.session_id)
+            .await?;
+        let target = browser_element_expression(
+            input.selector.as_deref(),
+            input.element_ref,
+            input.snapshot_id.as_deref(),
+        )?;
         let expression = format!(
             "(() => {{ const el = {target}; if (!el) return {{ok:false,error:'browser element not found'}}; if (el.disabled) return {{ok:false,error:'element is disabled'}}; el.scrollIntoView({{block:'center'}}); el.focus(); el.click(); return {{ok:true}}; }})()"
         );
@@ -2147,10 +2352,17 @@ impl WebPlugin {
         summary = "Fill a browser input selected by CSS or the latest snapshot ref, optionally pressing Enter.",
         mutating
     )]
-    async fn browser_type(&self, input: &BrowserTypeInput) -> SdkResult<ToolInvokeOutput> {
+    async fn browser_type(
+        &self,
+        context: &ToolInvokeContext<'_>,
+        input: &BrowserTypeInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        self.require_browser_owner(context, &input.session_id)
+            .await?;
         let expression = browser_type_expression(
             input.selector.as_deref(),
             input.element_ref,
+            input.snapshot_id.as_deref(),
             input.text.as_str(),
             input.press_enter,
         )?;
@@ -2174,7 +2386,13 @@ impl WebPlugin {
         read_only,
         concurrency_safe
     )]
-    async fn browser_wait(&self, input: &BrowserWaitInput) -> SdkResult<ToolInvokeOutput> {
+    async fn browser_wait(
+        &self,
+        context: &ToolInvokeContext<'_>,
+        input: &BrowserWaitInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        self.require_browser_owner(context, &input.session_id)
+            .await?;
         if input.selector.is_some() && input.text.is_some() {
             return Err(PluginError::invalid_params(
                 "browser_wait accepts selector or text, not both",
@@ -2201,12 +2419,16 @@ impl WebPlugin {
         tags(network, interactive, mutate, filesystem),
         name = "browser_screenshot",
         summary = "Capture a browser screenshot and return it as an image attachment.",
+        path(requests = self.screenshot_permission_paths(input)?),
         mutating
     )]
     async fn browser_screenshot(
         &self,
+        context: &ToolInvokeContext<'_>,
         input: &BrowserScreenshotInput,
     ) -> SdkResult<ToolInvokeOutput> {
+        self.require_browser_owner(context, &input.session_id)
+            .await?;
         let client = self.browser_client(Some(input.session_id.as_str())).await?;
         client.command("Page.enable", serde_json::json!({})).await?;
         let result = client
@@ -2230,7 +2452,7 @@ impl WebPlugin {
         let relative = input
             .path
             .clone()
-            .unwrap_or_else(|| format!(".agena/artifacts/browser/{}.png", input.session_id));
+            .unwrap_or_else(|| format!(".agena/artifacts/browser/{}.png", uuid::Uuid::new_v4()));
         let path = if Path::new(relative.as_str()).is_absolute() {
             PathBuf::from(relative.as_str())
         } else {
@@ -2278,9 +2500,17 @@ impl WebPlugin {
         tags(network, interactive, mutate, filesystem),
         name = "browser_download",
         summary = "Download one HTTP(S) URL through a managed browser session and return a local artifact.",
+        network(connect = input.url.clone()),
+        path(write = self.workspace_root()?.join(".agena/artifacts/browser/downloads").display().to_string()),
         mutating
     )]
-    async fn browser_download(&self, input: &BrowserDownloadInput) -> SdkResult<ToolInvokeOutput> {
+    async fn browser_download(
+        &self,
+        context: &ToolInvokeContext<'_>,
+        input: &BrowserDownloadInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        self.require_browser_owner(context, &input.session_id)
+            .await?;
         const MAX_DOWNLOAD_BYTES: u64 = 100 * 1024 * 1024;
         let url = prepare_fetch_url(input.url.as_str()).map_err(crawl_error_to_plugin)?;
         self.validate_network_target(&url).await?;
@@ -2289,130 +2519,59 @@ impl WebPlugin {
             .workspace_root()?
             .join(".agena/artifacts/browser/downloads")
             .join(uuid::Uuid::new_v4().simple().to_string());
-        tokio::fs::create_dir_all(&download_dir)
+        let endpoint = self.browser_endpoint().await?;
+        let browser_context_id = self
+            .browser_state
+            .meta
+            .lock()
             .await
-            .map_err(|error| {
-                plugin_internal_error_with_context(
-                    "cannot create browser download directory",
-                    &error,
-                )
-            })?;
-
-        // Chromium's download behavior is browser-global. Serialize this
-        // short setup/navigation/polling sequence so two model calls cannot
-        // redirect each other's artifacts into the wrong managed directory.
-        let _guard = self.browser_download_lock.lock().await;
-        let root = self.browser_client(None).await?;
-        root.command(
-            "Browser.setDownloadBehavior",
-            serde_json::json!({
-                "behavior": "allow",
-                "downloadPath": download_dir,
-                "eventsEnabled": true,
-            }),
+            .get(&input.session_id)
+            .and_then(|meta| meta.browser_context_id.clone());
+        let result = downloads::transfer(
+            endpoint,
+            browser_context_id,
+            input.session_id.clone(),
+            url.to_string(),
+            download_dir,
+            MAX_DOWNLOAD_BYTES,
+            Duration::from_millis(input.timeout_ms),
+            Arc::clone(&self.browser_download_lock),
         )
         .await?;
-        drop(root);
-        let page = self.browser_client(Some(input.session_id.as_str())).await?;
-        page.command("Page.enable", serde_json::json!({})).await?;
-        page.command("Page.navigate", serde_json::json!({ "url": url.as_str() }))
-            .await?;
-        drop(page);
-
-        let deadline = tokio::time::Instant::now() + Duration::from_millis(input.timeout_ms);
-        let mut last_candidate: Option<(PathBuf, u64)> = None;
-        loop {
-            let mut entries = tokio::fs::read_dir(&download_dir).await.map_err(|error| {
-                plugin_internal_error_with_context(
-                    "cannot inspect browser download directory",
-                    &error,
-                )
-            })?;
-            while let Some(entry) = entries.next_entry().await.map_err(|error| {
-                plugin_internal_error_with_context(
-                    "cannot inspect browser download artifact",
-                    &error,
-                )
-            })? {
-                let path = entry.path();
-                let partial = path
-                    .extension()
-                    .and_then(|extension| extension.to_str())
-                    .is_some_and(|extension| extension.eq_ignore_ascii_case("crdownload"));
-                if partial
-                    || !entry
-                        .file_type()
-                        .await
-                        .map_err(|error| PluginError::internal_error(&error))?
-                        .is_file()
-                {
-                    continue;
-                }
-                let size = entry
-                    .metadata()
-                    .await
-                    .map_err(|error| PluginError::internal_error(&error))?
-                    .len();
-                if size > MAX_DOWNLOAD_BYTES {
-                    return Err(PluginError::internal(format!(
-                        "browser download exceeds the {} MiB artifact limit",
-                        MAX_DOWNLOAD_BYTES / (1024 * 1024)
-                    )));
-                }
-                if last_candidate
-                    .as_ref()
-                    .is_some_and(|(previous_path, previous_size)| {
-                        previous_path == &path && *previous_size == size
-                    })
-                {
-                    let filename = path
-                        .file_name()
-                        .and_then(|value| value.to_str())
-                        .map(ToOwned::to_owned);
-                    let kind = AttachmentKind::detect("", filename.as_deref());
-                    let attachment = AttachmentItem {
-                        kind,
-                        mime: "application/octet-stream".to_string(),
-                        source: AttachmentSource::LocalPath {
-                            path: path.to_string_lossy().to_string(),
-                        },
-                        filename,
-                        title: Some(format!("Browser download from {url}")),
-                        size_bytes: Some(size),
-                        sha256: None,
-                        width: None,
-                        height: None,
-                        duration_ms: None,
-                        page_count: None,
-                    };
-                    return Ok(ToolInvokeOutput::from_parts(
-                        "browser download",
-                        format!("{} bytes", size),
-                        format!("Saved browser download to '{}'.", path.display()),
-                        Some(serde_json::json!({
-                            "session_id": input.session_id,
-                            "url": url,
-                            "path": path,
-                            "size_bytes": size,
-                            "preflight_redirects": preflight_redirects,
-                        })),
-                        std::collections::BTreeMap::from([
-                            ("agena.effect".to_string(), "file_changes".to_string()),
-                            ("path".to_string(), path.to_string_lossy().to_string()),
-                        ]),
-                        vec![attachment],
-                    ));
-                }
-                last_candidate = Some((path, size));
-            }
-            if tokio::time::Instant::now() >= deadline {
-                return Err(PluginError::internal(format!(
-                    "browser download timed out after {} ms",
-                    input.timeout_ms
-                )));
-            }
-            tokio::time::sleep(Duration::from_millis(200)).await;
-        }
+        let filename = result
+            .path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .map(str::to_owned);
+        let attachment = AttachmentItem {
+            kind: AttachmentKind::detect("", filename.as_deref()),
+            mime: "application/octet-stream".into(),
+            source: AttachmentSource::LocalPath {
+                path: result.path.display().to_string(),
+            },
+            filename,
+            title: Some(format!("Browser download from {url}")),
+            size_bytes: Some(result.size),
+            sha256: None,
+            width: None,
+            height: None,
+            duration_ms: None,
+            page_count: None,
+        };
+        Ok(ToolInvokeOutput::from_parts(
+            "browser download",
+            format!("{} bytes · completed GUID {}", result.size, result.guid),
+            format!(
+                "Saved completed browser download at {}.\n{}",
+                result.path.display(),
+                result.warnings.join("\n")
+            ),
+            Some(
+                serde_json::json!({"session_id":input.session_id,"url":url,"path":result.path,"size_bytes":result.size,"download_guid":result.guid,"state":"completed","cleanup_warnings":result.warnings,"preflight_redirects":preflight_redirects}),
+            ),
+            Default::default(),
+            vec![attachment],
+        ))
     }
 
     async fn wait_for_browser_condition(
@@ -2440,10 +2599,19 @@ impl WebPlugin {
                 "document.readyState === 'complete' || document.readyState === 'interactive'"
                     .to_string()
             };
-            if let Ok(client) = self.browser_client(Some(target_id)).await
-                && client.evaluate(expression.as_str()).await?.as_bool() == Some(true)
-            {
-                return Ok(());
+            let probe = async {
+                let client = self.browser_client(Some(target_id)).await?;
+                client.evaluate(expression.as_str()).await
+            };
+            match tokio::time::timeout_at(deadline, probe).await {
+                Ok(Ok(value)) if value.as_bool() == Some(true) => return Ok(()),
+                Ok(Ok(_)) => {}
+                Ok(Err(error)) => return Err(error),
+                Err(_) => {
+                    return Err(PluginError::internal(format!(
+                        "browser wait exceeded {timeout_ms} ms"
+                    )));
+                }
             }
             if tokio::time::Instant::now() >= deadline {
                 return Err(PluginError::internal(format!(
@@ -3204,25 +3372,55 @@ fn ensure_browser_action(result: &serde_json::Value) -> SdkResult<()> {
 ///
 /// This runs only in the already attached CDP target, and it does not
 /// introduce a separate browser/plugin execution surface.
+fn ensure_search_available(successes: usize, failures: &[String]) -> SdkResult<()> {
+    if successes == 0 && !failures.is_empty() {
+        return Err(PluginError::internal(format!(
+            "all search engines failed; this is not an empty search result: {}",
+            failures.join("; ")
+        )));
+    }
+    Ok(())
+}
+
+fn browser_snapshot_expression() -> String {
+    include_str!("browser/snapshot.js").replace(
+        "__AGENA_SNAPSHOT_ID__",
+        &format!("\"{}\"", uuid::Uuid::new_v4()),
+    )
+}
+
 fn browser_element_expression(
     selector: Option<&str>,
     element_ref: Option<u16>,
+    snapshot_id: Option<&str>,
 ) -> SdkResult<String> {
     match (
-        selector.map(str::trim).filter(|value| !value.is_empty()),
+        selector.filter(|value| !value.trim().is_empty()),
         element_ref,
     ) {
-        (Some(selector), None) => serde_json::to_string(selector)
+        (Some(selector), None) if snapshot_id.is_none() => serde_json::to_string(selector)
             .map(|selector| format!("document.querySelector({selector})"))
             .map_err(|error| PluginError::invalid_params_error(&error)),
-        (None, Some(element_ref)) => Ok(format!(
-            "Array.from(document.querySelectorAll('a,button,input,textarea,select,[role],[contenteditable=\"true\"]'))[{element_ref}] || null"
-        )),
-        (Some(_), Some(_)) => Err(PluginError::invalid_params(
-            "browser action accepts exactly one of selector or ref",
-        )),
-        (None, None) => Err(PluginError::invalid_params(
-            "browser action requires selector or ref from browser_snapshot",
+        (None, Some(element_ref)) => {
+            let id = snapshot_id.filter(|id| !id.is_empty()).ok_or_else(|| {
+                PluginError::invalid_params(
+                    "ref requires snapshot_id from browser_snapshot; refresh before retrying",
+                )
+            })?;
+            let id = serde_json::to_string(id)
+                .map_err(|error| PluginError::invalid_params_error(&error))?;
+            Ok(format!(
+                r#"(() => {{
+                const state = globalThis[Symbol.for('agena.browser.snapshot')];
+                if (!state || state.id !== {id} || state.document !== document || state.url !== location.href) throw new Error('stale browser snapshot; refresh before acting');
+                const el = state.nodes[{element_ref}];
+                if (!el || !el.isConnected || el.ownerDocument !== document || state.signature(el) !== state.signatures[{element_ref}]) throw new Error('stale browser element; refresh before acting');
+                return el;
+            }})()"#
+            ))
+        }
+        _ => Err(PluginError::invalid_params(
+            "provide selector alone, or ref together with snapshot_id",
         )),
     }
 }
@@ -3230,10 +3428,11 @@ fn browser_element_expression(
 fn browser_type_expression(
     selector: Option<&str>,
     element_ref: Option<u16>,
+    snapshot_id: Option<&str>,
     text: &str,
     press_enter: bool,
 ) -> SdkResult<String> {
-    let target = browser_element_expression(selector, element_ref)?;
+    let target = browser_element_expression(selector, element_ref, snapshot_id)?;
     let text =
         serde_json::to_string(text).map_err(|error| PluginError::invalid_params_error(&error))?;
     let enter = if press_enter {
@@ -3287,7 +3486,7 @@ fn browser_type_expression(
             el.dispatchEvent(inputEvent);
             el.dispatchEvent(new Event('change', {{bubbles:true}}));
             {enter}
-            return {{ok:true,value,method}};
+            return {{ok:true,method,value_omitted:true}};
         }})()"#
     ))
 }
@@ -3304,7 +3503,13 @@ fn browser_action_output(
     ToolInvokeOutput::from_parts(
         title,
         summary,
-        format!("Completed {title} in browser session {session_id}."),
+        format!(
+            "Browser action acknowledged: {title} in session {session_id}.\n\n{}",
+            result
+                .get("snapshot")
+                .map(format_browser_snapshot)
+                .unwrap_or_default()
+        ),
         Some(serde_json::json!({
             "session_id": session_id,
             "result": result,
@@ -3328,28 +3533,67 @@ fn browser_snapshot_summary(snapshot: &serde_json::Value) -> String {
     format!("{title} · {element_count} interactive elements")
 }
 
+fn browser_text_prefix(text: &str, max_bytes: usize) -> &str {
+    let mut end = text.len().min(max_bytes);
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    &text[..end]
+}
+
 fn format_browser_snapshot(snapshot: &serde_json::Value) -> String {
-    let title = snapshot
-        .get("title")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or_default();
-    let url = snapshot
-        .get("url")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or_default();
-    let text = snapshot
-        .get("text")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or_default();
-    let elements = snapshot
+    let value = |key| {
+        snapshot
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+    };
+    let mut text = format!(
+        "Snapshot ID: {}\nTitle: {}\nURL: {}\nReady state: {}\nUse ref together with this snapshot_id; form values are omitted.\n",
+        value("snapshot_id"),
+        browser_text_prefix(value("title"), 512),
+        browser_text_prefix(value("url"), 1024),
+        value("ready_state")
+    );
+    if let Some(elements) = snapshot
         .get("elements")
         .and_then(serde_json::Value::as_array)
-        .map(|elements| elements.len())
-        .unwrap_or_default();
-    format!(
-        "Title: {title}\nURL: {url}\nInteractive elements: {elements}\n\n{}",
-        preview_text(text, 12_000)
-    )
+    {
+        text.push_str(&format!("Interactive elements: {}\n", elements.len()));
+        for (index, element) in elements.iter().enumerate() {
+            let label = element
+                .get("text")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default();
+            let tag = element
+                .get("tag")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default();
+            let row = format!(
+                "ref {} [{}] {}{}\n",
+                element
+                    .get("ref")
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(index as u64),
+                browser_text_prefix(tag, 32),
+                browser_text_prefix(label, 128),
+                if element.get("disabled").and_then(serde_json::Value::as_bool) == Some(true) {
+                    " (disabled)"
+                } else {
+                    ""
+                }
+            );
+            if text.len() + row.len() > 20000 {
+                text.push_str("Additional element rows omitted from the text preview.\n");
+                break;
+            }
+            text.push_str(&row);
+        }
+    }
+    text.push_str("\nVisible text:\n");
+    let remaining = 32000usize.saturating_sub(text.len());
+    text.push_str(browser_text_prefix(value("text"), remaining));
+    text
 }
 
 fn is_public_address(address: IpAddr) -> bool {
@@ -3886,7 +4130,7 @@ mod tests {
 
     #[test]
     fn browser_type_expression_uses_native_setter_and_react_tracker_fallback() {
-        let expression = browser_type_expression(Some("#search"), None, "hello", true)
+        let expression = browser_type_expression(Some("#search"), None, None, "hello", true)
             .expect("browser type expression");
         assert!(expression.contains("Object.getOwnPropertyDescriptor"));
         assert!(expression.contains("_valueTracker"));
@@ -3895,12 +4139,12 @@ mod tests {
         assert!(expression.contains("\"#search\""));
         assert!(expression.contains("\"hello\""));
         assert!(
-            browser_element_expression(None, Some(7))
+            browser_element_expression(None, Some(7), Some("snapshot"))
                 .expect("snapshot ref expression")
-                .contains("[7] || null")
+                .contains("state.nodes[7]")
         );
-        assert!(browser_element_expression(Some("#search"), Some(7)).is_err());
-        assert!(browser_element_expression(None, None).is_err());
+        assert!(browser_element_expression(Some("#search"), Some(7), Some("snapshot")).is_err());
+        assert!(browser_element_expression(None, None, None).is_err());
     }
 
     #[tokio::test]
@@ -3915,6 +4159,13 @@ mod tests {
             // still runs on build hosts without a browser binary.
             return;
         };
+        struct BrowserCleanup;
+        impl Drop for BrowserCleanup {
+            fn drop(&mut self) {
+                let _ = agena_web::shutdown_local_browser();
+            }
+        }
+        let _cleanup = BrowserCleanup;
         let root = CdpClient::connect(endpoint.as_str(), None, None)
             .await
             .expect("connect browser");
@@ -3967,7 +4218,7 @@ mod tests {
             .expect("install controlled input fixture");
         let type_result = page
             .evaluate(
-                browser_type_expression(Some("#controlled"), None, "updated", false)
+                browser_type_expression(Some("#controlled"), None, None, "updated", false)
                     .expect("browser type expression")
                     .as_str(),
             )
@@ -3983,6 +4234,76 @@ mod tests {
         assert_eq!(metrics["trackerValue"], "");
         assert_eq!(metrics["inputEvents"], 1);
         assert_eq!(metrics["changeEvents"], 1);
+        page.evaluate(r#"(() => {
+            document.body.innerHTML = '<div role="group"><input id="password" type="password" value="AUDIT_SECRET"><textarea id="token">AUDIT_TEXTAREA_SECRET</textarea><div contenteditable="true">AUDIT_EDITABLE_SECRET</div><button id="first">First</button><button id="second">Second</button></div>';
+            const unicodeButton = document.createElement('button');
+            unicodeButton.id = 'unicode'; unicodeButton.textContent = 'a' + '😀'.repeat(200);
+            document.body.append(unicodeButton);
+            window.auditClicks = [];
+            document.querySelector('#second').onclick = () => window.auditClicks.push('second');
+            return {ok:true};
+        })()"#).await.expect("install sensitive DOM fixture");
+        let snapshot = page
+            .evaluate(&super::browser_snapshot_expression())
+            .await
+            .expect("capture production snapshot");
+        let encoded = snapshot.to_string();
+        assert!(!encoded.contains("AUDIT_SECRET"));
+        assert!(!encoded.contains("AUDIT_TEXTAREA_SECRET"));
+        assert!(!encoded.contains("AUDIT_EDITABLE_SECRET"));
+        let unicode_text = snapshot["elements"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|element| element["id"] == "unicode")
+            .unwrap()["text"]
+            .as_str()
+            .unwrap();
+        assert_eq!(
+            unicode_text.chars().count(),
+            150,
+            "snapshot clipping must not split UTF-16 surrogate pairs"
+        );
+        let snapshot_id = snapshot["snapshot_id"].as_str().unwrap();
+        let element_ref = snapshot["elements"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|el| el["id"] == "second")
+            .unwrap()["ref"]
+            .as_u64()
+            .unwrap() as u16;
+        page.evaluate("(() => { const b=document.createElement('button'); b.textContent='Inserted'; document.body.prepend(b); return {ok:true}; })()").await.unwrap();
+        let selected =
+            browser_element_expression(None, Some(element_ref), Some(snapshot_id)).unwrap();
+        page.evaluate(&format!(
+            "(() => {{ ({selected}).click(); return {{ok:true}}; }})()"
+        ))
+        .await
+        .expect("click captured node, not shifted array index");
+        assert_eq!(
+            page.evaluate("window.auditClicks").await.unwrap(),
+            serde_json::json!(["second"])
+        );
+        let typed = page
+            .evaluate(
+                &browser_type_expression(Some("#password"), None, None, "AUDIT_NEW_SECRET", false)
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(!typed.to_string().contains("AUDIT_NEW_SECRET"));
+        assert!(typed.get("value").is_none());
+        page.evaluate(&super::browser_snapshot_expression())
+            .await
+            .unwrap();
+        assert!(
+            page.evaluate(&selected).await.is_err(),
+            "old snapshot must be rejected"
+        );
+        eprintln!(
+            "AUDIT_REAL_BROWSER: secret omission, stable nodes, stale snapshot rejection passed"
+        );
         page.command("Page.enable", serde_json::json!({}))
             .await
             .expect("enable page");
@@ -3997,6 +4318,111 @@ mod tests {
             screenshot["data"]
                 .as_str()
                 .is_some_and(|value| !value.is_empty())
+        );
+        let isolated = WebPlugin::new();
+        *isolated.browser_state.root.lock().await = Some(root.clone());
+        let (first, second) =
+            tokio::join!(isolated.browser_client(None), isolated.browser_client(None));
+        let first = first.expect("reuse context-owning root without relaunching");
+        let second = second.expect("coalesce root access for another call");
+        assert!(first.commands.same_channel(&second.commands));
+        assert!(root.commands.same_channel(&first.commands));
+
+        let scope = tempfile::tempdir().unwrap();
+        let owner_a = agena_runtime_tools::TerminalOwner {
+            workspace: scope.path().canonicalize().unwrap(),
+            session_id: Some(41),
+        };
+        let owner_b = agena_runtime_tools::TerminalOwner {
+            workspace: owner_a.workspace.clone(),
+            session_id: Some(42),
+        };
+        let context_a = isolated
+            .browser_context_for_owner(&root, &owner_a)
+            .await
+            .unwrap();
+        let context_b = isolated
+            .browser_context_for_owner(&root, &owner_b)
+            .await
+            .unwrap();
+        assert_ne!(context_a, context_b);
+        let retained = isolated.browser_client(None).await.unwrap();
+        assert!(retained.commands.same_channel(&root.commands));
+        let contexts = retained
+            .command("Target.getBrowserContexts", serde_json::json!({}))
+            .await
+            .unwrap();
+        assert!(
+            contexts["browserContextIds"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|id| id == &context_a)
+        );
+        assert!(
+            contexts["browserContextIds"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|id| id == &context_b)
+        );
+
+        root.command("Storage.setCookies",serde_json::json!({"browserContextId":context_a,"cookies":[{"name":"audit_private","value":"synthetic_cookie","url":"https://example.invalid/"}]})).await.unwrap();
+        let own = root
+            .command(
+                "Storage.getCookies",
+                serde_json::json!({"browserContextId":context_a}),
+            )
+            .await
+            .unwrap();
+        let other = root
+            .command(
+                "Storage.getCookies",
+                serde_json::json!({"browserContextId":context_b}),
+            )
+            .await
+            .unwrap();
+        assert!(
+            own["cookies"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|cookie| cookie["name"] == "audit_private")
+        );
+        assert!(
+            !other["cookies"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|cookie| cookie["name"] == "audit_private")
+        );
+        let download_target = root
+            .command(
+                "Target.createTarget",
+                serde_json::json!({"url":"about:blank","browserContextId":context_a}),
+            )
+            .await
+            .unwrap();
+        super::downloads::real_browser_regressions(
+            &endpoint,
+            download_target["targetId"].as_str().unwrap(),
+            Some(context_a.clone()),
+        )
+        .await;
+        root.command(
+            "Target.disposeBrowserContext",
+            serde_json::json!({"browserContextId":context_a}),
+        )
+        .await
+        .unwrap();
+        root.command(
+            "Target.disposeBrowserContext",
+            serde_json::json!({"browserContextId":context_b}),
+        )
+        .await
+        .unwrap();
+        eprintln!(
+            "AUDIT_BROWSER_CONTEXTS: separate caller cookies and context-scoped downloads passed"
         );
         // Never leak the managed browser from tests: shut it down explicitly
         // (Rust statics are not dropped at process exit).
@@ -4019,5 +4445,118 @@ mod tests {
             .expect_err("file redirect must be rejected");
         assert!(error.diagnostic_message().contains("unsupported scheme"));
         assert!(error.to_string().contains("unsupported scheme"));
+    }
+}
+
+#[cfg(test)]
+mod audit_search_tests {
+    #[test]
+    fn all_sources_failing_is_not_a_successful_empty_search() {
+        assert!(super::ensure_search_available(0, &["engine unavailable".into()]).is_err());
+        assert!(super::ensure_search_available(1, &["secondary unavailable".into()]).is_ok());
+        assert!(super::ensure_search_available(1, &[]).is_ok());
+    }
+    #[test]
+    fn references_require_a_snapshot_and_plain_selectors_do_not() {
+        assert!(super::browser_element_expression(None, Some(1), None).is_err());
+        assert!(super::browser_element_expression(Some("#search"), None, None).is_ok());
+        assert!(
+            super::browser_element_expression(None, Some(1), Some("id"))
+                .unwrap()
+                .contains("isConnected")
+        );
+    }
+}
+
+#[cfg(test)]
+mod audit_log_budget_tests {
+    #[test]
+    fn browser_log_budget_applies_to_bytes_and_preserves_utf8() {
+        let mut log = super::BrowserSessionLog::new();
+        log.append("console", format!("a{}", "中😀".repeat(10000)));
+        let result = log.read("fixture", 0, None);
+        assert!(result.lines[0].text.len() <= 16 * 1024);
+        assert!(result.lines[0].text.ends_with(" [truncated]"));
+    }
+}
+
+#[cfg(test)]
+mod audit_model_output_tests {
+    #[test]
+    fn actionable_snapshot_identity_and_refs_reach_text_only_clients() {
+        let snapshot = serde_json::json!({"snapshot_id":"revision-42","url":"https://example.invalid","title":"fixture","ready_state":"complete","text":"visible","elements":[{"ref":3,"tag":"button","text":"Continue"}]});
+        let text = super::format_browser_snapshot(&snapshot);
+        assert!(text.contains("revision-42"));
+        assert!(text.contains("ref 3"));
+        assert!(text.contains("Continue"));
+        let output = super::browser_action_output(
+            "click",
+            "session",
+            serde_json::json!({"snapshot":snapshot}),
+        );
+        assert!(output.output_text.contains("revision-42"));
+        assert!(output.output_text.contains("ref 3"));
+    }
+}
+
+#[cfg(test)]
+mod ownership_tests {
+    use super::*;
+    #[tokio::test]
+    async fn foreign_page_access_and_shutdown_do_not_touch_browser_process() {
+        let dir = tempfile::tempdir().unwrap();
+        let plugin = WebPlugin::new();
+        let a = ToolInvokeContext {
+            tool_name: "browser_snapshot",
+            session_id: 41,
+            call_id: 1,
+            workspace_root: dir.path().to_str().unwrap(),
+        };
+        let b = ToolInvokeContext {
+            session_id: 42,
+            ..a
+        };
+        plugin.browser_state.meta.lock().await.insert(
+            "page".into(),
+            BrowserSessionMeta {
+                owner: browser_owner(&a).unwrap(),
+                browser_context_id: None,
+                title: "private".into(),
+                url: "https://example.invalid/private".into(),
+                started_at_ms: 1,
+            },
+        );
+        assert!(plugin.require_browser_owner(&a, "page").await.is_ok());
+        assert!(
+            plugin
+                .browser_snapshot(
+                    &b,
+                    &BrowserSessionInput {
+                        session_id: "page".into()
+                    }
+                )
+                .await
+                .is_err()
+        );
+        assert!(
+            plugin
+                .browser_close(
+                    &b,
+                    &BrowserSessionInput {
+                        session_id: "page".into()
+                    }
+                )
+                .await
+                .is_err()
+        );
+        let output = plugin
+            .browser_shutdown(&b, &BrowserListInput {})
+            .await
+            .unwrap()
+            .payload
+            .unwrap();
+        assert_eq!(output["process_shutdown"], false);
+        assert!(output["closed_sessions"].as_array().unwrap().is_empty());
+        assert!(plugin.browser_state.meta.lock().await.contains_key("page"));
     }
 }

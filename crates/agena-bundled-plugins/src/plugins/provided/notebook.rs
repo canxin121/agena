@@ -12,6 +12,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+mod validation;
+
 pub(crate) const NOTEBOOK_PLUGIN_ID: &str = "agena.notebook";
 const MAX_NOTEBOOK_BYTES: u64 = 32 * 1024 * 1024;
 
@@ -45,7 +47,11 @@ impl NotebookCellType {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
-#[input(trim("path", "expected_sha256"), non_empty("path", "expected_sha256"))]
+#[input(
+    trim("path", "expected_sha256"),
+    non_empty("path", "expected_sha256"),
+    max_chars("source", 16777216)
+)]
 #[serde(deny_unknown_fields)]
 struct NotebookEditInput {
     path: String,
@@ -55,13 +61,10 @@ struct NotebookEditInput {
     cell_type: Option<NotebookCellType>,
     #[serde(default)]
     source: String,
-    #[serde(default = "default_true")]
+    /// Explicit opt-in to retaining code outputs; retained output may be stale.
+    #[serde(default)]
     preserve_outputs: bool,
     expected_sha256: String,
-}
-
-const fn default_true() -> bool {
-    true
 }
 
 #[agena_plugin_host::sdk::agena_plugin(
@@ -89,6 +92,11 @@ impl NotebookPlugin {
         context: &ToolInvokeContext<'_>,
         input: &NotebookEditInput,
     ) -> SdkResult<ToolInvokeOutput> {
+        if input.source.len() > 16 * 1024 * 1024 {
+            return Err(PluginError::invalid_params(
+                "notebook source exceeds the 16 MiB byte limit",
+            ));
+        }
         let workspace_root = context.workspace_root.to_string();
         let input = input.clone();
         let worker_permit = crate::BLOCKING_PLUGIN_WORKERS
@@ -167,20 +175,11 @@ impl NotebookPlugin {
                         let object = cell.as_object_mut().ok_or_else(|| {
                             PluginError::invalid_params("target notebook cell is not an object")
                         })?;
-                        if let Some(cell_type) = input.cell_type {
-                            object.insert(
-                                "cell_type".to_string(),
-                                serde_json::Value::String(cell_type.as_str().to_string()),
-                            );
-                        }
+                        let previous_type = object.get("cell_type").and_then(serde_json::Value::as_str).unwrap_or_default().to_string();
+                        let kind = input.cell_type.map(|kind| kind.as_str().to_string()).unwrap_or(previous_type.clone());
+                        object.insert("cell_type".into(), serde_json::Value::String(kind.clone()));
                         object.insert("source".to_string(), notebook_source(input.source.as_str()));
-                        if !input.preserve_outputs
-                            && object.get("cell_type").and_then(serde_json::Value::as_str)
-                                == Some("code")
-                        {
-                            object.insert("outputs".to_string(), serde_json::json!([]));
-                            object.insert("execution_count".to_string(), serde_json::Value::Null);
-                        }
+                        validation::normalize_cell(object, &kind, input.preserve_outputs && previous_type == "code" && kind == "code");
                     }
                     NotebookEditAction::InsertBefore | NotebookEditAction::InsertAfter => {
                         if input.cell_index > cells.len()
@@ -214,14 +213,8 @@ impl NotebookPlugin {
                 }
 
                 let cell_count = cells.len();
-                let updated = serde_json::to_vec_pretty(&notebook).map_err(|error| {
-                    PluginError::internal(
-                        agena_failure::diagnostic::format_error_chain_with_context(
-                            "cannot serialize notebook",
-                            &error,
-                        ),
-                    )
-                })?;
+                validation::validate(&mut notebook)?;
+                let updated = validation::serialize(&notebook)?;
                 atomic_write(&path, updated.as_slice())?;
                 let after_sha256 = sha256(updated.as_slice());
                 Ok(ToolInvokeOutput::from_parts(
@@ -246,6 +239,7 @@ impl NotebookPlugin {
                         "cell_count": cell_count,
                         "before_sha256": before_sha256,
                         "after_sha256": after_sha256,
+                        "outputs_may_be_stale": input.preserve_outputs,
                     })),
                     std::collections::BTreeMap::from([
                         ("agena.effect".to_string(), "file_changes".to_string()),
@@ -268,7 +262,7 @@ impl NotebookPlugin {
 }
 
 fn new_cell(cell_type: NotebookCellType, source: &str) -> serde_json::Value {
-    match cell_type {
+    let mut cell = match cell_type {
         NotebookCellType::Code => serde_json::json!({
             "cell_type": "code",
             "execution_count": null,
@@ -286,7 +280,9 @@ fn new_cell(cell_type: NotebookCellType, source: &str) -> serde_json::Value {
             "metadata": {},
             "source": notebook_source(source),
         }),
-    }
+    };
+    cell["id"] = serde_json::Value::String(uuid::Uuid::new_v4().simple().to_string());
+    cell
 }
 
 fn notebook_source(source: &str) -> serde_json::Value {

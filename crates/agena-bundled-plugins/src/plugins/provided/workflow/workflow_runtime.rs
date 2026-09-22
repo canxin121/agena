@@ -237,7 +237,10 @@ impl WorkflowPlugin {
         &self,
         input: &PlanSetInput,
     ) -> SdkResult<ToolInvokeOutput> {
+        self.require_activation_grant(input.request_approval)?;
         let previous = self.load_active_plan().await?;
+        Self::require_expected_plan(previous.as_ref(), input.expected_revision.as_deref())?;
+        let expected = previous.as_ref().map(|plan| plan.revision.clone());
         let mut plan = self.build_plan(
             input.objective.as_str(),
             input.title.as_deref(),
@@ -251,7 +254,7 @@ impl WorkflowPlugin {
             // user. This tool never triggers review by itself; the agent must
             // call `plan.review` to request user approval before the plan can
             // become active.
-            self.save_active_plan(&plan).await?;
+            self.save_plan_version(&mut plan, expected).await?;
             let payload = Self::plan_payload(&plan)?;
             return Ok(ToolInvokeOutput::from_parts(
                 "plan",
@@ -270,7 +273,7 @@ impl WorkflowPlugin {
         // `active` (the plan already carries the resolved `autorun`) and
         // return without any user interaction.
         Self::set_plan_phase(&mut plan, WorkflowPlanPhase::Active, None)?;
-        self.save_active_plan(&plan).await?;
+        self.save_plan_version(&mut plan, expected).await?;
         let payload = Self::plan_payload(&plan)?;
         Ok(ToolInvokeOutput::from_parts(
             "plan",
@@ -289,6 +292,7 @@ impl WorkflowPlugin {
         let Some(mut plan) = self.load_active_plan().await? else {
             return Err(PluginError::invalid_params("no active plan to edit"));
         };
+        Self::require_expected_plan(Some(&plan), input.expected_revision.as_deref())?;
         let target = Self::validate_plan_edit_input(input)?;
         let message = match target {
             PlanEditTarget::Step(step) => {
@@ -340,7 +344,7 @@ impl WorkflowPlugin {
                 format!("Updated check '{checkpoint_text}'.")
             }
         };
-        self.save_active_plan(&plan).await?;
+        self.update_active_plan(&mut plan).await?;
         let payload = Self::plan_payload(&plan)?;
         Ok(ToolInvokeOutput::from_parts(
             "plan",
@@ -359,6 +363,8 @@ impl WorkflowPlugin {
         let Some(mut plan) = self.load_active_plan().await? else {
             return Err(PluginError::invalid_params("no active plan to update"));
         };
+        self.require_activation_grant(input.request_approval)?;
+        Self::require_expected_plan(Some(&plan), input.expected_revision.as_deref())?;
         Self::validate_plan_phase_input(input)?;
         let completion_summary = match input.phase {
             Some(WorkflowPlanPhase::Completed) => input.summary.as_deref(),
@@ -385,7 +391,7 @@ impl WorkflowPlugin {
         if let Some(autorun) = input.autorun {
             plan.autorun = autorun;
         }
-        self.save_active_plan(&plan).await?;
+        self.update_active_plan(&mut plan).await?;
         let payload = Self::plan_payload(&plan)?;
         let message = "Updated the plan phase.";
         Ok(ToolInvokeOutput::from_parts(
@@ -421,9 +427,13 @@ impl WorkflowPlugin {
 
     pub(crate) async fn invoke_plan_clear(&self) -> SdkResult<ToolInvokeOutput> {
         let existing = self.load_active_plan().await?;
-        self.clear_active_plan().await?;
+        let warning = self
+            .clear_plan_version(existing.as_ref().map(|plan| plan.revision.clone()))
+            .await?;
         let payload = serde_json::json!({
             "cleared": existing.is_some(),
+            "committed": true,
+            "display_warning": warning,
         });
         let text = if existing.is_some() {
             "Cleared the active plan."
@@ -433,7 +443,10 @@ impl WorkflowPlugin {
         Ok(ToolInvokeOutput::from_parts(
             "plan",
             text,
-            text,
+            warning
+                .as_ref()
+                .map(|warning| format!("{text}\nWarning: {warning}"))
+                .unwrap_or_else(|| text.into()),
             Some(payload),
             std::collections::BTreeMap::new(),
             Vec::new(),
@@ -1059,22 +1072,37 @@ impl WorkflowPlugin {
             .into_iter()
             .map(|record| (record.name, record.tags))
             .collect::<HashMap<_, _>>();
-        let outputs = requested
-            .iter()
-            .map(|tool_name| {
-                let descriptor = Self::resolve_tool_descriptor(tool_name, &tools)?;
-                Ok(Self::render_tool_api_help(
+        let mut outputs = Vec::new();
+        let mut failures = 0usize;
+        for name in requested {
+            match Self::resolve_tool_descriptor(name, &tools) {
+                Ok(descriptor) => outputs.push(Self::render_tool_api_help(
                     descriptor,
                     tag_index.get(descriptor.name.as_str()).map(Vec::as_slice),
-                ))
-            })
-            .collect::<SdkResult<Vec<_>>>()?;
+                )),
+                Err(error) if requested.len() == 1 => return Err(error),
+                Err(error) => {
+                    failures += 1;
+                    outputs.push(discovery_text_output(
+                        format!("Unavailable tool: {name}"),
+                        "Tool help failed",
+                        format!(
+                            "Tool: {name}\nHelp unavailable: {}",
+                            error.failure.user.fallback
+                        ),
+                    ));
+                }
+            }
+        }
         if let [output] = outputs.as_slice() {
             return Ok(output.clone());
         }
         Ok(discovery_text_output(
             format!("Inspect {} tools", outputs.len()),
-            format!("Usage and input contracts for {} tools.", outputs.len()),
+            format!(
+                "{} tool contracts returned · {failures} unavailable",
+                outputs.len() - failures
+            ),
             outputs
                 .iter()
                 .map(|output| output.output_text.as_str())

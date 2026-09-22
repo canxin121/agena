@@ -124,7 +124,9 @@ struct MemoryListInput {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, agena_plugin_host::sdk::ToolInput)]
 #[input(
-    trim("name", "description", "content"),
+    trim("name", "description", "expected_sha256"),
+    max_chars("content", 8388608),
+    max_chars("description", 64000),
     trim_suffix("name", ".md"),
     non_empty("name", "content"),
     forbid_substrings("name", "/", "\\")
@@ -137,6 +139,9 @@ struct MemoryWriteInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     memory_type: Option<MemoryType>,
     content: String,
+    /// Required when updating an existing record; returned by memory.get/write.
+    #[serde(default)]
+    expected_sha256: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, agena_plugin_host::sdk::ToolInput)]
@@ -158,6 +163,7 @@ struct MemoryRecordOutput {
     memory_type: Option<String>,
     file_name: String,
     body: String,
+    sha256: String,
 }
 
 #[agena_plugin_host::sdk::agena_plugin(
@@ -410,32 +416,35 @@ impl MemoryPlugin {
         let content = input.content.clone();
         let description = input.description.clone();
         let memory_type = input.memory_type;
+        let expected = input.expected_sha256.clone();
         run_memory_blocking(move || {
             let store = MemoryStore::for_workspace(&workspace_root);
-            let repository: &dyn MemoryRepository = &store;
-            match repository.forget(name.as_str()) {
-                Ok(()) | Err(MemoryError::NotFound(_)) => {}
-                Err(err) => return Err(memory_error_to_plugin(err)),
-            }
-            let entry = repository
-                .save(NewMemory {
-                    name: name.clone(),
-                    description: description.clone(),
-                    memory_type,
-                    body: content.clone(),
-                    index_line: Some(memory_index_line(
-                        name.as_str(),
-                        description.as_str(),
-                        content.as_str(),
-                    )),
-                })
+            let entry = store
+                .save_checked(
+                    NewMemory {
+                        name: name.clone(),
+                        description: description.clone(),
+                        memory_type,
+                        body: content.clone(),
+                        index_line: Some(memory_index_line(
+                            name.as_str(),
+                            description.as_str(),
+                            content.as_str(),
+                        )),
+                    },
+                    expected.as_deref(),
+                )
                 .map_err(memory_error_to_plugin)?;
             let payload = serde_json::to_value(memory_record_output(&entry))
                 .map_err(|err| PluginError::internal_error(&err))?;
             Ok(ToolInvokeOutput::from_parts(
                 format!("Write memory · {}", memory_name(&entry)),
                 format!("Saved {}", memory_name(&entry)),
-                format!("Saved memory '{}'.", memory_name(&entry)),
+                format!(
+                    "Saved memory '{}'.\nRevision (sha256): {}",
+                    memory_name(&entry),
+                    entry.sha256
+                ),
                 Some(payload),
                 std::collections::BTreeMap::new(),
                 Vec::new(),
@@ -559,7 +568,18 @@ fn parse_memory_config(value: serde_json::Value) -> SdkResult<MemoryConfig> {
 }
 
 fn memory_error_to_plugin(err: MemoryError) -> PluginError {
-    PluginError::internal_error(&err)
+    match &err {
+        MemoryError::NotFound(_) => PluginError::invalid_params_error(&err),
+        MemoryError::Io(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::InvalidInput | std::io::ErrorKind::InvalidData
+            ) =>
+        {
+            PluginError::invalid_params_error(&err)
+        }
+        _ => PluginError::internal_error(&err),
+    }
 }
 
 fn memory_document_from_entry(entry: MemoryRecord) -> MemorySearchDocument {
@@ -585,6 +605,7 @@ fn memory_record_output(entry: &MemoryRecord) -> MemoryRecordOutput {
             .map(|kind| kind.label().to_string()),
         file_name: entry.file_name.clone(),
         body: entry.body.clone(),
+        sha256: entry.sha256.clone(),
     }
 }
 
@@ -614,7 +635,10 @@ fn first_line(content: &str) -> String {
 }
 
 fn format_memory_entry(entry: &MemoryRecord) -> String {
-    let mut lines = vec![format!("Name: {}", memory_name(entry))];
+    let mut lines = vec![
+        format!("Name: {}", memory_name(entry)),
+        format!("Revision (sha256): {}", entry.sha256),
+    ];
     if let Some(memory_type) = entry.frontmatter.r#type {
         lines.push(format!("Type: {}", memory_type.label()));
     }
@@ -648,7 +672,11 @@ fn truncate_body(body: &str, limit: usize) -> String {
     if trimmed.len() <= limit {
         return trimmed.to_string();
     }
-    format!("{}...", &trimmed[..limit])
+    let mut end = limit;
+    while !trimmed.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}...", &trimmed[..end])
 }
 
 fn should_skip_memory_retrieval(message: &str) -> bool {
@@ -720,5 +748,24 @@ mod tests {
                 .iter()
                 .any(|operation| operation.id == "memory.open")
         );
+    }
+}
+
+#[cfg(test)]
+mod audit_unicode_tests {
+    #[test]
+    fn every_unicode_byte_boundary_is_safe() {
+        for input in [
+            format!("a{}", "中".repeat(210)),
+            "😀e\u{301} العربية 中文".repeat(80),
+        ] {
+            for budget in 0..=input.len() + 1 {
+                let output = super::truncate_body(&input, budget);
+                assert!(output.is_char_boundary(output.len()));
+                if input.trim().len() > budget {
+                    assert!(output.len() <= budget + 3);
+                }
+            }
+        }
     }
 }

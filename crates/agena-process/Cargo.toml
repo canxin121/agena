@@ -7,6 +7,7 @@ rust-version.workspace = true
 description = "Cross-platform Tokio subprocess lifecycle policy for Agena"
 
 [dependencies]
+portable-pty = { workspace = true }
 libc = { workspace = true }
 process-wrap = { workspace = true }
 tokio = { workspace = true, features = ["io-util", "process", "rt", "time"] }
@@ -14,3 +15,6 @@ tracing = { workspace = true }
 
 [lints]
 workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_System_JobObjects", "Win32_System_Threading"] }

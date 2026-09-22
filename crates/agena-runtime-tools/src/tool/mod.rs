@@ -17,6 +17,7 @@ pub(crate) mod monitor_tool;
 pub(crate) mod orchestrator;
 mod output_helpers;
 pub mod payload;
+mod post_edit;
 pub(crate) mod powershell;
 pub(crate) mod process_tool;
 pub(crate) mod read;
@@ -26,6 +27,7 @@ pub(crate) mod shell;
 pub(crate) mod shell_tools;
 pub(crate) mod snapshot;
 pub(crate) mod task;
+mod terminal_tool;
 pub mod tool_registry;
 pub(crate) mod tool_search;
 

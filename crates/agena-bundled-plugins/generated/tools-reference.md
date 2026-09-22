@@ -6,7 +6,7 @@
 > agena inspect --tools-reference > crates/agena-bundled-plugins/generated/tools-reference.md
 > ```
 
-This document is deterministically generated from the real `agena-bundled-plugins` plugin manifests, covering **22 plugins and 141 tool definitions**.
+This document is deterministically generated from the real `agena-bundled-plugins` plugin manifests, covering **22 plugins and 146 tool definitions**.
 
 - Each tool entry includes: name, summary, detailed help (`before_help` / `help` / `after_help`), tags, concurrency / streaming / strict runtime flags, examples, an input parameter table, and the full input / output JSON Schema.
 - The `list` / `search` / `help` / `tags` / `call` tools of `agena.tools` are the stable Tool API gateway handlers; all other tools are ordinary execution tools.
@@ -18,7 +18,7 @@ This document is deterministically generated from the real `agena-bundled-plugin
 - [`agena.claude`](#agenaclaude) — Anthropic Claude server and client tools exposed as ordinary Agena tools. (11 tools)
 - [`agena.code`](#agenacode) — Structured code search and syntax inspection tools. (2 tools)
 - [`agena.cron`](#agenacron) — Cron-style and one-shot wakeup scheduling tools. (7 tools)
-- [`agena.fs`](#agenafs) — Filesystem command tools for read/search and explicit edits. (9 tools)
+- [`agena.fs`](#agenafs) — Filesystem command tools for read/search and explicit edits. (11 tools)
 - [`agena.gemini`](#agenagemini) — Google Gemini Interactions and image capabilities exposed as ordinary Agena tools. (11 tools)
 - [`agena.interaction`](#agenainteraction) — User interaction tools. (2 tools)
 - [`agena.lsp`](#agenalsp) — LSP read-only observability and navigation tools. (5 tools)
@@ -30,7 +30,7 @@ This document is deterministically generated from the real `agena-bundled-plugin
 - [`agena.report`](#agenareport) — Structured review and verification findings. (1 tools)
 - [`agena.session`](#agenasession) — Inspect and manage the current runtime session and its environment, model, and token state. (5 tools)
 - [`agena.settings`](#agenasettings) — Inspect and edit Agena's global and workspace agena.json settings. (7 tools)
-- [`agena.shell`](#agenashell) — Shell command execution and background process tools. (4 tools)
+- [`agena.shell`](#agenashell) — Shell command execution and background process tools. (7 tools)
 - [`agena.skills`](#agenaskills) — Discover and read plain-text skills and slash commands. (7 tools)
 - [`agena.snapshot`](#agenasnapshot) — Managed snapshot tools backed by Rift or git worktree. (3 tools)
 - [`agena.tasks`](#agenatasks) — Delegated subtask orchestration tools. (7 tools)
@@ -3523,7 +3523,7 @@ Cron-style and one-shot wakeup scheduling tools.
 
 ## agena.fs
 
-**Version** `0.1.2-beta.1` · **Tools** 9
+**Version** `0.1.2-beta.1` · **Tools** 11
 
 Filesystem command tools for read/search and explicit edits.
 
@@ -3553,7 +3553,7 @@ Filesystem command tools for read/search and explicit edits.
 **Input schema**:
 ```json
 {
-  "description": "Textual patch payload in the agena patch format. Must start with the exact\nmarker line `*** Begin Patch` and end with the exact marker line\n`*** End Patch`; use `*** Update File:` / `*** Add File:` / `*** Delete File:`\ndirectives with `@@` hunks (context lines start with a space, removed lines\nwith `-`, added lines with `+`).",
+  "description": "Textual patch payload in the agena patch format. Must start with the exact\nmarker line `*** Begin Patch` and end with the exact marker line\n`*** End Patch`; use `*** Update File:` / `*** Add File:` / `*** Delete File:`\ndirectives with `@@` or `@@ exact context line` hunks. Context lines start\nwith a space, removed lines with `-`, and added lines with `+`. Matching is\nexact and line-oriented; ambiguous targets are rejected. `*** End of File`\nrestricts the last hunk to EOF. `\\ No newline at end of file` after a content\nline specifies a missing final newline. Existing line endings are preserved.",
   "properties": {
     "patch": {
       "description": "Unified patch text to apply to the workspace.",
@@ -3717,6 +3717,116 @@ Filesystem command tools for read/search and explicit edits.
     }
   },
   "required": [
+    "pattern"
+  ],
+  "type": "object"
+}
+```
+
+### output_read
+
+`agena.fs.output_read` · **Summary**: Read a byte range of captured tool output owned by this session.
+
+**Tags**: `query`
+
+**Runtime**: ✓ concurrency-safe · streaming `buffered` · non-strict
+
+**Help**:
+> Use output_id from a tool result. Offsets are UTF-8 byte offsets; next_offset continues the capture. Capture can expire, be evicted, or already be truncated.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `limit` | `integer` | — | `8000` |  |
+| `offset` | `integer` | — | `0` |  |
+| `output_id` | `string` | ✓ | — |  |
+
+**Input schema**:
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "limit": {
+      "default": 8000,
+      "format": "uint",
+      "maximum": 16000,
+      "minimum": 1,
+      "type": "integer",
+      "x-agena-order": "000002"
+    },
+    "offset": {
+      "default": 0,
+      "format": "uint",
+      "minimum": 0,
+      "type": "integer",
+      "x-agena-order": "000001"
+    },
+    "output_id": {
+      "minLength": 1,
+      "type": "string",
+      "x-agena-order": "000000"
+    }
+  },
+  "required": [
+    "output_id"
+  ],
+  "type": "object"
+}
+```
+
+### output_search
+
+`agena.fs.output_search` · **Summary**: Find literal text within captured tool output owned by this session.
+
+**Tags**: `query`
+
+**Runtime**: ✓ concurrency-safe · streaming `buffered` · non-strict
+
+**Help**:
+> Search before reading long logs. Results return byte offsets accepted by output_read. This searches captured bytes only, not content already dropped upstream.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `limit` | `integer` | — | `20` |  |
+| `offset` | `integer` | — | `0` |  |
+| `output_id` | `string` | ✓ | — |  |
+| `pattern` | `string` | ✓ | — |  |
+
+**Input schema**:
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "limit": {
+      "default": 20,
+      "format": "uint",
+      "maximum": 100,
+      "minimum": 1,
+      "type": "integer",
+      "x-agena-order": "000003"
+    },
+    "offset": {
+      "default": 0,
+      "format": "uint",
+      "minimum": 0,
+      "type": "integer",
+      "x-agena-order": "000002"
+    },
+    "output_id": {
+      "minLength": 1,
+      "type": "string",
+      "x-agena-order": "000000"
+    },
+    "pattern": {
+      "maxLength": 4096,
+      "minLength": 1,
+      "type": "string",
+      "x-agena-order": "000001"
+    }
+  },
+  "required": [
+    "output_id",
     "pattern"
   ],
   "type": "object"
@@ -5821,6 +5931,7 @@ Persistent memory with searchable retrieval and write tools.
 | --- | --- | --- | --- | --- |
 | `content` | `string` | ✓ | — |  |
 | `description` | `string` | — | `` |  |
+| `expected_sha256` | `string / null` | — | `null` | Required when updating an existing record; returned by memory.get/write. |
 | `memory_type` | `MemoryType / null` | — | — |  |
 | `name` | `string` | ✓ | — |  |
 
@@ -5843,14 +5954,25 @@ Persistent memory with searchable retrieval and write tools.
   "additionalProperties": false,
   "properties": {
     "content": {
+      "maxLength": 8388608,
       "minLength": 1,
       "type": "string",
       "x-agena-order": "000003"
     },
     "description": {
       "default": "",
+      "maxLength": 64000,
       "type": "string",
       "x-agena-order": "000001"
+    },
+    "expected_sha256": {
+      "default": null,
+      "description": "Required when updating an existing record; returned by memory.get/write.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000004"
     },
     "memory_type": {
       "anyOf": [
@@ -6026,7 +6148,7 @@ Revision-safe Jupyter notebook cell editing.
 | `cell_type` | `NotebookCellType / null` | — | — |  |
 | `expected_sha256` | `string` | ✓ | — |  |
 | `path` | `string` | ✓ | — |  |
-| `preserve_outputs` | `boolean` | — | `true` |  |
+| `preserve_outputs` | `boolean` | — | `false` | Explicit opt-in to retaining code outputs; retained output may be stale. |
 | `source` | `string` | — | `` |  |
 
 **Input schema**:
@@ -6085,12 +6207,14 @@ Revision-safe Jupyter notebook cell editing.
       "x-agena-order": "000000"
     },
     "preserve_outputs": {
-      "default": true,
+      "default": false,
+      "description": "Explicit opt-in to retaining code outputs; retained output may be stale.",
       "type": "boolean",
       "x-agena-order": "000005"
     },
     "source": {
       "default": "",
+      "maxLength": 16777216,
       "type": "string",
       "x-agena-order": "000004"
     }
@@ -6143,6 +6267,7 @@ Plan orchestration and plan-autorun tools.
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
 | `check` | `integer / null` | — | — | 1-based index of the check within the step to update (1 = first check). Requires `step`. |
+| `expected_revision` | `string / null` | — | — | Optional revision from plan.get; mismatches never overwrite newer state. |
 | `note` | `string / null` | — | — |  |
 | `status` | `WorkflowPlanStepStatus / null` | — | — |  |
 | `step` | `integer / null` | — | — | 1-based index of the step to update (1 = first step). |
@@ -6173,14 +6298,22 @@ Plan orchestration and plan-autorun tools.
         "integer",
         "null"
       ],
-      "x-agena-order": "000001"
+      "x-agena-order": "000002"
+    },
+    "expected_revision": {
+      "description": "Optional revision from plan.get; mismatches never overwrite newer state.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000000"
     },
     "note": {
       "type": [
         "string",
         "null"
       ],
-      "x-agena-order": "000003"
+      "x-agena-order": "000004"
     },
     "status": {
       "anyOf": [
@@ -6191,7 +6324,7 @@ Plan orchestration and plan-autorun tools.
           "type": "null"
         }
       ],
-      "x-agena-order": "000002"
+      "x-agena-order": "000003"
     },
     "step": {
       "description": "1-based index of the step to update (1 = first step).",
@@ -6201,7 +6334,7 @@ Plan orchestration and plan-autorun tools.
         "integer",
         "null"
       ],
-      "x-agena-order": "000000"
+      "x-agena-order": "000001"
     }
   },
   "type": "object"
@@ -6261,6 +6394,7 @@ Plan orchestration and plan-autorun tools.
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
 | `autorun` | `boolean / null` | — | — | Whether an approved active plan should keep running automatically. |
+| `expected_revision` | `string / null` | — | — | Optional revision from plan.get; mismatches never overwrite newer state. |
 | `phase` | `WorkflowPlanPhase / null` | — | — | Canonical plan phase. Use `planning`, `active`, `blocked`, `completed`, or `cancelled`. |
 | `request_approval` | `boolean / null` | — | — | Whether to request user approval for this plan-level phase change. Defaults to true when omitted: request approval unless the user has already declared that the change needs no approval. |
 | `summary` | `string / null` | — | — | Optional completion summary. This is only applied when `phase` is `completed`. |
@@ -6289,7 +6423,15 @@ Plan orchestration and plan-autorun tools.
         "boolean",
         "null"
       ],
-      "x-agena-order": "000002"
+      "x-agena-order": "000003"
+    },
+    "expected_revision": {
+      "description": "Optional revision from plan.get; mismatches never overwrite newer state.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000000"
     },
     "phase": {
       "anyOf": [
@@ -6301,7 +6443,7 @@ Plan orchestration and plan-autorun tools.
         }
       ],
       "description": "Canonical plan phase. Use `planning`, `active`, `blocked`, `completed`, or `cancelled`.",
-      "x-agena-order": "000000"
+      "x-agena-order": "000001"
     },
     "request_approval": {
       "description": "Whether to request user approval for this plan-level phase change. Defaults to true when omitted: request approval unless the user has already declared that the change needs no approval.",
@@ -6309,7 +6451,7 @@ Plan orchestration and plan-autorun tools.
         "boolean",
         "null"
       ],
-      "x-agena-order": "000001"
+      "x-agena-order": "000002"
     },
     "summary": {
       "description": "Optional completion summary. This is only applied when `phase` is `completed`.",
@@ -6317,7 +6459,7 @@ Plan orchestration and plan-autorun tools.
         "string",
         "null"
       ],
-      "x-agena-order": "000003"
+      "x-agena-order": "000004"
     }
   },
   "type": "object"
@@ -6361,6 +6503,7 @@ Plan orchestration and plan-autorun tools.
 | --- | --- | --- | --- | --- |
 | `autorun` | `boolean / null` | — | — |  |
 | `document_markdown` | `string / null` | — | — |  |
+| `expected_revision` | `string / null` | — | — | Optional revision from plan.get; mismatches never overwrite newer state. |
 | `objective` | `string` | ✓ | — |  |
 | `request_approval` | `boolean / null` | — | — | Whether to request user approval before the plan becomes active. Defaults to true when omitted: the plan stays in `planning` and you must call `plan.review` to request approval. Pass `false` only when the user has already declared that the plan needs no approval; the plan then becomes active immediately. |
 | `steps` | `array<WorkflowPlanStepInput>` | — | — | Ordered plan steps. Each step item uses `title`; nested checks use `text`. |
@@ -6463,18 +6606,26 @@ Plan orchestration and plan-autorun tools.
         "boolean",
         "null"
       ],
-      "x-agena-order": "000004"
+      "x-agena-order": "000005"
     },
     "document_markdown": {
       "type": [
         "string",
         "null"
       ],
-      "x-agena-order": "000002"
+      "x-agena-order": "000003"
+    },
+    "expected_revision": {
+      "description": "Optional revision from plan.get; mismatches never overwrite newer state.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000000"
     },
     "objective": {
       "type": "string",
-      "x-agena-order": "000000"
+      "x-agena-order": "000001"
     },
     "request_approval": {
       "description": "Whether to request user approval before the plan becomes active. Defaults to true when omitted: the plan stays in `planning` and you must call `plan.review` to request approval. Pass `false` only when the user has already declared that the plan needs no approval; the plan then becomes active immediately.",
@@ -6482,7 +6633,7 @@ Plan orchestration and plan-autorun tools.
         "boolean",
         "null"
       ],
-      "x-agena-order": "000005"
+      "x-agena-order": "000006"
     },
     "steps": {
       "description": "Ordered plan steps. Each step item uses `title`; nested checks use `text`.",
@@ -6490,14 +6641,14 @@ Plan orchestration and plan-autorun tools.
         "$ref": "#/$defs/WorkflowPlanStepInput"
       },
       "type": "array",
-      "x-agena-order": "000003"
+      "x-agena-order": "000004"
     },
     "title": {
       "type": [
         "string",
         "null"
       ],
-      "x-agena-order": "000001"
+      "x-agena-order": "000002"
     }
   },
   "required": [
@@ -6535,7 +6686,6 @@ Structured review and verification findings.
       "additionalProperties": false,
       "properties": {
         "body": {
-          "minLength": 1,
           "type": "string"
         },
         "code": {
@@ -6560,7 +6710,6 @@ Structured review and verification findings.
           ]
         },
         "file": {
-          "minLength": 1,
           "type": "string"
         },
         "line": {
@@ -6572,7 +6721,6 @@ Structured review and verification findings.
           "$ref": "#/$defs/FindingSeverity"
         },
         "title": {
-          "minLength": 1,
           "type": "string"
         }
       },
@@ -6743,6 +6891,7 @@ Inspect and edit Agena's global and workspace agena.json settings.
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
 | `dry_run` | `boolean` | — | `false` |  |
+| `expected_revision` | `string / null` | — | `null` |  |
 | `layer` | `SettingsLayer / null` | — | — |  |
 | `path` | `string` | ✓ | — |  |
 | `reload` | `boolean / null` | — | — |  |
@@ -6766,7 +6915,15 @@ Inspect and edit Agena's global and workspace agena.json settings.
     "dry_run": {
       "default": false,
       "type": "boolean",
-      "x-agena-order": "000002"
+      "x-agena-order": "000003"
+    },
+    "expected_revision": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000000"
     },
     "layer": {
       "anyOf": [
@@ -6777,26 +6934,26 @@ Inspect and edit Agena's global and workspace agena.json settings.
           "type": "null"
         }
       ],
-      "x-agena-order": "000001"
+      "x-agena-order": "000002"
     },
     "path": {
       "minLength": 1,
       "type": "string",
-      "x-agena-order": "000000"
+      "x-agena-order": "000001"
     },
     "reload": {
       "type": [
         "boolean",
         "null"
       ],
-      "x-agena-order": "000004"
+      "x-agena-order": "000005"
     },
     "validate": {
       "type": [
         "boolean",
         "null"
       ],
-      "x-agena-order": "000003"
+      "x-agena-order": "000004"
     }
   },
   "required": [
@@ -7058,6 +7215,7 @@ Inspect and edit Agena's global and workspace agena.json settings.
 | --- | --- | --- | --- | --- |
 | `changes` | `any` | ✓ | — |  |
 | `dry_run` | `boolean` | — | `false` |  |
+| `expected_revision` | `string / null` | — | `null` |  |
 | `layer` | `SettingsLayer / null` | — | — |  |
 | `path` | `string / null` | — | `null` |  |
 | `reload` | `boolean / null` | — | — |  |
@@ -7079,12 +7237,20 @@ Inspect and edit Agena's global and workspace agena.json settings.
   "additionalProperties": false,
   "properties": {
     "changes": {
-      "x-agena-order": "000001"
+      "x-agena-order": "000002"
     },
     "dry_run": {
       "default": false,
       "type": "boolean",
-      "x-agena-order": "000003"
+      "x-agena-order": "000004"
+    },
+    "expected_revision": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000000"
     },
     "layer": {
       "anyOf": [
@@ -7095,7 +7261,7 @@ Inspect and edit Agena's global and workspace agena.json settings.
           "type": "null"
         }
       ],
-      "x-agena-order": "000002"
+      "x-agena-order": "000003"
     },
     "path": {
       "default": null,
@@ -7103,21 +7269,21 @@ Inspect and edit Agena's global and workspace agena.json settings.
         "string",
         "null"
       ],
-      "x-agena-order": "000000"
+      "x-agena-order": "000001"
     },
     "reload": {
       "type": [
         "boolean",
         "null"
       ],
-      "x-agena-order": "000005"
+      "x-agena-order": "000006"
     },
     "validate": {
       "type": [
         "boolean",
         "null"
       ],
-      "x-agena-order": "000004"
+      "x-agena-order": "000005"
     }
   },
   "required": [
@@ -7142,6 +7308,7 @@ Inspect and edit Agena's global and workspace agena.json settings.
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
 | `dry_run` | `boolean` | — | `false` |  |
+| `expected_revision` | `string / null` | — | `null` |  |
 | `layer` | `SettingsLayer / null` | — | — |  |
 | `path` | `string` | ✓ | — |  |
 | `reload` | `boolean / null` | — | — |  |
@@ -7166,7 +7333,15 @@ Inspect and edit Agena's global and workspace agena.json settings.
     "dry_run": {
       "default": false,
       "type": "boolean",
-      "x-agena-order": "000003"
+      "x-agena-order": "000004"
+    },
+    "expected_revision": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000000"
     },
     "layer": {
       "anyOf": [
@@ -7177,29 +7352,29 @@ Inspect and edit Agena's global and workspace agena.json settings.
           "type": "null"
         }
       ],
-      "x-agena-order": "000002"
+      "x-agena-order": "000003"
     },
     "path": {
       "minLength": 1,
       "type": "string",
-      "x-agena-order": "000000"
+      "x-agena-order": "000001"
     },
     "reload": {
       "type": [
         "boolean",
         "null"
       ],
-      "x-agena-order": "000005"
+      "x-agena-order": "000006"
     },
     "validate": {
       "type": [
         "boolean",
         "null"
       ],
-      "x-agena-order": "000004"
+      "x-agena-order": "000005"
     },
     "value": {
-      "x-agena-order": "000001"
+      "x-agena-order": "000002"
     }
   },
   "required": [
@@ -7257,7 +7432,7 @@ Inspect and edit Agena's global and workspace agena.json settings.
 
 ## agena.shell
 
-**Version** `0.1.2-beta.1` · **Tools** 4
+**Version** `0.1.2-beta.1` · **Tools** 7
 
 Shell command execution and background process tools.
 
@@ -7335,6 +7510,55 @@ Shell command execution and background process tools.
 }
 ```
 
+### resize
+
+`agena.shell.resize` · **Summary**: Resize an interactive terminal.
+
+**Tags**: `mutate`
+
+**Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `cols` | `integer` | ✓ | — |  |
+| `process_id` | `string` | ✓ | — |  |
+| `rows` | `integer` | ✓ | — |  |
+
+**Input schema**:
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "cols": {
+      "format": "uint16",
+      "maximum": 400,
+      "minimum": 1,
+      "type": "integer",
+      "x-agena-order": "000002"
+    },
+    "process_id": {
+      "minLength": 1,
+      "type": "string",
+      "x-agena-order": "000000"
+    },
+    "rows": {
+      "format": "uint16",
+      "maximum": 200,
+      "minimum": 1,
+      "type": "integer",
+      "x-agena-order": "000001"
+    }
+  },
+  "required": [
+    "process_id",
+    "rows",
+    "cols"
+  ],
+  "type": "object"
+}
+```
+
 ### run
 
 `agena.shell.run` · **Summary**: Run one shell process.
@@ -7344,21 +7568,25 @@ Shell command execution and background process tools.
 **Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
 
 **Help**:
-> Run one shell process. Always pass the required `reads` and `writes` path arrays declaring every file or directory the command reads or modifies - empty arrays `[]` when the command touches only its executables (never list the executables). Pass the `network` array of outbound targets (host names, `host:port`, or URLs) the command may connect to - empty array `[]` when none. Set `run_in_background = true` to keep the process attached to the session; you will be notified when it completes — do not poll. Add `monitor` for success/failure regex or literal conditions, quiet-period completion, bounded capture, and timeout. Both modes return one `process_id` used by shell.list/logs/stop. Background launches return immediately; you will be notified with a `system_notification` when the process settles — do not poll shell.list/logs waiting for it.
+> Run a shell command. Declare `reads`, `writes` and outbound `network` targets; use empty arrays when none. Set `tty=true` for an interactive CLI, REPL or full-screen terminal. This retains a PTY across tool calls and returns a process_id, incremental output, last_seq, and a current terminal screen. `yield_time_ms` (default 1000, maximum 30000) only controls this call's initial output wait: it never terminates the process. `timeout_ms`, when supplied, is the terminal's overall lifetime limit. Continue with shell.write; read without input with shell.write(chars="") or shell.logs; use shell.resize for dimensions, shell.signal for interrupt/terminate/kill, and shell.stop for cleanup. Never assume a quiet prompt means completion. tty is incompatible with monitor. Without tty, normal foreground behavior is unchanged. `run_in_background=true` or `monitor` starts a non-interactive managed command; completion is notified by system_notification, so do not poll merely to wait for those jobs.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
+| `cols` | `integer` | — | `80` |  |
 | `command` | `string` | ✓ | — |  |
 | `description` | `string` | — | `` |  |
 | `monitor` | `ShellMonitorInput / null` | — | — |  |
 | `network` | `array<string>` | — | `[]` | Outbound network targets the command may connect to: host names,<br>`host:port`, or URLs. Pass an empty array `[]` when the command has no<br>network effect. |
 | `reads` | `array<string>` | — | `[]` | Files and directories the command may read. Declare only the actual<br>files/directories affected - never the executables, interpreters, or<br>tools being invoked (e.g. `node`, `python`, `uv`, `git`, `cargo`) or<br>their installation directories. Pass an empty array `[]` when the<br>command reads nothing beyond its executables. |
+| `rows` | `integer` | — | `24` | Initial terminal dimensions, in character cells. |
 | `run_in_background` | `boolean` | — | `false` |  |
 | `shell` | `ProcessShell` | — | `bash` |  |
 | `timeout_ms` | `integer / null` | — | — |  |
+| `tty` | `boolean` | — | `false` | Allocate a persistent pseudo-terminal. Use shell.write for subsequent<br>input; yielding output does not stop the process. Incompatible with monitor. |
 | `workdir` | `string / null` | — | — |  |
 | `writes` | `array<string>` | — | `[]` | Files and directories the command may create, modify, or delete.<br>Declare only the actual files/directories affected - never the<br>executables, interpreters, or tools being invoked (e.g. `node`,<br>`python`, `uv`, `git`, `cargo`) or their installation directories.<br>Pass an empty array `[]` when the command writes nothing. |
+| `yield_time_ms` | `integer` | — | `1000` | Maximum initial wait for terminal output, not a process timeout (0–30000 ms). |
 
 **Input schema**:
 ```json
@@ -7450,6 +7678,14 @@ Shell command execution and background process tools.
   "additionalProperties": false,
   "description": "Input of a shell command execution.",
   "properties": {
+    "cols": {
+      "default": 80,
+      "format": "uint16",
+      "maximum": 400,
+      "minimum": 1,
+      "type": "integer",
+      "x-agena-order": "000001.000004"
+    },
     "command": {
       "minLength": 1,
       "type": "string",
@@ -7458,7 +7694,7 @@ Shell command execution and background process tools.
     "description": {
       "default": "",
       "type": "string",
-      "x-agena-order": "000001.000001"
+      "x-agena-order": "000001.000005"
     },
     "monitor": {
       "anyOf": [
@@ -7483,7 +7719,7 @@ Shell command execution and background process tools.
         "type": "string"
       },
       "type": "array",
-      "x-agena-order": "000001.000006"
+      "x-agena-order": "000001.000010"
     },
     "reads": {
       "default": [],
@@ -7497,7 +7733,16 @@ Shell command execution and background process tools.
         "type": "string"
       },
       "type": "array",
-      "x-agena-order": "000001.000004"
+      "x-agena-order": "000001.000008"
+    },
+    "rows": {
+      "default": 24,
+      "description": "Initial terminal dimensions, in character cells.",
+      "format": "uint16",
+      "maximum": 200,
+      "minimum": 1,
+      "type": "integer",
+      "x-agena-order": "000001.000003"
     },
     "run_in_background": {
       "default": false,
@@ -7515,7 +7760,13 @@ Shell command execution and background process tools.
         "integer",
         "null"
       ],
-      "x-agena-order": "000001.000002"
+      "x-agena-order": "000001.000006"
+    },
+    "tty": {
+      "default": false,
+      "description": "Allocate a persistent pseudo-terminal. Use shell.write for subsequent\ninput; yielding output does not stop the process. Incompatible with monitor.",
+      "type": "boolean",
+      "x-agena-order": "000001.000001"
     },
     "workdir": {
       "type": [
@@ -7537,11 +7788,71 @@ Shell command execution and background process tools.
         "type": "string"
       },
       "type": "array",
-      "x-agena-order": "000001.000005"
+      "x-agena-order": "000001.000009"
+    },
+    "yield_time_ms": {
+      "default": 1000,
+      "description": "Maximum initial wait for terminal output, not a process timeout (0–30000 ms).",
+      "format": "uint64",
+      "maximum": 30000,
+      "minimum": 0,
+      "type": "integer",
+      "x-agena-order": "000001.000002"
     }
   },
   "required": [
     "command"
+  ],
+  "type": "object"
+}
+```
+
+### signal
+
+`agena.shell.signal` · **Summary**: Interrupt or terminate an interactive terminal.
+
+**Tags**: `mutate` `execute`
+
+**Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
+
+**Help**:
+> interrupt targets the current Unix foreground process group without closing the shell (ConPTY uses terminal Ctrl-C). terminate requests graceful session cleanup and then kills remaining jobs; kill skips the grace period. This is distinct from typing a control byte into a raw-mode program. The same owning session/workspace is required. shell.stop is equivalent to terminate.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `process_id` | `string` | ✓ | — |  |
+| `signal` | `ShellSignal` | ✓ | — |  |
+
+**Input schema**:
+```json
+{
+  "$defs": {
+    "ShellSignal": {
+      "description": "Out-of-band process control. On Unix, interrupt signals the foreground\nprocess group even in raw mode. Windows uses ConPTY Ctrl-C semantics.",
+      "enum": [
+        "interrupt",
+        "terminate",
+        "kill"
+      ],
+      "type": "string",
+      "x-agena-order": "000001"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "process_id": {
+      "minLength": 1,
+      "type": "string",
+      "x-agena-order": "000000"
+    },
+    "signal": {
+      "$ref": "#/$defs/ShellSignal"
+    }
+  },
+  "required": [
+    "process_id",
+    "signal"
   ],
   "type": "object"
 }
@@ -7569,6 +7880,98 @@ Shell command execution and background process tools.
       "minLength": 1,
       "type": "string",
       "x-agena-order": "000000"
+    }
+  },
+  "required": [
+    "process_id"
+  ],
+  "type": "object"
+}
+```
+
+### write
+
+`agena.shell.write` · **Summary**: Write to an interactive terminal and read its response.
+
+**Tags**: `mutate` `execute`
+
+**Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
+
+**Help**:
+> Continue a process started with shell.run(tty=true). chars is exact terminal input: never trim or automatically append a newline. Send \r for Enter, \u0003 for Ctrl-C, \u0004 for Ctrl-D, \t for Tab, or terminal escape sequences for arrow/function keys. Use chars="" to read without sending input. Omit since_seq to read previously unread output; use an explicit last_seq to replay/page output. wait_ms defaults to 250 and is capped at 30000; a wait timeout does not kill the CLI. Input is an execution operation: declare every affected reads/writes path (relative to the Agena workspace) and network target, including effects of commands entered inside a shell/REPL. Requires the same owning session and workspace as the launch. A partial-write error requests terminal termination; do not resend the full input blindly. Process exit, not absence of output, indicates completion.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `chars` | `string` | — | `` | Exact UTF-8 text/control characters. Empty reads without writing. Use<br>\r for Enter, \u0003 for Ctrl-C, \u0004 for Ctrl-D; at most 65536 bytes. |
+| `network` | `array<string>` | — | `[]` | Outbound targets the entered operation may contact. |
+| `process_id` | `string` | ✓ | — |  |
+| `reads` | `array<string>` | — | `[]` | Paths the entered operation may read, relative to the Agena workspace. |
+| `since_seq` | `integer / null` | — | — | Output cursor from a previous result. Omit to consume the session's<br>unread output; explicit cursors permit replay without changing it. |
+| `wait_ms` | `integer` | — | `250` |  |
+| `writes` | `array<string>` | — | `[]` | Paths the entered operation may modify, relative to the Agena workspace. |
+
+**Input schema**:
+```json
+{
+  "additionalProperties": false,
+  "description": "Input is terminal data, not a new shell command. Never trim it or append a newline.",
+  "properties": {
+    "chars": {
+      "default": "",
+      "description": "Exact UTF-8 text/control characters. Empty reads without writing. Use\n\\r for Enter, \\u0003 for Ctrl-C, \\u0004 for Ctrl-D; at most 65536 bytes.",
+      "type": "string",
+      "x-agena-order": "000001"
+    },
+    "network": {
+      "default": [],
+      "description": "Outbound targets the entered operation may contact.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "x-agena-order": "000006"
+    },
+    "process_id": {
+      "minLength": 1,
+      "type": "string",
+      "x-agena-order": "000000"
+    },
+    "reads": {
+      "default": [],
+      "description": "Paths the entered operation may read, relative to the Agena workspace.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "x-agena-order": "000004"
+    },
+    "since_seq": {
+      "description": "Output cursor from a previous result. Omit to consume the session's\nunread output; explicit cursors permit replay without changing it.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ],
+      "x-agena-order": "000002"
+    },
+    "wait_ms": {
+      "default": 250,
+      "format": "uint64",
+      "maximum": 30000,
+      "minimum": 0,
+      "type": "integer",
+      "x-agena-order": "000003"
+    },
+    "writes": {
+      "default": [],
+      "description": "Paths the entered operation may modify, relative to the Agena workspace.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "x-agena-order": "000005"
     }
   },
   "required": [
@@ -7633,6 +8036,7 @@ Discover and read plain-text skills and slash commands.
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
+| `expected_revision` | `string / null` | — | `null` | Exact document revision from skills.get; required for update/delete. |
 | `name` | `string` | ✓ | — | Canonical name (or alias) of the workspace-managed Skill to remove. |
 
 **Input schema**:
@@ -7640,11 +8044,20 @@ Discover and read plain-text skills and slash commands.
 {
   "additionalProperties": false,
   "properties": {
+    "expected_revision": {
+      "default": null,
+      "description": "Exact document revision from skills.get; required for update/delete.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000000"
+    },
     "name": {
       "description": "Canonical name (or alias) of the workspace-managed Skill to remove.",
       "minLength": 1,
       "type": "string",
-      "x-agena-order": "000000"
+      "x-agena-order": "000001"
     }
   },
   "required": [
@@ -7832,6 +8245,7 @@ Discover and read plain-text skills and slash commands.
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
 | `document` | `string` | ✓ | — | Replacement `SKILL.md` document. Its frontmatter name must not change. |
+| `expected_revision` | `string / null` | — | `null` | Exact document revision from skills.get; required for update/delete. |
 | `name` | `string` | ✓ | — | Canonical name (or alias) of the workspace-managed Skill to replace. |
 
 **Input schema**:
@@ -7843,13 +8257,22 @@ Discover and read plain-text skills and slash commands.
       "description": "Replacement `SKILL.md` document. Its frontmatter name must not change.",
       "minLength": 1,
       "type": "string",
-      "x-agena-order": "000001"
+      "x-agena-order": "000002"
+    },
+    "expected_revision": {
+      "default": null,
+      "description": "Exact document revision from skills.get; required for update/delete.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000000"
     },
     "name": {
       "description": "Canonical name (or alias) of the workspace-managed Skill to replace.",
       "minLength": 1,
       "type": "string",
-      "x-agena-order": "000000"
+      "x-agena-order": "000001"
     }
   },
   "required": [
@@ -9045,6 +9468,7 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
 | `ref` | `integer / null` | — | — | Snapshot-local index returned by `browser_snapshot.elements[].ref`.<br>It is valid only while the page DOM has not materially changed. |
 | `selector` | `string / null` | — | — |  |
 | `session_id` | `string` | ✓ | — |  |
+| `snapshot_id` | `string / null` | — | — | ID of the snapshot that supplied ref. Required with ref; stale refs are rejected. |
 
 **Input schema**:
 ```json
@@ -9074,6 +9498,14 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
       "minLength": 1,
       "type": "string",
       "x-agena-order": "000000"
+    },
+    "snapshot_id": {
+      "description": "ID of the snapshot that supplied ref. Required with ref; stale refs are rejected.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000003"
     }
   },
   "required": [
@@ -9267,14 +9699,14 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
 
 ### browser_shutdown
 
-`agena.web.browser_shutdown` · **Summary**: Shut down the managed browser process and all its sessions.
+`agena.web.browser_shutdown` · **Summary**: Close browser pages owned by the current Agena session without affecting other callers.
 
 **Tags**: `network` `interactive` `mutate`
 
 **Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
 
 **Help**:
-> Closes the underlying Chrome/Chromium process used for rendered fetches and interactive browsing, and removes its temporary profile. All browser sessions are discarded; the next browser_open starts a fresh browser. Use this to release memory without exiting Agena.
+> Caller-scoped shutdown closes owned pages only. The shared Chrome process and other sessions are not stopped. Global browser shutdown is reserved for trusted host lifecycle control.
 
 **Input schema**:
 ```json
@@ -9331,6 +9763,7 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
 | `ref` | `integer / null` | — | — |  |
 | `selector` | `string / null` | — | — |  |
 | `session_id` | `string` | ✓ | — |  |
+| `snapshot_id` | `string / null` | — | — | ID of the snapshot that supplied ref. Required with ref; stale refs are rejected. |
 | `text` | `string` | ✓ | — |  |
 
 **Input schema**:
@@ -9341,7 +9774,7 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
     "press_enter": {
       "default": false,
       "type": "boolean",
-      "x-agena-order": "000004"
+      "x-agena-order": "000005"
     },
     "ref": {
       "format": "uint16",
@@ -9366,9 +9799,17 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
       "type": "string",
       "x-agena-order": "000000"
     },
+    "snapshot_id": {
+      "description": "ID of the snapshot that supplied ref. Required with ref; stale refs are rejected.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000003"
+    },
     "text": {
       "type": "string",
-      "x-agena-order": "000003"
+      "x-agena-order": "000004"
     }
   },
   "required": [

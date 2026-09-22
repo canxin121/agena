@@ -62,9 +62,13 @@ pub enum MonitorError {
     RuntimeMissing,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 /// Parameters for starting a monitored process.
 pub struct StartParams {
+    /// Trusted argv overrides the display command without another outer shell.
+    pub argv: Option<Vec<String>>,
+    /// Trusted workspace/session identity. None is host-only and invisible to AI tools.
+    pub owner: Option<crate::TerminalOwner>,
     /// Stable id reserved by the durable background-operation coordinator.
     /// Callers outside a session launch may omit it and receive a UUID-based
     /// id. Reusing a reserved id is idempotent and returns the existing
@@ -90,7 +94,7 @@ pub struct StartParams {
     pub env: HashMap<String, String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 /// WebSocket endpoint parameters for a monitor.
 pub struct MonitorWsParams {
     pub url: String,
@@ -149,6 +153,16 @@ pub struct MonitorStopOutcome {
 
 /// Trait so callers (and tests) can swap implementations.
 pub trait MonitorService: Send + Sync + std::fmt::Debug {
+    /// Native terminal sessions share this service's lifetime and observer.
+    fn terminals(&self) -> Option<&crate::TerminalRegistry> {
+        None
+    }
+    /// Unscoped methods are for trusted runtime administration, never model input.
+    fn is_owned(&self, _id: &str, _owner: &crate::TerminalOwner) -> bool {
+        false
+    }
+    fn stop_session(&self, _session: i64) {}
+    fn shutdown(&self) {}
     fn start(&self, params: StartParams) -> Result<MonitorStart, MonitorError>;
     fn list(&self) -> Vec<ProcessSummary>;
     fn read(&self, params: ReadParams) -> Result<MonitorRead, MonitorError>;
@@ -157,6 +171,8 @@ pub trait MonitorService: Send + Sync + std::fmt::Debug {
 
 #[derive(Debug)]
 struct MonitorState {
+    owner: Option<crate::TerminalOwner>,
+    launch: StartParams,
     monitor_id: String,
     /// The source line shown in the transcript / activity panel: the command,
     /// or `ws <url>` for a WebSocket monitor.
@@ -192,6 +208,7 @@ impl MonitorState {
         let inner = self.inner.lock().unwrap();
         ProcessSummary {
             process_id: self.monitor_id.clone(),
+            tty: false,
             command: self.command.clone(),
             description: self.description.clone(),
             status: inner.status,
@@ -211,8 +228,10 @@ impl MonitorState {
 #[derive(Debug)]
 /// Registry of monitored processes.
 pub struct MonitorRegistry {
+    terminals: crate::TerminalRegistry,
     handle: Option<Handle>,
     monitors: Mutex<HashMap<String, Arc<MonitorState>>>,
+    closed: std::sync::atomic::AtomicBool,
     listener: Option<Arc<dyn MonitorListener>>,
 }
 
@@ -220,7 +239,9 @@ impl Default for MonitorRegistry {
     fn default() -> Self {
         Self {
             handle: Handle::try_current().ok(),
+            terminals: crate::TerminalRegistry::default(),
             monitors: Mutex::new(HashMap::new()),
+            closed: std::sync::atomic::AtomicBool::new(false),
             listener: None,
         }
     }
@@ -229,8 +250,10 @@ impl Default for MonitorRegistry {
 impl MonitorRegistry {
     pub fn from_handle(handle: Handle) -> Self {
         Self {
+            terminals: crate::TerminalRegistry::from_handle(handle.clone()),
             handle: Some(handle),
             monitors: Mutex::new(HashMap::new()),
+            closed: std::sync::atomic::AtomicBool::new(false),
             listener: None,
         }
     }
@@ -239,6 +262,7 @@ impl MonitorRegistry {
     /// listener is supported per registry; later calls replace the previous
     /// one.
     pub fn with_monitor_listener(mut self, listener: Arc<dyn MonitorListener>) -> Self {
+        self.terminals.set_listener(Arc::clone(&listener));
         self.listener = Some(listener);
         self
     }
@@ -263,6 +287,49 @@ pub fn default_monitor_registry() -> Option<Arc<dyn MonitorService>> {
 }
 
 impl MonitorService for MonitorRegistry {
+    fn terminals(&self) -> Option<&crate::TerminalRegistry> {
+        Some(&self.terminals)
+    }
+    fn is_owned(&self, id: &str, owner: &crate::TerminalOwner) -> bool {
+        if self.terminals.contains(id) {
+            return self.terminals.is_owned(id, owner);
+        }
+        self.lookup(id)
+            .is_some_and(|state| state.owner.as_ref() == Some(owner))
+    }
+    fn stop_session(&self, session: i64) {
+        self.terminals.stop_session(session);
+        let states: Vec<_> = self
+            .monitors
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .values()
+            .filter(|state| {
+                state
+                    .owner
+                    .as_ref()
+                    .is_some_and(|owner| owner.session_id == Some(session))
+            })
+            .cloned()
+            .collect();
+        for state in states {
+            request_abort(&state);
+        }
+    }
+    fn shutdown(&self) {
+        self.terminals.shutdown();
+        let states = {
+            let monitors = self
+                .monitors
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            self.closed.store(true, Ordering::Release);
+            monitors.values().cloned().collect::<Vec<_>>()
+        };
+        for state in states {
+            request_abort(&state);
+        }
+    }
     fn start(&self, params: StartParams) -> Result<MonitorStart, MonitorError> {
         // Exactly one of `command` / `ws` must be provided.
         let has_command = !params.command.trim().is_empty();
@@ -325,6 +392,8 @@ impl MonitorService for MonitorRegistry {
             ));
         }
         let state = Arc::new(MonitorState {
+            owner: params.owner.clone(),
+            launch: params.clone(),
             monitor_id: process_id,
             command: source,
             description: params.description.clone(),
@@ -354,10 +423,43 @@ impl MonitorService for MonitorRegistry {
         // no-op rather than a second process.
         {
             let mut monitors = self.monitors.lock().unwrap();
+            if self.closed.load(Ordering::Acquire) {
+                return Err(MonitorError::Invalid(
+                    "process registry is shut down".into(),
+                ));
+            }
             if let Some(existing) = monitors.get(&state.monitor_id) {
+                if existing.owner != params.owner {
+                    return Err(MonitorError::NotFound(state.monitor_id.clone()));
+                }
+                if existing.launch != params {
+                    return Err(MonitorError::Invalid(
+                        "process id already belongs to a different launch; do not reuse it".into(),
+                    ));
+                }
                 return Ok(MonitorStart {
                     summary: existing.snapshot(),
                 });
+            }
+            if monitors
+                .values()
+                .filter(|state| state.snapshot().status == ProcessStatus::Running)
+                .count()
+                >= 64
+            {
+                return Err(MonitorError::Invalid(
+                    "at most 64 ordinary background processes may run concurrently".into(),
+                ));
+            }
+            if monitors.len() >= 256 {
+                let candidate = monitors
+                    .iter()
+                    .filter(|(_, state)| state.snapshot().status != ProcessStatus::Running)
+                    .min_by_key(|(_, state)| state.started_at_ms)
+                    .map(|(id, _)| id.clone());
+                if let Some(id) = candidate {
+                    monitors.remove(&id);
+                }
             }
             monitors.insert(state.monitor_id.clone(), Arc::clone(&state));
         }
@@ -390,6 +492,7 @@ impl MonitorService for MonitorRegistry {
             handle.spawn(async move {
                 run_monitor(
                     runner_state,
+                    params.argv,
                     runner_command,
                     runner_workdir,
                     runner_env,
@@ -418,11 +521,31 @@ impl MonitorService for MonitorRegistry {
     fn list(&self) -> Vec<ProcessSummary> {
         let guard = self.monitors.lock().unwrap();
         let mut out: Vec<ProcessSummary> = guard.values().map(|s| s.snapshot()).collect();
+        out.extend(self.terminals.list());
         out.sort_by_key(|summary| summary.started_at_ms);
         out
     }
 
     fn read(&self, params: ReadParams) -> Result<MonitorRead, MonitorError> {
+        if self.terminals.contains(&params.monitor_id) {
+            let read = self.terminals.read_unscoped(
+                &params.monitor_id,
+                params.since_seq,
+                params.wait_ms.min(30_000),
+                params.limit,
+            )?;
+            return Ok(MonitorRead {
+                monitor_id: read.summary.process_id,
+                status: read.summary.status,
+                events: read.events,
+                last_seq: read.last_seq,
+                has_more: read.has_more,
+                dropped_lines: read.summary.dropped_lines,
+                exit_code: read.summary.exit_code,
+                completion_reason: read.summary.completion_reason,
+            });
+        }
+
         let state = self
             .lookup(&params.monitor_id)
             .ok_or_else(|| MonitorError::NotFound(params.monitor_id.clone()))?;
@@ -459,32 +582,37 @@ impl MonitorService for MonitorRegistry {
     }
 
     fn stop(&self, monitor_id: &str) -> Result<MonitorStopOutcome, MonitorError> {
+        if self.terminals.contains(monitor_id) {
+            return self
+                .terminals
+                .stop_unscoped(monitor_id)
+                .map(|summary| MonitorStopOutcome { summary });
+        }
         let state = self
             .lookup(monitor_id)
-            .ok_or_else(|| MonitorError::NotFound(monitor_id.to_string()))?;
+            .ok_or_else(|| MonitorError::NotFound(monitor_id.into()))?;
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut inner = state
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if inner.status == ProcessStatus::Running
+            && let Some(sender) = inner.abort.take()
         {
-            let mut inner = state.inner.lock().unwrap_or_else(|error| {
-                tracing::error!(
-                    diagnostic = %error,
-                    monitor_id,
-                    "recovering a poisoned monitor state while stopping it"
-                );
-                error.into_inner()
-            });
-            if inner.status == ProcessStatus::Running {
-                inner.status = ProcessStatus::Stopped;
-                inner.completion_reason = Some("explicit_stop".to_string());
-                if let Some(tx) = inner.abort.take()
-                    && tx.send(()).is_err()
-                {
-                    tracing::debug!(monitor_id, "monitor abort receiver had already completed");
-                }
+            let _ = sender.send(());
+        }
+        while inner.status == ProcessStatus::Running {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(MonitorError::Invalid("stop requested but termination is not confirmed; inspect shell.logs/list before retrying".into()));
             }
+            let (updated, _) = state
+                .changed
+                .wait_timeout(inner, remaining)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            inner = updated;
         }
-        state.changed.notify_all();
-        if let Some(listener) = state.listener.as_ref() {
-            listener.on_finished(&state.snapshot());
-        }
+        drop(inner);
         Ok(MonitorStopOutcome {
             summary: state.snapshot(),
         })
@@ -517,6 +645,17 @@ impl Drop for MonitorRegistry {
             inner.worker.take();
         }
     }
+}
+
+fn request_abort(state: &MonitorState) {
+    let mut inner = state
+        .inner
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(sender) = inner.abort.take() {
+        let _ = sender.send(());
+    }
+    state.changed.notify_all();
 }
 
 fn collect_events_locked(
@@ -562,6 +701,7 @@ fn compile_optional_pattern(pattern: Option<&str>) -> Result<Option<Regex>, Moni
 #[allow(clippy::too_many_arguments)]
 async fn run_monitor(
     state: Arc<MonitorState>,
+    argv: Option<Vec<String>>,
     command: String,
     workdir: std::path::PathBuf,
     env: HashMap<String, String>,
@@ -574,7 +714,21 @@ async fn run_monitor(
     quiet_period_ms: Option<u64>,
     abort_rx: tokio::sync::oneshot::Receiver<()>,
 ) {
-    let mut cmd = build_command(&command);
+    let mut cmd = match argv {
+        Some(argv) => {
+            let Some((program, args)) = argv
+                .split_first()
+                .filter(|(program, _)| !program.is_empty())
+            else {
+                mark_failed(&state, "empty explicit process command".into());
+                return;
+            };
+            let mut cmd = Command::new(program);
+            cmd.args(args);
+            cmd
+        }
+        None => build_command(&command),
+    };
     cmd.current_dir(&workdir);
     cmd.env_clear();
     for (k, v) in env {
@@ -729,17 +883,9 @@ async fn run_monitor(
 
     {
         let mut inner = state.inner.lock().unwrap();
-        // Don't downgrade an explicit Stopped from `stop()` to Exited if the
-        // child happened to finish racing the kill.
-        let preserve_stopped =
-            matches!(inner.status, ProcessStatus::Stopped) && final_status == ProcessStatus::Exited;
-        if !preserve_stopped {
-            inner.status = final_status;
-        }
+        inner.status = final_status;
         inner.exit_code = final_exit_code;
-        if inner.completion_reason.is_none() {
-            inner.completion_reason = Some(completion_reason);
-        }
+        inner.completion_reason = Some(completion_reason);
         inner.ended_at_ms = Some(Utc::now().timestamp_millis());
         inner.abort = None;
         inner.worker = None;
@@ -1170,6 +1316,8 @@ mod tests {
 
     fn start_params(command: &str) -> StartParams {
         StartParams {
+            argv: None,
+            owner: None,
             process_id: None,
             command: command.to_string(),
             ws: None,

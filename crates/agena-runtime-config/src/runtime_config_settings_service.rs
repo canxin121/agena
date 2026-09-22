@@ -53,10 +53,12 @@ pub struct ConfigSettingsPathInput {
     pub path: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq, Default)]
 #[serde(default)]
 /// Options for a settings edit operation.
 pub struct ConfigSettingsEditOptions {
+    /// Revision of the complete persisted JSON document, not of a leaf value.
+    pub expected_revision: Option<String>,
     pub dry_run: bool,
     #[serde(default = "default_true")]
     pub validate: bool,
@@ -121,6 +123,7 @@ pub struct ConfigSettingsValidateInput {
 #[derive(Debug, Clone, Serialize)]
 /// Response of a settings read.
 pub struct ConfigSettingsReadResponse {
+    pub revision: Option<String>,
     pub config_path: PathBuf,
     pub config_found: bool,
     pub source: ConfigSettingsSource,
@@ -141,6 +144,7 @@ pub struct ConfigSettingsListItem {
 #[derive(Debug, Clone, Serialize)]
 /// Response of a settings listing.
 pub struct ConfigSettingsListResponse {
+    pub revision: Option<String>,
     pub config_path: PathBuf,
     pub config_found: bool,
     pub source: ConfigSettingsSource,
@@ -152,6 +156,10 @@ pub struct ConfigSettingsListResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 /// Response of a settings edit.
 pub struct ConfigSettingsEditResponse {
+    #[serde(default)]
+    pub before_revision: String,
+    #[serde(default)]
+    pub after_revision: String,
     pub config_path: PathBuf,
     pub config_found: bool,
     pub operation: String,
@@ -353,6 +361,7 @@ pub fn read_runtime_file_setting(
     let (config_found, document) = read_runtime_settings_document(&config_path)?;
     let value = get_json_path(&document, input.target.path.as_deref())?;
     Ok(ConfigSettingsReadResponse {
+        revision: Some(document_revision(&document)),
         config_path,
         config_found,
         source: ConfigSettingsSource::File,
@@ -371,6 +380,7 @@ pub fn list_runtime_file_settings(
     let (config_found, document) = read_runtime_settings_document(&config_path)?;
     let items = list_json_path(&document, input.target.path.as_deref(), input.recursive)?;
     Ok(ConfigSettingsListResponse {
+        revision: Some(document_revision(&document)),
         config_path,
         config_found,
         source: ConfigSettingsSource::File,
@@ -394,6 +404,7 @@ pub fn set_runtime_file_setting(
     crate::with_config_file_write_lock(|| {
         let segments = required_runtime_settings_path_segments(&input.path)?;
         let (config_found, mut document) = read_runtime_settings_document(&config_path)?;
+        verify_document_revision(&document, input.options.expected_revision.as_deref())?;
         let before = document.clone();
         let previous = get_json_path(&before, Some(input.path.as_str()))?;
         let created = previous.is_null();
@@ -422,6 +433,7 @@ pub fn delete_runtime_file_setting(
     crate::with_config_file_write_lock(|| {
         let segments = required_runtime_settings_path_segments(&input.path)?;
         let (config_found, mut document) = read_runtime_settings_document(&config_path)?;
+        verify_document_revision(&document, input.options.expected_revision.as_deref())?;
         let before = document.clone();
         let deleted = remove_runtime_json_path(&mut document, &segments)?;
         finish_runtime_settings_edit(
@@ -452,6 +464,7 @@ pub fn patch_runtime_file_settings(
             )
         })?;
         let (config_found, mut document) = read_runtime_settings_document(&config_path)?;
+        verify_document_revision(&document, input.options.expected_revision.as_deref())?;
         let before = document.clone();
         let created = input
             .target
@@ -523,6 +536,8 @@ fn finish_runtime_settings_edit(
         write_runtime_settings_document(&config_path, &text)?;
     }
     Ok(ConfigSettingsEditResponse {
+        before_revision: document_revision(&before),
+        after_revision: document_revision(&document),
         config_path,
         config_found,
         operation: operation.to_string(),
@@ -810,6 +825,25 @@ fn json_kind(value: &JsonValue) -> &'static str {
     }
 }
 
+/// Stable revision for the complete parsed persisted document. Never a hash of redacted output.
+pub fn document_revision(value: &JsonValue) -> String {
+    use sha2::Digest;
+    hex::encode(sha2::Sha256::digest(
+        serde_json::to_vec(value).expect("JSON value is serializable"),
+    ))
+}
+fn verify_document_revision(
+    value: &JsonValue,
+    expected: Option<&str>,
+) -> Result<(), RuntimeConfigSettingsError> {
+    if expected.is_some_and(|expected| expected != document_revision(value)) {
+        return Err(RuntimeConfigSettingsError::invalid_input(
+            "settings revision changed; read source=file and retry with the returned revision",
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::{Value as JsonValue, json};
@@ -823,6 +857,7 @@ mod tests {
 
     fn no_validation() -> ConfigSettingsEditOptions {
         ConfigSettingsEditOptions {
+            expected_revision: None,
             dry_run: false,
             validate: false,
             reload: true,

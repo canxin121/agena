@@ -2,7 +2,7 @@
 //!
 //! Process lifecycle, pipe draining, timeout, and cancellation all run on the
 //! Tokio runtime. Filesystem and tool permissions remain runtime-owned; this
-//! module does not attempt to provide an OS sandbox.
+//! opt-in OS sandbox wrapping is applied before this runner by shell_sandbox.
 
 use std::collections::HashMap;
 use std::io;
@@ -153,7 +153,7 @@ fn validate(request: &ShellRequest) -> Result<(), ShellError> {
 }
 
 /// Strip environment variables that can hijack a child shell or loader.
-fn sanitize_env(env: &HashMap<String, String>) -> HashMap<String, String> {
+pub(crate) fn sanitize_env(env: &HashMap<String, String>) -> HashMap<String, String> {
     const BLOCKED_EXACT: &[&str] = &[
         "BASH_ENV",
         "ENV",

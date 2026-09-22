@@ -8,8 +8,7 @@ use agena_domain::ProcessSummary;
 
 use crate::part::MonitorToolInput;
 use crate::{
-    MonitorError, MonitorService, MonitorStart, MonitorStartParams as StartParams,
-    MonitorStopOutcome, MonitorWsParams,
+    MonitorError, MonitorService, MonitorStart, MonitorStartParams as StartParams, MonitorWsParams,
 };
 
 use super::shell_tools::resolve_workdir;
@@ -29,8 +28,15 @@ pub(crate) async fn execute_async(
             persistent,
             description,
         } => {
+            if command.is_some() && crate::shell_sandbox::enabled()? {
+                return Err(ToolError::invalid_input(
+                    "monitor.start command has no explicit filesystem effects for offline sandbox; use shell.run with reads/writes and monitor options",
+                ));
+            }
             let started = registry
                 .start(StartParams {
+                    argv: None,
+                    owner: Some(super::terminal_tool::owner(executor, context.session_id)?),
                     process_id: context.session_id.zip(context.call_id).map(
                         |(session_id, call_id)| crate::managed_process_id(session_id, call_id),
                     ),
@@ -59,8 +65,14 @@ pub(crate) async fn execute_async(
             Ok(render_start(started))
         }
         MonitorToolInput::Stop { monitor_id } => {
-            let stopped = registry.stop(monitor_id).map_err(into_tool_error)?;
-            Ok(render_stop(stopped))
+            super::process_tool::execute_async(
+                executor,
+                &crate::part::ShellToolInput::Stop {
+                    process_id: monitor_id.clone(),
+                },
+                context,
+            )
+            .await
         }
     }
 }
@@ -101,42 +113,6 @@ fn render_start(started: MonitorStart) -> ToolPayloadExecution {
 
     let output = ToolPayloadOutput::Monitor {
         action: "start".to_string(),
-        monitor_id: Some(summary.process_id.clone()),
-        status: Some(summary.status),
-        output: None,
-        processes: vec![summary],
-        last_seq: 0,
-        exit_code: None,
-        completion_reason: None,
-    };
-    ToolPayloadExecution::new(output, view)
-}
-
-fn render_stop(stopped: MonitorStopOutcome) -> ToolPayloadExecution {
-    let summary = stopped.summary;
-    let body = format!(
-        "Stopped monitor {} (status={}{}{}).",
-        summary.process_id,
-        summary.status,
-        summary
-            .exit_code
-            .map(|code| format!(", exit={code}"))
-            .unwrap_or_default(),
-        summary
-            .completion_reason
-            .as_ref()
-            .map(|reason| format!(", reason={reason}"))
-            .unwrap_or_default(),
-    );
-    let stop_summary = summary
-        .exit_code
-        .map(|code| format!("{} · exit {code}", summary.status))
-        .unwrap_or_else(|| summary.status.to_string());
-    let mut view = ToolExecutionView::simple("Stop monitor", stop_summary, body);
-    insert_summary_metadata(&mut view, &summary);
-
-    let output = ToolPayloadOutput::Monitor {
-        action: "stop".to_string(),
         monitor_id: Some(summary.process_id.clone()),
         status: Some(summary.status),
         output: None,

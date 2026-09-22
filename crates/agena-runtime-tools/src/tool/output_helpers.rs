@@ -129,6 +129,11 @@ pub(super) fn shell_command_from_invocation(invocation: &ToolInvocation) -> Opti
             ToolPayloadInput::Shell(crate::part::ShellToolInput::Run { command, .. }) => {
                 Some(command.command)
             }
+            // Preserve bytes for denial checks and review. PermissionPolicy
+            // deliberately does not apply shell prefix approvals to shell.write.
+            ToolPayloadInput::Shell(crate::part::ShellToolInput::Write { input }) => {
+                Some(input.chars)
+            }
             _ => None,
         };
         if command.is_some() {

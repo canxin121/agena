@@ -23,12 +23,29 @@ use agena_domain::TimeRange;
         "writes[]",
         "network[]"
     ),
-    non_empty("command")
+    non_empty("command"),
+    maximum("yield_time_ms", 30000),
+    minimum("rows", 1),
+    maximum("rows", 200),
+    minimum("cols", 1),
+    maximum("cols", 400)
 )]
 #[serde(deny_unknown_fields)]
 /// Input of a shell command execution.
 pub struct ShellCommandInput {
     pub command: String,
+    /// Allocate a persistent pseudo-terminal. Use shell.write for subsequent
+    /// input; yielding output does not stop the process. Incompatible with monitor.
+    #[serde(default)]
+    pub tty: bool,
+    /// Maximum initial wait for terminal output, not a process timeout (0–30000 ms).
+    #[serde(default = "default_terminal_yield_ms")]
+    pub yield_time_ms: u64,
+    /// Initial terminal dimensions, in character cells.
+    #[serde(default = "default_terminal_rows")]
+    pub rows: u16,
+    #[serde(default = "default_terminal_cols")]
+    pub cols: u16,
     #[serde(default)]
     pub description: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -58,6 +75,60 @@ pub struct ShellCommandInput {
     #[serde(default)]
     #[schemars(example = example_network())]
     pub network: Vec<String>,
+}
+
+pub fn default_terminal_yield_ms() -> u64 {
+    1000
+}
+pub fn default_terminal_rows() -> u16 {
+    24
+}
+pub fn default_terminal_cols() -> u16 {
+    80
+}
+pub fn default_terminal_write_wait_ms() -> u64 {
+    250
+}
+
+/// Input is terminal data, not a new shell command. Never trim it or append a newline.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
+#[input(
+    trim("process_id", "reads[]", "writes[]", "network[]"),
+    non_empty("process_id"),
+    maximum("wait_ms", 30000)
+)]
+#[serde(deny_unknown_fields)]
+pub struct ShellWriteInput {
+    pub process_id: String,
+    /// Exact UTF-8 text/control characters. Empty reads without writing. Use
+    /// \r for Enter, \u0003 for Ctrl-C, \u0004 for Ctrl-D; at most 65536 bytes.
+    #[serde(default)]
+    pub chars: String,
+    /// Output cursor from a previous result. Omit to consume the session's
+    /// unread output; explicit cursors permit replay without changing it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub since_seq: Option<u64>,
+    #[serde(default = "default_terminal_write_wait_ms")]
+    pub wait_ms: u64,
+    /// Paths the entered operation may read, relative to the Agena workspace.
+    #[serde(default)]
+    pub reads: Vec<String>,
+    /// Paths the entered operation may modify, relative to the Agena workspace.
+    #[serde(default)]
+    pub writes: Vec<String>,
+    /// Outbound targets the entered operation may contact.
+    #[serde(default)]
+    pub network: Vec<String>,
+}
+
+/// Out-of-band process control. On Unix, interrupt signals the foreground
+/// process group even in raw mode. Windows uses ConPTY Ctrl-C semantics.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ShellSignal {
+    Interrupt,
+    Terminate,
+    Kill,
 }
 
 impl ShellCommandInput {
@@ -325,6 +396,22 @@ pub enum ShellToolInput {
     /// Terminate a running background process.
     #[input(non_empty("process_id"))]
     Stop { process_id: String },
+    /// Write to a running PTY and collect incremental output.
+    Write {
+        #[serde(flatten)]
+        input: ShellWriteInput,
+    },
+    /// Change the terminal dimensions and deliver a window-size notification.
+    Resize {
+        process_id: String,
+        rows: u16,
+        cols: u16,
+    },
+    /// Interrupt or terminate a terminal process.
+    Signal {
+        process_id: String,
+        signal: ShellSignal,
+    },
 }
 
 /// WebSocket endpoint monitored by the monitor tool.
@@ -431,8 +518,11 @@ pub struct InteractionNotifyToolInput {
 /// Textual patch payload in the agena patch format. Must start with the exact
 /// marker line `*** Begin Patch` and end with the exact marker line
 /// `*** End Patch`; use `*** Update File:` / `*** Add File:` / `*** Delete File:`
-/// directives with `@@` hunks (context lines start with a space, removed lines
-/// with `-`, added lines with `+`).
+/// directives with `@@` or `@@ exact context line` hunks. Context lines start
+/// with a space, removed lines with `-`, and added lines with `+`. Matching is
+/// exact and line-oriented; ambiguous targets are rejected. `*** End of File`
+/// restricts the last hunk to EOF. `\ No newline at end of file` after a content
+/// line specifies a missing final newline. Existing line endings are preserved.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
 #[input(max_chars("patch", 16777216))]
 pub struct ApplyPatchToolInput {
@@ -1148,6 +1238,54 @@ mod operation_part_tests {
 mod current_input_contract_tests {
     use super::{ReadToolInput, ShellCommandInput, TaskToolInput};
     use serde_json::json;
+
+    #[test]
+    fn terminal_input_preserves_whitespace_and_control_bytes_through_postprocessing() {
+        for chars in ["  你好 \t\r", "\u{3}", "\u{4}", "\u{1b}[A", "", "\n"] {
+            let input = super::ShellWriteInput::parse_input(json!({
+                "process_id": " pty-1 ", "chars": chars, "reads": [], "writes": [], "network": []
+            }))
+            .expect("terminal write input");
+            assert_eq!(input.process_id, "pty-1");
+            assert_eq!(input.chars, chars);
+            let serialized = serde_json::to_value(super::ShellToolInput::Write { input }).unwrap();
+            let parsed =
+                super::ShellToolInput::parse_input(serialized).expect("flattened shell input");
+            let super::ShellToolInput::Write { input } = parsed else {
+                panic!("write variant");
+            };
+            assert_eq!(input.chars, chars);
+        }
+    }
+
+    #[test]
+    fn old_shell_inputs_stay_non_interactive_and_terminal_options_round_trip() {
+        let plain: ShellCommandInput =
+            serde_json::from_value(json!({"command": "echo ok"})).unwrap();
+        assert!(!plain.tty);
+        let terminal: super::ShellToolInput = serde_json::from_value(json!({
+            "action": "run", "command": "python3 -q", "tty": true, "yield_time_ms": 250,
+            "rows": 30, "cols": 100, "reads": [], "writes": [], "network": []
+        }))
+        .unwrap();
+        let roundtrip: super::ShellToolInput =
+            serde_json::from_value(serde_json::to_value(&terminal).unwrap()).unwrap();
+        assert_eq!(terminal, roundtrip);
+        let super::ShellToolInput::Run {
+            command,
+            run_in_background,
+            ..
+        } = terminal
+        else {
+            panic!("run variant");
+        };
+        assert!(command.tty);
+        assert!(!run_in_background);
+        assert_eq!(
+            (command.rows, command.cols, command.yield_time_ms),
+            (30, 100, 250)
+        );
+    }
 
     #[test]
     fn shell_input_rejects_removed_result_and_background_fields() {

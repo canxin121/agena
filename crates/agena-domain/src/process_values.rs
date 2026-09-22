@@ -23,6 +23,23 @@ pub enum ProcessShell {
     Bash,
     Powershell,
 }
+
+/// A bounded, plain-text projection of a terminal's current screen. Positions
+/// are zero-based. Raw terminal output is returned separately and never executed
+/// as control sequences by the human-facing renderer.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+pub struct TerminalScreen {
+    pub rows: u16,
+    pub cols: u16,
+    pub cursor_row: u16,
+    pub cursor_col: u16,
+    pub cursor_visible: bool,
+    pub alternate_screen: bool,
+    pub bracketed_paste: bool,
+    pub application_cursor: bool,
+    pub text: String,
+    pub truncated: bool,
+}
 #[derive(
     Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Display, EnumString,
 )]
@@ -58,6 +75,10 @@ pub struct ProcessEvent {
 /// Summary of a monitored process.
 pub struct ProcessSummary {
     pub process_id: String,
+    /// True for a persistent pseudo-terminal; its events contain raw chunks,
+    /// not newline-delimited log records.
+    #[serde(default)]
+    pub tty: bool,
     pub command: String,
     pub description: String,
     pub status: ProcessStatus,

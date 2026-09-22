@@ -4,7 +4,12 @@ use std::io::Read as _;
 use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
-use similar::{ChangeTag, TextDiff};
+use similar::TextDiff;
+
+mod edit;
+mod format;
+use edit::apply_hunks;
+use format::parse_patch;
 use uuid::Uuid;
 
 use crate::part::ApplyPatchToolInput;
@@ -32,10 +37,14 @@ enum PatchOp {
     },
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 struct Hunk {
     old: String,
     new: String,
+    contexts: Vec<String>,
+    end_of_file: bool,
+    old_no_newline: bool,
+    new_no_newline: bool,
 }
 
 #[derive(Debug)]
@@ -56,7 +65,6 @@ enum PreparedPatchOp {
         absolute: PathBuf,
         original: String,
         updated: String,
-        hunks: Vec<Hunk>,
     },
     Move {
         path: String,
@@ -66,7 +74,6 @@ enum PreparedPatchOp {
         original: String,
         updated: String,
         permissions: Permissions,
-        hunks: Vec<Hunk>,
     },
 }
 
@@ -152,13 +159,12 @@ fn execute_locked(
                 path,
                 original,
                 updated,
-                hunks,
                 ..
             } => {
                 before_state.push_str(&format!("U:{path}:{original}\n"));
                 after_state.push_str(&format!("U:{path}:{updated}\n"));
                 inverse_sections.push(render_update_inverse_section(path, None, updated, original));
-                diff_sections.push(render_update_diff(path, None, hunks));
+                diff_sections.push(render_update_diff(path, None, original, updated));
                 changed_files.push(AppliedFileChange {
                     path: path.clone(),
                     kind: PatchOpKind::Update,
@@ -170,7 +176,6 @@ fn execute_locked(
                 target_path,
                 original,
                 updated,
-                hunks,
                 ..
             } => {
                 before_state.push_str(&format!("M:{path}:{original}\n"));
@@ -181,7 +186,12 @@ fn execute_locked(
                     updated,
                     original,
                 ));
-                diff_sections.push(render_update_diff(path, Some(target_path), hunks));
+                diff_sections.push(render_update_diff(
+                    path,
+                    Some(target_path),
+                    original,
+                    updated,
+                ));
                 changed_files.push(AppliedFileChange {
                     path: target_path.clone(),
                     kind: PatchOpKind::Move,
@@ -282,7 +292,6 @@ fn prepare_operations(
                         original,
                         updated,
                         permissions,
-                        hunks,
                     });
                 } else {
                     prepared.push(PreparedPatchOp::Update {
@@ -290,7 +299,6 @@ fn prepare_operations(
                         absolute: source,
                         original,
                         updated,
-                        hunks,
                     });
                 }
             }
@@ -491,176 +499,24 @@ pub(crate) fn planned_paths(text: &str) -> Result<Vec<String>, ToolError> {
     Ok(paths)
 }
 
-fn parse_patch(text: &str) -> Result<Vec<PatchOp>, ToolError> {
-    let lines = text.lines().collect::<Vec<_>>();
-    if lines.is_empty() {
-        return Err(ToolError::invalid_patch("empty patch".to_string()));
-    }
-
-    if lines.first().copied() != Some("*** Begin Patch") {
-        return Err(ToolError::invalid_patch(
-            "patch must start with '*** Begin Patch'".to_string(),
-        ));
-    }
-    if lines.last().copied() != Some("*** End Patch") {
-        return Err(ToolError::invalid_patch(
-            "patch must end with '*** End Patch'".to_string(),
-        ));
-    }
-
-    let mut idx = 1usize;
-    let mut ops = Vec::new();
-
-    while idx < lines.len() - 1 {
-        let line = lines[idx];
-        if line.trim().is_empty() {
-            idx += 1;
-            continue;
-        }
-
-        if let Some(path) = line.strip_prefix("*** Add File: ") {
-            idx += 1;
-            let mut content = Vec::new();
-            while idx < lines.len() - 1 && !lines[idx].starts_with("*** ") {
-                let l = lines[idx];
-                let payload = l.strip_prefix('+').ok_or_else(|| {
-                    ToolError::invalid_patch("add file expects '+' prefixed lines".to_string())
-                })?;
-                content.push(payload);
-                idx += 1;
-            }
-            ops.push(PatchOp::Add {
-                path: path.to_string(),
-                content: join_lines(&content),
-            });
-            continue;
-        }
-
-        if let Some(path) = line.strip_prefix("*** Delete File: ") {
-            idx += 1;
-            ops.push(PatchOp::Delete {
-                path: path.to_string(),
-            });
-            continue;
-        }
-
-        if let Some(path) = line.strip_prefix("*** Update File: ") {
-            idx += 1;
-            let mut move_to = None;
-            let mut hunks = Vec::new();
-            let mut old_lines = Vec::new();
-            let mut new_lines = Vec::new();
-
-            while idx < lines.len() - 1 {
-                let l = lines[idx];
-                if let Some(target) = l.strip_prefix("*** Move to: ") {
-                    if move_to.replace(target.to_string()).is_some() {
-                        return Err(ToolError::invalid_patch(format!(
-                            "duplicate move target for update file: {path}"
-                        )));
-                    }
-                    idx += 1;
-                    continue;
-                }
-                if l.starts_with("*** ") {
-                    break;
-                }
-                if l.starts_with("@@") {
-                    if !old_lines.is_empty() || !new_lines.is_empty() {
-                        hunks.push(Hunk {
-                            old: join_lines(&old_lines),
-                            new: join_lines(&new_lines),
-                        });
-                        old_lines.clear();
-                        new_lines.clear();
-                    }
-                    idx += 1;
-                    continue;
-                }
-
-                if let Some(payload) = l.strip_prefix(' ') {
-                    old_lines.push(payload);
-                    new_lines.push(payload);
-                    idx += 1;
-                    continue;
-                }
-                if let Some(payload) = l.strip_prefix('-') {
-                    old_lines.push(payload);
-                    idx += 1;
-                    continue;
-                }
-                if let Some(payload) = l.strip_prefix('+') {
-                    new_lines.push(payload);
-                    idx += 1;
-                    continue;
-                }
-
-                return Err(ToolError::invalid_patch(format!(
-                    "invalid update hunk line in {path}: {l}"
-                )));
-            }
-
-            if !old_lines.is_empty() || !new_lines.is_empty() {
-                hunks.push(Hunk {
-                    old: join_lines(&old_lines),
-                    new: join_lines(&new_lines),
-                });
-            }
-
-            if hunks.is_empty() && move_to.is_none() {
-                return Err(ToolError::invalid_patch(format!(
-                    "update file has no hunks: {path}"
-                )));
-            }
-
-            ops.push(PatchOp::Update {
-                path: path.to_string(),
-                move_to,
-                hunks,
-            });
-            continue;
-        }
-
-        return Err(ToolError::invalid_patch(format!(
-            "unknown patch section header: {line}"
-        )));
-    }
-
-    Ok(ops)
-}
-
-fn apply_hunks(path: &str, original: &str, hunks: &[Hunk]) -> Result<String, ToolError> {
-    let mut content = normalize_lf(original);
-    for (index, hunk) in hunks.iter().enumerate() {
-        if hunk.old.is_empty() {
-            content.push_str(&hunk.new);
-            continue;
-        }
-        let pos = content.find(&hunk.old).ok_or_else(|| {
-            ToolError::invalid_patch(format!(
-                "failed to locate update hunk {} in target file: {path}",
-                index + 1
-            ))
-        })?;
-        content.replace_range(pos..(pos + hunk.old.len()), &hunk.new);
-    }
-
-    if original.contains("\r\n") {
-        Ok(content.replace('\n', "\r\n"))
-    } else {
-        Ok(content)
-    }
-}
-
 fn render_add_file_section(path: &str, content: &str) -> String {
     let mut lines = vec![format!("*** Add File: {path}")];
-    for line in normalize_lf(content).lines() {
+    for line in content.split_terminator('\n') {
         lines.push(format!("+{line}"));
     }
-    if content.ends_with('\n') {
-        lines.push("+".to_string());
+    if !content.is_empty() && !content.ends_with('\n') {
+        lines.push("\\ No newline at end of file".into());
     }
     lines.join("\n")
+}
+
+fn push_inverse_lines(lines: &mut Vec<String>, prefix: char, content: &str) {
+    for line in normalize_lf(content).lines() {
+        lines.push(format!("{prefix}{line}"));
+    }
+    if !content.is_empty() && !content.ends_with('\n') {
+        lines.push("\\ No newline at end of file".into());
+    }
 }
 
 fn render_update_inverse_section(
@@ -677,13 +533,10 @@ fn render_update_inverse_section(
         lines.push(format!("*** Move to: {original_path}"));
     }
     if now_content != before_content {
-        lines.push("@@".to_string());
-        for line in normalize_lf(now_content).lines() {
-            lines.push(format!("-{line}"));
-        }
-        for line in normalize_lf(before_content).lines() {
-            lines.push(format!("+{line}"));
-        }
+        lines.push("@@".into());
+        push_inverse_lines(&mut lines, '-', now_content);
+        push_inverse_lines(&mut lines, '+', before_content);
+        lines.push("*** End of File".into());
     }
     lines.join("\n")
 }
@@ -708,33 +561,19 @@ fn render_delete_diff(path: &str, content: &str) -> String {
     lines.join("\n")
 }
 
-fn render_update_diff(path: &str, move_to: Option<&str>, hunks: &[Hunk]) -> String {
-    let target_path = move_to.unwrap_or(path);
-    let mut lines = vec![format!("diff --git a/{path} b/{target_path}")];
-    if let Some(target_path) = move_to {
-        lines.push(format!("rename from {path}"));
-        lines.push(format!("rename to {target_path}"));
+fn render_update_diff(path: &str, move_to: Option<&str>, original: &str, updated: &str) -> String {
+    let target = move_to.unwrap_or(path);
+    let mut output = format!("diff --git a/{path} b/{target}\n");
+    if move_to.is_some() {
+        output.push_str(&format!("rename from {path}\nrename to {target}\n"));
     }
-    lines.push(format!("--- a/{path}"));
-    lines.push(format!("+++ b/{target_path}"));
-
-    if hunks.is_empty() {
-        return lines.join("\n");
-    }
-
-    for hunk in hunks {
-        lines.push("@@".to_string());
-        for change in TextDiff::from_lines(&hunk.old, &hunk.new).iter_all_changes() {
-            let value = change.value().trim_end_matches(['\r', '\n']);
-            match change.tag() {
-                ChangeTag::Delete => lines.push(format!("-{value}")),
-                ChangeTag::Equal => lines.push(format!(" {value}")),
-                ChangeTag::Insert => lines.push(format!("+{value}")),
-            }
-        }
-    }
-
-    lines.join("\n")
+    output.push_str(
+        &TextDiff::from_lines(original, updated)
+            .unified_diff()
+            .header(&format!("a/{path}"), &format!("b/{target}"))
+            .to_string(),
+    );
+    output
 }
 
 fn push_prefixed_lines(lines: &mut Vec<String>, prefix: char, content: &str) {
@@ -799,14 +638,6 @@ fn read_patch_target(path: &Path) -> Result<String, ToolError> {
             path.display()
         ))
     })
-}
-
-fn join_lines(lines: &[&str]) -> String {
-    let mut out = lines.join("\n");
-    if !out.is_empty() {
-        out.push('\n');
-    }
-    out
 }
 
 fn normalize_lf(input: &str) -> String {

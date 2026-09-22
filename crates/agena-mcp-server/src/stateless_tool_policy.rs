@@ -126,6 +126,9 @@ mod tests {
     fn direct_workspace_tools_remain_exposed() {
         for candidate in [
             tool("shell.run", Some("agena.shell"), false, false),
+            tool("shell.write", Some("agena.shell"), false, false),
+            tool("shell.resize", Some("agena.shell"), false, false),
+            tool("shell.signal", Some("agena.shell"), false, false),
             tool("fs.write", Some("agena.fs"), false, false),
             tool("code.search_ast", Some("agena.code"), false, false),
             tool("lsp.definition", Some("agena.lsp"), false, false),

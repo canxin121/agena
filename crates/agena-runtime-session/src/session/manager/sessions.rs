@@ -656,6 +656,9 @@ impl SessionManager {
         session_id: i64,
         reason: agena_plugin_host::SessionEndReason,
     ) {
+        if let Some(service) = self.execution_state().tool_executor.monitor_registry() {
+            service.stop_session(session_id);
+        }
         self.execution_state()
             .tool_executor
             .plugin_manager()

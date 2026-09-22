@@ -37,12 +37,14 @@ pub(super) async fn execute_async(
             .shell_env_overrides_async(&cwd, context.session_id, context.call_id)
             .await?,
     );
-    let request = ShellRequest {
+    let mut request = ShellRequest {
         command: powershell_command_for_windows(&input.command),
         cwd,
         env,
         timeout_ms: Some(input.timeout_ms.unwrap_or(DEFAULT_SHELL_TIMEOUT_MS)),
     };
+    request.command =
+        crate::shell_sandbox::protect(executor, request.command, input, &mut request.env)?;
     let _worker_permit = super::shell::acquire_worker_permit().await?;
     let execution = executor.execute_shell_command(&request).await?;
     executor.ensure_not_cancelled()?;
@@ -75,6 +77,8 @@ fn render_execution(
     };
 
     let output = ToolPayloadOutput::Shell {
+        terminal: None,
+        dropped_bytes: 0,
         action: "run".to_string(),
         shell: Some(ProcessShell::Powershell),
         background: false,

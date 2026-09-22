@@ -134,10 +134,14 @@ impl App {
                             .lines
                             .into_iter()
                             .map(|line| {
+                                // PTY chunks may contain OSC/CSI control sequences.
+                                // Render text, never replay child terminal controls
+                                // into the user's own terminal via a raw Span.
+                                let text = crate::sanitize_terminal_text(&line.text);
                                 if line.stream == "stderr" {
-                                    format!("e> {}", line.text)
+                                    format!("e> {text}")
                                 } else {
-                                    line.text
+                                    text
                                 }
                             })
                             .collect(),

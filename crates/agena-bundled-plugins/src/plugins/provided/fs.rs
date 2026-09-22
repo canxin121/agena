@@ -43,8 +43,9 @@ struct WriteFileInput {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
 #[input(
-    trim("path", "old", "expected_sha256"),
-    non_empty("path", "old"),
+    trim("path", "expected_sha256"),
+    non_empty("path"),
+    min_chars("old", 1),
     non_empty_if_present("expected_sha256"),
     minimum("expected_occurrences", 1),
     max_chars("old", 16777216),
@@ -118,6 +119,39 @@ const fn default_true() -> bool {
     true
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInput)]
+#[serde(deny_unknown_fields)]
+#[input(non_empty("output_id"), minimum("limit", 1), maximum("limit", 16000))]
+struct OutputReadInput {
+    output_id: String,
+    #[serde(default)]
+    offset: usize,
+    #[serde(default = "output_default_limit")]
+    limit: usize,
+}
+const fn output_default_limit() -> usize {
+    8000
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInput)]
+#[serde(deny_unknown_fields)]
+#[input(
+    non_empty("output_id", "pattern"),
+    max_chars("pattern", 4096),
+    minimum("limit", 1),
+    maximum("limit", 100)
+)]
+struct OutputSearchInput {
+    output_id: String,
+    pattern: String,
+    #[serde(default)]
+    offset: usize,
+    #[serde(default = "output_default_matches")]
+    limit: usize,
+}
+const fn output_default_matches() -> usize {
+    20
+}
+
 pub(crate) fn new_plugin() -> FsPlugin {
     FsPlugin
 }
@@ -129,6 +163,95 @@ pub(crate) fn new_plugin() -> FsPlugin {
     summary = "Filesystem command tools for read/search and explicit edits.",
 )]
 impl FsPlugin {
+    #[tool(
+        name = "output_read",
+        tags(query),
+        summary = "Read a byte range of captured tool output owned by this session.",
+        help = "Use output_id from a tool result. Offsets are UTF-8 byte offsets; next_offset continues the capture. Capture can expire, be evicted, or already be truncated.",
+        read_only,
+        concurrency_safe
+    )]
+    async fn output_read(
+        &self,
+        context: &ToolInvokeContext<'_>,
+        input: &OutputReadInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        let result = agena_runtime_tools::output_resources::read(
+            Path::new(context.workspace_root),
+            context.session_id,
+            &input.output_id,
+            input.offset,
+            input.limit,
+        )
+        .map_err(PluginError::invalid_params)?;
+        let text = format!(
+            "{}\n[Next offset: {:?}; captured {}/{} bytes; capture_truncated={}]",
+            result.text,
+            result.next_offset,
+            result.captured_bytes,
+            result.original_bytes,
+            result.capture_truncated
+        );
+        Ok(ToolInvokeOutput::from_parts(
+            "Captured output",
+            format!("{} bytes", result.text.len()),
+            text,
+            Some(
+                serde_json::to_value(result)
+                    .map_err(|error| PluginError::internal_error(&error))?,
+            ),
+            Default::default(),
+            Vec::new(),
+        ))
+    }
+    #[tool(
+        name = "output_search",
+        tags(query),
+        summary = "Find literal text within captured tool output owned by this session.",
+        help = "Search before reading long logs. Results return byte offsets accepted by output_read. This searches captured bytes only, not content already dropped upstream.",
+        read_only,
+        concurrency_safe
+    )]
+    async fn output_search(
+        &self,
+        context: &ToolInvokeContext<'_>,
+        input: &OutputSearchInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        let result = agena_runtime_tools::output_resources::search(
+            Path::new(context.workspace_root),
+            context.session_id,
+            &input.output_id,
+            &input.pattern,
+            input.offset,
+            input.limit,
+        )
+        .map_err(PluginError::invalid_params)?;
+        let mut text = result
+            .matches
+            .iter()
+            .map(|hit| format!("byte {}: {}", hit.offset, hit.preview))
+            .collect::<Vec<_>>()
+            .join("\n");
+        if text.is_empty() {
+            text = "No matches in captured content.".into();
+        }
+        text.push_str(&format!(
+            "\n[Next search offset: {:?}; capture_truncated={}]",
+            result.next_offset, result.capture_truncated
+        ));
+        Ok(ToolInvokeOutput::from_parts(
+            "Search captured output",
+            format!("{} matches", result.matches.len()),
+            text,
+            Some(
+                serde_json::to_value(result)
+                    .map_err(|error| PluginError::internal_error(&error))?,
+            ),
+            Default::default(),
+            Vec::new(),
+        ))
+    }
+
     #[tool(
         tags(query, filesystem),
         summary = "Read workspace files.",
@@ -323,8 +446,8 @@ impl FsPlugin {
                         input.path
                     )));
                 }
-                if let Some(expected) = input.expected_sha256.as_deref() {
-                    verify_expected_hash(&target, expected)?;
+                if input.old.is_empty() {
+                    return Err(PluginError::invalid_params("old text must contain at least one byte"));
                 }
                 let original = String::from_utf8(read_file_bounded(
                     &target,
@@ -337,6 +460,15 @@ impl FsPlugin {
                         input.path
                     ))
                 })?;
+                let before_sha256 = sha256_bytes(original.as_bytes());
+                if let Some(expected) = input.expected_sha256.as_deref()
+                    && !before_sha256.eq_ignore_ascii_case(expected)
+                {
+                    return Err(PluginError::invalid_params(format!(
+                        "stale file revision for '{}': expected sha256 {}, actual {}",
+                        input.path, expected, before_sha256
+                    )));
+                }
                 let occurrences = original.match_indices(input.old.as_str()).count();
                 if occurrences != input.expected_occurrences as usize {
                     return Err(PluginError::invalid_params(format!(
@@ -344,6 +476,12 @@ impl FsPlugin {
                         input.expected_occurrences, input.path
                     )));
                 }
+                let replacements = if input.replace_all { occurrences } else { 1 };
+                let result_bytes = original.len()
+                    .checked_sub(input.old.len().checked_mul(replacements).ok_or_else(|| PluginError::invalid_params("replacement size overflow"))?)
+                    .and_then(|size| input.new.len().checked_mul(replacements).and_then(|added| size.checked_add(added)))
+                    .filter(|size| *size as u64 <= MAX_MUTATING_TEXT_BYTES)
+                    .ok_or_else(|| PluginError::invalid_params("fs.replace result exceeds the 16 MiB limit"))?;
                 let updated = if input.replace_all {
                     original.replace(input.old.as_str(), input.new.as_str())
                 } else {
@@ -357,7 +495,7 @@ impl FsPlugin {
                 }
                 agena_runtime_tools::atomic_replace_file(&target, updated.as_bytes())
                     .map_err(fs_error)?;
-                let before_sha256 = sha256_bytes(original.as_bytes());
+                debug_assert_eq!(updated.len(), result_bytes);
                 let after_sha256 = sha256_bytes(updated.as_bytes());
                 Ok(ToolInvokeOutput::from_parts(
                     format!("replaced text in {}", input.path),
@@ -410,37 +548,42 @@ impl FsPlugin {
             let mut sections = Vec::new();
             let mut entries = Vec::new();
             let mut truncated = false;
+            let mut succeeded = 0;
+            let mut failed = 0;
             for path in &input.paths {
                 if remaining == 0 {
                     truncated = true;
-                    break;
-                }
-                let target = resolve_path(workspace_root.as_str(), path);
-                if !target.is_file() {
-                    entries.push(serde_json::json!({ "path": path, "error": "not a file" }));
+                    entries.push(serde_json::json!({"path":path,"status":"not_read_budget","returned_bytes":0}));
                     continue;
                 }
-                let metadata = std::fs::metadata(&target).map_err(fs_error)?;
-                let (preview, returned_bytes, file_truncated) =
-                    read_utf8_prefix(&target, remaining, path)?;
-                sections.push(format!("===== {path} =====\n{preview}"));
-                let hash = (!file_truncated).then(|| sha256_bytes(preview.as_bytes()));
-                entries.push(serde_json::json!({
-                    "path": path,
-                    "bytes": metadata.len(),
-                    "returned_bytes": returned_bytes,
-                    "truncated": file_truncated,
-                    "sha256": hash,
-                }));
-                remaining = remaining.saturating_sub(returned_bytes);
-                truncated |= file_truncated;
-                if remaining == 0 {
-                    truncated |= entries.len() < input.paths.len();
-                    break;
+                let target = resolve_path(workspace_root.as_str(), path);
+                let read = (|| {
+                    let metadata = std::fs::metadata(&target).map_err(fs_error)?;
+                    if !metadata.is_file() {
+                        return Err(PluginError::invalid_params("not a regular file"));
+                    }
+                    let (preview, returned_bytes, file_truncated) = read_utf8_prefix(&target, remaining, path)?;
+                    Ok((metadata.len(), preview, returned_bytes, file_truncated))
+                })();
+                match read {
+                    Ok((bytes, preview, returned_bytes, file_truncated)) => {
+                        sections.push(format!("===== {path} =====\n{preview}"));
+                        let hash = (!file_truncated).then(|| sha256_bytes(preview.as_bytes()));
+                        entries.push(serde_json::json!({"path":path,"status":"read","bytes":bytes,
+                            "returned_bytes":returned_bytes,"truncated":file_truncated,"sha256":hash}));
+                        remaining = remaining.saturating_sub(returned_bytes);
+                        truncated |= file_truncated;
+                        succeeded += 1;
+                    }
+                    Err(error) => {
+                        failed += 1;
+                        sections.push(format!("===== {path} =====\nRead failed: {error}"));
+                        entries.push(serde_json::json!({"path":path,"status":"error","error":error.to_string()}));
+                    }
                 }
             }
             Ok(ToolInvokeOutput::from_parts(
-                format!("read {} files", entries.len()),
+                format!("read {succeeded} files · {failed} failed"),
                 if truncated {
                     format!("{} files · truncated", entries.len())
                 } else {
@@ -449,6 +592,8 @@ impl FsPlugin {
                 sections.join("\n\n"),
                 Some(serde_json::json!({
                     "files": entries,
+                    "success_count": succeeded,
+                    "error_count": failed,
                     "max_total_bytes": input.max_total_bytes,
                     "remaining_bytes": remaining,
                     "truncated": truncated,
@@ -479,8 +624,58 @@ impl FsPlugin {
         let workspace_root = context.workspace_root.to_string();
         let input = input.clone();
         run_fs_blocking(move || {
-            let target = resolve_path(workspace_root.as_str(), input.path.as_str());
-            let metadata = std::fs::symlink_metadata(&target).map_err(fs_error)?;
+            let requested = Path::new(&input.path);
+            let target = if requested.is_absolute() {
+                requested.to_path_buf()
+            } else {
+                Path::new(&workspace_root).join(requested)
+            };
+            let mut metadata = std::fs::symlink_metadata(&target).map_err(fs_error)?;
+            let mut hash_skipped = false;
+            let hash = if input.hash && metadata.is_file() {
+                let file = File::open(&target).map_err(fs_error)?;
+                metadata = file.metadata().map_err(fs_error)?;
+                if !metadata.is_file() {
+                    return Err(PluginError::invalid_params(
+                        "stat target changed while opening it",
+                    ));
+                }
+                if metadata.len() > MAX_STAT_HASH_BYTES {
+                    hash_skipped = true;
+                    None
+                } else {
+                    let mut digest = Sha256::new();
+                    let mut reader = (&file).take(MAX_STAT_HASH_BYTES + 1);
+                    let mut bytes = 0_u64;
+                    let mut buffer = [0_u8; 64 * 1024];
+                    loop {
+                        let count = reader.read(&mut buffer).map_err(fs_error)?;
+                        if count == 0 {
+                            break;
+                        }
+                        bytes += count as u64;
+                        if bytes > MAX_STAT_HASH_BYTES {
+                            return Err(PluginError::invalid_params(
+                                "stat file grew beyond its hash budget",
+                            ));
+                        }
+                        digest.update(&buffer[..count]);
+                    }
+                    let after = file.metadata().map_err(fs_error)?;
+                    if bytes != metadata.len()
+                        || after.len() != metadata.len()
+                        || after.modified().map_err(fs_error)?
+                            != metadata.modified().map_err(fs_error)?
+                    {
+                        return Err(PluginError::invalid_params(
+                            "stat file changed while hashing; retry the read",
+                        ));
+                    }
+                    Some(hex::encode(digest.finalize()))
+                }
+            } else {
+                None
+            };
             let file_type = if metadata.file_type().is_symlink() {
                 "symlink"
             } else if metadata.is_dir() {
@@ -498,13 +693,6 @@ impl FsPlugin {
                 .as_millis();
             let modified_at_ms = i64::try_from(modified_at_ms)
                 .map_err(|error| PluginError::internal_error(&error))?;
-            let hash_skipped =
-                input.hash && metadata.is_file() && metadata.len() > MAX_STAT_HASH_BYTES;
-            let hash = if input.hash && metadata.is_file() && !hash_skipped {
-                Some(sha256_file(&target)?)
-            } else {
-                None
-            };
             let symlink_target = if metadata.file_type().is_symlink() {
                 Some(
                     std::fs::read_link(&target)
@@ -816,6 +1004,8 @@ mod tests {
                 .map(|tool| tool.name.as_str())
                 .collect::<Vec<_>>(),
             [
+                "output_read",
+                "output_search",
                 "read",
                 "glob",
                 "grep",

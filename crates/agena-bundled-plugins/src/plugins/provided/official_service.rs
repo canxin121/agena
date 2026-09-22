@@ -4,6 +4,8 @@
 //! helpers call official provider endpoints, normalize provider-reported usage,
 //! retain continuation state, and persist binary-redacted response receipts.
 
+mod outcome;
+
 use std::{
     collections::{BTreeMap, HashSet},
     path::{Path, PathBuf},
@@ -109,7 +111,10 @@ pub(crate) fn endpoint(base_url: &str, path: &str) -> SdkResult<String> {
     Ok(format!("{base}/{}", path.trim_start_matches('/')))
 }
 
-pub(crate) async fn authorize_network(_host: &Arc<dyn HostClient>, url: &str) -> SdkResult<()> {
+pub(crate) async fn validate_provider_endpoint(
+    _host: &Arc<dyn HostClient>,
+    url: &str,
+) -> SdkResult<()> {
     let parsed = url::Url::parse(url)
         .map_err(|error| PluginError::invalid_params(format!("invalid provider URL: {error}")))?;
     if !matches!(parsed.scheme(), "http" | "https") {
@@ -276,7 +281,7 @@ pub(crate) async fn post_json(
     provider: &str,
     operation: &str,
 ) -> SdkResult<ProviderHttpResponse> {
-    authorize_network(host, url).await?;
+    validate_provider_endpoint(host, url).await?;
     let mut request = crate::PROVIDER_HTTP_CLIENT
         .post(url)
         .timeout(Duration::from_secs(timeout_secs.max(1)))
@@ -312,13 +317,49 @@ pub(crate) async fn provider_output(
     usage_kind: ProviderUsageKind,
     response: ProviderHttpResponse,
 ) -> SdkResult<ToolInvokeOutput> {
-    let attachments =
-        persist_images(host, workspace_root, provider, title, &response.value).await?;
-    let output_text = extract_response_text(&response.value)
+    let mut persistence_warnings = Vec::new();
+    let receipt = match persist_response_receipt(
+        host,
+        workspace_root,
+        provider,
+        tool,
+        &response.value,
+    )
+    .await
+    {
+        Ok((path, sha256)) => {
+            Some(serde_json::json!({"path":path,"sha256":sha256,"binary_payloads_redacted":true}))
+        }
+        Err(error) => {
+            persistence_warnings.push(format!("Provider response was received, but receipt persistence failed: {}. Do not repeat the paid request automatically.",error.failure.user.fallback));
+            None
+        }
+    };
+    let (attachments, image_warnings) =
+        persist_images(host, workspace_root, provider, title, &response.value).await;
+    persistence_warnings.extend(image_warnings);
+    let mut output_text = extract_response_text(&response.value)
         .filter(|text| !text.trim().is_empty())
-        .unwrap_or_else(|| format!("{provider}.{tool} completed without a text summary."));
+        .unwrap_or_else(|| {
+            format!("{provider}.{tool} returned no text summary; completion is not inferred.")
+        });
     let pending_calls = pending_calls(&response.value);
     let continuation_required = !pending_calls.is_empty();
+    let outcome = outcome::classify(provider, &response.value, continuation_required).label();
+    output_text = format!(
+        "Provider outcome: {outcome}. Local persistence: {}.\n{}{}",
+        if persistence_warnings.is_empty() {
+            "complete"
+        } else {
+            "partial_or_failed"
+        },
+        output_text,
+        if persistence_warnings.is_empty() {
+            String::new()
+        } else {
+            format!("\n{}", persistence_warnings.join("\n"))
+        }
+    );
     let response_id = response
         .value
         .get("id")
@@ -339,8 +380,6 @@ pub(crate) async fn provider_output(
         usage: Box::new(usage.clone()),
     };
 
-    let (receipt_path, receipt_sha256) =
-        persist_response_receipt(host, workspace_root, provider, tool, &response.value).await?;
     let mut payload = serde_json::json!({
         "provider": provider,
         "tool": tool,
@@ -351,11 +390,11 @@ pub(crate) async fn provider_output(
         "assistant_content": assistant_content,
         "sources": sources,
         "usage": usage,
-        "response_receipt": {
-            "path": receipt_path,
-            "sha256": receipt_sha256,
-            "binary_payloads_redacted": true
-        },
+        "response_receipt": receipt,
+        "outcome": outcome,
+        "response_received": true,
+        "persistence_warnings": persistence_warnings,
+        "safe_to_reexecute_automatically": false,
         "continuation_required": continuation_required,
     });
     if let Some(object) = payload.as_object_mut() {
@@ -369,17 +408,23 @@ pub(crate) async fn provider_output(
     let usage_metadata = serde_json::to_string(&attributed).map_err(|error| {
         PluginError::internal(format!("cannot serialize provider tool usage: {error}"))
     })?;
-    let result_summary = if continuation_required {
-        format!("{} tool calls pending", pending_calls.len())
-    } else if !attachments.is_empty() || !sources.is_empty() {
-        format!(
-            "{} sources · {} attachments",
-            sources.len(),
-            attachments.len()
-        )
-    } else {
-        "Response received".to_string()
-    };
+    let result_summary =
+        if !matches!(outcome, "completed" | "pending_calls") || !persistence_warnings.is_empty() {
+            format!(
+                "Provider {outcome} · {} persistence warning(s)",
+                persistence_warnings.len()
+            )
+        } else if continuation_required {
+            format!("{} tool calls pending", pending_calls.len())
+        } else if !attachments.is_empty() || !sources.is_empty() {
+            format!(
+                "{} sources · {} attachments",
+                sources.len(),
+                attachments.len()
+            )
+        } else {
+            "Response received".to_string()
+        };
     Ok(ToolInvokeOutput::from_parts(
         title,
         result_summary,
@@ -1401,10 +1446,11 @@ async fn persist_images(
     provider: &str,
     title: &str,
     response: &serde_json::Value,
-) -> SdkResult<Vec<AttachmentItem>> {
+) -> (Vec<AttachmentItem>, Vec<String>) {
     let mut candidates = Vec::new();
     collect_image_candidates(response, &mut candidates, 0);
     let mut attachments = Vec::new();
+    let mut warnings = Vec::new();
     let mut seen = HashSet::new();
     for candidate in candidates {
         let encoded = candidate
@@ -1414,12 +1460,17 @@ async fn persist_images(
             .unwrap_or(candidate.encoded.as_str())
             .trim();
         if encoded.len() > MAX_IMAGE_BASE64_BYTES {
+            warnings.push(
+                "An image result exceeded its encoded size limit; it was not persisted.".into(),
+            );
             continue;
         }
         let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(encoded) else {
+            warnings.push("An image result was not valid base64; it was not persisted.".into());
             continue;
         };
         if bytes.is_empty() || bytes.len() > MAX_IMAGE_BYTES {
+            warnings.push("An image result was empty or exceeded its decoded byte limit.".into());
             continue;
         }
         let sha256 = hex::encode(Sha256::digest(bytes.as_slice()));
@@ -1432,7 +1483,12 @@ async fn persist_images(
             .join(provider)
             .join(format!("{}.{}", uuid::Uuid::new_v4().simple(), extension));
         let size_bytes = bytes.len() as u64;
-        crate::artifact_file::persist_new(path.clone(), bytes, "provider image").await?;
+        if let Err(error) =
+            crate::artifact_file::persist_new(path.clone(), bytes, "provider image").await
+        {
+            warnings.push(format!("An image could not be persisted: {}. Earlier successful images remain available; do not repeat the provider request automatically.",error.failure.user.fallback));
+            continue;
+        }
         attachments.push(AttachmentItem {
             kind: AttachmentKind::Image,
             mime: candidate.mime.clone(),
@@ -1452,7 +1508,7 @@ async fn persist_images(
             page_count: None,
         });
     }
-    Ok(attachments)
+    (attachments, warnings)
 }
 
 fn collect_image_candidates(
@@ -1657,5 +1713,67 @@ mod tests {
         );
         assert_eq!(facts.get("exit_code"), Some(&json!(0)));
         assert_eq!(facts.get("outcome"), Some(&json!("completed")));
+    }
+}
+
+#[cfg(test)]
+mod audit_transport_tests {
+    use super::*;
+    use axum::{
+        Json, Router,
+        http::{StatusCode, header},
+        routing::post,
+    };
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    #[tokio::test]
+    async fn credential_bearing_provider_requests_do_not_follow_redirects() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let followed = Arc::new(AtomicUsize::new(0));
+        let observed = followed.clone();
+        let destination = format!("{base}/sink");
+        let app = Router::new()
+            .route(
+                "/redirect",
+                post(move || {
+                    let destination = destination.clone();
+                    async move {
+                        (
+                            StatusCode::TEMPORARY_REDIRECT,
+                            [(header::LOCATION, destination)],
+                            Json(serde_json::json!({"message":"moved"})),
+                        )
+                    }
+                }),
+            )
+            .route(
+                "/sink",
+                post(move || {
+                    let observed = observed.clone();
+                    async move {
+                        observed.fetch_add(1, Ordering::SeqCst);
+                        Json(serde_json::json!({"unexpected":true}))
+                    }
+                }),
+            );
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let host: Arc<dyn HostClient> = Arc::new(agena_plugin_host::sdk::NoopHostClient);
+        let result = post_json(
+            &host,
+            &format!("{base}/redirect"),
+            &BTreeMap::from([("authorization".into(), "Bearer synthetic-test-only".into())]),
+            &serde_json::json!({"test":true}),
+            3,
+            "audit",
+            "redirect",
+        )
+        .await;
+        server.abort();
+        assert!(result.is_err());
+        assert_eq!(followed.load(Ordering::SeqCst), 0);
     }
 }

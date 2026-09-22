@@ -30,13 +30,95 @@ impl ToolExecutor {
         mut execution: ToolInvocationExecution,
     ) -> Result<ToolInvocationExecution, ToolError> {
         execution.view.normalize_presentation();
-        self.apply_after_hooks_async(invocation, session_id, call_id, &mut execution)
-            .await?;
+        let raw_execution = execution.clone();
+        if let Err(error) = self
+            .apply_after_hooks_async(invocation, session_id, call_id, &mut execution)
+            .await
+        {
+            // The tool has already returned. A post-hook failure cannot undo
+            // its side effects and must not induce an automatic mutation retry.
+            tracing::warn!(tool=%model_tool_name,diagnostic=%error,"post-execution hook failed after a tool returned; preserving raw receipt");
+            execution = raw_execution;
+            execution.view.output_text.push_str("\n[Post-execution processing failed after the tool returned. Its side effects may already be committed. Inspect the recorded result; do not repeat the operation automatically.]");
+            execution
+                .view
+                .metadata
+                .insert("postprocessing_state".into(), "failed".into());
+            execution
+                .view
+                .metadata
+                .insert("safe_to_reexecute_automatically".into(), "false".into());
+            execution.view.summary = format!("{} · postprocessing warning", execution.view.summary);
+        }
         execution.view.normalize_presentation();
         if execution.view.summary.is_empty() {
             return Err(ToolError::plugin(format!(
                 "tool `{model_tool_name}` returned an empty activity summary; every tool result must provide a concise outcome summary"
             )));
+        }
+
+        crate::tool::post_edit::validate(self, invocation, session_id, &mut execution).await;
+
+        if matches!(
+            model_tool_name,
+            "fs.read" | "agena.fs.read" | "fs.read_many" | "agena.fs.read_many"
+        ) {
+            let input = serde_json::Value::from(invocation.input.clone());
+            let paths = input
+                .get("paths")
+                .and_then(serde_json::Value::as_array)
+                .map(|paths| {
+                    paths
+                        .iter()
+                        .filter_map(serde_json::Value::as_str)
+                        .map(|path| self.resolve_target_path(path))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_else(|| {
+                    input
+                        .get("file_path")
+                        .and_then(serde_json::Value::as_str)
+                        .map(|path| vec![self.resolve_target_path(path)])
+                        .unwrap_or_default()
+                });
+            let instructions = self.project_instruction_section(&paths);
+            if !instructions.is_empty() {
+                execution
+                    .view
+                    .output_text
+                    .push_str(&format!("\n\n{instructions}"));
+            }
+        }
+
+        // Make bounded captured text queryable before read-time projection
+        // removes the middle of a long result. Never recursively archive reads.
+        if !model_tool_name.ends_with("output_read") && !model_tool_name.ends_with("output_search")
+        {
+            let captured = if execution.view.output_text.len() > 4096
+                || execution.view.output_text.lines().count() > 100
+            {
+                Some(execution.view.output_text.clone())
+            } else {
+                execution
+                    .output
+                    .to_json_payload()
+                    .and_then(|payload| serde_json::to_string_pretty(&payload).ok())
+                    .filter(|text| text.len() > 4096)
+            };
+            if let Some(text) = captured {
+                match crate::output_resources::capture(&self.workspace_root, session_id, &text) {
+                    Ok(id) => {
+                        execution
+                            .view
+                            .metadata
+                            .insert("output_resource_id".into(), id.clone());
+                        execution.view.output_text.push_str(&format!("\n[Captured output: {id}. Use fs.output_search or fs.output_read. Cache expires after one hour and may be evicted; original capture limits still apply.]"));
+                    }
+                    Err(error) => {
+                        execution.view.output_text.push_str(&format!("\n[Output cache unavailable: {error}; do not assume truncated content can be retrieved.]"));
+                    }
+                }
+            }
         }
 
         // Complete the call-time action/input title with a compact fact from
@@ -209,6 +291,13 @@ impl ToolExecutor {
                 .as_ref()
                 .map(|tool| &tool.definition.runtime.result_policy),
         );
+        if let Some(id) = output
+            .metadata
+            .get("output_resource_id")
+            .and_then(serde_json::Value::as_str)
+        {
+            model.push_str(&format!("\n[Read captured output with fs.output_read or search it with fs.output_search: output_id={id}. Availability is bounded by cache retention.]"));
+        }
         let plugin_human = rendered.human.take();
         let needs_runtime_human_fallback = plugin_human.as_ref().is_none_or(|human| {
             human.blocks.is_empty()

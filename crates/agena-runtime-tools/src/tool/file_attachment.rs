@@ -53,6 +53,7 @@ pub(super) fn execute_for_read_attachment(
 ) -> Result<ToolPayloadExecution, ToolError> {
     let prepared = prepare_file_attachment(executor, path)?;
     let output = ToolPayloadOutput::Read {
+        read_info: None,
         preview: None,
         truncated: false,
         loaded_paths: vec![prepared.path.clone()],

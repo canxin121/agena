@@ -404,6 +404,9 @@ pub(crate) fn compact_tool_name(name: &str) -> String {
         "agena_shell_list" | "agena.shell.list" => "shell.list".to_string(),
         "agena_shell_logs" | "agena.shell.logs" => "shell.logs".to_string(),
         "agena_shell_stop" | "agena.shell.stop" => "shell.stop".to_string(),
+        "agena_shell_write" | "agena.shell.write" => "shell.write".to_string(),
+        "agena_shell_resize" | "agena.shell.resize" => "shell.resize".to_string(),
+        "agena_shell_signal" | "agena.shell.signal" => "shell.signal".to_string(),
         other => other.strip_prefix("agena.").unwrap_or(other).to_string(),
     }
 }

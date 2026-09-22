@@ -199,8 +199,11 @@ pub(super) fn requested_background_kind(
         crate::tool::ToolPayloadInput::Shell(ShellToolInput::Run {
             run_in_background,
             monitor,
+            command,
             ..
-        }) if run_in_background || monitor.is_some() => Some(BackgroundOperationKind::Shell),
+        }) if run_in_background || monitor.is_some() || command.tty => {
+            Some(BackgroundOperationKind::Shell)
+        }
         crate::tool::ToolPayloadInput::Monitor(MonitorToolInput::Start { .. }) => {
             Some(BackgroundOperationKind::Monitor)
         }

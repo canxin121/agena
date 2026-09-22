@@ -13,12 +13,18 @@ pub use agena_runtime_contracts::{authorization, identity, part, permission, pro
 mod atomic_file;
 mod bounded_process;
 mod monitor;
+pub mod output_resources;
+mod project_instructions;
 mod project_paths;
+pub mod shell_sandbox;
 mod snapshot_capabilities;
 mod snapshot_managed;
 mod snapshot_operations;
 mod snapshot_registry;
+mod terminal;
 pub mod tool;
+
+pub use terminal::{TerminalOwner, TerminalRead, TerminalRegistry, TerminalStartParams};
 
 pub use atomic_file::{
     atomic_create_file, atomic_replace_file, atomic_write_file, canonicalize_mutation_path,

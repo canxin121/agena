@@ -12,6 +12,11 @@ use crate::{
     NewMemory,
 };
 
+mod transaction;
+use sha2::{Digest, Sha256};
+use std::io::Read as _;
+const MAX_MEMORY_BYTES: usize = 8 * 1024 * 1024;
+
 const ENTRYPOINT_NAME: &str = "MEMORY.md";
 static MEMORY_FILE_WRITE_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
@@ -27,37 +32,57 @@ fn with_memory_write_lock<T>(operation: impl FnOnce() -> T) -> T {
 }
 
 fn write_memory_file_atomically(path: &Path, contents: &[u8]) -> io::Result<()> {
-    let parent = path.parent().ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("memory path has no parent: {}", path.display()),
-        )
-    })?;
-    fs::create_dir_all(parent)?;
-    let permissions = match fs::metadata(path) {
-        Ok(metadata) if metadata.is_file() => Some(metadata.permissions()),
-        Ok(_) => None,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
-        Err(error) => return Err(error),
-    };
-    let mut builder = tempfile::Builder::new();
-    builder.prefix(".agena-memory-").suffix(".tmp");
-    #[cfg(unix)]
-    if permissions.is_none() {
-        use std::os::unix::fs::PermissionsExt as _;
-        builder.permissions(fs::Permissions::from_mode(0o600));
-    }
-    let mut staged = builder.tempfile_in(parent)?;
-    staged.write_all(contents)?;
-    staged.flush()?;
-    staged.as_file().sync_all()?;
-    if let Some(permissions) = permissions {
-        staged.as_file().set_permissions(permissions)?;
-    }
-    staged
+    transaction::stage(path, contents)?
         .persist(path)
         .map(|_| ())
         .map_err(|error| error.error)
+}
+
+fn read_bounded(path: &Path) -> MemoryResult<Vec<u8>> {
+    let file = fs::File::open(path)?;
+    if !file.metadata()?.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "memory target is not a regular file",
+        )
+        .into());
+    }
+    let mut bytes = Vec::new();
+    file.take(MAX_MEMORY_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() > MAX_MEMORY_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "memory file exceeds the 8 MiB limit",
+        )
+        .into());
+    }
+    Ok(bytes)
+}
+fn read_text(path: &Path) -> MemoryResult<String> {
+    String::from_utf8(read_bounded(path)?)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error).into())
+}
+fn canonical_name(name: &str) -> MemoryResult<&str> {
+    let name = name.trim().trim_end_matches(".md");
+    if name.is_empty()
+        || name.eq_ignore_ascii_case("MEMORY")
+        || name.len() > 255
+        || name
+            .chars()
+            .any(|c| c == '/' || c == '\\' || c.is_control())
+        || matches!(name, "." | "..")
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "invalid or reserved memory name",
+        )
+        .into());
+    }
+    Ok(name)
+}
+fn refers_to(line: &str, name: &str) -> bool {
+    line.contains(&format!("({name}.md)")) || line.contains(&format!("(./{name}.md)"))
 }
 
 #[derive(Debug, Clone)]
@@ -117,6 +142,7 @@ impl MemoryStore {
         Ok(entries)
     }
     pub fn get(&self, name: &str) -> MemoryResult<MemoryRecord> {
+        let name = canonical_name(name)?;
         let path = self.resolve_path(name);
         if !path.exists() {
             return Err(MemoryError::NotFound(name.to_string()));
@@ -134,68 +160,110 @@ impl MemoryStore {
             .collect())
     }
     pub fn forget(&self, name: &str) -> MemoryResult<()> {
+        self.forget_checked(name, None)
+    }
+    pub fn forget_checked(&self, name: &str, expected: Option<&str>) -> MemoryResult<()> {
+        let name = canonical_name(name)?;
         with_memory_write_lock(|| {
             let path = self.resolve_path(name);
             if !path.exists() {
-                return Err(MemoryError::NotFound(name.to_string()));
+                return Err(MemoryError::NotFound(name.into()));
             }
-            fs::remove_file(path)?;
+            check_revision(&path, expected, false)?;
             let index = self.dir.join(ENTRYPOINT_NAME);
-            if index.exists() {
-                let needle = format!("{name}.md");
-                let mut updated = fs::read_to_string(&index)?
-                    .lines()
-                    .filter(|line| !line.contains(&needle))
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                if !updated.is_empty() {
-                    updated.push('\n');
-                }
-                write_memory_file_atomically(&index, updated.as_bytes())?;
-            }
-            Ok(())
+            let updated = if index.exists() {
+                Some(index_without(&read_text(&index)?, name))
+            } else {
+                None
+            };
+            transaction::mutate(
+                &path,
+                None,
+                updated
+                    .as_deref()
+                    .map(|text| (index.as_path(), text.as_bytes())),
+            )
         })
     }
     pub fn save(&self, entry: NewMemory) -> MemoryResult<MemoryRecord> {
+        self.save_inner(entry, None, false)
+    }
+    /// Tool-facing create-or-CAS-update. Existing records require a revision.
+    pub fn save_checked(
+        &self,
+        entry: NewMemory,
+        expected: Option<&str>,
+    ) -> MemoryResult<MemoryRecord> {
+        self.save_inner(entry, expected, true)
+    }
+    fn save_inner(
+        &self,
+        entry: NewMemory,
+        expected: Option<&str>,
+        guarded: bool,
+    ) -> MemoryResult<MemoryRecord> {
+        let name = canonical_name(&entry.name)?.to_owned();
         self.ensure_exists()?;
         with_memory_write_lock(|| {
-            let file_name = format!("{}.md", entry.name.trim());
-            let path = self.dir.join(&file_name);
-            let mut raw = format!("---\nname: {}\n", yaml_escape(&entry.name));
+            let path = self.resolve_path(&name);
+            check_revision(&path, expected, guarded)?;
+            let mut raw = format!("---\nname: {}\n", yaml_escape(&name));
             if !entry.description.trim().is_empty() {
                 raw.push_str(&format!(
                     "description: {}\n",
                     yaml_escape(entry.description.trim())
                 ));
             }
-            if let Some(memory_type) = entry.memory_type {
-                raw.push_str(&format!("type: {}\n", memory_type.label()));
+            if let Some(kind) = entry.memory_type {
+                raw.push_str(&format!("type: {}\n", kind.label()));
             }
             raw.push_str("---\n\n");
             raw.push_str(entry.body.trim_end());
             raw.push('\n');
-            write_memory_file_atomically(&path, raw.as_bytes())?;
-            if let Some(index_line) = entry.index_line.as_deref() {
-                let index = self.dir.join(ENTRYPOINT_NAME);
-                let needle = format!("{}.md", entry.name.trim());
-                let mut existing = if index.exists() {
-                    fs::read_to_string(&index)?
+            if raw.len() > MAX_MEMORY_BYTES {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "memory result exceeds the 8 MiB limit",
+                )
+                .into());
+            }
+            // Parsing before publication prevents a YAML failure after writing.
+            let (frontmatter, body) = parse_frontmatter(&raw, &path)?;
+            let index = self.dir.join(ENTRYPOINT_NAME);
+            let updated = if let Some(line) = entry.index_line.as_deref() {
+                let previous = if index.exists() {
+                    read_text(&index)?
                 } else {
                     String::new()
                 };
-                existing = existing
-                    .lines()
-                    .filter(|line| !line.contains(&needle))
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                if !existing.is_empty() {
-                    existing.push('\n');
+                let mut next = index_without(&previous, &name);
+                next.push_str(line);
+                next.push('\n');
+                if next.len() > MAX_MEMORY_BYTES {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "memory index exceeds the 8 MiB limit",
+                    )
+                    .into());
                 }
-                existing.push_str(index_line);
-                existing.push('\n');
-                write_memory_file_atomically(&index, existing.as_bytes())?;
-            }
-            read_entry(&path)
+                Some(next)
+            } else {
+                None
+            };
+            transaction::mutate(
+                &path,
+                Some(raw.as_bytes()),
+                updated
+                    .as_deref()
+                    .map(|text| (index.as_path(), text.as_bytes())),
+            )?;
+            Ok(MemoryRecord {
+                file_name: format!("{name}.md"),
+                path,
+                frontmatter,
+                body,
+                sha256: hex::encode(Sha256::digest(raw.as_bytes())),
+            })
         })
     }
     fn resolve_path(&self, name: &str) -> PathBuf {
@@ -230,20 +298,60 @@ impl MemoryRepository for MemoryStore {
     }
 }
 
+fn check_revision(path: &Path, expected: Option<&str>, required: bool) -> MemoryResult<()> {
+    if path.exists() {
+        let actual = hex::encode(Sha256::digest(read_bounded(path)?));
+        if expected.is_some_and(|value| !value.eq_ignore_ascii_case(&actual))
+            || (required && expected.is_none())
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "memory revision conflict: read the record and supply expected_sha256={actual}"
+                ),
+            )
+            .into());
+        }
+    } else if expected.is_some() {
+        return Err(MemoryError::NotFound(path.display().to_string()));
+    }
+    Ok(())
+}
+fn index_without(previous: &str, name: &str) -> String {
+    let mut text = previous
+        .lines()
+        .filter(|line| !refers_to(line, name))
+        .collect::<Vec<_>>()
+        .join("\n");
+    if !text.is_empty() {
+        text.push('\n');
+    }
+    text
+}
 fn read_entry(path: &Path) -> MemoryResult<MemoryRecord> {
-    let raw = fs::read_to_string(path)?;
+    let metadata = fs::symlink_metadata(path)?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "memory record is not a regular file",
+        )
+        .into());
+    }
+    let raw = read_text(path)?;
     let (frontmatter, body) = parse_frontmatter(&raw, path)?;
     Ok(MemoryRecord {
         file_name: path
             .file_name()
             .and_then(|s| s.to_str())
             .unwrap_or_default()
-            .to_string(),
-        path: path.to_path_buf(),
+            .into(),
+        path: path.into(),
         frontmatter,
         body,
+        sha256: hex::encode(Sha256::digest(raw.as_bytes())),
     })
 }
+
 fn parse_frontmatter(raw: &str, path: &Path) -> MemoryResult<(MemoryFrontmatter, String)> {
     let normalized = raw.replace("\r\n", "\n");
     let Some(stripped) = normalized.strip_prefix("---\n") else {
@@ -272,11 +380,9 @@ fn is_memory_file(path: &Path) -> bool {
         && matches!(path.file_name().and_then(|s| s.to_str()), Some(name) if !name.eq_ignore_ascii_case(ENTRYPOINT_NAME))
 }
 fn yaml_escape(s: &str) -> String {
-    if s.contains(':') || s.contains('#') || s.starts_with('-') || s.contains('\n') {
-        format!("\"{}\"", s.replace('"', "\\\""))
-    } else {
-        s.to_string()
-    }
+    // JSON quoted strings are valid YAML scalars and preserve quotes,
+    // backslashes, booleans, numbers, and embedded control characters.
+    serde_json::to_string(s).expect("serializing a string cannot fail")
 }
 
 #[cfg(test)]

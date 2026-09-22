@@ -1,3 +1,6 @@
+mod admission;
+#[cfg(test)]
+mod fault_tests;
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
@@ -28,7 +31,8 @@ const MAX_ACTIVE_TASKS_PER_PARENT: usize = 8;
 
 pub(crate) struct TasksPlugin {
     inner: WorkflowPlugin,
-    tasks: Mutex<BTreeMap<String, Arc<AsyncTaskEntry>>>,
+    tasks: Arc<Mutex<BTreeMap<String, Arc<AsyncTaskEntry>>>>,
+    admission: Arc<tokio::sync::Mutex<()>>,
 }
 
 #[derive(Debug)]
@@ -39,6 +43,10 @@ struct AsyncTaskEntry {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct AsyncTaskState {
+    #[serde(default)]
+    run_epoch: u64,
+    #[serde(default)]
+    storage_warning: Option<String>,
     task_id: String,
     parent_session_id: i64,
     description: String,
@@ -146,7 +154,8 @@ impl TasksPlugin {
     pub(crate) fn new() -> Self {
         Self {
             inner: WorkflowPlugin::new(),
-            tasks: Mutex::new(BTreeMap::new()),
+            tasks: Arc::new(Mutex::new(BTreeMap::new())),
+            admission: Arc::new(tokio::sync::Mutex::new(())),
         }
     }
 
@@ -176,7 +185,7 @@ impl TasksPlugin {
             return self.inner.invoke_task(input).await;
         }
         self.hydrate_session_tasks(context).await?;
-        ensure_task_capacity(&self.tasks, context.session_id, None)?;
+        let _admission = self.admission.lock().await;
         let task_id = input
             .task_id
             .clone()
@@ -193,39 +202,26 @@ impl TasksPlugin {
                 verbosity: selection.verbosity.clone(),
                 parallel_tool_calls: selection.parallel_tool_calls,
             });
-        let entry = Arc::new(AsyncTaskEntry {
-            state: Mutex::new(AsyncTaskState {
-                task_id: task_id.clone(),
-                parent_session_id: context.session_id,
-                description: input.description.clone(),
-                prompt: input.prompt.clone(),
-                access: input.access,
-                status: "running".to_string(),
-                started_at_ms: chrono::Utc::now().timestamp_millis(),
-                finished_at_ms: None,
-                response: None,
-                error: None,
-                selection: selection.clone(),
-                timeout_ms: input.timeout_ms,
-                max_tokens: input.max_tokens,
-                max_cost_microusd: input.max_cost_microusd,
-                budget_exceeded: false,
-            }),
-            notify: Arc::new(Notify::new()),
-        });
-        {
-            let mut tasks = self.tasks.lock().map_err(|_| {
-                agena_plugin_host::PluginError::internal("tasks registry lock poisoned")
-            })?;
-            if tasks.get(task_id.as_str()).is_some_and(|existing| {
-                !is_terminal(&existing.state.lock().expect("task state").status)
-            }) {
-                return Err(agena_plugin_host::PluginError::invalid_params(format!(
-                    "task '{task_id}' is already running"
-                )));
-            }
-            tasks.insert(task_id.clone(), Arc::clone(&entry));
-        }
+        let state = AsyncTaskState {
+            run_epoch: 1,
+            storage_warning: None,
+            task_id: task_id.clone(),
+            parent_session_id: context.session_id,
+            description: input.description.clone(),
+            prompt: input.prompt.clone(),
+            access: input.access,
+            status: "running".to_string(),
+            started_at_ms: chrono::Utc::now().timestamp_millis(),
+            finished_at_ms: None,
+            response: None,
+            error: None,
+            selection: selection.clone(),
+            timeout_ms: input.timeout_ms,
+            max_tokens: input.max_tokens,
+            max_cost_microusd: input.max_cost_microusd,
+            budget_exceeded: false,
+        };
+        let reservation = self.reserve_task(state.clone(), false)?;
         let host = self.inner.host()?;
         let request = RunSubtaskRequest {
             parent_session_id: Some(context.session_id),
@@ -239,19 +235,21 @@ impl TasksPlugin {
             max_tokens: input.max_tokens,
             max_cost_microusd: input.max_cost_microusd,
         };
-        persist_task_state(
-            &host,
-            callback_context(context),
-            &entry_state(&self.tasks, &task_id)?,
-        )
-        .await?;
-        spawn_task(host, Arc::clone(&entry), request);
+        persist_task_state(&host, callback_context(context), &state).await?;
+        let entry = reservation.commit();
+        spawn_task(
+            host,
+            Arc::clone(&entry),
+            request,
+            Arc::clone(&self.admission),
+            Arc::clone(&self.tasks),
+        );
         Ok(task_output(
             "Start task",
             format!(
                 "Started task '{task_id}' in the background. You will be notified when it completes — do not poll; continue with other work in the meantime."
             ),
-            vec![entry_state(&self.tasks, task_id.as_str())?],
+            vec![state],
             false,
         ))
     }
@@ -393,6 +391,7 @@ impl TasksPlugin {
         context: &ToolInvokeContext<'_>,
     ) -> SdkResult<ToolInvokeOutput> {
         self.hydrate_session_tasks(context).await?;
+        let _admission = self.admission.lock().await;
         let entry = task_entry_for_parent(&self.tasks, input.task_id.as_str(), context.session_id)?;
         let parent_session_id = lock_state(&entry)?.parent_session_id;
         let response = self
@@ -405,7 +404,7 @@ impl TasksPlugin {
             .await?;
         {
             let mut state = lock_state(&entry)?;
-            if !is_terminal(&state.status) {
+            if response.accepted && !is_terminal(&state.status) {
                 state.status = "cancelling".to_string();
             }
         }
@@ -413,10 +412,25 @@ impl TasksPlugin {
         entry.notify.notify_one();
         let state =
             entry_state_for_parent(&self.tasks, input.task_id.as_str(), context.session_id)?;
-        persist_task_state(&self.inner.host()?, callback_context(context), &state).await?;
+        if let Err(error) =
+            persist_task_state(&self.inner.host()?, callback_context(context), &state).await
+        {
+            lock_state(&entry)?.storage_warning = Some(format!(
+                "cancellation outcome known; persistence failed: {}",
+                error.failure.user.fallback
+            ));
+        }
         Ok(task_output(
             "Cancel task",
-            format!("Cancellation requested for task '{}'.", input.task_id),
+            format!(
+                "Cancellation {} for task '{}'.",
+                if response.accepted {
+                    "accepted"
+                } else {
+                    "not accepted"
+                },
+                input.task_id
+            ),
             vec![entry_state_for_parent(
                 &self.tasks,
                 input.task_id.as_str(),
@@ -476,51 +490,51 @@ impl TasksPlugin {
         context: &ToolInvokeContext<'_>,
     ) -> SdkResult<ToolInvokeOutput> {
         self.hydrate_session_tasks(context).await?;
+        let _admission = self.admission.lock().await;
         let entry = task_entry_for_parent(&self.tasks, input.task_id.as_str(), context.session_id)?;
-        ensure_task_capacity(
-            &self.tasks,
-            context.session_id,
-            Some(input.task_id.as_str()),
-        )?;
-        let request = {
-            let mut state = lock_state(&entry)?;
-            if !is_terminal(&state.status) {
-                return Err(agena_plugin_host::PluginError::invalid_params(format!(
-                    "task '{}' is {}; use tasks.message while it is running",
-                    input.task_id, state.status
-                )));
-            }
-            state.status = "running".to_string();
-            state.started_at_ms = chrono::Utc::now().timestamp_millis();
-            state.finished_at_ms = None;
-            state.response = None;
-            state.error = None;
-            state.budget_exceeded = false;
-            state.max_tokens = input.max_tokens.or(state.max_tokens);
-            state.max_cost_microusd = input.max_cost_microusd.or(state.max_cost_microusd);
-            RunSubtaskRequest {
-                parent_session_id: Some(state.parent_session_id),
-                access: run_subtask_access(state.access),
-                description: state.description.clone(),
-                prompt: input.prompt.clone(),
-                // Resuming an existing subtask keeps the Skill references
-                // already attached to its first user message; do not re-inject.
-                skills: None,
-                task_id: Some(state.task_id.clone()),
-                selection: state.selection.clone(),
-                timeout_ms: input.timeout_ms.or(state.timeout_ms),
-                max_tokens: state.max_tokens,
-                max_cost_microusd: state.max_cost_microusd,
-            }
+        let mut state = recover_task_state(&entry).clone();
+        if !is_terminal(&state.status) {
+            return Err(agena_plugin_host::PluginError::invalid_params(
+                "task is not terminal; send guidance with tasks.message",
+            ));
+        }
+        state.run_epoch = state.run_epoch.checked_add(1).ok_or_else(|| {
+            agena_plugin_host::PluginError::invalid_params("task epoch exhausted")
+        })?;
+        state.status = "running".into();
+        state.prompt = input.prompt.clone();
+        state.started_at_ms = chrono::Utc::now().timestamp_millis();
+        state.finished_at_ms = None;
+        state.response = None;
+        state.error = None;
+        state.storage_warning = None;
+        state.budget_exceeded = false;
+        state.timeout_ms = input.timeout_ms.or(state.timeout_ms);
+        state.max_tokens = input.max_tokens.or(state.max_tokens);
+        state.max_cost_microusd = input.max_cost_microusd.or(state.max_cost_microusd);
+        let request = RunSubtaskRequest {
+            parent_session_id: Some(state.parent_session_id),
+            access: run_subtask_access(state.access),
+            description: state.description.clone(),
+            prompt: state.prompt.clone(),
+            skills: None,
+            task_id: Some(state.task_id.clone()),
+            selection: state.selection.clone(),
+            timeout_ms: state.timeout_ms,
+            max_tokens: state.max_tokens,
+            max_cost_microusd: state.max_cost_microusd,
         };
+        let reservation = self.reserve_task(state.clone(), true)?;
         let host = self.inner.host()?;
-        persist_task_state(
-            &host,
-            callback_context(context),
-            &entry_state_for_parent(&self.tasks, input.task_id.as_str(), context.session_id)?,
-        )
-        .await?;
-        spawn_task(host, Arc::clone(&entry), request);
+        persist_task_state(&host, callback_context(context), &state).await?;
+        let entry = reservation.commit();
+        spawn_task(
+            host,
+            Arc::clone(&entry),
+            request,
+            Arc::clone(&self.admission),
+            Arc::clone(&self.tasks),
+        );
         Ok(task_output(
             "Follow up task",
             format!("Resumed task '{}' with a follow-up prompt.", input.task_id),
@@ -604,6 +618,7 @@ impl TasksPlugin {
     /// automatic restart could duplicate side effects. `tasks.output` and an
     /// explicit `tasks.followup` remain available for recovery.
     async fn hydrate_session_tasks(&self, context: &ToolInvokeContext<'_>) -> SdkResult<()> {
+        let _admission = self.admission.lock().await;
         let host = self.inner.host()?;
         let records = host
             .storage_list(HostStorageListRequest {
@@ -639,7 +654,7 @@ impl TasksPlugin {
                 .map_err(|_| {
                     agena_plugin_host::PluginError::internal("tasks registry lock poisoned")
                 })?
-                .contains_key(state.task_id.as_str());
+                .contains_key(&task_storage_key(&state));
             if exists {
                 continue;
             }
@@ -661,7 +676,7 @@ impl TasksPlugin {
                 .map_err(|_| {
                     agena_plugin_host::PluginError::internal("tasks registry lock poisoned")
                 })?
-                .insert(state.task_id.clone(), entry);
+                .insert(task_storage_key(&state), entry);
         }
         Ok(())
     }
@@ -723,7 +738,13 @@ async fn persist_task_state(
     .await
 }
 
-fn spawn_task(host: Arc<dyn HostClient>, entry: Arc<AsyncTaskEntry>, request: RunSubtaskRequest) {
+fn spawn_task(
+    host: Arc<dyn HostClient>,
+    entry: Arc<AsyncTaskEntry>,
+    request: RunSubtaskRequest,
+    admission: Arc<tokio::sync::Mutex<()>>,
+    tasks: Arc<Mutex<BTreeMap<String, Arc<AsyncTaskEntry>>>>,
+) {
     tokio::spawn(async move {
         // Detached work deliberately drops session/call/tool authority. The
         // subtask request carries its parent session explicitly and task state
@@ -731,6 +752,16 @@ fn spawn_task(host: Arc<dyn HostClient>, entry: Arc<AsyncTaskEntry>, request: Ru
         // needs the plugin identity granted by ScopedHostClient/transport.
         let context = detached_task_context();
         let result = run_in_host_callback_context(context.clone(), host.run_subtask(request)).await;
+        let _admission = admission.lock().await;
+        let key = task_storage_key(&recover_task_state(&entry));
+        if tasks
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(&key)
+            .is_none_or(|current| !Arc::ptr_eq(current, &entry))
+        {
+            return;
+        }
         let persisted = {
             let mut state = recover_task_state(&entry);
             state.finished_at_ms = Some(chrono::Utc::now().timestamp_millis());
@@ -757,6 +788,7 @@ fn spawn_task(host: Arc<dyn HostClient>, entry: Arc<AsyncTaskEntry>, request: Ru
             state.clone()
         };
         if let Err(error) = persist_task_state(&host, context, &persisted).await {
+            recover_task_state(&entry).storage_warning=Some("task finished, but saving its terminal record failed; inspect child transcript before retrying".into());
             tracing::warn!(
                 target: "agena_tasks",
                 diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
@@ -793,90 +825,30 @@ fn is_terminal(status: &str) -> bool {
     )
 }
 
-fn entry_state(
-    tasks: &Mutex<BTreeMap<String, Arc<AsyncTaskEntry>>>,
-    task_id: &str,
-) -> SdkResult<AsyncTaskState> {
-    let entry = tasks
-        .lock()
-        .map_err(|_| agena_plugin_host::PluginError::internal("tasks registry lock poisoned"))?
-        .get(task_id)
-        .cloned()
-        .ok_or_else(|| {
-            agena_plugin_host::PluginError::invalid_params(format!("unknown task '{task_id}'"))
-        })?;
-    let state = entry
-        .state
-        .lock()
-        .map_err(|_| agena_plugin_host::PluginError::internal("task state lock poisoned"))?
-        .clone();
-    Ok(state)
-}
-
 fn entry_state_for_parent(
     tasks: &Mutex<BTreeMap<String, Arc<AsyncTaskEntry>>>,
     task_id: &str,
     parent_session_id: i64,
 ) -> SdkResult<AsyncTaskState> {
-    let state = entry_state(tasks, task_id)?;
-    if state.parent_session_id != parent_session_id {
-        return Err(agena_plugin_host::PluginError::invalid_params(format!(
-            "unknown task '{task_id}'"
-        )));
-    }
-    Ok(state)
+    let entry = task_entry_for_parent(tasks, task_id, parent_session_id)?;
+    Ok(recover_task_state(&entry).clone())
 }
-
-fn task_entry(
-    tasks: &Mutex<BTreeMap<String, Arc<AsyncTaskEntry>>>,
-    task_id: &str,
-) -> SdkResult<Arc<AsyncTaskEntry>> {
-    tasks
-        .lock()
-        .map_err(|_| agena_plugin_host::PluginError::internal("tasks registry lock poisoned"))?
-        .get(task_id)
-        .cloned()
-        .ok_or_else(|| {
-            agena_plugin_host::PluginError::invalid_params(format!("unknown task '{task_id}'"))
-        })
-}
-
 fn task_entry_for_parent(
     tasks: &Mutex<BTreeMap<String, Arc<AsyncTaskEntry>>>,
     task_id: &str,
     parent_session_id: i64,
 ) -> SdkResult<Arc<AsyncTaskEntry>> {
-    let entry = task_entry(tasks, task_id)?;
-    if lock_state(&entry)?.parent_session_id != parent_session_id {
-        return Err(agena_plugin_host::PluginError::invalid_params(format!(
-            "unknown task '{task_id}'"
-        )));
-    }
-    Ok(entry)
-}
-
-fn ensure_task_capacity(
-    tasks: &Mutex<BTreeMap<String, Arc<AsyncTaskEntry>>>,
-    parent_session_id: i64,
-    exclude_task_id: Option<&str>,
-) -> SdkResult<()> {
-    let active = tasks
+    tasks
         .lock()
-        .map_err(|_| agena_plugin_host::PluginError::internal("tasks registry lock poisoned"))?
-        .values()
-        .map(|entry| recover_task_state(entry).clone())
-        .filter(|state| {
-            state.parent_session_id == parent_session_id
-                && !is_terminal(&state.status)
-                && exclude_task_id != Some(state.task_id.as_str())
+        .map_err(|_| agena_plugin_host::PluginError::internal("task registry poisoned"))?
+        .get(&format!(
+            "{}{task_id}",
+            task_storage_prefix(parent_session_id)
+        ))
+        .cloned()
+        .ok_or_else(|| {
+            agena_plugin_host::PluginError::invalid_params(format!("unknown task '{task_id}'"))
         })
-        .count();
-    if active >= MAX_ACTIVE_TASKS_PER_PARENT {
-        return Err(agena_plugin_host::PluginError::invalid_params(format!(
-            "at most {MAX_ACTIVE_TASKS_PER_PARENT} delegated tasks may run concurrently for one parent session"
-        )));
-    }
-    Ok(())
 }
 
 fn lock_state(entry: &AsyncTaskEntry) -> SdkResult<std::sync::MutexGuard<'_, AsyncTaskState>> {
@@ -1046,6 +1018,8 @@ mod tests {
     async fn task_notification_preserves_a_completion_wakeup() {
         let entry = Arc::new(AsyncTaskEntry {
             state: std::sync::Mutex::new(AsyncTaskState {
+                run_epoch: 1,
+                storage_warning: None,
                 task_id: "task_wait".to_string(),
                 parent_session_id: 7,
                 description: "wait".to_string(),

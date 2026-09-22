@@ -21,7 +21,8 @@ use agena_tool::shell::powershell_command_for_windows;
 pub(crate) fn execute(
     executor: &ToolExecutor,
     input: &ShellToolInput,
-    _context: ToolRuntimeContext,
+    context: ToolRuntimeContext,
+    cancel: &tokio_util::sync::CancellationToken,
 ) -> Result<ToolPayloadExecution, ToolError> {
     match input {
         ShellToolInput::Run { .. } => Err(ToolError::plugin(
@@ -29,7 +30,14 @@ pub(crate) fn execute(
         )),
         ShellToolInput::List {} => {
             let registry = process_registry(executor)?;
-            Ok(render_list(registry.list()))
+            let owner = super::terminal_tool::owner(executor, context.session_id)?;
+            Ok(render_list(
+                registry
+                    .list()
+                    .into_iter()
+                    .filter(|summary| registry.is_owned(&summary.process_id, &owner))
+                    .collect(),
+            ))
         }
         ShellToolInput::Logs {
             process_id,
@@ -38,6 +46,16 @@ pub(crate) fn execute(
             wait_ms,
         } => {
             let registry = process_registry(executor)?;
+            let owner = super::terminal_tool::owner(executor, context.session_id)?;
+            if !registry.is_owned(process_id, &owner) {
+                return Err(into_tool_error(MonitorError::NotFound(process_id.clone())));
+            }
+            if registry
+                .terminals()
+                .is_some_and(|terminals| terminals.contains(process_id))
+            {
+                return super::terminal_tool::execute(executor, input, context.session_id, cancel);
+            }
             let read = registry
                 .read(ReadParams {
                     monitor_id: process_id.clone(),
@@ -50,10 +68,25 @@ pub(crate) fn execute(
         }
         ShellToolInput::Stop { process_id } => {
             let registry = process_registry(executor)?;
+            let owner = super::terminal_tool::owner(executor, context.session_id)?;
+            if !registry.is_owned(process_id, &owner) {
+                return Err(into_tool_error(MonitorError::NotFound(process_id.clone())));
+            }
+            if registry
+                .terminals()
+                .is_some_and(|terminals| terminals.contains(process_id))
+            {
+                return super::terminal_tool::execute(executor, input, context.session_id, cancel);
+            }
             let stopped = registry
                 .stop(process_id.as_str())
                 .map_err(into_tool_error)?;
             Ok(render_stop(stopped))
+        }
+        ShellToolInput::Write { .. }
+        | ShellToolInput::Resize { .. }
+        | ShellToolInput::Signal { .. } => {
+            super::terminal_tool::execute(executor, input, context.session_id, cancel)
         }
     }
 }
@@ -69,13 +102,13 @@ pub(crate) async fn execute_async(
             command,
             run_in_background: false,
             monitor: None,
-        } => execute_foreground_bash_async(executor, command, context).await,
+        } if !command.tty => execute_foreground_bash_async(executor, command, context).await,
         ShellToolInput::Run {
             shell: ProcessShell::Powershell,
             command,
             run_in_background: false,
             monitor: None,
-        } => {
+        } if !command.tty => {
             let execution = powershell::execute_async(executor, command, context).await?;
             normalize_foreground_execution(execution, ProcessShell::Powershell, command)
         }
@@ -84,29 +117,34 @@ pub(crate) async fn execute_async(
             command,
             run_in_background,
             monitor,
-        } if *run_in_background || monitor.is_some() => {
+        } if *run_in_background || monitor.is_some() || command.tty => {
             execute_background_run_async(executor, *shell, command, monitor.as_ref(), context).await
         }
         _ => {
-            let executor = executor.clone();
+            let worker_executor = executor.clone();
             let input = input.clone();
-            let worker_permit = PROCESS_BLOCKING_WORKERS.acquire().await.map_err(|error| {
-                ToolError::plugin(agena_failure::diagnostic::format_error_chain_with_context(
-                    "process worker pool is unavailable",
-                    &error,
-                ))
-            })?;
-            tokio::task::spawn_blocking(move || {
+            // Long reads must never occupy every slot needed to stop a process.
+            // At most sixteen ordinary workers block; out-of-band controls use
+            // the runtime's remaining blocking capacity and never wait on them.
+            let urgent = matches!(
+                input,
+                ShellToolInput::Stop { .. } | ShellToolInput::Signal { .. }
+            );
+            let worker_permit = if urgent {
+                None
+            } else {
+                Some(PROCESS_BLOCKING_WORKERS.acquire().await.map_err(|error| {
+                    ToolError::plugin(agena_failure::diagnostic::format_error_chain_with_context(
+                        "process worker pool is unavailable",
+                        &error,
+                    ))
+                })?)
+            };
+            super::terminal_tool::blocking(executor, move |cancel| {
                 let _worker_permit = worker_permit;
-                execute(&executor, &input, context)
+                execute(&worker_executor, &input, context, &cancel)
             })
             .await
-            .map_err(|error| {
-                ToolError::plugin(agena_failure::diagnostic::format_error_chain_with_context(
-                    "process tool worker failed before completion",
-                    &error,
-                ))
-            })?
         }
     }
 }
@@ -158,6 +196,8 @@ fn normalize_foreground_execution(
         .insert("status".to_string(), status.to_string());
 
     let output = ToolPayloadOutput::Shell {
+        terminal: None,
+        dropped_bytes: 0,
         action: "run".to_string(),
         shell: Some(shell),
         background: false,
@@ -183,6 +223,11 @@ async fn execute_background_run_async(
     context: ToolRuntimeContext,
 ) -> Result<ToolPayloadExecution, ToolError> {
     let effects = command.filesystem_effects();
+    if command.tty && monitor.is_some() {
+        return Err(ToolError::invalid_input(
+            "tty cannot be combined with monitor; a quiet terminal is not a completed command",
+        ));
+    }
     validate_declared_filesystem_effects("shell.run", command.command.as_str(), &effects)?;
     let cwd = resolve_workdir(executor, command.workdir.as_deref())?;
     let ToolRuntimeContext {
@@ -222,6 +267,8 @@ async fn execute_background_run_async(
     };
 
     let worker_executor = executor.clone();
+    let process_owner = super::terminal_tool::owner(executor, session_id)?;
+    let terminal_owner = command.tty.then(|| process_owner.clone());
     let worker_command = command.clone();
     let worker_monitor = monitor.cloned();
     let worker_permit = PROCESS_BLOCKING_WORKERS.acquire().await.map_err(|error| {
@@ -230,25 +277,36 @@ async fn execute_background_run_async(
             &error,
         ))
     })?;
-    tokio::task::spawn_blocking(move || {
+    super::terminal_tool::blocking(executor, move |cancel| {
         let _worker_permit = worker_permit;
+        if let Some(owner) = terminal_owner {
+            return super::terminal_tool::start_prepared(
+                &worker_executor,
+                shell,
+                &worker_command,
+                final_command,
+                final_cwd,
+                env,
+                reserved_process_id,
+                owner,
+                cancel,
+            );
+        }
         execute_background_run_prepared(
             &worker_executor,
             shell,
             &worker_command,
             worker_monitor.as_ref(),
-            final_command,
-            final_cwd,
-            env,
+            PreparedShellCommand {
+                command: final_command,
+                cwd: final_cwd,
+                env,
+            },
             reserved_process_id,
+            process_owner,
         )
     })
     .await
-    .map_err(|error| {
-        ToolError::plugin(format!(
-            "background process worker failed before completion: {error}"
-        ))
-    })?
 }
 
 fn execute_background_run_prepared(
@@ -256,11 +314,21 @@ fn execute_background_run_prepared(
     shell: ProcessShell,
     command: &crate::part::ShellCommandInput,
     monitor: Option<&crate::part::ShellMonitorInput>,
-    final_command: String,
-    final_cwd: std::path::PathBuf,
-    env: std::collections::HashMap<String, String>,
+    prepared: PreparedShellCommand,
     reserved_process_id: Option<String>,
+    owner: crate::TerminalOwner,
 ) -> Result<ToolPayloadExecution, ToolError> {
+    let PreparedShellCommand {
+        command: final_command,
+        cwd: final_cwd,
+        mut env,
+    } = prepared;
+    let argv = crate::shell_sandbox::protect(
+        executor,
+        agena_tool::shell::shell_command_for_platform(&final_command),
+        command,
+        &mut env,
+    )?;
     let registry = process_registry(executor)?;
     let pattern = |value: Option<&String>| {
         value.map(|value| match monitor.map(|monitor| monitor.pattern_kind) {
@@ -270,6 +338,8 @@ fn execute_background_run_prepared(
     };
     let started = registry
         .start(StartParams {
+            owner: Some(owner),
+            argv: Some(argv),
             process_id: reserved_process_id,
             command: final_command,
             ws: None,
@@ -377,6 +447,8 @@ fn render_run(
         .insert("monitored".to_string(), monitored.to_string());
 
     let output = ToolPayloadOutput::Shell {
+        terminal: None,
+        dropped_bytes: 0,
         action: "run".to_string(),
         shell: Some(shell),
         background: true,
@@ -432,6 +504,8 @@ fn render_list(processes: Vec<ProcessSummary>) -> ToolPayloadExecution {
         .insert("count".to_string(), processes.len().to_string());
 
     let output = ToolPayloadOutput::Shell {
+        terminal: None,
+        dropped_bytes: 0,
         action: "list".to_string(),
         shell: None,
         background: true,
@@ -491,6 +565,8 @@ fn render_logs(read: MonitorRead) -> ToolPayloadExecution {
     }
 
     let output = ToolPayloadOutput::Shell {
+        terminal: None,
+        dropped_bytes: 0,
         action: "logs".to_string(),
         shell: None,
         background: true,
@@ -533,6 +609,8 @@ fn render_stop(stop: MonitorStopOutcome) -> ToolPayloadExecution {
     insert_summary_metadata(&mut view, &summary);
 
     let output = ToolPayloadOutput::Shell {
+        terminal: None,
+        dropped_bytes: 0,
         action: "stop".to_string(),
         shell: None,
         background: true,

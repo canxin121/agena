@@ -8,6 +8,8 @@ use std::io;
 use std::process::{ExitStatus, Output, Stdio};
 use std::time::Duration;
 
+pub mod pty;
+
 #[cfg(windows)]
 use process_wrap::tokio::JobObject;
 #[cfg(unix)]

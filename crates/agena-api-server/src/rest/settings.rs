@@ -15,6 +15,7 @@ pub async fn get_settings(
                 ServerError::bad_request_with_diagnostic("The settings path is invalid.", error)
             })?;
             ConfigSettingsReadResponse {
+                revision: None,
                 config_path: configuration.config_path,
                 config_found: configuration.config_found,
                 source: ConfigSettingsSource::Effective,
@@ -64,6 +65,7 @@ pub async fn list_settings(
             let items =
                 list_json_path(&value, path.as_deref(), input.recursive).map_err(settings_error)?;
             ConfigSettingsListResponse {
+                revision: None,
                 config_path: configuration.config_path,
                 config_found: configuration.config_found,
                 source: ConfigSettingsSource::Effective,

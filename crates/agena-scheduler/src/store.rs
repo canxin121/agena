@@ -59,6 +59,30 @@ pub trait JobStore: Send + Sync {
     /// Insert a new job. Existing IDs are rejected, never silently overwritten.
     async fn put(&self, job: ScheduledJob) -> SchedulerResult<()>;
     async fn remove(&self, id: Uuid) -> SchedulerResult<bool>;
+    /// Delete only the snapshot whose immutable owner was authorized.
+    async fn remove_checked(&self, _expected: &JobSnapshot) -> SchedulerResult<bool> {
+        Err(SchedulerError::InvalidUpdate(
+            "conditional deletion unsupported by this store".into(),
+        ))
+    }
+    async fn list_history_owned(
+        &self,
+        workspace: &str,
+        session: Option<i64>,
+        job_id: Option<Uuid>,
+        limit: usize,
+    ) -> SchedulerResult<Vec<SchedulerHistoryEntry>> {
+        Ok(self
+            .list_history(job_id, MAX_RETAINED_HISTORY_ENTRIES)
+            .await?
+            .into_iter()
+            .filter(|entry| {
+                entry.owner_workspace.as_deref() == Some(workspace)
+                    && entry.owner_session_id == session
+            })
+            .take(limit.clamp(1, MAX_RETAINED_HISTORY_ENTRIES))
+            .collect())
+    }
     async fn list(&self) -> SchedulerResult<Vec<JobSnapshot>>;
     async fn get(&self, id: Uuid) -> SchedulerResult<Option<JobSnapshot>>;
     /// Due unclaimed jobs and abandoned, unpaused claims. Callers claim each
@@ -128,11 +152,20 @@ fn new_history(expected: &JobSnapshot, job: &ScheduledJob) -> Option<SchedulerHi
         .flatten()
         .map(|record| SchedulerHistoryEntry {
             job_id: job.id,
+            owner_session_id: job.owner_session_id,
+            owner_workspace: job.owner_workspace.clone(),
             record,
         })
 }
 
 fn encode_update(expected: &JobSnapshot, job: &ScheduledJob) -> SchedulerResult<String> {
+    if expected.job.owner_session_id != job.owner_session_id
+        || expected.job.owner_workspace != job.owner_workspace
+    {
+        return Err(SchedulerError::InvalidUpdate(
+            "job ownership is immutable".into(),
+        ));
+    }
     if expected.job.id != job.id {
         return Err(SchedulerError::InvalidUpdate("job id cannot change".into()));
     }
@@ -163,6 +196,19 @@ impl JobStore for InMemoryJobStore {
             },
         );
         Ok(())
+    }
+
+    async fn remove_checked(&self, expected: &JobSnapshot) -> SchedulerResult<bool> {
+        let mut state = self.inner.write();
+        if state
+            .jobs
+            .get(&expected.job.id)
+            .is_none_or(|actual| !actual.matches(expected))
+        {
+            return Ok(false);
+        }
+        state.jobs.remove(&expected.job.id);
+        Ok(true)
     }
 
     async fn remove(&self, id: Uuid) -> SchedulerResult<bool> {
@@ -361,9 +407,12 @@ impl SqliteJobStore {
         db: &impl ConnectionTrait,
         entry: &SchedulerHistoryEntry,
     ) -> SchedulerResult<()> {
+        let mut record = serde_json::to_value(&entry.record)?;
+        record["owner_workspace"] = serde_json::json!(entry.owner_workspace);
+        record["owner_session_id"] = serde_json::json!(entry.owner_session_id);
         db.execute(Statement::from_sql_and_values(DatabaseBackend::Sqlite,
             "INSERT INTO agena_scheduler_history (job_id, run_json, finished_at_ms) VALUES (?, ?, ?)",
-            [entry.job_id.to_string().into(), serde_json::to_string(&entry.record)?.into(), entry.record.finished_at.timestamp_millis().into()],
+            [entry.job_id.to_string().into(), serde_json::to_string(&record)?.into(), entry.record.finished_at.timestamp_millis().into()],
         )).await?;
         db.execute(Statement::from_sql_and_values(
             DatabaseBackend::Sqlite,
@@ -408,6 +457,13 @@ impl JobStore for SqliteJobStore {
             return Err(SchedulerError::Conflict(job.id));
         }
         Ok(())
+    }
+
+    async fn remove_checked(&self, expected: &JobSnapshot) -> SchedulerResult<bool> {
+        Ok(self.db.execute(Statement::from_sql_and_values(DatabaseBackend::Sqlite,
+            "DELETE FROM agena_scheduler_jobs WHERE id = ? AND job_json = ? AND delivery_key IS ?",
+            [expected.job.id.to_string().into(), expected.json.clone().into(), expected.claim_key.clone().into()],
+        )).await?.rows_affected() > 0)
     }
 
     async fn remove(&self, id: Uuid) -> SchedulerResult<bool> {
@@ -571,9 +627,12 @@ impl JobStore for SqliteJobStore {
                     )))
                 })?;
                 let json: String = row.try_get("", "run_json")?;
+                let value: serde_json::Value = serde_json::from_str(&json)?;
                 Ok(SchedulerHistoryEntry {
                     job_id,
-                    record: serde_json::from_str(&json)?,
+                    owner_workspace: value["owner_workspace"].as_str().map(str::to_owned),
+                    owner_session_id: value["owner_session_id"].as_i64(),
+                    record: serde_json::from_value(value)?,
                 })
             })
             .collect()

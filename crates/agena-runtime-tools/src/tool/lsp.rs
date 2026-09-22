@@ -35,7 +35,8 @@ pub(super) async fn execute_definition_async(
     let client = registry.client_for_path(&path).await.map_err(map_lsp_err)?;
     let sync_status = sync_document(&client, &path, &uri)
         .await
-        .map_err(map_lsp_err)?;
+        .map_err(map_lsp_err)?
+        .status;
     let response = client
         .definition_after_sync(uri, pos, sync_status)
         .await
@@ -76,7 +77,8 @@ pub(super) async fn execute_references_async(
     let client = registry.client_for_path(&path).await.map_err(map_lsp_err)?;
     let sync_status = sync_document(&client, &path, &uri)
         .await
-        .map_err(map_lsp_err)?;
+        .map_err(map_lsp_err)?
+        .status;
     let response = client
         .references_after_sync(uri, pos, include_definition, sync_status)
         .await
@@ -118,7 +120,8 @@ pub(super) async fn execute_hover_async(
     let client = registry.client_for_path(&path).await.map_err(map_lsp_err)?;
     let sync_status = sync_document(&client, &path, &uri)
         .await
-        .map_err(map_lsp_err)?;
+        .map_err(map_lsp_err)?
+        .status;
     let response = client
         .hover_after_sync(uri, pos, sync_status)
         .await
@@ -159,13 +162,20 @@ pub(super) async fn execute_diagnostics_async(
     // Make sure the language server has been spawned (it might not have
     // pushed diagnostics yet if no other tool touched this file).
     let client = registry.client_for_path(&path).await.map_err(map_lsp_err)?;
-    sync_document(&client, &path, &uri)
+    let receipt = sync_document(&client, &path, &uri)
         .await
         .map_err(map_lsp_err)?;
-    // Give the server a brief window to publish diagnostics for the document
-    // we just synced; servers typically push within ~100ms.
-    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
-    let entries = client.diagnostics_for(&uri);
+    let waiting = client.wait_diagnostics(
+        &uri,
+        receipt.version,
+        std::time::Duration::from_millis(2000),
+    );
+    let report = if let Some(cancel) = executor.cancellation_token() {
+        tokio::select! {biased; _=cancel.cancelled()=>return Err(ToolError::Cancelled), report=waiting=>report}
+    } else {
+        waiting.await
+    };
+    let entries = report.diagnostics;
 
     let formatted: Vec<String> = entries
         .iter()
@@ -174,15 +184,36 @@ pub(super) async fn execute_diagnostics_async(
 
     let view = ToolExecutionView::simple(
         format!("lsp_diagnostics {}", display_path(&path, executor)),
-        format!("{} diagnostics", formatted.len()),
-        if formatted.is_empty() {
-            "no diagnostics".to_string()
+        format!(
+            "{} diagnostics · {} · version {}",
+            formatted.len(),
+            report.state,
+            report.expected_version
+        ),
+        if report.state != "current" {
+            format!(
+                "Diagnostic evidence is {} for document version {} (reported {:?}); an empty result does not certify clean code.\n{}",
+                report.state,
+                report.expected_version,
+                report.reported_version,
+                formatted.join("\n")
+            )
+        } else if formatted.is_empty() {
+            format!(
+                "No diagnostics for synchronized document version {}.",
+                report.expected_version
+            )
         } else {
             formatted.join("\n")
         },
     );
     Ok(ToolPayloadExecution::new(
-        ToolPayloadOutput::LspDiagnostics { entries: formatted },
+        ToolPayloadOutput::LspDiagnostics {
+            entries: formatted,
+            state: report.state.into(),
+            document_version: Some(report.expected_version),
+            reported_version: report.reported_version,
+        },
         view,
     ))
 }
@@ -292,7 +323,7 @@ async fn sync_document(
     client: &agena_lsp::LspClient,
     path: &Path,
     uri: &Uri,
-) -> Result<agena_lsp::DocumentSyncStatus, agena_lsp::LspError> {
+) -> Result<agena_lsp::DocumentReceipt, agena_lsp::LspError> {
     let file = tokio::fs::File::open(path).await?;
     let initial_capacity = match file.metadata().await {
         Ok(metadata) => match usize::try_from(metadata.len().min(MAX_LSP_DOCUMENT_BYTES)) {
@@ -337,7 +368,7 @@ async fn sync_document(
     })?;
     let language_id = language_id_for_path(path);
     client
-        .sync_document_with_status(uri.clone(), text, &language_id)
+        .sync_document_with_receipt(uri.clone(), text, &language_id)
         .await
 }
 

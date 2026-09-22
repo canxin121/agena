@@ -1,3 +1,4 @@
+use sha2::{Digest, Sha256};
 use std::path::Path;
 use std::process::Stdio;
 use std::sync::{Arc, OnceLock};
@@ -26,7 +27,7 @@ pub(crate) struct SessionPlugin {
 struct GitFacts {
     branch: Option<String>,
     short_sha: Option<String>,
-    dirty: bool,
+    dirty: Option<bool>,
 }
 
 fn run_git(workspace: &Path, args: &[&str]) -> SdkResult<Option<String>> {
@@ -51,6 +52,8 @@ fn run_git(workspace: &Path, args: &[&str]) -> SdkResult<Option<String>> {
             ))
         })?;
     let mut retained = 0_usize;
+    let truncated = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let capture_truncated = truncated.clone();
     let output = child
         .controlled_with_output()
         .stdout_filter(move |chunk: &[u8]| {
@@ -59,6 +62,7 @@ fn run_git(workspace: &Path, args: &[&str]) -> SdkResult<Option<String>> {
                 Ok(true)
             } else {
                 retained = MAX_GIT_FACT_BYTES;
+                capture_truncated.store(true, std::sync::atomic::Ordering::Relaxed);
                 Ok(false)
             }
         })
@@ -77,6 +81,10 @@ fn run_git(workspace: &Path, args: &[&str]) -> SdkResult<Option<String>> {
                 "Git inspection timed out after 15 seconds.",
             )
         })?;
+    if truncated.load(std::sync::atomic::Ordering::Relaxed) {
+        tracing::warn!(arguments = ?args, "Git inspection output exceeded its budget; facts remain unknown");
+        return Ok(None);
+    }
     if !output.status.success() {
         tracing::debug!(
             arguments = ?args,
@@ -95,16 +103,17 @@ fn run_git(workspace: &Path, args: &[&str]) -> SdkResult<Option<String>> {
     Ok(Some(stdout.trim().to_string()))
 }
 
+fn git_dirty_from_status(status: Option<&str>) -> Option<bool> {
+    status.map(|status| !status.trim().is_empty())
+}
+
 fn git_facts(workspace: &Path) -> SdkResult<Option<GitFacts>> {
     let Some(branch) = run_git(workspace, &["rev-parse", "--abbrev-ref", "HEAD"])? else {
         return Ok(None);
     };
     let short_sha = run_git(workspace, &["rev-parse", "--short", "HEAD"])?;
     let status = run_git(workspace, &["status", "--porcelain"])?;
-    let dirty = status
-        .as_deref()
-        .map(|status| !status.trim().is_empty())
-        .unwrap_or(false);
+    let dirty = git_dirty_from_status(status.as_deref());
     Ok(Some(GitFacts {
         branch: Some(branch),
         short_sha,
@@ -159,7 +168,7 @@ impl SessionPlugin {
         let mut lines = vec![format!("Working directory: {workspace_root}")];
         let mut git_branch = None::<String>;
         let mut git_short_sha = None::<String>;
-        let mut git_dirty = false;
+        let mut git_dirty = None;
         let git_workspace = workspace_root.clone();
         let worker_permit = crate::BLOCKING_PLUGIN_WORKERS
             .acquire()
@@ -188,7 +197,11 @@ impl SessionPlugin {
             if let (Some(branch), Some(short_sha)) =
                 (git_branch.as_deref(), git_short_sha.as_deref())
             {
-                let dirty = if git_dirty { " (dirty)" } else { "" };
+                let dirty = match git_dirty {
+                    Some(true) => " (dirty)",
+                    Some(false) => " (clean)",
+                    None => " (status unknown)",
+                };
                 lines.push(format!("Git: {branch} @ {short_sha}{dirty}"));
             } else if let Some(branch) = git_branch.as_deref() {
                 lines.push(format!("Git branch: {branch}"));
@@ -210,11 +223,44 @@ impl SessionPlugin {
             std::env::consts::OS,
             std::env::consts::ARCH
         ));
+        let catalog = match self.inner.host() {
+            Ok(host) => match host.list_tools().await {
+                Ok(mut tools) => {
+                    tools.sort_by(|a, b| a.name.cmp(&b.name));
+                    let bytes = serde_json::to_vec(&tools)
+                        .map_err(|error| PluginError::internal_error(&error))?;
+                    Some(
+                        serde_json::json!({"status":"available","count":tools.len(),"sha256":hex::encode(Sha256::digest(&bytes)),
+                        "interactive_shell":tools.iter().any(|tool|tool.name.ends_with("shell.write")),"output_recovery":tools.iter().any(|tool|tool.name.ends_with("fs.output_read"))}),
+                    )
+                }
+                Err(_) => None,
+            },
+            Err(_) => None,
+        };
+        let build = serde_json::json!({"package_version":env!("CARGO_PKG_VERSION"),"target":env!("AGENA_TOOL_BUILD_TARGET"),"source_fingerprint":env!("AGENA_TOOL_SOURCE_FINGERPRINT"),"source_scope":env!("AGENA_TOOL_SOURCE_SCOPE")});
+        lines.push(format!(
+            "Compiled tool-runtime source: {} ({})",
+            env!("AGENA_TOOL_SOURCE_FINGERPRINT"),
+            env!("AGENA_TOOL_BUILD_TARGET")
+        ));
+        lines.push(format!(
+            "Visible tool catalogue: {}",
+            catalog
+                .as_ref()
+                .map(|catalog| catalog.to_string())
+                .unwrap_or_else(
+                    || "unavailable; capabilities were not inferred from the checkout".into()
+                )
+        ));
         let payload = serde_json::json!({
+            "tool_runtime_build": build,
+            "tool_catalog": catalog,
             "workspace_root": workspace_root,
             "git_branch": git_branch,
             "git_short_sha": git_short_sha,
             "git_dirty": git_dirty,
+            "git_status_known": git_dirty.is_some(),
             "shell": shell,
             "os": std::env::consts::OS,
             "arch": std::env::consts::ARCH,
@@ -382,5 +428,36 @@ mod tests {
             tool_names,
             ["get", "environment", "model", "tokens", "rename"]
         );
+    }
+}
+
+#[cfg(test)]
+mod audit_fact_tests {
+    #[test]
+    fn unavailable_status_is_not_reported_as_clean() {
+        assert_eq!(super::git_dirty_from_status(None), None);
+        assert_eq!(super::git_dirty_from_status(Some("")), Some(false));
+        assert_eq!(
+            super::git_dirty_from_status(Some(" M src/lib.rs\n")),
+            Some(true)
+        );
+    }
+    #[tokio::test]
+    async fn nongit_workspace_has_explicit_unknown_git_status() {
+        let directory = tempfile::tempdir().unwrap();
+        let context = agena_plugin_host::sdk::ToolInvokeContext {
+            tool_name: "environment",
+            session_id: 41,
+            call_id: 1,
+            workspace_root: directory.path().to_str().unwrap(),
+        };
+        let output = super::SessionPlugin::new()
+            .environment(&context)
+            .await
+            .unwrap()
+            .payload
+            .unwrap();
+        assert!(output["git_dirty"].is_null());
+        assert_eq!(output["git_status_known"], false);
     }
 }

@@ -865,6 +865,7 @@ pub(crate) async fn patch_provider_settings(
                 provider_id: provider_patch,
             }),
             options: agena_runtime::ConfigSettingsEditOptions {
+                expected_revision: None,
                 dry_run: false,
                 validate: true,
                 reload: true,
@@ -895,6 +896,7 @@ pub(crate) async fn patch_provider_settings_root(
             },
             changes,
             options: agena_runtime::ConfigSettingsEditOptions {
+                expected_revision: None,
                 dry_run: false,
                 validate: true,
                 reload: true,
@@ -923,6 +925,7 @@ pub(crate) async fn set_provider_settings(
                 path: format!("providers.{}", quoted_settings_segment(provider_id)),
                 value: provider_value,
                 options: agena_runtime::ConfigSettingsEditOptions {
+                    expected_revision: None,
                     dry_run: false,
                     validate: true,
                     reload: true,

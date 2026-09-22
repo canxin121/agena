@@ -258,6 +258,8 @@ pub struct MemoryFrontmatter {
 #[derive(Debug, Clone)]
 /// A memory document as stored on disk.
 pub struct MemoryRecord {
+    /// SHA-256 of the exact stored document, captured by the same read.
+    pub sha256: String,
     pub file_name: String,
     pub path: PathBuf,
     pub frontmatter: MemoryFrontmatter,

@@ -189,6 +189,7 @@ mod tests {
         let view = ToolExecutionView::simple("title", "summary", "output");
         let payload = super::ToolPayloadExecution {
             output: super::ToolPayloadOutput::Read {
+                read_info: None,
                 preview: None,
                 truncated: false,
                 loaded_paths: Vec::new(),

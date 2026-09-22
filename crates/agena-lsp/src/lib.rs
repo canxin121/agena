@@ -16,7 +16,9 @@ pub mod registry;
 pub mod server_spec;
 pub mod transport;
 
-pub use client::{DocumentSyncStatus, LspClient, ServerNotification};
+pub use client::{
+    DiagnosticReport, DocumentReceipt, DocumentSyncStatus, LspClient, ServerNotification,
+};
 pub use error::{LspError, LspResult};
 pub use registry::{LspRegistry, ResolveError};
 pub use server_spec::LspServerSpec;

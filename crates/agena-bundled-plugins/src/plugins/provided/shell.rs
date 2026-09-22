@@ -1,6 +1,8 @@
 //! `agena.shell` plugin: run shell commands and manage background processes.
 
-use crate::part::{ShellCommandInput, ShellMonitorInput, ShellToolInput};
+use crate::part::{
+    ShellCommandInput, ShellMonitorInput, ShellSignal, ShellToolInput, ShellWriteInput,
+};
 use crate::plugins::provided::router;
 use agena_domain::ProcessShell;
 use agena_macros::ToolInput;
@@ -51,6 +53,30 @@ pub(crate) struct ProcessStopInput {
     process_id: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
+#[input(
+    trim("process_id"),
+    non_empty("process_id"),
+    minimum("rows", 1),
+    maximum("rows", 200),
+    minimum("cols", 1),
+    maximum("cols", 400)
+)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ProcessResizeInput {
+    process_id: String,
+    rows: u16,
+    cols: u16,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
+#[input(trim("process_id"), non_empty("process_id"))]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ProcessSignalInput {
+    process_id: String,
+    signal: ShellSignal,
+}
+
 #[agena_plugin_host::sdk::agena_plugin(
     namespace = "agena",
     name = "shell",
@@ -61,7 +87,7 @@ impl ShellPlugin {
     #[tool(
         tags(execute),
         summary = "Run one shell process.",
-        help = "Run one shell process. Always pass the required `reads` and `writes` path arrays declaring every file or directory the command reads or modifies - empty arrays `[]` when the command touches only its executables (never list the executables). Pass the `network` array of outbound targets (host names, `host:port`, or URLs) the command may connect to - empty array `[]` when none. Set `run_in_background = true` to keep the process attached to the session; you will be notified when it completes — do not poll. Add `monitor` for success/failure regex or literal conditions, quiet-period completion, bounded capture, and timeout. Both modes return one `process_id` used by shell.list/logs/stop. Background launches return immediately; you will be notified with a `system_notification` when the process settles — do not poll shell.list/logs waiting for it.",
+        help = "Run a shell command. Declare `reads`, `writes` and outbound `network` targets; use empty arrays when none. Set `tty=true` for an interactive CLI, REPL or full-screen terminal. This retains a PTY across tool calls and returns a process_id, incremental output, last_seq, and a current terminal screen. `yield_time_ms` (default 1000, maximum 30000) only controls this call's initial output wait: it never terminates the process. `timeout_ms`, when supplied, is the terminal's overall lifetime limit. Continue with shell.write; read without input with shell.write(chars=\"\") or shell.logs; use shell.resize for dimensions, shell.signal for interrupt/terminate/kill, and shell.stop for cleanup. Never assume a quiet prompt means completion. tty is incompatible with monitor. Without tty, normal foreground behavior is unchanged. `run_in_background=true` or `monitor` starts a non-interactive managed command; completion is notified by system_notification, so do not poll merely to wait for those jobs.",
         mutating,
         shell,
         network(connects = run_network_targets(input)?)
@@ -145,6 +171,77 @@ impl ShellPlugin {
             context.call_id,
         )
     }
+
+    #[tool(tags(mutate, execute), summary = "Write to an interactive terminal and read its response.",
+        help = "Continue a process started with shell.run(tty=true). chars is exact terminal input: never trim or automatically append a newline. Send \\r for Enter, \\u0003 for Ctrl-C, \\u0004 for Ctrl-D, \\t for Tab, or terminal escape sequences for arrow/function keys. Use chars=\"\" to read without sending input. Omit since_seq to read previously unread output; use an explicit last_seq to replay/page output. wait_ms defaults to 250 and is capped at 30000; a wait timeout does not kill the CLI. Input is an execution operation: declare every affected reads/writes path (relative to the Agena workspace) and network target, including effects of commands entered inside a shell/REPL. Requires the same owning session and workspace as the launch. A partial-write error requests terminal termination; do not resend the full input blindly. Process exit, not absence of output, indicates completion.",
+        mutating, shell, network(connects = write_network_targets(input)?))]
+    async fn invoke_write(
+        &self,
+        context: &ToolInvokeContext<'_>,
+        args: ShellWriteInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        router::invoke_tool(
+            "shell",
+            json_input(ShellToolInput::Write { input: args })?,
+            context.session_id,
+            context.call_id,
+        )
+    }
+
+    #[tool(
+        tags(mutate),
+        summary = "Resize an interactive terminal.",
+        mutating,
+        shell
+    )]
+    async fn invoke_resize(
+        &self,
+        context: &ToolInvokeContext<'_>,
+        args: ProcessResizeInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        router::invoke_tool(
+            "shell",
+            json_input(ShellToolInput::Resize {
+                process_id: args.process_id,
+                rows: args.rows,
+                cols: args.cols,
+            })?,
+            context.session_id,
+            context.call_id,
+        )
+    }
+
+    #[tool(
+        tags(mutate, execute),
+        summary = "Interrupt or terminate an interactive terminal.",
+        help = "interrupt targets the current Unix foreground process group without closing the shell (ConPTY uses terminal Ctrl-C). terminate requests graceful session cleanup and then kills remaining jobs; kill skips the grace period. This is distinct from typing a control byte into a raw-mode program. The same owning session/workspace is required. shell.stop is equivalent to terminate.",
+        mutating,
+        shell
+    )]
+    async fn invoke_signal(
+        &self,
+        context: &ToolInvokeContext<'_>,
+        args: ProcessSignalInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        router::invoke_tool(
+            "shell",
+            json_input(ShellToolInput::Signal {
+                process_id: args.process_id,
+                signal: args.signal,
+            })?,
+            context.session_id,
+            context.call_id,
+        )
+    }
+}
+
+fn write_network_targets(args: &ShellWriteInput) -> SdkResult<Vec<String>> {
+    router::permission_network_targets_for(
+        "shell",
+        &json_input(ShellToolInput::Write {
+            input: args.clone(),
+        })?,
+    )
 }
 
 fn run_network_targets(args: &ShellRunInput) -> SdkResult<Vec<String>> {
@@ -180,7 +277,10 @@ mod tests {
 
         assert_eq!(manifest.namespace, "agena");
         assert_eq!(manifest.name, "shell");
-        assert_eq!(tool_names, ["run", "list", "logs", "stop"]);
+        assert_eq!(
+            tool_names,
+            ["run", "list", "logs", "stop", "write", "resize", "signal"]
+        );
         let run = manifest
             .tools
             .iter()

@@ -169,6 +169,10 @@ pub struct JobRunRecord {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SchedulerHistoryEntry {
     pub job_id: Uuid,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_session_id: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_workspace: Option<String>,
     pub record: JobRunRecord,
 }
 
@@ -232,6 +236,9 @@ pub struct ScheduledJob {
     /// to spawn a fresh headless session.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner_session_id: Option<i64>,
+    /// Trusted canonical workspace. Missing legacy ownership is host-only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_workspace: Option<String>,
     /// Durable provenance for schedules created by an assistant tool call.
     ///
     /// Host-created jobs may have no provenance and are delivered as Runtime
@@ -302,6 +309,7 @@ impl ScheduledJob {
             },
             prompt: prompt.into(),
             owner_session_id: None,
+            owner_workspace: None,
             launch_provenance: None,
             created_at: now,
             last_fired_at: None,
@@ -328,6 +336,7 @@ impl ScheduledJob {
             kind: JobKind::Once { at },
             prompt: prompt.into(),
             owner_session_id: None,
+            owner_workspace: None,
             launch_provenance: None,
             created_at: Utc::now(),
             last_fired_at: None,

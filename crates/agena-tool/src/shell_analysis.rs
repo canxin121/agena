@@ -185,7 +185,7 @@ fn is_assignment(token: &str) -> bool {
 }
 
 fn is_command_wrapper(token: &str) -> bool {
-    matches!(token, "env" | "command" | "builtin" | "nohup")
+    matches!(token, "env" | "command" | "builtin" | "nohup" | "exec")
 }
 
 /// Detect a shell output-redirection operator outside quotes.
@@ -387,8 +387,14 @@ pub fn filesystem_effects_required_reason(command: &str) -> Option<String> {
     }
     let tokens = shell_tokens(command);
     for segment in command_segments(tokens.as_slice()) {
-        let (_, _, args) = first_command(segment);
-        if let Some(reason) = curl_filesystem_reason(args.as_slice()) {
+        let (primary, _, args) = first_command(segment);
+        let is_curl = primary.as_deref().is_some_and(|program| {
+            matches!(
+                program.rsplit(['/', '\\']).next(),
+                Some("curl" | "curl.exe")
+            )
+        });
+        if is_curl && let Some(reason) = curl_filesystem_reason(args.as_slice()) {
             return Some(reason);
         }
     }
@@ -945,6 +951,32 @@ mod tests {
         assert!(filesystem_effects_required_reason("cargo build").is_none());
         assert!(filesystem_effects_required_reason("ls -la").is_none());
         assert!(filesystem_effects_required_reason("git status").is_none());
+    }
+
+    #[test]
+    fn curl_option_detection_is_scoped_to_the_actual_executable() {
+        for command in [
+            "python3 -c 'print(1)'",
+            "exec /usr/bin/python3 -c 'print(1)'",
+            "grep -c pattern",
+            "node -e 'console.log(1)'",
+            "printf -- '-c cookies'",
+        ] {
+            assert!(
+                filesystem_effects_required_reason(command).is_none(),
+                "{command}"
+            );
+        }
+        for command in [
+            "curl -c cookies.txt https://example.com",
+            "exec /usr/bin/curl --cookie-jar cookies.txt https://example.com",
+            "command curl -o out.txt https://example.com",
+        ] {
+            assert!(
+                filesystem_effects_required_reason(command).is_some(),
+                "{command}"
+            );
+        }
     }
 
     #[test]

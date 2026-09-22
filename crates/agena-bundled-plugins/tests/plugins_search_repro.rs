@@ -418,3 +418,25 @@ async fn tools_search_filters_opposite_and_unrelated_capabilities_before_paginat
 
     let _ = std::fs::remove_dir_all(workspace_root);
 }
+
+#[tokio::test]
+async fn mixed_batch_help_retains_valid_contracts_when_one_name_is_missing() {
+    let (executor, root) = build_tool_api_executor().await;
+    let output = execute_gateway(
+        &executor,
+        agena_domain::ToolApiFunction::Help,
+        "tools_help",
+        serde_json::json!({"tool":["monitor.start","missing.nonexistent"]}),
+        101,
+    )
+    .await;
+    assert!(output.view.output_text.contains("Tool: monitor.start"));
+    assert!(
+        output
+            .view
+            .output_text
+            .contains("Tool: missing.nonexistent")
+    );
+    assert!(output.view.output_text.contains("Help unavailable"));
+    std::fs::remove_dir_all(root).unwrap();
+}

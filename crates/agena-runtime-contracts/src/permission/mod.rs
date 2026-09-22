@@ -169,13 +169,22 @@ fn bash_rule_qualifier_reverse(command: &str, rules: &[BashPatternRule]) -> Opti
         .map(|rule| rule.pattern.clone())
 }
 
+fn is_terminal_write(names: &[&str]) -> bool {
+    names.iter().any(|name| {
+        matches!(
+            *name,
+            "shell.write" | "agena.shell.write" | "agena_shell_write"
+        )
+    })
+}
+
 pub fn tool_action(
     tool_name: &str,
     command: Option<&str>,
     contract: &ToolPermissionContract,
     policy: Option<&ToolPermissionPolicy>,
 ) -> PermissionAction {
-    let qualifier = if is_shell_tool(&[tool_name], contract) {
+    let qualifier = if is_shell_tool(&[tool_name], contract) && !is_terminal_write(&[tool_name]) {
         command.and_then(|command| bash_permission_qualifier(command, policy))
     } else {
         None
@@ -228,6 +237,31 @@ impl ToolPermissionPolicy {
         command: Option<&str>,
         contract: &ToolPermissionContract,
     ) -> PermissionDecision {
+        // Input to a persistent CLI is not an independent shell command: it
+        // may complete an earlier input or execute inside a REPL. Keep explicit
+        // tool restrictions and recognizable command denials, but never let a
+        // shell prefix allow/auto rule approve arbitrary terminal input.
+        if is_terminal_write(names) {
+            let decision = self.check_tool_mode_with_names(names, contract);
+            if matches!(decision, PermissionDecision::Deny { .. }) {
+                return decision;
+            }
+            if let Some(command) = command {
+                for rule_decision in [
+                    self.evaluate_bash_deny(command),
+                    self.evaluate_bash_overlay_pattern(command),
+                    self.evaluate_bash_pattern(command),
+                ]
+                .into_iter()
+                .flatten()
+                {
+                    if matches!(rule_decision, PermissionDecision::Deny { .. }) {
+                        return rule_decision;
+                    }
+                }
+            }
+            return decision;
+        }
         if is_shell_tool(names, contract)
             && let Some(command) = command
         {

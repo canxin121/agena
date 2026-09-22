@@ -1,3 +1,4 @@
+mod stream;
 use std::cmp::min;
 use std::fs;
 use std::io::Read;
@@ -14,7 +15,6 @@ const DEFAULT_OFFSET: usize = 1;
 const DEFAULT_LIMIT: usize = 2000;
 const MAX_LINE_CHARS: usize = 2000;
 const AUTO_DETECT_BYTES: usize = 8 * 1024;
-const MAX_TEXT_FILE_BYTES: usize = 8 * 1024 * 1024;
 const MAX_DIRECTORY_ENTRIES: usize = 20_000;
 
 pub(super) fn execute(
@@ -51,6 +51,7 @@ pub(super) fn execute(
             read_directory_listing(&target, offset, limit)?;
         let truncated = page_truncated || scan_truncated;
         let output = ToolPayloadOutput::Read {
+            read_info: None,
             preview: Some(preview.clone()),
             truncated,
             loaded_paths: vec![display_path.clone()],
@@ -93,40 +94,30 @@ pub(super) fn execute(
         }
     }
 
-    let content = read_text_file_bounded(&target, MAX_TEXT_FILE_BYTES)?;
-
-    let text = String::from_utf8(content).map_err(|_| {
-        ToolError::invalid_field("mode", agena_failure::FieldIssueKind::Unsupported, format!(
-            "read tool currently supports UTF-8 text files only; use mode=attachment or mode=auto for binary files: {}",
-            input.file_path
-        ))
-    })?;
-
-    let (preview, truncated, rendered_lines, total_lines) =
-        render_file_preview(&text, offset, limit)?;
+    let page = stream::read_page(&target, offset, limit, executor.cancellation_token())?;
+    let truncated = page.next_offset.is_some() || page.truncated_lines;
+    let info = serde_json::json!({"offset":offset,"returned_lines":page.returned,"next_offset":page.next_offset,"total_lines":page.total_lines,
+        "truncated_lines":page.truncated_lines,"scanned_bytes":page.scanned_bytes,"source_bytes":page.source_bytes,"modified_ns":page.modified_ns.map(|value|value.to_string())});
     let output = ToolPayloadOutput::Read {
-        preview: Some(preview.clone()),
+        preview: Some(page.preview.clone()),
         truncated,
         loaded_paths: vec![display_path.clone()],
         attachment: None,
+        read_info: Some(info),
     };
-
-    let summary = if truncated {
-        format!("{rendered_lines} of {total_lines} lines")
-    } else {
-        format!("{total_lines} lines")
+    let summary = match page.total_lines {
+        Some(total) => format!("{} of {total} lines", page.returned),
+        None => format!("{} lines · more available", page.returned),
     };
-    let mut view = ToolExecutionView::simple(format!("Read {}", display_path), summary, preview);
-    view.metadata.insert("kind".to_string(), "file".to_string());
+    let mut view = ToolExecutionView::simple(format!("Read {display_path}"), summary, page.preview);
+    view.metadata.insert("kind".into(), "file".into());
+    view.metadata.insert("offset".into(), offset.to_string());
+    view.metadata.insert("limit".into(), limit.to_string());
     view.metadata
-        .insert("offset".to_string(), offset.to_string());
-    view.metadata.insert("limit".to_string(), limit.to_string());
-    view.metadata
-        .insert("rendered_lines".to_string(), rendered_lines.to_string());
-    view.metadata
-        .insert("total_lines".to_string(), total_lines.to_string());
-    view.metadata
-        .insert("truncated".to_string(), truncated.to_string());
+        .insert("truncated".into(), truncated.to_string());
+    if let Some(next) = page.next_offset {
+        view.metadata.insert("next_offset".into(), next.to_string());
+    }
 
     Ok(ToolPayloadExecution::new(output, view))
 }
@@ -136,24 +127,6 @@ fn read_prefix(path: &std::path::Path, limit: usize) -> Result<Vec<u8>, ToolErro
     fs::File::open(path)?
         .take(limit as u64)
         .read_to_end(&mut bytes)?;
-    Ok(bytes)
-}
-
-fn read_text_file_bounded(path: &std::path::Path, max_bytes: usize) -> Result<Vec<u8>, ToolError> {
-    let mut bytes = Vec::new();
-    fs::File::open(path)?
-        .take((max_bytes as u64).saturating_add(1))
-        .read_to_end(&mut bytes)?;
-    if bytes.len() > max_bytes {
-        return Err(ToolError::invalid_field(
-            "file_path",
-            agena_failure::FieldIssueKind::OutOfRange,
-            format!(
-                "text read is limited to {max_bytes} bytes to keep tool execution bounded: {}",
-                path.display()
-            ),
-        ));
-    }
     Ok(bytes)
 }
 
@@ -217,46 +190,6 @@ fn read_directory_listing(
     Ok((preview, truncated, entries.len(), scan_truncated))
 }
 
-fn render_file_preview(
-    text: &str,
-    offset: usize,
-    limit: usize,
-) -> Result<(String, bool, usize, usize), ToolError> {
-    let normalized = text.replace("\r\n", "\n");
-    let lines = normalized.lines().collect::<Vec<_>>();
-
-    if lines.is_empty() {
-        return Ok((String::new(), false, 0, 0));
-    }
-
-    if offset > lines.len() {
-        return Err(ToolError::invalid_field(
-            "offset",
-            agena_failure::FieldIssueKind::OutOfRange,
-            format!(
-                "read offset {} exceeds file line count {}",
-                offset,
-                lines.len()
-            ),
-        ));
-    }
-
-    let start = offset - 1;
-    let end = min(start + limit, lines.len());
-    let mut rendered = Vec::with_capacity(end - start);
-
-    for (index, line) in lines[start..end].iter().enumerate() {
-        rendered.push(format!(
-            "{}: {}",
-            start + index + 1,
-            truncate_line_chars(line)
-        ));
-    }
-
-    let truncated = end < lines.len();
-    Ok((rendered.join("\n"), truncated, rendered.len(), lines.len()))
-}
-
 fn truncate_line_chars(input: &str) -> String {
     let mut iter = input.chars();
     let mut out = String::new();
@@ -271,27 +204,4 @@ fn truncate_line_chars(input: &str) -> String {
         out.push('…');
     }
     out
-}
-
-#[cfg(test)]
-mod tests {
-    use std::io::Write;
-
-    use super::read_text_file_bounded;
-
-    #[test]
-    fn bounded_text_read_rejects_before_loading_the_rest_of_a_large_file() {
-        let path = std::env::temp_dir().join(format!(
-            "agena-read-bound-{}.txt",
-            uuid::Uuid::new_v4().simple()
-        ));
-        let mut file = std::fs::File::create(&path).expect("create read fixture");
-        file.write_all(b"small prefix").expect("write read prefix");
-        file.set_len(1_000_000).expect("extend sparse read fixture");
-
-        let error = read_text_file_bounded(&path, 32).expect_err("oversized text must fail");
-
-        assert!(error.to_string().contains("limited to 32 bytes"));
-        std::fs::remove_file(path).expect("remove read fixture");
-    }
 }

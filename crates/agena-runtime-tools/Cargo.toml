@@ -7,6 +7,7 @@ rust-version.workspace = true
 description = "Builtin Agena tools and tool execution"
 
 [dependencies]
+vt100 = "0.16.2"
 portable-atomic = { workspace = true }
 agena-failure = { workspace = true }
 agena-domain = { workspace = true }

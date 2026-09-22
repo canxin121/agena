@@ -402,22 +402,22 @@ impl ToolExecutor {
                     crate::tool::cron::execute_create_async(self, &input, &context).await?
                 }
                 ToolPayloadInput::CronList(input) => {
-                    crate::tool::cron::execute_list_async(self, &input).await?
+                    crate::tool::cron::execute_list_async(self, &input, &context).await?
                 }
                 ToolPayloadInput::CronDelete(input) => {
-                    crate::tool::cron::execute_delete_async(self, &input).await?
+                    crate::tool::cron::execute_delete_async(self, &input, &context).await?
                 }
                 ToolPayloadInput::CronUpdate(input) => {
-                    crate::tool::cron::execute_update_async(self, &input).await?
+                    crate::tool::cron::execute_update_async(self, &input, &context).await?
                 }
                 ToolPayloadInput::CronPause(input) => {
-                    crate::tool::cron::execute_pause_async(self, &input).await?
+                    crate::tool::cron::execute_pause_async(self, &input, &context).await?
                 }
                 ToolPayloadInput::CronResume(input) => {
-                    crate::tool::cron::execute_resume_async(self, &input).await?
+                    crate::tool::cron::execute_resume_async(self, &input, &context).await?
                 }
                 ToolPayloadInput::CronHistory(input) => {
-                    crate::tool::cron::execute_history_async(self, &input).await?
+                    crate::tool::cron::execute_history_async(self, &input, &context).await?
                 }
                 ToolPayloadInput::LspDefinition(input) => {
                     crate::tool::lsp::execute_definition_async(self, &input).await?

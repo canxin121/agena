@@ -27,6 +27,7 @@ use agena_tool::tool_search::{ToolSearchDocument, search_tools};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+mod plan_storage;
 mod workflow_plan;
 mod workflow_runtime;
 
@@ -95,12 +96,15 @@ impl Default for ToolTagsConfig {
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct WorkflowPlanConfig {
     pub(crate) default_autorun: bool,
+    /// Trusted configuration opt-in; a model argument alone cannot waive review.
+    pub(crate) allow_unreviewed_activation: bool,
 }
 
 impl Default for WorkflowPlanConfig {
     fn default() -> Self {
         Self {
             default_autorun: true,
+            allow_unreviewed_activation: false,
         }
     }
 }
@@ -307,7 +311,7 @@ impl WorkflowPlugin {
         };
         if plan.autorun {
             plan.autorun = false;
-            self.save_active_plan(&plan).await?;
+            self.update_active_plan(&mut plan).await?;
         }
         Ok(())
     }
@@ -706,6 +710,9 @@ mod tests {
 
     fn sample_plan() -> WorkflowPlan {
         WorkflowPlan {
+            plan_id: "test-plan".into(),
+            revision: "test-revision".into(),
+            display_warning: None,
             title: "Test plan".to_string(),
             objective: "Objective".to_string(),
             phase: WorkflowPlanPhase::Planning,
@@ -794,6 +801,7 @@ mod tests {
     #[test]
     fn validate_plan_edit_input_maps_step_and_check_targets() {
         let step_update = PlanEditInput {
+            expected_revision: None,
             step: Some(2),
             status: Some(WorkflowPlanStepStatus::InProgress),
             ..Default::default()
@@ -804,6 +812,7 @@ mod tests {
         ));
 
         let check_update = PlanEditInput {
+            expected_revision: None,
             step: Some(1),
             check: Some(2),
             status: Some(WorkflowPlanStepStatus::Completed),
@@ -1046,6 +1055,7 @@ mod tests {
     #[test]
     fn validate_plan_edit_input_rejects_invalid_combinations() {
         let check_without_step = PlanEditInput {
+            expected_revision: None,
             check: Some(1),
             status: Some(WorkflowPlanStepStatus::Completed),
             ..Default::default()
@@ -1058,6 +1068,7 @@ mod tests {
         );
 
         let check_without_status = PlanEditInput {
+            expected_revision: None,
             step: Some(1),
             check: Some(1),
             ..Default::default()
@@ -1070,6 +1081,7 @@ mod tests {
         );
 
         let step_without_change = PlanEditInput {
+            expected_revision: None,
             step: Some(1),
             ..Default::default()
         };
@@ -1092,6 +1104,7 @@ mod tests {
         );
 
         let autorun_only = PlanPhaseInput {
+            expected_revision: None,
             autorun: Some(true),
             ..Default::default()
         };
@@ -1099,6 +1112,7 @@ mod tests {
             .expect("autorun-only phase input must be valid");
 
         let summary_without_completed = PlanPhaseInput {
+            expected_revision: None,
             phase: Some(WorkflowPlanPhase::Active),
             summary: Some("done".to_string()),
             ..Default::default()

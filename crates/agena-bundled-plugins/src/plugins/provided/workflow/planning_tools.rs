@@ -53,6 +53,10 @@ pub(crate) struct WorkflowPlanStep {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default)]
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct WorkflowPlan {
+    pub(crate) plan_id: String,
+    pub(crate) revision: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) display_warning: Option<String>,
     pub(crate) title: String,
     pub(crate) objective: String,
     pub(crate) phase: WorkflowPlanPhase,
@@ -108,6 +112,9 @@ pub(crate) struct WorkflowPlanStepInput {
     description = "Create or overwrite the current active-session plan. If a plan already exists, this replaces it and resets the phase to planning. Use `steps[].title` for steps, `steps[].checks[].text` for checks, and `autorun` to control whether approved active plans should keep running automatically. This tool never blocks on the user: with `request_approval` true (the default) the plan is saved in the `planning` phase and you must call `plan.review` to request user approval before it becomes active; with `request_approval: false` it is applied directly and becomes active immediately, which you should only do when the user has already declared the plan needs no approval."
 )]
 pub(crate) struct PlanSetInput {
+    /// Optional revision from plan.get; mismatches never overwrite newer state.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) expected_revision: Option<String>,
     pub(crate) objective: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) title: Option<String>,
@@ -152,6 +159,9 @@ pub(crate) struct PlanGetInput {
     description = "Edit the current plan's steps and checks. Never requests user approval and never changes the plan phase. Address steps and checks by their 1-based index (step 1 is the first step; check 1 is the first check within the step): use `step` + `status` (with an optional `note`) to update a step, or `step` + `check` + `status` to update a check."
 )]
 pub(crate) struct PlanEditInput {
+    /// Optional revision from plan.get; mismatches never overwrite newer state.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) expected_revision: Option<String>,
     #[schemars(description = "1-based index of the step to update (1 = first step).")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) step: Option<usize>,
@@ -173,6 +183,9 @@ pub(crate) struct PlanEditInput {
     description = "Transition the current plan's phase. `phase` moves the plan between `planning`, `active`, `blocked`, `completed`, and `cancelled`; `autorun` and `summary` are optional modifiers. A transition into `active`, `blocked`, or `completed` requires user approval by default: pass `request_approval: true` (or omit it) to route it through the same review dialog as `plan.review`, or `request_approval: false` (only when the user has already declared the change needs no approval) to apply it directly. To complete a plan with steps, first mark the relevant steps or checks `completed` via `plan.edit`, then make a separate call with `phase: completed`."
 )]
 pub(crate) struct PlanPhaseInput {
+    /// Optional revision from plan.get; mismatches never overwrite newer state.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) expected_revision: Option<String>,
     #[schemars(
         description = "Canonical plan phase. Use `planning`, `active`, `blocked`, `completed`, or `cancelled`."
     )]

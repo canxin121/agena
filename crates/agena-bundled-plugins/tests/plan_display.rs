@@ -131,7 +131,13 @@ async fn build_host_with_previous(
     previous_plugins: HashMap<String, ConfiguredPlugin>,
 ) -> Arc<PluginHost> {
     let mut list = BTreeMap::new();
-    list.insert("agena.plan".to_string(), ConfiguredPlugin::static_default());
+    list.insert(
+        "agena.plan".to_string(),
+        ConfiguredPlugin {
+            settings: serde_json::json!({"allow_unreviewed_activation":true}),
+            ..ConfiguredPlugin::static_default()
+        },
+    );
     PluginHost::new(PluginHostBuildConfig {
         static_plugins: vec![StaticPluginRegistration::new(
             "agena.plan".parse().unwrap(),
@@ -432,7 +438,13 @@ async fn hot_reload_recreates_static_plan_plugin_against_successor_host() {
     // Hot-reload: byte-identical config + the previous host, exactly how
     // RuntimeSnapshot::build_inner derives previous_plugins.
     let mut list = BTreeMap::new();
-    list.insert("agena.plan".to_string(), ConfiguredPlugin::static_default());
+    list.insert(
+        "agena.plan".to_string(),
+        ConfiguredPlugin {
+            settings: serde_json::json!({"allow_unreviewed_activation":true}),
+            ..ConfiguredPlugin::static_default()
+        },
+    );
     let previous_config = PluginsConfig {
         list,
         ..Default::default()

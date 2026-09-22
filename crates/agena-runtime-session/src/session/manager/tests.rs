@@ -5464,6 +5464,8 @@ async fn background_launch_receipt_is_terminal_and_needs_no_guard() {
         .pending_tool_by_part_id(tool_part_id)
         .expect("resolve pending shell tool");
     let output = crate::tool::ToolPayloadOutput::Shell {
+        terminal: None,
+        dropped_bytes: 0,
         action: "run".to_owned(),
         shell: Some(agena_domain::ProcessShell::Bash),
         background: true,

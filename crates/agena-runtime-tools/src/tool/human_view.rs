@@ -2790,6 +2790,10 @@ impl BuiltinHumanRenderer {
                 }
             }
             "lsp.diagnostics" => {
+                let state = object
+                    .get("state")
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown");
                 if let Some(entries) = Self::object_array(object, "entries") {
                     if let Some(table) = Self::table_block(
                         "lsp-diagnostics",
@@ -2800,7 +2804,7 @@ impl BuiltinHumanRenderer {
                     } else {
                         blocks.push(Self::markdown_block(
                             "lsp-diagnostics",
-                            "### Diagnostics\nNo diagnostics.",
+                            if state=="current" {"### Diagnostics\nNo diagnostics for the synchronized version."} else {"### Diagnostics\nCurrent-version diagnostics are not confirmed; do not infer clean code."},
                         ));
                     }
                 } else {
@@ -3849,6 +3853,70 @@ impl BuiltinHumanRenderer {
     ) -> Vec<ViewBlock> {
         let mut blocks = Vec::new();
         match key {
+            "fs.output_read" | "fs.output_search" => {
+                let fields = [
+                    ("Output ID", Self::object_text(object, "output_id")),
+                    ("Next byte offset", Self::object_text(object, "next_offset")),
+                    (
+                        "Captured bytes",
+                        Self::object_text(object, "captured_bytes"),
+                    ),
+                    (
+                        "Original bytes",
+                        Self::object_text(object, "original_bytes"),
+                    ),
+                    (
+                        "Capture truncated",
+                        Self::object_text(object, "capture_truncated"),
+                    ),
+                ];
+                if let Some(block) = Self::details_block_if_nonempty(
+                    "captured-output-meta",
+                    "Captured output",
+                    &fields,
+                ) {
+                    blocks.push(block);
+                }
+                if object.get("capture_truncated").and_then(Value::as_bool) == Some(true) {
+                    blocks.push(Self::markdown_block(
+                        "captured-output-warning",
+                        "Only retained bytes are available. Missing content was not searched or recovered.",
+                    ));
+                }
+                if key == "fs.output_read" {
+                    match object.get("text").and_then(Value::as_str) {
+                        Some(text) if !text.is_empty() => blocks.push(Self::markdown_code_block(
+                            "captured-output-text",
+                            "Captured text",
+                            text,
+                            None,
+                        )),
+                        _ => blocks.push(Self::markdown_block(
+                            "captured-output-empty",
+                            "### Captured text\nNo text returned for this range.",
+                        )),
+                    }
+                } else if let Some(matches) = Self::object_array(object, "matches") {
+                    if let Some(table) = Self::scalar_table(
+                        "captured-output-matches",
+                        "Matches in captured output",
+                        matches,
+                        &[("offset", "Byte offset"), ("preview", "Preview")],
+                    ) {
+                        blocks.push(table);
+                    } else {
+                        blocks.push(Self::markdown_block(
+                            "captured-output-empty",
+                            "### Captured output search\nNo matches in the retained content.",
+                        ));
+                    }
+                } else {
+                    blocks.push(Self::markdown_block(
+                        "captured-output-empty",
+                        "### Captured output search\nNo search result returned.",
+                    ));
+                }
+            }
             "fs.write" => {
                 let fields = [
                     ("Path", Self::object_text(object, "path")),
@@ -5155,6 +5223,7 @@ impl BuiltinHumanRenderer {
                     loaded_paths,
                     truncated,
                     attachment,
+                    ..
                 } => {
                     let has_preview = preview
                         .as_deref()
@@ -5389,6 +5458,8 @@ impl BuiltinHumanRenderer {
                 }
                 ToolPayloadOutput::Shell {
                     action,
+                    terminal,
+                    dropped_bytes,
                     shell,
                     background,
                     process_id,
@@ -5402,7 +5473,22 @@ impl BuiltinHumanRenderer {
                     dropped_lines,
                     exit_code,
                 } => {
-                    if action == "run" {
+                    if let Some(screen) = terminal {
+                        blocks.push(ViewBlock::Log {
+                            id: Some("terminal-screen".into()),
+                            stream: agena_domain::CommandOutputStream::Stdout,
+                            text: Self::bounded_human_text(&screen.text),
+                        });
+                        if let Some(output) = output.filter(|text| !text.is_empty()) {
+                            blocks.push(ViewBlock::Log {
+                                id: Some("terminal-output".into()),
+                                stream: agena_domain::CommandOutputStream::Stdout,
+                                text: Self::bounded_human_text(
+                                    &super::terminal_tool::display_output(&output),
+                                ),
+                            });
+                        }
+                    } else if action == "run" {
                         let event_stdout = events
                             .iter()
                             .filter(|event| {
@@ -5456,6 +5542,9 @@ impl BuiltinHumanRenderer {
                         }
                     }
                     let mut fields = vec![("Action", action.clone())];
+                    if dropped_bytes > 0 {
+                        fields.push(("Dropped bytes", dropped_bytes.to_string()));
+                    }
                     if let Some(shell) = shell {
                         fields.push(("Shell", shell.to_string()));
                     }
@@ -5752,7 +5841,7 @@ impl BuiltinHumanRenderer {
                         contents.unwrap_or_else(|| "No hover information.".into()),
                     ));
                 }
-                ToolPayloadOutput::LspDiagnostics { entries } => {
+                ToolPayloadOutput::LspDiagnostics { entries, state, .. } => {
                     let values = entries
                         .iter()
                         .cloned()
@@ -5767,7 +5856,7 @@ impl BuiltinHumanRenderer {
                     } else {
                         blocks.push(Self::markdown_block(
                             "diagnostics",
-                            "### Diagnostics\nNo diagnostics.",
+                            if state=="current" {"### Diagnostics\nNo diagnostics for the synchronized version."} else {"### Diagnostics\nCurrent-version diagnostics are not confirmed; do not infer clean code."},
                         ));
                     }
                 }

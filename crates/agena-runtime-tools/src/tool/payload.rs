@@ -180,9 +180,11 @@ impl ToolPayloadInput {
             ("agena", "fs", "glob") => ("glob", None),
             ("agena", "fs", "grep") => ("grep", None),
             ("agena", "fs", "apply_patch") => ("apply_patch", None),
-            ("agena", "shell", action @ ("run" | "list" | "logs" | "stop")) => {
-                ("shell", Some(action))
-            }
+            (
+                "agena",
+                "shell",
+                action @ ("run" | "list" | "logs" | "stop" | "write" | "resize" | "signal"),
+            ) => ("shell", Some(action)),
             ("agena", "monitor", action @ ("start" | "stop")) => ("monitor", Some(action)),
             ("agena", "cron", "create") => ("cron_create", None),
             ("agena", "cron", "list") => ("cron_list", None),
@@ -242,6 +244,8 @@ pub struct ReadAttachmentOutput {
 /// Output payload of a tool execution.
 pub enum ToolPayloadOutput {
     Read {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        read_info: Option<serde_json::Value>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         preview: Option<String>,
         #[serde(default, skip_serializing_if = "is_false")]
@@ -331,6 +335,10 @@ pub enum ToolPayloadOutput {
     },
     Shell {
         action: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        terminal: Option<agena_domain::TerminalScreen>,
+        #[serde(default)]
+        dropped_bytes: u64,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         shell: Option<ProcessShell>,
         #[serde(default)]
@@ -441,6 +449,12 @@ pub enum ToolPayloadOutput {
     },
     LspDiagnostics {
         entries: Vec<String>,
+        #[serde(default)]
+        state: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        document_version: Option<i32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reported_version: Option<i32>,
     },
 }
 
@@ -752,6 +766,22 @@ fn payload_name_for_invocation(
     invocation_name: &str,
     input: &mut serde_json::Map<String, serde_json::Value>,
 ) -> Option<String> {
+    for action in ["write", "resize", "signal"] {
+        if [
+            format!("shell.{action}"),
+            format!("agena.shell.{action}"),
+            format!("agena_shell_{action}"),
+        ]
+        .iter()
+        .any(|name| name == invocation_name)
+        {
+            input.insert(
+                "action".to_owned(),
+                serde_json::Value::String(action.to_owned()),
+            );
+            return Some("shell".to_owned());
+        }
+    }
     match invocation_name {
         "agena_web__fetch" | "web.fetch" | "web_fetch" => return Some("web_fetch".to_string()),
         "agena_web__search" | "web.search" | "web_search" => {
@@ -797,6 +827,27 @@ fn payload_name_for_invocation(
             );
             return Some("shell".to_string());
         }
+        "shell.write" | "agena_shell_write" | "agena.shell.write" => {
+            input.insert(
+                "action".to_string(),
+                serde_json::Value::String("write".to_string()),
+            );
+            return Some("shell".to_string());
+        }
+        "shell.resize" | "agena_shell_resize" | "agena.shell.resize" => {
+            input.insert(
+                "action".to_string(),
+                serde_json::Value::String("resize".to_string()),
+            );
+            return Some("shell".to_string());
+        }
+        "shell.signal" | "agena_shell_signal" | "agena.shell.signal" => {
+            input.insert(
+                "action".to_string(),
+                serde_json::Value::String("signal".to_string()),
+            );
+            return Some("shell".to_string());
+        }
         "monitor.start" | "agena_monitor_start" | "agena.monitor.start" => {
             input.insert(
                 "action".to_string(),
@@ -837,6 +888,15 @@ fn payload_name_for_output_tool(tool_name: &str) -> Option<String> {
     if matches!(
         tool_name,
         "shell"
+            | "shell.write"
+            | "shell.resize"
+            | "shell.signal"
+            | "agena.shell.write"
+            | "agena.shell.resize"
+            | "agena.shell.signal"
+            | "agena_shell_write"
+            | "agena_shell_resize"
+            | "agena_shell_signal"
             | "shell.run"
             | "shell.list"
             | "shell.logs"
@@ -879,6 +939,9 @@ mod tests {
             ("agena.shell", "list"),
             ("agena.shell", "logs"),
             ("agena.shell", "stop"),
+            ("agena.shell", "write"),
+            ("agena.shell", "resize"),
+            ("agena.shell", "signal"),
             ("agena.monitor", "start"),
             ("agena.monitor", "stop"),
             ("agena.cron", "create"),

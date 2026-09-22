@@ -549,7 +549,14 @@ fn tool_result_fragment(
     // actually returned.
     if matches!(
         key,
-        "shell.run" | "shell.list" | "shell.logs" | "shell.stop" | "shell"
+        "shell.run"
+            | "shell.list"
+            | "shell.logs"
+            | "shell.stop"
+            | "shell.write"
+            | "shell.resize"
+            | "shell.signal"
+            | "shell"
     ) && let Some(fragment) = shell_result_fragment(key, object)
     {
         return Some(fragment);
@@ -893,6 +900,32 @@ fn tool_result_fragment(
                 .and_then(value_as_u64)
             {
                 return Some(format!("loaded · {}", format_bytes(size)));
+            }
+        }
+        "fs.output_read" | "fs.output_search" => {
+            let fact = if key == "fs.output_read" {
+                object
+                    .get("text")
+                    .and_then(serde_json::Value::as_str)
+                    .map(|text| format!("{} read", format_bytes(text.len() as u64)))
+            } else {
+                object
+                    .get("matches")
+                    .and_then(serde_json::Value::as_array)
+                    .map(|matches| format_count(matches.len(), "matches"))
+            };
+            if let Some(mut fact) = fact {
+                if object.get("next_offset").and_then(value_as_u64).is_some() {
+                    fact.push_str(" · more available");
+                }
+                if object
+                    .get("capture_truncated")
+                    .and_then(serde_json::Value::as_bool)
+                    == Some(true)
+                {
+                    fact.push_str(" · capture truncated");
+                }
+                return Some(fact);
             }
         }
         "fs.read_many" => {
@@ -2541,6 +2574,8 @@ fn tool_action_label(tool_name: &str) -> String {
     match key.as_str() {
         "fs.read" | "read" => "Read".to_owned(),
         "fs.read_many" => "Read files".to_owned(),
+        "fs.output_read" => "Read captured output".to_owned(),
+        "fs.output_search" => "Search captured output".to_owned(),
         "fs.write" | "write" => "Write".to_owned(),
         "fs.apply_patch" | "apply_patch" => "Apply patch".to_owned(),
         "fs.glob" | "glob" => "Find files".to_owned(),
@@ -2554,6 +2589,9 @@ fn tool_action_label(tool_name: &str) -> String {
         "shell.list" => "List processes".to_owned(),
         "shell.logs" => "Show process logs".to_owned(),
         "shell.stop" => "Stop process".to_owned(),
+        "shell.write" => "Interact with terminal".to_owned(),
+        "shell.resize" => "Resize terminal".to_owned(),
+        "shell.signal" => "Signal terminal".to_owned(),
         "monitor.start" => "Start monitor".to_owned(),
         "monitor.stop" => "Stop monitor".to_owned(),
         "tools.search" | "tools_search" | "tool_search" => "Search tools".to_owned(),
@@ -2758,6 +2796,10 @@ fn invocation_title_subject(tool_name: &str, input: &serde_json::Value) -> Strin
         &["monitor_id", "id"]
     } else if key.ends_with("fs.read") || key.ends_with("fs.write") {
         &["file_path", "path", "name"]
+    } else if key.ends_with("fs.output_read") {
+        &["output_id"]
+    } else if key.ends_with("fs.output_search") {
+        &["pattern", "output_id"]
     } else if key.ends_with("fs.read_many") {
         &["paths", "path"]
     } else if key.ends_with("fs.replace")

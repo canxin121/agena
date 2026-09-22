@@ -1,10 +1,10 @@
 {
   "counts": {
     "bundled_skills": 14,
-    "execution_tools": 137,
+    "execution_tools": 142,
     "gateway_tools": 4,
     "plugins": 22,
-    "tools": 141
+    "tools": 146
   },
   "plugins": [
     {
@@ -512,9 +512,9 @@
         {
           "canonical_name": "agena.fs.apply_patch",
           "conditional": null,
-          "definition_identity": "1add9bc4f024db5dcc708847d2d3b16cac9ff4a70667b032ca50874d8b2e20aa",
+          "definition_identity": "e06a78065b3bd3ef45cba522a79d780afd12bd332325875a468fcd5fbc8e3217",
           "gateway": false,
-          "input_schema_sha256": "d303f3bc9f2877108249ee8cc57615679e7875d6c2d11707ba00da3bfeca766c",
+          "input_schema_sha256": "9616535da79ffb0307d5b7591d0b86cb97bb6f2e6ae3e72917340880a7cc170c",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "mutate",
@@ -545,6 +545,28 @@
             "query",
             "filesystem",
             "discovery"
+          ]
+        },
+        {
+          "canonical_name": "agena.fs.output_read",
+          "conditional": null,
+          "definition_identity": "ed918eba2342b4406336351681127e91a7d8d2bbfeadac0b16d23fc6bef2cc76",
+          "gateway": false,
+          "input_schema_sha256": "67ff34f403e57324daa79fec42030bbc6dc3ef4531f0ec9bd2454e3480d74cfc",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "query"
+          ]
+        },
+        {
+          "canonical_name": "agena.fs.output_search",
+          "conditional": null,
+          "definition_identity": "15c950d638fa4769dafcc064840ada68daf6bd6c16a997a2f486cffd9ef6d338",
+          "gateway": false,
+          "input_schema_sha256": "1f94efea308c32aeb36e0f94fa75e98991aca0fd4d255f8510c5335aa6520ae2",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "query"
           ]
         },
         {
@@ -1063,9 +1085,9 @@
         {
           "canonical_name": "agena.memory.write",
           "conditional": null,
-          "definition_identity": "22a92fc48492d88f3c4ee5012a4181c7388009aed8b325eaac2818e4174af582",
+          "definition_identity": "011f927b0ed40855c2f082bd03f40b13c6879d64ff7de68d917dd232d270933c",
           "gateway": false,
-          "input_schema_sha256": "a71d31a0d3576a78d856aec46f090c811ed8690dceb69052a85b20e62ca033d5",
+          "input_schema_sha256": "30e6eacbf493cf90aea8c8a0e82f10e1cd02d5e7ee4256bdec84c3bf2920f9b7",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "mutate",
@@ -1118,9 +1140,9 @@
         {
           "canonical_name": "agena.notebook.edit_cell",
           "conditional": null,
-          "definition_identity": "e9e9ec975896b322367058f948e81c5823fe2eb4490cf694112186300a329f7f",
+          "definition_identity": "177f8de8273279fad18deec07f93ff9fecaf3f58aec71fc84755865f074a29aa",
           "gateway": false,
-          "input_schema_sha256": "5cf7ca569c8ea6b16856a58ec0f3eb15509e6f463133ac4ddf30f339df609870",
+          "input_schema_sha256": "70afabb3bfce7ace66a576863ee82de68691c1007115ec03044591fc15851a04",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "mutate",
@@ -1157,9 +1179,9 @@
         {
           "canonical_name": "agena.plan.edit",
           "conditional": null,
-          "definition_identity": "bd312cfa9245e910947351f2dbad877e8c477dd4bd5f1cc59562ab6618ce16de",
+          "definition_identity": "fddeda83dda398a17c4bd9498923aa643fb96883b07672b13dce314a2da3f777",
           "gateway": false,
-          "input_schema_sha256": "04e78be5863c3945499288acaa63688778d1a197823c4c15db5f100330910b5d",
+          "input_schema_sha256": "4afc9e44d520c195aee77b84aa1d71fb9a421398d2b32e52740c15e970fef3bd",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "mutate",
@@ -1181,9 +1203,9 @@
         {
           "canonical_name": "agena.plan.phase",
           "conditional": null,
-          "definition_identity": "5d24acda31059ef56d34ceb659b694e41f8e7085ce81ca084c1397bd2951b20f",
+          "definition_identity": "69fa9333c714bc2f91a5ea30244627c6597d87762e8f9273d256c2994ea7780d",
           "gateway": false,
-          "input_schema_sha256": "78c4d0de27ca03ea506ba5e15af69ae6664fd3287debc7fb2920ed8b0a598724",
+          "input_schema_sha256": "1b682054b14363877cfbadb3365ceecedb39463ce27d13c5a46aa00da8e67492",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "mutate",
@@ -1207,9 +1229,9 @@
         {
           "canonical_name": "agena.plan.set",
           "conditional": null,
-          "definition_identity": "dd6a9b606abaab64c7a0396b0d029bec8a42da51f1d14655856eead547c5e8b8",
+          "definition_identity": "de9d70eb40eb2314d8078f9a74d2a476ae8a5832b399dc227360cd99fbea1d4b",
           "gateway": false,
-          "input_schema_sha256": "dec5d11933b67252886557b673672f208b42c7ca4c1e5c56845c097b490722ea",
+          "input_schema_sha256": "252cff84114a79eeb48e09abf4a4a1cb7420a1da59b4dbc7475f9236fd51d655",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "mutate",
@@ -1229,9 +1251,9 @@
         {
           "canonical_name": "agena.report.findings",
           "conditional": null,
-          "definition_identity": "36db7555031640fc518055b228fa6507771a445498ef04415c9a3e70643f5466",
+          "definition_identity": "adb3947d5d4850cda1f6b99e01aa4aa66c6304e96855e07fbf60b41f4e0e9585",
           "gateway": false,
-          "input_schema_sha256": "137ac77f007b17155ad113da431cb50df849900a51b960371bf38a53bfba0d31",
+          "input_schema_sha256": "f3166641f975ee521293082bc5c3f9ebdc50be5521b734b60cdadb5eb06627ad",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "mutate",
@@ -1322,9 +1344,9 @@
         {
           "canonical_name": "agena.settings.delete",
           "conditional": null,
-          "definition_identity": "907f0ee8fb9fc5cbf2b329f1606184e37a21e6c6b9d971eeffb1485c776b757e",
+          "definition_identity": "581441a6d0afa770f4b45409172bb3faf166f195252b84cdf984c1c03b6910f2",
           "gateway": false,
-          "input_schema_sha256": "b71cb2aa7bb3d977a13d6b893e06dd36d9b756ee2838e3c3de4c3ef0d7c6e111",
+          "input_schema_sha256": "4539023c129f0b6aea1074cb5dfb021a98c5833e0fa586bbb60fe90c7ffb6c29",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "mutate",
@@ -1381,9 +1403,9 @@
         {
           "canonical_name": "agena.settings.patch",
           "conditional": null,
-          "definition_identity": "08faebebf584a5d763f3b803c6e4785bfc9ad232023f785b61c28fe7cadfb8e1",
+          "definition_identity": "9fdaf3ba1f51f834e04309cc05e646409a93b35cc12a877c0dbd8a61815be851",
           "gateway": false,
-          "input_schema_sha256": "63c7a034de0f7aea6321437392e000c4975703578c1ef7e8d51636d310dc9fb9",
+          "input_schema_sha256": "89ea7a9df828d61629f2dcd53f10a281b4525ba7dd263ba374ba032aedb7d71d",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "mutate",
@@ -1395,9 +1417,9 @@
         {
           "canonical_name": "agena.settings.set",
           "conditional": null,
-          "definition_identity": "8665650aaa8b8935a417ab054848c308b4a84545daea1b9cc5a47643e2a9eabd",
+          "definition_identity": "5d8861237f2a5a1cfdfbfdf86cb0b43d8ec6b90284cc29dd86857b453daeea8a",
           "gateway": false,
-          "input_schema_sha256": "b6d04fe5bf8903ac9d95347e0a775749fd0010e4510cfd2b0c64073d52e61604",
+          "input_schema_sha256": "0df68b49c818f69781c581826edaef48c9b17dd56636082161be58a65bd8bb59",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "mutate",
@@ -1454,13 +1476,36 @@
           ]
         },
         {
-          "canonical_name": "agena.shell.run",
+          "canonical_name": "agena.shell.resize",
           "conditional": null,
-          "definition_identity": "02e4aaa73557b57d6ff6599f30a26487d46bf1d3ec2448fde07142c8439e1bd6",
+          "definition_identity": "5c4019b4734d52da0c024bbf9981186a678daaa8f928af26e7ecb5e7775bcb5f",
           "gateway": false,
-          "input_schema_sha256": "d25c72c2a810dd5b6d15eef70247aea741685337dc424105bc231f5aa6b6cb0b",
+          "input_schema_sha256": "c554d95e29c8f350dfd6004d55329da410dcbd7be7343285b6ceb54f45545559",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
+            "mutate"
+          ]
+        },
+        {
+          "canonical_name": "agena.shell.run",
+          "conditional": null,
+          "definition_identity": "111870ce9a0ac86e4c7574769d00c0d925c0389b0e2bc653348ecb2e8103d52d",
+          "gateway": false,
+          "input_schema_sha256": "b8667e8a3b22e82fb8335a011d36b891511ef4a37d29a764e0bc761720a8a341",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "execute"
+          ]
+        },
+        {
+          "canonical_name": "agena.shell.signal",
+          "conditional": null,
+          "definition_identity": "8eca533958bf703d2486b2889c51e89e09d9f6d7ff8343fe32c2c190c84fd5e7",
+          "gateway": false,
+          "input_schema_sha256": "bf0e663439569b839e0156899a7e5378ad56ff47f72870474c04c7fd7fdfde8f",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "mutate",
             "execute"
           ]
         },
@@ -1470,6 +1515,18 @@
           "definition_identity": "2fd8fa4b056432eb6c917b379a57848a52aebac0b1c7a0be3a8ab8ae043ad785",
           "gateway": false,
           "input_schema_sha256": "0b746767db7a0e15810a548b448efe51100c66972c397740ed4f45568831d06e",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "mutate",
+            "execute"
+          ]
+        },
+        {
+          "canonical_name": "agena.shell.write",
+          "conditional": null,
+          "definition_identity": "5045334fda79bb7e24bd2f5ea51ce0f8d717ebba5a1f1e22927f8fcb9d0c9f68",
+          "gateway": false,
+          "input_schema_sha256": "2948fb5e5185e166dc0723854cd2bcb1573866ac67508bae9d9688592a1b7a13",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "mutate",
@@ -1503,9 +1560,9 @@
         {
           "canonical_name": "agena.skills.delete",
           "conditional": null,
-          "definition_identity": "62ce1db1e5b3a2d5813a8a76db980aed3f04998b3c69b010ac6a6839f4ebc849",
+          "definition_identity": "5c93f623deeb38bdf736811dcfbbbc4e2879863d867f66a3988b500b8d0e2218",
           "gateway": false,
-          "input_schema_sha256": "a86c982774269c9ea7312d0bda1f309bda3b39af8b78e50ca3a35e2edff877e3",
+          "input_schema_sha256": "50eb8389cf1cca79bd7abb73b20cf76d9f197cf596092a70dbc730c94ea73139",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "mutate",
@@ -1563,9 +1620,9 @@
         {
           "canonical_name": "agena.skills.update",
           "conditional": null,
-          "definition_identity": "6dff5683dad29de1e9aec4bb727e371081cb1167a68684ca53387439936df17a",
+          "definition_identity": "b468413a7959e4ff72916aa1075f19a53bead88fc6292769971aeb15742bfea3",
           "gateway": false,
-          "input_schema_sha256": "fb568179e2c742ddd781ea3cb7e81b242499c55c88b27686cbf40ce8ba23e062",
+          "input_schema_sha256": "218db7dd0a5abee8c146eed5be0dba810cc2807e50e3012ab52987abc97f7456",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "mutate",
@@ -1826,9 +1883,9 @@
         {
           "canonical_name": "agena.web.browser_click",
           "conditional": null,
-          "definition_identity": "85f5802f90aa2488cdbf50adc995aea31d79c5dacb6f05feca8a2a86905231ec",
+          "definition_identity": "e5d8884c448032fec4c8924608fee78ca930577f32bc210abba112e19f662f29",
           "gateway": false,
-          "input_schema_sha256": "7b43532bc7fc1799c3c08d94fc9db820ab80786aaf12df6865057e5a206d77b0",
+          "input_schema_sha256": "cf0347bd16a5a1aa44b7f8b71ff50f71281461d0339f8256cf585aed5ab3e34c",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "network",
@@ -1907,7 +1964,7 @@
         {
           "canonical_name": "agena.web.browser_shutdown",
           "conditional": null,
-          "definition_identity": "a9b442286afae2afa1c3838e1bf3f58146feedc0a9bd73e991596ae9d456d1d0",
+          "definition_identity": "17bb65cc7134eee7e18091331ca6c2f043296eed9d39b65da0c3b1780310879c",
           "gateway": false,
           "input_schema_sha256": "99334726611ccf58a148b0814696bfa6fe08c1b2d027e946beccf5a74331c9aa",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
@@ -1933,9 +1990,9 @@
         {
           "canonical_name": "agena.web.browser_type",
           "conditional": null,
-          "definition_identity": "c4b5157e8c7fb227a8efcf768122566341d641cb8044b0b212656eb5549f163f",
+          "definition_identity": "8c7c0c9d5dff46b05ee3f245b404e8e566911568fb6cff07ca35c3d3d1a4cc2b",
           "gateway": false,
-          "input_schema_sha256": "25bfff4f04e10bb8c814f27abbb02ccaa5d58ae86044c227d076162afab75ab6",
+          "input_schema_sha256": "c375533cecfb36d9e56ee2377a68fd471d270defe460cd342a2ef1af083f1496",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "network",

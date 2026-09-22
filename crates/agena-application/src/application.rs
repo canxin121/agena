@@ -471,6 +471,7 @@ impl Application {
                     "gemini": versions.gemini,
                 }),
                 options: agena_runtime::ConfigSettingsEditOptions {
+                    expected_revision: None,
                     dry_run: false,
                     validate: true,
                     reload: true,

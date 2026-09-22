@@ -1,5 +1,7 @@
 //! The `Scheduler` runtime loop.
 
+mod owned;
+
 use std::sync::Arc;
 use std::time::Duration;
 

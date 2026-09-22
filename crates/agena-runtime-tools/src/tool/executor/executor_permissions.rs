@@ -307,6 +307,7 @@ impl ToolExecutor {
             let command = input
                 .pointer("/args/command")
                 .or_else(|| input.get("command"))
+                .or_else(|| input.get("chars"))
                 .and_then(serde_json::Value::as_str)
                 .unwrap_or_default();
             if !command.is_empty() {

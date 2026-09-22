@@ -1020,6 +1020,8 @@ impl HostClient for RuntimeHostClient {
         };
         let summary = registry
             .start(MonitorStartParams {
+                argv: None,
+                owner: None,
                 process_id: None,
                 description: req.label.unwrap_or_else(|| command.clone()),
                 command,

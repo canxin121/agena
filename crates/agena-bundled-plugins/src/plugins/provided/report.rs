@@ -63,7 +63,6 @@ const fn default_confidence() -> f64 {
 #[input(
     trim("summary", "findings[].file", "findings[].title", "findings[].body"),
     max_items("findings", 200),
-    non_empty("findings[].file", "findings[].title", "findings[].body"),
     minimum("findings[].line", 1),
     minimum("findings[].end_line", 1),
     minimum("findings[].confidence", 0),
@@ -96,6 +95,32 @@ impl ReportPlugin {
         concurrency_safe
     )]
     async fn invoke_findings(&self, input: &ReportFindingsInput) -> SdkResult<ToolInvokeOutput> {
+        // An empty list is a valid "no findings" report. Validate members
+        // individually rather than requiring wildcard matches to exist.
+        for finding in &input.findings {
+            if finding.file.trim().is_empty()
+                || finding.title.trim().is_empty()
+                || finding.body.trim().is_empty()
+            {
+                return Err(agena_plugin_host::PluginError::invalid_params(
+                    "each finding requires a nonempty file, title, and body",
+                ));
+            }
+            if finding.line == 0
+                || finding.end_line == Some(0)
+                || !finding.confidence.is_finite()
+                || !(0.0..=1.0).contains(&finding.confidence)
+            {
+                return Err(agena_plugin_host::PluginError::invalid_params(
+                    "finding lines must be positive and confidence must be between 0 and 1",
+                ));
+            }
+            if finding.end_line.is_some_and(|end| end < finding.line) {
+                return Err(agena_plugin_host::PluginError::invalid_params(
+                    "finding end_line must not precede line",
+                ));
+            }
+        }
         let mut lines = Vec::new();
         if !input.summary.is_empty() {
             lines.push(input.summary.clone());
@@ -138,7 +163,11 @@ impl ReportPlugin {
         .collect::<std::collections::BTreeMap<_, _>>();
         Ok(ToolInvokeOutput::from_parts(
             format!("{} finding(s)", input.findings.len()),
-            input.summary.clone(),
+            if input.summary.trim().is_empty() {
+                format!("{} finding(s)", input.findings.len())
+            } else {
+                input.summary.clone()
+            },
             lines.join("\n\n"),
             Some(serde_json::json!({
                 "summary": input.summary,

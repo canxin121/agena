@@ -461,6 +461,11 @@ impl BackgroundCompletionBridge {
     /// events; plain/monitored shells keep their logs in the streaming buffer
     /// (queryable via `shell.logs`).
     pub(crate) fn settle_monitor_event(&self, event: &ProcessEvent, summary: &ProcessSummary) {
+        // PTY output is consumed interactively, not delivered as continuous
+        // monitor notifications. Avoid spawning a DB lookup task per raw chunk.
+        if summary.tty {
+            return;
+        }
         let bridge = self.clone();
         let process_id = summary.process_id.clone();
         let event_seq = event.seq;

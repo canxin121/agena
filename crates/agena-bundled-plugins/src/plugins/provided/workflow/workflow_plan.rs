@@ -442,38 +442,6 @@ impl WorkflowPlugin {
             .map_err(|err| PluginError::internal(format!("invalid stored plan payload: {err}")))
     }
 
-    pub(in crate::plugins::provided::workflow) async fn save_active_plan(
-        &self,
-        plan: &WorkflowPlan,
-    ) -> SdkResult<()> {
-        let value =
-            serde_json::to_string_pretty(plan).map_err(|err| PluginError::internal_error(&err))?;
-        let host = self.host()?;
-        host.storage_set(HostStorageSetRequest {
-            scope: HostStorageScope::Session,
-            visibility: HostStorageVisibility::Shared,
-            namespace: PLAN_NAMESPACE.to_string(),
-            key: PLAN_KEY_ACTIVE.to_string(),
-            value,
-        })
-        .await?;
-        self.sync_plan_display(Some(plan)).await?;
-        Ok(())
-    }
-
-    pub(in crate::plugins::provided::workflow) async fn clear_active_plan(&self) -> SdkResult<()> {
-        let host = self.host()?;
-        host.storage_delete(HostStorageDeleteRequest {
-            scope: HostStorageScope::Session,
-            visibility: HostStorageVisibility::Shared,
-            namespace: PLAN_NAMESPACE.to_string(),
-            key: PLAN_KEY_ACTIVE.to_string(),
-        })
-        .await?;
-        self.sync_plan_display(None).await?;
-        Ok(())
-    }
-
     pub(in crate::plugins::provided::workflow) async fn sync_plan_display(
         &self,
         plan: Option<&WorkflowPlan>,
@@ -612,6 +580,9 @@ impl WorkflowPlugin {
                 .unwrap_or(self.config()?.plan.default_autorun),
         };
         Ok(WorkflowPlan {
+            plan_id: uuid::Uuid::new_v4().to_string(),
+            revision: String::new(),
+            display_warning: None,
             title,
             objective,
             phase: WorkflowPlanPhase::Planning,
@@ -878,7 +849,15 @@ impl WorkflowPlugin {
         prefix: &str,
         plan: &WorkflowPlan,
     ) -> String {
-        format!("{prefix}\n{}", Self::plan_summary_text(plan))
+        format!(
+            "{prefix}\nRevision: {}\n{}{}",
+            plan.revision,
+            Self::plan_summary_text(plan),
+            plan.display_warning
+                .as_ref()
+                .map(|warning| format!("\nWarning: {warning}"))
+                .unwrap_or_default()
+        )
     }
 
     pub(in crate::plugins::provided::workflow) fn plan_current_text(plan: &WorkflowPlan) -> String {
@@ -899,11 +878,12 @@ impl WorkflowPlugin {
         plan: &WorkflowPlan,
         view: PlanGetView,
     ) -> String {
-        match view {
+        let text = match view {
             PlanGetView::Current => Self::plan_current_text(plan),
             PlanGetView::Summary => Self::plan_summary_text(plan),
             PlanGetView::Full => Self::workflow_plan_markdown(plan),
-        }
+        };
+        format!("Revision: {}\n{text}", plan.revision)
     }
 
     pub(in crate::plugins::provided::workflow) fn plan_get_payload(
@@ -1340,7 +1320,7 @@ impl WorkflowPlugin {
         review_kind: PlanReviewKind,
     ) -> SdkResult<ToolInvokeOutput> {
         Self::set_plan_phase(&mut plan, WorkflowPlanPhase::Planning, None)?;
-        self.save_active_plan(&plan).await?;
+        self.update_active_plan(&mut plan).await?;
 
         let response = self
             .host()?
@@ -1361,7 +1341,7 @@ impl WorkflowPlugin {
             requested_autorun,
             completion_summary,
         )?;
-        self.save_active_plan(&plan).await?;
+        self.update_active_plan(&mut plan).await?;
 
         let output_text = if Self::is_review_feedback_decision(&decision) {
             Self::plan_output_text(
@@ -1408,10 +1388,10 @@ use super::{
     Arc, AskUserRequest, AskUserToolInput, AvailablePluginRecord, AvailableToolRecord, BTreeMap,
     ContributionKind, HashMap, HashSet, HostAskUserOption, HostAskUserQuestion, HostClient,
     HostDisplayContributeRequest, HostDisplayRemoveRequest, HostGetSessionRequest,
-    HostRegisteredToolDescriptor, HostRenameSessionRequest, HostSession, HostStorageDeleteRequest,
-    HostStorageGetRequest, HostStorageScope, HostStorageSetRequest, HostStorageVisibility,
-    OnceLock, PLAN_DISPLAY_CONTRIBUTION_ID, PLAN_KEY_ACTIVE, PLAN_NAMESPACE,
-    PLAN_REVIEW_DECISION_APPROVE, PLAN_REVIEW_DECISION_APPROVE_ACTIVE_AUTORUN_OFF,
+    HostRegisteredToolDescriptor, HostRenameSessionRequest, HostSession, HostStorageGetRequest,
+    HostStorageScope, HostStorageVisibility, OnceLock, PLAN_DISPLAY_CONTRIBUTION_ID,
+    PLAN_KEY_ACTIVE, PLAN_NAMESPACE, PLAN_REVIEW_DECISION_APPROVE,
+    PLAN_REVIEW_DECISION_APPROVE_ACTIVE_AUTORUN_OFF,
     PLAN_REVIEW_DECISION_APPROVE_ACTIVE_AUTORUN_ON, PLAN_REVIEW_DECISION_APPROVE_REQUESTED,
     PLAN_REVIEW_DECISION_APPROVE_REQUESTED_PAUSE, PLAN_REVIEW_DECISION_CANCELLED,
     PLAN_REVIEW_DECISION_KEEP_PLANNING, PLAN_REVIEW_DECISION_REJECT, Path, PathBuf, PlanEditInput,

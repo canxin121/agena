@@ -48,6 +48,14 @@ pub(super) async fn execute_create_async(
             }
         }
     }
+    job.owner_workspace = Some(
+        executor
+            .workspace_root()
+            .canonicalize()
+            .map_err(ToolError::Io)?
+            .display()
+            .to_string(),
+    );
     let id = job.id;
     let next = job.next_fire_at.map(|t| t.to_rfc3339());
     scheduler
@@ -79,10 +87,17 @@ pub(super) async fn execute_create_async(
 pub(super) async fn execute_list_async(
     executor: &ToolExecutor,
     _input: &CronListToolInput,
+    context: &super::ToolRuntimeContext,
 ) -> Result<ToolPayloadExecution, ToolError> {
+    let workspace = executor
+        .workspace_root()
+        .canonicalize()
+        .map_err(ToolError::Io)?
+        .display()
+        .to_string();
     let scheduler = require_scheduler(executor)?;
     let jobs = scheduler
-        .list()
+        .list_owned(&workspace, context.session_id)
         .await
         .map_err(|error| ToolError::plugin(format!("cron_list: {error}")))?;
     let summaries: Vec<CronJobSummary> = jobs.into_iter().map(summarize).collect();
@@ -114,12 +129,19 @@ pub(super) async fn execute_list_async(
 pub(super) async fn execute_delete_async(
     executor: &ToolExecutor,
     input: &CronDeleteToolInput,
+    context: &super::ToolRuntimeContext,
 ) -> Result<ToolPayloadExecution, ToolError> {
+    let workspace = executor
+        .workspace_root()
+        .canonicalize()
+        .map_err(ToolError::Io)?
+        .display()
+        .to_string();
     let scheduler = require_scheduler(executor)?;
     let id = uuid::Uuid::parse_str(input.id.trim())
         .map_err(|e| ToolError::plugin(format!("cron_delete: invalid id: {e}")))?;
     let removed = scheduler
-        .remove(id)
+        .remove_owned(&workspace, context.session_id, id)
         .await
         .map_err(|error| ToolError::plugin(format!("cron_delete: {error}")))?;
     let view = ToolExecutionView::simple(
@@ -139,6 +161,7 @@ pub(super) async fn execute_delete_async(
 pub(super) async fn execute_update_async(
     executor: &ToolExecutor,
     input: &CronUpdateToolInput,
+    context: &super::ToolRuntimeContext,
 ) -> Result<ToolPayloadExecution, ToolError> {
     if input.prompt.is_none()
         && input.expression.is_none()
@@ -151,6 +174,12 @@ pub(super) async fn execute_update_async(
                 .to_string(),
         ));
     }
+    let workspace = executor
+        .workspace_root()
+        .canonicalize()
+        .map_err(ToolError::Io)?
+        .display()
+        .to_string();
     let scheduler = require_scheduler(executor)?;
     let id = parse_job_id("cron_update", input.id.as_str())?;
     let prompt = normalized_optional(input.prompt.clone());
@@ -159,7 +188,9 @@ pub(super) async fn execute_update_async(
     let misfire_policy = input.misfire_policy.map(scheduler_misfire_policy);
     let retry_policy = input.retry_policy.as_ref().map(scheduler_retry_policy);
     let updated = scheduler
-        .update(
+        .update_owned(
+            &workspace,
+            context.session_id,
             id,
             prompt,
             expression,
@@ -189,11 +220,18 @@ pub(super) async fn execute_update_async(
 pub(super) async fn execute_pause_async(
     executor: &ToolExecutor,
     input: &CronJobControlToolInput,
+    context: &super::ToolRuntimeContext,
 ) -> Result<ToolPayloadExecution, ToolError> {
+    let workspace = executor
+        .workspace_root()
+        .canonicalize()
+        .map_err(ToolError::Io)?
+        .display()
+        .to_string();
     let scheduler = require_scheduler(executor)?;
     let id = parse_job_id("cron_pause", input.id.as_str())?;
     let job = scheduler
-        .pause(id)
+        .pause_owned(&workspace, context.session_id, id)
         .await
         .map_err(|error| ToolError::plugin(format!("cron_pause: {error}")))?
         .ok_or_else(|| ToolError::plugin(format!("cron_pause: job {id} was not found")))?;
@@ -216,11 +254,18 @@ pub(super) async fn execute_pause_async(
 pub(super) async fn execute_resume_async(
     executor: &ToolExecutor,
     input: &CronJobControlToolInput,
+    context: &super::ToolRuntimeContext,
 ) -> Result<ToolPayloadExecution, ToolError> {
+    let workspace = executor
+        .workspace_root()
+        .canonicalize()
+        .map_err(ToolError::Io)?
+        .display()
+        .to_string();
     let scheduler = require_scheduler(executor)?;
     let id = parse_job_id("cron_resume", input.id.as_str())?;
     let job = scheduler
-        .resume(id)
+        .resume_owned(&workspace, context.session_id, id)
         .await
         .map_err(|error| ToolError::plugin(format!("cron_resume: {error}")))?
         .ok_or_else(|| ToolError::plugin(format!("cron_resume: job {id} was not found")))?;
@@ -251,7 +296,14 @@ pub(super) async fn execute_resume_async(
 pub(super) async fn execute_history_async(
     executor: &ToolExecutor,
     input: &CronHistoryToolInput,
+    context: &super::ToolRuntimeContext,
 ) -> Result<ToolPayloadExecution, ToolError> {
+    let workspace = executor
+        .workspace_root()
+        .canonicalize()
+        .map_err(ToolError::Io)?
+        .display()
+        .to_string();
     let scheduler = require_scheduler(executor)?;
     let filter_id = input
         .id
@@ -259,7 +311,12 @@ pub(super) async fn execute_history_async(
         .map(|id| parse_job_id("cron_history", id))
         .transpose()?;
     let mut entries = scheduler
-        .history(filter_id, input.limit as usize)
+        .history_owned(
+            &workspace,
+            context.session_id,
+            filter_id,
+            input.limit as usize,
+        )
         .await
         .map_err(|error| ToolError::plugin(format!("cron_history: {error}")))?
         .into_iter()

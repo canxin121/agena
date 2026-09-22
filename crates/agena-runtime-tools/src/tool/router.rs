@@ -55,9 +55,14 @@ pub fn permission_network_targets_for(
                     command.command.as_str(),
                     &command.network,
                 ),
+                ShellToolInput::Write { input } => {
+                    declared_shell_network_targets("shell.write", &input.chars, &input.network)
+                }
                 ShellToolInput::List {}
                 | ShellToolInput::Logs { .. }
-                | ShellToolInput::Stop { .. } => Ok(Vec::new()),
+                | ShellToolInput::Stop { .. }
+                | ShellToolInput::Resize { .. }
+                | ShellToolInput::Signal { .. } => Ok(Vec::new()),
             }
         }
         _ => Ok(Vec::new()),

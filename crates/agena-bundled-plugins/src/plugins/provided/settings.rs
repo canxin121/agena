@@ -179,6 +179,8 @@ struct SettingsValidateToolInput {
 #[input(trim("path"), non_empty("path"))]
 #[serde(deny_unknown_fields)]
 struct SettingsSetToolInput {
+    #[serde(default)]
+    expected_revision: Option<String>,
     path: String,
     value: JsonValue,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -195,6 +197,8 @@ struct SettingsSetToolInput {
 #[input(trim("path"), non_empty("path"))]
 #[serde(deny_unknown_fields)]
 struct SettingsDeleteToolInput {
+    #[serde(default)]
+    expected_revision: Option<String>,
     path: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     layer: Option<SettingsLayer>,
@@ -210,6 +214,8 @@ struct SettingsDeleteToolInput {
 #[input(trim("path"))]
 #[serde(deny_unknown_fields)]
 struct SettingsPatchToolInput {
+    #[serde(default)]
+    expected_revision: Option<String>,
     #[serde(default)]
     path: Option<String>,
     changes: JsonValue,
@@ -416,6 +422,7 @@ impl SettingsPlugin {
     ) -> SdkResult<ConfigSettingsEditOptions> {
         let config = self.config()?;
         Ok(ConfigSettingsEditOptions {
+            expected_revision: None,
             dry_run,
             validate: validate.unwrap_or(config.edits.validate_by_default),
             reload: reload.unwrap_or(config.edits.reload_after_write),
@@ -504,6 +511,7 @@ impl SettingsPlugin {
             ConfigSettingsSource::Effective => {
                 let (config_path, config_found) = meta.file(SettingsLayer::Global);
                 ConfigSettingsReadResponse {
+                    revision: None,
                     value: self
                         .effective_config_value(
                             resolve_effective_settings_path(scope, input.path.as_deref())?
@@ -576,6 +584,7 @@ impl SettingsPlugin {
                 .map_err(map_err)?;
                 let (config_path, config_found) = meta.file(SettingsLayer::Global);
                 crate::config::ConfigSettingsListResponse {
+                    revision: None,
                     config_path: config_path.clone(),
                     config_found,
                     source,
@@ -648,7 +657,8 @@ impl SettingsPlugin {
     async fn set(&self, input: SettingsSetToolInput) -> SdkResult<ToolInvokeOutput> {
         let layer = self.edit_layer(input.layer)?;
         let meta = self.config_meta().await?;
-        let options = self.edit_options(input.dry_run, input.validate, input.reload)?;
+        let mut options = self.edit_options(input.dry_run, input.validate, input.reload)?;
+        options.expected_revision = input.expected_revision.clone();
         let reload = options.reload;
         let response = set_layered_file_setting(
             meta.global_path.clone(),
@@ -686,7 +696,8 @@ impl SettingsPlugin {
     async fn delete(&self, input: SettingsDeleteToolInput) -> SdkResult<ToolInvokeOutput> {
         let layer = self.edit_layer(input.layer)?;
         let meta = self.config_meta().await?;
-        let options = self.edit_options(input.dry_run, input.validate, input.reload)?;
+        let mut options = self.edit_options(input.dry_run, input.validate, input.reload)?;
+        options.expected_revision = input.expected_revision.clone();
         let reload = options.reload;
         let response = delete_layered_file_setting(
             meta.global_path.clone(),
@@ -723,7 +734,8 @@ impl SettingsPlugin {
     async fn patch(&self, input: SettingsPatchToolInput) -> SdkResult<ToolInvokeOutput> {
         let layer = self.edit_layer(input.layer)?;
         let meta = self.config_meta().await?;
-        let options = self.edit_options(input.dry_run, input.validate, input.reload)?;
+        let mut options = self.edit_options(input.dry_run, input.validate, input.reload)?;
+        options.expected_revision = input.expected_revision.clone();
         let reload = options.reload;
         let response = patch_layered_file_settings(
             meta.global_path.clone(),
@@ -788,21 +800,49 @@ impl SettingsPlugin {
     {
         let mut payload =
             serde_json::to_value(&response).map_err(|err| PluginError::internal_error(&err))?;
-        let reload_request = match payload
+        let needs_reload = payload
             .get("reload_required")
             .and_then(JsonValue::as_bool)
             .unwrap_or(false)
-            && reload
-        {
-            true => Some(self.host()?.request_config_reload().await?),
-            false => None,
-        };
-        let text = if let Some(request) = reload_request {
-            insert_reload_request(&mut payload, request);
-            format!("{text} Runtime reload queued.")
+            && reload;
+        let dry_run = payload
+            .get("dry_run")
+            .and_then(JsonValue::as_bool)
+            .unwrap_or(false);
+        payload["committed"] = JsonValue::Bool(!dry_run);
+        let mut text = if needs_reload {
+            match self.host()?.request_config_reload().await {
+                Ok(request) => {
+                    insert_reload_request(&mut payload, request);
+                    payload["activation_state"] = JsonValue::String("queued".into());
+                    format!(
+                        "{text} Configuration saved; runtime reload queued, not yet confirmed active."
+                    )
+                }
+                Err(error) => {
+                    payload["activation_state"] = JsonValue::String("request_failed".into());
+                    payload["activation_warning"] =
+                        JsonValue::String(error.failure.user.fallback.clone());
+                    format!(
+                        "{text} Configuration was saved, but reload request failed: {}. Do not repeat the file edit; retry activation separately.",
+                        error.failure.user.fallback
+                    )
+                }
+            }
         } else {
+            payload["activation_state"] = JsonValue::String(
+                if dry_run {
+                    "not_committed"
+                } else {
+                    "not_requested"
+                }
+                .into(),
+            );
             text.to_owned()
         };
+        if let Some(revision) = payload.get("after_revision").and_then(JsonValue::as_str) {
+            text.push_str(&format!("\nResult document revision: {revision}"));
+        }
         insert_settings_layer(&mut payload, layer);
         redact_settings_payload(&mut payload);
         Ok(ToolInvokeOutput::from_parts(
@@ -933,11 +973,14 @@ fn output_with_layer<T>(
 where
     T: Serialize,
 {
-    let text = text.into();
+    let mut text = text.into();
     let mut payload =
         serde_json::to_value(payload).map_err(|err| PluginError::internal_error(&err))?;
     if let Some(layer) = layer {
         insert_settings_layer(&mut payload, layer);
+    }
+    if let Some(revision) = payload.get("revision").and_then(JsonValue::as_str) {
+        text.push_str(&format!("\nPersisted document revision: {revision}"));
     }
     redact_settings_payload(&mut payload);
     Ok(ToolInvokeOutput::from_parts(
@@ -1345,6 +1388,46 @@ mod tests {
         assert!(
             resolve_effective_settings_path(Some(SettingsScope::Config), Some("meta.config_path"))
                 .is_err()
+        );
+    }
+}
+
+#[cfg(test)]
+mod commit_tests {
+    use super::*;
+    #[tokio::test]
+    async fn failed_reload_after_save_preserves_commit_fact() {
+        let plugin = SettingsPlugin::new();
+        *plugin.host.write().unwrap() = Some(Arc::new(agena_plugin_host::sdk::NoopHostClient));
+        let output=plugin.edit_output("Settings updated","Saved.",serde_json::json!({"changed":true,"dry_run":false,"reload_required":true,"after_revision":"revision"}),true,SettingsLayer::Workspace).await.unwrap();
+        let payload = output.payload.unwrap();
+        assert_eq!(payload["committed"], true);
+        assert_eq!(payload["activation_state"], "request_failed");
+        assert!(output.output_text.contains("Do not repeat"));
+        assert!(
+            output
+                .output_text
+                .contains("Result document revision: revision")
+        );
+    }
+}
+
+#[cfg(test)]
+mod revision_text_tests {
+    use super::*;
+    #[test]
+    fn read_revision_is_available_to_text_only_clients() {
+        let output = output_with_layer(
+            "Settings read",
+            "Value",
+            &serde_json::json!({"revision":"read-version"}),
+            Some(SettingsLayer::Workspace),
+        )
+        .unwrap();
+        assert!(
+            output
+                .output_text
+                .contains("Persisted document revision: read-version")
         );
     }
 }

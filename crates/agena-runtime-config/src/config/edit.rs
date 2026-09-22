@@ -51,6 +51,9 @@ pub fn read_file_setting(
     let (config_found, file_value) = read_or_create_doc(&config_path)?;
     let value = get_json_path(&file_value, input.target.path.as_deref())?;
     Ok(ConfigSettingsReadResponse {
+        revision: Some(crate::runtime_config_settings_service::document_revision(
+            &file_value,
+        )),
         config_path,
         config_found,
         source: ConfigSettingsSource::File,
@@ -67,6 +70,9 @@ pub fn list_file_settings(
     let (config_found, file_value) = read_or_create_doc(&config_path)?;
     let items = list_json_path(&file_value, input.target.path.as_deref(), input.recursive)?;
     Ok(ConfigSettingsListResponse {
+        revision: Some(crate::runtime_config_settings_service::document_revision(
+            &file_value,
+        )),
         config_path,
         config_found,
         source: ConfigSettingsSource::File,
@@ -127,6 +133,18 @@ fn set_file_setting_impl(
     crate::with_config_file_write_lock(|| {
         let segments = required_path_segments(&input.path)?;
         let (config_found, mut doc) = read_or_create_doc(&config_path)?;
+        if input
+            .options
+            .expected_revision
+            .as_deref()
+            .is_some_and(|expected| {
+                expected != crate::runtime_config_settings_service::document_revision(&doc)
+            })
+        {
+            return Err(ConfigError::Validation(
+                "settings revision changed; read source=file before retrying".into(),
+            ));
+        }
         let before = doc.clone();
         let previous = get_json_path(&before, Some(input.path.as_str()))?;
         let created = previous.is_null();
@@ -191,6 +209,18 @@ fn delete_file_setting_impl(
     crate::with_config_file_write_lock(|| {
         let segments = required_path_segments(&input.path)?;
         let (config_found, mut doc) = read_or_create_doc(&config_path)?;
+        if input
+            .options
+            .expected_revision
+            .as_deref()
+            .is_some_and(|expected| {
+                expected != crate::runtime_config_settings_service::document_revision(&doc)
+            })
+        {
+            return Err(ConfigError::Validation(
+                "settings revision changed; read source=file before retrying".into(),
+            ));
+        }
         let before = doc.clone();
         let deleted = remove_json_path(&mut doc, &segments)?;
         finish_edit(
@@ -255,6 +285,18 @@ fn patch_file_settings_impl(
             ConfigError::Validation("settings_patch changes must be a JSON object".to_owned())
         })?;
         let (config_found, mut doc) = read_or_create_doc(&config_path)?;
+        if input
+            .options
+            .expected_revision
+            .as_deref()
+            .is_some_and(|expected| {
+                expected != crate::runtime_config_settings_service::document_revision(&doc)
+            })
+        {
+            return Err(ConfigError::Validation(
+                "settings revision changed; read source=file before retrying".into(),
+            ));
+        }
         let before = doc.clone();
         let created = match input.target.path.as_deref() {
             Some(path) => get_json_path(&before, Some(path))?.is_null(),
@@ -350,6 +392,8 @@ fn finish_edit(
     }
 
     Ok(ConfigSettingsEditResponse {
+        before_revision: crate::runtime_config_settings_service::document_revision(&before),
+        after_revision: crate::runtime_config_settings_service::document_revision(&doc),
         config_path,
         config_found,
         operation: operation.to_string(),
@@ -557,6 +601,7 @@ mod tests {
 
     fn edit_options(dry_run: bool) -> ConfigSettingsEditOptions {
         ConfigSettingsEditOptions {
+            expected_revision: None,
             dry_run,
             validate: true,
             reload: true,
@@ -923,5 +968,50 @@ mod tests {
         )
         .expect("resulting config must validate");
         let _ = std::fs::remove_dir_all(root);
+    }
+}
+
+#[cfg(test)]
+mod revision_tests {
+    use super::*;
+    #[test]
+    fn stale_document_revision_never_overwrites_new_settings() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("settings.json");
+        fs::write(&path, "{\"value\":1}").unwrap();
+        let initial = read_file_setting(&path, ConfigSettingsGetInput::default()).unwrap();
+        let revision = initial.revision.unwrap();
+        let options = ConfigSettingsEditOptions {
+            expected_revision: Some(revision.clone()),
+            dry_run: false,
+            validate: false,
+            reload: false,
+        };
+        set_file_setting_impl(
+            path.clone(),
+            ConfigSettingsSetInput {
+                path: "value".into(),
+                value: serde_json::json!(2),
+                options: options.clone(),
+            },
+            &ProcessEnvironment,
+            None,
+        )
+        .unwrap();
+        let after = fs::read(&path).unwrap();
+        assert!(
+            set_file_setting_impl(
+                path.clone(),
+                ConfigSettingsSetInput {
+                    path: "value".into(),
+                    value: serde_json::json!(3),
+                    options
+                },
+                &ProcessEnvironment,
+                None
+            )
+            .is_err()
+        );
+        assert_eq!(fs::read(path).unwrap(), after);
     }
 }

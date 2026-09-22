@@ -2392,6 +2392,9 @@ impl AgenaRuntime {
         if !self.inner.control_state.shutdown() {
             return;
         }
+        if let Some(service) = self.activities.monitor.as_ref() {
+            service.shutdown();
+        }
         if let Some(session_manager) = self.session_manager() {
             match tokio::runtime::Handle::try_current() {
                 Ok(_handle) => {

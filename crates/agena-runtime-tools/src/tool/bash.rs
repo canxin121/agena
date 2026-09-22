@@ -138,12 +138,14 @@ pub(super) async fn execute_async(
     };
     let final_analysis = analyze_command(final_command.as_str());
     let command_rewritten = final_command != input.command;
-    let request = ShellRequest {
+    let mut request = ShellRequest {
         command: shell_command_for_platform(&final_command),
         cwd: final_cwd,
         env,
         timeout_ms: Some(input.timeout_ms.unwrap_or(DEFAULT_SHELL_TIMEOUT_MS)),
     };
+    request.command =
+        crate::shell_sandbox::protect(executor, request.command, input, &mut request.env)?;
     let _worker_permit = super::shell::acquire_worker_permit().await?;
     let execution = executor.execute_shell_command(&request).await?;
     executor.ensure_not_cancelled()?;
@@ -232,6 +234,8 @@ fn render_execution(
     };
 
     let output = ToolPayloadOutput::Shell {
+        terminal: None,
+        dropped_bytes: 0,
         action: "run".to_string(),
         shell: Some(ProcessShell::Bash),
         background: false,

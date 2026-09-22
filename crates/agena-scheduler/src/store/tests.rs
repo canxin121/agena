@@ -434,6 +434,8 @@ async fn history_retention_is_bounded_and_ordered_by_completion_time() {
             record.delivery_key = Some(index.to_string());
             store
                 .append_history(SchedulerHistoryEntry {
+                    owner_workspace: None,
+                    owner_session_id: None,
                     job_id: job.id,
                     record,
                 })
@@ -470,6 +472,8 @@ async fn history_prune_failure_must_roll_back_the_insert() {
     assert!(
         store
             .append_history(SchedulerHistoryEntry {
+                owner_workspace: None,
+                owner_session_id: None,
                 job_id: job.id,
                 record
             })
@@ -636,5 +640,92 @@ async fn list_due_filters_paused_completed_future_and_claimed_jobs() {
             .collect();
         found.sort();
         assert_eq!(found, ["due", "retry"]);
+    }
+}
+
+#[tokio::test]
+async fn owned_history_survives_job_deletion_and_hides_legacy_rows() {
+    for store in stores().await {
+        let now = Utc::now();
+        let mut job = ScheduledJob::new_once(now, "owned");
+        job.owner_workspace = Some("workspace-a".into());
+        job.set_owner(41);
+        store.put(job.clone()).await.unwrap();
+        let before = snapshot(store.as_ref(), job.id).await;
+        job.record_delivery(now, JobDeliveryResult::submitted(Some(91)));
+        assert!(store.replace(&before, job.clone()).await.unwrap());
+        assert_eq!(
+            store
+                .list_history_owned("workspace-a", Some(41), None, 10)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(
+            store
+                .list_history_owned("workspace-a", Some(42), None, 10)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            store
+                .list_history_owned("workspace-b", Some(41), None, 10)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        let current = snapshot(store.as_ref(), job.id).await;
+        assert!(
+            !store.remove_checked(&before).await.unwrap(),
+            "stale authorized snapshot must not delete a new version"
+        );
+        assert!(store.remove_checked(&current).await.unwrap());
+        assert_eq!(
+            store
+                .list_history_owned("workspace-a", Some(41), Some(job.id), 10)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        store
+            .append_history(SchedulerHistoryEntry {
+                job_id: Uuid::new_v4(),
+                owner_workspace: None,
+                owner_session_id: Some(41),
+                record: job.last_run.clone().unwrap(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            store
+                .list_history_owned("workspace-a", Some(41), None, 10)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+}
+
+#[tokio::test]
+async fn owner_cannot_be_changed_by_any_store_update() {
+    for store in stores().await {
+        let mut job = ScheduledJob::new_once(Utc::now(), "owned");
+        job.owner_workspace = Some("workspace-a".into());
+        job.set_owner(41);
+        store.put(job.clone()).await.unwrap();
+        let before = snapshot(store.as_ref(), job.id).await;
+        job.set_owner(42);
+        assert!(store.replace(&before, job).await.is_err());
+        assert_eq!(
+            snapshot(store.as_ref(), before.job.id)
+                .await
+                .job
+                .owner_session_id,
+            Some(41)
+        );
     }
 }

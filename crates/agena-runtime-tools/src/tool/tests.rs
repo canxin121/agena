@@ -21,6 +21,8 @@ use agena_plugin_host::{
 use agena_tool::SnapshotBackend;
 
 mod cron_persistence;
+#[cfg(unix)]
+mod terminal;
 
 #[derive(Default)]
 struct ChokePointPlugin;
@@ -379,6 +381,11 @@ async fn empty_plugin_title_uses_the_initial_action_before_appending_result() {
 impl ExecutorBackedShellAdapter {
     #[tool(name = "run", summary = "Run a shell command.", mutating, shell)]
     async fn run(&self, _input: &crate::part::ShellCommandInput) -> String {
+        "plugin adapter must not execute".to_owned()
+    }
+
+    #[tool(name = "write", summary = "Write to a terminal.", mutating, shell)]
+    async fn write(&self, _input: &crate::part::ShellWriteInput) -> String {
         "plugin adapter must not execute".to_owned()
     }
 }

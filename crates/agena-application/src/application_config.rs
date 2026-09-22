@@ -56,6 +56,7 @@ impl Application {
             .delete_file_setting(ConfigSettingsDeleteInput {
                 path: path.trim().to_owned(),
                 options: ConfigSettingsEditOptions {
+                    expected_revision: None,
                     dry_run: false,
                     validate: true,
                     reload: true,
@@ -116,6 +117,7 @@ impl Application {
                 path: path.trim().to_owned(),
                 value,
                 options: ConfigSettingsEditOptions {
+                    expected_revision: None,
                     dry_run: false,
                     validate: true,
                     reload: true,

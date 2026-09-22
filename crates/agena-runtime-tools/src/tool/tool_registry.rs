@@ -270,6 +270,12 @@ where
 }
 
 pub(crate) fn unknown_tool_message(requested: &str, suggestions: &[String]) -> String {
+    if let Some(renamed) = agena_tool::provider_tools::renamed(requested) {
+        return renamed.migration_message();
+    }
+    if let Some(retired) = agena_tool::provider_tools::retired(requested) {
+        return retired.message();
+    }
     if suggestions.is_empty() {
         return format!("unknown tool '{requested}'");
     }
@@ -613,12 +619,19 @@ pub(super) fn tool_summary(registered_tool: &RegisteredTool) -> String {
 }
 
 #[derive(Clone)]
+pub(super) struct CloudToolAdapterGate {
+    pub adapter: Option<agena_domain::AdapterId>,
+}
+
+#[derive(Clone)]
 /// Executor that runs tools with permissions.
 pub struct ToolExecutor {
     pub(super) workspace_root: PathBuf,
     pub(super) principal: ExecutionPrincipal,
     pub(super) allowed_tool_names: Option<std::collections::HashSet<String>>,
     pub(super) model_id: Option<String>,
+    /// AI-call execution guard only. Never used to filter tool discovery.
+    pub(super) cloud_tool_adapter_gate: Option<CloudToolAdapterGate>,
     /// Opaque plugin capability scope selected from the runtime-only session
     /// carrier. All catalog/permission/execution lookups for this executor use
     /// this exact scope snapshot.

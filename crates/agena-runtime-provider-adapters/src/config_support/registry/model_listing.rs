@@ -299,11 +299,6 @@ pub(crate) fn resolved_adapter_models_base_url(
                 HttpAdapterKind::OpenAi,
             )?)),
         },
-        ProviderAdapterDefinition::OpenAiRealtime(_) => Ok(Some(resolve_http_adapter_base_url(
-            provider_id,
-            auth,
-            HttpAdapterKind::OpenAi,
-        )?)),
         ProviderAdapterDefinition::Anthropic(_) => match auth {
             ProviderAuthConfig::Api(api) if api.gitlab().is_some() => {
                 Ok(Some(gitlab_proxy_base_url(

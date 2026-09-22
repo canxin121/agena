@@ -8,7 +8,6 @@ use crate::part::{ApplyPatchToolInput, GlobToolInput, GrepToolInput, ReadToolInp
 use crate::plugins::provided::router;
 use agena_macros::ToolInput;
 use agena_plugin_host::PluginError;
-use agena_plugin_host::sdk::attachment::{AttachmentItem, AttachmentKind, AttachmentSource};
 use agena_plugin_host::sdk::{
     PathRequest, Result as SdkResult, ToolInvokeContext, ToolInvokeOutput,
 };
@@ -95,24 +94,6 @@ struct StatInput {
     path: String,
     #[serde(default = "default_true")]
     hash: bool,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default)]
-#[serde(rename_all = "snake_case")]
-enum ImageDetail {
-    Low,
-    #[default]
-    High,
-    Original,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
-#[input(trim("path"), non_empty("path"))]
-#[serde(deny_unknown_fields)]
-struct ViewImageInput {
-    path: String,
-    #[serde(default)]
-    detail: ImageDetail,
 }
 
 const fn default_true() -> bool {
@@ -255,7 +236,7 @@ impl FsPlugin {
     #[tool(
         tags(query, filesystem),
         summary = "Read workspace files.",
-        help = "Use `read` for text previews, directory listings, or file attachments via `mode = text|attachment|auto` (default `auto`).",
+        help = "Use `read` for text previews and directory listings. Binary files return local references, not model-visible bytes. Use a provider cloud_image_understanding/cloud_document_understanding tool or explicitly attach media to the composer to send its contents.",
         read_only,
         examples(r#"{"file_path":"Cargo.toml"}"#),
         concurrency_safe
@@ -725,91 +706,6 @@ impl FsPlugin {
         })
         .await
     }
-
-    #[tool(
-        tags(query, filesystem),
-        summary = "Attach a local image for visual inspection with an explicit detail hint.",
-        read_only,
-
-        path(requests = vec![PathRequest::read(input.path.clone())]),
-        concurrency_safe
-    )]
-    async fn invoke_view_image(
-        &self,
-        context: &ToolInvokeContext<'_>,
-        input: &ViewImageInput,
-    ) -> SdkResult<ToolInvokeOutput> {
-        let workspace_root = context.workspace_root.to_string();
-        let input = input.clone();
-        run_fs_blocking(move || {
-            let target = resolve_path(workspace_root.as_str(), input.path.as_str());
-            let metadata = std::fs::metadata(&target).map_err(fs_error)?;
-            if !metadata.is_file() {
-                return Err(PluginError::invalid_params(format!(
-                    "image target is not a file: {}",
-                    input.path
-                )));
-            }
-            const MAX_IMAGE_BYTES: u64 = 50 * 1024 * 1024;
-            if metadata.len() > MAX_IMAGE_BYTES {
-                return Err(PluginError::invalid_params(format!(
-                    "image exceeds the {} MiB safety limit",
-                    MAX_IMAGE_BYTES / 1024 / 1024
-                )));
-            }
-            let mime = image_mime(&target).ok_or_else(|| {
-                PluginError::invalid_params(
-                    "unsupported image extension; expected png, jpg/jpeg, gif, webp, bmp, or svg",
-                )
-            })?;
-            let hash = sha256_file(&target)?;
-            let detail = match input.detail {
-                ImageDetail::Low => "low",
-                ImageDetail::High => "high",
-                ImageDetail::Original => "original",
-            };
-            let attachment = AttachmentItem {
-                kind: AttachmentKind::Image,
-                mime: mime.to_string(),
-                source: AttachmentSource::LocalPath {
-                    path: target.to_string_lossy().to_string(),
-                },
-                filename: target
-                    .file_name()
-                    .and_then(|value| value.to_str())
-                    .map(ToOwned::to_owned),
-                title: Some(format!("{} ({detail} detail)", input.path)),
-                size_bytes: Some(metadata.len()),
-                sha256: Some(hash.clone()),
-                width: None,
-                height: None,
-                duration_ms: None,
-                page_count: None,
-            };
-            Ok(ToolInvokeOutput::from_parts(
-                format!("view image {}", input.path),
-                format!("{mime} · {} bytes · {detail}", metadata.len()),
-                format!(
-                    "Attached '{}' for visual inspection (detail={detail}, {} bytes).",
-                    input.path,
-                    metadata.len()
-                ),
-                Some(serde_json::json!({
-                    "path": input.path,
-                    "detail": detail,
-                    "mime": mime,
-                    "size_bytes": metadata.len(),
-                    "sha256": hash,
-                })),
-                std::collections::BTreeMap::from([
-                    ("detail".to_string(), detail.to_string()),
-                    ("sha256".to_string(), hash),
-                ]),
-                vec![attachment],
-            ))
-        })
-        .await
-    }
 }
 
 async fn invoke_internal<T: Serialize + Send + 'static>(
@@ -950,23 +846,6 @@ fn read_utf8_prefix(
     Ok((text, valid_bytes.len(), truncated))
 }
 
-fn image_mime(path: &Path) -> Option<&'static str> {
-    match path
-        .extension()
-        .and_then(|value| value.to_str())?
-        .to_ascii_lowercase()
-        .as_str()
-    {
-        "png" => Some("image/png"),
-        "jpg" | "jpeg" => Some("image/jpeg"),
-        "gif" => Some("image/gif"),
-        "webp" => Some("image/webp"),
-        "bmp" => Some("image/bmp"),
-        "svg" => Some("image/svg+xml"),
-        _ => None,
-    }
-}
-
 fn verify_expected_hash(path: &Path, expected: &str) -> SdkResult<()> {
     let actual = sha256_file(path)?;
     if actual.eq_ignore_ascii_case(expected.trim()) {
@@ -1014,7 +893,6 @@ mod tests {
                 "replace",
                 "read_many",
                 "stat",
-                "view_image",
             ]
         );
     }

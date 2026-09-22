@@ -866,8 +866,6 @@ pub enum ProviderKind {
     OpenAiResponses,
     #[serde(rename = "openai_chat_completions")]
     OpenAiChatCompletions,
-    #[serde(rename = "openai_realtime")]
-    OpenAiRealtime,
     #[serde(rename = "anthropic")]
     Anthropic,
     #[serde(rename = "gemini")]
@@ -886,7 +884,6 @@ impl std::str::FromStr for ProviderKind {
             "ollama" => Ok(Self::Ollama),
             "openai_responses" => Ok(Self::OpenAiResponses),
             "openai_chat_completions" => Ok(Self::OpenAiChatCompletions),
-            "openai_realtime" => Ok(Self::OpenAiRealtime),
             "anthropic" => Ok(Self::Anthropic),
             "gemini" => Ok(Self::Gemini),
             "gitlab" => Ok(Self::Gitlab),
@@ -1262,7 +1259,6 @@ mod openai_protocol_adapter_tests {
         for adapter_id in [
             "openai_responses",
             "openai_chat_completions",
-            "openai_realtime",
         ] {
             validate_config_text(
                 Path::new("agena.json"),

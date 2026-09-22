@@ -567,3 +567,11 @@ describe('TUI-parity part presentation', () => {
     expect(projected.presentationBlocks).toEqual([{ type: 'text', text: 'Human summary' }])
   })
 })
+
+test('provider-bound media snapshots remain previewable without exposing route in the URL',()=>{
+  const projected=operationPresentation(operationPart({name:'media.result',output:{attachments:[{
+    kind:'image',mime:'image/png',filename:'input.png',source:{source:'provider_data',route:'media-route-v1:opaque',data:'Zml4ZWQ='},
+  }]}}))
+  expect(projected.attachments[0]?.url).toBe('data:image/png;base64,Zml4ZWQ=')
+  expect(projected.attachments[0]?.url).not.toContain('media-route')
+})

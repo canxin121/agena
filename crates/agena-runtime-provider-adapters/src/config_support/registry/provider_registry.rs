@@ -10,8 +10,7 @@ use super::{
     GeminiAdapterOptions, GitlabProvider, GitlabRoutedAdapter, GitlabRoutedBackend,
     HttpAdapterKind, ManagedCredential, ModelCatalogSnapshot, ModelId, ModelRuntime,
     MultiAdapterProvider, OllamaAdapter, OpenAiChatCompletionsAdapter,
-    OpenAiChatCompletionsAdapterOptions, OpenAiRealtimeAdapter, OpenAiRealtimeAdapterOptions,
-    OpenAiResponsesAdapter, OpenAiResponsesAdapterOptions, Path, ProviderAdapterDefinition,
+    OpenAiChatCompletionsAdapterOptions, OpenAiResponsesAdapter, OpenAiResponsesAdapterOptions, Path, ProviderAdapterDefinition,
     ProviderAuthConfig, ProviderModelRoute, ProviderRegistry, ResolvedProviderAdapterConfig,
     ResolvedProviderConfig, api_auth_has_direct_source, api_auth_managed_credential,
     copilot_base_url, gitlab_auth_managed_credential, gitlab_credential_instance_url,
@@ -651,42 +650,6 @@ pub(crate) fn build_adapter_provider(
                     },
                 ))
             }
-        }
-        ProviderAdapterDefinition::OpenAiRealtime(adapter) => {
-            let connection = resolve_openai_connection(
-                provider_id,
-                auth,
-                client.clone(),
-                env,
-                config_path,
-                adapter.options.capability_family,
-                adapter.options.models_url.as_deref(),
-            )?;
-            Arc::new(OpenAiRealtimeAdapter::new_managed_with_options(
-                runtime_provider_id.as_str(),
-                client,
-                connection.credential,
-                connection.base_url,
-                adapter_default_model.to_owned(),
-                OpenAiRealtimeAdapterOptions {
-                    client_identity: client_identity.clone(),
-                    auth_data: connection.auth_data,
-                    models_url: adapter.options.models_url.clone(),
-                    auth_header: adapter.options.auth_header.clone(),
-                    auth_scheme: adapter.options.auth_scheme.clone(),
-                    capability_family: connection.capability_family,
-                    extra_headers: http_adapter_extra_headers(
-                        adapter,
-                        Some(http_adapter_default_user_agent(
-                            client_identity,
-                            auth,
-                            HttpAdapterKind::OpenAi,
-                            adapter_default_model,
-                        )),
-                    ),
-                    realtime_ws_url: adapter.options.realtime_ws_url.clone(),
-                },
-            ))
         }
         ProviderAdapterDefinition::Anthropic(adapter) => match auth {
             ProviderAuthConfig::Credential(credential_auth)

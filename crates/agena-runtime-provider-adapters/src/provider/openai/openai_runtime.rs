@@ -6,12 +6,10 @@ use super::{
     CHAT_COMPLETIONS_ADAPTER_KIND, CapabilitySupport, CompletionFinishReason, CompletionRequest,
     CompletionResponse, CompletionStreamEvent, CompletionUsage, ModelCapabilities, ModelId,
     ModelRuntime, ModelThinkingMode, OpenAiChatCompletionsAdapter, OpenAiInputContent,
-    OpenAiInputMessage, OpenAiModelListResponse, OpenAiProfile, OpenAiRealtimeAdapter,
-    OpenAiResponsesAdapter, OpenAiResponsesBackend, OpenAiResponsesCompactResponse,
+    OpenAiInputMessage, OpenAiModelListResponse, OpenAiProfile, OpenAiResponsesAdapter, OpenAiResponsesBackend, OpenAiResponsesCompactResponse,
     OpenAiResponsesInputItem, OpenAiResponsesRequest, OpenAiResponsesResponse, OpenAiTransport,
     OpenAiUsage, ProviderError, ProviderId, ProviderImageCapabilities, ProviderImageOperation,
-    ProviderImageRequest, ProviderImageResponse, ProviderNativeToolArtifact, REALTIME_ADAPTER_KIND,
-    RESPONSES_ADAPTER_KIND, RequestHeaderContext, Stream, ToolStreamAccumulator, async_trait,
+    ProviderImageRequest, ProviderImageResponse, ProviderNativeToolArtifact, RESPONSES_ADAPTER_KIND, RequestHeaderContext, Stream, ToolStreamAccumulator, async_trait,
     completion_event_from_tool_stream_update, merge_openai_reasoning_item,
     openai_reasoning_item_from_event, openai_reasoning_items_from_output,
     openai_responses_metadata, responses_provider_native_tool_event, responses_reasoning_delta,
@@ -954,110 +952,5 @@ impl ModelRuntime for OpenAiChatCompletionsAdapter {
     > {
         self.complete_stream_with_chat_api(&request, request.model.to_string())
             .await
-    }
-}
-
-#[async_trait]
-impl ModelRuntime for OpenAiRealtimeAdapter {
-    fn id(&self) -> &str {
-        self.id.as_str()
-    }
-
-    fn default_model(&self) -> &ModelId {
-        &self.default_model
-    }
-
-    fn capability_family(&self) -> Option<CapabilityFamily> {
-        Some(self.capability_family)
-    }
-
-    fn validate_provider_native_tools_request(
-        &self,
-        _adapter_id: Option<&agena_domain::AdapterId>,
-        request: &CompletionRequest,
-    ) -> Result<(), ProviderError> {
-        if request.provider_native_tools.bindings().is_empty() {
-            Ok(())
-        } else {
-            Err(ProviderError::Config(format!(
-                "provider `{}` model `{}` configures OpenAI-hosted tools, but the Realtime protocol does not support those hosted tool definitions",
-                self.id, request.model
-            )))
-        }
-    }
-
-    fn model_capabilities_for_adapter(
-        &self,
-        _adapter_id: Option<&agena_domain::AdapterId>,
-        model: &ModelId,
-    ) -> ModelCapabilities {
-        self.runtime_model_capabilities(model)
-    }
-
-    fn model_thinking_modes_for_adapter(
-        &self,
-        adapter_id: Option<&agena_domain::AdapterId>,
-        model: &ModelId,
-    ) -> Vec<ModelThinkingMode> {
-        agena_provider::default_model_mode_registry().thinking_modes_for_family(
-            self.capability_family,
-            adapter_id,
-            model.as_ref(),
-            &self.model_metadata_for_adapter(adapter_id, model),
-        )
-    }
-
-    fn stream_resume_policy(&self) -> StreamResumePolicy {
-        // See the OpenAiResponsesAdapter note: replay-safe prefix resume only
-        // holds for the deterministic official endpoint, not third-party
-        // OpenAI-compatible gateways.
-        if self.is_official_openai_endpoint() {
-            StreamResumePolicy::ReplaySafePrefix
-        } else {
-            StreamResumePolicy::Disabled
-        }
-    }
-
-    fn supports_prompt_continuation(&self, _model: &ModelId) -> bool {
-        false
-    }
-
-    fn prompt_cache_shape(&self, _model: &ModelId) -> Option<agena_provider::PromptCacheShape> {
-        let mut fields = self.prompt_cache_fields("realtime");
-        if let Some(realtime_ws_url) = self.realtime_ws_url.as_deref() {
-            fields.push(("realtime_ws_url", realtime_ws_url.to_owned()));
-        }
-        Some(agena_provider::PromptCacheShape::from_fields(
-            self.id.as_str(),
-            fields,
-        ))
-    }
-
-    async fn list_models(&self) -> Result<Vec<Model>, ProviderError> {
-        self.list_models_for_protocol(REALTIME_ADAPTER_KIND).await
-    }
-
-    async fn complete(
-        &self,
-        request: CompletionRequest,
-    ) -> Result<CompletionResponse, ProviderError> {
-        let fallback_model = request.model.clone();
-        let stream = self.complete_stream(request).await?;
-        utils::aggregate_stream(self.id.as_str(), fallback_model, stream).await
-    }
-
-    async fn complete_stream(
-        &self,
-        request: CompletionRequest,
-    ) -> Result<
-        std::pin::Pin<Box<dyn Stream<Item = Result<CompletionStreamEvent, ProviderError>> + Send>>,
-        ProviderError,
-    > {
-        self.complete_stream_with_realtime_ws(
-            &request,
-            request.model.to_string(),
-            self.realtime_ws_url.as_deref(),
-        )
-        .await
     }
 }

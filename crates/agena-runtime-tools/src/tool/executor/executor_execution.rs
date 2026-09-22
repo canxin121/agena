@@ -89,6 +89,11 @@ impl ToolExecutor {
         let definition = self.invocation_definition(invocation);
         let plugin_name = self.invocation_plugin_name_for(invocation);
         if definition.is_none() {
+            if agena_tool::provider_tools::retired(&model_tool_name).is_some()
+                || agena_tool::provider_tools::renamed(&model_tool_name).is_some()
+            {
+                return Err(self.unknown_tool_error(&model_tool_name));
+            }
             let mut prepared_invocation = invocation.clone();
             prepared_invocation.plugin_name = Some(plugin_name);
             return Ok(PreparedToolInvocation {
@@ -96,6 +101,9 @@ impl ToolExecutor {
                 title_override: None,
                 metadata: Default::default(),
             });
+        }
+        if let Some(definition) = definition.as_ref() {
+            self.check_cloud_tool_adapter(&definition.canonical_name())?;
         }
         let hook_tool_name = self
             .plugin_resolution_for_invocation(invocation)
@@ -243,6 +251,7 @@ impl ToolExecutor {
         let resolution = self
             .plugin_resolution_for_invocation(invocation)
             .ok_or_else(|| self.unknown_tool_error(plugin_invocation.tool_name.as_str()))?;
+        self.check_cloud_tool_adapter(&resolution.canonical_name())?;
         let invoke_stream = self.plugins.invoke_tool_stream(
             &resolution,
             PluginToolInvokeInput {
@@ -380,6 +389,8 @@ impl ToolExecutor {
         let resolution = self
             .plugin_resolution_for_invocation(invocation)
             .ok_or_else(|| self.unknown_tool_error(plugin_invocation.tool_name.as_str()))?;
+
+        self.check_cloud_tool_adapter(&resolution.canonical_name())?;
 
         if let Some(payload) =
             ToolPayloadInput::from_executor_backed_invocation(&resolution, invocation)

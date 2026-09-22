@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { createFailedAttachmentDraftSlot } from './chat/failedAttachmentDrafts'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, type Component } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
@@ -83,8 +84,10 @@ type OutgoingMessagePart =
       type: 'activity'
       activity: {
         id: string
+        provenance?: { content_hash: string }
         payload: {
           activity_type: 'resource'
+          delivery?: 'reference' | 'model_input'
           kind: 'file' | 'image' | 'audio' | 'video' | 'pdf'
           reference: { reference_type: 'workspace_path'; path: string }
           name: string
@@ -124,9 +127,21 @@ const draft = computed<string>({
   },
 })
 const sending = ref(false)
+const failedDraftSlot = createFailedAttachmentDraftSlot()
+const failedDraftVersion = ref(0)
+const failedAttachmentDraft = computed(() => { void failedDraftVersion.value; return failedDraftSlot.peek() })
+function restoreFailedAttachmentDraft() {
+  const sid=chat.selectedSessionId
+  if (!sid) return
+  const restored=failedDraftSlot.take(sid,draft.value,attachedFiles.value)
+  if (!restored) { toasts.push('info', String(t('chat.attachments.recoveryNeedsEmptyDraft'))); return }
+  clearAttachments();draft.value=restored.text;attachedFiles.value=restored.files;failedDraftVersion.value++
+}
+function discardFailedAttachmentDraft() { failedDraftSlot.discard();failedDraftVersion.value++ }
+
 
 const composerRef = ref<ComposerExpose | null>(null)
-const attachments = useChatAttachments({ toasts, composerRef })
+const attachments = useChatAttachments({ toasts, composerRef, restoreText: (text) => { draft.value += text } })
 const {
   attachedFiles,
   attachmentsBusy,
@@ -142,6 +157,8 @@ const {
   openProjectAttachDialog,
   addProjectAttachment,
 } = attachments
+watch(() => chat.selectedSessionId, () => { clearAttachments() }, { flush: 'sync' })
+
 
 const editorFullscreen = ref(false)
 const editorClosing = ref(false)
@@ -1099,6 +1116,7 @@ function restoredComposerFiles(document: JsonValue): AttachedFile[] {
         size,
         mime: typeof payload.media_type === 'string' ? payload.media_type : 'application/octet-stream',
         serverPath: path,
+        delivery: payload.delivery === 'model_input' ? 'model_input' as const : 'reference' as const,
       },
     ]
   })
@@ -1124,6 +1142,7 @@ function restoreCancelledComposer(outcome: chatApi.CancellationOutcome) {
       mime: file.mime,
       ...(file.url ? { url: file.url } : {}),
       ...(file.serverPath ? { serverPath: file.serverPath } : {}),
+      delivery: file.delivery || 'reference',
     })) ?? restoredComposerFiles(document)
   draft.value = text
   attachedFiles.value = files
@@ -1585,6 +1604,8 @@ function attachmentResourceKind(mime: string, filename: string): 'file' | 'image
 }
 
 function resourceComposerNode(input: {
+  sha256?: string
+  delivery?: 'reference' | 'model_input'
   path: string
   filename: string
   mime: string
@@ -1595,8 +1616,10 @@ function resourceComposerNode(input: {
     type: 'activity',
     activity: {
       id: globalThis.crypto.randomUUID(),
+      ...(input.sha256 ? { provenance: { content_hash: input.sha256 } } : {}),
       payload: {
         activity_type: 'resource',
+        delivery: input.delivery || 'reference',
         kind: attachmentResourceKind(mediaType, input.filename),
         reference: { reference_type: 'workspace_path', path: input.path },
         name: input.filename,
@@ -1993,6 +2016,11 @@ async function handleCommandSelected(command: Command) {
 }
 
 async function send() {
+  if (failedDraftSlot.peek()) { toasts.push('info', String(t('chat.attachments.recoverBeforeSend'))); return }
+  if (sending.value || attachmentsBusy.value) {
+    toasts.push('info', String(t('chat.attachments.preparing')))
+    return
+  }
   const sid = chat.selectedSessionId
   let text = draft.value.trim()
   const filesSnapshot = attachedFiles.value.slice()
@@ -2036,6 +2064,14 @@ async function send() {
     return
   }
 
+  const runCfg = deriveSendRunConfig({
+      selectedProviderId: modelSelection.selectedProviderId.value,
+      selectedAdapterId: modelSelection.selectedAdapterId.value,
+      selectedModelId: modelSelection.selectedModelId.value,
+      selectedThinkingMode: modelSelection.selectedThinkingMode.value,
+      selectedSpeedMode: modelSelection.selectedSpeedMode.value,
+    })
+
   // UX: if the editor is expanded, collapse it on send.
   if (editorFullscreen.value && !editorClosing.value) {
     closeEditorFullscreen()
@@ -2052,6 +2088,7 @@ async function send() {
       mime: f.mime,
       url: f.url,
       serverPath: f.serverPath,
+      delivery: f.delivery,
     })),
   })
 
@@ -2069,6 +2106,7 @@ async function send() {
     const workspace = filesSnapshot.length > 0 ? await chat.resolveSessionWorkspace(sid) : null
     for (const f of filesSnapshot) {
       let path = ''
+      let sha256: string | undefined
       let size = Number.isFinite(f.size) && f.size > 0 ? Math.floor(f.size) : undefined
       const dataUrl = typeof f.url === 'string' ? f.url.trim() : ''
       if (dataUrl) {
@@ -2079,21 +2117,16 @@ async function send() {
           mime: f.mime,
         })
         path = String(uploaded.path || '').trim()
+        sha256 = uploaded.sha256
         size = Number.isFinite(uploaded.size_bytes) ? Math.max(0, Math.floor(uploaded.size_bytes)) : size
       } else if (f.serverPath && workspace) {
         path = workspaceRelativePath(f.serverPath, workspace.path)
       }
-      if (!path) continue
-      parts.push(resourceComposerNode({ path, filename: f.filename, mime: f.mime, size }))
+      if (!path) throw new Error(`Attachment could not be prepared: ${f.filename}`)
+      parts.push(resourceComposerNode({ path, filename: f.filename, mime: f.mime, size, sha256, delivery: f.delivery || 'reference' }))
     }
 
-    const runCfg = deriveSendRunConfig({
-      selectedProviderId: modelSelection.selectedProviderId.value,
-      selectedAdapterId: modelSelection.selectedAdapterId.value,
-      selectedModelId: modelSelection.selectedModelId.value,
-      selectedThinkingMode: modelSelection.selectedThinkingMode.value,
-      selectedSpeedMode: modelSelection.selectedSpeedMode.value,
-    })
+
 
     const sendResult = await chat.sendMessage(sid, { ...runCfg, parts })
 
@@ -2113,8 +2146,14 @@ async function send() {
     clearOnSendFailure()
 
     // Restore composer content on failure.
-    draft.value = draftSnapshot
-    attachedFiles.value = filesSnapshot
+    if (chat.selectedSessionId === sid && !draft.value && attachedFiles.value.length === 0) {
+      draft.value = draftSnapshot
+      attachedFiles.value = filesSnapshot
+    } else {
+      failedDraftSlot.save({sessionId:sid,text:draftSnapshot,files:filesSnapshot})
+      failedDraftVersion.value++
+      toasts.push('error', String(t('chat.attachments.failedDraftSaved')))
+    }
     throw e
   } finally {
     sending.value = false
@@ -2293,6 +2332,9 @@ const viewCtx = {
   sessionActionsMenuRef,
 
   // Composer + attachments.
+  failedAttachmentDraft,
+  restoreFailedAttachmentDraft,
+  discardFailedAttachmentDraft,
   draft,
   attachedFiles,
   attachmentsBusy,

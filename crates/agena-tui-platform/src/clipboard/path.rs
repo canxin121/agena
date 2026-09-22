@@ -87,3 +87,21 @@ pub(super) fn convert_windows_path_to_wsl(path: &str) -> Option<PathBuf> {
     }
     Some(out)
 }
+
+#[cfg(test)]
+mod media_input_path_tests {
+    #[test]
+    fn quoted_unicode_clipboard_paths_are_parsed_as_paths_not_commands() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("图片 file.png");
+        std::fs::write(&file, b"fixture").unwrap();
+        let text = format!("\"{}\"", file.display());
+        let parsed = super::normalize_pasted_path(&text);
+        assert_eq!(parsed, Some(file.clone()));
+        assert_eq!(
+            super::normalize_pasted_path(url::Url::from_file_path(&file).unwrap().as_str()),
+            Some(file)
+        );
+        assert!(super::normalize_pasted_path("/tmp/a.png ; echo do-not-execute").is_none());
+    }
+}

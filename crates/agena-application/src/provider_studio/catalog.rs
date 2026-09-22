@@ -603,11 +603,7 @@ pub(crate) fn apply_provider_auth_required_adapter_defaults_to_overlay_adapters(
     draft: &ProviderConfigDraft,
     adapters: &mut std::collections::BTreeMap<String, ProviderAdapterOverlay>,
 ) {
-    for adapter_id in [
-        "openai_responses",
-        "openai_chat_completions",
-        "openai_realtime",
-    ] {
+    for adapter_id in ["openai_responses", "openai_chat_completions"] {
         if let Some(adapter) = adapters.get_mut(adapter_id) {
             apply_provider_auth_required_adapter_defaults_to_overlay(draft, adapter_id, adapter);
         }
@@ -640,11 +636,7 @@ pub(crate) fn apply_provider_auth_required_adapter_defaults_to_json_adapters(
     draft: &ProviderConfigDraft,
     adapters: &mut JsonMap<String, JsonValue>,
 ) -> std::result::Result<(), ProviderStudioSaveError> {
-    for adapter_id in [
-        "openai_responses",
-        "openai_chat_completions",
-        "openai_realtime",
-    ] {
+    for adapter_id in ["openai_responses", "openai_chat_completions"] {
         if let Some(adapter_value) = adapters.get_mut(adapter_id) {
             apply_provider_auth_required_adapter_defaults_to_json_value(
                 draft,

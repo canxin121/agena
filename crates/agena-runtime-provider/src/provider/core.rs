@@ -48,6 +48,14 @@ macro_rules! impl_model_runtime_target_defaults {
             self.target.default_adapter()
         }
 
+        fn resolved_execution_adapter(
+            &self,
+            adapter_id: Option<&AdapterId>,
+            model: &ModelId,
+        ) -> Result<Option<AdapterId>, crate::ProviderError> {
+            self.target.resolved_execution_adapter(adapter_id, model)
+        }
+
         fn stream_resume_policy(&self) -> StreamResumePolicy {
             self.target.stream_resume_policy()
         }
@@ -85,6 +93,18 @@ pub trait ModelRuntime: Send + Sync {
     fn default_model(&self) -> &ModelId;
     fn default_adapter(&self) -> Option<&AdapterId> {
         None
+    }
+
+    /// Trusted adapter identity used by an invocation-time guard. Multi-
+    /// adapter runtimes override this with the same route selection as sends.
+    fn resolved_execution_adapter(
+        &self,
+        adapter_id: Option<&AdapterId>,
+        _model: &ModelId,
+    ) -> Result<Option<AdapterId>, ProviderError> {
+        Ok(adapter_id
+            .cloned()
+            .or_else(|| self.default_adapter().cloned()))
     }
 
     fn provider_native_tools_config(&self, model: &ModelId) -> ProviderNativeToolsConfig {

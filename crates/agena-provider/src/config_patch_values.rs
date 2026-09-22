@@ -240,6 +240,7 @@ pub struct ProviderAdapterOverlay {
     pub extra_headers: BTreeMap<String, String>,
     #[merge(strategy = option_override)]
     pub stream_mode: Option<StreamTransportMode>,
+    /// Optional endpoint for Gemini's live WebSocket transport only.
     #[merge(strategy = option_override)]
     pub realtime_ws_url: Option<String>,
     #[merge(strategy = option_override)]

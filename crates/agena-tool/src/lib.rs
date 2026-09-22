@@ -1096,6 +1096,7 @@ fn provider_result_fragment(
     key: &str,
     object: &serde_json::Map<String, serde_json::Value>,
 ) -> Option<String> {
+    let key = provider_tools::operation_identity(key);
     let pending = first_array(object, &["pending_calls", "pending_actions", "tool_calls"])
         .filter(|calls| !calls.is_empty())
         .map(|calls| format_count(calls.len(), "pending calls"));
@@ -2571,6 +2572,9 @@ fn action_is_noun_phrase_with_subject(action: &str) -> bool {
 
 fn tool_action_label(tool_name: &str) -> String {
     let key = normalized_tool_identity(tool_name);
+    if let Some(tool) = provider_tools::cloud_tool(&key) {
+        return tool.title.to_owned();
+    }
     match key.as_str() {
         "fs.read" | "read" => "Read".to_owned(),
         "fs.read_many" => "Read files".to_owned(),
@@ -2741,6 +2745,12 @@ fn tool_action_label(tool_name: &str) -> String {
 }
 
 fn normalized_tool_identity(tool_name: &str) -> String {
+    // Exact cloud identities retain underscores in the action portion of a
+    // wire name; replacing every underscore would erase the cloud marker.
+    if let Some(tool) = provider_tools::cloud_tool(tool_name) {
+        return tool.name.to_owned();
+    }
+
     let mut key = tool_name.trim().replace("__", ".").replace('/', ".");
     if let Some(stripped) = key.strip_prefix("agena.") {
         key = stripped.to_owned();
@@ -2973,6 +2983,7 @@ fn invocation_title_subject(tool_name: &str, input: &serde_json::Value) -> Strin
 }
 
 fn provider_invocation_title_subject(key: &str, input: &serde_json::Value) -> String {
+    let key = provider_tools::operation_identity(key);
     let Some(object) = input.as_object() else {
         return String::new();
     };
@@ -4321,6 +4332,7 @@ mod tool_title_tests {
 }
 
 pub mod code_search;
+pub mod provider_tools;
 pub mod shell;
 pub mod shell_analysis;
 pub mod tool_search;

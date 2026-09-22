@@ -773,7 +773,7 @@ impl BuiltinHumanRenderer {
     fn attachment_artifact(attachment: &agena_domain::AttachmentItem) -> ArtifactRef {
         let uri = match &attachment.source {
             AttachmentSource::Url { url } | AttachmentSource::DataUrl { url } => url.clone(),
-            AttachmentSource::Base64 { data } => {
+            AttachmentSource::Base64 { data } | AttachmentSource::ProviderData { data, .. } => {
                 format!("data:{};base64,{data}", attachment.mime)
             }
             AttachmentSource::FileId { file_id } => format!("file-id:{file_id}"),
@@ -1292,6 +1292,12 @@ impl BuiltinHumanRenderer {
     }
 
     fn normalized_tool_name(tool_name: &str) -> String {
+        // Exact cloud identities retain underscores in the action portion of a
+        // wire name; replacing every underscore would erase the cloud marker.
+        if let Some(tool) = agena_tool::provider_tools::cloud_tool(tool_name) {
+            return tool.name.to_owned();
+        }
+
         let mut key = tool_name.trim().replace("__", ".").replace('/', ".");
         if let Some(stripped) = key.strip_prefix("agena.") {
             key = stripped.to_owned();
@@ -1723,6 +1729,9 @@ impl BuiltinHumanRenderer {
     }
 
     fn provider_operation_label(tool_name: &str) -> &'static str {
+        if let Some(tool) = agena_tool::provider_tools::cloud_tool(tool_name) {
+            return tool.title;
+        }
         match tool_name {
             "chatgpt.web_search"
             | "chatgpt.web_search_preview"
@@ -2557,6 +2566,9 @@ impl BuiltinHumanRenderer {
         object: &serde_json::Map<String, Value>,
     ) -> Vec<ViewBlock> {
         let mut blocks = Vec::new();
+        let cloud = agena_tool::provider_tools::cloud_tool(tool_name);
+        let operation_label = Self::provider_operation_label(tool_name);
+        let tool_name = agena_tool::provider_tools::operation_identity(tool_name);
         let operation_blocks = Self::specific_provider_operation_blocks(tool_name, object);
         let operation_has_status = operation_blocks.iter().any(|block| {
             block
@@ -2577,7 +2589,8 @@ impl BuiltinHumanRenderer {
         for (key, label) in [
             ("operation", "Operation"),
             ("provider", "Provider"),
-            ("tool", "Provider tool"),
+            ("public_tool_name", "Cloud tool"),
+            ("tool", "Provider API operation"),
             ("status", "Status"),
             ("model", "Model"),
             ("request_id", "Request"),
@@ -2592,16 +2605,102 @@ impl BuiltinHumanRenderer {
                 fields.push((label, value));
             }
         }
-        fields.insert(
-            0,
-            ("What", Self::provider_operation_label(tool_name).to_owned()),
-        );
+        fields.insert(0, ("What", operation_label.to_owned()));
+        if let Some(cloud) = cloud {
+            fields.insert(
+                1,
+                (
+                    "Execution location",
+                    format!("{} cloud, not this computer", cloud.provider_label),
+                ),
+            );
+            fields.insert(
+                2,
+                (
+                    "Local project access",
+                    "Not automatic; only explicitly supplied inputs are available".into(),
+                ),
+            );
+        }
         if !fields.is_empty() {
             blocks.push(Self::details_block(
                 "provider-meta",
                 "Provider response",
                 &fields,
             ));
+        }
+        if tool_name.ends_with(".image_understanding")
+            || tool_name.ends_with(".document_understanding")
+        {
+            if let Some(inputs) = Self::object_array(object, "media_inputs")
+                && let Some(table) = Self::scalar_table(
+                    "provider-media-inputs",
+                    "Analyzed inputs",
+                    inputs,
+                    &[
+                        ("filename", "File"),
+                        ("mime", "Media type"),
+                        ("size_bytes", "Bytes"),
+                        ("transport", "Transport"),
+                        ("sha256", "SHA-256"),
+                    ],
+                )
+            {
+                blocks.push(table);
+            }
+            if let Some(details) = Self::details_block_if_nonempty(
+                "provider-media-delivery",
+                "Media delivery",
+                &[
+                    ("Input sent", Self::object_text(object, "input_sent")),
+                    (
+                        "Remote file created by analysis",
+                        Self::object_text(object, "remote_file_created_by_analysis"),
+                    ),
+                    ("Outcome", Self::object_text(object, "outcome")),
+                ],
+            ) {
+                blocks.push(details);
+            }
+            if let Some(text) = object
+                .get("text")
+                .and_then(Value::as_str)
+                .filter(|value| !value.is_empty())
+            {
+                blocks.push(Self::markdown_block(
+                    "provider-media-analysis",
+                    format!("### Analysis\n{text}"),
+                ));
+            }
+        }
+        if (tool_name.ends_with(".file_upload")
+            || tool_name.ends_with(".file_status")
+            || tool_name.ends_with(".file_delete"))
+            && let Some(details) = Self::details_block_if_nonempty(
+                "provider-media-lifecycle",
+                "Cloud file lifecycle",
+                &[
+                    ("Owned handle", Self::object_text(object, "handle")),
+                    ("State", Self::object_text(object, "state")),
+                    ("File", Self::object_text(object, "filename")),
+                    ("Media type", Self::object_text(object, "mime")),
+                    ("Bytes", Self::object_text(object, "size_bytes")),
+                    ("SHA-256", Self::object_text(object, "sha256")),
+                    ("Provider file", Self::object_text(object, "remote_file_id")),
+                    ("Expires at", Self::object_text(object, "expires_at")),
+                    (
+                        "Deletion acknowledged",
+                        Self::object_text(object, "deletion_acknowledged"),
+                    ),
+                    (
+                        "Physical erasure guaranteed",
+                        Self::object_text(object, "physical_erasure_guaranteed"),
+                    ),
+                    ("Warning", Self::object_text(object, "warning")),
+                ],
+            )
+        {
+            blocks.push(details);
         }
         blocks.extend(operation_blocks);
         if let Some(calls) = Self::object_array(object, "pending_calls") {
@@ -2626,7 +2725,7 @@ impl BuiltinHumanRenderer {
             } else if object.get("continuation_required").and_then(Value::as_bool) == Some(true) {
                 blocks.push(Self::markdown_block(
                     "provider-calls",
-                    "### Pending calls\nNo pending calls could be decoded.",
+                    if cloud.is_some() {"### Cloud continuation\nThe vendor-hosted operation may require continuation. No local command or client tool callback is requested."} else {"### Pending calls\nNo pending calls could be decoded."},
                 ));
             }
         }

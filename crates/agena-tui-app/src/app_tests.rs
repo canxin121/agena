@@ -839,6 +839,35 @@ mod interaction_part_routing_tests {
         app
     }
 
+    #[tokio::test]
+    async fn pending_clipboard_media_blocks_submit_queue_and_steer_without_losing_text() {
+        let mut app = seeded_app().await;
+        app.composer.insert_str("preserve my draft");
+        app.composer_pending_media = 2;
+        app.submit_composer();
+        assert_eq!(app.composer.text(), "preserve my draft");
+        app.queue_or_submit();
+        assert_eq!(app.composer.text(), "preserve my draft");
+        app.submit_or_steer();
+        assert_eq!(app.composer.text(), "preserve my draft");
+        assert_eq!(app.composer_pending_media, 2);
+        assert_eq!(app.remaining_resource_attachment_slots(), 6);
+        let epoch = app.composer_media_epoch;
+        app.clear_composer_state();
+        assert_eq!(app.composer_pending_media, 0);
+        assert_ne!(app.composer_media_epoch, epoch);
+    }
+
+    #[tokio::test]
+    async fn oversized_long_paste_does_not_insert_text_or_start_an_upload() {
+        let mut app = seeded_app().await;
+        app.composer.insert_str("keep current draft");
+        app.stage_long_paste_text_file("中".repeat(400000));
+        assert_eq!(app.composer.text(), "keep current draft");
+        assert_eq!(app.composer_pending_media, 0);
+        assert!(app.composer_items.is_empty());
+    }
+
     /// Seed the pending review part (canonical tool_call + execution + live
     /// user-input view + expanded node + the request in the interaction map).
     fn seed_pending_review(app: &mut App) {

@@ -552,7 +552,7 @@ fn attachment_resource(item: &AttachmentItem) -> agena_api::resource::PartAttach
         AttachmentSource::DataUrl { url } => {
             agena_api::resource::PartAttachmentSource::DataUrl { url: url.clone() }
         }
-        AttachmentSource::Base64 { data } => {
+        AttachmentSource::Base64 { data } | AttachmentSource::ProviderData { data, .. } => {
             agena_api::resource::PartAttachmentSource::Base64 { data: data.clone() }
         }
         AttachmentSource::FileId { file_id } => agena_api::resource::PartAttachmentSource::FileId {

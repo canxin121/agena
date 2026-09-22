@@ -90,7 +90,10 @@ export type ChatPageViewContext = {
     isSessionSwitcherOpen: boolean
     setSessionSwitcherOpen: (open: boolean) => void
   }
-  attachedFiles: MaybeRef<AttachedFile[]>
+  failedAttachmentDraft: MaybeRef<{sessionId:string;text:string;files:AttachedFile[]} | null>
+  restoreFailedAttachmentDraft: () => void
+  discardFailedAttachmentDraft: () => void
+  attachedFiles: Ref<AttachedFile[]>
   attachmentsBusy: MaybeRef<boolean>
   attachmentsPanelOpen: MaybeRef<boolean>
   draft: MaybeRef<string>

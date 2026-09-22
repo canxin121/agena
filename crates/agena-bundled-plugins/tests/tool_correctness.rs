@@ -630,3 +630,42 @@ async fn audit_edit_without_lsp_does_not_claim_validation_success() {
             .contains("not evidence of clean code")
     );
 }
+
+#[tokio::test]
+async fn audit_binary_fs_read_is_a_local_reference_not_an_implicit_model_upload() {
+    let f = Fixture::new().await;
+    let png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGMQVDL+DwACFAFmBODefwAAAABJRU5ErkJggg==";
+    use base64::Engine as _;
+    std::fs::write(
+        f.root.path().join("picture.png"),
+        base64::engine::general_purpose::STANDARD
+            .decode(png)
+            .unwrap(),
+    )
+    .unwrap();
+    let invocation = ToolInvocation::new(
+        "fs.read",
+        StructuredObject::try_from(json!({"file_path":"picture.png","mode":"attachment"})).unwrap(),
+    );
+    let prepared = f
+        .executor
+        .prepare_invocation(&invocation, 41, 201)
+        .await
+        .unwrap();
+    let result = f
+        .executor
+        .execute_invocation_detailed(&prepared.invocation, 41, 201)
+        .await
+        .unwrap();
+    assert!(result.view.output_text.contains("Local reference only"));
+    assert!(!serde_json::to_string(&result.output).unwrap().contains(png));
+    assert!(result.view.attachments.iter().all(|attachment| matches!(
+        attachment.source,
+        agena_domain::AttachmentSource::LocalPath { .. }
+    )));
+    let error = f
+        .call("fs.view_image", json!({"path":"picture.png"}))
+        .await
+        .unwrap_err();
+    assert!(matches!(error, ToolError::ToolUnavailable(_)));
+}

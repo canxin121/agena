@@ -101,8 +101,8 @@ pub use activity::{
     ActivityPayload, ActivityProvenance, ActivityState, CancellationOutcome, CancellationResult,
     ComposerActivity, ComposerDocument, ComposerNode, ErrorActivity, ExecutionTarget,
     InteractionActivity, NoticeActivity, OperationAuthorization, OperationPermission,
-    ReasoningActivity, ResourceActivity, ResourceKind, ResourceReference, SkillReferenceActivity,
-    TextArtifactActivity, TextSegmentActivity,
+    ReasoningActivity, ResourceActivity, ResourceDelivery, ResourceKind, ResourceReference,
+    SkillReferenceActivity, TextArtifactActivity, TextSegmentActivity,
 };
 pub use activity_kind::{
     ACTIVITY_KIND_ERROR, ACTIVITY_KIND_HOOK, ACTIVITY_KIND_INTERACTION, ACTIVITY_KIND_NOTICE,

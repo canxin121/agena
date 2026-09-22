@@ -258,42 +258,6 @@ pub(super) enum OpenAiResponsesInputItem {
 }
 
 #[derive(Debug, Serialize)]
-#[serde(untagged)]
-pub(super) enum OpenAiRealtimeConversationItem {
-    Message(OpenAiRealtimeMessageItem),
-    FunctionCall(OpenAiFunctionCallItem),
-    FunctionCallOutput(OpenAiFunctionCallOutputItem),
-}
-
-impl OpenAiRealtimeConversationItem {
-    pub(super) fn from_responses_input(value: OpenAiResponsesInputItem) -> Option<Self> {
-        match value {
-            OpenAiResponsesInputItem::Message(message) => {
-                Some(Self::Message(OpenAiRealtimeMessageItem {
-                    kind: "message",
-                    role: message.role,
-                    content: message.content,
-                }))
-            }
-            OpenAiResponsesInputItem::Reasoning(_) => None,
-            OpenAiResponsesInputItem::FunctionCall(item) => Some(Self::FunctionCall(item)),
-            OpenAiResponsesInputItem::FunctionCallOutput(item) => {
-                Some(Self::FunctionCallOutput(item))
-            }
-            OpenAiResponsesInputItem::Raw(_) => None,
-        }
-    }
-}
-
-#[derive(Debug, Serialize)]
-pub(super) struct OpenAiRealtimeMessageItem {
-    #[serde(rename = "type")]
-    kind: &'static str,
-    role: String,
-    content: Vec<OpenAiInputContent>,
-}
-
-#[derive(Debug, Serialize)]
 pub(super) struct OpenAiFunctionCallItem {
     #[serde(rename = "type")]
     pub(super) kind: &'static str,

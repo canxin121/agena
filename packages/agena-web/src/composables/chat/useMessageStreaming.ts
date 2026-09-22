@@ -6,7 +6,7 @@ export type OptimisticUserMessage = {
   createdAt: number
   status: 'sending' | 'queued' | 'sent'
   text: string
-  files: Array<{ id?: string; filename: string; size?: number; mime: string; url?: string; serverPath?: string }>
+  files: Array<{ id?: string; filename: string; size?: number; mime: string; url?: string; serverPath?: string; delivery?: 'reference' | 'model_input' }>
   // Last user message id visible in the timeline when the send started.
   // Used to avoid falsely acknowledging against an older (updated) message.
   baselineUserMessageId: string
@@ -19,7 +19,7 @@ type MessagePartLike = {
   text?: string
   content?: string
   url?: string
-  serverPath?: string
+  serverPath?: string; delivery?: 'reference' | 'model_input'
   filename?: string
   id?: string
 }
@@ -177,7 +177,7 @@ export function useMessageStreaming(opts: {
       size?: number
       mime: string
       url?: string
-      serverPath?: string
+      serverPath?: string; delivery?: 'reference' | 'model_input'
     }>
   }) {
     const sid = (args.sessionId || '').trim()

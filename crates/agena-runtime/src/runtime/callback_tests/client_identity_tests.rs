@@ -160,7 +160,6 @@ async fn published_client_identities_are_isolated_between_runtimes_for_all_vendo
     for adapter in [
         "openai_responses",
         "openai_chat_completions",
-        "openai_realtime",
         "anthropic",
         "gemini",
     ] {

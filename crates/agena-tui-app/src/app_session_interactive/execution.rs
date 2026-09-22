@@ -82,6 +82,12 @@ impl App {
     /// (permission / user input) the run is not cancelled; the message
     /// is parked in the queue like bare Enter.
     pub(crate) fn submit_or_steer(&mut self) {
+        if self.composer_pending_media > 0 {
+            self.flash_warning(
+                "Attachments are still being prepared; the draft was not sent or queued.",
+            );
+            return;
+        }
         let draft = self.take_composer_draft();
         if draft.is_empty() {
             // Ctrl+Enter with nothing typed re-flushes a parked message
@@ -147,6 +153,12 @@ impl App {
     /// sends immediately. When the AI is mid-run, the message is parked in the
     /// single pending slot and delivered on run completion.
     pub(crate) fn queue_or_submit(&mut self) {
+        if self.composer_pending_media > 0 {
+            self.flash_warning(
+                "Attachments are still being prepared; the draft was not sent or queued.",
+            );
+            return;
+        }
         let draft = self.take_composer_draft();
         if draft.is_empty() {
             // A bare Enter with nothing typed re-flushes a parked message
@@ -181,6 +193,12 @@ impl App {
     }
 
     pub(crate) fn submit_composer(&mut self) {
+        if self.composer_pending_media > 0 {
+            self.flash_warning(
+                "Attachments are still being prepared; the draft was not sent or queued.",
+            );
+            return;
+        }
         let draft = self.take_composer_draft();
         if draft.is_empty() || self.current_session_activity().is_busy() {
             self.restore_composer_draft(draft);

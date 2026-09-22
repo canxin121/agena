@@ -1676,6 +1676,7 @@ pub enum CompletionInputAttachmentSource {
     Url { url: String },
     DataUrl { url: String },
     Base64 { data: String },
+    ProviderData { route: String, data: String },
     FileId { id: String },
     LocalPath { path: String },
 }
@@ -1909,6 +1910,7 @@ fn attachment_text_hint(attachment: &CompletionInputAttachment) -> String {
             CompletionInputAttachmentSource::Url { url }
             | CompletionInputAttachmentSource::DataUrl { url } => Some(url.as_str()),
             CompletionInputAttachmentSource::Base64 { .. } => Some("base64"),
+            CompletionInputAttachmentSource::ProviderData { .. } => Some("provider-bound media"),
             CompletionInputAttachmentSource::FileId { id } => Some(id.as_str()),
             CompletionInputAttachmentSource::LocalPath { path } => Some(path.as_str()),
         })

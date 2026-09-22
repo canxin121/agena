@@ -26,7 +26,7 @@ type AttachedFile = {
   size: number
   mime: string
   url?: string
-  serverPath?: string
+  serverPath?: string; delivery?: 'reference' | 'model_input'
 }
 
 type MessagePartLike = {

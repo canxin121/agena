@@ -85,11 +85,26 @@ impl AttachmentKind {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "source", rename_all = "snake_case")]
 pub enum AttachmentSource {
-    Url { url: String },
-    DataUrl { url: String },
-    Base64 { data: String },
-    FileId { file_id: String },
-    LocalPath { path: String },
+    Url {
+        url: String,
+    },
+    DataUrl {
+        url: String,
+    },
+    Base64 {
+        data: String,
+    },
+    /// Explicit user input, immutable bytes scoped to the selected model route.
+    ProviderData {
+        route: String,
+        data: String,
+    },
+    FileId {
+        file_id: String,
+    },
+    LocalPath {
+        path: String,
+    },
 }
 
 impl AttachmentSource {
@@ -97,6 +112,7 @@ impl AttachmentSource {
         let value = match self {
             Self::Url { url } | Self::DataUrl { url } => url,
             Self::Base64 { .. } => return Some("base64"),
+            Self::ProviderData { .. } => return Some("provider-bound media"),
             Self::FileId { file_id } => file_id,
             Self::LocalPath { path } => path,
         };

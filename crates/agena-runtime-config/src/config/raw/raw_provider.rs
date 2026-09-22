@@ -225,8 +225,9 @@ fn resolve_adapter_config(
             if stream_mode.is_some() || normalize_optional(realtime_ws_url.clone()).is_some() {
                 return Err(ConfigError::InvalidProviderConfig {
                     provider_id: provider_id.to_owned(),
-                    message: "openai_responses adapter does not accept Realtime transport fields"
-                        .to_owned(),
+                    message:
+                        "openai_responses adapter does not accept Gemini streaming transport fields"
+                            .to_owned(),
                 });
             }
             ProviderAdapterDefinition::OpenAiResponses(HttpProviderAdapterConfig {
@@ -260,7 +261,7 @@ fn resolve_adapter_config(
                 return Err(ConfigError::InvalidProviderConfig {
                     provider_id: provider_id.to_owned(),
                     message:
-                        "openai_chat_completions adapter does not accept Realtime transport fields"
+                        "openai_chat_completions adapter does not accept Gemini streaming transport fields"
                             .to_owned(),
                 });
             }
@@ -268,39 +269,6 @@ fn resolve_adapter_config(
                 user_agent: normalize_optional(user_agent),
                 extra_headers,
                 options: crate::OpenAiChatCompletionsProviderOptions {
-                    models_url: normalize_optional(models_url),
-                    auth_header: auth_header.unwrap_or_else(|| "authorization".to_owned()),
-                    auth_scheme: normalize_optional(auth_scheme)
-                        .or_else(|| Some("Bearer".to_owned())),
-                    capability_family,
-                },
-            })
-        }
-        ProviderKind::OpenAiRealtime => {
-            if backend.is_some() {
-                return Err(ConfigError::InvalidProviderConfig {
-                    provider_id: provider_id.to_owned(),
-                    message: "openai_realtime adapter does not accept a Responses backend"
-                        .to_owned(),
-                });
-            }
-            if normalize_optional(base_url.clone()).is_some() {
-                return Err(ConfigError::InvalidProviderConfig {
-                    provider_id: provider_id.to_owned(),
-                    message: "openai_realtime adapter does not support `base_url`; configure provider auth endpoint instead".to_owned(),
-                });
-            }
-            if stream_mode.is_some() {
-                return Err(ConfigError::InvalidProviderConfig {
-                    provider_id: provider_id.to_owned(),
-                    message: "openai_realtime is already a WebSocket protocol adapter and does not accept `stream_mode`".to_owned(),
-                });
-            }
-            ProviderAdapterDefinition::OpenAiRealtime(HttpProviderAdapterConfig {
-                user_agent: normalize_optional(user_agent),
-                extra_headers,
-                options: crate::OpenAiRealtimeProviderOptions {
-                    realtime_ws_url: normalize_optional(realtime_ws_url),
                     models_url: normalize_optional(models_url),
                     auth_header: auth_header.unwrap_or_else(|| "authorization".to_owned()),
                     auth_scheme: normalize_optional(auth_scheme)
@@ -886,7 +854,6 @@ fn validate_provider_auth<'a>(
                         ProviderAdapterDefinition::OpenAiChatCompletions(_) => {
                             "openai_chat_completions"
                         }
-                        ProviderAdapterDefinition::OpenAiRealtime(_) => "openai_realtime",
                         ProviderAdapterDefinition::Anthropic(_) => "anthropic",
                         ProviderAdapterDefinition::Gemini(_) => "gemini",
                         ProviderAdapterDefinition::Gitlab(_) => "gitlab",
@@ -934,12 +901,6 @@ fn validate_provider_auth<'a>(
                     });
                 }
             },
-            (ProviderAuthConfig::Credential(_), ProviderAdapterDefinition::OpenAiRealtime(_)) => {
-                return Err(ConfigError::InvalidProviderConfig {
-                    provider_id: provider_id.to_owned(),
-                    message: "openai_realtime requires API authentication".to_owned(),
-                });
-            }
             (ProviderAuthConfig::Credential(config), ProviderAdapterDefinition::Anthropic(_)) => {
                 if !matches!(
                     config.issuer(),
@@ -999,7 +960,6 @@ fn api_auth_requires_base_url(definition: &ProviderAdapterDefinition) -> bool {
         definition,
         ProviderAdapterDefinition::OpenAiResponses(_)
             | ProviderAdapterDefinition::OpenAiChatCompletions(_)
-            | ProviderAdapterDefinition::OpenAiRealtime(_)
             | ProviderAdapterDefinition::Anthropic(_)
             | ProviderAdapterDefinition::Gemini(_)
     )

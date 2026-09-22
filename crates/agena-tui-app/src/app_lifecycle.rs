@@ -100,6 +100,8 @@ impl App {
             run_options: RunOptionsState::default(),
             composer: Editor::default(),
             composer_items: Vec::new(),
+            composer_media_epoch: 0,
+            composer_pending_media: 0,
             slash_command_suggestions: None,
             slash_command_suggestion_actions: BTreeMap::new(),
             dismissed_slash_command_suggestions_for: None,

@@ -25,9 +25,9 @@ fn bundled_manifest_separates_gateway_and_execution_tools() {
         manifest.counts.tools.saturating_sub(4)
     );
     for (plugin_id, canonical_name) in [
-        ("agena.chatgpt", "agena.chatgpt.web_search"),
-        ("agena.gemini", "agena.gemini.google_search"),
-        ("agena.claude", "agena.claude.bash"),
+        ("agena.chatgpt", "agena.chatgpt.cloud_web_search"),
+        ("agena.gemini", "agena.gemini.cloud_google_search"),
+        ("agena.claude", "agena.claude.cloud_code_execution"),
     ] {
         assert!(manifest.plugins.iter().any(|plugin| {
             plugin.id == plugin_id

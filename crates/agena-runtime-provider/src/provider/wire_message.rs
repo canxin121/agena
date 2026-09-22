@@ -197,7 +197,20 @@ pub fn project_persisted(parts: &[Part]) -> Vec<WirePart> {
             TypedContent::Run(_) => {}
             TypedContent::FileRef(file_ref) => {
                 for item in &attachment_from_file_ref(&file_ref).attachments {
-                    if let Some(text) = local_resource_reference_text(item) {
+                    if file_ref
+                        .extra
+                        .get("delivery")
+                        .and_then(serde_json::Value::as_str)
+                        == Some("reference")
+                    {
+                        let label = item
+                            .filename
+                            .as_deref()
+                            .or(item.title.as_deref())
+                            .unwrap_or("attachment");
+                        let text=local_resource_reference_text(item).unwrap_or_else(||format!("[Reference-only resource: {label}; media type {}. No media bytes or remote-file access were provided to this model. Use a separately authorized cloud media tool or explicitly attach contents to analyze it.]",item.mime));
+                        wire.push(WirePart::Text { text });
+                    } else if let Some(text) = local_resource_reference_text(item) {
                         wire.push(WirePart::Text { text });
                     } else {
                         wire.push(WirePart::Attachment { item: item.clone() });
@@ -356,6 +369,9 @@ fn attachment_item_from_completion_input(attachment: CompletionInputAttachment) 
             CompletionInputAttachmentSource::Url { url } => AttachmentSource::Url { url },
             CompletionInputAttachmentSource::DataUrl { url } => AttachmentSource::DataUrl { url },
             CompletionInputAttachmentSource::Base64 { data } => AttachmentSource::Base64 { data },
+            CompletionInputAttachmentSource::ProviderData { route, data } => {
+                AttachmentSource::ProviderData { route, data }
+            }
             CompletionInputAttachmentSource::FileId { id } => {
                 AttachmentSource::FileId { file_id: id }
             }
@@ -447,6 +463,9 @@ fn completion_input_attachment(item: AttachmentItem) -> CompletionInputAttachmen
             AttachmentSource::Url { url } => CompletionInputAttachmentSource::Url { url },
             AttachmentSource::DataUrl { url } => CompletionInputAttachmentSource::DataUrl { url },
             AttachmentSource::Base64 { data } => CompletionInputAttachmentSource::Base64 { data },
+            AttachmentSource::ProviderData { route, data } => {
+                CompletionInputAttachmentSource::ProviderData { route, data }
+            }
             AttachmentSource::FileId { file_id } => {
                 CompletionInputAttachmentSource::FileId { id: file_id }
             }
@@ -684,9 +703,9 @@ pub fn parts_text_lossy(parts: &[WirePart]) -> String {
 /// Render a workspace-local resource as a lazy, model-visible reference.
 ///
 /// Local paths belong to Agena's workspace and are intentionally never sent to
-/// a provider as multimodal bytes. The exact path is the stable hand-off to
-/// `fs.read`, which lets the model inspect the resource only when the task
-/// actually requires it.
+/// a provider as multimodal bytes. Text can be read by fs.read; media analysis
+/// requires a separately authorized cloud tool or explicit composer delivery.
+/// Do not instruct the model to loop through metadata-only media reads.
 fn local_resource_reference_text(item: &AttachmentItem) -> Option<String> {
     let AttachmentSource::LocalPath { path } = &item.source else {
         return None;
@@ -704,11 +723,25 @@ fn local_resource_reference_text(item: &AttachmentItem) -> Option<String> {
         "size_bytes": item.size_bytes,
         "sha256": item.sha256,
     });
+    let inspect = match item.kind {
+        AttachmentKind::Image => {
+            "Use tools_search/tools_help to choose an available provider.cloud_image_understanding tool with this exact local path. That is a separate authorized cloud request; fs.read only returns a reference and does not let you see the picture."
+        }
+        AttachmentKind::Pdf => {
+            "Use tools_search/tools_help to choose an available provider.cloud_document_understanding tool with this exact local path. That is a separate authorized cloud request; fs.read attachment mode does not analyze the PDF."
+        }
+        AttachmentKind::Audio | AttachmentKind::Video => {
+            "Media contents are not available through fs.read. Use a separately authorized, supported cloud media capability or ask the user to explicitly send contents to a model with confirmed audio/video input support. Do not infer playback or analysis from metadata."
+        }
+        AttachmentKind::File => {
+            "For UTF-8 text, use fs.read with file_path set exactly to the resource path. Binary attachment mode returns a local reference only; use an explicit supported cloud analysis operation for binary media."
+        }
+    };
     let payload = serde_json::json!({
         "semantics": "message_scoped_user_selected_resource_reference",
         "guidance": [
             "The user attached this workspace resource by reference; its contents are not embedded in the message.",
-            "Use `fs.read` with `file_path` set exactly to the resource `path` when you need to inspect it. The default `mode=auto` is appropriate unless the task requires another read mode.",
+            inspect,
             "Do not infer the resource contents from its filename or metadata alone."
         ],
         "resource": resource,
@@ -746,7 +779,7 @@ pub fn data_url(item: &AttachmentItem) -> Option<String> {
             let trimmed = url.trim();
             (!trimmed.is_empty()).then_some(trimmed.to_owned())
         }
-        AttachmentSource::Base64 { data } => {
+        AttachmentSource::Base64 { data } | AttachmentSource::ProviderData { data, .. } => {
             let mime = item.mime.trim();
             let data = data.trim();
             if mime.is_empty() || data.is_empty() {
@@ -766,7 +799,7 @@ pub fn media_url(item: &AttachmentItem) -> Option<String> {
         AttachmentSource::Url { url } | AttachmentSource::DataUrl { url } => {
             Some(url.trim().to_owned())
         }
-        AttachmentSource::Base64 { data } => {
+        AttachmentSource::Base64 { data } | AttachmentSource::ProviderData { data, .. } => {
             if item.mime.trim().is_empty() || data.trim().is_empty() {
                 None
             } else {
@@ -779,7 +812,7 @@ pub fn media_url(item: &AttachmentItem) -> Option<String> {
 
 pub fn base64_with_mime(item: &AttachmentItem) -> Option<(String, String)> {
     match &item.source {
-        AttachmentSource::Base64 { data } => {
+        AttachmentSource::Base64 { data } | AttachmentSource::ProviderData { data, .. } => {
             let mime = item.mime.trim();
             let data = data.trim();
             if mime.is_empty() || data.is_empty() {
@@ -823,7 +856,7 @@ pub fn attachment_text(item: &AttachmentItem) -> Option<String> {
     }
 
     let bytes = match &item.source {
-        AttachmentSource::Base64 { data } => {
+        AttachmentSource::Base64 { data } | AttachmentSource::ProviderData { data, .. } => {
             match base64::engine::general_purpose::STANDARD.decode(data.trim()) {
                 Ok(bytes) => bytes,
                 Err(error) => {
@@ -1292,17 +1325,17 @@ fn attachment_file_content_value(item: &AttachmentItem) -> Option<serde_json::Va
         .map(str::to_owned)
         .unwrap_or_else(|| item.summary_label());
     match &item.source {
-        AttachmentSource::Base64 { .. } | AttachmentSource::DataUrl { .. } => {
-            data_url(item).map(|file_data| {
-                serde_json::json!({
-                    "type": "file",
-                    "file": {
-                        "file_data": file_data,
-                        "filename": upload_name,
-                    }
-                })
+        AttachmentSource::Base64 { .. }
+        | AttachmentSource::ProviderData { .. }
+        | AttachmentSource::DataUrl { .. } => data_url(item).map(|file_data| {
+            serde_json::json!({
+                "type": "file",
+                "file": {
+                    "file_data": file_data,
+                    "filename": upload_name,
+                }
             })
-        }
+        }),
         AttachmentSource::FileId { file_id } => {
             let file_id = file_id.trim();
             (!file_id.is_empty()).then(|| {
@@ -1626,7 +1659,7 @@ mod tests {
     }
 
     #[test]
-    fn local_workspace_file_projects_as_lazy_fs_read_reference() {
+    fn local_workspace_image_remains_a_reference_until_explicit_cloud_analysis() {
         let file = part(
             "file_ref",
             PartRole::User,
@@ -1648,9 +1681,113 @@ mod tests {
         assert!(text.contains("message_scoped_user_selected_resource_reference"));
         assert!(text.contains(".agena/uploads/abc123-screenshot.png"));
         assert!(text.contains("screenshot.png"));
-        assert!(text.contains("fs.read"));
-        assert!(text.contains("file_path"));
+        assert!(text.contains("provider.cloud_image_understanding"));
+        assert!(text.contains("separate authorized cloud request"));
+        assert!(text.contains("fs.read only returns a reference"));
+        assert!(text.contains("does not let you see the picture"));
         assert!(!text.contains("data:image/png"));
+        assert!(!text.contains("Use `fs.read`"));
+    }
+
+    #[test]
+    fn reference_guidance_distinguishes_text_reading_from_media_understanding() {
+        for (kind, mime, path, expected) in [
+            (
+                "file",
+                "text/plain",
+                "notes.txt",
+                "For UTF-8 text, use fs.read with file_path",
+            ),
+            (
+                "pdf",
+                "application/pdf",
+                "report.pdf",
+                "provider.cloud_document_understanding",
+            ),
+            (
+                "audio",
+                "audio/mpeg",
+                "recording.mp3",
+                "confirmed audio/video input support",
+            ),
+            (
+                "video",
+                "video/mp4",
+                "clip.mp4",
+                "confirmed audio/video input support",
+            ),
+        ] {
+            let reference = part(
+                "file_ref",
+                PartRole::User,
+                PartState::Completed,
+                serde_json::json!({
+                    "path":path,"name":path,"mime":mime,"kind":kind,"delivery":"reference"
+                }),
+            );
+            let projected = project_persisted(&[reference]);
+            assert_eq!(projected.len(), 1);
+            let WirePart::Text { text } = &projected[0] else {
+                panic!("a reference must never become binary model input")
+            };
+            assert!(text.contains(path));
+            assert!(text.contains(expected), "{kind}: {text}");
+            assert!(text.contains("contents are not embedded"));
+            assert!(!text.contains("data:"));
+        }
+    }
+
+    #[test]
+    fn explicit_reference_delivery_never_sends_remote_urls_or_provider_file_ids() {
+        for source in [
+            agena_domain::AttachmentSource::Url {
+                url: "https://example.invalid/private.png".into(),
+            },
+            agena_domain::AttachmentSource::FileId {
+                file_id: "file_private".into(),
+            },
+            agena_domain::AttachmentSource::Base64 {
+                data: "PRIVATE_BASE64".into(),
+            },
+        ] {
+            let attachment = agena_domain::AttachmentItem {
+                kind: agena_domain::AttachmentKind::Image,
+                mime: "image/png".into(),
+                source,
+                filename: Some("image.png".into()),
+                title: None,
+                size_bytes: None,
+                sha256: None,
+                width: None,
+                height: None,
+                duration_ms: None,
+                page_count: None,
+            };
+            let file = part(
+                "file_ref",
+                PartRole::User,
+                PartState::Completed,
+                serde_json::json!({"name":"image.png","kind":"image","mime":"image/png","delivery":"reference","attachments":[attachment]}),
+            );
+            // Positive control: without explicit reference-only delivery this
+            // valid attachment would project as actual model input.
+            let mut transmitted = file.clone();
+            transmitted
+                .content
+                .as_object_mut()
+                .unwrap()
+                .remove("delivery");
+            assert!(matches!(
+                project_persisted(&[transmitted]).as_slice(),
+                [WirePart::Attachment { .. }]
+            ));
+            let projected = project_persisted(&[file]);
+            assert!(matches!(projected.as_slice(), [WirePart::Text { .. }]));
+            let serialized = format!("{projected:?}");
+            assert!(!serialized.contains("PRIVATE_BASE64"));
+            assert!(!serialized.contains("https://example.invalid"));
+            assert!(!serialized.contains("file_private"));
+        }
     }
 
     #[test]

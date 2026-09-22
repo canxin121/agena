@@ -7,7 +7,7 @@ use agena_provider::{
 /// Chat Completions API endpoints.
 ///
 /// The explicit OpenAI Chat Completions adapter and compatible Chat
-/// Completions backends share these structs. Responses and Realtime use their
+/// Completions backends share these structs. Responses uses its
 /// own wire types and never serialize this schema.
 use serde_json::Value;
 

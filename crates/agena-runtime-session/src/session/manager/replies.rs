@@ -928,6 +928,10 @@ impl SessionManager {
                 .tool_executor
                 .for_session_context_async(&execution_tool.session_runtime.execution)
                 .await
+                .with_cloud_tool_adapter(Self::cloud_tool_adapter(
+                    execution_state.as_ref(),
+                    &execution_tool.session_runtime.execution.selection,
+                ))
                 .with_cancellation_token(Some(cancellation));
             let host_user_input_sequence = execution_manager
                 .host_user_input_sequence_guard(session_id, execution_tool.call_id);

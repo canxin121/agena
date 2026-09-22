@@ -834,6 +834,12 @@ fn attachment_to_transcript_block(item: &CompletionInputAttachment) -> Transcrip
         CompletionInputAttachmentSource::Base64 { data } => {
             format!("base64:{}", digest_bytes(data.trim().as_bytes()))
         }
+        CompletionInputAttachmentSource::ProviderData { route, data } => {
+            format!(
+                "provider_data:{route}:{}",
+                digest_bytes(data.trim().as_bytes())
+            )
+        }
         CompletionInputAttachmentSource::FileId { id } => format!("file_id:{}", id.trim()),
         CompletionInputAttachmentSource::LocalPath { path } => {
             format!("local_path:{}", path.trim())
@@ -1160,6 +1166,12 @@ fn completion_input_attachment_from_raw_output(
             }
             agena_domain::AttachmentSource::Base64 { data } => {
                 CompletionInputAttachmentSource::Base64 { data: data.clone() }
+            }
+            agena_domain::AttachmentSource::ProviderData { route, data } => {
+                CompletionInputAttachmentSource::ProviderData {
+                    route: route.clone(),
+                    data: data.clone(),
+                }
             }
             agena_domain::AttachmentSource::FileId { file_id } => {
                 CompletionInputAttachmentSource::FileId {
@@ -2426,5 +2438,34 @@ mod compaction_tests {
             text_lossy_list(&[items[0].run.clone()]),
             vec!["plain assistant".to_owned()]
         );
+    }
+}
+
+#[cfg(test)]
+mod media_identity_tests {
+    use super::*;
+    #[test]
+    fn prompt_identity_contains_digest_not_inline_image_content() {
+        let item = agena_provider::CompletionInputAttachment {
+            kind: agena_provider::CompletionInputAttachmentKind::Image,
+            mime: "image/png".into(),
+            source: agena_provider::CompletionInputAttachmentSource::ProviderData {
+                route: "media-route-v1:fixture".into(),
+                data: "PRIVATE_BINARY_CONTENT".repeat(1024),
+            },
+            filename: Some("image.png".into()),
+            title: None,
+            size_bytes: None,
+            sha256: None,
+            width: None,
+            height: None,
+            duration_ms: None,
+            page_count: None,
+        };
+        let block = attachment_to_transcript_block(&item);
+        let text = format!("{block:?}");
+        assert!(!text.contains("PRIVATE_BINARY_CONTENT"));
+        assert!(text.len() < 1024);
+        assert!(text.contains("media-route-v1:fixture"));
     }
 }

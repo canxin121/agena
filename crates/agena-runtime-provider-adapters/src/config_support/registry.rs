@@ -12,8 +12,7 @@ use crate::{
         AmazonBedrockAdapter, AnthropicAdapter, AnthropicAdapterOptions, CatalogedModelsProvider,
         GeminiAdapter, GeminiAdapterOptions, GitlabProvider, ManagedCredential, ModelId,
         ModelRuntime, ModelSpeedMode, ModelThinkingMode, MultiAdapterProvider, OllamaAdapter,
-        OpenAiChatCompletionsAdapter, OpenAiChatCompletionsAdapterOptions, OpenAiRealtimeAdapter,
-        OpenAiRealtimeAdapterOptions, OpenAiResponsesAdapter, OpenAiResponsesAdapterOptions,
+        OpenAiChatCompletionsAdapter, OpenAiChatCompletionsAdapterOptions, OpenAiResponsesAdapter, OpenAiResponsesAdapterOptions,
         ProviderModelRoute, ProviderRegistry, parse_sap_ai_core_service_key,
     },
 };

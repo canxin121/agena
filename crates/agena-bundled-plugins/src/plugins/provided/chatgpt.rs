@@ -15,11 +15,13 @@ use agena_plugin_host::sdk::{
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use super::cloud_media::{AnalyzeInput, FileInput, Service, UploadInput};
 use super::official_service::{
     ProviderHttpResponse, ProviderUsageKind, append_prompt_to_items, configured_model, endpoint,
     env_secret, merge_object_options, post_json, provider_output, read_image_input_bounded,
     read_json_response_bounded, resolve_local_path, stable_cache_key,
 };
+use agena_plugin_host::sdk::ToolInvokeContext;
 
 pub(crate) const CHATGPT_PLUGIN_ID: &str = "agena.chatgpt";
 
@@ -74,7 +76,7 @@ impl Default for ChatGptToolsConfig {
 )]
 #[serde(deny_unknown_fields)]
 struct ChatGptToolInput {
-    /// Instruction for a new request. Optional when continuation items are supplied.
+    /// Instruction for a new hosted request. May be omitted when message history is supplied.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     prompt: Option<String>,
     /// Stable developer prefix eligible for an explicit OpenAI cache breakpoint.
@@ -92,7 +94,7 @@ struct ChatGptToolInput {
     /// Responses API continuation token from an earlier call.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     previous_response_id: Option<String>,
-    /// Official callback/output items used to continue Computer, Shell, Patch, MCP, or Tool Search calls.
+    /// Responses message history for hosted follow-up. Client Function/Computer/Patch/MCP/Shell callback items are rejected; use previous_response_id for hosted continuation.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     input_items: Vec<serde_json::Value>,
     /// Optional Responses include selectors.
@@ -118,6 +120,18 @@ struct ChatGptImageEditInput {
 }
 
 impl ChatGptToolsPlugin {
+    fn media_service(&self) -> SdkResult<Service<'_>> {
+        Ok(Service {
+            provider: "chatgpt",
+            root: self.workspace_root()?,
+            host: self.host()?,
+            base_url: &self.config()?.base_url,
+            key_env: &self.config()?.api_key_env,
+            timeout_secs: self.config()?.timeout_secs,
+            anthropic_version: "2023-06-01",
+        })
+    }
+
     pub(crate) fn new() -> Self {
         Self {
             host: OnceLock::new(),
@@ -170,9 +184,19 @@ impl ChatGptToolsPlugin {
         declaration: serde_json::Value,
         input: ChatGptToolInput,
     ) -> SdkResult<ToolInvokeOutput> {
-        let model = self.model(input.model, format!("chatgpt.{tool_name}").as_str())?;
+        super::official_service::hosted::validate_options(&input.tool_options, "tool_options")?;
+        super::official_service::hosted::validate_options(
+            &input.request_options,
+            "request_options",
+        )?;
+        super::official_service::hosted::validate_history(
+            "chatgpt",
+            &serde_json::json!(&input.input_items),
+        )?;
+        let model = self.model(input.model, format!("chatgpt.cloud_{tool_name}").as_str())?;
         let declaration =
             merge_object_options(declaration, &input.tool_options, &["type"], "tool_options")?;
+        super::official_service::hosted::validate_declaration("chatgpt", tool_name, &declaration)?;
         let previous_response_id = input.previous_response_id.clone();
         let mut provider_input = append_prompt_to_items(input.input_items, input.prompt, true)?;
         let stable_instructions = input
@@ -315,7 +339,7 @@ impl ChatGptToolsPlugin {
     namespace = "agena",
     name = "chatgpt",
     version = env!("CARGO_PKG_VERSION"),
-    summary = "OpenAI Responses and image service tools exposed as ordinary Agena tools.",
+    summary = "OpenAI cloud search, computation and image capabilities. Inputs leave this computer; no local execution fallback.",
     settings = ChatGptToolsConfig,
     settings_default = default,
 )]
@@ -341,12 +365,82 @@ impl ChatGptToolsPlugin {
         )))
     }
 
+    #[tool(name="cloud_image_understanding",tags(query,network),
+        summary="Send explicit images to OpenAI cloud for understanding; not local file viewing.",
+        help="Runs in OpenAI cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Sends only the specified, permission-checked inputs and prompt to OpenAI. Accepts local paths with expected_sha256 or owned cloud_file_upload handles. Local preparation is bounded; no automatic whole-workspace or conversation upload. Cloud inference may be billed. Input sent inline is not a separate remote file. Results return input hashes, provider/model and usage. No local execution fallback.",
+        mutating,network(connect=self.config()?.base_url.clone()),path(requests=input.paths(self.workspace_root()?)))]
+    async fn image_understanding(
+        &self,
+        context: &ToolInvokeContext<'_>,
+        input: &AnalyzeInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        let model = self.model(input.model.clone(), "chatgpt.cloud_image_understanding")?;
+        self.media_service()?
+            .analyze(context, input, model, true)
+            .await
+    }
+
+    #[tool(name="cloud_document_understanding",tags(query,network),
+        summary="Send explicit PDF/text documents to OpenAI cloud for understanding; not local file viewing.",
+        help="Runs in OpenAI cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Sends only the specified, permission-checked inputs and prompt to OpenAI. Accepts local paths with expected_sha256 or owned cloud_file_upload handles. Local preparation is bounded; no automatic whole-workspace or conversation upload. Cloud inference may be billed. Input sent inline is not a separate remote file. Results return input hashes, provider/model and usage. No local execution fallback.",
+        mutating,network(connect=self.config()?.base_url.clone()),path(requests=input.paths(self.workspace_root()?)))]
+    async fn document_understanding(
+        &self,
+        context: &ToolInvokeContext<'_>,
+        input: &AnalyzeInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        let model = self.model(input.model.clone(), "chatgpt.cloud_document_understanding")?;
+        self.media_service()?
+            .analyze(context, input, model, false)
+            .await
+    }
+
+    #[tool(name="cloud_file_upload",tags(mutate,network),
+        summary="Upload one permitted local file to OpenAI cloud and return a session-owned handle.",
+        help="Runs in OpenAI cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Creates a remote file; does not analyze it. Inputs up to 20 MiB are content-checked and optionally revision-checked. The handle is bound to this workspace/session/provider connection; arbitrary vendor file IDs cannot be substituted. Local files remain unchanged. A timeout may leave remote acceptance unknown: inspect the returned handle, do not automatically repeat. Query status before using processing files and delete unneeded files explicitly.",
+        mutating,network(connect=self.config()?.base_url.clone()),path(requests=vec![PathRequest::read(input.path.clone()),PathRequest::write(self.workspace_root()?.join(".agena/artifacts/provider-tools").display().to_string())]))]
+    async fn file_upload(
+        &self,
+        context: &ToolInvokeContext<'_>,
+        input: &UploadInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        self.media_service()?.upload(context, input).await
+    }
+
+    #[tool(name="cloud_file_status",tags(query,network),
+        summary="Query the remote status of an owned OpenAI cloud file, not a local path.",
+        help="Runs in OpenAI cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Accepts only cloud_file_upload handles from the same workspace, session and provider connection. Reports provider readiness/expiry and refreshes the signed local receipt. Does not download file contents or resubmit an unknown upload.",
+        mutating,network(connect=self.config()?.base_url.clone()),path(requests=vec![PathRequest::read(self.workspace_root()?.join(".agena/artifacts/provider-tools/media").display().to_string()),PathRequest::write(self.workspace_root()?.join(".agena/artifacts/provider-tools/media").display().to_string())]))]
+    async fn file_status(
+        &self,
+        context: &ToolInvokeContext<'_>,
+        input: &FileInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        self.media_service()?
+            .file_control(context, input, false)
+            .await
+    }
+
+    #[tool(name="cloud_file_delete",tags(mutate,network),
+        summary="Request deletion of an owned file from OpenAI cloud; preserve the local original.",
+        help="Runs in OpenAI cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Accepts only session-owned cloud file handles. Deletes the remote resource and records the provider acknowledgement; it does not promise erasure of provider logs/backups. No arbitrary remote IDs or cross-provider deletion. A failed request is not reported as successful cleanup.",
+        mutating,network(connect=self.config()?.base_url.clone()),path(requests=vec![PathRequest::read(self.workspace_root()?.join(".agena/artifacts/provider-tools/media").display().to_string()),PathRequest::write(self.workspace_root()?.join(".agena/artifacts/provider-tools/media").display().to_string())]))]
+    async fn file_delete(
+        &self,
+        context: &ToolInvokeContext<'_>,
+        input: &FileInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        self.media_service()?
+            .file_control(context, input, true)
+            .await
+    }
     #[tool(
+        name = "cloud_web_search",
         network(connect = self.config()?.base_url.clone()),
         path(write = self.workspace_root()?.join(".agena/artifacts/provider-tools").display().to_string()),
         tags(network, interactive),
-        summary = "Use OpenAI's current Responses web_search tool.",
-        help = "tool_options accepts the official WebSearchToolParam fields: filters.allowed_domains, search_context_size, user_location, and versioned type-compatible options. Pending calls and response_id are returned for continuation.",
+        summary = "Search the web in OpenAI cloud and return sources; not a local browser operation.",
+        help = "Runs in OpenAI cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. tool_options accepts the official WebSearchToolParam fields: filters.allowed_domains, search_context_size, user_location, and versioned type-compatible options. Hosted results and response_id are returned for follow-up; this plugin never executes client tool callbacks.",
         read_only,
         discovery
     )]
@@ -361,30 +455,12 @@ impl ChatGptToolsPlugin {
     }
 
     #[tool(
+        name = "cloud_file_search",
         network(connect = self.config()?.base_url.clone()),
         path(write = self.workspace_root()?.join(".agena/artifacts/provider-tools").display().to_string()),
         tags(network, interactive),
-        summary = "Use OpenAI's compatibility web_search_preview tool.",
-        help = "Supports official preview fields such as search_content_types, search_context_size, and user_location.",
-        read_only,
-        discovery
-    )]
-    async fn web_search_preview(&self, input: ChatGptToolInput) -> SdkResult<ToolInvokeOutput> {
-        self.responses_tool(
-            "web_search_preview",
-            "ChatGPT web search preview",
-            serde_json::json!({"type":"web_search_preview"}),
-            input,
-        )
-        .await
-    }
-
-    #[tool(
-        network(connect = self.config()?.base_url.clone()),
-        path(write = self.workspace_root()?.join(".agena/artifacts/provider-tools").display().to_string()),
-        tags(network, interactive),
-        summary = "Search OpenAI vector stores with the official file_search tool.",
-        help = "Set tool_options.vector_store_ids and optional filters, max_num_results, and ranking_options exactly as documented by OpenAI.",
+        summary = "Search configured OpenAI cloud file stores, not files on this computer.",
+        help = "Runs in OpenAI cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Provider file-store identifiers refer to remote resources, not local filesystem paths. Set tool_options.vector_store_ids and optional filters, max_num_results, and ranking_options exactly as documented by OpenAI.",
         read_only,
         discovery
     )]
@@ -399,65 +475,12 @@ impl ChatGptToolsPlugin {
     }
 
     #[tool(
+        name = "cloud_code_interpreter",
         network(connect = self.config()?.base_url.clone()),
         path(write = self.workspace_root()?.join(".agena/artifacts/provider-tools").display().to_string()),
         tags(network, interactive),
-        summary = "Run OpenAI's current computer tool and return pending computer calls.",
-        help = "When the response contains computer_call items, execute the requested actions in Agena's browser/computer environment and call this tool again with previous_response_id plus official computer_call_output items in input_items.",
-        mutating
-    )]
-    async fn computer(&self, input: ChatGptToolInput) -> SdkResult<ToolInvokeOutput> {
-        self.responses_tool(
-            "computer",
-            "ChatGPT computer",
-            serde_json::json!({"type":"computer"}),
-            input,
-        )
-        .await
-    }
-
-    #[tool(
-        network(connect = self.config()?.base_url.clone()),
-        path(write = self.workspace_root()?.join(".agena/artifacts/provider-tools").display().to_string()),
-        tags(network, interactive),
-        summary = "Run OpenAI's computer_use_preview compatibility tool.",
-        help = "Set display_width, display_height, and environment in tool_options. Continue with computer_call_output items.",
-        mutating
-    )]
-    async fn computer_use_preview(&self, input: ChatGptToolInput) -> SdkResult<ToolInvokeOutput> {
-        self.responses_tool(
-            "computer_use_preview",
-            "ChatGPT computer use preview",
-            serde_json::json!({"type":"computer_use_preview"}),
-            input,
-        )
-        .await
-    }
-
-    #[tool(
-        network(connect = self.config()?.base_url.clone()),
-        path(write = self.workspace_root()?.join(".agena/artifacts/provider-tools").display().to_string()),
-        tags(network, interactive),
-        summary = "Connect OpenAI Responses to an official remote MCP server or connector.",
-        help = "Set server_label and one of server_url, connector_id, or tunnel_id in tool_options. Official allowed_tools, authorization, headers, require_approval, defer_loading, and allowed_callers fields are preserved.",
-        mutating
-    )]
-    async fn mcp(&self, input: ChatGptToolInput) -> SdkResult<ToolInvokeOutput> {
-        self.responses_tool(
-            "mcp",
-            "ChatGPT MCP",
-            serde_json::json!({"type":"mcp"}),
-            input,
-        )
-        .await
-    }
-
-    #[tool(
-        network(connect = self.config()?.base_url.clone()),
-        path(write = self.workspace_root()?.join(".agena/artifacts/provider-tools").display().to_string()),
-        tags(network, interactive),
-        summary = "Run Python with OpenAI's hosted code_interpreter tool.",
-        help = "tool_options.container may be a container id or an auto container object with file_ids, memory_limit, and network_policy.",
+        summary = "Run Python in an OpenAI cloud container, not the Agena local workspace.",
+        help = "Runs in OpenAI cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Cloud filesystem and runtime are separate from the Agena workspace; provide needed input files explicitly. tool_options.container may be a container id or an auto container object with file_ids, memory_limit, and network_policy.",
         read_only
     )]
     async fn code_interpreter(&self, input: ChatGptToolInput) -> SdkResult<ToolInvokeOutput> {
@@ -471,32 +494,12 @@ impl ChatGptToolsPlugin {
     }
 
     #[tool(
+        name = "cloud_image_generation",
         network(connect = self.config()?.base_url.clone()),
         path(write = self.workspace_root()?.join(".agena/artifacts/provider-tools").display().to_string()),
         tags(network, interactive),
-        summary = "Enable OpenAI programmatic tool calling.",
-        help = "This official Responses tool lets generated programs invoke eligible tools. Use input_items to continue any resulting calls.",
-        mutating
-    )]
-    async fn programmatic_tool_calling(
-        &self,
-        input: ChatGptToolInput,
-    ) -> SdkResult<ToolInvokeOutput> {
-        self.responses_tool(
-            "programmatic_tool_calling",
-            "ChatGPT programmatic tool calling",
-            serde_json::json!({"type":"programmatic_tool_calling"}),
-            input,
-        )
-        .await
-    }
-
-    #[tool(
-        network(connect = self.config()?.base_url.clone()),
-        path(write = self.workspace_root()?.join(".agena/artifacts/provider-tools").display().to_string()),
-        tags(network, interactive),
-        summary = "Generate or edit an image with OpenAI's Responses image_generation tool.",
-        help = "tool_options supports action, model, background, input_fidelity, input_image_mask, moderation, output_compression, output_format, partial_images, quality, and size. Returned base64 images are persisted as managed attachments.",
+        summary = "Generate images in OpenAI cloud; save returned images as local attachments.",
+        help = "Runs in OpenAI cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. tool_options supports action, model, background, input_fidelity, input_image_mask, moderation, output_compression, output_format, partial_images, quality, and size. Returned base64 images are persisted as managed attachments.",
         mutating
     )]
     async fn image_generation(&self, input: ChatGptToolInput) -> SdkResult<ToolInvokeOutput> {
@@ -510,139 +513,30 @@ impl ChatGptToolsPlugin {
     }
 
     #[tool(
+        name = "cloud_shell",
         network(connect = self.config()?.base_url.clone()),
         path(write = self.workspace_root()?.join(".agena/artifacts/provider-tools").display().to_string()),
         tags(network, interactive),
-        summary = "Expose OpenAI's local_shell protocol tool as an ordinary Agena request.",
-        help = "The provider returns local_shell_call items. Execute them with Agena shell permissions, then continue using previous_response_id and local_shell_call_output items.",
-        mutating
-    )]
-    async fn local_shell(&self, input: ChatGptToolInput) -> SdkResult<ToolInvokeOutput> {
-        self.responses_tool(
-            "local_shell",
-            "ChatGPT local shell",
-            serde_json::json!({"type":"local_shell"}),
-            input,
-        )
-        .await
-    }
-
-    #[tool(
-        network(connect = self.config()?.base_url.clone()),
-        path(write = self.workspace_root()?.join(".agena/artifacts/provider-tools").display().to_string()),
-        tags(network, interactive),
-        summary = "Expose OpenAI's shell tool with official environment configuration.",
-        help = "tool_options.environment accepts OpenAI local/container environment objects. Execute pending shell_call items under Agena permissions and continue with shell_call_output items.",
+        summary = "Run shell commands in an OpenAI cloud container, never in the local terminal.",
+        help = "Runs in OpenAI cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Cloud filesystem and runtime are separate from the Agena workspace; provide needed input files explicitly. Defaults to container_auto. Only container_auto or container_reference with container_id is accepted. Local/custom environments and client callbacks are rejected. Uploaded provider files are separate from Agena local files; there is no local execution fallback.",
         mutating
     )]
     async fn shell(&self, input: ChatGptToolInput) -> SdkResult<ToolInvokeOutput> {
         self.responses_tool(
             "shell",
             "ChatGPT shell",
-            serde_json::json!({"type":"shell"}),
+            serde_json::json!({"type":"shell","environment":{"type":"container_auto"}}),
             input,
         )
         .await
     }
 
     #[tool(
-        network(connect = self.config()?.base_url.clone()),
-        path(write = self.workspace_root()?.join(".agena/artifacts/provider-tools").display().to_string()),
-        tags(network, interactive),
-        summary = "Use OpenAI hosted or client tool_search.",
-        help = "Set tool_options.execution to server or client, plus optional description and parameters. Continue client calls with tool_search_output items in input_items.",
-        read_only,
-        discovery
-    )]
-    async fn tool_search(&self, input: ChatGptToolInput) -> SdkResult<ToolInvokeOutput> {
-        self.responses_tool(
-            "tool_search",
-            "ChatGPT tool search",
-            serde_json::json!({"type":"tool_search","execution":"server"}),
-            input,
-        )
-        .await
-    }
-
-    #[tool(
-        network(connect = self.config()?.base_url.clone()),
-        path(write = self.workspace_root()?.join(".agena/artifacts/provider-tools").display().to_string()),
-        tags(network, interactive),
-        summary = "Expose OpenAI's apply_patch protocol tool.",
-        help = "Execute returned apply_patch_call operations through Agena's permission-checked fs.apply_patch path, then continue with apply_patch_call_output items.",
-        mutating
-    )]
-    async fn apply_patch(&self, input: ChatGptToolInput) -> SdkResult<ToolInvokeOutput> {
-        self.responses_tool(
-            "apply_patch",
-            "ChatGPT apply patch",
-            serde_json::json!({"type":"apply_patch"}),
-            input,
-        )
-        .await
-    }
-
-    #[tool(
-        network(connect = self.config()?.base_url.clone()),
-        path(write = self.workspace_root()?.join(".agena/artifacts/provider-tools").display().to_string()),
-        tags(network, interactive),
-        name = "function",
-        summary = "Send an official OpenAI function tool declaration.",
-        help = "Set tool_options.name, description, parameters, and strict. This remains an ordinary Agena wrapper; returned function calls are continued through input_items.",
-        mutating
-    )]
-    async fn function_tool(&self, input: ChatGptToolInput) -> SdkResult<ToolInvokeOutput> {
-        self.responses_tool(
-            "function",
-            "ChatGPT function tool",
-            serde_json::json!({"type":"function"}),
-            input,
-        )
-        .await
-    }
-
-    #[tool(
-        network(connect = self.config()?.base_url.clone()),
-        path(write = self.workspace_root()?.join(".agena/artifacts/provider-tools").display().to_string()),
-        tags(network, interactive),
-        name = "custom",
-        summary = "Send an official OpenAI custom tool declaration.",
-        help = "Set the official custom tool name, description, and format fields in tool_options; continue custom_tool_call outputs through input_items.",
-        mutating
-    )]
-    async fn custom_tool(&self, input: ChatGptToolInput) -> SdkResult<ToolInvokeOutput> {
-        self.responses_tool(
-            "custom",
-            "ChatGPT custom tool",
-            serde_json::json!({"type":"custom"}),
-            input,
-        )
-        .await
-    }
-
-    #[tool(
-        network(connect = self.config()?.base_url.clone()),
-        path(write = self.workspace_root()?.join(".agena/artifacts/provider-tools").display().to_string()),
-        tags(network, interactive),
-        name = "namespace",
-        summary = "Send an official OpenAI namespace tool declaration.",
-        help = "Use tool_options to define the namespace and nested tools according to the current Responses schema.",
-        mutating
-    )]
-    async fn namespace_tool(&self, input: ChatGptToolInput) -> SdkResult<ToolInvokeOutput> {
-        self.responses_tool(
-            "namespace",
-            "ChatGPT namespace tool",
-            serde_json::json!({"type":"namespace"}),
-            input,
-        )
-        .await
-    }
-
-    #[tool(
-        network(connect = self.config()?.base_url.clone()),summary = "Edit permitted local images through OpenAI's Images edit endpoint.", help = "This convenience entry preserves the official image edit endpoint alongside the Responses image_generation tool. Every input and output path is permission checked.", mutating, path(requests = input.images.iter().cloned().map(PathRequest::read).chain(std::iter::once(PathRequest::write(self.workspace_root()?.join(".agena/artifacts/provider-tools").display().to_string()))).collect::<Vec<_>>()))]
+        name = "cloud_image_edit",
+        network(connect = self.config()?.base_url.clone()),summary = "Upload permitted images for editing in OpenAI cloud; save the returned image separately.", help = "Runs in OpenAI cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Permission-checked local images are uploaded to OpenAI; returned images are saved as separate local artifacts. This convenience entry preserves the official image edit endpoint alongside the Responses image_generation tool. Every input and output path is permission checked.", mutating, path(requests = input.images.iter().cloned().map(PathRequest::read).chain(std::iter::once(PathRequest::write(self.workspace_root()?.join(".agena/artifacts/provider-tools").display().to_string()))).collect::<Vec<_>>()))]
     async fn image_edit(&self, input: ChatGptImageEditInput) -> SdkResult<ToolInvokeOutput> {
-        let model = self.image_model(input.model, "chatgpt.image_edit")?;
+        super::official_service::hosted::validate_options(&input.options, "options")?;
+        let model = self.image_model(input.model, "chatgpt.cloud_image_edit")?;
         let url = endpoint(self.config()?.base_url.as_str(), "images/edits")?;
         super::official_service::validate_provider_endpoint(self.host()?, url.as_str()).await?;
         let mut form = reqwest::multipart::Form::new()

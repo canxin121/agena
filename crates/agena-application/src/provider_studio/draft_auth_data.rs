@@ -56,12 +56,6 @@ pub(crate) const API_ADAPTER_RULES: &[ProviderDraftAdapterRule] = &[
         supports_draft_model_listing: true,
     },
     ProviderDraftAdapterRule {
-        adapter_id: "openai_realtime",
-        detail_key: "provider-adapter-rule-api-openai-detail",
-        requires_base_url: true,
-        supports_draft_model_listing: true,
-    },
-    ProviderDraftAdapterRule {
         adapter_id: "anthropic",
         detail_key: "provider-adapter-rule-api-anthropic-detail",
         requires_base_url: true,

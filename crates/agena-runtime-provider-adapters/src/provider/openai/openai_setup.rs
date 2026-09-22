@@ -2,7 +2,7 @@ use super::{
     AuthData, CHATGPT_CODEX_ORIGINATOR, CapabilityFamily, DEFAULT_COPILOT_BASE_URL,
     DashscopeReasoningProfile, HashMap, ManagedCredential, ModelId, OpenAiChatCompletionResponse,
     OpenAiChatCompletionsAdapter, OpenAiChatCompletionsAdapterOptions, OpenAiProfile,
-    OpenAiRealtimeAdapter, OpenAiRealtimeAdapterOptions, OpenAiResponsesAdapter,
+    OpenAiResponsesAdapter,
     OpenAiResponsesAdapterOptions, OpenAiResponsesBackend, OpenAiTransport, OpenAiTransportOptions,
     ProviderError, append_query_param, normalize_domain, utils,
 };
@@ -40,23 +40,6 @@ impl From<OpenAiChatCompletionsAdapterOptions> for OpenAiTransportOptions {
             capability_family: options.capability_family,
             extra_headers: options.extra_headers,
             top_level_prompt_cache_override: options.top_level_prompt_cache_override,
-        }
-    }
-}
-
-impl From<&OpenAiRealtimeAdapterOptions> for OpenAiTransportOptions {
-    fn from(options: &OpenAiRealtimeAdapterOptions) -> Self {
-        Self {
-            client_identity: options.client_identity.clone(),
-            backend: OpenAiResponsesBackend::Api,
-            auth_data: options.auth_data.clone(),
-            profile: OpenAiProfile::Standard,
-            models_url: options.models_url.clone(),
-            auth_header: options.auth_header.clone(),
-            auth_scheme: options.auth_scheme.clone(),
-            capability_family: options.capability_family,
-            extra_headers: options.extra_headers.clone(),
-            top_level_prompt_cache_override: None,
         }
     }
 }
@@ -101,33 +84,6 @@ impl OpenAiChatCompletionsAdapter {
                 default_model,
                 options.into(),
             ),
-        }
-    }
-}
-
-impl OpenAiRealtimeAdapter {
-    pub fn new_managed_with_options(
-        id: impl Into<String>,
-        client: reqwest::Client,
-        api_key: ManagedCredential,
-        base_url: impl Into<String>,
-        default_model: impl Into<String>,
-        options: OpenAiRealtimeAdapterOptions,
-    ) -> Self {
-        let realtime_ws_url = options
-            .realtime_ws_url
-            .clone()
-            .and_then(|value| utils::normalize_optional_text(Some(value)));
-        Self {
-            transport: OpenAiTransport::new_managed_with_options(
-                id,
-                client,
-                api_key,
-                base_url,
-                default_model,
-                (&options).into(),
-            ),
-            realtime_ws_url,
         }
     }
 }
@@ -558,127 +514,6 @@ impl OpenAiTransport {
 
     pub(super) fn should_require_sse_content_type(&self) -> bool {
         !matches!(self.backend, OpenAiResponsesBackend::ChatgptCodex)
-    }
-
-    pub(super) fn realtime_ws_endpoint(
-        &self,
-        model: &str,
-        realtime_ws_url: Option<&str>,
-    ) -> Result<url::Url, ProviderError> {
-        let mut endpoint = if let Some(ws_url) = realtime_ws_url {
-            url::Url::parse(ws_url).map_err(|err| {
-                ProviderError::Config(format!("openai realtime websocket url is invalid: {err}"))
-            })?
-        } else {
-            let mut url = url::Url::parse(self.base_url.as_str()).map_err(|err| {
-                ProviderError::Config(format!("openai base url is invalid: {err}"))
-            })?;
-            let realtime_path = format!("{}/realtime", url.path().trim_end_matches('/'));
-            url.set_path(realtime_path.as_str());
-            url
-        };
-
-        match endpoint.scheme() {
-            "http" => endpoint.set_scheme("ws").map_err(|_| {
-                ProviderError::Config("openai realtime websocket url is invalid".to_owned())
-            })?,
-            "https" => endpoint.set_scheme("wss").map_err(|_| {
-                ProviderError::Config("openai realtime websocket url is invalid".to_owned())
-            })?,
-            "ws" | "wss" => {}
-            other => {
-                return Err(ProviderError::Config(format!(
-                    "openai realtime websocket url has unsupported scheme `{other}`"
-                )));
-            }
-        }
-
-        let existing = endpoint
-            .query_pairs()
-            .into_owned()
-            .filter(|(key, _)| key != "model")
-            .collect::<Vec<_>>();
-
-        let mut serializer = url::form_urlencoded::Serializer::new(String::new());
-        for (key, value) in existing {
-            serializer.append_pair(key.as_str(), value.as_str());
-        }
-        serializer.append_pair("model", model);
-        let query = serializer.finish();
-        endpoint.set_query(Some(query.as_str()));
-
-        Ok(endpoint)
-    }
-
-    pub(super) fn realtime_handshake_request(
-        &self,
-        endpoint: &url::Url,
-        api_key: &str,
-        session_affinity: Option<&str>,
-    ) -> Result<http::Request<()>, ProviderError> {
-        use tokio_tungstenite::tungstenite::client::IntoClientRequest;
-
-        let mut request = endpoint.as_str().into_client_request().map_err(|err| {
-            ProviderError::Config(format!(
-                "openai realtime websocket handshake invalid: {err}"
-            ))
-        })?;
-
-        let auth_header_name = http::header::HeaderName::from_bytes(self.auth_header.as_bytes())
-            .map_err(|err| {
-                ProviderError::Config(format!("openai auth header name is invalid: {err}"))
-            })?;
-        let auth_header_value = http::header::HeaderValue::from_str(
-            utils::auth_header_value(self.auth_scheme.as_deref(), api_key).as_str(),
-        )
-        .map_err(|err| {
-            ProviderError::Config(format!("openai auth header value is invalid: {err}"))
-        })?;
-        request
-            .headers_mut()
-            .insert(auth_header_name, auth_header_value);
-
-        if let Some(session_affinity) = session_affinity.filter(|value| !value.trim().is_empty()) {
-            request.headers_mut().insert(
-                http::header::HeaderName::from_static("x-session-affinity"),
-                http::header::HeaderValue::from_str(session_affinity).map_err(|err| {
-                    ProviderError::Config(format!(
-                        "openai session affinity header value is invalid: {err}"
-                    ))
-                })?,
-            );
-        }
-
-        if endpoint
-            .host_str()
-            .map(|host| {
-                host.eq_ignore_ascii_case("api.openai.com") || host.ends_with(".openai.com")
-            })
-            .unwrap_or(false)
-        {
-            request.headers_mut().insert(
-                http::header::HeaderName::from_static("openai-beta"),
-                http::header::HeaderValue::from_static("realtime=v1"),
-            );
-        }
-
-        for (key, value) in &self.extra_headers {
-            let header_name =
-                http::header::HeaderName::from_bytes(key.as_bytes()).map_err(|err| {
-                    ProviderError::Config(format!(
-                        "openai extra header name `{key}` is invalid: {err}"
-                    ))
-                })?;
-            let header_value =
-                http::header::HeaderValue::from_str(value.as_str()).map_err(|err| {
-                    ProviderError::Config(format!(
-                        "openai extra header `{key}` value is invalid: {err}"
-                    ))
-                })?;
-            request.headers_mut().insert(header_name, header_value);
-        }
-
-        Ok(request)
     }
 
     pub(super) fn is_official_openai_endpoint(&self) -> bool {

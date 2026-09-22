@@ -268,7 +268,9 @@ impl SessionManager {
         // model instead of the default. `persist_session_changes` is a no-op
         // without changed parts, so write the execution config directly.
         session = self.store.persist_execution_config(session).await?;
-        let input_parts = request.parts;
+        let input_parts = self
+            .materialize_user_media(&session, &options.model, request.parts)
+            .await?;
         // The user's message is persisted as a `user_send` run: one run
         // marker plus one `text` content part per submitted payload (the same
         // shape `drain_steer_input` writes). Parts carry no separate activity

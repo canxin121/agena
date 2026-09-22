@@ -120,7 +120,7 @@ pub use agena_runtime_config::{
     ConfigResolution, ConfigResolutionMeta, ConfigSource, EditorHarnessConfig,
     GeminiProviderOptions, GitlabProviderOptions, HarnessViewportConfig, HarnessesConfig,
     HttpProviderAdapterConfig, OllamaProviderOptions, OpenAiChatCompletionsProviderOptions,
-    OpenAiRealtimeProviderOptions, OpenAiResponsesProviderOptions, ProviderAdapterDefinition,
+    OpenAiResponsesProviderOptions, ProviderAdapterDefinition,
     ProviderApiAuthConfig, ProviderAuthConfig, ProviderClientVersionSettings,
     ProviderGitlabAuthConfig, ResolvedConfig, ResolvedProviderAdapterConfig,
     ResolvedProviderConfig, RuntimeConfig, RuntimeProvidersConfig, SessionCompactionConfig,

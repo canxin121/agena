@@ -13,6 +13,19 @@ fn render_context() -> RenderContext {
 }
 
 fn sample_payload(tool: &str) -> Value {
+    let operation = agena_tool::provider_tools::operation_identity(tool);
+    if operation.ends_with("image_understanding") || operation.ends_with("document_understanding") {
+        return json!({"provider":operation.split('.').next(),"tool":operation.split('.').nth(1),"model":"fixture","outcome":"completed","input_sent":true,"media_inputs":[{"filename":"input.png","mime":"image/png","size_bytes":80}],"text":"Understood fixture"});
+    }
+    if operation.ends_with("file_upload")
+        || operation.ends_with("file_status")
+        || operation.ends_with("file_delete")
+    {
+        return json!({"provider":operation.split('.').next(),"tool":operation.split('.').nth(1),"state":"ready","handle":"media_fixture","filename":"input.png","mime":"image/png","size_bytes":80,"remote_file_id":"file_fixture"});
+    }
+
+    // Feed identical operation evidence to old-history and renamed-cloud views.
+    let tool = agena_tool::provider_tools::operation_identity(tool);
     let job = json!({
         "id": "job-1",
         "kind": "cron",
@@ -741,7 +754,7 @@ fn every_bundled_execution_tool_has_a_non_json_human_fallback() {
         }
     }
 
-    assert_eq!(checked, 142);
+    assert_eq!(checked, 134);
 }
 
 #[test]
@@ -782,7 +795,7 @@ fn every_bundled_execution_tool_has_a_tool_specific_human_projection() {
         }
     }
 
-    assert_eq!(checked, 142);
+    assert_eq!(checked, 134);
 }
 
 #[test]
@@ -817,7 +830,7 @@ fn every_bundled_execution_tool_has_a_typed_empty_state_projection() {
         }
     }
 
-    assert_eq!(checked, 142);
+    assert_eq!(checked, 134);
 }
 
 #[test]
@@ -919,7 +932,7 @@ fn every_bundled_execution_tool_has_a_human_initial_and_completed_title() {
         }
     }
 
-    assert_eq!(checked, 142);
+    assert_eq!(checked, 134);
 }
 
 #[test]
@@ -1997,4 +2010,88 @@ fn captured_output_search_has_match_locations_and_truthful_empty_state() {
         assert_ne!(initial, completed);
         assert!(completed.contains("capture truncated"));
     }
+}
+
+#[test]
+fn every_cloud_tool_keeps_its_location_visible_in_titles_and_result_views() {
+    for tool in agena_tool::provider_tools::CLOUD_TOOLS {
+        let raw = sample_raw(tool.name);
+        for name in [
+            tool.name.to_owned(),
+            format!("agena.{}", tool.name),
+            format!("agena_{}", tool.name.replacen('.', "_", 1)),
+        ] {
+            let invocation = ToolInvocation::new(
+                name.clone(),
+                StructuredObject::try_from(json!({"prompt":"fixture","model":"test-model"}))
+                    .unwrap(),
+            );
+            let initial = initial_tool_title(&invocation);
+            let completed = completed_tool_title(&invocation, &raw);
+            assert!(initial.contains("cloud"), "{name}: {initial}");
+            assert!(initial.contains(tool.provider_label));
+            assert!(completed.starts_with(&initial));
+            assert!(completed.contains("cloud"));
+            assert_ne!(initial, completed);
+            let blocks = BuiltinHumanRenderer::new(&name)
+                .render_human(&render_context(), &raw)
+                .unwrap();
+            assert!(
+                has_tool_specific_projection(tool.name, &blocks),
+                "{name} lost operation details"
+            );
+            let metadata = blocks
+                .iter()
+                .find(|block| block.block_id() == Some("provider-meta"))
+                .and_then(ViewBlock::text_value)
+                .unwrap();
+            assert!(
+                metadata.contains(&format!("{} cloud, not this computer", tool.provider_label))
+            );
+            assert!(metadata.contains("Local project access"));
+            let empty = BuiltinHumanRenderer::new(&name)
+                .render_human(&render_context(), &RawOutput::default())
+                .unwrap();
+            assert!(
+                empty
+                    .iter()
+                    .filter_map(ViewBlock::text_value)
+                    .any(|text| text.contains("cloud"))
+            );
+        }
+        // Rendering a stored historical invocation remains supported without
+        // pretending the old name was itself a new cloud-named invocation.
+        let historical = BuiltinHumanRenderer::new(tool.previous_name)
+            .render_human(&render_context(), &sample_raw(tool.previous_name))
+            .unwrap();
+        assert!(has_tool_specific_projection(
+            tool.previous_name,
+            &historical
+        ));
+    }
+    for name in ["shell.run", "fs.read", "web.search"] {
+        let invocation = ToolInvocation::new(name, StructuredObject::default());
+        assert!(!initial_tool_title(&invocation).contains("cloud"));
+    }
+}
+
+#[test]
+fn cloud_continuation_never_looks_like_missing_local_callbacks() {
+    let raw = RawOutput {
+        payload: Some(
+            json!({"provider":"claude","tool":"advisor","pending_calls":[],"continuation_required":true}),
+        ),
+        ..Default::default()
+    };
+    let blocks = BuiltinHumanRenderer::new("claude.cloud_advisor")
+        .render_human(&render_context(), &raw)
+        .unwrap();
+    let text = blocks
+        .iter()
+        .filter_map(ViewBlock::text_value)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(text.contains("Cloud continuation"));
+    assert!(text.contains("No local command"));
+    assert!(!text.contains("No pending calls could be decoded"));
 }

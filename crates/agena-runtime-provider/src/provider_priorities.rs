@@ -34,11 +34,6 @@ pub fn provider_model_catalog_priorities(
                                 config.options.capability_family.as_ref(),
                             )
                         }
-                        ProviderAdapterDefinition::OpenAiRealtime(config) => {
-                            provider_capability_family_priority(
-                                config.options.capability_family.as_ref(),
-                            )
-                        }
                         ProviderAdapterDefinition::AmazonBedrock(_) => 200,
                         ProviderAdapterDefinition::Gitlab(_) => 150,
                         ProviderAdapterDefinition::Ollama(_) => 50,

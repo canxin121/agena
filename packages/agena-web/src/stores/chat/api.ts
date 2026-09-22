@@ -756,6 +756,7 @@ export async function getRuntimeWorkspaceRoot(): Promise<string> {
 }
 
 export type WorkspaceFileUpload = {
+  sha256?: string
   workspace_id: number
   path: string
   name: string

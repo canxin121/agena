@@ -2,7 +2,6 @@ use std::fs;
 use std::io::Read;
 use std::path::Path;
 
-use base64::{Engine as _, engine::general_purpose::STANDARD};
 use mime_guess::MimeGuess;
 
 use crate::part::{AttachmentItem, AttachmentKind, AttachmentSource};
@@ -145,7 +144,7 @@ fn build_file_attachment(
         _ => (None, None),
     };
 
-    let summary = render_summary(
+    let mut summary = render_summary(
         display_path.as_str(),
         kind,
         mime.as_str(),
@@ -154,8 +153,9 @@ fn build_file_attachment(
         height,
     );
 
+    summary.push_str("\nLocal reference only: file bytes were not sent to a model. To analyze content, use an explicit provider cloud media tool or send the attachment from the composer.");
     PreparedFileAttachment {
-        path: display_path,
+        path: display_path.clone(),
         kind,
         mime: mime.clone(),
         size_bytes: bytes.len() as u64,
@@ -168,8 +168,8 @@ fn build_file_attachment(
         attachment: AttachmentItem {
             kind,
             mime,
-            source: AttachmentSource::Base64 {
-                data: STANDARD.encode(bytes),
+            source: AttachmentSource::LocalPath {
+                path: display_path.clone(),
             },
             filename: Some(filename),
             title: None,

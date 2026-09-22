@@ -6247,3 +6247,5 @@ async fn a_settle_whose_steer_reaches_a_turn_that_never_drains_it_still_wakes_th
         "the fresh wake execution ran a model turn over the notification"
     );
 }
+
+mod adapter_gate;

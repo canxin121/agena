@@ -16,6 +16,7 @@ type AttachedFile = {
   mime: string
   url?: string
   serverPath?: string
+  delivery?: 'reference' | 'model_input'
 }
 
 type DesktopAnchorLike =
@@ -39,6 +40,7 @@ const props = withDefaults(
     desktopGapPx?: number
     desktopViewportMarginPx?: number
     title?: string
+    providerLabel?: string
   }>(),
   {
     busy: false,
@@ -59,6 +61,7 @@ const effectiveTitle = computed(() => String(props.title || '').trim() || String
 const emit = defineEmits<{
   (e: 'update:open', value: boolean): void
   (e: 'remove', id: string): void
+  (e: 'delivery', id: string, delivery: 'reference' | 'model_input'): void
   (e: 'clear'): void
   (e: 'attachLocal'): void
   (e: 'attachProject'): void
@@ -614,6 +617,14 @@ onBeforeUnmount(() => {
 
               <div class="min-w-0 flex-1">
                 <div class="text-xs font-mono font-medium truncate" :title="f.filename">{{ f.filename }}</div>
+                <label class="mt-1 flex items-center gap-1 text-xs text-muted-foreground">
+                  <input type="checkbox" :checked="f.delivery === 'model_input'" :disabled="busy"
+                    @change="emit('delivery', f.id, ($event.target as HTMLInputElement).checked ? 'model_input' : 'reference')" />
+                  {{ t('chat.attachments.sendContents') }}
+                </label>
+                <p class="text-[11px] text-muted-foreground">
+                  {{ f.delivery === 'model_input' ? t('chat.attachments.deliveryNotice', { provider: providerLabel || 'selected model' }) : t('chat.attachments.referenceNotice') }}
+                </p>
                 <div
                   v-if="f.serverPath"
                   class="mt-0.5 text-[11px] text-muted-foreground font-mono truncate"
@@ -757,6 +768,14 @@ onBeforeUnmount(() => {
 
               <div class="min-w-0 flex-1">
                 <div class="text-sm font-mono font-medium truncate" :title="f.filename">{{ f.filename }}</div>
+                <label class="mt-1 flex items-center gap-1 text-xs text-muted-foreground">
+                  <input type="checkbox" :checked="f.delivery === 'model_input'" :disabled="busy"
+                    @change="emit('delivery', f.id, ($event.target as HTMLInputElement).checked ? 'model_input' : 'reference')" />
+                  {{ t('chat.attachments.sendContents') }}
+                </label>
+                <p class="text-[11px] text-muted-foreground">
+                  {{ f.delivery === 'model_input' ? t('chat.attachments.deliveryNotice', { provider: providerLabel || 'selected model' }) : t('chat.attachments.referenceNotice') }}
+                </p>
                 <div
                   v-if="f.serverPath"
                   class="mt-0.5 text-[13px] text-muted-foreground font-mono truncate"

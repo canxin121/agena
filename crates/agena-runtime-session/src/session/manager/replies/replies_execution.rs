@@ -1800,7 +1800,11 @@ impl SessionManager {
         let batch_executor = state
             .tool_executor
             .for_session_context_async(&session.runtime.execution)
-            .await;
+            .await
+            .with_cloud_tool_adapter(Self::cloud_tool_adapter(
+                state.as_ref(),
+                &session.runtime.execution.selection,
+            ));
         for pending_tool in pending_tools {
             match Box::pin(self.prepare_pending_tool_batch_member(
                 &mut session,
@@ -1916,6 +1920,19 @@ impl SessionManager {
         }
 
         Ok(session)
+    }
+
+    pub(super) fn cloud_tool_adapter(
+        state: &SessionManagerState,
+        selection: &agena_domain::ExecutionSelection,
+    ) -> Option<agena_domain::AdapterId> {
+        // A missing/invalid route closes only vendor cloud execution; local
+        // tools and discovery must remain available for fixing configuration.
+        state
+            .provider_registry
+            .tool_execution_adapter(selection)
+            .ok()
+            .flatten()
     }
 
     /// Shared single-tool preflight: validate the advertised identity, prepare
@@ -2097,12 +2114,14 @@ impl SessionManager {
 
         let mut handles = Vec::with_capacity(pending_tools.len());
         let batch_executor = match pending_tools.first() {
-            Some(pending_tool) => {
-                state
-                    .tool_executor
-                    .for_session_context_async(&pending_tool.session_runtime.execution)
-                    .await
-            }
+            Some(pending_tool) => state
+                .tool_executor
+                .for_session_context_async(&pending_tool.session_runtime.execution)
+                .await
+                .with_cloud_tool_adapter(Self::cloud_tool_adapter(
+                    state.as_ref(),
+                    &pending_tool.session_runtime.execution.selection,
+                )),
             None => return Ok(Vec::new()),
         };
         for pending_tool in pending_tools {
@@ -2163,6 +2182,10 @@ impl SessionManager {
         let scoped_executor = executor
             .for_session_context_async(&execution_context)
             .await
+            .with_cloud_tool_adapter(Self::cloud_tool_adapter(
+                state,
+                &execution_context.selection,
+            ))
             .with_cancellation_token(cancellation);
         let PreparedToolPreflight {
             resolved,

@@ -1,6 +1,6 @@
 const MAX_RESOURCE_ATTACHMENTS_PER_MESSAGE: usize = 8;
-const MAX_CLIPBOARD_UPLOAD_BYTES: u64 = 50 * 1024 * 1024;
-const MAX_CLIPBOARD_UPLOAD_TOTAL_BYTES: u64 = 200 * 1024 * 1024;
+const MAX_CLIPBOARD_UPLOAD_BYTES: u64 = 20 * 1024 * 1024;
+const MAX_CLIPBOARD_UPLOAD_TOTAL_BYTES: u64 = 40 * 1024 * 1024;
 
 #[derive(Debug)]
 struct ClipboardUploadCandidate {
@@ -129,6 +129,11 @@ impl App {
             .map(str::to_owned)
             .unwrap_or_else(|| relative.display().to_string());
         Ok(agena_domain::ResourceActivity {
+            delivery: if !is_directory && !matches!(kind, AttachmentKind::File) {
+                agena_domain::ResourceDelivery::ModelInput
+            } else {
+                agena_domain::ResourceDelivery::Reference
+            },
             kind: if is_directory {
                 agena_domain::ResourceKind::Directory
             } else {
@@ -169,41 +174,56 @@ impl App {
     }
 
     pub(crate) fn stage_long_paste_text_file(&mut self, text: String) {
-        if self.remaining_resource_attachment_slots() == 0 {
-            self.flash_warning(self.i18n.text_args(
-                "flash-attachment-count-limit",
-                &agena_tui::fl_args!("count" => MAX_RESOURCE_ATTACHMENTS_PER_MESSAGE as i64),
-            ));
+        if text.len() > 1024 * 1024 {
+            self.flash_warning("Paste exceeds the 1 MiB text limit. The clipboard and current draft are unchanged.");
             return;
         }
-        if text.len() as u64 > MAX_CLIPBOARD_UPLOAD_BYTES {
-            self.flash_warning(self.i18n.text_args(
-                "flash-clipboard-paste-failed",
-                &agena_tui::fl_args!("error" => "pasted text exceeds the 50 MiB upload limit"),
-            ));
+        if self.composer_pending_media > 0 || self.remaining_resource_attachment_slots() == 0 {
+            self.composer.insert_str(&text);
+            self.after_composer_text_mutated();
+            self.flash_warning(
+                "Long paste was kept as text because the attachment limit was reached.",
+            );
             return;
         }
-
+        let epoch = self.composer_media_epoch;
+        let slot = self.current_draft_slot();
+        self.composer_pending_media += 1;
         let filename = format!("clipboard-paste-{}.txt", uuid::Uuid::new_v4().simple());
+        let fallback = text.clone();
         self.dispatch_backend_operation(
             move |application| async move {
                 application
                     .upload_workspace_attachment(
-                        filename.as_str(),
+                        &filename,
                         text.as_bytes(),
                         Some("text/plain; charset=utf-8"),
                     )
                     .await
             },
-            |app, result| match result {
-                Ok(uploaded) => match app.stage_uploaded_attachment(uploaded, None) {
-                    Ok(()) => app.after_composer_text_mutated(),
-                    Err(error) => app.flash_warning(error),
-                },
-                Err(error) => app.flash_error(app.i18n.text_args(
-                    "flash-clipboard-paste-failed",
-                    &agena_tui::fl_args!("error" => error.to_string()),
-                )),
+            move |app, result| {
+                if app.composer_media_epoch != epoch || app.current_draft_slot() != slot {
+                    app.flash_warning(
+                        "Paste completed for an earlier draft; the current draft was not modified.",
+                    );
+                    return;
+                }
+                app.composer_pending_media = app.composer_pending_media.saturating_sub(1);
+                match result {
+                    Ok(uploaded) => match app.stage_uploaded_attachment(uploaded, None) {
+                        Ok(()) => app.after_composer_text_mutated(),
+                        Err(error) => {
+                            app.composer.insert_str(&fallback);
+                            app.after_composer_text_mutated();
+                            app.flash_warning(error);
+                        }
+                    },
+                    Err(error) => {
+                        app.composer.insert_str(&fallback);
+                        app.after_composer_text_mutated();
+                        app.flash_error(error.to_string());
+                    }
+                }
             },
         );
     }
@@ -242,6 +262,7 @@ impl App {
         let kind = AttachmentKind::detect(mime.as_str(), Some(uploaded.name.as_str()));
         let display_name = uploaded.name.clone();
         let resource = agena_domain::ResourceActivity {
+            delivery: agena_domain::ResourceDelivery::ModelInput,
             kind: match kind {
                 AttachmentKind::Image => agena_domain::ResourceKind::Image,
                 AttachmentKind::Audio => agena_domain::ResourceKind::Audio,
@@ -260,6 +281,7 @@ impl App {
             duration_ms: None,
             page_count: None,
         };
+        let checksum = uploaded.sha256.clone();
         self.stage_resource_with_metadata(
             Path::new(display_name.as_str()),
             resource,
@@ -267,7 +289,11 @@ impl App {
             uploaded.size_bytes,
             "clipboard",
             uploaded.path,
-        )
+        )?;
+        if let Some(item) = self.composer_items.last_mut() {
+            item.activity.provenance.content_hash = checksum;
+        }
+        Ok(())
     }
 
     pub(crate) fn remaining_resource_attachment_slots(&self) -> usize {
@@ -276,7 +302,8 @@ impl App {
             .iter()
             .filter(|item| matches!(item.payload(), agena_domain::ActivityPayload::Resource(_)))
             .count();
-        MAX_RESOURCE_ATTACHMENTS_PER_MESSAGE.saturating_sub(used)
+        MAX_RESOURCE_ATTACHMENTS_PER_MESSAGE
+            .saturating_sub(used.saturating_add(self.composer_pending_media))
     }
 
     fn stage_resource_with_metadata(
@@ -288,6 +315,21 @@ impl App {
         provenance_source: &str,
         attached_path: String,
     ) -> UiResult<()> {
+        let existing_bytes = self
+            .composer_items
+            .iter()
+            .filter_map(|item| match &item.activity.payload {
+                agena_domain::ActivityPayload::Resource(resource) => resource.size_bytes,
+                _ => None,
+            })
+            .fold(0u64, u64::saturating_add);
+        if size_bytes > MAX_CLIPBOARD_UPLOAD_BYTES
+            || existing_bytes.saturating_add(size_bytes) > MAX_CLIPBOARD_UPLOAD_TOTAL_BYTES
+        {
+            return Err(crate::UiFailure::message(
+                "attachment exceeds 20 MiB per file or 40 MiB total composer budget",
+            ));
+        }
         if self.remaining_resource_attachment_slots() == 0 {
             return Err(crate::UiFailure::message(self.i18n.text_args(
                 "flash-attachment-count-limit",
@@ -301,7 +343,7 @@ impl App {
             agena_domain::ResourceKind::Pdf => AttachmentKind::Pdf,
             _ => AttachmentKind::File,
         };
-        let label = attachment_chip_label(
+        let mut label = attachment_chip_label(
             &self.i18n,
             display_path,
             kind,
@@ -310,6 +352,9 @@ impl App {
             resource.height,
             size_bytes,
         );
+        if resource.delivery == agena_domain::ResourceDelivery::ModelInput {
+            label.push_str(" · send contents to selected model");
+        }
         let placeholder = self.make_unique_composer_placeholder(attachment_placeholder_base(
             &self.i18n,
             display_path,
@@ -378,6 +423,8 @@ impl App {
     }
 
     pub(crate) fn clear_composer_state(&mut self) {
+        self.composer_media_epoch = self.composer_media_epoch.wrapping_add(1);
+        self.composer_pending_media = 0;
         self.composer.clear();
         self.composer_items.clear();
         self.slash_command_suggestions = None;
@@ -423,6 +470,8 @@ impl App {
     }
 
     pub(crate) fn restore_draft_for_slot(&mut self, slot: DraftSlot) {
+        self.composer_media_epoch = self.composer_media_epoch.wrapping_add(1);
+        self.composer_pending_media = 0;
         if let DraftSlot::Session(session_id) = slot
             && self.run_activity.has_operation(
                 RunActivityTarget::Session(session_id),
@@ -674,6 +723,13 @@ impl App {
                     })
                     .collect::<Vec<_>>();
                 if !candidates.is_empty() {
+                    if let Ok(text) = get_clipboard_text(&context)
+                        && !text.is_empty()
+                        && text.len() <= 1024 * 1024
+                    {
+                        self.composer.insert_str(&text);
+                        self.after_composer_text_mutated();
+                    }
                     self.dispatch_clipboard_uploads(candidates, acquisition.cleanup_root);
                     return Ok(());
                 }
@@ -707,8 +763,23 @@ impl App {
             .filter(|candidate| candidate.temporary)
             .map(|candidate| candidate.path.clone())
             .collect::<Vec<_>>();
+        let epoch = self.composer_media_epoch;
+        let slot = self.current_draft_slot();
+        let reserved = candidates.len();
+        self.composer_pending_media = self.composer_pending_media.saturating_add(reserved);
+        let remaining_bytes = 40_u64 * 1024 * 1024
+            - self
+                .composer_items
+                .iter()
+                .filter_map(|item| match &item.activity.payload {
+                    agena_domain::ActivityPayload::Resource(resource) => resource.size_bytes,
+                    _ => None,
+                })
+                .sum::<u64>()
+                .min(40 * 1024 * 1024);
         self.dispatch_backend_operation(
             move |application| async move {
+                let _cleanup=ClipboardUploadCleanup {files:cleanup_files,root:cleanup_root};
                 let mut batch = ClipboardUploadBatch::default();
                 let mut accepted_bytes = 0u64;
                 for candidate in candidates {
@@ -722,18 +793,22 @@ impl App {
                         }
                         if metadata.len() > MAX_CLIPBOARD_UPLOAD_BYTES {
                             anyhow::bail!(
-                                "clipboard attachment exceeds the 50 MiB upload limit: {}",
+                                "clipboard attachment exceeds the 20 MiB upload limit: {}",
                                 candidate.path.display()
                             );
                         }
                         if accepted_bytes.saturating_add(metadata.len())
-                            > MAX_CLIPBOARD_UPLOAD_TOTAL_BYTES
+                            > remaining_bytes
                         {
                             anyhow::bail!(
-                                "clipboard attachments exceed the 200 MiB total upload limit"
+                                "clipboard attachments exceed the 40 MiB total upload limit"
                             );
                         }
-                        let bytes = tokio::fs::read(candidate.path.as_path()).await?;
+                        use tokio::io::AsyncReadExt as _;
+                        let file=tokio::fs::File::open(candidate.path.as_path()).await?;
+                        let mut bytes=Vec::new();
+                        file.take(MAX_CLIPBOARD_UPLOAD_BYTES+1).read_to_end(&mut bytes).await?;
+                        if bytes.len() as u64>MAX_CLIPBOARD_UPLOAD_BYTES || accepted_bytes.saturating_add(bytes.len() as u64)>remaining_bytes {anyhow::bail!("clipboard file changed or exceeded its bounded read budget");}
                         if bytes.is_empty() {
                             anyhow::bail!(
                                 "clipboard attachment is empty: {}",
@@ -779,15 +854,14 @@ impl App {
                     }
                 }
 
-                for path in cleanup_files {
-                    let _ = tokio::fs::remove_file(path).await;
-                }
-                if let Some(root) = cleanup_root {
-                    let _ = tokio::fs::remove_dir_all(root).await;
-                }
                 Ok::<_, anyhow::Error>(batch)
             },
-            |app, result| match result {
+            move |app, result| {
+                if app.composer_media_epoch!=epoch || app.current_draft_slot()!=slot {
+                    app.flash_warning("Attachment upload finished for an earlier draft; nothing was inserted into the current draft.");return;
+                }
+                app.composer_pending_media=app.composer_pending_media.saturating_sub(reserved);
+                match result {
                 Ok(mut batch) => {
                     let mut staged = 0usize;
                     for attachment in batch.uploaded {
@@ -813,6 +887,7 @@ impl App {
                     "flash-clipboard-paste-failed",
                     &agena_tui::fl_args!("error" => error.to_string()),
                 )),
+                }
             },
         );
     }
@@ -1112,6 +1187,7 @@ mod tests {
                     activity: ComposerActivity {
                         id: directory_id,
                         payload: ActivityPayload::Resource(ResourceActivity {
+                            delivery: Default::default(),
                             kind: ResourceKind::Directory,
                             reference: ResourceReference::WorkspacePath {
                                 path: "apps".to_owned(),
@@ -1141,6 +1217,7 @@ mod tests {
                     && matches!(
                         &activity.payload,
                         ActivityPayload::Resource(ResourceActivity {
+                            delivery: _,
                             kind: ResourceKind::Directory,
                             reference: ResourceReference::WorkspacePath { path },
                             ..
@@ -1225,6 +1302,7 @@ mod tests {
             activity: ComposerActivity {
                 id: ActivityId::new(),
                 payload: ActivityPayload::Resource(ResourceActivity {
+                    delivery: Default::default(),
                     kind: ResourceKind::File,
                     reference: ResourceReference::WorkspacePath {
                         path: "LICENSE".to_owned(),
@@ -1285,3 +1363,25 @@ use agena_tui_platform::{
     attachment_source::acquire_clipboard_image,
     clipboard::{PastedImageInfo, clipboard_file_list, get_clipboard_text},
 };
+
+struct ClipboardUploadCleanup {
+    files: Vec<PathBuf>,
+    root: Option<PathBuf>,
+}
+impl Drop for ClipboardUploadCleanup {
+    fn drop(&mut self) {
+        for path in &self.files {
+            if let Err(error) = std::fs::remove_file(path)
+                && error.kind() != std::io::ErrorKind::NotFound
+            {
+                tracing::warn!(%error,"clipboard temporary file cleanup failed");
+            }
+        }
+        if let Some(root) = &self.root
+            && let Err(error) = std::fs::remove_dir_all(root)
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
+            tracing::warn!(%error,"clipboard temporary directory cleanup failed");
+        }
+    }
+}

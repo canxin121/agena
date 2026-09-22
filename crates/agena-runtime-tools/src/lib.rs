@@ -12,6 +12,7 @@ pub use agena_runtime_contracts::{authorization, identity, part, permission, pro
 
 mod atomic_file;
 mod bounded_process;
+pub mod media_input;
 mod monitor;
 pub mod output_resources;
 mod project_instructions;

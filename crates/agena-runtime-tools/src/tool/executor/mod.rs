@@ -1,3 +1,4 @@
+mod executor_adapter_gate;
 mod executor_core;
 mod executor_execution;
 mod executor_hooks;

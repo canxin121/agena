@@ -197,6 +197,15 @@ pub fn validate_input_document(document: &ComposerDocument) -> Result<(), Applic
         match &activity.payload {
             ActivityPayload::Resource(resource) => {
                 resources = resources.saturating_add(1);
+                if resource.delivery == agena_domain::ResourceDelivery::ModelInput
+                    && (resource.kind == agena_domain::ResourceKind::Directory
+                        || !matches!(resource.reference, ResourceReference::WorkspacePath { .. }))
+                {
+                    return Err(ApplicationError::bad_request(
+                        "send-to-model resources must be explicit workspace files; directories, URLs and foreign provider IDs remain references",
+                    ));
+                }
+
                 match &resource.reference {
                     ResourceReference::Artifact { sha256, uri }
                         if sha256.trim().is_empty() || uri.trim().is_empty() =>

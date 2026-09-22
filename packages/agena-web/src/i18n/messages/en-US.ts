@@ -2340,6 +2340,17 @@ export default {
     },
 
     attachments: {
+      recoveryNeedsEmptyDraft: 'Select the original session and clear or save your current draft before restoring.',
+      recoverBeforeSend: 'Restore or discard the saved failed draft before another send.',
+      failedDraftSaved: 'The earlier send failed. Your newer draft is unchanged; the failed text and attachments are saved in this page for explicit recovery.',
+      recoverySession: 'Original session: {session}',
+      restoreFailedDraft: 'Restore failed draft',
+      discardFailedDraft: 'Discard saved failed draft',
+
+      preparing: 'Attachments are still being prepared; the draft has not been sent.',
+      sendContents: "Send file contents to selected model",
+      deliveryNotice: "On Send, contents go to {provider}. Previewing alone does not send them.",
+      referenceNotice: "Reference only. File contents are not automatically included.",
       title: 'Attachments',
       attaching: 'Attaching…',
       countLabelOne: '1 file',
@@ -2357,6 +2368,7 @@ export default {
         description: 'Use the buttons above to attach files.',
       },
       errors: {
+        textPasteTooLarge: 'Paste exceeds the 1 MiB text limit. Nothing was pasted or uploaded; the clipboard and current draft are unchanged.',
         failedToReadUnknown: 'Failed to read file',
         fileTooLarge: 'File too large: {name} ({size})',
         totalTooLarge: 'Attachments too large (max {size})',

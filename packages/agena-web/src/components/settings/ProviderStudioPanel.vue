@@ -364,7 +364,7 @@ const authSubtypeOptions = computed(() =>
 
 const adapterRuleMap: Record<string, string[]> = {
   none: ['ollama'],
-  api: ['openai_responses', 'openai_chat_completions', 'openai_realtime', 'anthropic', 'gemini'],
+  api: ['openai_responses', 'openai_chat_completions', 'anthropic', 'gemini'],
   cline_api: ['openai_chat_completions'],
   gitlab_api: ['openai_responses', 'openai_chat_completions', 'anthropic'],
   bedrock_sigv4: ['amazon_bedrock'],

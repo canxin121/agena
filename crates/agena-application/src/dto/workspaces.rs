@@ -55,6 +55,8 @@ pub struct WorkspaceFileUploadRequest {
 /// A file uploaded into a workspace. `path` is relative to the workspace root
 /// and is the value clients should reference as a workspace attachment.
 pub struct WorkspaceFileUploadResource {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sha256: Option<String>,
     pub workspace_id: i64,
     pub path: String,
     pub name: String,

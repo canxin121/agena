@@ -335,14 +335,56 @@ impl ApplicationService {
         }
 
         let upload_dir = root.join(".agena").join("uploads");
-        fs::create_dir_all(upload_dir.as_path())
-            .map_err(|error| workspace_fs_error(upload_dir.as_path(), error))?;
+        for directory in [root.join(".agena"), upload_dir.clone()] {
+            match fs::symlink_metadata(&directory) {
+                Ok(metadata) if !metadata.is_dir() || metadata.file_type().is_symlink() => {
+                    return Err(ApplicationError::bad_request(
+                        "attachment staging directory must be a real workspace directory, not a symlink",
+                    ));
+                }
+                Ok(_) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    fs::create_dir(&directory)
+                        .map_err(|error| workspace_fs_error(&directory, error))?;
+                }
+                Err(error) => return Err(workspace_fs_error(&directory, error)),
+            }
+            if directory
+                .canonicalize()
+                .map_err(|error| workspace_fs_error(&directory, error))?
+                != directory
+            {
+                return Err(ApplicationError::bad_request(
+                    "attachment staging directory changed during validation",
+                ));
+            }
+        }
         let stored_name = format!("{}-{}", Uuid::new_v4().simple(), filename);
         let target = upload_dir.join(&stored_name);
-        fs::write(target.as_path(), decoded.as_slice())
-            .map_err(|error| workspace_fs_error(target.as_path(), error))?;
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt as _;
+            options.mode(0o600);
+        }
+        let mut file = options
+            .open(&target)
+            .map_err(|error| workspace_fs_error(&target, error))?;
+        use std::io::Write as _;
+        if let Err(error) = file.write_all(&decoded).and_then(|()| file.sync_all()) {
+            let _ = fs::remove_file(&target);
+            return Err(workspace_fs_error(&target, error));
+        }
 
+        use sha2::Digest as _;
         Ok(WorkspaceFileUploadResource {
+            sha256: Some(
+                sha2::Sha256::digest(&decoded)
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect(),
+            ),
             workspace_id,
             path: format!(".agena/uploads/{stored_name}"),
             name: filename,

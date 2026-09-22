@@ -86,10 +86,25 @@ pub enum ResourceReference {
     },
 }
 
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ResourceDelivery {
+    #[default]
+    Reference,
+    ModelInput,
+}
+impl ResourceDelivery {
+    pub fn is_reference(&self) -> bool {
+        matches!(self, Self::Reference)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 /// An activity referencing a file, directory, URL, or other resource.
 pub struct ResourceActivity {
+    #[serde(default, skip_serializing_if = "ResourceDelivery::is_reference")]
+    pub delivery: ResourceDelivery,
     pub kind: ResourceKind,
     pub reference: ResourceReference,
     pub name: String,

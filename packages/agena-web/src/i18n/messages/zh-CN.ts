@@ -2335,6 +2335,17 @@ export default {
     },
 
     attachments: {
+      recoveryNeedsEmptyDraft: '请回到原会话，并先保存或清空当前草稿，再恢复失败的消息。',
+      recoverBeforeSend: '请先恢复或丢弃已保存的失败草稿，再发送下一条消息。',
+      failedDraftSaved: '上次发送失败。新草稿未被覆盖，失败消息的文本和附件已保留在当前页面，可手动恢复。',
+      recoverySession: '原会话：{session}',
+      restoreFailedDraft: '恢复失败草稿',
+      discardFailedDraft: '丢弃已保存的失败草稿',
+
+      preparing: '附件仍在准备中，草稿尚未发送。',
+      sendContents: "将文件内容发送给所选模型",
+      deliveryNotice: "点击发送后，内容交给 {provider}；仅预览不会发送。",
+      referenceNotice: "仅引用路径，不自动附带文件内容。",
       title: '附件',
       attaching: '正在附加…',
       countLabelOne: '1 个文件',
@@ -2352,6 +2363,7 @@ export default {
         description: '使用上方按钮添加文件。',
       },
       errors: {
+        textPasteTooLarge: '粘贴文本超过 1 MiB 限制，未插入或上传；剪贴板和当前草稿保持不变。',
         failedToReadUnknown: '读取文件失败',
         fileTooLarge: '文件过大：{name}（{size}）',
         totalTooLarge: '附件总大小过大（上限 {size}）',

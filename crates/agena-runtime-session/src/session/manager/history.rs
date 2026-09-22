@@ -426,6 +426,11 @@ impl SessionManager {
         session_id: i64,
         parts: Vec<TypedContent>,
     ) -> Result<(), AppError> {
+        let parts=if parts.iter().any(|part|matches!(part,TypedContent::FileRef(reference) if reference.extra.get("delivery").and_then(serde_json::Value::as_str)==Some("model_input"))) {
+            let session=self.load_session_with_workspace_root(session_id).await?;
+            let model=session.runtime().effective_model_ref().map_err(|error|AppError::Config(error.to_string()))?.ok_or_else(||AppError::Config("select a model before sending media".into()))?;
+            self.materialize_user_media(&session,&model,parts).await?
+        }else{parts};
         self.execution_registry
             .steer(session_id, parts)
             .await

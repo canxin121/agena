@@ -68,18 +68,15 @@ fn tools() -> Vec<(String, Value)> {
     let groups = [
         (
             "chatgpt",
-            "apply_patch code_interpreter computer computer_use_preview custom file_search function image_edit image_generation local_shell mcp namespace programmatic_tool_calling shell tool_search web_search web_search_preview",
+            "code_interpreter file_search image_edit image_generation shell web_search",
         ),
-        (
-            "claude",
-            "advisor bash code_execution computer mcp_toolset memory text_editor tool_search_bm25 tool_search_regex web_fetch web_search",
-        ),
+        ("claude", "advisor code_execution web_fetch web_search"),
         (
             "gemini",
-            "code_execution computer_use file_search function google_maps google_search image_edit image_generation mcp_server retrieval url_context",
+            "code_execution file_search google_maps google_search image_edit image_generation url_context",
         ),
     ];
-    groups
+    let mut entries: Vec<_> = groups
         .iter()
         .flat_map(|(family, names)| {
             names.split_whitespace().map(move |name| {
@@ -87,10 +84,29 @@ fn tools() -> Vec<(String, Value)> {
                 if name == "image_edit" {
                     input["images"] = json!(["fixture.png"]);
                 }
-                (format!("{family}.{name}"), input)
+                (format!("{family}.cloud_{name}"), input)
             })
         })
-        .collect()
+        .collect();
+    for provider in ["chatgpt", "claude", "gemini"] {
+        for operation in [
+            "image_understanding",
+            "document_understanding",
+            "file_upload",
+            "file_status",
+            "file_delete",
+        ] {
+            let input = match operation {
+                "image_understanding" | "document_understanding" => {
+                    json!({"inputs":[{"source":"local","path":"fixture.png"}],"prompt":"fixture"})
+                }
+                "file_upload" => json!({"path":"fixture.png"}),
+                _ => json!({"handle":"media_00000000000000000000000000000000"}),
+            };
+            entries.push((format!("{provider}.cloud_{operation}"), input));
+        }
+    }
+    entries
 }
 async fn has_denial(executor: &ToolExecutor, name: &str, value: Value) -> bool {
     let call = ToolInvocation::new(name, StructuredObject::try_from(value).unwrap());
@@ -112,7 +128,7 @@ async fn every_provider_tool_declares_its_actual_network_target() {
     )
     .await;
     let tools = tools();
-    assert_eq!(tools.len(), 39);
+    assert_eq!(tools.len(), 32);
     for (name, input) in tools {
         assert!(
             has_denial(&executor, &name, input).await,
@@ -180,4 +196,36 @@ async fn browser_initial_navigation_declares_network_access() {
         )
         .await
     );
+}
+
+#[tokio::test]
+async fn cloud_media_reads_require_path_permission_even_when_network_is_allowed() {
+    let (_dir, executor) = fixture(
+        PermissionMode::Deny,
+        PermissionMode::Allow,
+        PermissionMode::Allow,
+    )
+    .await;
+    for provider in ["chatgpt", "claude", "gemini"] {
+        for operation in [
+            "image_understanding",
+            "document_understanding",
+            "file_upload",
+            "file_status",
+            "file_delete",
+        ] {
+            let input = match operation {
+                "image_understanding" | "document_understanding" => {
+                    json!({"inputs":[{"source":"local","path":"fixture.png"}],"prompt":"fixture"})
+                }
+                "file_upload" => json!({"path":"fixture.png"}),
+                _ => json!({"handle":"media_00000000000000000000000000000000"}),
+            };
+            let name = format!("{provider}.cloud_{operation}");
+            assert!(
+                has_denial(&executor, &name, input).await,
+                "missing read authorization for {name}"
+            );
+        }
+    }
 }

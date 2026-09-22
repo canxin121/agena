@@ -88,6 +88,7 @@ async fn prepare_attachment_image(
             "remote URL image inputs are not accepted by the direct image host API; materialize the image as a permitted local attachment first"
                 .to_owned(),
         ),
+        AttachmentSource::ProviderData { .. } => Err("provider-bound conversation inputs cannot be repurposed as image-edit uploads; use an explicitly authorized local input".into()),
         AttachmentSource::FileId { .. } => Err(
             "provider file-id image inputs are not portable across the selected route"
                 .to_owned(),

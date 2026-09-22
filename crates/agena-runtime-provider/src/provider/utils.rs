@@ -1669,7 +1669,7 @@ mod tests {
     }
 
     #[test]
-    fn realtime_error_reads_nested_error_envelope() {
+    fn stream_error_reads_nested_error_envelope() {
         let event = json!({
             "type": "error",
             "error": {
@@ -1680,7 +1680,7 @@ mod tests {
 
         let error = responses_stream_error("openai", &event)
             .expect("error payload should decode")
-            .expect("realtime error should be surfaced");
+            .expect("stream error should be surfaced");
         assert!(!error.retryable());
         assert_eq!(
             classified_message(error),

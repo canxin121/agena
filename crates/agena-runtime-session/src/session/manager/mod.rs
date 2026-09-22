@@ -455,6 +455,7 @@ fn usage_cost_microusd(cost_usd: f64) -> u64 {
 mod compact;
 mod helpers;
 mod history;
+mod media;
 mod permission_service;
 mod replies;
 mod runs;
@@ -885,6 +886,8 @@ fn part_contents_from_composer_document(
             })),
             ComposerNode::Activity { activity } => match activity.payload {
                 ActivityPayload::Resource(resource) => {
+                    let delivery=resource.delivery;
+                    let expected_sha256=activity.provenance.content_hash.clone();
                     let kind = match resource.kind {
                         ResourceKind::Image => AttachmentKind::Image,
                         ResourceKind::Audio => AttachmentKind::Audio,
@@ -907,7 +910,7 @@ fn part_contents_from_composer_document(
                             AttachmentSource::FileId { file_id }
                         }
                     };
-                    Ok(TypedContent::FileRef(super::store::file_ref_from_attachment(
+                    let mut reference=super::store::file_ref_from_attachment(
                         &crate::part::AttachmentPart {
                             attachments: vec![AttachmentItem {
                                 kind,
@@ -929,7 +932,12 @@ fn part_contents_from_composer_document(
                                 page_count: resource.page_count,
                             }],
                         },
-                    )))
+                    );
+                    if delivery==agena_domain::ResourceDelivery::ModelInput {
+                        reference.extra.insert("delivery".into(),serde_json::json!("model_input"));
+                        reference.sha=expected_sha256;
+                    }
+                    Ok(TypedContent::FileRef(reference))
                 }
                 ActivityPayload::SkillReference(skill) => Ok(TypedContent::SkillRef(
                     super::store::skill_ref_from_reference(&crate::part::SkillReferencePart {

@@ -58,7 +58,6 @@ const CHATGPT_CODEX_ORIGINATOR: &str = crate::RUNTIME_CODEX_ORIGINATOR;
 const DEFAULT_COPILOT_BASE_URL: &str = "https://api.githubcopilot.com";
 const RESPONSES_ADAPTER_KIND: &str = "openai_responses";
 const CHAT_COMPLETIONS_ADAPTER_KIND: &str = "openai_chat_completions";
-const REALTIME_ADAPTER_KIND: &str = "openai_realtime";
 
 #[derive(Clone)]
 #[doc(hidden)]
@@ -91,13 +90,6 @@ pub struct OpenAiResponsesAdapter {
 /// Adapter for the OpenAI Chat Completions API.
 pub struct OpenAiChatCompletionsAdapter {
     transport: OpenAiTransport,
-}
-
-#[derive(Clone)]
-/// Adapter for the OpenAI Realtime API.
-pub struct OpenAiRealtimeAdapter {
-    transport: OpenAiTransport,
-    realtime_ws_url: Option<String>,
 }
 
 #[derive(Clone)]
@@ -176,34 +168,6 @@ impl Default for OpenAiChatCompletionsAdapterOptions {
     }
 }
 
-#[derive(Clone)]
-/// Options of the OpenAI Realtime adapter.
-pub struct OpenAiRealtimeAdapterOptions {
-    pub client_identity: crate::ProviderClientIdentity,
-    pub auth_data: Option<Arc<Mutex<AuthData>>>,
-    pub models_url: Option<String>,
-    pub auth_header: String,
-    pub auth_scheme: Option<String>,
-    pub capability_family: CapabilityFamily,
-    pub extra_headers: HashMap<String, String>,
-    pub realtime_ws_url: Option<String>,
-}
-
-impl Default for OpenAiRealtimeAdapterOptions {
-    fn default() -> Self {
-        Self {
-            client_identity: Default::default(),
-            auth_data: None,
-            models_url: None,
-            auth_header: "authorization".to_owned(),
-            auth_scheme: Some("Bearer".to_owned()),
-            capability_family: CapabilityFamily::OpenAi,
-            extra_headers: HashMap::new(),
-            realtime_ws_url: None,
-        }
-    }
-}
-
 impl std::ops::Deref for OpenAiResponsesAdapter {
     type Target = OpenAiTransport;
 
@@ -213,14 +177,6 @@ impl std::ops::Deref for OpenAiResponsesAdapter {
 }
 
 impl std::ops::Deref for OpenAiChatCompletionsAdapter {
-    type Target = OpenAiTransport;
-
-    fn deref(&self) -> &Self::Target {
-        &self.transport
-    }
-}
-
-impl std::ops::Deref for OpenAiRealtimeAdapter {
     type Target = OpenAiTransport;
 
     fn deref(&self) -> &Self::Target {

@@ -9,14 +9,18 @@ use std::{
 use agena_macros::ToolInput;
 use agena_plugin_host::PluginError;
 use agena_plugin_host::sdk::host_api::HostClient;
-use agena_plugin_host::sdk::{InitContext, InitOutcome, Result as SdkResult, ToolInvokeOutput};
+use agena_plugin_host::sdk::{
+    InitContext, InitOutcome, PathRequest, Result as SdkResult, ToolInvokeOutput,
+};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use super::cloud_media::{AnalyzeInput, FileInput, Service, UploadInput};
 use super::official_service::{
     ProviderUsageKind, configured_model, dedup_strings, endpoint, env_secret, merge_object_options,
     post_json, provider_output,
 };
+use agena_plugin_host::sdk::ToolInvokeContext;
 
 pub(crate) const CLAUDE_PLUGIN_ID: &str = "agena.claude";
 
@@ -73,7 +77,7 @@ impl Default for ClaudeToolsConfig {
 )]
 #[serde(deny_unknown_fields)]
 struct ClaudeToolInput {
-    /// New user instruction. Optional when messages already contain tool_result continuation.
+    /// New user instruction. Optional when messages continue hosted server execution.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     prompt: Option<String>,
     /// Stable system prefix placed before dynamic messages for cache reuse.
@@ -89,7 +93,7 @@ struct ClaudeToolInput {
     tool_options: BTreeMap<String, serde_json::Value>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     request_options: BTreeMap<String, serde_json::Value>,
-    /// Full Anthropic messages used to continue tool_use/tool_result loops.
+    /// Anthropic message history for hosted results or pause_turn resumption. Client tool_use/tool_result callbacks are not accepted.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     messages: Vec<serde_json::Value>,
     /// Additional official Anthropic beta feature headers.
@@ -98,6 +102,18 @@ struct ClaudeToolInput {
 }
 
 impl ClaudeToolsPlugin {
+    fn media_service(&self) -> SdkResult<Service<'_>> {
+        Ok(Service {
+            provider: "claude",
+            root: self.workspace_root()?,
+            host: self.host()?,
+            base_url: &self.config()?.base_url,
+            key_env: &self.config()?.api_key_env,
+            timeout_secs: self.config()?.timeout_secs,
+            anthropic_version: self.config()?.anthropic_version.as_str(),
+        })
+    }
+
     pub(crate) fn new() -> Self {
         Self {
             host: OnceLock::new(),
@@ -138,13 +154,23 @@ impl ClaudeToolsPlugin {
         default_betas: &[&str],
         input: ClaudeToolInput,
     ) -> SdkResult<ToolInvokeOutput> {
-        let model = self.model(input.model, format!("claude.{tool_name}").as_str())?;
+        super::official_service::hosted::validate_options(&input.tool_options, "tool_options")?;
+        super::official_service::hosted::validate_options(
+            &input.request_options,
+            "request_options",
+        )?;
+        super::official_service::hosted::validate_history(
+            "claude",
+            &serde_json::json!(&input.messages),
+        )?;
+        let model = self.model(input.model, format!("claude.cloud_{tool_name}").as_str())?;
         let declaration = merge_object_options(
             declaration,
             &input.tool_options,
             &["type", "name"],
             "tool_options",
         )?;
+        super::official_service::hosted::validate_declaration("claude", tool_name, &declaration)?;
         let mut messages = input.messages;
         if let Some(prompt) = input
             .prompt
@@ -249,7 +275,7 @@ impl ClaudeToolsPlugin {
     }
 }
 
-#[agena_plugin_host::sdk::agena_plugin(namespace="agena", name="claude", version=env!("CARGO_PKG_VERSION"), summary="Anthropic Claude server and client tools exposed as ordinary Agena tools.", settings=ClaudeToolsConfig, settings_default=default)]
+#[agena_plugin_host::sdk::agena_plugin(namespace="agena", name="claude", version=env!("CARGO_PKG_VERSION"), summary="Anthropic cloud search, fetch, computation and advisor capabilities. Inputs leave this computer; no local execution fallback.", settings=ClaudeToolsConfig, settings_default=default)]
 impl ClaudeToolsPlugin {
     #[hook(init)]
     async fn init(&self, ctx: InitContext, host: Arc<dyn HostClient>) -> SdkResult<InitOutcome> {
@@ -272,31 +298,82 @@ impl ClaudeToolsPlugin {
         )))
     }
 
-    #[tool(
-        network(connect = self.config()?.base_url.clone()),
-        path(write = self.workspace_root()?.join(".agena/artifacts/provider-tools").display().to_string()),
-        tags(network, interactive),
-        summary = "Use Claude's current Bash client tool.",
-        help = "The declaration uses bash_20250124. Execute returned bash tool_use blocks through Agena shell permissions, append assistant content and user tool_result content to messages, then call this tool again.",
-        mutating
-    )]
-    async fn bash(&self, input: ClaudeToolInput) -> SdkResult<ToolInvokeOutput> {
-        self.messages_tool(
-            "bash",
-            "Claude Bash",
-            serde_json::json!({"type":"bash_20250124","name":"bash"}),
-            &["computer-use-2025-01-24"],
-            input,
-        )
-        .await
+    #[tool(name="cloud_image_understanding",tags(query,network),
+        summary="Send explicit images to Anthropic cloud for understanding; not local file viewing.",
+        help="Runs in Anthropic cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Sends only the specified, permission-checked inputs and prompt to Anthropic. Accepts local paths with expected_sha256 or owned cloud_file_upload handles. Local preparation is bounded; no automatic whole-workspace or conversation upload. Cloud inference may be billed. Input sent inline is not a separate remote file. Results return input hashes, provider/model and usage. No local execution fallback.",
+        mutating,network(connect=self.config()?.base_url.clone()),path(requests=input.paths(self.workspace_root()?)))]
+    async fn image_understanding(
+        &self,
+        context: &ToolInvokeContext<'_>,
+        input: &AnalyzeInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        let model = self.model(input.model.clone(), "claude.cloud_image_understanding")?;
+        self.media_service()?
+            .analyze(context, input, model, true)
+            .await
     }
 
+    #[tool(name="cloud_document_understanding",tags(query,network),
+        summary="Send explicit PDF/text documents to Anthropic cloud for understanding; not local file viewing.",
+        help="Runs in Anthropic cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Sends only the specified, permission-checked inputs and prompt to Anthropic. Accepts local paths with expected_sha256 or owned cloud_file_upload handles. Local preparation is bounded; no automatic whole-workspace or conversation upload. Cloud inference may be billed. Input sent inline is not a separate remote file. Results return input hashes, provider/model and usage. No local execution fallback.",
+        mutating,network(connect=self.config()?.base_url.clone()),path(requests=input.paths(self.workspace_root()?)))]
+    async fn document_understanding(
+        &self,
+        context: &ToolInvokeContext<'_>,
+        input: &AnalyzeInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        let model = self.model(input.model.clone(), "claude.cloud_document_understanding")?;
+        self.media_service()?
+            .analyze(context, input, model, false)
+            .await
+    }
+
+    #[tool(name="cloud_file_upload",tags(mutate,network),
+        summary="Upload one permitted local file to Anthropic cloud and return a session-owned handle.",
+        help="Runs in Anthropic cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Creates a remote file; does not analyze it. Inputs up to 20 MiB are content-checked and optionally revision-checked. The handle is bound to this workspace/session/provider connection; arbitrary vendor file IDs cannot be substituted. Local files remain unchanged. A timeout may leave remote acceptance unknown: inspect the returned handle, do not automatically repeat. Query status before using processing files and delete unneeded files explicitly.",
+        mutating,network(connect=self.config()?.base_url.clone()),path(requests=vec![PathRequest::read(input.path.clone()),PathRequest::write(self.workspace_root()?.join(".agena/artifacts/provider-tools").display().to_string())]))]
+    async fn file_upload(
+        &self,
+        context: &ToolInvokeContext<'_>,
+        input: &UploadInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        self.media_service()?.upload(context, input).await
+    }
+
+    #[tool(name="cloud_file_status",tags(query,network),
+        summary="Query the remote status of an owned Anthropic cloud file, not a local path.",
+        help="Runs in Anthropic cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Accepts only cloud_file_upload handles from the same workspace, session and provider connection. Reports provider readiness/expiry and refreshes the signed local receipt. Does not download file contents or resubmit an unknown upload.",
+        mutating,network(connect=self.config()?.base_url.clone()),path(requests=vec![PathRequest::read(self.workspace_root()?.join(".agena/artifacts/provider-tools/media").display().to_string()),PathRequest::write(self.workspace_root()?.join(".agena/artifacts/provider-tools/media").display().to_string())]))]
+    async fn file_status(
+        &self,
+        context: &ToolInvokeContext<'_>,
+        input: &FileInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        self.media_service()?
+            .file_control(context, input, false)
+            .await
+    }
+
+    #[tool(name="cloud_file_delete",tags(mutate,network),
+        summary="Request deletion of an owned file from Anthropic cloud; preserve the local original.",
+        help="Runs in Anthropic cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Accepts only session-owned cloud file handles. Deletes the remote resource and records the provider acknowledgement; it does not promise erasure of provider logs/backups. No arbitrary remote IDs or cross-provider deletion. A failed request is not reported as successful cleanup.",
+        mutating,network(connect=self.config()?.base_url.clone()),path(requests=vec![PathRequest::read(self.workspace_root()?.join(".agena/artifacts/provider-tools/media").display().to_string()),PathRequest::write(self.workspace_root()?.join(".agena/artifacts/provider-tools/media").display().to_string())]))]
+    async fn file_delete(
+        &self,
+        context: &ToolInvokeContext<'_>,
+        input: &FileInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        self.media_service()?
+            .file_control(context, input, true)
+            .await
+    }
     #[tool(
+        name = "cloud_code_execution",
         network(connect = self.config()?.base_url.clone()),
         path(write = self.workspace_root()?.join(".agena/artifacts/provider-tools").display().to_string()),
         tags(network, interactive),
-        summary = "Run Claude's latest hosted code execution tool.",
-        help = "Uses code_execution_20260521 with persistent REPL state. Official allowed_callers, cache_control, defer_loading, and strict fields may be supplied in tool_options.",
+        summary = "Execute code in Anthropic cloud infrastructure, not on this computer.",
+        help = "Runs in Anthropic cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Cloud filesystem and runtime are separate from the Agena workspace; provide needed input files explicitly. Uses code_execution_20260521 with persistent REPL state. Official allowed_callers, cache_control, defer_loading, and strict fields may be supplied in tool_options.",
         read_only
     )]
     async fn code_execution(&self, input: ClaudeToolInput) -> SdkResult<ToolInvokeOutput> {
@@ -304,75 +381,19 @@ impl ClaudeToolsPlugin {
             "code_execution",
             "Claude code execution",
             serde_json::json!({"type":"code_execution_20260521","name":"code_execution"}),
-            &["code-execution-2026-05-21"],
+            &[],
             input,
         )
         .await
     }
 
     #[tool(
+        name = "cloud_web_search",
         network(connect = self.config()?.base_url.clone()),
         path(write = self.workspace_root()?.join(".agena/artifacts/provider-tools").display().to_string()),
         tags(network, interactive),
-        summary = "Run Claude Computer Use and return pending computer actions.",
-        help = "Uses computer_20251124. Set display_width_px and display_height_px in tool_options. Agena executors should normalize left_mouse_down/left_mouse_up, drag paths, key combinations, screenshots, zoom, and cursor actions before returning tool_result blocks.",
-        mutating
-    )]
-    async fn computer(&self, input: ClaudeToolInput) -> SdkResult<ToolInvokeOutput> {
-        self.messages_tool(
-            "computer",
-            "Claude computer",
-            serde_json::json!({"type":"computer_20251124","name":"computer"}),
-            &["computer-use-2025-11-24"],
-            input,
-        )
-        .await
-    }
-
-    #[tool(
-        network(connect = self.config()?.base_url.clone()),
-        path(write = self.workspace_root()?.join(".agena/artifacts/provider-tools").display().to_string()),
-        tags(network, interactive),
-        summary = "Use Claude's memory client tool.",
-        help = "Uses memory_20250818. Execute returned memory commands against Agena's permission-checked memory store and continue with tool_result blocks.",
-        mutating
-    )]
-    async fn memory(&self, input: ClaudeToolInput) -> SdkResult<ToolInvokeOutput> {
-        self.messages_tool(
-            "memory",
-            "Claude memory",
-            serde_json::json!({"type":"memory_20250818","name":"memory"}),
-            &["context-management-2025-06-27"],
-            input,
-        )
-        .await
-    }
-
-    #[tool(
-        network(connect = self.config()?.base_url.clone()),
-        path(write = self.workspace_root()?.join(".agena/artifacts/provider-tools").display().to_string()),
-        tags(network, interactive),
-        summary = "Use Claude's current text editor client tool.",
-        help = "Uses text_editor_20250728 with name str_replace_based_edit_tool. Execute view/create/str_replace/insert operations through Agena filesystem permissions and continue with tool_result blocks.",
-        mutating
-    )]
-    async fn text_editor(&self, input: ClaudeToolInput) -> SdkResult<ToolInvokeOutput> {
-        self.messages_tool(
-            "text_editor",
-            "Claude text editor",
-            serde_json::json!({"type":"text_editor_20250728","name":"str_replace_based_edit_tool"}),
-            &["computer-use-2025-01-24"],
-            input,
-        )
-        .await
-    }
-
-    #[tool(
-        network(connect = self.config()?.base_url.clone()),
-        path(write = self.workspace_root()?.join(".agena/artifacts/provider-tools").display().to_string()),
-        tags(network, interactive),
-        summary = "Search the web with Claude's latest server web search.",
-        help = "Uses web_search_20260318. tool_options supports allowed_callers, allowed_domains, blocked_domains, cache_control, defer_loading, max_uses, response_inclusion, strict, and user_location.",
+        summary = "Search the web in Anthropic cloud and return sources; not a local browser operation.",
+        help = "Runs in Anthropic cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Uses web_search_20260318. tool_options supports allowed_callers, allowed_domains, blocked_domains, cache_control, defer_loading, max_uses, response_inclusion, strict, and user_location.",
         read_only,
         discovery
     )]
@@ -381,18 +402,19 @@ impl ClaudeToolsPlugin {
             "web_search",
             "Claude web search",
             serde_json::json!({"type":"web_search_20260318","name":"web_search"}),
-            &["web-search-2026-03-18"],
+            &[],
             input,
         )
         .await
     }
 
     #[tool(
+        name = "cloud_web_fetch",
         network(connect = self.config()?.base_url.clone()),
         path(write = self.workspace_root()?.join(".agena/artifacts/provider-tools").display().to_string()),
         tags(network, interactive),
-        summary = "Fetch web documents with Claude's latest server web fetch.",
-        help = "Uses web_fetch_20260318. tool_options supports allowed/blocked domains, citations, max_content_tokens, max_uses, response_inclusion, strict, and use_cache.",
+        summary = "Fetch and process web content in Anthropic cloud, not through the local browser.",
+        help = "Runs in Anthropic cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Uses web_fetch_20260318. tool_options supports allowed/blocked domains, citations, max_content_tokens, max_uses, response_inclusion, strict, and use_cache.",
         read_only,
         discovery
     )]
@@ -401,18 +423,19 @@ impl ClaudeToolsPlugin {
             "web_fetch",
             "Claude web fetch",
             serde_json::json!({"type":"web_fetch_20260318","name":"web_fetch"}),
-            &["web-fetch-2026-03-18"],
+            &[],
             input,
         )
         .await
     }
 
     #[tool(
+        name = "cloud_advisor",
         network(connect = self.config()?.base_url.clone()),
         path(write = self.workspace_root()?.join(".agena/artifacts/provider-tools").display().to_string()),
         tags(network, interactive),
-        summary = "Ask an Anthropic advisor model with Claude's advisor server tool.",
-        help = "Uses advisor_20260301. Set tool_options.model and optional caching, max_tokens, max_uses, allowed_callers, cache_control, defer_loading, and strict.",
+        summary = "Consult an advisor model in Anthropic cloud using the supplied context.",
+        help = "Runs in Anthropic cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Only supplied context is available; the local repository and session transcript are not automatically uploaded. Uses advisor_20260301. Set tool_options.model and optional caching, max_tokens, max_uses, allowed_callers, cache_control, defer_loading, and strict.",
         read_only
     )]
     async fn advisor(&self, input: ClaudeToolInput) -> SdkResult<ToolInvokeOutput> {
@@ -420,52 +443,7 @@ impl ClaudeToolsPlugin {
             "advisor",
             "Claude advisor",
             serde_json::json!({"type":"advisor_20260301","name":"advisor"}),
-            &["advisor-2026-03-01"],
-            input,
-        )
-        .await
-    }
-
-    #[tool(
-        network(connect = self.config()?.base_url.clone()),
-        path(write = self.workspace_root()?.join(".agena/artifacts/provider-tools").display().to_string()),
-        tags(network, interactive),
-        summary = "Use Claude's BM25 deferred tool search.",
-        help = "Uses tool_search_tool_bm25_20251119. The returned tool_reference/server_tool_use content remains in the provider response and can be continued through messages.",
-        read_only,
-        discovery
-    )]
-    async fn tool_search_bm25(&self, input: ClaudeToolInput) -> SdkResult<ToolInvokeOutput> {
-        self.messages_tool("tool_search_bm25", "Claude BM25 tool search", serde_json::json!({"type":"tool_search_tool_bm25_20251119","name":"tool_search_tool_bm25"}), &["advanced-tool-use-2025-11-20"], input).await
-    }
-
-    #[tool(
-        network(connect = self.config()?.base_url.clone()),
-        path(write = self.workspace_root()?.join(".agena/artifacts/provider-tools").display().to_string()),
-        tags(network, interactive),
-        summary = "Use Claude's regex deferred tool search.",
-        help = "Uses tool_search_tool_regex_20251119 and supports official allowed_callers, cache_control, defer_loading, and strict options.",
-        read_only,
-        discovery
-    )]
-    async fn tool_search_regex(&self, input: ClaudeToolInput) -> SdkResult<ToolInvokeOutput> {
-        self.messages_tool("tool_search_regex", "Claude regex tool search", serde_json::json!({"type":"tool_search_tool_regex_20251119","name":"tool_search_tool_regex"}), &["advanced-tool-use-2025-11-20"], input).await
-    }
-
-    #[tool(
-        network(connect = self.config()?.base_url.clone()),
-        path(write = self.workspace_root()?.join(".agena/artifacts/provider-tools").display().to_string()),
-        tags(network, interactive),
-        summary = "Configure a Claude MCP toolset.",
-        help = "Set tool_options.mcp_server_name plus optional configs and default_config. The wrapper sends the official mcp_toolset declaration and returns approval/tool-use content for continuation.",
-        mutating
-    )]
-    async fn mcp_toolset(&self, input: ClaudeToolInput) -> SdkResult<ToolInvokeOutput> {
-        self.messages_tool(
-            "mcp_toolset",
-            "Claude MCP toolset",
-            serde_json::json!({"type":"mcp_toolset"}),
-            &["mcp-client-2025-04-04"],
+            &["advisor-tool-2026-03-01"],
             input,
         )
         .await

@@ -625,6 +625,58 @@ impl ProviderRegistry {
     }
 }
 
+/// Opaque authorization scope for media, covering the selected model/adapter
+/// and the adapter's endpoint/auth/profile shape. No raw credentials are exposed.
+fn media_route_fingerprint(
+    model: &ModelRef,
+    provider: &dyn ModelRuntime,
+) -> Result<String, ProviderError> {
+    use sha2::{Digest, Sha256};
+    let shape=provider.prompt_cache_shape_for_adapter(model.adapter_id.as_ref(),&model.model_id)
+        .ok_or_else(||ProviderError::Config("selected provider cannot identify a stable media destination; use a provider cloud media tool or configure a supported adapter".into()))?;
+    let bytes = serde_json::to_vec(&(model.to_string(), shape)).map_err(|error| {
+        ProviderError::Config(format!("cannot bind media destination: {error}"))
+    })?;
+    Ok(format!(
+        "media-route-v1:{}",
+        Sha256::digest(bytes)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    ))
+}
+impl ProviderRegistry {
+    pub fn media_route_binding(&self, model: &ModelRef) -> Result<String, ProviderError> {
+        let provider = self.require_provider(model.provider_id.as_ref())?;
+        media_route_fingerprint(model, provider.as_ref())
+    }
+    pub fn validate_media_inputs(
+        &self,
+        model: &ModelRef,
+        attachments: &[AttachmentItem],
+    ) -> Result<(), ProviderError> {
+        let provider = self.require_provider(model.provider_id.as_ref())?;
+        let capabilities =
+            provider.model_capabilities_for_adapter(model.adapter_id.as_ref(), &model.model_id);
+        for item in attachments {
+            if let Some(modality) = explicit_media_requirement(item)
+                && capabilities.support_for_input_modality(modality)
+                    != agena_domain::CapabilitySupport::Supported
+            {
+                return Err(ProviderError::Config(format!(
+                    "selected model {model} has no confirmed support for {modality}; choose a supported route or explicitly configure its capabilities before sending"
+                )));
+            }
+            if let Some(modality) = unsupported_attachment_modality(&capabilities, item) {
+                return Err(ProviderError::Config(format!(
+                    "selected model {model} does not support {modality}; media has not been sent"
+                )));
+            }
+        }
+        Ok(())
+    }
+}
+
 fn validate_request_capabilities(
     model: &ModelRef,
     provider: &dyn ModelRuntime,
@@ -640,6 +692,24 @@ fn validate_request_capabilities(
                 continue;
             };
 
+            if let agena_domain::AttachmentSource::ProviderData { route, .. } = &item.source
+                && route != &media_route_fingerprint(model, provider)?
+            {
+                return Err(ProviderError::Config(format!(
+                    "attachment is bound to a different provider/model/endpoint/account route; use the original route or start a new conversation and explicitly attach it to {model}"
+                )));
+            }
+            if matches!(
+                item.source,
+                agena_domain::AttachmentSource::ProviderData { .. }
+            ) && let Some(modality) = explicit_media_requirement(&item)
+                && capabilities.support_for_input_modality(modality)
+                    != agena_domain::CapabilitySupport::Supported
+            {
+                return Err(ProviderError::Config(format!(
+                    "media-bound request cannot be sent to {model}: {modality} support is not confirmed"
+                )));
+            }
             if let Some(modality) = unsupported_attachment_modality(&capabilities, &item) {
                 unsupported.push((modality, item.summary_label()));
             }
@@ -659,6 +729,32 @@ fn validate_request_capabilities(
     }
 
     provider.validate_provider_native_tools_request(model.adapter_id.as_ref(), request)
+}
+
+fn explicit_media_requirement(item: &AttachmentItem) -> Option<ModelInputModality> {
+    match item.kind {
+        AttachmentKind::Image => Some(ModelInputModality::Image),
+        AttachmentKind::Pdf => Some(ModelInputModality::Document),
+        AttachmentKind::Audio => Some(ModelInputModality::Audio),
+        AttachmentKind::Video => Some(ModelInputModality::Video),
+        AttachmentKind::File => {
+            let mime = item.mime.to_ascii_lowercase();
+            if mime.starts_with("text/")
+                || matches!(
+                    mime.as_str(),
+                    "application/json"
+                        | "application/xml"
+                        | "application/yaml"
+                        | "application/x-yaml"
+                        | "application/javascript"
+                )
+            {
+                None
+            } else {
+                Some(ModelInputModality::File)
+            }
+        }
+    }
 }
 
 fn unsupported_attachment_modality(

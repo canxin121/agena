@@ -1,3 +1,4 @@
+mod cloud_media;
 pub mod code;
 pub mod cron;
 pub mod fs;

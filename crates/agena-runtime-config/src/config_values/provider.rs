@@ -254,7 +254,6 @@ pub enum ProviderAdapterDefinition {
     Ollama(OllamaProviderOptions),
     OpenAiResponses(HttpProviderAdapterConfig<OpenAiResponsesProviderOptions>),
     OpenAiChatCompletions(HttpProviderAdapterConfig<OpenAiChatCompletionsProviderOptions>),
-    OpenAiRealtime(HttpProviderAdapterConfig<OpenAiRealtimeProviderOptions>),
     Anthropic(HttpProviderAdapterConfig<AnthropicProviderOptions>),
     Gemini(HttpProviderAdapterConfig<GeminiProviderOptions>),
     Gitlab(GitlabProviderOptions),
@@ -314,17 +313,6 @@ pub struct OpenAiResponsesProviderOptions {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 /// Options for the OpenAI Chat Completions adapter.
 pub struct OpenAiChatCompletionsProviderOptions {
-    pub models_url: Option<String>,
-    pub auth_header: String,
-    pub auth_scheme: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub capability_family: Option<ProviderCapabilityFamilyConfig>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-/// Options for the OpenAI Realtime adapter.
-pub struct OpenAiRealtimeProviderOptions {
-    pub realtime_ws_url: Option<String>,
     pub models_url: Option<String>,
     pub auth_header: String,
     pub auth_scheme: Option<String>,

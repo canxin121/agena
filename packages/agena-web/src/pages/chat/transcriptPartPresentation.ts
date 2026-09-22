@@ -322,7 +322,7 @@ function attachmentFromRecord(value: JsonValue, index: number): AttachmentPresen
   const path = firstString(source, ['path']) || firstString(item, ['path'])
   const directUrl = firstString(source, ['data_url', 'url']) || firstString(item, ['data_url', 'url'])
   const base64 =
-    (sourceKind === 'base64' ? firstString(source, ['data']) : firstString(source, ['base64'])) ||
+    (sourceKind === 'base64' || sourceKind === 'provider_data' ? firstString(source, ['data']) : firstString(source, ['base64'])) ||
     firstString(item, ['base64'])
   const fileId = firstString(source, ['file_id']) || firstString(item, ['file_id'])
   const url = directUrl || (base64 && mime ? `data:${mime};base64,${base64}` : '') || path

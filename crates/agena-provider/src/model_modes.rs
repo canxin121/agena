@@ -77,7 +77,7 @@ fn protocol_for_model(
     match adapter_id.map(AsRef::<str>::as_ref) {
         Some("anthropic") => return ThinkingProtocol::Anthropic,
         Some("gemini") => return ThinkingProtocol::Gemini,
-        Some("openai_responses" | "openai_chat_completions" | "openai_realtime") => {
+        Some("openai_responses" | "openai_chat_completions") => {
             return match family {
                 CapabilityFamily::OpenAi => ThinkingProtocol::OpenAi,
                 _ => ThinkingProtocol::OpenAiCompatible,

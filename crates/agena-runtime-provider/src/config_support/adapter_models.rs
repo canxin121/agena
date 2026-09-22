@@ -22,8 +22,7 @@ pub struct ProviderAdapterModelsResult {
 use super::{
     AmazonBedrockProviderOptions, AnthropicProviderOptions, ConfigEnvironment, ConfigError,
     GeminiProviderOptions, HttpProviderAdapterConfig, OllamaProviderOptions,
-    OpenAiChatCompletionsProviderOptions, OpenAiRealtimeProviderOptions,
-    OpenAiResponsesProviderOptions, ProviderAdapterDefinition, ProviderApiAuthConfig,
+    OpenAiChatCompletionsProviderOptions, OpenAiResponsesProviderOptions, ProviderAdapterDefinition, ProviderApiAuthConfig,
     ProviderAuthConfig, ResolvedProviderAdapterConfig, ResolvedProviderConfig,
 };
 const DEFAULT_BEDROCK_BASE_URL: &str = "https://bedrock-runtime.us-east-1.amazonaws.com";
@@ -363,21 +362,6 @@ fn default_adapter_model_list_adapters(
                         },
                     },
                 ),
-            },
-            "openai_realtime" => ResolvedProviderAdapterConfig {
-                enabled: true,
-                model_discovery: Default::default(),
-                definition: ProviderAdapterDefinition::OpenAiRealtime(HttpProviderAdapterConfig {
-                    user_agent: None,
-                    extra_headers: BTreeMap::new(),
-                    options: OpenAiRealtimeProviderOptions {
-                        realtime_ws_url: None,
-                        models_url: None,
-                        auth_header: "authorization".to_owned(),
-                        auth_scheme: Some("Bearer".to_owned()),
-                        capability_family: openai_capability_family_for_listing(defaults),
-                    },
-                }),
             },
             "anthropic" => ResolvedProviderAdapterConfig {
                 enabled: true,

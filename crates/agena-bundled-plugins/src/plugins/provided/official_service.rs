@@ -4,6 +4,7 @@
 //! helpers call official provider endpoints, normalize provider-reported usage,
 //! retain continuation state, and persist binary-redacted response receipts.
 
+pub(crate) mod hosted;
 mod outcome;
 
 use std::{
@@ -31,7 +32,6 @@ const MAX_IMAGE_BASE64_BYTES: usize = MAX_IMAGE_BYTES.div_ceil(3) * 4 + 4;
 const MAX_PROVIDER_RESPONSE_BYTES: usize = 96 * 1024 * 1024;
 pub(crate) const MAX_PROVIDER_IMAGE_INPUT_BYTES: u64 = 50 * 1024 * 1024;
 const MAX_TEXT_BYTES: usize = 32 * 1024;
-const MAX_PENDING_CALLS: usize = 128;
 const MAX_SOURCES: usize = 100;
 
 #[derive(Debug, Clone, Copy)]
@@ -317,6 +317,12 @@ pub(crate) async fn provider_output(
     usage_kind: ProviderUsageKind,
     response: ProviderHttpResponse,
 ) -> SdkResult<ToolInvokeOutput> {
+    let cloud_tool = agena_tool::provider_tools::cloud_operation(provider, tool);
+    let public_tool_name = cloud_tool.map(|entry| entry.name).unwrap_or(tool);
+    let execution_provider = cloud_tool
+        .map(|entry| entry.provider_label)
+        .unwrap_or(provider);
+    let title = cloud_tool.map(|entry| entry.title).unwrap_or(title);
     let mut persistence_warnings = Vec::new();
     let receipt = match persist_response_receipt(
         host,
@@ -341,19 +347,43 @@ pub(crate) async fn provider_output(
     let mut output_text = extract_response_text(&response.value)
         .filter(|text| !text.trim().is_empty())
         .unwrap_or_else(|| {
-            format!("{provider}.{tool} returned no text summary; completion is not inferred.")
+            format!("{public_tool_name} returned no text summary; completion is not inferred.")
         });
-    let pending_calls = pending_calls(&response.value);
-    let continuation_required = !pending_calls.is_empty();
-    let outcome = outcome::classify(provider, &response.value, continuation_required).label();
+    let evidence = hosted::inspect(provider, tool, &response.value);
+    let base_outcome = outcome::classify(provider, &response.value, false);
+    let continuation_required = !evidence.blocked()
+        && !evidence.server_errors
+        && (matches!(base_outcome, outcome::Outcome::Pending)
+            || (provider == "claude" && response.value["stop_reason"] == "pause_turn"));
+    let outcome = if evidence.blocked() {
+        "blocked_client_execution"
+    } else if evidence.server_errors {
+        "failed"
+    } else if evidence.unresolved_hosted_calls > 0
+        && matches!(base_outcome, outcome::Outcome::Completed)
+    {
+        "unconfirmed_hosted_execution"
+    } else if continuation_required {
+        "provider_pending"
+    } else {
+        base_outcome.label()
+    };
+    if evidence.blocked() {
+        output_text="The provider returned application-side actions or a non-hosted route. Agena blocked that execution boundary: no local action was executed or redirected. Do not execute or resubmit these callbacks. Inspect the response receipt and choose a separate native tool only when explicitly intended.".into();
+    }
     output_text = format!(
-        "Provider outcome: {outcome}. Local persistence: {}.\n{}{}",
+        "Cloud tool: {public_tool_name}. Execution location: {execution_provider} cloud, not this computer.\nExecution boundary: vendor-hosted only; local actions executed: 0.\nProvider outcome: {outcome}. Local persistence: {}.\n{}{}{}",
         if persistence_warnings.is_empty() {
             "complete"
         } else {
             "partial_or_failed"
         },
         output_text,
+        if continuation_required {
+            "\nContinue only the provider's hosted operation; do not run its internal server calls with Agena local tools."
+        } else {
+            ""
+        },
         if persistence_warnings.is_empty() {
             String::new()
         } else {
@@ -366,7 +396,7 @@ pub(crate) async fn provider_output(
         .or_else(|| response.value.get("interaction_id"))
         .or_else(|| response.value.get("interactionId"))
         .cloned();
-    let assistant_content = (provider == "claude")
+    let assistant_content = (provider == "claude" && !evidence.blocked())
         .then(|| response.value.get("content").cloned())
         .flatten();
     let sources = compact_sources(&response.value);
@@ -383,10 +413,18 @@ pub(crate) async fn provider_output(
     let mut payload = serde_json::json!({
         "provider": provider,
         "tool": tool,
+        "public_tool_name": public_tool_name,
+        "execution_location": "vendor_cloud",
+        "execution_provider": execution_provider,
+        "local_workspace_automatically_available": false,
         "model": model,
         "request_id": response.request_id,
         "response_id": response_id,
-        "pending_calls": pending_calls,
+        "pending_calls": [],
+        "execution_boundary": "vendor_hosted_only",
+        "local_actions_executed": false,
+        "client_execution_allowed": false,
+        "execution_evidence": evidence,
         "assistant_content": assistant_content,
         "sources": sources,
         "usage": usage,
@@ -398,33 +436,39 @@ pub(crate) async fn provider_output(
         "continuation_required": continuation_required,
     });
     if let Some(object) = payload.as_object_mut() {
-        object.extend(compact_operation_facts(
-            tool,
-            &response.value,
-            sources.len(),
-            attachments.len(),
-        ));
+        for (key, value) in
+            compact_operation_facts(tool, &response.value, sources.len(), attachments.len())
+        {
+            // Presentation facts from a vendor response must never replace
+            // our execution boundary, classified outcome, or receipt facts.
+            if key == "outcome" {
+                object.insert("provider_reported_outcome".into(), value);
+            } else {
+                object.entry(key).or_insert(value);
+            }
+        }
     }
     let usage_metadata = serde_json::to_string(&attributed).map_err(|error| {
         PluginError::internal(format!("cannot serialize provider tool usage: {error}"))
     })?;
-    let result_summary =
-        if !matches!(outcome, "completed" | "pending_calls") || !persistence_warnings.is_empty() {
-            format!(
-                "Provider {outcome} · {} persistence warning(s)",
-                persistence_warnings.len()
-            )
-        } else if continuation_required {
-            format!("{} tool calls pending", pending_calls.len())
-        } else if !attachments.is_empty() || !sources.is_empty() {
-            format!(
-                "{} sources · {} attachments",
-                sources.len(),
-                attachments.len()
-            )
-        } else {
-            "Response received".to_string()
-        };
+    let result_summary = if !matches!(outcome, "completed" | "provider_pending")
+        || !persistence_warnings.is_empty()
+    {
+        format!(
+            "Provider {outcome} · {} persistence warning(s)",
+            persistence_warnings.len()
+        )
+    } else if continuation_required {
+        "Provider-hosted operation requires continuation; no local execution".to_owned()
+    } else if !attachments.is_empty() || !sources.is_empty() {
+        format!(
+            "{} sources · {} attachments",
+            sources.len(),
+            attachments.len()
+        )
+    } else {
+        "Response received".to_string()
+    };
     Ok(ToolInvokeOutput::from_parts(
         title,
         result_summary,
@@ -433,6 +477,8 @@ pub(crate) async fn provider_output(
         BTreeMap::from([
             ("provider".to_owned(), provider.to_owned()),
             ("tool".to_owned(), tool.to_owned()),
+            ("public_tool_name".into(), public_tool_name.into()),
+            ("execution_location".into(), "vendor_cloud".into()),
             ("model".to_owned(), model.to_owned()),
             (PROVIDER_TOOL_USAGE_METADATA_KEY.to_owned(), usage_metadata),
         ]),
@@ -1381,54 +1427,6 @@ fn collect_text(
                 && !text.trim().is_empty() =>
         {
             output.push(text.to_owned());
-        }
-        _ => {}
-    }
-}
-
-fn pending_calls(value: &serde_json::Value) -> Vec<serde_json::Value> {
-    let mut calls = Vec::new();
-    collect_pending_calls(value, &mut calls, 0);
-    calls.truncate(MAX_PENDING_CALLS);
-    calls
-}
-
-fn collect_pending_calls(
-    value: &serde_json::Value,
-    output: &mut Vec<serde_json::Value>,
-    depth: usize,
-) {
-    if depth > 16 || output.len() >= MAX_PENDING_CALLS {
-        return;
-    }
-    match value {
-        serde_json::Value::Object(object) => {
-            let kind = object
-                .get("type")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or_default();
-            let status = object
-                .get("status")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or_default();
-            let is_pending_kind = kind.ends_with("_call")
-                || matches!(
-                    kind,
-                    "tool_use" | "server_tool_use" | "function_call" | "computer_call"
-                )
-                || kind.contains("approval_request");
-            let terminal = matches!(status, "completed" | "failed" | "cancelled");
-            if is_pending_kind && !terminal {
-                output.push(value.clone());
-            }
-            for child in object.values() {
-                collect_pending_calls(child, output, depth + 1);
-            }
-        }
-        serde_json::Value::Array(items) => {
-            for child in items {
-                collect_pending_calls(child, output, depth + 1);
-            }
         }
         _ => {}
     }

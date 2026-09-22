@@ -5,7 +5,7 @@ use super::{
     AttachmentItem, AttachmentKind, AttachmentSource, BTreeMap, CHATGPT_CODEX_ORIGINATOR,
     CompletionRequest, CompletionToolCall, Deserialize, HashMap, ModelId, OpenAiFunctionCallItem,
     OpenAiFunctionCallOutputItem, OpenAiInputContent, OpenAiInputMessage, OpenAiListedModel,
-    OpenAiOutputItem, OpenAiProfile, OpenAiRealtimeConversationItem, OpenAiResponsesBackend,
+    OpenAiOutputItem, OpenAiProfile, OpenAiResponsesBackend,
     OpenAiResponsesInputItem, OpenAiResponsesReasoningConfig, OpenAiResponsesTextConfig,
     OpenAiResponsesTextFormat, OpenAiResponsesToolPlan, OpenAiTransport, ProviderError, ProviderId,
     RequestHeaderContext, Role, chat_wire, clear_responses_prompt_cache_hints,
@@ -262,21 +262,6 @@ impl OpenAiTransport {
         Ok(input)
     }
 
-    pub(super) fn realtime_conversation_items_for_runs(
-        runs: &[CompletionInputRun],
-    ) -> Result<Vec<OpenAiRealtimeConversationItem>, ProviderError> {
-        let mut input = Vec::new();
-        for run in runs {
-            Self::append_responses_items_for_message(&mut input, run);
-        }
-        validate_responses_input(input.as_slice())?;
-        clear_responses_prompt_cache_hints(input.as_mut_slice());
-        Ok(input
-            .into_iter()
-            .filter_map(OpenAiRealtimeConversationItem::from_responses_input)
-            .collect())
-    }
-
     pub(super) fn attachment_upload_name(item: &AttachmentItem) -> String {
         wire_message::filename(item)
             .map(str::to_owned)
@@ -286,7 +271,9 @@ impl OpenAiTransport {
     pub(super) fn responses_file_content(item: &AttachmentItem) -> Option<OpenAiInputContent> {
         let filename = Some(Self::attachment_upload_name(item));
         match &item.source {
-            AttachmentSource::Base64 { .. } | AttachmentSource::DataUrl { .. } => {
+            AttachmentSource::Base64 { .. }
+            | AttachmentSource::ProviderData { .. }
+            | AttachmentSource::DataUrl { .. } => {
                 wire_message::data_url(item).map(|file_data| OpenAiInputContent::File {
                     file_data: Some(file_data),
                     file_id: None,

@@ -262,6 +262,15 @@ impl ModelRuntime for MultiAdapterProvider {
         Some(&self.default_adapter)
     }
 
+    fn resolved_execution_adapter(
+        &self,
+        adapter_id: Option<&AdapterId>,
+        model: &ModelId,
+    ) -> Result<Option<AdapterId>, ProviderError> {
+        let (selected, ..) = self.resolve_route_and_adapter(adapter_id, model)?;
+        Ok(Some(selected))
+    }
+
     impl_model_runtime_base_via_adapter_methods! {
         fn model_capabilities / model_capabilities_for_adapter (&self, model: &ModelId) -> ModelCapabilities;
         fn model_metadata / model_metadata_for_adapter (&self, model: &ModelId) -> ModelMetadata;

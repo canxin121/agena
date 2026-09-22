@@ -281,13 +281,6 @@
           "models": {
             "gpt-4.1-mini": {}
           }
-        },
-        "openai_realtime": {
-          "enabled": false,
-          "realtime_ws_url": "wss://api.openai.com/v1/realtime",
-          "models": {
-            "gpt-realtime": {}
-          }
         }
       }
     },

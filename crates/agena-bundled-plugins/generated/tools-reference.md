@@ -6,7 +6,7 @@
 > agena inspect --tools-reference > crates/agena-bundled-plugins/generated/tools-reference.md
 > ```
 
-This document is deterministically generated from the real `agena-bundled-plugins` plugin manifests, covering **22 plugins and 146 tool definitions**.
+This document is deterministically generated from the real `agena-bundled-plugins` plugin manifests, covering **22 plugins and 138 tool definitions**.
 
 - Each tool entry includes: name, summary, detailed help (`before_help` / `help` / `after_help`), tags, concurrency / streaming / strict runtime flags, examples, an input parameter table, and the full input / output JSON Schema.
 - The `list` / `search` / `help` / `tags` / `call` tools of `agena.tools` are the stable Tool API gateway handlers; all other tools are ordinary execution tools.
@@ -14,12 +14,12 @@ This document is deterministically generated from the real `agena-bundled-plugin
 
 ## Table of Contents
 
-- [`agena.chatgpt`](#agenachatgpt) — OpenAI Responses and image service tools exposed as ordinary Agena tools. (17 tools)
-- [`agena.claude`](#agenaclaude) — Anthropic Claude server and client tools exposed as ordinary Agena tools. (11 tools)
+- [`agena.chatgpt`](#agenachatgpt) — OpenAI cloud search, computation and image capabilities. Inputs leave this computer; no local execution fallback. (11 tools)
+- [`agena.claude`](#agenaclaude) — Anthropic cloud search, fetch, computation and advisor capabilities. Inputs leave this computer; no local execution fallback. (9 tools)
 - [`agena.code`](#agenacode) — Structured code search and syntax inspection tools. (2 tools)
 - [`agena.cron`](#agenacron) — Cron-style and one-shot wakeup scheduling tools. (7 tools)
-- [`agena.fs`](#agenafs) — Filesystem command tools for read/search and explicit edits. (11 tools)
-- [`agena.gemini`](#agenagemini) — Google Gemini Interactions and image capabilities exposed as ordinary Agena tools. (11 tools)
+- [`agena.fs`](#agenafs) — Filesystem command tools for read/search and explicit edits. (10 tools)
+- [`agena.gemini`](#agenagemini) — Google cloud search, computation and image capabilities. Inputs leave this computer; no local execution fallback. (12 tools)
 - [`agena.interaction`](#agenainteraction) — User interaction tools. (2 tools)
 - [`agena.lsp`](#agenalsp) — LSP read-only observability and navigation tools. (5 tools)
 - [`agena.mcp`](#agenamcp) — MCP discovery and bridge tools. (9 tools)
@@ -39,29 +39,29 @@ This document is deterministically generated from the real `agena-bundled-plugin
 
 ## agena.chatgpt
 
-**Version** `0.1.2-beta.1` · **Tools** 17
+**Version** `0.1.2-beta.1` · **Tools** 11
 
-OpenAI Responses and image service tools exposed as ordinary Agena tools.
+OpenAI cloud search, computation and image capabilities. Inputs leave this computer; no local execution fallback.
 
-### apply_patch
+### cloud_code_interpreter
 
-`agena.chatgpt.apply_patch` · **Summary**: Expose OpenAI's apply_patch protocol tool.
+`agena.chatgpt.cloud_code_interpreter` · **Summary**: Run Python in an OpenAI cloud container, not the Agena local workspace.
 
 **Tags**: `network` `interactive`
 
 **Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
 
 **Help**:
-> Execute returned apply_patch_call operations through Agena's permission-checked fs.apply_patch path, then continue with apply_patch_call_output items.
+> Runs in OpenAI cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Cloud filesystem and runtime are separate from the Agena workspace; provide needed input files explicitly. tool_options.container may be a container id or an auto container object with file_ids, memory_limit, and network_policy.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
 | `include` | `array<string>` | — | — | Optional Responses include selectors. |
-| `input_items` | `array<any>` | — | — | Official callback/output items used to continue Computer, Shell, Patch, MCP, or Tool Search calls. |
+| `input_items` | `array<any>` | — | — | Responses message history for hosted follow-up. Client Function/Computer/Patch/MCP/Shell callback items are rejected; use previous_response_id for hosted continuation. |
 | `model` | `string / null` | — | — | Optional model override; otherwise plugin config, CHATGPT_MODEL, or OPENAI_MODEL is used. |
 | `previous_response_id` | `string / null` | — | — | Responses API continuation token from an earlier call. |
-| `prompt` | `string / null` | — | — | Instruction for a new request. Optional when continuation items are supplied. |
+| `prompt` | `string / null` | — | — | Instruction for a new hosted request. May be omitted when message history is supplied. |
 | `request_options` | `object` | — | — | Additional Responses request fields. `model`, `input`, `tools`, and `stream` are protected. |
 | `stable_instructions` | `string / null` | — | — | Stable developer prefix eligible for an explicit OpenAI cache breakpoint. |
 | `tool_options` | `object` | — | — | Official fields merged into this tool's declaration. `type` is protected. |
@@ -80,7 +80,7 @@ OpenAI Responses and image service tools exposed as ordinary Agena tools.
       "x-agena-order": "000007"
     },
     "input_items": {
-      "description": "Official callback/output items used to continue Computer, Shell, Patch, MCP, or Tool Search calls.",
+      "description": "Responses message history for hosted follow-up. Client Function/Computer/Patch/MCP/Shell callback items are rejected; use previous_response_id for hosted continuation.",
       "items": true,
       "type": "array",
       "x-agena-order": "000006"
@@ -102,7 +102,7 @@ OpenAI Responses and image service tools exposed as ordinary Agena tools.
       "x-agena-order": "000005"
     },
     "prompt": {
-      "description": "Instruction for a new request. Optional when continuation items are supplied.",
+      "description": "Instruction for a new hosted request. May be omitted when message history is supplied.",
       "maxLength": 64000,
       "type": [
         "string",
@@ -138,405 +138,183 @@ OpenAI Responses and image service tools exposed as ordinary Agena tools.
 }
 ```
 
-### code_interpreter
+### cloud_document_understanding
 
-`agena.chatgpt.code_interpreter` · **Summary**: Run Python with OpenAI's hosted code_interpreter tool.
+`agena.chatgpt.cloud_document_understanding` · **Summary**: Send explicit PDF/text documents to OpenAI cloud for understanding; not local file viewing.
 
-**Tags**: `network` `interactive`
+**Tags**: `query` `network`
 
 **Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
 
 **Help**:
-> tool_options.container may be a container id or an auto container object with file_ids, memory_limit, and network_policy.
+> Runs in OpenAI cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Sends only the specified, permission-checked inputs and prompt to OpenAI. Accepts local paths with expected_sha256 or owned cloud_file_upload handles. Local preparation is bounded; no automatic whole-workspace or conversation upload. Cloud inference may be billed. Input sent inline is not a separate remote file. Results return input hashes, provider/model and usage. No local execution fallback.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
-| `include` | `array<string>` | — | — | Optional Responses include selectors. |
-| `input_items` | `array<any>` | — | — | Official callback/output items used to continue Computer, Shell, Patch, MCP, or Tool Search calls. |
-| `model` | `string / null` | — | — | Optional model override; otherwise plugin config, CHATGPT_MODEL, or OPENAI_MODEL is used. |
-| `previous_response_id` | `string / null` | — | — | Responses API continuation token from an earlier call. |
-| `prompt` | `string / null` | — | — | Instruction for a new request. Optional when continuation items are supplied. |
-| `request_options` | `object` | — | — | Additional Responses request fields. `model`, `input`, `tools`, and `stream` are protected. |
-| `stable_instructions` | `string / null` | — | — | Stable developer prefix eligible for an explicit OpenAI cache breakpoint. |
-| `tool_options` | `object` | — | — | Official fields merged into this tool's declaration. `type` is protected. |
+| `detail` | `ImageDetail` | — | `auto` |  |
+| `inputs` | `array<MediaSource>` | ✓ | — |  |
+| `max_output_tokens` | `integer` | — | `4096` |  |
+| `model` | `string / null` | — | `null` |  |
+| `prompt` | `string` | ✓ | — |  |
 
 **Input schema**:
 ```json
 {
+  "$defs": {
+    "ImageDetail": {
+      "enum": [
+        "auto",
+        "low",
+        "high"
+      ],
+      "type": "string",
+      "x-agena-order": "000003"
+    },
+    "MediaSource": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "expected_sha256": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "path": {
+              "type": "string"
+            },
+            "source": {
+              "const": "local",
+              "type": "string"
+            }
+          },
+          "required": [
+            "source",
+            "path"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "handle": {
+              "type": "string"
+            },
+            "source": {
+              "const": "cloud",
+              "type": "string"
+            }
+          },
+          "required": [
+            "source",
+            "handle"
+          ],
+          "type": "object"
+        }
+      ],
+      "properties": {},
+      "type": "object"
+    }
+  },
   "additionalProperties": false,
   "properties": {
-    "include": {
-      "description": "Optional Responses include selectors.",
+    "detail": {
+      "$ref": "#/$defs/ImageDetail",
+      "default": "auto"
+    },
+    "inputs": {
       "items": {
-        "type": "string"
+        "$ref": "#/$defs/MediaSource"
       },
       "type": "array",
-      "x-agena-order": "000007"
+      "x-agena-order": "000000"
     },
-    "input_items": {
-      "description": "Official callback/output items used to continue Computer, Shell, Patch, MCP, or Tool Search calls.",
-      "items": true,
-      "type": "array",
-      "x-agena-order": "000006"
+    "max_output_tokens": {
+      "default": 4096,
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer",
+      "x-agena-order": "000004"
     },
     "model": {
-      "description": "Optional model override; otherwise plugin config, CHATGPT_MODEL, or OPENAI_MODEL is used.",
+      "default": null,
       "type": [
         "string",
         "null"
       ],
       "x-agena-order": "000002"
     },
-    "previous_response_id": {
-      "description": "Responses API continuation token from an earlier call.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000005"
-    },
     "prompt": {
-      "description": "Instruction for a new request. Optional when continuation items are supplied.",
       "maxLength": 64000,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000000"
-    },
-    "request_options": {
-      "additionalProperties": true,
-      "description": "Additional Responses request fields. `model`, `input`, `tools`, and `stream` are protected.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000004"
-    },
-    "stable_instructions": {
-      "description": "Stable developer prefix eligible for an explicit OpenAI cache breakpoint.",
-      "maxLength": 256000,
-      "type": [
-        "string",
-        "null"
-      ],
+      "minLength": 1,
+      "type": "string",
       "x-agena-order": "000001"
-    },
-    "tool_options": {
-      "additionalProperties": true,
-      "description": "Official fields merged into this tool's declaration. `type` is protected.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000003"
     }
   },
+  "required": [
+    "inputs",
+    "prompt"
+  ],
   "type": "object"
 }
 ```
 
-### computer
+### cloud_file_delete
 
-`agena.chatgpt.computer` · **Summary**: Run OpenAI's current computer tool and return pending computer calls.
+`agena.chatgpt.cloud_file_delete` · **Summary**: Request deletion of an owned file from OpenAI cloud; preserve the local original.
 
-**Tags**: `network` `interactive`
+**Tags**: `mutate` `network`
 
 **Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
 
 **Help**:
-> When the response contains computer_call items, execute the requested actions in Agena's browser/computer environment and call this tool again with previous_response_id plus official computer_call_output items in input_items.
+> Runs in OpenAI cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Accepts only session-owned cloud file handles. Deletes the remote resource and records the provider acknowledgement; it does not promise erasure of provider logs/backups. No arbitrary remote IDs or cross-provider deletion. A failed request is not reported as successful cleanup.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
-| `include` | `array<string>` | — | — | Optional Responses include selectors. |
-| `input_items` | `array<any>` | — | — | Official callback/output items used to continue Computer, Shell, Patch, MCP, or Tool Search calls. |
-| `model` | `string / null` | — | — | Optional model override; otherwise plugin config, CHATGPT_MODEL, or OPENAI_MODEL is used. |
-| `previous_response_id` | `string / null` | — | — | Responses API continuation token from an earlier call. |
-| `prompt` | `string / null` | — | — | Instruction for a new request. Optional when continuation items are supplied. |
-| `request_options` | `object` | — | — | Additional Responses request fields. `model`, `input`, `tools`, and `stream` are protected. |
-| `stable_instructions` | `string / null` | — | — | Stable developer prefix eligible for an explicit OpenAI cache breakpoint. |
-| `tool_options` | `object` | — | — | Official fields merged into this tool's declaration. `type` is protected. |
+| `handle` | `string` | ✓ | — |  |
 
 **Input schema**:
 ```json
 {
   "additionalProperties": false,
   "properties": {
-    "include": {
-      "description": "Optional Responses include selectors.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000007"
-    },
-    "input_items": {
-      "description": "Official callback/output items used to continue Computer, Shell, Patch, MCP, or Tool Search calls.",
-      "items": true,
-      "type": "array",
-      "x-agena-order": "000006"
-    },
-    "model": {
-      "description": "Optional model override; otherwise plugin config, CHATGPT_MODEL, or OPENAI_MODEL is used.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000002"
-    },
-    "previous_response_id": {
-      "description": "Responses API continuation token from an earlier call.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000005"
-    },
-    "prompt": {
-      "description": "Instruction for a new request. Optional when continuation items are supplied.",
-      "maxLength": 64000,
-      "type": [
-        "string",
-        "null"
-      ],
+    "handle": {
+      "minLength": 1,
+      "type": "string",
       "x-agena-order": "000000"
-    },
-    "request_options": {
-      "additionalProperties": true,
-      "description": "Additional Responses request fields. `model`, `input`, `tools`, and `stream` are protected.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000004"
-    },
-    "stable_instructions": {
-      "description": "Stable developer prefix eligible for an explicit OpenAI cache breakpoint.",
-      "maxLength": 256000,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000001"
-    },
-    "tool_options": {
-      "additionalProperties": true,
-      "description": "Official fields merged into this tool's declaration. `type` is protected.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000003"
     }
   },
+  "required": [
+    "handle"
+  ],
   "type": "object"
 }
 ```
 
-### computer_use_preview
+### cloud_file_search
 
-`agena.chatgpt.computer_use_preview` · **Summary**: Run OpenAI's computer_use_preview compatibility tool.
-
-**Tags**: `network` `interactive`
-
-**Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
-
-**Help**:
-> Set display_width, display_height, and environment in tool_options. Continue with computer_call_output items.
-
-**Input parameters**:
-| Parameter | Type | Required | Default | Description |
-| --- | --- | --- | --- | --- |
-| `include` | `array<string>` | — | — | Optional Responses include selectors. |
-| `input_items` | `array<any>` | — | — | Official callback/output items used to continue Computer, Shell, Patch, MCP, or Tool Search calls. |
-| `model` | `string / null` | — | — | Optional model override; otherwise plugin config, CHATGPT_MODEL, or OPENAI_MODEL is used. |
-| `previous_response_id` | `string / null` | — | — | Responses API continuation token from an earlier call. |
-| `prompt` | `string / null` | — | — | Instruction for a new request. Optional when continuation items are supplied. |
-| `request_options` | `object` | — | — | Additional Responses request fields. `model`, `input`, `tools`, and `stream` are protected. |
-| `stable_instructions` | `string / null` | — | — | Stable developer prefix eligible for an explicit OpenAI cache breakpoint. |
-| `tool_options` | `object` | — | — | Official fields merged into this tool's declaration. `type` is protected. |
-
-**Input schema**:
-```json
-{
-  "additionalProperties": false,
-  "properties": {
-    "include": {
-      "description": "Optional Responses include selectors.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000007"
-    },
-    "input_items": {
-      "description": "Official callback/output items used to continue Computer, Shell, Patch, MCP, or Tool Search calls.",
-      "items": true,
-      "type": "array",
-      "x-agena-order": "000006"
-    },
-    "model": {
-      "description": "Optional model override; otherwise plugin config, CHATGPT_MODEL, or OPENAI_MODEL is used.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000002"
-    },
-    "previous_response_id": {
-      "description": "Responses API continuation token from an earlier call.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000005"
-    },
-    "prompt": {
-      "description": "Instruction for a new request. Optional when continuation items are supplied.",
-      "maxLength": 64000,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000000"
-    },
-    "request_options": {
-      "additionalProperties": true,
-      "description": "Additional Responses request fields. `model`, `input`, `tools`, and `stream` are protected.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000004"
-    },
-    "stable_instructions": {
-      "description": "Stable developer prefix eligible for an explicit OpenAI cache breakpoint.",
-      "maxLength": 256000,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000001"
-    },
-    "tool_options": {
-      "additionalProperties": true,
-      "description": "Official fields merged into this tool's declaration. `type` is protected.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000003"
-    }
-  },
-  "type": "object"
-}
-```
-
-### custom
-
-`agena.chatgpt.custom` · **Summary**: Send an official OpenAI custom tool declaration.
-
-**Tags**: `network` `interactive`
-
-**Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
-
-**Help**:
-> Set the official custom tool name, description, and format fields in tool_options; continue custom_tool_call outputs through input_items.
-
-**Input parameters**:
-| Parameter | Type | Required | Default | Description |
-| --- | --- | --- | --- | --- |
-| `include` | `array<string>` | — | — | Optional Responses include selectors. |
-| `input_items` | `array<any>` | — | — | Official callback/output items used to continue Computer, Shell, Patch, MCP, or Tool Search calls. |
-| `model` | `string / null` | — | — | Optional model override; otherwise plugin config, CHATGPT_MODEL, or OPENAI_MODEL is used. |
-| `previous_response_id` | `string / null` | — | — | Responses API continuation token from an earlier call. |
-| `prompt` | `string / null` | — | — | Instruction for a new request. Optional when continuation items are supplied. |
-| `request_options` | `object` | — | — | Additional Responses request fields. `model`, `input`, `tools`, and `stream` are protected. |
-| `stable_instructions` | `string / null` | — | — | Stable developer prefix eligible for an explicit OpenAI cache breakpoint. |
-| `tool_options` | `object` | — | — | Official fields merged into this tool's declaration. `type` is protected. |
-
-**Input schema**:
-```json
-{
-  "additionalProperties": false,
-  "properties": {
-    "include": {
-      "description": "Optional Responses include selectors.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000007"
-    },
-    "input_items": {
-      "description": "Official callback/output items used to continue Computer, Shell, Patch, MCP, or Tool Search calls.",
-      "items": true,
-      "type": "array",
-      "x-agena-order": "000006"
-    },
-    "model": {
-      "description": "Optional model override; otherwise plugin config, CHATGPT_MODEL, or OPENAI_MODEL is used.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000002"
-    },
-    "previous_response_id": {
-      "description": "Responses API continuation token from an earlier call.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000005"
-    },
-    "prompt": {
-      "description": "Instruction for a new request. Optional when continuation items are supplied.",
-      "maxLength": 64000,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000000"
-    },
-    "request_options": {
-      "additionalProperties": true,
-      "description": "Additional Responses request fields. `model`, `input`, `tools`, and `stream` are protected.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000004"
-    },
-    "stable_instructions": {
-      "description": "Stable developer prefix eligible for an explicit OpenAI cache breakpoint.",
-      "maxLength": 256000,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000001"
-    },
-    "tool_options": {
-      "additionalProperties": true,
-      "description": "Official fields merged into this tool's declaration. `type` is protected.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000003"
-    }
-  },
-  "type": "object"
-}
-```
-
-### file_search
-
-`agena.chatgpt.file_search` · **Summary**: Search OpenAI vector stores with the official file_search tool.
+`agena.chatgpt.cloud_file_search` · **Summary**: Search configured OpenAI cloud file stores, not files on this computer.
 
 **Tags**: `network` `interactive` `discovery`
 
 **Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
 
 **Help**:
-> Set tool_options.vector_store_ids and optional filters, max_num_results, and ranking_options exactly as documented by OpenAI.
+> Runs in OpenAI cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Provider file-store identifiers refer to remote resources, not local filesystem paths. Set tool_options.vector_store_ids and optional filters, max_num_results, and ranking_options exactly as documented by OpenAI.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
 | `include` | `array<string>` | — | — | Optional Responses include selectors. |
-| `input_items` | `array<any>` | — | — | Official callback/output items used to continue Computer, Shell, Patch, MCP, or Tool Search calls. |
+| `input_items` | `array<any>` | — | — | Responses message history for hosted follow-up. Client Function/Computer/Patch/MCP/Shell callback items are rejected; use previous_response_id for hosted continuation. |
 | `model` | `string / null` | — | — | Optional model override; otherwise plugin config, CHATGPT_MODEL, or OPENAI_MODEL is used. |
 | `previous_response_id` | `string / null` | — | — | Responses API continuation token from an earlier call. |
-| `prompt` | `string / null` | — | — | Instruction for a new request. Optional when continuation items are supplied. |
+| `prompt` | `string / null` | — | — | Instruction for a new hosted request. May be omitted when message history is supplied. |
 | `request_options` | `object` | — | — | Additional Responses request fields. `model`, `input`, `tools`, and `stream` are protected. |
 | `stable_instructions` | `string / null` | — | — | Stable developer prefix eligible for an explicit OpenAI cache breakpoint. |
 | `tool_options` | `object` | — | — | Official fields merged into this tool's declaration. `type` is protected. |
@@ -555,7 +333,7 @@ OpenAI Responses and image service tools exposed as ordinary Agena tools.
       "x-agena-order": "000007"
     },
     "input_items": {
-      "description": "Official callback/output items used to continue Computer, Shell, Patch, MCP, or Tool Search calls.",
+      "description": "Responses message history for hosted follow-up. Client Function/Computer/Patch/MCP/Shell callback items are rejected; use previous_response_id for hosted continuation.",
       "items": true,
       "type": "array",
       "x-agena-order": "000006"
@@ -577,7 +355,7 @@ OpenAI Responses and image service tools exposed as ordinary Agena tools.
       "x-agena-order": "000005"
     },
     "prompt": {
-      "description": "Instruction for a new request. Optional when continuation items are supplied.",
+      "description": "Instruction for a new hosted request. May be omitted when message history is supplied.",
       "maxLength": 64000,
       "type": [
         "string",
@@ -613,109 +391,103 @@ OpenAI Responses and image service tools exposed as ordinary Agena tools.
 }
 ```
 
-### function
+### cloud_file_status
 
-`agena.chatgpt.function` · **Summary**: Send an official OpenAI function tool declaration.
+`agena.chatgpt.cloud_file_status` · **Summary**: Query the remote status of an owned OpenAI cloud file, not a local path.
 
-**Tags**: `network` `interactive`
+**Tags**: `query` `network`
 
 **Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
 
 **Help**:
-> Set tool_options.name, description, parameters, and strict. This remains an ordinary Agena wrapper; returned function calls are continued through input_items.
+> Runs in OpenAI cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Accepts only cloud_file_upload handles from the same workspace, session and provider connection. Reports provider readiness/expiry and refreshes the signed local receipt. Does not download file contents or resubmit an unknown upload.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
-| `include` | `array<string>` | — | — | Optional Responses include selectors. |
-| `input_items` | `array<any>` | — | — | Official callback/output items used to continue Computer, Shell, Patch, MCP, or Tool Search calls. |
-| `model` | `string / null` | — | — | Optional model override; otherwise plugin config, CHATGPT_MODEL, or OPENAI_MODEL is used. |
-| `previous_response_id` | `string / null` | — | — | Responses API continuation token from an earlier call. |
-| `prompt` | `string / null` | — | — | Instruction for a new request. Optional when continuation items are supplied. |
-| `request_options` | `object` | — | — | Additional Responses request fields. `model`, `input`, `tools`, and `stream` are protected. |
-| `stable_instructions` | `string / null` | — | — | Stable developer prefix eligible for an explicit OpenAI cache breakpoint. |
-| `tool_options` | `object` | — | — | Official fields merged into this tool's declaration. `type` is protected. |
+| `handle` | `string` | ✓ | — |  |
 
 **Input schema**:
 ```json
 {
   "additionalProperties": false,
   "properties": {
-    "include": {
-      "description": "Optional Responses include selectors.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000007"
-    },
-    "input_items": {
-      "description": "Official callback/output items used to continue Computer, Shell, Patch, MCP, or Tool Search calls.",
-      "items": true,
-      "type": "array",
-      "x-agena-order": "000006"
-    },
-    "model": {
-      "description": "Optional model override; otherwise plugin config, CHATGPT_MODEL, or OPENAI_MODEL is used.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000002"
-    },
-    "previous_response_id": {
-      "description": "Responses API continuation token from an earlier call.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000005"
-    },
-    "prompt": {
-      "description": "Instruction for a new request. Optional when continuation items are supplied.",
-      "maxLength": 64000,
-      "type": [
-        "string",
-        "null"
-      ],
+    "handle": {
+      "minLength": 1,
+      "type": "string",
       "x-agena-order": "000000"
-    },
-    "request_options": {
-      "additionalProperties": true,
-      "description": "Additional Responses request fields. `model`, `input`, `tools`, and `stream` are protected.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000004"
-    },
-    "stable_instructions": {
-      "description": "Stable developer prefix eligible for an explicit OpenAI cache breakpoint.",
-      "maxLength": 256000,
+    }
+  },
+  "required": [
+    "handle"
+  ],
+  "type": "object"
+}
+```
+
+### cloud_file_upload
+
+`agena.chatgpt.cloud_file_upload` · **Summary**: Upload one permitted local file to OpenAI cloud and return a session-owned handle.
+
+**Tags**: `mutate` `network`
+
+**Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
+
+**Help**:
+> Runs in OpenAI cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Creates a remote file; does not analyze it. Inputs up to 20 MiB are content-checked and optionally revision-checked. The handle is bound to this workspace/session/provider connection; arbitrary vendor file IDs cannot be substituted. Local files remain unchanged. A timeout may leave remote acceptance unknown: inspect the returned handle, do not automatically repeat. Query status before using processing files and delete unneeded files explicitly.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `expected_sha256` | `string / null` | — | `null` |  |
+| `expires_in_seconds` | `integer / null` | — | `null` | Optional provider expiry. OpenAI/Anthropic default to one day.<br>Google uses its own lifecycle and rejects custom expiry. |
+| `path` | `string` | ✓ | — |  |
+
+**Input schema**:
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "expected_sha256": {
+      "default": null,
       "type": [
         "string",
         "null"
       ],
       "x-agena-order": "000001"
     },
-    "tool_options": {
-      "additionalProperties": true,
-      "description": "Official fields merged into this tool's declaration. `type` is protected.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000003"
+    "expires_in_seconds": {
+      "default": null,
+      "description": "Optional provider expiry. OpenAI/Anthropic default to one day.\nGoogle uses its own lifecycle and rejects custom expiry.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ],
+      "x-agena-order": "000002"
+    },
+    "path": {
+      "minLength": 1,
+      "type": "string",
+      "x-agena-order": "000000"
     }
   },
+  "required": [
+    "path"
+  ],
   "type": "object"
 }
 ```
 
-### image_edit
+### cloud_image_edit
 
-`agena.chatgpt.image_edit` · **Summary**: Edit permitted local images through OpenAI's Images edit endpoint.
+`agena.chatgpt.cloud_image_edit` · **Summary**: Upload permitted images for editing in OpenAI cloud; save the returned image separately.
 
 **Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
 
 **Help**:
-> This convenience entry preserves the official image edit endpoint alongside the Responses image_generation tool. Every input and output path is permission checked.
+> Runs in OpenAI cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Permission-checked local images are uploaded to OpenAI; returned images are saved as separate local artifacts. This convenience entry preserves the official image edit endpoint alongside the Responses image_generation tool. Every input and output path is permission checked.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -767,25 +539,25 @@ OpenAI Responses and image service tools exposed as ordinary Agena tools.
 }
 ```
 
-### image_generation
+### cloud_image_generation
 
-`agena.chatgpt.image_generation` · **Summary**: Generate or edit an image with OpenAI's Responses image_generation tool.
+`agena.chatgpt.cloud_image_generation` · **Summary**: Generate images in OpenAI cloud; save returned images as local attachments.
 
 **Tags**: `network` `interactive`
 
 **Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
 
 **Help**:
-> tool_options supports action, model, background, input_fidelity, input_image_mask, moderation, output_compression, output_format, partial_images, quality, and size. Returned base64 images are persisted as managed attachments.
+> Runs in OpenAI cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. tool_options supports action, model, background, input_fidelity, input_image_mask, moderation, output_compression, output_format, partial_images, quality, and size. Returned base64 images are persisted as managed attachments.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
 | `include` | `array<string>` | — | — | Optional Responses include selectors. |
-| `input_items` | `array<any>` | — | — | Official callback/output items used to continue Computer, Shell, Patch, MCP, or Tool Search calls. |
+| `input_items` | `array<any>` | — | — | Responses message history for hosted follow-up. Client Function/Computer/Patch/MCP/Shell callback items are rejected; use previous_response_id for hosted continuation. |
 | `model` | `string / null` | — | — | Optional model override; otherwise plugin config, CHATGPT_MODEL, or OPENAI_MODEL is used. |
 | `previous_response_id` | `string / null` | — | — | Responses API continuation token from an earlier call. |
-| `prompt` | `string / null` | — | — | Instruction for a new request. Optional when continuation items are supplied. |
+| `prompt` | `string / null` | — | — | Instruction for a new hosted request. May be omitted when message history is supplied. |
 | `request_options` | `object` | — | — | Additional Responses request fields. `model`, `input`, `tools`, and `stream` are protected. |
 | `stable_instructions` | `string / null` | — | — | Stable developer prefix eligible for an explicit OpenAI cache breakpoint. |
 | `tool_options` | `object` | — | — | Official fields merged into this tool's declaration. `type` is protected. |
@@ -804,7 +576,7 @@ OpenAI Responses and image service tools exposed as ordinary Agena tools.
       "x-agena-order": "000007"
     },
     "input_items": {
-      "description": "Official callback/output items used to continue Computer, Shell, Patch, MCP, or Tool Search calls.",
+      "description": "Responses message history for hosted follow-up. Client Function/Computer/Patch/MCP/Shell callback items are rejected; use previous_response_id for hosted continuation.",
       "items": true,
       "type": "array",
       "x-agena-order": "000006"
@@ -826,7 +598,7 @@ OpenAI Responses and image service tools exposed as ordinary Agena tools.
       "x-agena-order": "000005"
     },
     "prompt": {
-      "description": "Instruction for a new request. Optional when continuation items are supplied.",
+      "description": "Instruction for a new hosted request. May be omitted when message history is supplied.",
       "maxLength": 64000,
       "type": [
         "string",
@@ -862,25 +634,149 @@ OpenAI Responses and image service tools exposed as ordinary Agena tools.
 }
 ```
 
-### local_shell
+### cloud_image_understanding
 
-`agena.chatgpt.local_shell` · **Summary**: Expose OpenAI's local_shell protocol tool as an ordinary Agena request.
+`agena.chatgpt.cloud_image_understanding` · **Summary**: Send explicit images to OpenAI cloud for understanding; not local file viewing.
+
+**Tags**: `query` `network`
+
+**Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
+
+**Help**:
+> Runs in OpenAI cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Sends only the specified, permission-checked inputs and prompt to OpenAI. Accepts local paths with expected_sha256 or owned cloud_file_upload handles. Local preparation is bounded; no automatic whole-workspace or conversation upload. Cloud inference may be billed. Input sent inline is not a separate remote file. Results return input hashes, provider/model and usage. No local execution fallback.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `detail` | `ImageDetail` | — | `auto` |  |
+| `inputs` | `array<MediaSource>` | ✓ | — |  |
+| `max_output_tokens` | `integer` | — | `4096` |  |
+| `model` | `string / null` | — | `null` |  |
+| `prompt` | `string` | ✓ | — |  |
+
+**Input schema**:
+```json
+{
+  "$defs": {
+    "ImageDetail": {
+      "enum": [
+        "auto",
+        "low",
+        "high"
+      ],
+      "type": "string",
+      "x-agena-order": "000003"
+    },
+    "MediaSource": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "expected_sha256": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "path": {
+              "type": "string"
+            },
+            "source": {
+              "const": "local",
+              "type": "string"
+            }
+          },
+          "required": [
+            "source",
+            "path"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "handle": {
+              "type": "string"
+            },
+            "source": {
+              "const": "cloud",
+              "type": "string"
+            }
+          },
+          "required": [
+            "source",
+            "handle"
+          ],
+          "type": "object"
+        }
+      ],
+      "properties": {},
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "detail": {
+      "$ref": "#/$defs/ImageDetail",
+      "default": "auto"
+    },
+    "inputs": {
+      "items": {
+        "$ref": "#/$defs/MediaSource"
+      },
+      "type": "array",
+      "x-agena-order": "000000"
+    },
+    "max_output_tokens": {
+      "default": 4096,
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer",
+      "x-agena-order": "000004"
+    },
+    "model": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000002"
+    },
+    "prompt": {
+      "maxLength": 64000,
+      "minLength": 1,
+      "type": "string",
+      "x-agena-order": "000001"
+    }
+  },
+  "required": [
+    "inputs",
+    "prompt"
+  ],
+  "type": "object"
+}
+```
+
+### cloud_shell
+
+`agena.chatgpt.cloud_shell` · **Summary**: Run shell commands in an OpenAI cloud container, never in the local terminal.
 
 **Tags**: `network` `interactive`
 
 **Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
 
 **Help**:
-> The provider returns local_shell_call items. Execute them with Agena shell permissions, then continue using previous_response_id and local_shell_call_output items.
+> Runs in OpenAI cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Cloud filesystem and runtime are separate from the Agena workspace; provide needed input files explicitly. Defaults to container_auto. Only container_auto or container_reference with container_id is accepted. Local/custom environments and client callbacks are rejected. Uploaded provider files are separate from Agena local files; there is no local execution fallback.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
 | `include` | `array<string>` | — | — | Optional Responses include selectors. |
-| `input_items` | `array<any>` | — | — | Official callback/output items used to continue Computer, Shell, Patch, MCP, or Tool Search calls. |
+| `input_items` | `array<any>` | — | — | Responses message history for hosted follow-up. Client Function/Computer/Patch/MCP/Shell callback items are rejected; use previous_response_id for hosted continuation. |
 | `model` | `string / null` | — | — | Optional model override; otherwise plugin config, CHATGPT_MODEL, or OPENAI_MODEL is used. |
 | `previous_response_id` | `string / null` | — | — | Responses API continuation token from an earlier call. |
-| `prompt` | `string / null` | — | — | Instruction for a new request. Optional when continuation items are supplied. |
+| `prompt` | `string / null` | — | — | Instruction for a new hosted request. May be omitted when message history is supplied. |
 | `request_options` | `object` | — | — | Additional Responses request fields. `model`, `input`, `tools`, and `stream` are protected. |
 | `stable_instructions` | `string / null` | — | — | Stable developer prefix eligible for an explicit OpenAI cache breakpoint. |
 | `tool_options` | `object` | — | — | Official fields merged into this tool's declaration. `type` is protected. |
@@ -899,7 +795,7 @@ OpenAI Responses and image service tools exposed as ordinary Agena tools.
       "x-agena-order": "000007"
     },
     "input_items": {
-      "description": "Official callback/output items used to continue Computer, Shell, Patch, MCP, or Tool Search calls.",
+      "description": "Responses message history for hosted follow-up. Client Function/Computer/Patch/MCP/Shell callback items are rejected; use previous_response_id for hosted continuation.",
       "items": true,
       "type": "array",
       "x-agena-order": "000006"
@@ -921,7 +817,7 @@ OpenAI Responses and image service tools exposed as ordinary Agena tools.
       "x-agena-order": "000005"
     },
     "prompt": {
-      "description": "Instruction for a new request. Optional when continuation items are supplied.",
+      "description": "Instruction for a new hosted request. May be omitted when message history is supplied.",
       "maxLength": 64000,
       "type": [
         "string",
@@ -957,405 +853,25 @@ OpenAI Responses and image service tools exposed as ordinary Agena tools.
 }
 ```
 
-### mcp
+### cloud_web_search
 
-`agena.chatgpt.mcp` · **Summary**: Connect OpenAI Responses to an official remote MCP server or connector.
-
-**Tags**: `network` `interactive`
-
-**Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
-
-**Help**:
-> Set server_label and one of server_url, connector_id, or tunnel_id in tool_options. Official allowed_tools, authorization, headers, require_approval, defer_loading, and allowed_callers fields are preserved.
-
-**Input parameters**:
-| Parameter | Type | Required | Default | Description |
-| --- | --- | --- | --- | --- |
-| `include` | `array<string>` | — | — | Optional Responses include selectors. |
-| `input_items` | `array<any>` | — | — | Official callback/output items used to continue Computer, Shell, Patch, MCP, or Tool Search calls. |
-| `model` | `string / null` | — | — | Optional model override; otherwise plugin config, CHATGPT_MODEL, or OPENAI_MODEL is used. |
-| `previous_response_id` | `string / null` | — | — | Responses API continuation token from an earlier call. |
-| `prompt` | `string / null` | — | — | Instruction for a new request. Optional when continuation items are supplied. |
-| `request_options` | `object` | — | — | Additional Responses request fields. `model`, `input`, `tools`, and `stream` are protected. |
-| `stable_instructions` | `string / null` | — | — | Stable developer prefix eligible for an explicit OpenAI cache breakpoint. |
-| `tool_options` | `object` | — | — | Official fields merged into this tool's declaration. `type` is protected. |
-
-**Input schema**:
-```json
-{
-  "additionalProperties": false,
-  "properties": {
-    "include": {
-      "description": "Optional Responses include selectors.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000007"
-    },
-    "input_items": {
-      "description": "Official callback/output items used to continue Computer, Shell, Patch, MCP, or Tool Search calls.",
-      "items": true,
-      "type": "array",
-      "x-agena-order": "000006"
-    },
-    "model": {
-      "description": "Optional model override; otherwise plugin config, CHATGPT_MODEL, or OPENAI_MODEL is used.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000002"
-    },
-    "previous_response_id": {
-      "description": "Responses API continuation token from an earlier call.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000005"
-    },
-    "prompt": {
-      "description": "Instruction for a new request. Optional when continuation items are supplied.",
-      "maxLength": 64000,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000000"
-    },
-    "request_options": {
-      "additionalProperties": true,
-      "description": "Additional Responses request fields. `model`, `input`, `tools`, and `stream` are protected.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000004"
-    },
-    "stable_instructions": {
-      "description": "Stable developer prefix eligible for an explicit OpenAI cache breakpoint.",
-      "maxLength": 256000,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000001"
-    },
-    "tool_options": {
-      "additionalProperties": true,
-      "description": "Official fields merged into this tool's declaration. `type` is protected.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000003"
-    }
-  },
-  "type": "object"
-}
-```
-
-### namespace
-
-`agena.chatgpt.namespace` · **Summary**: Send an official OpenAI namespace tool declaration.
-
-**Tags**: `network` `interactive`
-
-**Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
-
-**Help**:
-> Use tool_options to define the namespace and nested tools according to the current Responses schema.
-
-**Input parameters**:
-| Parameter | Type | Required | Default | Description |
-| --- | --- | --- | --- | --- |
-| `include` | `array<string>` | — | — | Optional Responses include selectors. |
-| `input_items` | `array<any>` | — | — | Official callback/output items used to continue Computer, Shell, Patch, MCP, or Tool Search calls. |
-| `model` | `string / null` | — | — | Optional model override; otherwise plugin config, CHATGPT_MODEL, or OPENAI_MODEL is used. |
-| `previous_response_id` | `string / null` | — | — | Responses API continuation token from an earlier call. |
-| `prompt` | `string / null` | — | — | Instruction for a new request. Optional when continuation items are supplied. |
-| `request_options` | `object` | — | — | Additional Responses request fields. `model`, `input`, `tools`, and `stream` are protected. |
-| `stable_instructions` | `string / null` | — | — | Stable developer prefix eligible for an explicit OpenAI cache breakpoint. |
-| `tool_options` | `object` | — | — | Official fields merged into this tool's declaration. `type` is protected. |
-
-**Input schema**:
-```json
-{
-  "additionalProperties": false,
-  "properties": {
-    "include": {
-      "description": "Optional Responses include selectors.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000007"
-    },
-    "input_items": {
-      "description": "Official callback/output items used to continue Computer, Shell, Patch, MCP, or Tool Search calls.",
-      "items": true,
-      "type": "array",
-      "x-agena-order": "000006"
-    },
-    "model": {
-      "description": "Optional model override; otherwise plugin config, CHATGPT_MODEL, or OPENAI_MODEL is used.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000002"
-    },
-    "previous_response_id": {
-      "description": "Responses API continuation token from an earlier call.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000005"
-    },
-    "prompt": {
-      "description": "Instruction for a new request. Optional when continuation items are supplied.",
-      "maxLength": 64000,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000000"
-    },
-    "request_options": {
-      "additionalProperties": true,
-      "description": "Additional Responses request fields. `model`, `input`, `tools`, and `stream` are protected.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000004"
-    },
-    "stable_instructions": {
-      "description": "Stable developer prefix eligible for an explicit OpenAI cache breakpoint.",
-      "maxLength": 256000,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000001"
-    },
-    "tool_options": {
-      "additionalProperties": true,
-      "description": "Official fields merged into this tool's declaration. `type` is protected.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000003"
-    }
-  },
-  "type": "object"
-}
-```
-
-### programmatic_tool_calling
-
-`agena.chatgpt.programmatic_tool_calling` · **Summary**: Enable OpenAI programmatic tool calling.
-
-**Tags**: `network` `interactive`
-
-**Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
-
-**Help**:
-> This official Responses tool lets generated programs invoke eligible tools. Use input_items to continue any resulting calls.
-
-**Input parameters**:
-| Parameter | Type | Required | Default | Description |
-| --- | --- | --- | --- | --- |
-| `include` | `array<string>` | — | — | Optional Responses include selectors. |
-| `input_items` | `array<any>` | — | — | Official callback/output items used to continue Computer, Shell, Patch, MCP, or Tool Search calls. |
-| `model` | `string / null` | — | — | Optional model override; otherwise plugin config, CHATGPT_MODEL, or OPENAI_MODEL is used. |
-| `previous_response_id` | `string / null` | — | — | Responses API continuation token from an earlier call. |
-| `prompt` | `string / null` | — | — | Instruction for a new request. Optional when continuation items are supplied. |
-| `request_options` | `object` | — | — | Additional Responses request fields. `model`, `input`, `tools`, and `stream` are protected. |
-| `stable_instructions` | `string / null` | — | — | Stable developer prefix eligible for an explicit OpenAI cache breakpoint. |
-| `tool_options` | `object` | — | — | Official fields merged into this tool's declaration. `type` is protected. |
-
-**Input schema**:
-```json
-{
-  "additionalProperties": false,
-  "properties": {
-    "include": {
-      "description": "Optional Responses include selectors.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000007"
-    },
-    "input_items": {
-      "description": "Official callback/output items used to continue Computer, Shell, Patch, MCP, or Tool Search calls.",
-      "items": true,
-      "type": "array",
-      "x-agena-order": "000006"
-    },
-    "model": {
-      "description": "Optional model override; otherwise plugin config, CHATGPT_MODEL, or OPENAI_MODEL is used.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000002"
-    },
-    "previous_response_id": {
-      "description": "Responses API continuation token from an earlier call.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000005"
-    },
-    "prompt": {
-      "description": "Instruction for a new request. Optional when continuation items are supplied.",
-      "maxLength": 64000,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000000"
-    },
-    "request_options": {
-      "additionalProperties": true,
-      "description": "Additional Responses request fields. `model`, `input`, `tools`, and `stream` are protected.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000004"
-    },
-    "stable_instructions": {
-      "description": "Stable developer prefix eligible for an explicit OpenAI cache breakpoint.",
-      "maxLength": 256000,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000001"
-    },
-    "tool_options": {
-      "additionalProperties": true,
-      "description": "Official fields merged into this tool's declaration. `type` is protected.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000003"
-    }
-  },
-  "type": "object"
-}
-```
-
-### shell
-
-`agena.chatgpt.shell` · **Summary**: Expose OpenAI's shell tool with official environment configuration.
-
-**Tags**: `network` `interactive`
-
-**Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
-
-**Help**:
-> tool_options.environment accepts OpenAI local/container environment objects. Execute pending shell_call items under Agena permissions and continue with shell_call_output items.
-
-**Input parameters**:
-| Parameter | Type | Required | Default | Description |
-| --- | --- | --- | --- | --- |
-| `include` | `array<string>` | — | — | Optional Responses include selectors. |
-| `input_items` | `array<any>` | — | — | Official callback/output items used to continue Computer, Shell, Patch, MCP, or Tool Search calls. |
-| `model` | `string / null` | — | — | Optional model override; otherwise plugin config, CHATGPT_MODEL, or OPENAI_MODEL is used. |
-| `previous_response_id` | `string / null` | — | — | Responses API continuation token from an earlier call. |
-| `prompt` | `string / null` | — | — | Instruction for a new request. Optional when continuation items are supplied. |
-| `request_options` | `object` | — | — | Additional Responses request fields. `model`, `input`, `tools`, and `stream` are protected. |
-| `stable_instructions` | `string / null` | — | — | Stable developer prefix eligible for an explicit OpenAI cache breakpoint. |
-| `tool_options` | `object` | — | — | Official fields merged into this tool's declaration. `type` is protected. |
-
-**Input schema**:
-```json
-{
-  "additionalProperties": false,
-  "properties": {
-    "include": {
-      "description": "Optional Responses include selectors.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000007"
-    },
-    "input_items": {
-      "description": "Official callback/output items used to continue Computer, Shell, Patch, MCP, or Tool Search calls.",
-      "items": true,
-      "type": "array",
-      "x-agena-order": "000006"
-    },
-    "model": {
-      "description": "Optional model override; otherwise plugin config, CHATGPT_MODEL, or OPENAI_MODEL is used.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000002"
-    },
-    "previous_response_id": {
-      "description": "Responses API continuation token from an earlier call.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000005"
-    },
-    "prompt": {
-      "description": "Instruction for a new request. Optional when continuation items are supplied.",
-      "maxLength": 64000,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000000"
-    },
-    "request_options": {
-      "additionalProperties": true,
-      "description": "Additional Responses request fields. `model`, `input`, `tools`, and `stream` are protected.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000004"
-    },
-    "stable_instructions": {
-      "description": "Stable developer prefix eligible for an explicit OpenAI cache breakpoint.",
-      "maxLength": 256000,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000001"
-    },
-    "tool_options": {
-      "additionalProperties": true,
-      "description": "Official fields merged into this tool's declaration. `type` is protected.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000003"
-    }
-  },
-  "type": "object"
-}
-```
-
-### tool_search
-
-`agena.chatgpt.tool_search` · **Summary**: Use OpenAI hosted or client tool_search.
+`agena.chatgpt.cloud_web_search` · **Summary**: Search the web in OpenAI cloud and return sources; not a local browser operation.
 
 **Tags**: `network` `interactive` `discovery`
 
 **Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
 
 **Help**:
-> Set tool_options.execution to server or client, plus optional description and parameters. Continue client calls with tool_search_output items in input_items.
+> Runs in OpenAI cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. tool_options accepts the official WebSearchToolParam fields: filters.allowed_domains, search_context_size, user_location, and versioned type-compatible options. Hosted results and response_id are returned for follow-up; this plugin never executes client tool callbacks.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
 | `include` | `array<string>` | — | — | Optional Responses include selectors. |
-| `input_items` | `array<any>` | — | — | Official callback/output items used to continue Computer, Shell, Patch, MCP, or Tool Search calls. |
+| `input_items` | `array<any>` | — | — | Responses message history for hosted follow-up. Client Function/Computer/Patch/MCP/Shell callback items are rejected; use previous_response_id for hosted continuation. |
 | `model` | `string / null` | — | — | Optional model override; otherwise plugin config, CHATGPT_MODEL, or OPENAI_MODEL is used. |
 | `previous_response_id` | `string / null` | — | — | Responses API continuation token from an earlier call. |
-| `prompt` | `string / null` | — | — | Instruction for a new request. Optional when continuation items are supplied. |
+| `prompt` | `string / null` | — | — | Instruction for a new hosted request. May be omitted when message history is supplied. |
 | `request_options` | `object` | — | — | Additional Responses request fields. `model`, `input`, `tools`, and `stream` are protected. |
 | `stable_instructions` | `string / null` | — | — | Stable developer prefix eligible for an explicit OpenAI cache breakpoint. |
 | `tool_options` | `object` | — | — | Official fields merged into this tool's declaration. `type` is protected. |
@@ -1374,7 +890,7 @@ OpenAI Responses and image service tools exposed as ordinary Agena tools.
       "x-agena-order": "000007"
     },
     "input_items": {
-      "description": "Official callback/output items used to continue Computer, Shell, Patch, MCP, or Tool Search calls.",
+      "description": "Responses message history for hosted follow-up. Client Function/Computer/Patch/MCP/Shell callback items are rejected; use previous_response_id for hosted continuation.",
       "items": true,
       "type": "array",
       "x-agena-order": "000006"
@@ -1396,197 +912,7 @@ OpenAI Responses and image service tools exposed as ordinary Agena tools.
       "x-agena-order": "000005"
     },
     "prompt": {
-      "description": "Instruction for a new request. Optional when continuation items are supplied.",
-      "maxLength": 64000,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000000"
-    },
-    "request_options": {
-      "additionalProperties": true,
-      "description": "Additional Responses request fields. `model`, `input`, `tools`, and `stream` are protected.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000004"
-    },
-    "stable_instructions": {
-      "description": "Stable developer prefix eligible for an explicit OpenAI cache breakpoint.",
-      "maxLength": 256000,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000001"
-    },
-    "tool_options": {
-      "additionalProperties": true,
-      "description": "Official fields merged into this tool's declaration. `type` is protected.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000003"
-    }
-  },
-  "type": "object"
-}
-```
-
-### web_search
-
-`agena.chatgpt.web_search` · **Summary**: Use OpenAI's current Responses web_search tool.
-
-**Tags**: `network` `interactive` `discovery`
-
-**Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
-
-**Help**:
-> tool_options accepts the official WebSearchToolParam fields: filters.allowed_domains, search_context_size, user_location, and versioned type-compatible options. Pending calls and response_id are returned for continuation.
-
-**Input parameters**:
-| Parameter | Type | Required | Default | Description |
-| --- | --- | --- | --- | --- |
-| `include` | `array<string>` | — | — | Optional Responses include selectors. |
-| `input_items` | `array<any>` | — | — | Official callback/output items used to continue Computer, Shell, Patch, MCP, or Tool Search calls. |
-| `model` | `string / null` | — | — | Optional model override; otherwise plugin config, CHATGPT_MODEL, or OPENAI_MODEL is used. |
-| `previous_response_id` | `string / null` | — | — | Responses API continuation token from an earlier call. |
-| `prompt` | `string / null` | — | — | Instruction for a new request. Optional when continuation items are supplied. |
-| `request_options` | `object` | — | — | Additional Responses request fields. `model`, `input`, `tools`, and `stream` are protected. |
-| `stable_instructions` | `string / null` | — | — | Stable developer prefix eligible for an explicit OpenAI cache breakpoint. |
-| `tool_options` | `object` | — | — | Official fields merged into this tool's declaration. `type` is protected. |
-
-**Input schema**:
-```json
-{
-  "additionalProperties": false,
-  "properties": {
-    "include": {
-      "description": "Optional Responses include selectors.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000007"
-    },
-    "input_items": {
-      "description": "Official callback/output items used to continue Computer, Shell, Patch, MCP, or Tool Search calls.",
-      "items": true,
-      "type": "array",
-      "x-agena-order": "000006"
-    },
-    "model": {
-      "description": "Optional model override; otherwise plugin config, CHATGPT_MODEL, or OPENAI_MODEL is used.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000002"
-    },
-    "previous_response_id": {
-      "description": "Responses API continuation token from an earlier call.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000005"
-    },
-    "prompt": {
-      "description": "Instruction for a new request. Optional when continuation items are supplied.",
-      "maxLength": 64000,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000000"
-    },
-    "request_options": {
-      "additionalProperties": true,
-      "description": "Additional Responses request fields. `model`, `input`, `tools`, and `stream` are protected.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000004"
-    },
-    "stable_instructions": {
-      "description": "Stable developer prefix eligible for an explicit OpenAI cache breakpoint.",
-      "maxLength": 256000,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000001"
-    },
-    "tool_options": {
-      "additionalProperties": true,
-      "description": "Official fields merged into this tool's declaration. `type` is protected.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000003"
-    }
-  },
-  "type": "object"
-}
-```
-
-### web_search_preview
-
-`agena.chatgpt.web_search_preview` · **Summary**: Use OpenAI's compatibility web_search_preview tool.
-
-**Tags**: `network` `interactive` `discovery`
-
-**Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
-
-**Help**:
-> Supports official preview fields such as search_content_types, search_context_size, and user_location.
-
-**Input parameters**:
-| Parameter | Type | Required | Default | Description |
-| --- | --- | --- | --- | --- |
-| `include` | `array<string>` | — | — | Optional Responses include selectors. |
-| `input_items` | `array<any>` | — | — | Official callback/output items used to continue Computer, Shell, Patch, MCP, or Tool Search calls. |
-| `model` | `string / null` | — | — | Optional model override; otherwise plugin config, CHATGPT_MODEL, or OPENAI_MODEL is used. |
-| `previous_response_id` | `string / null` | — | — | Responses API continuation token from an earlier call. |
-| `prompt` | `string / null` | — | — | Instruction for a new request. Optional when continuation items are supplied. |
-| `request_options` | `object` | — | — | Additional Responses request fields. `model`, `input`, `tools`, and `stream` are protected. |
-| `stable_instructions` | `string / null` | — | — | Stable developer prefix eligible for an explicit OpenAI cache breakpoint. |
-| `tool_options` | `object` | — | — | Official fields merged into this tool's declaration. `type` is protected. |
-
-**Input schema**:
-```json
-{
-  "additionalProperties": false,
-  "properties": {
-    "include": {
-      "description": "Optional Responses include selectors.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000007"
-    },
-    "input_items": {
-      "description": "Official callback/output items used to continue Computer, Shell, Patch, MCP, or Tool Search calls.",
-      "items": true,
-      "type": "array",
-      "x-agena-order": "000006"
-    },
-    "model": {
-      "description": "Optional model override; otherwise plugin config, CHATGPT_MODEL, or OPENAI_MODEL is used.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000002"
-    },
-    "previous_response_id": {
-      "description": "Responses API continuation token from an earlier call.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000005"
-    },
-    "prompt": {
-      "description": "Instruction for a new request. Optional when continuation items are supplied.",
+      "description": "Instruction for a new hosted request. May be omitted when message history is supplied.",
       "maxLength": 64000,
       "type": [
         "string",
@@ -1624,20 +950,20 @@ OpenAI Responses and image service tools exposed as ordinary Agena tools.
 
 ## agena.claude
 
-**Version** `0.1.2-beta.1` · **Tools** 11
+**Version** `0.1.2-beta.1` · **Tools** 9
 
-Anthropic Claude server and client tools exposed as ordinary Agena tools.
+Anthropic cloud search, fetch, computation and advisor capabilities. Inputs leave this computer; no local execution fallback.
 
-### advisor
+### cloud_advisor
 
-`agena.claude.advisor` · **Summary**: Ask an Anthropic advisor model with Claude's advisor server tool.
+`agena.claude.cloud_advisor` · **Summary**: Consult an advisor model in Anthropic cloud using the supplied context.
 
 **Tags**: `network` `interactive`
 
 **Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
 
 **Help**:
-> Uses advisor_20260301. Set tool_options.model and optional caching, max_tokens, max_uses, allowed_callers, cache_control, defer_loading, and strict.
+> Runs in Anthropic cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Only supplied context is available; the local repository and session transcript are not automatically uploaded. Uses advisor_20260301. Set tool_options.model and optional caching, max_tokens, max_uses, allowed_callers, cache_control, defer_loading, and strict.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -1645,9 +971,9 @@ Anthropic Claude server and client tools exposed as ordinary Agena tools.
 | `beta_headers` | `array<string>` | — | — | Additional official Anthropic beta feature headers. |
 | `cache_ttl` | `ClaudeCacheTtl / null` | — | — |  |
 | `max_tokens` | `integer / null` | — | — |  |
-| `messages` | `array<any>` | — | — | Full Anthropic messages used to continue tool_use/tool_result loops. |
+| `messages` | `array<any>` | — | — | Anthropic message history for hosted results or pause_turn resumption. Client tool_use/tool_result callbacks are not accepted. |
 | `model` | `string / null` | — | — |  |
-| `prompt` | `string / null` | — | — | New user instruction. Optional when messages already contain tool_result continuation. |
+| `prompt` | `string / null` | — | — | New user instruction. Optional when messages continue hosted server execution. |
 | `request_options` | `object` | — | — |  |
 | `stable_system` | `string / null` | — | — | Stable system prefix placed before dynamic messages for cache reuse. |
 | `tool_options` | `object` | — | — |  |
@@ -1696,7 +1022,7 @@ Anthropic Claude server and client tools exposed as ordinary Agena tools.
       "x-agena-order": "000004"
     },
     "messages": {
-      "description": "Full Anthropic messages used to continue tool_use/tool_result loops.",
+      "description": "Anthropic message history for hosted results or pause_turn resumption. Client tool_use/tool_result callbacks are not accepted.",
       "items": true,
       "type": "array",
       "x-agena-order": "000007"
@@ -1709,7 +1035,7 @@ Anthropic Claude server and client tools exposed as ordinary Agena tools.
       "x-agena-order": "000003"
     },
     "prompt": {
-      "description": "New user instruction. Optional when messages already contain tool_result continuation.",
+      "description": "New user instruction. Optional when messages continue hosted server execution.",
       "maxLength": 64000,
       "type": [
         "string",
@@ -1743,16 +1069,16 @@ Anthropic Claude server and client tools exposed as ordinary Agena tools.
 }
 ```
 
-### bash
+### cloud_code_execution
 
-`agena.claude.bash` · **Summary**: Use Claude's current Bash client tool.
+`agena.claude.cloud_code_execution` · **Summary**: Execute code in Anthropic cloud infrastructure, not on this computer.
 
 **Tags**: `network` `interactive`
 
 **Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
 
 **Help**:
-> The declaration uses bash_20250124. Execute returned bash tool_use blocks through Agena shell permissions, append assistant content and user tool_result content to messages, then call this tool again.
+> Runs in Anthropic cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Cloud filesystem and runtime are separate from the Agena workspace; provide needed input files explicitly. Uses code_execution_20260521 with persistent REPL state. Official allowed_callers, cache_control, defer_loading, and strict fields may be supplied in tool_options.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -1760,9 +1086,9 @@ Anthropic Claude server and client tools exposed as ordinary Agena tools.
 | `beta_headers` | `array<string>` | — | — | Additional official Anthropic beta feature headers. |
 | `cache_ttl` | `ClaudeCacheTtl / null` | — | — |  |
 | `max_tokens` | `integer / null` | — | — |  |
-| `messages` | `array<any>` | — | — | Full Anthropic messages used to continue tool_use/tool_result loops. |
+| `messages` | `array<any>` | — | — | Anthropic message history for hosted results or pause_turn resumption. Client tool_use/tool_result callbacks are not accepted. |
 | `model` | `string / null` | — | — |  |
-| `prompt` | `string / null` | — | — | New user instruction. Optional when messages already contain tool_result continuation. |
+| `prompt` | `string / null` | — | — | New user instruction. Optional when messages continue hosted server execution. |
 | `request_options` | `object` | — | — |  |
 | `stable_system` | `string / null` | — | — | Stable system prefix placed before dynamic messages for cache reuse. |
 | `tool_options` | `object` | — | — |  |
@@ -1811,7 +1137,7 @@ Anthropic Claude server and client tools exposed as ordinary Agena tools.
       "x-agena-order": "000004"
     },
     "messages": {
-      "description": "Full Anthropic messages used to continue tool_use/tool_result loops.",
+      "description": "Anthropic message history for hosted results or pause_turn resumption. Client tool_use/tool_result callbacks are not accepted.",
       "items": true,
       "type": "array",
       "x-agena-order": "000007"
@@ -1824,7 +1150,7 @@ Anthropic Claude server and client tools exposed as ordinary Agena tools.
       "x-agena-order": "000003"
     },
     "prompt": {
-      "description": "New user instruction. Optional when messages already contain tool_result continuation.",
+      "description": "New user instruction. Optional when messages continue hosted server execution.",
       "maxLength": 64000,
       "type": [
         "string",
@@ -1858,591 +1184,387 @@ Anthropic Claude server and client tools exposed as ordinary Agena tools.
 }
 ```
 
-### code_execution
+### cloud_document_understanding
 
-`agena.claude.code_execution` · **Summary**: Run Claude's latest hosted code execution tool.
+`agena.claude.cloud_document_understanding` · **Summary**: Send explicit PDF/text documents to Anthropic cloud for understanding; not local file viewing.
 
-**Tags**: `network` `interactive`
+**Tags**: `query` `network`
 
 **Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
 
 **Help**:
-> Uses code_execution_20260521 with persistent REPL state. Official allowed_callers, cache_control, defer_loading, and strict fields may be supplied in tool_options.
+> Runs in Anthropic cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Sends only the specified, permission-checked inputs and prompt to Anthropic. Accepts local paths with expected_sha256 or owned cloud_file_upload handles. Local preparation is bounded; no automatic whole-workspace or conversation upload. Cloud inference may be billed. Input sent inline is not a separate remote file. Results return input hashes, provider/model and usage. No local execution fallback.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
-| `beta_headers` | `array<string>` | — | — | Additional official Anthropic beta feature headers. |
-| `cache_ttl` | `ClaudeCacheTtl / null` | — | — |  |
-| `max_tokens` | `integer / null` | — | — |  |
-| `messages` | `array<any>` | — | — | Full Anthropic messages used to continue tool_use/tool_result loops. |
-| `model` | `string / null` | — | — |  |
-| `prompt` | `string / null` | — | — | New user instruction. Optional when messages already contain tool_result continuation. |
-| `request_options` | `object` | — | — |  |
-| `stable_system` | `string / null` | — | — | Stable system prefix placed before dynamic messages for cache reuse. |
-| `tool_options` | `object` | — | — |  |
+| `detail` | `ImageDetail` | — | `auto` |  |
+| `inputs` | `array<MediaSource>` | ✓ | — |  |
+| `max_output_tokens` | `integer` | — | `4096` |  |
+| `model` | `string / null` | — | `null` |  |
+| `prompt` | `string` | ✓ | — |  |
 
 **Input schema**:
 ```json
 {
   "$defs": {
-    "ClaudeCacheTtl": {
+    "ImageDetail": {
       "enum": [
-        "disabled",
-        "five_minutes",
-        "one_hour"
+        "auto",
+        "low",
+        "high"
       ],
-      "type": "string"
+      "type": "string",
+      "x-agena-order": "000003"
+    },
+    "MediaSource": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "expected_sha256": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "path": {
+              "type": "string"
+            },
+            "source": {
+              "const": "local",
+              "type": "string"
+            }
+          },
+          "required": [
+            "source",
+            "path"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "handle": {
+              "type": "string"
+            },
+            "source": {
+              "const": "cloud",
+              "type": "string"
+            }
+          },
+          "required": [
+            "source",
+            "handle"
+          ],
+          "type": "object"
+        }
+      ],
+      "properties": {},
+      "type": "object"
     }
   },
   "additionalProperties": false,
   "properties": {
-    "beta_headers": {
-      "description": "Additional official Anthropic beta feature headers.",
+    "detail": {
+      "$ref": "#/$defs/ImageDetail",
+      "default": "auto"
+    },
+    "inputs": {
       "items": {
-        "type": "string"
+        "$ref": "#/$defs/MediaSource"
       },
       "type": "array",
-      "x-agena-order": "000008"
+      "x-agena-order": "000000"
     },
-    "cache_ttl": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/ClaudeCacheTtl"
-        },
-        {
-          "type": "null"
-        }
+    "max_output_tokens": {
+      "default": 4096,
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer",
+      "x-agena-order": "000004"
+    },
+    "model": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
       ],
       "x-agena-order": "000002"
     },
-    "max_tokens": {
+    "prompt": {
+      "maxLength": 64000,
+      "minLength": 1,
+      "type": "string",
+      "x-agena-order": "000001"
+    }
+  },
+  "required": [
+    "inputs",
+    "prompt"
+  ],
+  "type": "object"
+}
+```
+
+### cloud_file_delete
+
+`agena.claude.cloud_file_delete` · **Summary**: Request deletion of an owned file from Anthropic cloud; preserve the local original.
+
+**Tags**: `mutate` `network`
+
+**Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
+
+**Help**:
+> Runs in Anthropic cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Accepts only session-owned cloud file handles. Deletes the remote resource and records the provider acknowledgement; it does not promise erasure of provider logs/backups. No arbitrary remote IDs or cross-provider deletion. A failed request is not reported as successful cleanup.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `handle` | `string` | ✓ | — |  |
+
+**Input schema**:
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "handle": {
+      "minLength": 1,
+      "type": "string",
+      "x-agena-order": "000000"
+    }
+  },
+  "required": [
+    "handle"
+  ],
+  "type": "object"
+}
+```
+
+### cloud_file_status
+
+`agena.claude.cloud_file_status` · **Summary**: Query the remote status of an owned Anthropic cloud file, not a local path.
+
+**Tags**: `query` `network`
+
+**Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
+
+**Help**:
+> Runs in Anthropic cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Accepts only cloud_file_upload handles from the same workspace, session and provider connection. Reports provider readiness/expiry and refreshes the signed local receipt. Does not download file contents or resubmit an unknown upload.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `handle` | `string` | ✓ | — |  |
+
+**Input schema**:
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "handle": {
+      "minLength": 1,
+      "type": "string",
+      "x-agena-order": "000000"
+    }
+  },
+  "required": [
+    "handle"
+  ],
+  "type": "object"
+}
+```
+
+### cloud_file_upload
+
+`agena.claude.cloud_file_upload` · **Summary**: Upload one permitted local file to Anthropic cloud and return a session-owned handle.
+
+**Tags**: `mutate` `network`
+
+**Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
+
+**Help**:
+> Runs in Anthropic cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Creates a remote file; does not analyze it. Inputs up to 20 MiB are content-checked and optionally revision-checked. The handle is bound to this workspace/session/provider connection; arbitrary vendor file IDs cannot be substituted. Local files remain unchanged. A timeout may leave remote acceptance unknown: inspect the returned handle, do not automatically repeat. Query status before using processing files and delete unneeded files explicitly.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `expected_sha256` | `string / null` | — | `null` |  |
+| `expires_in_seconds` | `integer / null` | — | `null` | Optional provider expiry. OpenAI/Anthropic default to one day.<br>Google uses its own lifecycle and rejects custom expiry. |
+| `path` | `string` | ✓ | — |  |
+
+**Input schema**:
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "expected_sha256": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001"
+    },
+    "expires_in_seconds": {
+      "default": null,
+      "description": "Optional provider expiry. OpenAI/Anthropic default to one day.\nGoogle uses its own lifecycle and rejects custom expiry.",
       "format": "uint32",
       "minimum": 0,
       "type": [
         "integer",
         "null"
       ],
-      "x-agena-order": "000004"
+      "x-agena-order": "000002"
     },
-    "messages": {
-      "description": "Full Anthropic messages used to continue tool_use/tool_result loops.",
-      "items": true,
-      "type": "array",
-      "x-agena-order": "000007"
-    },
-    "model": {
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000003"
-    },
-    "prompt": {
-      "description": "New user instruction. Optional when messages already contain tool_result continuation.",
-      "maxLength": 64000,
-      "type": [
-        "string",
-        "null"
-      ],
+    "path": {
+      "minLength": 1,
+      "type": "string",
       "x-agena-order": "000000"
-    },
-    "request_options": {
-      "additionalProperties": true,
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000006"
-    },
-    "stable_system": {
-      "description": "Stable system prefix placed before dynamic messages for cache reuse.",
-      "maxLength": 256000,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000001"
-    },
-    "tool_options": {
-      "additionalProperties": true,
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000005"
     }
   },
+  "required": [
+    "path"
+  ],
   "type": "object"
 }
 ```
 
-### computer
+### cloud_image_understanding
 
-`agena.claude.computer` · **Summary**: Run Claude Computer Use and return pending computer actions.
+`agena.claude.cloud_image_understanding` · **Summary**: Send explicit images to Anthropic cloud for understanding; not local file viewing.
 
-**Tags**: `network` `interactive`
+**Tags**: `query` `network`
 
 **Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
 
 **Help**:
-> Uses computer_20251124. Set display_width_px and display_height_px in tool_options. Agena executors should normalize left_mouse_down/left_mouse_up, drag paths, key combinations, screenshots, zoom, and cursor actions before returning tool_result blocks.
+> Runs in Anthropic cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Sends only the specified, permission-checked inputs and prompt to Anthropic. Accepts local paths with expected_sha256 or owned cloud_file_upload handles. Local preparation is bounded; no automatic whole-workspace or conversation upload. Cloud inference may be billed. Input sent inline is not a separate remote file. Results return input hashes, provider/model and usage. No local execution fallback.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
-| `beta_headers` | `array<string>` | — | — | Additional official Anthropic beta feature headers. |
-| `cache_ttl` | `ClaudeCacheTtl / null` | — | — |  |
-| `max_tokens` | `integer / null` | — | — |  |
-| `messages` | `array<any>` | — | — | Full Anthropic messages used to continue tool_use/tool_result loops. |
-| `model` | `string / null` | — | — |  |
-| `prompt` | `string / null` | — | — | New user instruction. Optional when messages already contain tool_result continuation. |
-| `request_options` | `object` | — | — |  |
-| `stable_system` | `string / null` | — | — | Stable system prefix placed before dynamic messages for cache reuse. |
-| `tool_options` | `object` | — | — |  |
+| `detail` | `ImageDetail` | — | `auto` |  |
+| `inputs` | `array<MediaSource>` | ✓ | — |  |
+| `max_output_tokens` | `integer` | — | `4096` |  |
+| `model` | `string / null` | — | `null` |  |
+| `prompt` | `string` | ✓ | — |  |
 
 **Input schema**:
 ```json
 {
   "$defs": {
-    "ClaudeCacheTtl": {
+    "ImageDetail": {
       "enum": [
-        "disabled",
-        "five_minutes",
-        "one_hour"
+        "auto",
+        "low",
+        "high"
       ],
-      "type": "string"
+      "type": "string",
+      "x-agena-order": "000003"
+    },
+    "MediaSource": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "expected_sha256": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "path": {
+              "type": "string"
+            },
+            "source": {
+              "const": "local",
+              "type": "string"
+            }
+          },
+          "required": [
+            "source",
+            "path"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "handle": {
+              "type": "string"
+            },
+            "source": {
+              "const": "cloud",
+              "type": "string"
+            }
+          },
+          "required": [
+            "source",
+            "handle"
+          ],
+          "type": "object"
+        }
+      ],
+      "properties": {},
+      "type": "object"
     }
   },
   "additionalProperties": false,
   "properties": {
-    "beta_headers": {
-      "description": "Additional official Anthropic beta feature headers.",
+    "detail": {
+      "$ref": "#/$defs/ImageDetail",
+      "default": "auto"
+    },
+    "inputs": {
       "items": {
-        "type": "string"
+        "$ref": "#/$defs/MediaSource"
       },
       "type": "array",
-      "x-agena-order": "000008"
+      "x-agena-order": "000000"
     },
-    "cache_ttl": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/ClaudeCacheTtl"
-        },
-        {
-          "type": "null"
-        }
+    "max_output_tokens": {
+      "default": 4096,
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer",
+      "x-agena-order": "000004"
+    },
+    "model": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
       ],
       "x-agena-order": "000002"
     },
-    "max_tokens": {
-      "format": "uint32",
-      "minimum": 0,
-      "type": [
-        "integer",
-        "null"
-      ],
-      "x-agena-order": "000004"
-    },
-    "messages": {
-      "description": "Full Anthropic messages used to continue tool_use/tool_result loops.",
-      "items": true,
-      "type": "array",
-      "x-agena-order": "000007"
-    },
-    "model": {
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000003"
-    },
     "prompt": {
-      "description": "New user instruction. Optional when messages already contain tool_result continuation.",
       "maxLength": 64000,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000000"
-    },
-    "request_options": {
-      "additionalProperties": true,
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000006"
-    },
-    "stable_system": {
-      "description": "Stable system prefix placed before dynamic messages for cache reuse.",
-      "maxLength": 256000,
-      "type": [
-        "string",
-        "null"
-      ],
+      "minLength": 1,
+      "type": "string",
       "x-agena-order": "000001"
-    },
-    "tool_options": {
-      "additionalProperties": true,
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000005"
     }
   },
+  "required": [
+    "inputs",
+    "prompt"
+  ],
   "type": "object"
 }
 ```
 
-### mcp_toolset
+### cloud_web_fetch
 
-`agena.claude.mcp_toolset` · **Summary**: Configure a Claude MCP toolset.
-
-**Tags**: `network` `interactive`
-
-**Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
-
-**Help**:
-> Set tool_options.mcp_server_name plus optional configs and default_config. The wrapper sends the official mcp_toolset declaration and returns approval/tool-use content for continuation.
-
-**Input parameters**:
-| Parameter | Type | Required | Default | Description |
-| --- | --- | --- | --- | --- |
-| `beta_headers` | `array<string>` | — | — | Additional official Anthropic beta feature headers. |
-| `cache_ttl` | `ClaudeCacheTtl / null` | — | — |  |
-| `max_tokens` | `integer / null` | — | — |  |
-| `messages` | `array<any>` | — | — | Full Anthropic messages used to continue tool_use/tool_result loops. |
-| `model` | `string / null` | — | — |  |
-| `prompt` | `string / null` | — | — | New user instruction. Optional when messages already contain tool_result continuation. |
-| `request_options` | `object` | — | — |  |
-| `stable_system` | `string / null` | — | — | Stable system prefix placed before dynamic messages for cache reuse. |
-| `tool_options` | `object` | — | — |  |
-
-**Input schema**:
-```json
-{
-  "$defs": {
-    "ClaudeCacheTtl": {
-      "enum": [
-        "disabled",
-        "five_minutes",
-        "one_hour"
-      ],
-      "type": "string"
-    }
-  },
-  "additionalProperties": false,
-  "properties": {
-    "beta_headers": {
-      "description": "Additional official Anthropic beta feature headers.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000008"
-    },
-    "cache_ttl": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/ClaudeCacheTtl"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "x-agena-order": "000002"
-    },
-    "max_tokens": {
-      "format": "uint32",
-      "minimum": 0,
-      "type": [
-        "integer",
-        "null"
-      ],
-      "x-agena-order": "000004"
-    },
-    "messages": {
-      "description": "Full Anthropic messages used to continue tool_use/tool_result loops.",
-      "items": true,
-      "type": "array",
-      "x-agena-order": "000007"
-    },
-    "model": {
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000003"
-    },
-    "prompt": {
-      "description": "New user instruction. Optional when messages already contain tool_result continuation.",
-      "maxLength": 64000,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000000"
-    },
-    "request_options": {
-      "additionalProperties": true,
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000006"
-    },
-    "stable_system": {
-      "description": "Stable system prefix placed before dynamic messages for cache reuse.",
-      "maxLength": 256000,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000001"
-    },
-    "tool_options": {
-      "additionalProperties": true,
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000005"
-    }
-  },
-  "type": "object"
-}
-```
-
-### memory
-
-`agena.claude.memory` · **Summary**: Use Claude's memory client tool.
-
-**Tags**: `network` `interactive`
-
-**Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
-
-**Help**:
-> Uses memory_20250818. Execute returned memory commands against Agena's permission-checked memory store and continue with tool_result blocks.
-
-**Input parameters**:
-| Parameter | Type | Required | Default | Description |
-| --- | --- | --- | --- | --- |
-| `beta_headers` | `array<string>` | — | — | Additional official Anthropic beta feature headers. |
-| `cache_ttl` | `ClaudeCacheTtl / null` | — | — |  |
-| `max_tokens` | `integer / null` | — | — |  |
-| `messages` | `array<any>` | — | — | Full Anthropic messages used to continue tool_use/tool_result loops. |
-| `model` | `string / null` | — | — |  |
-| `prompt` | `string / null` | — | — | New user instruction. Optional when messages already contain tool_result continuation. |
-| `request_options` | `object` | — | — |  |
-| `stable_system` | `string / null` | — | — | Stable system prefix placed before dynamic messages for cache reuse. |
-| `tool_options` | `object` | — | — |  |
-
-**Input schema**:
-```json
-{
-  "$defs": {
-    "ClaudeCacheTtl": {
-      "enum": [
-        "disabled",
-        "five_minutes",
-        "one_hour"
-      ],
-      "type": "string"
-    }
-  },
-  "additionalProperties": false,
-  "properties": {
-    "beta_headers": {
-      "description": "Additional official Anthropic beta feature headers.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000008"
-    },
-    "cache_ttl": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/ClaudeCacheTtl"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "x-agena-order": "000002"
-    },
-    "max_tokens": {
-      "format": "uint32",
-      "minimum": 0,
-      "type": [
-        "integer",
-        "null"
-      ],
-      "x-agena-order": "000004"
-    },
-    "messages": {
-      "description": "Full Anthropic messages used to continue tool_use/tool_result loops.",
-      "items": true,
-      "type": "array",
-      "x-agena-order": "000007"
-    },
-    "model": {
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000003"
-    },
-    "prompt": {
-      "description": "New user instruction. Optional when messages already contain tool_result continuation.",
-      "maxLength": 64000,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000000"
-    },
-    "request_options": {
-      "additionalProperties": true,
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000006"
-    },
-    "stable_system": {
-      "description": "Stable system prefix placed before dynamic messages for cache reuse.",
-      "maxLength": 256000,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000001"
-    },
-    "tool_options": {
-      "additionalProperties": true,
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000005"
-    }
-  },
-  "type": "object"
-}
-```
-
-### text_editor
-
-`agena.claude.text_editor` · **Summary**: Use Claude's current text editor client tool.
-
-**Tags**: `network` `interactive`
-
-**Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
-
-**Help**:
-> Uses text_editor_20250728 with name str_replace_based_edit_tool. Execute view/create/str_replace/insert operations through Agena filesystem permissions and continue with tool_result blocks.
-
-**Input parameters**:
-| Parameter | Type | Required | Default | Description |
-| --- | --- | --- | --- | --- |
-| `beta_headers` | `array<string>` | — | — | Additional official Anthropic beta feature headers. |
-| `cache_ttl` | `ClaudeCacheTtl / null` | — | — |  |
-| `max_tokens` | `integer / null` | — | — |  |
-| `messages` | `array<any>` | — | — | Full Anthropic messages used to continue tool_use/tool_result loops. |
-| `model` | `string / null` | — | — |  |
-| `prompt` | `string / null` | — | — | New user instruction. Optional when messages already contain tool_result continuation. |
-| `request_options` | `object` | — | — |  |
-| `stable_system` | `string / null` | — | — | Stable system prefix placed before dynamic messages for cache reuse. |
-| `tool_options` | `object` | — | — |  |
-
-**Input schema**:
-```json
-{
-  "$defs": {
-    "ClaudeCacheTtl": {
-      "enum": [
-        "disabled",
-        "five_minutes",
-        "one_hour"
-      ],
-      "type": "string"
-    }
-  },
-  "additionalProperties": false,
-  "properties": {
-    "beta_headers": {
-      "description": "Additional official Anthropic beta feature headers.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000008"
-    },
-    "cache_ttl": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/ClaudeCacheTtl"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "x-agena-order": "000002"
-    },
-    "max_tokens": {
-      "format": "uint32",
-      "minimum": 0,
-      "type": [
-        "integer",
-        "null"
-      ],
-      "x-agena-order": "000004"
-    },
-    "messages": {
-      "description": "Full Anthropic messages used to continue tool_use/tool_result loops.",
-      "items": true,
-      "type": "array",
-      "x-agena-order": "000007"
-    },
-    "model": {
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000003"
-    },
-    "prompt": {
-      "description": "New user instruction. Optional when messages already contain tool_result continuation.",
-      "maxLength": 64000,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000000"
-    },
-    "request_options": {
-      "additionalProperties": true,
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000006"
-    },
-    "stable_system": {
-      "description": "Stable system prefix placed before dynamic messages for cache reuse.",
-      "maxLength": 256000,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000001"
-    },
-    "tool_options": {
-      "additionalProperties": true,
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000005"
-    }
-  },
-  "type": "object"
-}
-```
-
-### tool_search_bm25
-
-`agena.claude.tool_search_bm25` · **Summary**: Use Claude's BM25 deferred tool search.
+`agena.claude.cloud_web_fetch` · **Summary**: Fetch and process web content in Anthropic cloud, not through the local browser.
 
 **Tags**: `network` `interactive` `discovery`
 
 **Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
 
 **Help**:
-> Uses tool_search_tool_bm25_20251119. The returned tool_reference/server_tool_use content remains in the provider response and can be continued through messages.
+> Runs in Anthropic cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Uses web_fetch_20260318. tool_options supports allowed/blocked domains, citations, max_content_tokens, max_uses, response_inclusion, strict, and use_cache.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -2450,9 +1572,9 @@ Anthropic Claude server and client tools exposed as ordinary Agena tools.
 | `beta_headers` | `array<string>` | — | — | Additional official Anthropic beta feature headers. |
 | `cache_ttl` | `ClaudeCacheTtl / null` | — | — |  |
 | `max_tokens` | `integer / null` | — | — |  |
-| `messages` | `array<any>` | — | — | Full Anthropic messages used to continue tool_use/tool_result loops. |
+| `messages` | `array<any>` | — | — | Anthropic message history for hosted results or pause_turn resumption. Client tool_use/tool_result callbacks are not accepted. |
 | `model` | `string / null` | — | — |  |
-| `prompt` | `string / null` | — | — | New user instruction. Optional when messages already contain tool_result continuation. |
+| `prompt` | `string / null` | — | — | New user instruction. Optional when messages continue hosted server execution. |
 | `request_options` | `object` | — | — |  |
 | `stable_system` | `string / null` | — | — | Stable system prefix placed before dynamic messages for cache reuse. |
 | `tool_options` | `object` | — | — |  |
@@ -2501,7 +1623,7 @@ Anthropic Claude server and client tools exposed as ordinary Agena tools.
       "x-agena-order": "000004"
     },
     "messages": {
-      "description": "Full Anthropic messages used to continue tool_use/tool_result loops.",
+      "description": "Anthropic message history for hosted results or pause_turn resumption. Client tool_use/tool_result callbacks are not accepted.",
       "items": true,
       "type": "array",
       "x-agena-order": "000007"
@@ -2514,7 +1636,7 @@ Anthropic Claude server and client tools exposed as ordinary Agena tools.
       "x-agena-order": "000003"
     },
     "prompt": {
-      "description": "New user instruction. Optional when messages already contain tool_result continuation.",
+      "description": "New user instruction. Optional when messages continue hosted server execution.",
       "maxLength": 64000,
       "type": [
         "string",
@@ -2548,16 +1670,16 @@ Anthropic Claude server and client tools exposed as ordinary Agena tools.
 }
 ```
 
-### tool_search_regex
+### cloud_web_search
 
-`agena.claude.tool_search_regex` · **Summary**: Use Claude's regex deferred tool search.
+`agena.claude.cloud_web_search` · **Summary**: Search the web in Anthropic cloud and return sources; not a local browser operation.
 
 **Tags**: `network` `interactive` `discovery`
 
 **Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
 
 **Help**:
-> Uses tool_search_tool_regex_20251119 and supports official allowed_callers, cache_control, defer_loading, and strict options.
+> Runs in Anthropic cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Uses web_search_20260318. tool_options supports allowed_callers, allowed_domains, blocked_domains, cache_control, defer_loading, max_uses, response_inclusion, strict, and user_location.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -2565,9 +1687,9 @@ Anthropic Claude server and client tools exposed as ordinary Agena tools.
 | `beta_headers` | `array<string>` | — | — | Additional official Anthropic beta feature headers. |
 | `cache_ttl` | `ClaudeCacheTtl / null` | — | — |  |
 | `max_tokens` | `integer / null` | — | — |  |
-| `messages` | `array<any>` | — | — | Full Anthropic messages used to continue tool_use/tool_result loops. |
+| `messages` | `array<any>` | — | — | Anthropic message history for hosted results or pause_turn resumption. Client tool_use/tool_result callbacks are not accepted. |
 | `model` | `string / null` | — | — |  |
-| `prompt` | `string / null` | — | — | New user instruction. Optional when messages already contain tool_result continuation. |
+| `prompt` | `string / null` | — | — | New user instruction. Optional when messages continue hosted server execution. |
 | `request_options` | `object` | — | — |  |
 | `stable_system` | `string / null` | — | — | Stable system prefix placed before dynamic messages for cache reuse. |
 | `tool_options` | `object` | — | — |  |
@@ -2616,7 +1738,7 @@ Anthropic Claude server and client tools exposed as ordinary Agena tools.
       "x-agena-order": "000004"
     },
     "messages": {
-      "description": "Full Anthropic messages used to continue tool_use/tool_result loops.",
+      "description": "Anthropic message history for hosted results or pause_turn resumption. Client tool_use/tool_result callbacks are not accepted.",
       "items": true,
       "type": "array",
       "x-agena-order": "000007"
@@ -2629,237 +1751,7 @@ Anthropic Claude server and client tools exposed as ordinary Agena tools.
       "x-agena-order": "000003"
     },
     "prompt": {
-      "description": "New user instruction. Optional when messages already contain tool_result continuation.",
-      "maxLength": 64000,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000000"
-    },
-    "request_options": {
-      "additionalProperties": true,
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000006"
-    },
-    "stable_system": {
-      "description": "Stable system prefix placed before dynamic messages for cache reuse.",
-      "maxLength": 256000,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000001"
-    },
-    "tool_options": {
-      "additionalProperties": true,
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000005"
-    }
-  },
-  "type": "object"
-}
-```
-
-### web_fetch
-
-`agena.claude.web_fetch` · **Summary**: Fetch web documents with Claude's latest server web fetch.
-
-**Tags**: `network` `interactive` `discovery`
-
-**Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
-
-**Help**:
-> Uses web_fetch_20260318. tool_options supports allowed/blocked domains, citations, max_content_tokens, max_uses, response_inclusion, strict, and use_cache.
-
-**Input parameters**:
-| Parameter | Type | Required | Default | Description |
-| --- | --- | --- | --- | --- |
-| `beta_headers` | `array<string>` | — | — | Additional official Anthropic beta feature headers. |
-| `cache_ttl` | `ClaudeCacheTtl / null` | — | — |  |
-| `max_tokens` | `integer / null` | — | — |  |
-| `messages` | `array<any>` | — | — | Full Anthropic messages used to continue tool_use/tool_result loops. |
-| `model` | `string / null` | — | — |  |
-| `prompt` | `string / null` | — | — | New user instruction. Optional when messages already contain tool_result continuation. |
-| `request_options` | `object` | — | — |  |
-| `stable_system` | `string / null` | — | — | Stable system prefix placed before dynamic messages for cache reuse. |
-| `tool_options` | `object` | — | — |  |
-
-**Input schema**:
-```json
-{
-  "$defs": {
-    "ClaudeCacheTtl": {
-      "enum": [
-        "disabled",
-        "five_minutes",
-        "one_hour"
-      ],
-      "type": "string"
-    }
-  },
-  "additionalProperties": false,
-  "properties": {
-    "beta_headers": {
-      "description": "Additional official Anthropic beta feature headers.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000008"
-    },
-    "cache_ttl": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/ClaudeCacheTtl"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "x-agena-order": "000002"
-    },
-    "max_tokens": {
-      "format": "uint32",
-      "minimum": 0,
-      "type": [
-        "integer",
-        "null"
-      ],
-      "x-agena-order": "000004"
-    },
-    "messages": {
-      "description": "Full Anthropic messages used to continue tool_use/tool_result loops.",
-      "items": true,
-      "type": "array",
-      "x-agena-order": "000007"
-    },
-    "model": {
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000003"
-    },
-    "prompt": {
-      "description": "New user instruction. Optional when messages already contain tool_result continuation.",
-      "maxLength": 64000,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000000"
-    },
-    "request_options": {
-      "additionalProperties": true,
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000006"
-    },
-    "stable_system": {
-      "description": "Stable system prefix placed before dynamic messages for cache reuse.",
-      "maxLength": 256000,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000001"
-    },
-    "tool_options": {
-      "additionalProperties": true,
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000005"
-    }
-  },
-  "type": "object"
-}
-```
-
-### web_search
-
-`agena.claude.web_search` · **Summary**: Search the web with Claude's latest server web search.
-
-**Tags**: `network` `interactive` `discovery`
-
-**Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
-
-**Help**:
-> Uses web_search_20260318. tool_options supports allowed_callers, allowed_domains, blocked_domains, cache_control, defer_loading, max_uses, response_inclusion, strict, and user_location.
-
-**Input parameters**:
-| Parameter | Type | Required | Default | Description |
-| --- | --- | --- | --- | --- |
-| `beta_headers` | `array<string>` | — | — | Additional official Anthropic beta feature headers. |
-| `cache_ttl` | `ClaudeCacheTtl / null` | — | — |  |
-| `max_tokens` | `integer / null` | — | — |  |
-| `messages` | `array<any>` | — | — | Full Anthropic messages used to continue tool_use/tool_result loops. |
-| `model` | `string / null` | — | — |  |
-| `prompt` | `string / null` | — | — | New user instruction. Optional when messages already contain tool_result continuation. |
-| `request_options` | `object` | — | — |  |
-| `stable_system` | `string / null` | — | — | Stable system prefix placed before dynamic messages for cache reuse. |
-| `tool_options` | `object` | — | — |  |
-
-**Input schema**:
-```json
-{
-  "$defs": {
-    "ClaudeCacheTtl": {
-      "enum": [
-        "disabled",
-        "five_minutes",
-        "one_hour"
-      ],
-      "type": "string"
-    }
-  },
-  "additionalProperties": false,
-  "properties": {
-    "beta_headers": {
-      "description": "Additional official Anthropic beta feature headers.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000008"
-    },
-    "cache_ttl": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/ClaudeCacheTtl"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "x-agena-order": "000002"
-    },
-    "max_tokens": {
-      "format": "uint32",
-      "minimum": 0,
-      "type": [
-        "integer",
-        "null"
-      ],
-      "x-agena-order": "000004"
-    },
-    "messages": {
-      "description": "Full Anthropic messages used to continue tool_use/tool_result loops.",
-      "items": true,
-      "type": "array",
-      "x-agena-order": "000007"
-    },
-    "model": {
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000003"
-    },
-    "prompt": {
-      "description": "New user instruction. Optional when messages already contain tool_result continuation.",
+      "description": "New user instruction. Optional when messages continue hosted server execution.",
       "maxLength": 64000,
       "type": [
         "string",
@@ -3523,7 +2415,7 @@ Cron-style and one-shot wakeup scheduling tools.
 
 ## agena.fs
 
-**Version** `0.1.2-beta.1` · **Tools** 11
+**Version** `0.1.2-beta.1` · **Tools** 10
 
 Filesystem command tools for read/search and explicit edits.
 
@@ -3842,7 +2734,7 @@ Filesystem command tools for read/search and explicit edits.
 **Runtime**: ✓ concurrency-safe · streaming `buffered` · non-strict
 
 **Help**:
-> Use `read` for text previews, directory listings, or file attachments via `mode = text|attachment|auto` (default `auto`).
+> Use `read` for text previews and directory listings. Binary files return local references, not model-visible bytes. Use a provider cloud_image_understanding/cloud_document_understanding tool or explicitly attach media to the composer to send its contents.
 
 **Examples**:
 ```json
@@ -4067,53 +2959,6 @@ Filesystem command tools for read/search and explicit edits.
 }
 ```
 
-### view_image
-
-`agena.fs.view_image` · **Summary**: Attach a local image for visual inspection with an explicit detail hint.
-
-**Tags**: `query` `filesystem`
-
-**Runtime**: ✓ concurrency-safe · streaming `buffered` · non-strict
-
-**Input parameters**:
-| Parameter | Type | Required | Default | Description |
-| --- | --- | --- | --- | --- |
-| `detail` | `ImageDetail` | — | `high` |  |
-| `path` | `string` | ✓ | — |  |
-
-**Input schema**:
-```json
-{
-  "$defs": {
-    "ImageDetail": {
-      "enum": [
-        "low",
-        "high",
-        "original"
-      ],
-      "type": "string",
-      "x-agena-order": "000001"
-    }
-  },
-  "additionalProperties": false,
-  "properties": {
-    "detail": {
-      "$ref": "#/$defs/ImageDetail",
-      "default": "high"
-    },
-    "path": {
-      "minLength": 1,
-      "type": "string",
-      "x-agena-order": "000000"
-    }
-  },
-  "required": [
-    "path"
-  ],
-  "type": "object"
-}
-```
-
 ### write
 
 `agena.fs.write` · **Summary**: Create a UTF-8 text file or replace one at an expected revision.
@@ -4173,106 +3018,25 @@ Filesystem command tools for read/search and explicit edits.
 
 ## agena.gemini
 
-**Version** `0.1.2-beta.1` · **Tools** 11
+**Version** `0.1.2-beta.1` · **Tools** 12
 
-Google Gemini Interactions and image capabilities exposed as ordinary Agena tools.
+Google cloud search, computation and image capabilities. Inputs leave this computer; no local execution fallback.
 
-### code_execution
+### cloud_code_execution
 
-`agena.gemini.code_execution` · **Summary**: Run Gemini hosted code execution.
-
-**Tags**: `network` `interactive`
-
-**Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
-
-**Help**:
-> Uses the official Interactions code_execution declaration. Continue any function calls with function_result steps in input_steps.
-
-**Input parameters**:
-| Parameter | Type | Required | Default | Description |
-| --- | --- | --- | --- | --- |
-| `input_steps` | `array<any>` | — | — | Official Interactions steps, including function_result callbacks. |
-| `model` | `string / null` | — | — |  |
-| `previous_interaction_id` | `string / null` | — | — |  |
-| `prompt` | `string / null` | — | — |  |
-| `request_options` | `object` | — | — |  |
-| `stable_system_instruction` | `string / null` | — | — | Stable prefix used to improve Gemini implicit cache reuse. |
-| `tool_options` | `object` | — | — |  |
-
-**Input schema**:
-```json
-{
-  "additionalProperties": false,
-  "properties": {
-    "input_steps": {
-      "description": "Official Interactions steps, including function_result callbacks.",
-      "items": true,
-      "type": "array",
-      "x-agena-order": "000006"
-    },
-    "model": {
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000002"
-    },
-    "previous_interaction_id": {
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000005"
-    },
-    "prompt": {
-      "maxLength": 64000,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000000"
-    },
-    "request_options": {
-      "additionalProperties": true,
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000004"
-    },
-    "stable_system_instruction": {
-      "description": "Stable prefix used to improve Gemini implicit cache reuse.",
-      "maxLength": 256000,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000001"
-    },
-    "tool_options": {
-      "additionalProperties": true,
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000003"
-    }
-  },
-  "type": "object"
-}
-```
-
-### computer_use
-
-`agena.gemini.computer_use` · **Summary**: Run Gemini Computer Use and return official pending calls.
+`agena.gemini.cloud_code_execution` · **Summary**: Execute code in Google cloud infrastructure, not on this computer.
 
 **Tags**: `network` `interactive`
 
 **Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
 
 **Help**:
-> tool_options supports browser/mobile/desktop environments, safety policy controls, prompt-injection detection, and excluded predefined functions. Continue with function_result steps.
+> Runs in Google cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Cloud filesystem and runtime are separate from the Agena workspace; provide needed input files explicitly. Uses the official Interactions code_execution declaration. Computation executes on Google infrastructure; no returned function call is executed by Agena.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
-| `input_steps` | `array<any>` | — | — | Official Interactions steps, including function_result callbacks. |
+| `input_steps` | `array<any>` | — | — | Official Interactions message/history steps for hosted operations. Client function callbacks are not accepted. |
 | `model` | `string / null` | — | — |  |
 | `previous_interaction_id` | `string / null` | — | — |  |
 | `prompt` | `string / null` | — | — |  |
@@ -4286,7 +3050,7 @@ Google Gemini Interactions and image capabilities exposed as ordinary Agena tool
   "additionalProperties": false,
   "properties": {
     "input_steps": {
-      "description": "Official Interactions steps, including function_result callbacks.",
+      "description": "Official Interactions message/history steps for hosted operations. Client function callbacks are not accepted.",
       "items": true,
       "type": "array",
       "x-agena-order": "000006"
@@ -4339,21 +3103,179 @@ Google Gemini Interactions and image capabilities exposed as ordinary Agena tool
 }
 ```
 
-### file_search
+### cloud_document_understanding
 
-`agena.gemini.file_search` · **Summary**: Search Gemini File Search stores.
+`agena.gemini.cloud_document_understanding` · **Summary**: Send explicit PDF/text documents to Google cloud for understanding; not local file viewing.
+
+**Tags**: `query` `network`
+
+**Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
+
+**Help**:
+> Runs in Google cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Sends only the specified, permission-checked inputs and prompt to Google. Accepts local paths with expected_sha256 or owned cloud_file_upload handles. Local preparation is bounded; no automatic whole-workspace or conversation upload. Cloud inference may be billed. Input sent inline is not a separate remote file. Results return input hashes, provider/model and usage. No local execution fallback.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `detail` | `ImageDetail` | — | `auto` |  |
+| `inputs` | `array<MediaSource>` | ✓ | — |  |
+| `max_output_tokens` | `integer` | — | `4096` |  |
+| `model` | `string / null` | — | `null` |  |
+| `prompt` | `string` | ✓ | — |  |
+
+**Input schema**:
+```json
+{
+  "$defs": {
+    "ImageDetail": {
+      "enum": [
+        "auto",
+        "low",
+        "high"
+      ],
+      "type": "string",
+      "x-agena-order": "000003"
+    },
+    "MediaSource": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "expected_sha256": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "path": {
+              "type": "string"
+            },
+            "source": {
+              "const": "local",
+              "type": "string"
+            }
+          },
+          "required": [
+            "source",
+            "path"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "handle": {
+              "type": "string"
+            },
+            "source": {
+              "const": "cloud",
+              "type": "string"
+            }
+          },
+          "required": [
+            "source",
+            "handle"
+          ],
+          "type": "object"
+        }
+      ],
+      "properties": {},
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "detail": {
+      "$ref": "#/$defs/ImageDetail",
+      "default": "auto"
+    },
+    "inputs": {
+      "items": {
+        "$ref": "#/$defs/MediaSource"
+      },
+      "type": "array",
+      "x-agena-order": "000000"
+    },
+    "max_output_tokens": {
+      "default": 4096,
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer",
+      "x-agena-order": "000004"
+    },
+    "model": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000002"
+    },
+    "prompt": {
+      "maxLength": 64000,
+      "minLength": 1,
+      "type": "string",
+      "x-agena-order": "000001"
+    }
+  },
+  "required": [
+    "inputs",
+    "prompt"
+  ],
+  "type": "object"
+}
+```
+
+### cloud_file_delete
+
+`agena.gemini.cloud_file_delete` · **Summary**: Request deletion of an owned file from Google cloud; preserve the local original.
+
+**Tags**: `mutate` `network`
+
+**Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
+
+**Help**:
+> Runs in Google cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Accepts only session-owned cloud file handles. Deletes the remote resource and records the provider acknowledgement; it does not promise erasure of provider logs/backups. No arbitrary remote IDs or cross-provider deletion. A failed request is not reported as successful cleanup.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `handle` | `string` | ✓ | — |  |
+
+**Input schema**:
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "handle": {
+      "minLength": 1,
+      "type": "string",
+      "x-agena-order": "000000"
+    }
+  },
+  "required": [
+    "handle"
+  ],
+  "type": "object"
+}
+```
+
+### cloud_file_search
+
+`agena.gemini.cloud_file_search` · **Summary**: Search configured Google cloud file stores, not files on this computer.
 
 **Tags**: `network` `interactive` `discovery`
 
 **Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
 
 **Help**:
-> tool_options supports file_search_store_names, metadata_filter, and top_k.
+> Runs in Google cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Provider file-store identifiers refer to remote resources, not local filesystem paths. tool_options supports file_search_store_names, metadata_filter, and top_k.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
-| `input_steps` | `array<any>` | — | — | Official Interactions steps, including function_result callbacks. |
+| `input_steps` | `array<any>` | — | — | Official Interactions message/history steps for hosted operations. Client function callbacks are not accepted. |
 | `model` | `string / null` | — | — |  |
 | `previous_interaction_id` | `string / null` | — | — |  |
 | `prompt` | `string / null` | — | — |  |
@@ -4367,7 +3289,7 @@ Google Gemini Interactions and image capabilities exposed as ordinary Agena tool
   "additionalProperties": false,
   "properties": {
     "input_steps": {
-      "description": "Official Interactions steps, including function_result callbacks.",
+      "description": "Official Interactions message/history steps for hosted operations. Client function callbacks are not accepted.",
       "items": true,
       "type": "array",
       "x-agena-order": "000006"
@@ -4420,102 +3342,110 @@ Google Gemini Interactions and image capabilities exposed as ordinary Agena tool
 }
 ```
 
-### function
+### cloud_file_status
 
-`agena.gemini.function` · **Summary**: Send an official Gemini function declaration through Interactions.
+`agena.gemini.cloud_file_status` · **Summary**: Query the remote status of an owned Google cloud file, not a local path.
 
-**Tags**: `network` `interactive`
+**Tags**: `query` `network`
 
 **Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
 
 **Help**:
-> Set the official name, description, and JSON schema fields in tool_options; continue with function_result steps.
+> Runs in Google cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Accepts only cloud_file_upload handles from the same workspace, session and provider connection. Reports provider readiness/expiry and refreshes the signed local receipt. Does not download file contents or resubmit an unknown upload.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
-| `input_steps` | `array<any>` | — | — | Official Interactions steps, including function_result callbacks. |
-| `model` | `string / null` | — | — |  |
-| `previous_interaction_id` | `string / null` | — | — |  |
-| `prompt` | `string / null` | — | — |  |
-| `request_options` | `object` | — | — |  |
-| `stable_system_instruction` | `string / null` | — | — | Stable prefix used to improve Gemini implicit cache reuse. |
-| `tool_options` | `object` | — | — |  |
+| `handle` | `string` | ✓ | — |  |
 
 **Input schema**:
 ```json
 {
   "additionalProperties": false,
   "properties": {
-    "input_steps": {
-      "description": "Official Interactions steps, including function_result callbacks.",
-      "items": true,
-      "type": "array",
-      "x-agena-order": "000006"
-    },
-    "model": {
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000002"
-    },
-    "previous_interaction_id": {
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000005"
-    },
-    "prompt": {
-      "maxLength": 64000,
-      "type": [
-        "string",
-        "null"
-      ],
+    "handle": {
+      "minLength": 1,
+      "type": "string",
       "x-agena-order": "000000"
-    },
-    "request_options": {
-      "additionalProperties": true,
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000004"
-    },
-    "stable_system_instruction": {
-      "description": "Stable prefix used to improve Gemini implicit cache reuse.",
-      "maxLength": 256000,
+    }
+  },
+  "required": [
+    "handle"
+  ],
+  "type": "object"
+}
+```
+
+### cloud_file_upload
+
+`agena.gemini.cloud_file_upload` · **Summary**: Upload one permitted local file to Google cloud and return a session-owned handle.
+
+**Tags**: `mutate` `network`
+
+**Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
+
+**Help**:
+> Runs in Google cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Creates a remote file; does not analyze it. Inputs up to 20 MiB are content-checked and optionally revision-checked. The handle is bound to this workspace/session/provider connection; arbitrary vendor file IDs cannot be substituted. Local files remain unchanged. A timeout may leave remote acceptance unknown: inspect the returned handle, do not automatically repeat. Query status before using processing files and delete unneeded files explicitly.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `expected_sha256` | `string / null` | — | `null` |  |
+| `expires_in_seconds` | `integer / null` | — | `null` | Optional provider expiry. OpenAI/Anthropic default to one day.<br>Google uses its own lifecycle and rejects custom expiry. |
+| `path` | `string` | ✓ | — |  |
+
+**Input schema**:
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "expected_sha256": {
+      "default": null,
       "type": [
         "string",
         "null"
       ],
       "x-agena-order": "000001"
     },
-    "tool_options": {
-      "additionalProperties": true,
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000003"
+    "expires_in_seconds": {
+      "default": null,
+      "description": "Optional provider expiry. OpenAI/Anthropic default to one day.\nGoogle uses its own lifecycle and rejects custom expiry.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ],
+      "x-agena-order": "000002"
+    },
+    "path": {
+      "minLength": 1,
+      "type": "string",
+      "x-agena-order": "000000"
     }
   },
+  "required": [
+    "path"
+  ],
   "type": "object"
 }
 ```
 
-### google_maps
+### cloud_google_maps
 
-`agena.gemini.google_maps` · **Summary**: Use Google Maps grounding through Gemini.
+`agena.gemini.cloud_google_maps` · **Summary**: Query Google Maps data in Google cloud and return grounding sources.
 
 **Tags**: `network` `interactive` `discovery`
 
 **Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
 
 **Help**:
-> tool_options supports enable_widget, latitude, and longitude.
+> Runs in Google cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. tool_options supports enable_widget, latitude, and longitude.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
-| `input_steps` | `array<any>` | — | — | Official Interactions steps, including function_result callbacks. |
+| `input_steps` | `array<any>` | — | — | Official Interactions message/history steps for hosted operations. Client function callbacks are not accepted. |
 | `model` | `string / null` | — | — |  |
 | `previous_interaction_id` | `string / null` | — | — |  |
 | `prompt` | `string / null` | — | — |  |
@@ -4529,7 +3459,7 @@ Google Gemini Interactions and image capabilities exposed as ordinary Agena tool
   "additionalProperties": false,
   "properties": {
     "input_steps": {
-      "description": "Official Interactions steps, including function_result callbacks.",
+      "description": "Official Interactions message/history steps for hosted operations. Client function callbacks are not accepted.",
       "items": true,
       "type": "array",
       "x-agena-order": "000006"
@@ -4582,21 +3512,21 @@ Google Gemini Interactions and image capabilities exposed as ordinary Agena tool
 }
 ```
 
-### google_search
+### cloud_google_search
 
-`agena.gemini.google_search` · **Summary**: Search Google with Gemini grounding.
+`agena.gemini.cloud_google_search` · **Summary**: Search Google and ground answers in Google cloud, not the local browser.
 
 **Tags**: `network` `interactive` `discovery`
 
 **Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
 
 **Help**:
-> tool_options.search_types accepts web_search, image_search, and enterprise_web_search.
+> Runs in Google cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. tool_options.search_types accepts web_search, image_search, and enterprise_web_search.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
-| `input_steps` | `array<any>` | — | — | Official Interactions steps, including function_result callbacks. |
+| `input_steps` | `array<any>` | — | — | Official Interactions message/history steps for hosted operations. Client function callbacks are not accepted. |
 | `model` | `string / null` | — | — |  |
 | `previous_interaction_id` | `string / null` | — | — |  |
 | `prompt` | `string / null` | — | — |  |
@@ -4610,7 +3540,7 @@ Google Gemini Interactions and image capabilities exposed as ordinary Agena tool
   "additionalProperties": false,
   "properties": {
     "input_steps": {
-      "description": "Official Interactions steps, including function_result callbacks.",
+      "description": "Official Interactions message/history steps for hosted operations. Client function callbacks are not accepted.",
       "items": true,
       "type": "array",
       "x-agena-order": "000006"
@@ -4663,14 +3593,14 @@ Google Gemini Interactions and image capabilities exposed as ordinary Agena tool
 }
 ```
 
-### image_edit
+### cloud_image_edit
 
-`agena.gemini.image_edit` · **Summary**: Edit permitted local images with Gemini multimodal image generation.
+`agena.gemini.cloud_image_edit` · **Summary**: Upload permitted images for editing in Google cloud; save the returned image separately.
 
 **Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
 
 **Help**:
-> Uploads permission-checked local images as inlineData and requests an IMAGE response. Returned images are persisted as managed attachments.
+> Runs in Google cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Permission-checked local images are uploaded to Google; returned images are saved as separate local artifacts. Uploads permission-checked local images as inlineData and requests an IMAGE response. Returned images are persisted as managed attachments.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -4737,16 +3667,16 @@ Google Gemini Interactions and image capabilities exposed as ordinary Agena tool
 }
 ```
 
-### image_generation
+### cloud_image_generation
 
-`agena.gemini.image_generation` · **Summary**: Generate images with Gemini's image response modality.
+`agena.gemini.cloud_image_generation` · **Summary**: Generate images in Google cloud; save returned images as local attachments.
 
 **Tags**: `network` `interactive`
 
 **Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
 
 **Help**:
-> Uses generateContent with responseModalities TEXT and IMAGE. Configure GEMINI_IMAGE_MODEL or input.model. Inline image data is persisted as managed attachments.
+> Runs in Google cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Uses generateContent with responseModalities TEXT and IMAGE. Configure GEMINI_IMAGE_MODEL or input.model. Inline image data is persisted as managed attachments.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -4803,102 +3733,145 @@ Google Gemini Interactions and image capabilities exposed as ordinary Agena tool
 }
 ```
 
-### mcp_server
+### cloud_image_understanding
 
-`agena.gemini.mcp_server` · **Summary**: Connect Gemini to a remote MCP server.
+`agena.gemini.cloud_image_understanding` · **Summary**: Send explicit images to Google cloud for understanding; not local file viewing.
 
-**Tags**: `network` `interactive`
+**Tags**: `query` `network`
 
 **Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
 
 **Help**:
-> tool_options supports url, name, headers, and allowed_tools according to the current Interactions MCPServer schema.
+> Runs in Google cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Sends only the specified, permission-checked inputs and prompt to Google. Accepts local paths with expected_sha256 or owned cloud_file_upload handles. Local preparation is bounded; no automatic whole-workspace or conversation upload. Cloud inference may be billed. Input sent inline is not a separate remote file. Results return input hashes, provider/model and usage. No local execution fallback.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
-| `input_steps` | `array<any>` | — | — | Official Interactions steps, including function_result callbacks. |
-| `model` | `string / null` | — | — |  |
-| `previous_interaction_id` | `string / null` | — | — |  |
-| `prompt` | `string / null` | — | — |  |
-| `request_options` | `object` | — | — |  |
-| `stable_system_instruction` | `string / null` | — | — | Stable prefix used to improve Gemini implicit cache reuse. |
-| `tool_options` | `object` | — | — |  |
+| `detail` | `ImageDetail` | — | `auto` |  |
+| `inputs` | `array<MediaSource>` | ✓ | — |  |
+| `max_output_tokens` | `integer` | — | `4096` |  |
+| `model` | `string / null` | — | `null` |  |
+| `prompt` | `string` | ✓ | — |  |
 
 **Input schema**:
 ```json
 {
+  "$defs": {
+    "ImageDetail": {
+      "enum": [
+        "auto",
+        "low",
+        "high"
+      ],
+      "type": "string",
+      "x-agena-order": "000003"
+    },
+    "MediaSource": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "expected_sha256": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "path": {
+              "type": "string"
+            },
+            "source": {
+              "const": "local",
+              "type": "string"
+            }
+          },
+          "required": [
+            "source",
+            "path"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "handle": {
+              "type": "string"
+            },
+            "source": {
+              "const": "cloud",
+              "type": "string"
+            }
+          },
+          "required": [
+            "source",
+            "handle"
+          ],
+          "type": "object"
+        }
+      ],
+      "properties": {},
+      "type": "object"
+    }
+  },
   "additionalProperties": false,
   "properties": {
-    "input_steps": {
-      "description": "Official Interactions steps, including function_result callbacks.",
-      "items": true,
+    "detail": {
+      "$ref": "#/$defs/ImageDetail",
+      "default": "auto"
+    },
+    "inputs": {
+      "items": {
+        "$ref": "#/$defs/MediaSource"
+      },
       "type": "array",
-      "x-agena-order": "000006"
+      "x-agena-order": "000000"
+    },
+    "max_output_tokens": {
+      "default": 4096,
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer",
+      "x-agena-order": "000004"
     },
     "model": {
+      "default": null,
       "type": [
         "string",
         "null"
       ],
       "x-agena-order": "000002"
     },
-    "previous_interaction_id": {
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000005"
-    },
     "prompt": {
       "maxLength": 64000,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000000"
-    },
-    "request_options": {
-      "additionalProperties": true,
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000004"
-    },
-    "stable_system_instruction": {
-      "description": "Stable prefix used to improve Gemini implicit cache reuse.",
-      "maxLength": 256000,
-      "type": [
-        "string",
-        "null"
-      ],
+      "minLength": 1,
+      "type": "string",
       "x-agena-order": "000001"
-    },
-    "tool_options": {
-      "additionalProperties": true,
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000003"
     }
   },
+  "required": [
+    "inputs",
+    "prompt"
+  ],
   "type": "object"
 }
 ```
 
-### retrieval
+### cloud_url_context
 
-`agena.gemini.retrieval` · **Summary**: Use Gemini Retrieval across Vertex AI Search, RAG Store, Exa, or Parallel AI Search.
+`agena.gemini.cloud_url_context` · **Summary**: Retrieve and ground URL content in Google cloud; no local-file access.
 
 **Tags**: `network` `interactive` `discovery`
 
 **Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
 
 **Help**:
-> Pass retrieval_types and the official *_search_config fields in tool_options.
+> Runs in Google cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Uses the official url_context tool. Put URLs in the prompt or official request fields.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
-| `input_steps` | `array<any>` | — | — | Official Interactions steps, including function_result callbacks. |
+| `input_steps` | `array<any>` | — | — | Official Interactions message/history steps for hosted operations. Client function callbacks are not accepted. |
 | `model` | `string / null` | — | — |  |
 | `previous_interaction_id` | `string / null` | — | — |  |
 | `prompt` | `string / null` | — | — |  |
@@ -4912,88 +3885,7 @@ Google Gemini Interactions and image capabilities exposed as ordinary Agena tool
   "additionalProperties": false,
   "properties": {
     "input_steps": {
-      "description": "Official Interactions steps, including function_result callbacks.",
-      "items": true,
-      "type": "array",
-      "x-agena-order": "000006"
-    },
-    "model": {
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000002"
-    },
-    "previous_interaction_id": {
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000005"
-    },
-    "prompt": {
-      "maxLength": 64000,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000000"
-    },
-    "request_options": {
-      "additionalProperties": true,
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000004"
-    },
-    "stable_system_instruction": {
-      "description": "Stable prefix used to improve Gemini implicit cache reuse.",
-      "maxLength": 256000,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000001"
-    },
-    "tool_options": {
-      "additionalProperties": true,
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000003"
-    }
-  },
-  "type": "object"
-}
-```
-
-### url_context
-
-`agena.gemini.url_context` · **Summary**: Fetch and ground URLs with Gemini URL Context.
-
-**Tags**: `network` `interactive` `discovery`
-
-**Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
-
-**Help**:
-> Uses the official url_context tool. Put URLs in the prompt or official request fields.
-
-**Input parameters**:
-| Parameter | Type | Required | Default | Description |
-| --- | --- | --- | --- | --- |
-| `input_steps` | `array<any>` | — | — | Official Interactions steps, including function_result callbacks. |
-| `model` | `string / null` | — | — |  |
-| `previous_interaction_id` | `string / null` | — | — |  |
-| `prompt` | `string / null` | — | — |  |
-| `request_options` | `object` | — | — |  |
-| `stable_system_instruction` | `string / null` | — | — | Stable prefix used to improve Gemini implicit cache reuse. |
-| `tool_options` | `object` | — | — |  |
-
-**Input schema**:
-```json
-{
-  "additionalProperties": false,
-  "properties": {
-    "input_steps": {
-      "description": "Official Interactions steps, including function_result callbacks.",
+      "description": "Official Interactions message/history steps for hosted operations. Client function callbacks are not accepted.",
       "items": true,
       "type": "array",
       "x-agena-order": "000006"

@@ -63,6 +63,9 @@ const {
   chat,
   ui,
   attachedFiles,
+  failedAttachmentDraft,
+  restoreFailedAttachmentDraft,
+  discardFailedAttachmentDraft,
   attachmentsBusy,
   attachmentsPanelOpen,
   draft,
@@ -558,6 +561,12 @@ void sessionActionsMenuRef
                 :mobile-pointer="ui.isCompactTouch"
                 @abort="abortRun"
               />
+              <div v-if="failedAttachmentDraft" role="status" class="mb-2 rounded border border-border p-2 text-sm">
+                <p>{{ t('chat.attachments.failedDraftSaved') }}</p>
+                <p class="text-xs text-muted-foreground">{{ t('chat.attachments.recoverySession', { session: failedAttachmentDraft.sessionId }) }}</p>
+                <button type="button" class="mr-3 underline" :disabled="sending || attachmentsBusy" @click="restoreFailedAttachmentDraft">{{ t('chat.attachments.restoreFailedDraft') }}</button>
+                <button type="button" class="underline" :disabled="sending" @click="discardFailedAttachmentDraft">{{ t('chat.attachments.discardFailedDraft') }}</button>
+              </div>
               <Composer
                 ref="composerRef"
                 v-model:draft="draft"
@@ -860,6 +869,8 @@ void sessionActionsMenuRef
     :desktop-gap-px="COMPOSER_DESKTOP_MENU_GAP_PX"
     :desktop-viewport-margin-px="COMPOSER_DESKTOP_MENU_VIEWPORT_MARGIN_PX"
     :attached-files="attachedFiles"
+    :provider-label="String(unref(modelStatusLabel) || 'selected model')"
+    @delivery="(id, delivery) => { attachedFiles = attachedFiles.map((file) => file.id === id ? { ...file, delivery } : file) }"
     :busy="attachmentsBusy"
     :format-bytes="formatBytes"
     @update:open="setAttachmentsPanelOpen"

@@ -1,4 +1,4 @@
-//! Google Gemini Interactions and image capabilities exposed as ordinary Agena tools.
+//! Google cloud search, computation and image capabilities. Inputs leave this computer; no local execution fallback.
 
 use std::{
     collections::BTreeMap,
@@ -16,10 +16,12 @@ use base64::Engine as _;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use super::cloud_media::{AnalyzeInput, FileInput, Service, UploadInput};
 use super::official_service::{
     ProviderUsageKind, append_prompt_to_items, configured_model, endpoint, env_secret,
     merge_object_options, post_json, provider_output, read_image_input_bounded, resolve_local_path,
 };
+use agena_plugin_host::sdk::ToolInvokeContext;
 
 pub(crate) const GEMINI_PLUGIN_ID: &str = "agena.gemini";
 
@@ -74,7 +76,7 @@ struct GeminiToolInput {
     request_options: BTreeMap<String, serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     previous_interaction_id: Option<String>,
-    /// Official Interactions steps, including function_result callbacks.
+    /// Official Interactions message/history steps for hosted operations. Client function callbacks are not accepted.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     input_steps: Vec<serde_json::Value>,
 }
@@ -121,6 +123,18 @@ struct GeminiImageEditInput {
 }
 
 impl GeminiToolsPlugin {
+    fn media_service(&self) -> SdkResult<Service<'_>> {
+        Ok(Service {
+            provider: "gemini",
+            root: self.workspace_root()?,
+            host: self.host()?,
+            base_url: &self.config()?.base_url,
+            key_env: &self.config()?.api_key_env,
+            timeout_secs: self.config()?.timeout_secs,
+            anthropic_version: "2023-06-01",
+        })
+    }
+
     pub(crate) fn new() -> Self {
         Self {
             host: OnceLock::new(),
@@ -168,9 +182,19 @@ impl GeminiToolsPlugin {
         declaration: serde_json::Value,
         input: GeminiToolInput,
     ) -> SdkResult<ToolInvokeOutput> {
-        let model = self.model(input.model, format!("gemini.{tool_name}").as_str())?;
+        super::official_service::hosted::validate_options(&input.tool_options, "tool_options")?;
+        super::official_service::hosted::validate_options(
+            &input.request_options,
+            "request_options",
+        )?;
+        super::official_service::hosted::validate_history(
+            "gemini",
+            &serde_json::json!(&input.input_steps),
+        )?;
+        let model = self.model(input.model, format!("gemini.cloud_{tool_name}").as_str())?;
         let declaration =
             merge_object_options(declaration, &input.tool_options, &["type"], "tool_options")?;
+        super::official_service::hosted::validate_declaration("gemini", tool_name, &declaration)?;
         let provider_input = append_prompt_to_items(input.input_steps, input.prompt, false)?;
         let mut base = serde_json::json!({
             "model": model.clone(),
@@ -243,6 +267,8 @@ impl GeminiToolsPlugin {
         cached_content: Option<String>,
         request_options: BTreeMap<String, serde_json::Value>,
     ) -> SdkResult<ToolInvokeOutput> {
+        super::official_service::hosted::validate_options(&request_options, "request_options")?;
+        super::official_service::hosted::validate_options(&generation_config, "generation_config")?;
         generation_config
             .entry("responseModalities".to_owned())
             .or_insert_with(|| serde_json::json!(["TEXT", "IMAGE"]));
@@ -302,7 +328,7 @@ impl GeminiToolsPlugin {
     }
 }
 
-#[agena_plugin_host::sdk::agena_plugin(namespace="agena", name="gemini", version=env!("CARGO_PKG_VERSION"), summary="Google Gemini Interactions and image capabilities exposed as ordinary Agena tools.", settings=GeminiToolsConfig, settings_default=default)]
+#[agena_plugin_host::sdk::agena_plugin(namespace="agena", name="gemini", version=env!("CARGO_PKG_VERSION"), summary="Google cloud search, computation and image capabilities. Inputs leave this computer; no local execution fallback.", settings=GeminiToolsConfig, settings_default=default)]
 impl GeminiToolsPlugin {
     #[hook(init)]
     async fn init(&self, ctx: InitContext, host: Arc<dyn HostClient>) -> SdkResult<InitOutcome> {
@@ -325,12 +351,82 @@ impl GeminiToolsPlugin {
         )))
     }
 
+    #[tool(name="cloud_image_understanding",tags(query,network),
+        summary="Send explicit images to Google cloud for understanding; not local file viewing.",
+        help="Runs in Google cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Sends only the specified, permission-checked inputs and prompt to Google. Accepts local paths with expected_sha256 or owned cloud_file_upload handles. Local preparation is bounded; no automatic whole-workspace or conversation upload. Cloud inference may be billed. Input sent inline is not a separate remote file. Results return input hashes, provider/model and usage. No local execution fallback.",
+        mutating,network(connect=self.config()?.base_url.clone()),path(requests=input.paths(self.workspace_root()?)))]
+    async fn image_understanding(
+        &self,
+        context: &ToolInvokeContext<'_>,
+        input: &AnalyzeInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        let model = self.model(input.model.clone(), "gemini.cloud_image_understanding")?;
+        self.media_service()?
+            .analyze(context, input, model, true)
+            .await
+    }
+
+    #[tool(name="cloud_document_understanding",tags(query,network),
+        summary="Send explicit PDF/text documents to Google cloud for understanding; not local file viewing.",
+        help="Runs in Google cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Sends only the specified, permission-checked inputs and prompt to Google. Accepts local paths with expected_sha256 or owned cloud_file_upload handles. Local preparation is bounded; no automatic whole-workspace or conversation upload. Cloud inference may be billed. Input sent inline is not a separate remote file. Results return input hashes, provider/model and usage. No local execution fallback.",
+        mutating,network(connect=self.config()?.base_url.clone()),path(requests=input.paths(self.workspace_root()?)))]
+    async fn document_understanding(
+        &self,
+        context: &ToolInvokeContext<'_>,
+        input: &AnalyzeInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        let model = self.model(input.model.clone(), "gemini.cloud_document_understanding")?;
+        self.media_service()?
+            .analyze(context, input, model, false)
+            .await
+    }
+
+    #[tool(name="cloud_file_upload",tags(mutate,network),
+        summary="Upload one permitted local file to Google cloud and return a session-owned handle.",
+        help="Runs in Google cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Creates a remote file; does not analyze it. Inputs up to 20 MiB are content-checked and optionally revision-checked. The handle is bound to this workspace/session/provider connection; arbitrary vendor file IDs cannot be substituted. Local files remain unchanged. A timeout may leave remote acceptance unknown: inspect the returned handle, do not automatically repeat. Query status before using processing files and delete unneeded files explicitly.",
+        mutating,network(connect=self.config()?.base_url.clone()),path(requests=vec![PathRequest::read(input.path.clone()),PathRequest::write(self.workspace_root()?.join(".agena/artifacts/provider-tools").display().to_string())]))]
+    async fn file_upload(
+        &self,
+        context: &ToolInvokeContext<'_>,
+        input: &UploadInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        self.media_service()?.upload(context, input).await
+    }
+
+    #[tool(name="cloud_file_status",tags(query,network),
+        summary="Query the remote status of an owned Google cloud file, not a local path.",
+        help="Runs in Google cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Accepts only cloud_file_upload handles from the same workspace, session and provider connection. Reports provider readiness/expiry and refreshes the signed local receipt. Does not download file contents or resubmit an unknown upload.",
+        mutating,network(connect=self.config()?.base_url.clone()),path(requests=vec![PathRequest::read(self.workspace_root()?.join(".agena/artifacts/provider-tools/media").display().to_string()),PathRequest::write(self.workspace_root()?.join(".agena/artifacts/provider-tools/media").display().to_string())]))]
+    async fn file_status(
+        &self,
+        context: &ToolInvokeContext<'_>,
+        input: &FileInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        self.media_service()?
+            .file_control(context, input, false)
+            .await
+    }
+
+    #[tool(name="cloud_file_delete",tags(mutate,network),
+        summary="Request deletion of an owned file from Google cloud; preserve the local original.",
+        help="Runs in Google cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Accepts only session-owned cloud file handles. Deletes the remote resource and records the provider acknowledgement; it does not promise erasure of provider logs/backups. No arbitrary remote IDs or cross-provider deletion. A failed request is not reported as successful cleanup.",
+        mutating,network(connect=self.config()?.base_url.clone()),path(requests=vec![PathRequest::read(self.workspace_root()?.join(".agena/artifacts/provider-tools/media").display().to_string()),PathRequest::write(self.workspace_root()?.join(".agena/artifacts/provider-tools/media").display().to_string())]))]
+    async fn file_delete(
+        &self,
+        context: &ToolInvokeContext<'_>,
+        input: &FileInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        self.media_service()?
+            .file_control(context, input, true)
+            .await
+    }
     #[tool(
+        name = "cloud_code_execution",
         network(connect = self.config()?.base_url.clone()),
         path(write = self.workspace_root()?.join(".agena/artifacts/provider-tools").display().to_string()),
         tags(network, interactive),
-        summary = "Run Gemini hosted code execution.",
-        help = "Uses the official Interactions code_execution declaration. Continue any function calls with function_result steps in input_steps.",
+        summary = "Execute code in Google cloud infrastructure, not on this computer.",
+        help = "Runs in Google cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Cloud filesystem and runtime are separate from the Agena workspace; provide needed input files explicitly. Uses the official Interactions code_execution declaration. Computation executes on Google infrastructure; no returned function call is executed by Agena.",
         read_only
     )]
     async fn code_execution(&self, input: GeminiToolInput) -> SdkResult<ToolInvokeOutput> {
@@ -344,11 +440,12 @@ impl GeminiToolsPlugin {
     }
 
     #[tool(
+        name = "cloud_url_context",
         network(connect = self.config()?.base_url.clone()),
         path(write = self.workspace_root()?.join(".agena/artifacts/provider-tools").display().to_string()),
         tags(network, interactive),
-        summary = "Fetch and ground URLs with Gemini URL Context.",
-        help = "Uses the official url_context tool. Put URLs in the prompt or official request fields.",
+        summary = "Retrieve and ground URL content in Google cloud; no local-file access.",
+        help = "Runs in Google cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Uses the official url_context tool. Put URLs in the prompt or official request fields.",
         read_only,
         discovery
     )]
@@ -363,11 +460,12 @@ impl GeminiToolsPlugin {
     }
 
     #[tool(
+        name = "cloud_google_search",
         network(connect = self.config()?.base_url.clone()),
         path(write = self.workspace_root()?.join(".agena/artifacts/provider-tools").display().to_string()),
         tags(network, interactive),
-        summary = "Search Google with Gemini grounding.",
-        help = "tool_options.search_types accepts web_search, image_search, and enterprise_web_search.",
+        summary = "Search Google and ground answers in Google cloud, not the local browser.",
+        help = "Runs in Google cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. tool_options.search_types accepts web_search, image_search, and enterprise_web_search.",
         read_only,
         discovery
     )]
@@ -382,11 +480,12 @@ impl GeminiToolsPlugin {
     }
 
     #[tool(
+        name = "cloud_file_search",
         network(connect = self.config()?.base_url.clone()),
         path(write = self.workspace_root()?.join(".agena/artifacts/provider-tools").display().to_string()),
         tags(network, interactive),
-        summary = "Search Gemini File Search stores.",
-        help = "tool_options supports file_search_store_names, metadata_filter, and top_k.",
+        summary = "Search configured Google cloud file stores, not files on this computer.",
+        help = "Runs in Google cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Provider file-store identifiers refer to remote resources, not local filesystem paths. tool_options supports file_search_store_names, metadata_filter, and top_k.",
         read_only,
         discovery
     )]
@@ -401,11 +500,12 @@ impl GeminiToolsPlugin {
     }
 
     #[tool(
+        name = "cloud_google_maps",
         network(connect = self.config()?.base_url.clone()),
         path(write = self.workspace_root()?.join(".agena/artifacts/provider-tools").display().to_string()),
         tags(network, interactive),
-        summary = "Use Google Maps grounding through Gemini.",
-        help = "tool_options supports enable_widget, latitude, and longitude.",
+        summary = "Query Google Maps data in Google cloud and return grounding sources.",
+        help = "Runs in Google cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. tool_options supports enable_widget, latitude, and longitude.",
         read_only,
         discovery
     )]
@@ -420,92 +520,19 @@ impl GeminiToolsPlugin {
     }
 
     #[tool(
+        name = "cloud_image_generation",
         network(connect = self.config()?.base_url.clone()),
         path(write = self.workspace_root()?.join(".agena/artifacts/provider-tools").display().to_string()),
         tags(network, interactive),
-        summary = "Run Gemini Computer Use and return official pending calls.",
-        help = "tool_options supports browser/mobile/desktop environments, safety policy controls, prompt-injection detection, and excluded predefined functions. Continue with function_result steps.",
-        mutating
-    )]
-    async fn computer_use(&self, input: GeminiToolInput) -> SdkResult<ToolInvokeOutput> {
-        self.interactions_tool(
-            "computer_use",
-            "Gemini computer use",
-            serde_json::json!({"type":"computer_use"}),
-            input,
-        )
-        .await
-    }
-
-    #[tool(
-        network(connect = self.config()?.base_url.clone()),
-        path(write = self.workspace_root()?.join(".agena/artifacts/provider-tools").display().to_string()),
-        tags(network, interactive),
-        summary = "Connect Gemini to a remote MCP server.",
-        help = "tool_options supports url, name, headers, and allowed_tools according to the current Interactions MCPServer schema.",
-        mutating
-    )]
-    async fn mcp_server(&self, input: GeminiToolInput) -> SdkResult<ToolInvokeOutput> {
-        self.interactions_tool(
-            "mcp_server",
-            "Gemini MCP server",
-            serde_json::json!({"type":"mcp_server"}),
-            input,
-        )
-        .await
-    }
-
-    #[tool(
-        network(connect = self.config()?.base_url.clone()),
-        path(write = self.workspace_root()?.join(".agena/artifacts/provider-tools").display().to_string()),
-        tags(network, interactive),
-        summary = "Use Gemini Retrieval across Vertex AI Search, RAG Store, Exa, or Parallel AI Search.",
-        help = "Pass retrieval_types and the official *_search_config fields in tool_options.",
-        read_only,
-        discovery
-    )]
-    async fn retrieval(&self, input: GeminiToolInput) -> SdkResult<ToolInvokeOutput> {
-        self.interactions_tool(
-            "retrieval",
-            "Gemini retrieval",
-            serde_json::json!({"type":"retrieval"}),
-            input,
-        )
-        .await
-    }
-
-    #[tool(
-        network(connect = self.config()?.base_url.clone()),
-        path(write = self.workspace_root()?.join(".agena/artifacts/provider-tools").display().to_string()),
-        tags(network, interactive),
-        name = "function",
-        summary = "Send an official Gemini function declaration through Interactions.",
-        help = "Set the official name, description, and JSON schema fields in tool_options; continue with function_result steps.",
-        mutating
-    )]
-    async fn function_tool(&self, input: GeminiToolInput) -> SdkResult<ToolInvokeOutput> {
-        self.interactions_tool(
-            "function",
-            "Gemini function",
-            serde_json::json!({"type":"function"}),
-            input,
-        )
-        .await
-    }
-
-    #[tool(
-        network(connect = self.config()?.base_url.clone()),
-        path(write = self.workspace_root()?.join(".agena/artifacts/provider-tools").display().to_string()),
-        tags(network, interactive),
-        summary = "Generate images with Gemini's image response modality.",
-        help = "Uses generateContent with responseModalities TEXT and IMAGE. Configure GEMINI_IMAGE_MODEL or input.model. Inline image data is persisted as managed attachments.",
+        summary = "Generate images in Google cloud; save returned images as local attachments.",
+        help = "Runs in Google cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Uses generateContent with responseModalities TEXT and IMAGE. Configure GEMINI_IMAGE_MODEL or input.model. Inline image data is persisted as managed attachments.",
         mutating
     )]
     async fn image_generation(
         &self,
         input: GeminiImageGenerateInput,
     ) -> SdkResult<ToolInvokeOutput> {
-        let model = self.image_model(input.model, "gemini.image_generation")?;
+        let model = self.image_model(input.model, "gemini.cloud_image_generation")?;
         self.generate_content(
             "image_generation",
             "Gemini image generation",
@@ -519,10 +546,11 @@ impl GeminiToolsPlugin {
     }
 
     #[tool(
+        name = "cloud_image_edit",
         network(connect = self.config()?.base_url.clone()),
-        path(write = self.workspace_root()?.join(".agena/artifacts/provider-tools").display().to_string()),summary="Edit permitted local images with Gemini multimodal image generation.", help="Uploads permission-checked local images as inlineData and requests an IMAGE response. Returned images are persisted as managed attachments.", mutating, path(requests=input.images.iter().cloned().map(PathRequest::read).collect::<Vec<_>>()))]
+        path(write = self.workspace_root()?.join(".agena/artifacts/provider-tools").display().to_string()),summary = "Upload permitted images for editing in Google cloud; save the returned image separately.", help = "Runs in Google cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Permission-checked local images are uploaded to Google; returned images are saved as separate local artifacts. Uploads permission-checked local images as inlineData and requests an IMAGE response. Returned images are persisted as managed attachments.", mutating, path(requests=input.images.iter().cloned().map(PathRequest::read).collect::<Vec<_>>()))]
     async fn image_edit(&self, input: GeminiImageEditInput) -> SdkResult<ToolInvokeOutput> {
-        let model = self.image_model(input.model, "gemini.image_edit")?;
+        let model = self.image_model(input.model, "gemini.cloud_image_edit")?;
         let mut parts = Vec::new();
         let mut image_input_bytes = 0_u64;
         for source in input.images {

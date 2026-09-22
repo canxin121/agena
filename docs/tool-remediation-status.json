@@ -1,0 +1,27 @@
+{
+  "date": "2026-09-21",
+  "scope": "first_correctness_and_safety_batch",
+  "base_head": "d4ef9f3cb98c9a56afbd05c9a9e43564c891f28a",
+  "selected_tests_passed": 347,
+  "test_suites": [
+    96,
+    2,
+    1,
+    6,
+    9,
+    18,
+    4,
+    27,
+    128,
+    56
+  ],
+  "strict_clippy": "passed",
+  "all_targets_runtime_frontend_compilation": "passed",
+  "real_chromium_regression": "passed",
+  "live_provider_api_validation": false,
+  "windows_runtime_validation": false,
+  "production_service_restarted": false,
+  "git_committed": false,
+  "all_audit_packages_complete": false,
+  "evidence_directory": ".tmp-artifacts/tool-remediation-20260921"
+}

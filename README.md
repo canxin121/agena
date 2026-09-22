@@ -20,6 +20,7 @@ Deployment guides:
 Engineering guides:
 
 - [Development validation](docs/development.md)
+- [Interactive terminal tools](docs/interactive-terminals.md)
 - [Technical debt and reliability audit](docs/technical-debt-audit.md)
 
 ## Install

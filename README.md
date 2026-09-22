@@ -21,6 +21,8 @@ Engineering guides:
 
 - [Development validation](docs/development.md)
 - [Interactive terminal tools](docs/interactive-terminals.md)
+- [Vendor-hosted tool boundary and migration](docs/provider-hosted-tools.md)
+- [Explicit media input, cloud files and clipboard](docs/media-inputs.md)
 - [Technical debt and reliability audit](docs/technical-debt-audit.md)
 
 ## Install

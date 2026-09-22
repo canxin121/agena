@@ -1263,7 +1263,7 @@ Web、文件 HTTP 探针、浏览器、dist、远端 CI 和其他平台沿用各
   明确的默认标识或调用方传入的标识，不再读取其他运行时最近写入的全局配置。
 - 不只是延后全局赋值：候选注册表在发布前就使用候选版本，保留的旧注册表在新快照发布后仍
   使用旧版本。实际 HTTP 回归覆盖三家提供方的候选/旧注册表，以及两个并存 Runtime 中
-  OpenAI Responses、Chat Completions、Realtime、Anthropic、Gemini 五种适配器的模型发现。
+  OpenAI Responses、Chat Completions、Anthropic、Gemini 四种适配器的模型发现。
   这只证明客户端标识归属，不代表进程全局 PluginHost 槽也已支持多个运行时的完全隔离。
 - Codex 的 `client_version` 查询参数与请求 User-Agent 来自同一适配器标识；Gemini 按本次
   请求模型更新生成的 User-Agent，并保留用户自定义 User-Agent。保存配置的模型发现现在

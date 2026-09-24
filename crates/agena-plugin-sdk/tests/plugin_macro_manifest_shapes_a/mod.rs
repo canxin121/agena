@@ -644,9 +644,9 @@ fn tool_input_field_name_attr_renames_schema_and_preserves_compat_aliases() {
         .expect("field-level arg name should become the canonical wire key");
     assert_eq!(canonical.file_path, "Cargo.toml");
 
-    let legacy = ArgNameSemanticInput::parse_input(json!({ "file_path": " Cargo.toml " }))
-        .expect("field-level arg name should keep the old field name as an alias");
-    assert_eq!(legacy.file_path, "Cargo.toml");
+    let alternate = ArgNameSemanticInput::parse_input(json!({ "file_path": " Cargo.toml " }))
+        .expect("field-level arg name should keep the alternate field name as an alias");
+    assert_eq!(alternate.file_path, "Cargo.toml");
 
     let explicit_alias = ArgNameSemanticInput::parse_input(json!({ "path": " Cargo.toml " }))
         .expect("field-level arg name should still honor explicit aliases");
@@ -751,7 +751,7 @@ fn tool_input_choice_constraints_apply_to_parse_schema_and_usage() {
     let path_choice = PathChoiceInput::parse_input(json!({ "mode": "fast" }))
         .expect("path-level choices should accept allowed values");
     assert_eq!(path_choice.mode, "fast");
-    let field_choice = FieldChoiceInput::parse_input(json!({ "legacyTool": "git" }))
+    let field_choice = FieldChoiceInput::parse_input(json!({ "alternateTool": "git" }))
         .expect("field-level choices should accept aliases");
     assert_eq!(field_choice.tool_name, "git");
 
@@ -782,7 +782,7 @@ fn tool_input_choice_constraints_apply_to_parse_schema_and_usage() {
     );
     assert_eq!(
         field_schema.pointer("/properties/tool/x-agena-aliases"),
-        Some(&json!(["tool_name", "legacyTool"]))
+        Some(&json!(["tool_name", "alternateTool"]))
     );
     assert_eq!(FieldChoiceInput::input_usage().as_deref(), Some("cargo"));
 }

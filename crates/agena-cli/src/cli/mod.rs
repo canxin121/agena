@@ -904,12 +904,7 @@ pub struct ServerArgs {
     pub workspace_root: Option<PathBuf>,
     /// Directory containing the built Web frontend. When omitted, repository
     /// and packaged `web-dist` layouts are auto-detected.
-    #[arg(
-        long = "ui-dir",
-        visible_alias = "web-dir",
-        env = "AGENA_SERVER_UI_DIR",
-        value_name = "PATH"
-    )]
+    #[arg(long = "ui-dir", env = "AGENA_SERVER_UI_DIR", value_name = "PATH")]
     pub ui_dir: Option<PathBuf>,
 }
 
@@ -1849,17 +1844,20 @@ mod parser_contract_tests {
 
     #[test]
     fn server_accepts_the_built_web_frontend_directory() {
-        for flag in ["--ui-dir", "--web-dir"] {
-            let cli =
-                AgenaCli::try_parse_from(["agena", "server", "start", flag, "/opt/agena/web-dist"])
-                    .expect("parse server UI directory");
-            assert!(matches!(
-                cli.into_launch_mode(),
-                LaunchMode::Server(request)
-                    if request.args.ui_dir.as_deref()
-                        == Some(std::path::Path::new("/opt/agena/web-dist"))
-            ));
-        }
+        let cli = AgenaCli::try_parse_from([
+            "agena",
+            "server",
+            "start",
+            "--ui-dir",
+            "/opt/agena/web-dist",
+        ])
+        .expect("parse server UI directory");
+        assert!(matches!(
+            cli.into_launch_mode(),
+            LaunchMode::Server(request)
+                if request.args.ui_dir.as_deref()
+                    == Some(std::path::Path::new("/opt/agena/web-dist"))
+        ));
     }
 
     #[test]

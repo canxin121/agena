@@ -75,16 +75,16 @@ test('extractSessionActivityUpdate: session_changed non-run part is ignored', ()
   assert.equal(extractSessionActivityUpdate(evt), null)
 })
 
-test('extractSessionActivityUpdate: legacy opencode event types are ignored', () => {
+test('extractSessionActivityUpdate: unsupported event types are ignored', () => {
   assert.equal(
     extractSessionActivityUpdate({
-      type: 'opencode-studio:session-activity',
+      type: 'unknown_event',
       properties: { sessionID: 's1', phase: 'busy' },
     }),
     null,
   )
   assert.equal(
-    extractSessionActivityUpdate({ type: 'session.status', properties: { sessionID: 's1', status: { type: 'busy' } } }),
+    extractSessionActivityUpdate({ type: 'unrelated.status', properties: { sessionID: 's1', status: { type: 'busy' } } }),
     null,
   )
 })

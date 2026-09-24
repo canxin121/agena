@@ -821,20 +821,12 @@ impl<F: HttpFetcher> MarketplaceClient<F> {
             })?;
         let registry = registry_override
             .or_else(|| {
-                if record.registry_url.is_empty() {
-                    None
-                } else {
-                    Some(RegistrySpec {
-                        id: if record.registry_id.is_empty() {
-                            "default".into()
-                        } else {
-                            record.registry_id.clone()
-                        },
-                        url: record.registry_url.clone(),
-                        require_signature: record.require_signature,
-                        require_github_distribution: record.require_github_distribution,
-                    })
-                }
+                Some(RegistrySpec {
+                    id: record.registry_id.clone(),
+                    url: record.registry_url.clone(),
+                    require_signature: record.require_signature,
+                    require_github_distribution: record.require_github_distribution,
+                })
             })
             .ok_or_else(|| {
                 MarketplaceError::Config(format!(
@@ -894,15 +886,8 @@ impl<F: HttpFetcher> MarketplaceClient<F> {
         let installed = self.cache.load_installed()?;
         let mut out = Vec::new();
         for (_, record) in installed.records {
-            if record.registry_url.is_empty() {
-                continue;
-            }
             let registry = RegistrySpec {
-                id: if record.registry_id.is_empty() {
-                    "default".into()
-                } else {
-                    record.registry_id.clone()
-                },
+                id: record.registry_id.clone(),
                 url: record.registry_url.clone(),
                 require_signature: record.require_signature,
                 require_github_distribution: record.require_github_distribution,

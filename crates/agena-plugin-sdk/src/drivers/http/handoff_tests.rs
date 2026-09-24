@@ -306,9 +306,9 @@ async fn malformed_binding_objects_are_rejected_without_mutating_callbacks() {
         json!({"expected": {}, "next": {"token": "orphan"}}),
         json!({"expected": {}, "next": {"url": "file:///tmp/invalid"}}),
         json!({"expected": {}, "next": {"url": "invalid"}}),
-        json!({"expected": {}, "next": {}, "legacy": true}),
-        json!({"expected": {"legacy": true}, "next": {}}),
-        json!({"expected": {}, "next": {"legacy": true}}),
+        json!({"expected": {}, "next": {}, "obsolete": true}),
+        json!({"expected": {"obsolete": true}, "next": {}}),
+        json!({"expected": {}, "next": {"obsolete": true}}),
     ] {
         assert!(
             matches!(

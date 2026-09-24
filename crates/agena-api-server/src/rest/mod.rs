@@ -171,14 +171,13 @@ pub struct UsageStatsHttpQuery {
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default, deny_unknown_fields)]
 /// Body of a session fork request.
 pub struct SessionForkRequestBody {
     /// Fork point. `None` clones the entire history; otherwise clones
     /// every event up to and including the last one tied to this message id.
     #[serde(default)]
     pub at_message_id: Option<i64>,
-    #[serde(default)]
-    pub at_event_seq: Option<i64>,
     #[serde(default)]
     pub title: Option<String>,
 }

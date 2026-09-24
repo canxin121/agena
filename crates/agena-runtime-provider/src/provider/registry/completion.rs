@@ -2693,7 +2693,7 @@ mod tool_api_function_validation_tests {
         let mut registry = crate::provider::ProviderRegistry::new();
         // Register the raw provider with no catalog wrapper: the previous
         // prepare_request-only backfill never ran for this case, which is the
-        // gap this migration closes.
+        // gap this normalization closes.
         registry.register_arc(provider.clone());
 
         registry

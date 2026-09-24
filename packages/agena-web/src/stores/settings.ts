@@ -45,7 +45,7 @@ export type Settings = {
   diffViewMode?: 'single' | 'stacked'
 }
 
-const STORAGE_KEY = 'agena.settings.ui-prefs.v1'
+const STORAGE_KEY = 'agena.settings.ui-prefs'
 
 function cloneRecord(raw: unknown): Settings | null {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null

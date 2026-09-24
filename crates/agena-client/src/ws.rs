@@ -1,7 +1,7 @@
 //! WebSocket subscription multiplexer.
 //!
 //! [`WsClient::connect`] opens a single connection; each
-//! [`WsClient::subscribe`] returns a [`Subscription`] that delivers v2 part
+//! [`WsClient::subscribe`] returns a [`Subscription`] that delivers part
 //! patches and ephemeral runtime signals. Many subscriptions share one socket.
 
 use std::collections::HashMap;

@@ -170,7 +170,6 @@ export function useChatRunUi(opts: {
   pendingSendAt: Ref<number | null>
   renderBlocks: ComputedRef<RenderBlock[]>
 
-  getRevertId: () => string
   onSend: () => Promise<void>
   onCancellation?: (outcome: CancellationOutcome) => void | Promise<void>
   collapseAllActivities: () => void
@@ -188,7 +187,6 @@ export function useChatRunUi(opts: {
     awaitingAssistant,
     pendingSendAt,
     renderBlocks,
-    getRevertId,
     onSend,
     onCancellation,
     collapseAllActivities,
@@ -305,7 +303,6 @@ export function useChatRunUi(opts: {
       }
     }
 
-    const revertId = getRevertId()
     const list = Array.isArray(chat.messages) ? chat.messages : []
 
     let costTotal = 0
@@ -315,9 +312,6 @@ export function useChatRunUi(opts: {
       if (!info) continue
       const role = String(info.role || '')
       if (role !== 'assistant') continue
-      const mid = typeof info.id === 'string' ? info.id : ''
-      if (revertId && mid && mid >= revertId) continue
-
       const cost = typeof info.cost === 'number' && Number.isFinite(info.cost) ? info.cost : null
       if (cost != null) {
         costTotal += cost
@@ -333,9 +327,6 @@ export function useChatRunUi(opts: {
       const info = m?.info
       if (!info) continue
       if (String(info.role || '') !== 'assistant') continue
-      const mid = typeof info.id === 'string' ? info.id : ''
-      if (revertId && mid && mid >= revertId) continue
-
       const total = totalTokensFromUsage(info.tokens)
       if (total != null) {
         tokenTotal = total
@@ -372,7 +363,6 @@ export function useChatRunUi(opts: {
     const sid = chat.selectedSessionId
     if (!sid) return false
 
-    const revertId = getRevertId()
     const cutoff = pendingSendAt.value ? pendingSendAt.value - 500 : null
 
     const list = Array.isArray(chat.messages) ? chat.messages : []
@@ -381,8 +371,6 @@ export function useChatRunUi(opts: {
       const info = m?.info
       if (!info) continue
       if (!isAssistantMessageStreaming(info)) continue
-      const mid = typeof info.id === 'string' ? String(info.id) : ''
-      if (revertId && mid && mid >= revertId) continue
       const created = typeof info.time?.created === 'number' ? info.time.created : 0
       if (cutoff != null && created && created < cutoff) continue
       if (textFromMessageParts(Array.isArray(m.parts) ? m.parts : [])) return true
@@ -397,8 +385,7 @@ export function useChatRunUi(opts: {
     for (let i = blocks.length - 1; i >= 0; i -= 1) {
       const b = blocks[i]
       if (!b) continue
-      if (b.kind === 'message') return b.hasActivity && b.displayParts.length > 0
-      if (b.kind === 'revert') return false
+      return b.hasActivity && b.displayParts.length > 0
     }
     return false
   })

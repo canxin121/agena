@@ -1,10 +1,10 @@
-//! Session timeline presentation: the human-visible v2 part the terminal
+//! Session timeline presentation: the human-visible part the terminal
 //! consumes, plus the mapping from the runtime's `SessionPartView` projection
 //! (the mapping stays in the TUI per the R7 brief).
 
 use anyhow::Result;
 
-/// One human-visible v2 part in the session timeline. The terminal consumes
+/// One human-visible part in the session timeline. The terminal consumes
 /// this presentation value instead of a persisted runtime-event envelope.
 #[derive(Debug, Clone)]
 pub struct SessionTimelineEntry {

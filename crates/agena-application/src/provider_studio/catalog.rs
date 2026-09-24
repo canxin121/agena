@@ -1,4 +1,4 @@
-//! Provider Studio catalog / model helpers, migrated from
+//! Provider Studio catalog / model helpers. Previously located in
 //! `agena-tui-backend/src/backend_catalog.rs` (plus `optional_non_empty` from
 //! `backend_events.rs` and `required_trimmed` from `backend_auth.rs`).
 //!

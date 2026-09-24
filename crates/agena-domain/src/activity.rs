@@ -295,8 +295,7 @@ pub struct NoticeActivity {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
     /// Wall-clock time the notice was recorded (ms since the Unix epoch),
-    /// carried for presentation so a hook row can show when it actually
-    /// fired. Older records omit it.
+    /// carried for presentation so a hook row can show when it actually fired.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub occurred_at_ms: Option<i64>,
     /// Optional display headline chosen by the producer. Consumers render

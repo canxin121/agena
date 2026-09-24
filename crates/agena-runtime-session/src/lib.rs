@@ -14,7 +14,7 @@
 //! - [`ExecutionRegistry`] / [`ExecutionControl`] — manage running
 //!   executions (pause/cancel/resume).
 //! - [`SessionStore`] (from `agena-storage`) — the sealed data facade; there
-//!   is no event log in v2 (design 14.3).
+//!   has no persisted event log.
 //!
 //! The crate also re-exports [`config`], [`provider`], [`plugins`], and the
 //! shared contracts (`authorization`, `identity`, `part`, `permission`,
@@ -43,7 +43,6 @@ mod prompt_budget;
 mod prompt_merge;
 mod service_failure;
 pub mod session;
-mod session_cache_policy;
 mod session_configuration;
 mod session_execution_control;
 mod session_execution_service;
@@ -55,7 +54,6 @@ mod session_tool_execution;
 mod task_control;
 mod usage_stats;
 pub use session::model;
-pub use session_cache_policy::SessionCachePolicy;
 
 pub use agena_runtime_tools::{
     ActiveSnapshot, ManagedSnapshot, generated_image_artifact_path, list_active_snapshots,

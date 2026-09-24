@@ -23,7 +23,7 @@ use crate::registry::{PluginToolRegistry, RegisteredTool};
 use crate::scoped_registry::{PluginScopeKey, ScopedRegistry};
 use crate::sdk::host_api::{
     self, AskUserRequest, AskUserResponse, CancelSubtaskRequest, EventSubscription,
-    HostCallbackContext, HostClient, HostConfigReloadRequestResponse, HostConfigReloadResponse,
+    HostCallbackContext, HostClient, HostConfigReloadRequestResponse,
     HostConfigReloadStatusRequest, HostConfigReloadStatusResponse, HostContextStatusRequest,
     HostContextStatusResponse, HostDisplayContributeRequest, HostDisplayRemoveRequest,
     HostDisplayRemoveResponse, HostEnterSnapshotRequest, HostExitSnapshotRequest,

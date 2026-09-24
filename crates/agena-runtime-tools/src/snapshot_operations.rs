@@ -394,7 +394,7 @@ fn ensure_rift_branch(path: &Path, slug: &str) -> Option<String> {
                         "create a Rift snapshot branch with git switch",
                         &primary,
                     ),
-                    "used legacy git checkout to create the Rift snapshot branch"
+                    "used fallback git checkout to create the Rift snapshot branch"
                 );
                 Some(branch)
             }

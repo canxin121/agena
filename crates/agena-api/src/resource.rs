@@ -75,20 +75,6 @@ pub struct RuntimeTaskResource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-/// Session cache limits and statistics.
-pub struct RuntimeSessionCacheResource {
-    pub max_sessions: usize,
-    pub ttl_secs: u64,
-    pub max_bytes: usize,
-    pub session_count: usize,
-    pub total_bytes: usize,
-    pub hits: u64,
-    pub misses: u64,
-    pub inserts: u64,
-    pub evictions: u64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 /// One run of a scheduled job.
 pub struct ScheduledJobRunResource {
     pub triggered_at: DateTime<Utc>,
@@ -398,8 +384,6 @@ pub struct RuntimeStatusResponse {
     pub watch_paths: Vec<String>,
     pub reload: RuntimeTaskResource,
     pub session_gc: RuntimeTaskResource,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub session_cache: Option<RuntimeSessionCacheResource>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_catalog: Option<ModelCatalogResponse>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1340,10 +1324,10 @@ pub struct SessionUsageResource {
     pub model_max_output_tokens: Option<u32>,
 }
 
-/// One v2 part in a session transcript projection.
+/// One part in a session transcript projection.
 ///
-/// The transcript is the session's ordered v2 part list ("everything is a
-/// part", database-design-v2.md 4.1.1). Each projected run contributes a `run`
+/// The transcript is the session's ordered part list ("everything is a
+/// part). Each projected run contributes a `run`
 /// marker part followed by its content parts; `run_id` links content parts to
 /// their marker, and the marker's `state` mirrors the run/reply status.
 ///
@@ -1390,7 +1374,7 @@ impl From<crate::live::PartResource> for SessionTranscriptPart {
 /// Full execution view of a session.
 pub struct SessionExecutionResource {
     pub session: SessionResource,
-    /// The session's v2 parts (ordered parts, including `run` markers).
+    /// The session's parts (ordered parts, including `run` markers).
     pub parts: Vec<SessionTranscriptPart>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub latest_event_seq: Option<i64>,
@@ -1444,14 +1428,10 @@ mod run_options_contract_tests {
     use super::RunOptions;
 
     #[test]
-    fn nested_run_options_reject_removed_agent_selection_fields() {
-        for field in ["agent_profile", "profile", "subagent_type"] {
-            let mut options = serde_json::Map::new();
-            options.insert(field.to_owned(), serde_json::json!("build"));
-            let error = serde_json::from_value::<RunOptions>(serde_json::Value::Object(options))
-                .expect_err("removed agent selection must not be silently accepted");
-            assert!(error.to_string().contains("unknown field"), "{error}");
-        }
+    fn nested_run_options_reject_unknown_fields() {
+        let error = serde_json::from_value::<RunOptions>(serde_json::json!({"obsolete": true}))
+            .expect_err("unknown run option must not be silently accepted");
+        assert!(error.to_string().contains("unknown field"), "{error}");
     }
 }
 
@@ -2160,13 +2140,13 @@ pub struct SavedProviderAdapterModelsRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 /// Adapter model probe result for one adapter.
 pub struct ProviderAdapterModelsResource {
     pub adapter_id: String,
     pub enabled: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resolved_base_url: Option<String>,
-    #[serde(default)]
     pub models: Vec<ProviderModelResource>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub failure: Option<agena_failure::UserProblem>,

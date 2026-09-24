@@ -7,7 +7,7 @@ import {
   resolveSessionIdByName,
 } from '../src/features/terminal/lib/sessionNameKey'
 
-test('ensureTerminalSessionNames migrates missing and duplicate names', () => {
+test('ensureTerminalSessionNames normalizes current names and drops stale metadata', () => {
   const result = ensureTerminalSessionNames(
     ['sid-a', 'sid-b', 'sid-c'],
     {

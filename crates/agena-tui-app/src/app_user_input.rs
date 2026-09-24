@@ -175,8 +175,8 @@ impl App {
     }
 
     /// Route a transcript key into the active pending user-input interaction.
-    /// Unlike the old pre-step hijack this is a **thin context-aware action
-    /// layer**. Plan review only intercepts `Enter` on a decision row,
+    /// This is a **thin context-aware action layer**. Plan review only
+    /// intercepts `Enter` on a decision row,
     /// `Ctrl+X` to cancel, `e` on the custom-feedback label, and `Esc` to
     /// collapse — every other key falls through to the normal transcript
     /// dispatch. Ask-user is a paged wizard: while the cursor is on the

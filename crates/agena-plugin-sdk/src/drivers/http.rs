@@ -16,9 +16,8 @@ use crate::hooks::{
     ToolStreamError,
 };
 use crate::host_api::{
-    EventSubscription, HostClient, HostConfigReloadRequestResponse, HostConfigReloadResponse,
-    HostConfigReloadStatusRequest, HostConfigReloadStatusResponse, HostImageExecuteRequest,
-    HostImageExecuteResponse, LogLevel,
+    EventSubscription, HostClient, HostConfigReloadRequestResponse, HostConfigReloadStatusRequest,
+    HostConfigReloadStatusResponse, HostImageExecuteRequest, HostImageExecuteResponse, LogLevel,
 };
 use crate::plugin::{InitContext, Plugin};
 use crate::rpc::{
@@ -327,14 +326,6 @@ impl HostClient for HttpCallbackHostClient {
         self.call(
             method::HOST_CONFIG_READ,
             params_with_current_context(serde_json::json!({ "path": path })),
-        )
-        .await
-    }
-
-    async fn reload_config(&self) -> crate::error::Result<HostConfigReloadResponse> {
-        self.call(
-            method::HOST_CONFIG_RELOAD,
-            params_with_current_context(serde_json::json!({})),
         )
         .await
     }

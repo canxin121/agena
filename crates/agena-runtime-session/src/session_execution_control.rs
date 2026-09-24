@@ -8,9 +8,7 @@ use std::path::Path;
 
 use async_trait::async_trait;
 
-use agena_domain::{
-    CancellationOutcome, ExecutionId, ExecutionLifecycle, ModelRef, SessionCacheStats,
-};
+use agena_domain::{CancellationOutcome, ExecutionId, ExecutionLifecycle, ModelRef};
 use agena_tool::SnapshotBackend;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -118,9 +116,6 @@ pub trait SessionExecutionControl: Send + Sync {
         session_id: i64,
     ) -> Result<Option<ModelRef>, SessionExecutionControlError>;
 
-    /// Returns cache telemetry without exposing the concrete session cache.
-    fn cache_stats(&self) -> SessionCacheStats;
-
     /// Projects managed snapshot state when the composed service has snapshot
     /// support. The Runtime retains the registry and concrete snapshot tools.
     fn snapshot_status(&self, workspace_root: &Path) -> Option<RuntimeSnapshotStatus>;
@@ -190,10 +185,6 @@ mod tests {
             _session_id: i64,
         ) -> Result<Option<agena_domain::ModelRef>, SessionExecutionControlError> {
             Ok(None)
-        }
-
-        fn cache_stats(&self) -> agena_domain::SessionCacheStats {
-            agena_domain::SessionCacheStats::default()
         }
 
         fn snapshot_status(&self, _workspace_root: &Path) -> Option<RuntimeSnapshotStatus> {

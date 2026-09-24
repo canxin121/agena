@@ -222,7 +222,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_invalid_input_text_is_scrubbed_root_cause() {
+    fn invalid_input_text_is_scrubbed_root_cause() {
         let diagnostic = "invalid path /private/tmp/secret-project: parser backtrace";
         let failure = tool_error_failure(&ToolError::invalid_input(diagnostic));
         let encoded = serde_json::to_string(&failure).expect("serialize safe failure");

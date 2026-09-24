@@ -1,5 +1,4 @@
 import type { SessionRunConfig } from '@/types/chat'
-import type { JsonObject, JsonValue } from '@/types/json'
 
 export function loadSessionRunConfigMap(storageKey: string): Record<string, SessionRunConfig> {
   try {
@@ -31,37 +30,4 @@ export function createSessionRunConfigPersister(
     }, 250)
   }
   return { persistSoon }
-}
-
-function normalizeRunConfigValue(v: JsonValue): string {
-  return typeof v === 'string' ? v.trim() : ''
-}
-
-export function extractRunConfigFromMessageInfo(info: JsonValue): Partial<SessionRunConfig> {
-  const source = info && typeof info === 'object' ? (info as JsonObject) : null
-  const out: Partial<SessionRunConfig> = {}
-  const model = source?.model
-  const modelRec = model && typeof model === 'object' ? (model as JsonObject) : null
-  const providerID =
-    normalizeRunConfigValue(source?.providerID) ||
-    normalizeRunConfigValue(modelRec?.providerID) ||
-    normalizeRunConfigValue(source?.provider)
-  const modelID =
-    normalizeRunConfigValue(source?.modelID) ||
-    normalizeRunConfigValue(modelRec?.modelID) ||
-    normalizeRunConfigValue(source?.model)
-  const adapterID = normalizeRunConfigValue(source?.adapterID) || normalizeRunConfigValue(modelRec?.adapterID)
-  const thinkingMode = normalizeRunConfigValue(source?.thinkingMode) || normalizeRunConfigValue(source?.thinking_mode)
-  const speedMode = normalizeRunConfigValue(source?.speedMode) || normalizeRunConfigValue(source?.speed_mode)
-  const verbosity = normalizeRunConfigValue(source?.verbosity)
-
-  if (providerID) out.providerID = providerID
-  if (adapterID) out.adapterID = adapterID
-  if (modelID) out.modelID = modelID
-  if (thinkingMode) out.thinkingMode = thinkingMode
-  if (speedMode) out.speedMode = speedMode
-  if (verbosity) out.verbosity = verbosity
-  if (typeof source?.parallelToolCalls === 'boolean') out.parallelToolCalls = source.parallelToolCalls
-  else if (typeof source?.parallel_tool_calls === 'boolean') out.parallelToolCalls = source.parallel_tool_calls
-  return out
 }

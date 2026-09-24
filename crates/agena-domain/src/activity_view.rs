@@ -1,4 +1,4 @@
-//! Activity v2 —— 彻底重构后的领域核心（设计：07-comprehensive-redesign.md v3.1 + 08-plugin-contract.md）。
+//! Activity rendering and model/human projection domain core.
 //!
 //! 本模块承载重构的三大支柱：
 //! - [`RawOutput`]：**单一事实源**。activity 唯一持久化的内容（payload/text/attachments/metadata）。
@@ -271,7 +271,7 @@ impl RawOutput {
 
 /// 统一视图：所有 activity 类型只读已存字段/事实，绝不从数据推导视图（Golden Invariant I1）。
 ///
-/// 实现方（Operation/Resource/… 的 v2 活动类型）只需返回已持久化的标签与单一事实源；
+/// 实现方（Operation/Resource/… 活动类型）只需返回已持久化的标签与单一事实源；
 /// 人类视图与模型视图由投影器/渲染函数生成，本 trait 不承担推导。
 pub trait ActivityView {
     /// 已持久化标题（标签列）。
@@ -404,7 +404,7 @@ mod tests {
     }
 
     #[test]
-    fn raw_output_serde_rejects_the_removed_legacy_shape() {
+    fn raw_output_serde_round_trips_the_current_shape() {
         let output = RawOutput {
             payload: Some(json!({ "exit_code": 0 })),
             text: "ok".into(),
@@ -413,9 +413,6 @@ mod tests {
         let encoded = serde_json::to_string(&output).unwrap();
         let decoded: RawOutput = serde_json::from_str(&encoded).unwrap();
         assert_eq!(decoded, output);
-
-        let legacy = json!({ "result": { "count": 2 } });
-        assert!(serde_json::from_value::<RawOutput>(legacy).is_err());
     }
 
     #[test]

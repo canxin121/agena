@@ -2450,7 +2450,7 @@ mod media_identity_tests {
             kind: agena_provider::CompletionInputAttachmentKind::Image,
             mime: "image/png".into(),
             source: agena_provider::CompletionInputAttachmentSource::ProviderData {
-                route: "media-route-v1:fixture".into(),
+                route: "media-route:fixture".into(),
                 data: "PRIVATE_BINARY_CONTENT".repeat(1024),
             },
             filename: Some("image.png".into()),
@@ -2466,6 +2466,6 @@ mod media_identity_tests {
         let text = format!("{block:?}");
         assert!(!text.contains("PRIVATE_BINARY_CONTENT"));
         assert!(text.len() < 1024);
-        assert!(text.contains("media-route-v1:fixture"));
+        assert!(text.contains("media-route:fixture"));
     }
 }

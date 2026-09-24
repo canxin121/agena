@@ -1,6 +1,6 @@
 //! # agena-api
 //!
-//! Protocol crate for the v2 agena API. Defines the wire-format types shared
+//! Protocol crate for the Agena API. Defines the wire-format types shared
 //! between the server (`agena-api-server`) and clients (`agena-client`,
 //! third-party apps). **No transport**: this crate owns the message shapes,
 //! envelopes, and resource projections; how they reach the wire (REST / WS /

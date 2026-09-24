@@ -21,7 +21,7 @@ export async function reloadAgenaRuntime(): Promise<RuntimeReloadTaskResponse> {
   const previousGeneration = typeof before?.generation === 'number' ? before.generation : null
 
   // Reload runs as a background task. Wait briefly for the new generation so
-  // callers do not immediately reload the browser against the old runtime.
+  // callers do not immediately reload the browser against the previous runtime.
   if (previousGeneration !== null) {
     for (let attempt = 0; attempt < 20; attempt += 1) {
       await delay(250)

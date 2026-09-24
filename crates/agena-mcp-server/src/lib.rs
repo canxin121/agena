@@ -472,7 +472,7 @@ fn convert_tool_descriptor(tool: ToolDescriptor) -> Result<RmcpTool, McpServerEr
 /// Serialize one tool descriptor using the same standard MCP `Tool` shape as
 /// the rmcp-backed transports.
 ///
-/// The HTTP adapter uses this for a narrow stateless compatibility path that
+/// The HTTP adapter uses this for a narrow stateless path that
 /// may answer a connector request before rmcp creates a normal service
 /// instance. Keeping the conversion here prevents the two HTTP paths from
 /// drifting in field names or optional metadata handling.

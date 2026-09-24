@@ -13,11 +13,11 @@ use super::{
 
 mod ui;
 
-/// Shared v2 parts fixtures for app tests. The wire transcript is an ordered
-/// part list (database-design-v2.md §4.1.1); these helpers build the small
+/// Shared parts fixtures for app tests. The wire transcript is an ordered
+/// part list; these helpers build the small
 /// `run`/`text`/`error`/`think` shapes the rendering tests exercise. Every
 /// content fixture receives its owning run marker explicitly, matching the
-/// durable v2 ownership contract.
+/// current ownership contract.
 #[cfg(test)]
 mod parts_fixtures {
     use agena_api::part::ErrorPartResource;
@@ -1382,7 +1382,7 @@ mod interaction_part_routing_tests {
     async fn reveal_auto_expands_the_tool_call_operation_that_carries_the_ask() {
         let mut app = seeded_app().await;
         // The canonical single-activity shape: the ask lives on the tool_call
-        // operation, so the reveal must resolve ITS node key — not the legacy
+        // operation, so the reveal must resolve ITS node key — not a separate
         // `interaction` part. This is the pre-approval auto-expand behavior.
         app.transcript.apply_execution(execution_with(
             vec![pending_user_input_resource()],
@@ -2192,8 +2192,7 @@ mod session_activity_state_machine_tests {
         assert_eq!(
             app.session_activity(SESSION_ID),
             SessionActivity::Running,
-            "SessionState::Running must be active even when active_execution \
-             is absent (the old client-side view would have read Idle)"
+            "SessionState::Running must remain active even when active_execution is absent"
         );
     }
 
@@ -2972,8 +2971,8 @@ mod transcript_character_cursor_tests {
             "a response outcome must use the visible Activity headline contract"
         );
         // The cancelled run marker (part_id 3) projects to an Activity node
-        // keyed by its part id in the v2 parts model (database-design-v2.md
-        // §4.1.1), rendered just after its user turn.
+        // keyed by its part id in the parts model, rendered just after its
+        // user turn.
         assert!(transcript.rendered(80).nodes.iter().any(|node| {
             matches!(
                 node.key,
@@ -4211,7 +4210,7 @@ mod transcript_expansion_tests {
     fn activity_expansion_survives_a_full_parts_refresh() {
         // A `hook` part projects to a toggleable Activity whose content id is
         // the part id (design 4.1.1). Expansion state is keyed by that id, so a
-        // full parts re-merge (the v2 refresh path, `merge_parts`) must retain
+        // full parts re-merge (the refresh path, `merge_parts`) must retain
         // its body state even if a later count-based run fold temporarily
         // hides the whole old prefix.
         let hook = parts_fixtures::hook(

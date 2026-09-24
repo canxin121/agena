@@ -58,52 +58,74 @@ pub struct SessionCreateRequest {
     pub session: SessionHierarchyRequest,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone)]
 /// Request to submit a message to a session.
 pub struct SessionRunRequest {
-    #[serde(flatten)]
     pub run: SessionRunRequestBody,
-    #[serde(default)]
     pub document: agena_domain::ComposerDocument,
 }
 
-#[derive(Debug, Clone, Deserialize, Default)]
+impl<'de> serde::Deserialize<'de> for SessionRunRequest {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let mut object = serde_json::Map::<String, serde_json::Value>::deserialize(deserializer)?;
+        let document = object
+            .remove("document")
+            .map(|value| {
+                serde_json::from_value(value).map_err(<D::Error as serde::de::Error>::custom)
+            })
+            .transpose()?
+            .unwrap_or_default();
+        let options = serde_json::from_value(serde_json::Value::Object(object))
+            .map_err(<D::Error as serde::de::Error>::custom)?;
+        Ok(Self {
+            run: SessionRunRequestBody { options },
+            document,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Default)]
 /// Body of a session run request.
 pub struct SessionRunRequestBody {
-    #[serde(flatten)]
     pub options: SessionRunOptionsRequest,
-    #[allow(dead_code)]
-    #[serde(flatten)]
-    removed_agent_selection: RemovedAgentSelectionFields,
 }
 
-#[allow(dead_code)]
-#[derive(Debug, Clone, Deserialize, Default)]
-struct RemovedAgentSelectionFields {
-    #[serde(default, deserialize_with = "reject_removed_agent_selection")]
-    agent_profile: (),
-    #[serde(default, deserialize_with = "reject_removed_agent_selection")]
-    profile: (),
-    #[serde(default, deserialize_with = "reject_removed_agent_selection")]
-    subagent_type: (),
+impl<'de> serde::Deserialize<'de> for SessionRunRequestBody {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        SessionRunOptionsRequest::deserialize(deserializer).map(|options| Self { options })
+    }
 }
 
-fn reject_removed_agent_selection<'de, D>(deserializer: D) -> Result<(), D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let _ = serde::de::IgnoredAny::deserialize(deserializer)?;
-    Err(<D::Error as serde::de::Error>::custom(
-        "agent selection fields were removed; Agena has one fixed identity",
-    ))
-}
-
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone)]
 /// Body of a session reply request.
 pub struct SessionReplyRequestBody<T> {
-    #[serde(flatten)]
     pub run: SessionRunRequestBody,
     pub reply: T,
+}
+
+impl<'de, T: Deserialize<'de>> Deserialize<'de> for SessionReplyRequestBody<T> {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let mut object = serde_json::Map::<String, serde_json::Value>::deserialize(deserializer)?;
+        let reply = object
+            .remove("reply")
+            .ok_or_else(|| <D::Error as serde::de::Error>::missing_field("reply"))?;
+        let reply = T::deserialize(reply).map_err(<D::Error as serde::de::Error>::custom)?;
+        let options = serde_json::from_value(serde_json::Value::Object(object))
+            .map_err(<D::Error as serde::de::Error>::custom)?;
+        Ok(Self {
+            run: SessionRunRequestBody { options },
+            reply,
+        })
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -114,7 +136,9 @@ pub struct SessionRewindRequestBody {
 
 #[cfg(test)]
 mod tests {
-    use super::{SessionRunRequest, SessionUpdateRequest};
+    use super::{
+        SessionReplyRequestBody, SessionRunRequest, SessionRunRequestBody, SessionUpdateRequest,
+    };
 
     #[test]
     fn session_update_accepts_flag_only_metadata_patches() {
@@ -129,7 +153,7 @@ mod tests {
     }
 
     #[test]
-    fn session_run_request_rejects_removed_agent_selection_fields() {
+    fn session_run_request_rejects_unknown_fields() {
         let valid = serde_json::from_value::<SessionRunRequest>(serde_json::json!({
             "temperature": 0.25,
             "document": [],
@@ -138,13 +162,45 @@ mod tests {
         assert_eq!(valid.run.options.temperature, Some(0.25));
         assert!(valid.document.is_empty());
 
-        for field in ["agent_profile", "profile", "subagent_type"] {
-            let mut request = serde_json::Map::new();
-            request.insert(field.to_owned(), serde_json::json!("build"));
-            let error =
-                serde_json::from_value::<SessionRunRequest>(serde_json::Value::Object(request))
-                    .expect_err("removed agent selection must not be silently accepted");
-            assert!(error.to_string().contains("one fixed identity"), "{error}");
-        }
+        let error = serde_json::from_value::<SessionRunRequest>(serde_json::json!({
+            "obsolete": true,
+            "document": []
+        }))
+        .expect_err("unknown run fields must not be silently accepted");
+        assert!(error.to_string().contains("unknown field"), "{error}");
+    }
+
+    #[test]
+    fn standalone_run_body_rejects_unknown_fields() {
+        let valid = serde_json::from_value::<SessionRunRequestBody>(serde_json::json!({
+            "temperature": 0.25,
+            "parallel_tool_calls": false,
+        }))
+        .expect("current run options must decode");
+        assert_eq!(valid.options.temperature, Some(0.25));
+        assert_eq!(valid.options.parallel_tool_calls, Some(false));
+        let error = serde_json::from_value::<SessionRunRequestBody>(serde_json::json!({
+            "obsolete": true
+        }))
+        .expect_err("unknown standalone run options must be rejected");
+        assert!(error.to_string().contains("unknown field"), "{error}");
+    }
+
+    #[test]
+    fn reply_envelope_keeps_strict_run_options() {
+        type Reply = SessionReplyRequestBody<serde_json::Value>;
+        let valid = serde_json::from_value::<Reply>(serde_json::json!({
+            "reply": {"approved": true},
+            "temperature": 0.25,
+        }))
+        .expect("reply and current run options must decode together");
+        assert_eq!(valid.run.options.temperature, Some(0.25));
+        assert_eq!(valid.reply, serde_json::json!({"approved": true}));
+        let error = serde_json::from_value::<Reply>(serde_json::json!({
+            "reply": {"approved": true},
+            "obsolete": true,
+        }))
+        .expect_err("reply envelope must not hide unknown run options");
+        assert!(error.to_string().contains("unknown field"), "{error}");
     }
 }

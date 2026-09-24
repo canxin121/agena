@@ -1729,60 +1729,14 @@ impl BuiltinHumanRenderer {
     }
 
     fn provider_operation_label(tool_name: &str) -> &'static str {
-        if let Some(tool) = agena_tool::provider_tools::cloud_tool(tool_name) {
-            return tool.title;
-        }
-        match tool_name {
-            "chatgpt.web_search"
-            | "chatgpt.web_search_preview"
-            | "claude.web_search"
-            | "gemini.google_search" => "Web search",
-            "claude.web_fetch" | "gemini.url_context" => "Web retrieval",
-            "chatgpt.file_search" | "claude.file_search" | "gemini.file_search" => "File search",
-            "gemini.google_maps" => "Map search",
-            "gemini.retrieval" => "Context retrieval",
-            "chatgpt.code_interpreter" | "claude.code_execution" | "gemini.code_execution" => {
-                "Code execution"
-            }
-            "chatgpt.computer"
-            | "chatgpt.computer_use_preview"
-            | "claude.computer"
-            | "gemini.computer_use" => "Computer action",
-            "chatgpt.local_shell" | "chatgpt.shell" | "claude.bash" => "Shell execution",
-            "chatgpt.mcp" | "gemini.mcp_server" | "claude.mcp_toolset" => "MCP connection",
-            "claude.memory" => "Memory operation",
-            "claude.text_editor" | "claude.str_replace_based_edit_tool" => "Text edit",
-            "claude.advisor" => "Advisor response",
-            "chatgpt.apply_patch" => "Patch operation",
-            "chatgpt.function" | "gemini.function" => "Function call",
-            "chatgpt.custom" => "Custom tool call",
-            "chatgpt.namespace" => "Namespace call",
-            "chatgpt.programmatic_tool_calling" => "Programmatic call",
-            "chatgpt.tool_search"
-            | "claude.tool_search_bm25"
-            | "claude.tool_search_regex"
-            | "claude.tool_search_tool_bm25"
-            | "claude.tool_search_tool_regex" => "Tool search",
-            value if value.contains("image") => "Image output",
-            value
-                if value.contains("function")
-                    || value.contains("custom")
-                    || value.contains("namespace")
-                    || value.contains("programmatic") =>
-            {
-                "Tool call"
-            }
-            _ => "Provider operation",
-        }
+        agena_tool::provider_tools::cloud_tool(tool_name)
+            .map(|tool| tool.title)
+            .unwrap_or("Provider operation")
     }
 
     fn empty_state_block(tool_name: &str) -> ViewBlock {
         let key = Self::normalized_tool_name(tool_name);
-        if key.starts_with("chatgpt.")
-            || key.starts_with("claude.")
-            || key.starts_with("gemini.")
-            || key.starts_with("openai.")
-        {
+        if key.starts_with("chatgpt.") || key.starts_with("claude.") || key.starts_with("gemini.") {
             let operation = key
                 .rsplit('.')
                 .next()
@@ -1863,7 +1817,7 @@ impl BuiltinHumanRenderer {
                 _ => {}
             }
         }
-        Self::provider_call_value(call, &["name", "tool", "type", "query", "command"])
+        Self::provider_call_value(call, &["name", "tool", "command", "query", "type"])
     }
 
     fn provider_call_target(call: &serde_json::Map<String, Value>) -> String {
@@ -1911,14 +1865,10 @@ impl BuiltinHumanRenderer {
     }
 
     fn provider_call_operation_label(tool_name: &str) -> &'static str {
-        match tool_name {
-            "chatgpt.apply_patch" => "Patch operation",
-            "chatgpt.function" | "gemini.function" => "Function call",
-            "chatgpt.custom" => "Custom tool call",
-            "chatgpt.namespace" => "Namespace call",
-            "chatgpt.programmatic_tool_calling" => "Programmatic call",
-            "chatgpt.local_shell" | "chatgpt.shell" | "claude.bash" => "Shell call",
-            _ => "Tool call",
+        if tool_name == "chatgpt.cloud_shell" {
+            "Shell call"
+        } else {
+            "Tool call"
         }
     }
 
@@ -2050,7 +2000,7 @@ impl BuiltinHumanRenderer {
     ) -> Vec<ViewBlock> {
         let mut blocks = Vec::new();
         match key {
-            "chatgpt.file_search" | "claude.file_search" | "gemini.file_search" => {
+            "chatgpt.cloud_file_search" | "gemini.cloud_file_search" => {
                 let fields = [
                     ("Query", Self::object_text(object, "query")),
                     ("Store", Self::object_text(object, "vector_store_id")),
@@ -2129,69 +2079,7 @@ impl BuiltinHumanRenderer {
                     ));
                 }
             }
-            "chatgpt.tool_search"
-            | "claude.tool_search_bm25"
-            | "claude.tool_search_regex"
-            | "claude.tool_search_tool_bm25"
-            | "claude.tool_search_tool_regex" => {
-                let fields = [
-                    ("Query", Self::object_text(object, "query")),
-                    ("Total", Self::object_text(object, "total")),
-                    (
-                        "Matches",
-                        Self::provider_count_value(
-                            object,
-                            &[
-                                "tool_references",
-                                "tools",
-                                "matches",
-                                "results",
-                                "tool_count",
-                                "result_count",
-                            ],
-                        ),
-                    ),
-                ];
-                if let Some(block) =
-                    Self::details_block_if_nonempty("provider-tool-search", "Tool search", &fields)
-                {
-                    blocks.push(block);
-                }
-                for child_key in ["tool_references", "tools", "matches", "results"] {
-                    if let Some(values) = Self::object_array(object, child_key) {
-                        if let Some(table) = Self::scalar_table(
-                            "provider-tool-results",
-                            "Matching tools",
-                            values,
-                            &[
-                                ("name", "Name"),
-                                ("title", "Title"),
-                                ("server", "Server"),
-                                ("description", "Description"),
-                            ],
-                        ) {
-                            blocks.push(table);
-                        } else if values.is_empty() {
-                            blocks.push(Self::markdown_block(
-                                "provider-tool-results",
-                                "### Matching tools\nNo matching tools found.",
-                            ));
-                        }
-                        break;
-                    }
-                }
-                if blocks
-                    .iter()
-                    .all(|block| block.block_id() != Some("provider-tool-results"))
-                    && !Self::provider_has_pending_calls(object)
-                {
-                    blocks.push(Self::markdown_block(
-                        "provider-tool-results",
-                        "### Matching tools\nNo matching tools found.",
-                    ));
-                }
-            }
-            "gemini.google_maps" => {
+            "gemini.cloud_google_maps" => {
                 let fields = [
                     ("Query", Self::object_text(object, "query")),
                     (
@@ -2249,57 +2137,7 @@ impl BuiltinHumanRenderer {
                     ));
                 }
             }
-            "gemini.retrieval" => {
-                let fields = [
-                    ("Query", Self::object_text(object, "query")),
-                    (
-                        "Retrieved",
-                        Self::provider_count_value(
-                            object,
-                            &[
-                                "retrieved",
-                                "matches",
-                                "chunks",
-                                "documents",
-                                "results",
-                                "retrieved_count",
-                                "match_count",
-                                "chunk_count",
-                            ],
-                        ),
-                    ),
-                    ("Source", Self::object_text(object, "retrieval_type")),
-                ];
-                if let Some(block) = Self::details_block_if_nonempty(
-                    "provider-retrieval",
-                    "Context retrieval",
-                    &fields,
-                ) {
-                    blocks.push(block);
-                }
-                if Self::provider_count_value(
-                    object,
-                    &[
-                        "retrieved",
-                        "matches",
-                        "chunks",
-                        "documents",
-                        "results",
-                        "retrieved_count",
-                        "match_count",
-                        "chunk_count",
-                    ],
-                )
-                .is_empty()
-                    && !Self::provider_has_pending_calls(object)
-                {
-                    blocks.push(Self::markdown_block(
-                        "provider-retrieval-empty",
-                        "### Retrieved context\nNo context matches returned.",
-                    ));
-                }
-            }
-            "gemini.url_context" | "claude.web_fetch" => {
+            "gemini.cloud_url_context" | "claude.cloud_web_fetch" => {
                 let fields = [
                     ("URL", Self::object_text(object, "url")),
                     (
@@ -2349,7 +2187,9 @@ impl BuiltinHumanRenderer {
                     ));
                 }
             }
-            "chatgpt.code_interpreter" | "claude.code_execution" | "gemini.code_execution" => {
+            "chatgpt.cloud_code_interpreter"
+            | "claude.cloud_code_execution"
+            | "gemini.cloud_code_execution" => {
                 let fields = [
                     ("Status", Self::object_text(object, "status")),
                     ("Exit code", Self::object_text(object, "exit_code")),
@@ -2365,49 +2205,7 @@ impl BuiltinHumanRenderer {
                     blocks.push(block);
                 }
             }
-            "chatgpt.computer"
-            | "chatgpt.computer_use_preview"
-            | "claude.computer"
-            | "gemini.computer_use" => {
-                let fields = [
-                    ("Action", Self::object_text(object, "action")),
-                    ("Page", Self::object_text(object, "page_title")),
-                    ("URL", Self::object_text(object, "url")),
-                    ("Actions", Self::provider_count_value(object, &["actions"])),
-                ];
-                if let Some(block) =
-                    Self::details_block_if_nonempty("provider-computer", "Computer result", &fields)
-                {
-                    blocks.push(block);
-                }
-                if let Some(actions) = Self::object_array(object, "actions")
-                    && let Some(table) = Self::scalar_table(
-                        "provider-computer-actions",
-                        "Computer actions",
-                        actions,
-                        &[
-                            ("type", "Action"),
-                            ("status", "Status"),
-                            ("x", "X"),
-                            ("y", "Y"),
-                            ("text", "Text"),
-                        ],
-                    )
-                {
-                    blocks.push(table);
-                }
-                if !Self::provider_has_pending_calls(object)
-                    && Self::object_array(object, "actions").is_none()
-                    && Self::object_text(object, "action").is_empty()
-                    && Self::object_text(object, "page_title").is_empty()
-                {
-                    blocks.push(Self::markdown_block(
-                        "provider-computer-empty",
-                        "### Computer result\nNo computer action returned.",
-                    ));
-                }
-            }
-            "chatgpt.local_shell" | "chatgpt.shell" | "claude.bash" => {
+            "chatgpt.cloud_shell" => {
                 let pending_command = Self::object_array(object, "pending_calls")
                     .and_then(|calls| calls.first())
                     .and_then(Value::as_object)
@@ -2437,88 +2235,7 @@ impl BuiltinHumanRenderer {
                     blocks.push(block);
                 }
             }
-            "chatgpt.mcp" | "gemini.mcp_server" | "claude.mcp_toolset" => {
-                let fields = [
-                    ("Server", Self::object_text(object, "server_label")),
-                    ("URL", Self::object_text(object, "server_url")),
-                    ("Status", Self::object_text(object, "status")),
-                    ("Connected", Self::object_text(object, "connected")),
-                    ("Tools", Self::object_text(object, "tool_count")),
-                ];
-                if let Some(block) =
-                    Self::details_block_if_nonempty("provider-mcp", "MCP connection", &fields)
-                {
-                    blocks.push(block);
-                }
-            }
-            "claude.memory" => {
-                let fields = [
-                    ("Operation", Self::object_text(object, "operation")),
-                    ("Status", Self::object_text(object, "status")),
-                    ("Loaded", Self::object_text(object, "loaded")),
-                    ("Saved", Self::object_text(object, "saved")),
-                    ("Removed", Self::object_text(object, "removed")),
-                ];
-                if let Some(block) =
-                    Self::details_block_if_nonempty("provider-memory", "Memory result", &fields)
-                {
-                    blocks.push(block);
-                }
-            }
-            "claude.text_editor" => {
-                let fields = [
-                    ("Operation", Self::object_text(object, "operation")),
-                    ("Path", Self::object_text(object, "path")),
-                    ("Changed", Self::object_text(object, "changed")),
-                    ("Replacements", Self::object_text(object, "replacements")),
-                ];
-                if let Some(block) =
-                    Self::details_block_if_nonempty("provider-editor", "Text edit", &fields)
-                {
-                    blocks.push(block);
-                }
-            }
-            "claude.str_replace_based_edit_tool" => {
-                let fields = [
-                    ("Operation", Self::object_text(object, "operation")),
-                    ("Path", Self::object_text(object, "path")),
-                    ("Changed", Self::object_text(object, "changed")),
-                    ("Replacements", Self::object_text(object, "replacements")),
-                ];
-                if let Some(block) =
-                    Self::details_block_if_nonempty("provider-editor", "Text edit", &fields)
-                {
-                    blocks.push(block);
-                }
-            }
-            "chatgpt.apply_patch" => {
-                let fields = [
-                    (
-                        "Changed files",
-                        Self::provider_count_value(object, &["changes", "files"]),
-                    ),
-                    ("Status", Self::object_text(object, "status")),
-                ];
-                if let Some(block) =
-                    Self::details_block_if_nonempty("provider-patch", "Patch result", &fields)
-                {
-                    blocks.push(block);
-                }
-                for child_key in ["changes", "files"] {
-                    if let Some(values) = Self::object_array(object, child_key) {
-                        if let Some(table) = Self::scalar_table(
-                            "provider-patch-changes",
-                            "Changed files",
-                            values,
-                            &[("path", "Path"), ("kind", "Change"), ("status", "Status")],
-                        ) {
-                            blocks.push(table);
-                        }
-                        break;
-                    }
-                }
-            }
-            "claude.advisor" => {
+            "claude.cloud_advisor" => {
                 if let Some(error) = object.get("error") {
                     blocks.extend(Self::generic_value_blocks(
                         "provider-advisor-error",
@@ -2533,12 +2250,10 @@ impl BuiltinHumanRenderer {
                     ));
                 }
             }
-            "openai.image_generation"
-            | "openai.image_edit"
-            | "chatgpt.image_generation"
-            | "chatgpt.image_edit"
-            | "gemini.image_generation"
-            | "gemini.image_edit" => {
+            "chatgpt.cloud_image_generation"
+            | "chatgpt.cloud_image_edit"
+            | "gemini.cloud_image_generation"
+            | "gemini.cloud_image_edit" => {
                 let fields = [
                     ("Path", Self::object_text(object, "path")),
                     ("MIME", Self::object_text(object, "mime")),
@@ -2567,8 +2282,9 @@ impl BuiltinHumanRenderer {
     ) -> Vec<ViewBlock> {
         let mut blocks = Vec::new();
         let cloud = agena_tool::provider_tools::cloud_tool(tool_name);
+        let cloud_operation = cloud.map(|tool| tool.operation);
         let operation_label = Self::provider_operation_label(tool_name);
-        let tool_name = agena_tool::provider_tools::operation_identity(tool_name);
+        let tool_name = agena_tool::provider_tools::canonical_cloud_identity(tool_name);
         let operation_blocks = Self::specific_provider_operation_blocks(tool_name, object);
         let operation_has_status = operation_blocks.iter().any(|block| {
             block
@@ -2629,9 +2345,10 @@ impl BuiltinHumanRenderer {
                 &fields,
             ));
         }
-        if tool_name.ends_with(".image_understanding")
-            || tool_name.ends_with(".document_understanding")
-        {
+        if matches!(
+            cloud_operation,
+            Some("image_understanding" | "document_understanding")
+        ) {
             if let Some(inputs) = Self::object_array(object, "media_inputs")
                 && let Some(table) = Self::scalar_table(
                     "provider-media-inputs",
@@ -2673,33 +2390,32 @@ impl BuiltinHumanRenderer {
                 ));
             }
         }
-        if (tool_name.ends_with(".file_upload")
-            || tool_name.ends_with(".file_status")
-            || tool_name.ends_with(".file_delete"))
-            && let Some(details) = Self::details_block_if_nonempty(
-                "provider-media-lifecycle",
-                "Cloud file lifecycle",
-                &[
-                    ("Owned handle", Self::object_text(object, "handle")),
-                    ("State", Self::object_text(object, "state")),
-                    ("File", Self::object_text(object, "filename")),
-                    ("Media type", Self::object_text(object, "mime")),
-                    ("Bytes", Self::object_text(object, "size_bytes")),
-                    ("SHA-256", Self::object_text(object, "sha256")),
-                    ("Provider file", Self::object_text(object, "remote_file_id")),
-                    ("Expires at", Self::object_text(object, "expires_at")),
-                    (
-                        "Deletion acknowledged",
-                        Self::object_text(object, "deletion_acknowledged"),
-                    ),
-                    (
-                        "Physical erasure guaranteed",
-                        Self::object_text(object, "physical_erasure_guaranteed"),
-                    ),
-                    ("Warning", Self::object_text(object, "warning")),
-                ],
-            )
-        {
+        if matches!(
+            cloud_operation,
+            Some("file_upload" | "file_status" | "file_delete")
+        ) && let Some(details) = Self::details_block_if_nonempty(
+            "provider-media-lifecycle",
+            "Cloud file lifecycle",
+            &[
+                ("Owned handle", Self::object_text(object, "handle")),
+                ("State", Self::object_text(object, "state")),
+                ("File", Self::object_text(object, "filename")),
+                ("Media type", Self::object_text(object, "mime")),
+                ("Bytes", Self::object_text(object, "size_bytes")),
+                ("SHA-256", Self::object_text(object, "sha256")),
+                ("Provider file", Self::object_text(object, "remote_file_id")),
+                ("Expires at", Self::object_text(object, "expires_at")),
+                (
+                    "Deletion acknowledged",
+                    Self::object_text(object, "deletion_acknowledged"),
+                ),
+                (
+                    "Physical erasure guaranteed",
+                    Self::object_text(object, "physical_erasure_guaranteed"),
+                ),
+                ("Warning", Self::object_text(object, "warning")),
+            ],
+        ) {
             blocks.push(details);
         }
         blocks.extend(operation_blocks);
@@ -2731,12 +2447,9 @@ impl BuiltinHumanRenderer {
         }
         if let Some(sources) = Self::object_array(object, "sources") {
             let source_title = match tool_name {
-                "gemini.google_maps" => "Places",
-                "gemini.retrieval" => "Retrieved sources",
-                "gemini.url_context" | "claude.web_fetch" => "Fetched sources",
-                "chatgpt.file_search" | "claude.file_search" | "gemini.file_search" => {
-                    "File citations"
-                }
+                "gemini.cloud_google_maps" => "Places",
+                "gemini.cloud_url_context" | "claude.cloud_web_fetch" => "Fetched sources",
+                "chatgpt.cloud_file_search" | "gemini.cloud_file_search" => "File citations",
                 _ => "Sources",
             };
             if !sources.is_empty()
@@ -4112,19 +3825,6 @@ impl BuiltinHumanRenderer {
                     blocks.push(block);
                 }
             }
-            "fs.view_image" => {
-                let fields = [
-                    ("Path", Self::object_text(object, "path")),
-                    ("Detail", Self::object_text(object, "detail")),
-                    ("MIME", Self::object_text(object, "mime")),
-                    ("Size", Self::object_text(object, "size_bytes")),
-                    ("SHA-256", Self::object_text(object, "sha256")),
-                ];
-                if let Some(block) = Self::details_block_if_nonempty("image-meta", "Image", &fields)
-                {
-                    blocks.push(block);
-                }
-            }
             _ => {}
         }
         blocks
@@ -5183,7 +4883,6 @@ impl BuiltinHumanRenderer {
         let mut blocks = if key.starts_with("chatgpt.")
             || key.starts_with("claude.")
             || key.starts_with("gemini.")
-            || key.starts_with("openai.")
             || object.contains_key("response_receipt")
             || object.contains_key("continuation_required")
             || object.contains_key("pending_calls")
@@ -6318,7 +6017,7 @@ mod tests {
             duration_ms: None,
             page_count: None,
         };
-        let blocks = BuiltinHumanRenderer::new("fs.view_image")
+        let blocks = BuiltinHumanRenderer::new("chatgpt.cloud_image_generation")
             .render_human(
                 &ctx(),
                 &RawOutput {
@@ -6655,7 +6354,7 @@ mod tests {
                 vec!["notebook-edit"],
             ),
             (
-                "chatgpt.web_search",
+                "chatgpt.cloud_web_search",
                 json!({
                     "provider": "openai",
                     "tool": "web_search",
@@ -6698,7 +6397,7 @@ mod tests {
     fn provider_tools_render_operation_specific_results_without_json() {
         let cases = [
             (
-                "chatgpt.file_search",
+                "chatgpt.cloud_file_search",
                 json!({
                     "provider": "chatgpt",
                     "tool": "file_search",
@@ -6708,21 +6407,7 @@ mod tests {
                 vec!["provider-file-search", "provider-file-results", "README.md"],
             ),
             (
-                "chatgpt.tool_search",
-                json!({
-                    "provider": "chatgpt",
-                    "tool": "tool_search",
-                    "results": [{"name": "web.search", "description": "Search web"}],
-                    "response_id": "resp-2"
-                }),
-                vec![
-                    "provider-tool-search",
-                    "provider-tool-results",
-                    "web.search",
-                ],
-            ),
-            (
-                "gemini.google_maps",
+                "gemini.cloud_google_maps",
                 json!({
                     "provider": "gemini",
                     "tool": "google_maps",
@@ -6732,17 +6417,7 @@ mod tests {
                 vec!["provider-maps", "provider-places", "Cafe"],
             ),
             (
-                "gemini.retrieval",
-                json!({
-                    "provider": "gemini",
-                    "tool": "retrieval",
-                    "retrieved_count": 3,
-                    "response_id": "int-2"
-                }),
-                vec!["provider-retrieval", "Retrieved", "3"],
-            ),
-            (
-                "claude.web_fetch",
+                "claude.cloud_web_fetch",
                 json!({
                     "provider": "claude",
                     "tool": "web_fetch",
@@ -6753,7 +6428,7 @@ mod tests {
                 vec!["provider-web-fetch", "HTTP status", "200"],
             ),
             (
-                "claude.code_execution",
+                "claude.cloud_code_execution",
                 json!({
                     "provider": "claude",
                     "tool": "code_execution",
@@ -6764,40 +6439,7 @@ mod tests {
                 vec!["provider-code", "Exit code", "0"],
             ),
             (
-                "chatgpt.computer",
-                json!({
-                    "provider": "chatgpt",
-                    "tool": "computer",
-                    "action": {"type": "click", "x": 20, "y": 30},
-                    "page_title": "Agena docs",
-                    "response_id": "resp-3"
-                }),
-                vec!["provider-computer", "click", "Agena docs"],
-            ),
-            (
-                "gemini.mcp_server",
-                json!({
-                    "provider": "gemini",
-                    "tool": "mcp_server",
-                    "connected": true,
-                    "status": "ready",
-                    "response_id": "int-3"
-                }),
-                vec!["provider-mcp", "Connected", "true"],
-            ),
-            (
-                "claude.memory",
-                json!({
-                    "provider": "claude",
-                    "tool": "memory",
-                    "operation": "save",
-                    "saved": true,
-                    "response_id": "msg-3"
-                }),
-                vec!["provider-memory", "Saved", "true"],
-            ),
-            (
-                "claude.advisor",
+                "claude.cloud_advisor",
                 json!({
                     "provider": "claude",
                     "tool": "advisor",
@@ -6835,17 +6477,16 @@ mod tests {
     }
 
     #[test]
-    fn provider_pending_calls_show_action_and_server_columns() {
-        let renderer = BuiltinHumanRenderer::new("chatgpt.mcp");
+    fn provider_pending_shell_calls_show_current_command_identity() {
+        let renderer = BuiltinHumanRenderer::new("chatgpt.cloud_shell");
         let raw = RawOutput {
             payload: Some(json!({
                 "provider": "chatgpt",
-                "tool": "mcp",
+                "tool": "shell",
                 "pending_calls": [{
-                    "type": "mcp_call",
+                    "type": "shell_call",
                     "id": "call-1",
-                    "action": {"type": "search", "query": "docs"},
-                    "server_label": "docs"
+                    "command": "printf docs"
                 }],
                 "continuation_required": true
             })),
@@ -6854,15 +6495,19 @@ mod tests {
         let blocks = renderer
             .render_human(&ctx(), &raw)
             .expect("render pending call");
-        assert!(blocks.iter().any(|block| {
-            matches!(
-                block,
-                ViewBlock::Table { columns, rows, .. }
-                    if columns == &["Type", "Action", "ID", "Status", "Server"]
-                        && rows.iter().any(|row| row.iter().any(|value| value == "search"))
-                        && rows.iter().any(|row| row.iter().any(|value| value == "docs"))
-            )
-        }));
+        assert!(
+            blocks.iter().any(|block| {
+                matches!(
+                    block,
+                    ViewBlock::Table { columns, rows, .. }
+                        if columns == &["Type", "Action", "ID", "Status", "Server"]
+                            && rows.iter().any(|row| row.iter().any(|value| value == "shell_call"))
+                            && rows.iter().any(|row| row.iter().any(|value| value == "printf docs"))
+                            && rows.iter().any(|row| row.iter().any(|value| value == "call-1"))
+                )
+            }),
+            "{blocks:#?}"
+        );
     }
 
     #[test]
@@ -7079,7 +6724,7 @@ mod tests {
             duration_ms: None,
             page_count: None,
         };
-        let blocks = BuiltinHumanRenderer::new("chatgpt.image_generation")
+        let blocks = BuiltinHumanRenderer::new("chatgpt.cloud_image_generation")
             .render_human(
                 &ctx(),
                 &RawOutput {

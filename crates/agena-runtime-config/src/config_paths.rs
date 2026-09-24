@@ -10,7 +10,7 @@ const DEFAULT_CONFIG_FILE_NAME: &str = "agena.json";
 pub fn default_config_path(env: &impl ConfigEnvironment) -> PathBuf {
     let mut base = home_dir(env).unwrap_or_else(|| {
         tracing::error!(
-            "runtime config home is unavailable because neither HOME nor USERPROFILE is set; using the current-directory compatibility path"
+            "runtime config home is unavailable because neither HOME nor USERPROFILE is set; using the current-directory fallback path"
         );
         PathBuf::from(".")
     });

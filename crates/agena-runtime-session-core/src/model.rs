@@ -724,7 +724,7 @@ impl SessionRuntimeState {
 /// A session with its runtime state.
 ///
 /// The transcript is carried as a **parts projection cache**
-/// ([`Session::parts`]): the full ordered list of v2 parts
+/// ([`Session::parts`]): the full ordered list of parts
 /// (`agena_storage::store::Part`) in `(created_at_ms, part_id)` order. The
 /// aggregate only reads this projection for execution; every write goes
 /// through the storage facade. Derived state (pending operations, workflow

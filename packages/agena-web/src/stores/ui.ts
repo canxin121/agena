@@ -102,8 +102,8 @@ function normalizeRouteQueryRecord(raw: unknown): Record<string, string> {
   for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
     const k = String(key || '').trim()
     if (!k) continue
-    if (k === 'windowId' || k === 'windowid' || k === 'ocEmbed') continue
-    const canonicalKey = k === 'session' || k === 'sessionid' ? 'sessionId' : k === 'filepath' ? 'filePath' : k
+    if (k === 'windowId' || k === 'agenaEmbed') continue
+    const canonicalKey = k
     const normalized = normalizeQueryValue(value)
     if (!normalized) continue
     out[canonicalKey] = normalized
@@ -114,7 +114,7 @@ function normalizeRouteQueryRecord(raw: unknown): Record<string, string> {
 function readWindowIdFromRouteQuery(raw: unknown): string {
   if (!raw || typeof raw !== 'object') return ''
   const source = raw as Record<string, unknown>
-  return normalizeQueryValue(source.windowId) || normalizeQueryValue(source.windowid) || ''
+  return normalizeQueryValue(source.windowId) || ''
 }
 
 function areStringRecordsEqual(a: Record<string, string>, b: Record<string, string>): boolean {
@@ -138,7 +138,7 @@ function normalizeMatchQueryValue(key: string, value: string): string {
   const normalizedValue = String(value || '').trim()
   if (!normalizedValue) return ''
 
-  if (normalizedKey === 'filePath' || normalizedKey === 'filepath') {
+  if (normalizedKey === 'filePath') {
     return normalizedValue.replace(/\\/g, '/')
   }
 

@@ -301,7 +301,7 @@ fn default_agena_dir() -> PathBuf {
         .unwrap_or_else(|error| {
             tracing::error!(
                 diagnostic = %error,
-                "TUI data home is unavailable; using the current-directory compatibility path"
+                "TUI data home is unavailable; using the current-directory fallback path"
             );
             PathBuf::from(".")
         });

@@ -13,19 +13,28 @@ fn render_context() -> RenderContext {
 }
 
 fn sample_payload(tool: &str) -> Value {
-    let operation = agena_tool::provider_tools::operation_identity(tool);
-    if operation.ends_with("image_understanding") || operation.ends_with("document_understanding") {
-        return json!({"provider":operation.split('.').next(),"tool":operation.split('.').nth(1),"model":"fixture","outcome":"completed","input_sent":true,"media_inputs":[{"filename":"input.png","mime":"image/png","size_bytes":80}],"text":"Understood fixture"});
+    let cloud = agena_tool::provider_tools::cloud_tool(tool);
+    if cloud.is_some_and(|tool| {
+        matches!(
+            tool.operation,
+            "image_understanding" | "document_understanding"
+        )
+    }) {
+        let cloud = cloud.unwrap();
+        return json!({"provider":cloud.provider,"tool":cloud.operation,"model":"fixture","outcome":"completed","input_sent":true,"media_inputs":[{"filename":"input.png","mime":"image/png","size_bytes":80}],"text":"Understood fixture"});
     }
-    if operation.ends_with("file_upload")
-        || operation.ends_with("file_status")
-        || operation.ends_with("file_delete")
-    {
-        return json!({"provider":operation.split('.').next(),"tool":operation.split('.').nth(1),"state":"ready","handle":"media_fixture","filename":"input.png","mime":"image/png","size_bytes":80,"remote_file_id":"file_fixture"});
+    if cloud.is_some_and(|tool| {
+        matches!(
+            tool.operation,
+            "file_upload" | "file_status" | "file_delete"
+        )
+    }) {
+        let cloud = cloud.unwrap();
+        return json!({"provider":cloud.provider,"tool":cloud.operation,"state":"ready","handle":"media_fixture","filename":"input.png","mime":"image/png","size_bytes":80,"remote_file_id":"file_fixture"});
     }
 
-    // Feed identical operation evidence to old-history and renamed-cloud views.
-    let tool = agena_tool::provider_tools::operation_identity(tool);
+    // Feed one canonical current operation shape through every registered identity spelling.
+    let tool = agena_tool::provider_tools::canonical_cloud_identity(tool);
     let job = json!({
         "id": "job-1",
         "kind": "cron",
@@ -94,13 +103,6 @@ fn sample_payload(tool: &str) -> Value {
             "readonly": false,
             "sha256": "abc123",
             "hash_skipped": false
-        }),
-        "fs.view_image" => json!({
-            "path": "assets/chart.png",
-            "detail": "high",
-            "mime": "image/png",
-            "size_bytes": 4096,
-            "sha256": "abc123"
         }),
         "fs.glob" => json!({
             "count": 2,
@@ -389,8 +391,7 @@ fn sample_payload(tool: &str) -> Value {
         }
         _ if tool.starts_with("chatgpt.")
             || tool.starts_with("claude.")
-            || tool.starts_with("gemini.")
-            || tool.starts_with("openai.") =>
+            || tool.starts_with("gemini.") =>
         {
             provider_sample_payload(tool)
         }
@@ -410,7 +411,7 @@ fn sample_input(tool: &str) -> Value {
         }
         "fs.read" => json!({"file_path": "src/main.rs"}),
         "fs.read_many" => json!({"paths": ["src/lib.rs", "src/main.rs"]}),
-        "fs.write" | "fs.replace" | "fs.stat" | "fs.view_image" => {
+        "fs.write" | "fs.replace" | "fs.stat" => {
             json!({"path": "src/lib.rs"})
         }
         "fs.apply_patch" => {
@@ -494,46 +495,35 @@ fn sample_input(tool: &str) -> Value {
 }
 
 fn provider_sample_input(tool: &str) -> Value {
-    let operation = tool.rsplit('.').next().unwrap_or_default();
+    let operation = agena_tool::provider_tools::cloud_tool(tool)
+        .map(|tool| tool.operation)
+        .unwrap_or_else(|| tool.rsplit('.').next().unwrap_or_default());
     match operation {
-        "web_search"
-        | "web_search_preview"
-        | "google_search"
-        | "google_maps"
-        | "retrieval"
-        | "file_search"
-        | "tool_search"
-        | "tool_search_bm25"
-        | "tool_search_regex"
-        | "tool_search_tool_bm25"
-        | "tool_search_tool_regex" => {
+        "web_search" | "google_search" | "google_maps" | "file_search" => {
             json!({"query": "release policy"})
         }
         "web_fetch" | "url_context" => json!({"url": "https://example.test"}),
         "code_interpreter" | "code_execution" => json!({"command": "cargo test"}),
-        "local_shell" | "shell" | "bash" => json!({"command": "cargo test"}),
-        "mcp" | "mcp_server" | "mcp_toolset" => json!({"server_label": "docs"}),
-        "memory" => json!({"operation": "save", "name": "release-notes"}),
-        "text_editor" | "str_replace_based_edit_tool" => {
-            json!({"path": "src/lib.rs", "operation": "replace"})
-        }
-        "apply_patch" => {
-            json!({"patch": "*** Begin Patch\n*** Update File: src/lib.rs\n*** End Patch"})
-        }
+        "shell" => json!({"command": "cargo test"}),
         "image_generation" | "image_edit" => json!({"prompt": "A polished release diagram"}),
-        "computer" | "computer_use_preview" | "computer_use" => {
-            json!({"url": "https://example.test/docs"})
-        }
-        "function" | "custom" | "namespace" => json!({"name": "search"}),
-        "programmatic_tool_calling" => json!({"prompt": "Find the test tool"}),
         "advisor" => json!({"prompt": "Review this change"}),
+        "image_understanding" | "document_understanding" => {
+            json!({"prompt": "Analyze this fixture"})
+        }
+        "file_upload" => json!({"path": "input.png"}),
+        "file_status" | "file_delete" => json!({"handle": "media_fixture"}),
         _ => json!({}),
     }
 }
 
 fn provider_sample_payload(tool: &str) -> Value {
-    let provider = tool.split('.').next().unwrap_or("provider");
-    let operation = tool.rsplit('.').next().unwrap_or("operation");
+    let cloud = agena_tool::provider_tools::cloud_tool(tool);
+    let provider = cloud
+        .map(|tool| tool.provider)
+        .unwrap_or_else(|| tool.split('.').next().unwrap_or("provider"));
+    let operation = cloud
+        .map(|tool| tool.operation)
+        .unwrap_or_else(|| tool.rsplit('.').next().unwrap_or("operation"));
     let mut payload = json!({
         "provider": provider,
         "tool": operation,
@@ -552,16 +542,7 @@ fn provider_sample_payload(tool: &str) -> Value {
                 ]),
             );
         }
-        "tool_search" | "tool_search_bm25" | "tool_search_regex" => {
-            object.insert("query".into(), json!("find a search tool"));
-            object.insert(
-                "results".into(),
-                json!([
-                    {"name": "web.search", "description": "Search web", "server": "builtin"}
-                ]),
-            );
-        }
-        "web_search" | "web_search_preview" | "google_search" => {
+        "web_search" | "google_search" => {
             object.insert("sources".into(), json!([
                 {"title": "Agena guide", "url": "https://example.test/guide", "domain": "example.test", "snippet": "Guide"}
             ]));
@@ -576,15 +557,6 @@ fn provider_sample_payload(tool: &str) -> Value {
                 {"name": "Cafe One", "address": "1 Main St", "rating": 4.8, "url": "https://example.test/cafe"}
             ]));
         }
-        "retrieval" => {
-            object.insert("query".into(), json!("release policy"));
-            object.insert(
-                "retrieved".into(),
-                json!([
-                    {"title": "Policy", "url": "https://example.test/policy", "snippet": "..."}
-                ]),
-            );
-        }
         "url_context" | "web_fetch" => {
             object.insert("url".into(), json!("https://example.test"));
             object.insert("status".into(), json!(200));
@@ -598,12 +570,7 @@ fn provider_sample_payload(tool: &str) -> Value {
                 json!([{"type": "text", "text": "passed"}]),
             );
         }
-        "computer" | "computer_use_preview" | "computer_use" => {
-            object.insert("action".into(), json!({"type": "click", "x": 20, "y": 30}));
-            object.insert("page_title".into(), json!("Agena docs"));
-            object.insert("url".into(), json!("https://example.test/docs"));
-        }
-        "local_shell" | "shell" | "bash" => {
+        "shell" => {
             object.insert(
                 "pending_calls".into(),
                 json!([{
@@ -614,24 +581,6 @@ fn provider_sample_payload(tool: &str) -> Value {
                 }]),
             );
             object.insert("continuation_required".into(), json!(true));
-        }
-        "mcp" | "mcp_server" | "mcp_toolset" => {
-            object.insert("server_label".into(), json!("docs"));
-            object.insert("server_url".into(), json!("https://mcp.test"));
-            object.insert("connected".into(), json!(true));
-            object.insert("status".into(), json!("ready"));
-            object.insert("tool_count".into(), json!(3));
-        }
-        "memory" => {
-            object.insert("operation".into(), json!("save"));
-            object.insert("saved".into(), json!(true));
-            object.insert("status".into(), json!("completed"));
-        }
-        "text_editor" => {
-            object.insert("operation".into(), json!("str_replace"));
-            object.insert("path".into(), json!("src/lib.rs"));
-            object.insert("changed".into(), json!(true));
-            object.insert("replacements".into(), json!(1));
         }
         "advisor" => {
             object.insert(
@@ -646,21 +595,6 @@ fn provider_sample_payload(tool: &str) -> Value {
             object.insert("size_bytes".into(), json!(4096));
             object.insert("sha256".into(), json!("abc123"));
             object.insert("revised_prompt".into(), json!("A polished image"));
-        }
-        "apply_patch" => {
-            object.insert(
-                "pending_calls".into(),
-                json!([{
-                    "type": "apply_patch_call", "id": "call-1", "action": {"type": "update_file"}
-                }]),
-            );
-            object.insert("continuation_required".into(), json!(true));
-        }
-        "function" | "custom" | "namespace" | "programmatic_tool_calling" => {
-            object.insert("pending_calls".into(), json!([{
-                "type": "function_call", "id": "call-1", "action": {"type": "invoke", "name": "search"}
-            }]));
-            object.insert("continuation_required".into(), json!(true));
         }
         _ => {
             object.insert(
@@ -701,11 +635,7 @@ fn sample_raw(tool: &str) -> RawOutput {
 
 fn has_tool_specific_projection(tool: &str, blocks: &[ViewBlock]) -> bool {
     let ids = blocks.iter().filter_map(ViewBlock::block_id);
-    if tool.starts_with("chatgpt.")
-        || tool.starts_with("claude.")
-        || tool.starts_with("gemini.")
-        || tool.starts_with("openai.")
-    {
+    if tool.starts_with("chatgpt.") || tool.starts_with("claude.") || tool.starts_with("gemini.") {
         return ids.into_iter().any(|id| {
             id.starts_with("provider-")
                 && !matches!(
@@ -864,15 +794,14 @@ fn high_risk_tool_families_use_stable_operation_blocks() {
     let ids = render_ids("memory.write", sample_raw("memory.write"));
     assert_has("memory.write", &ids, "memory-write");
 
-    for tool in ["chatgpt.apply_patch", "chatgpt.function", "chatgpt.shell"] {
-        let ids = render_ids(tool, sample_raw(tool));
-        assert_has(tool, &ids, "provider-calls");
-        assert_has(tool, &ids, "provider-call-operation-0");
-        assert!(
-            ids.iter().all(|id| !id.starts_with("result-")),
-            "{tool} must not use generic nested result blocks: {ids:?}"
-        );
-    }
+    let tool = "chatgpt.cloud_shell";
+    let ids = render_ids(tool, sample_raw(tool));
+    assert_has(tool, &ids, "provider-calls");
+    assert_has(tool, &ids, "provider-call-operation-0");
+    assert!(
+        ids.iter().all(|id| !id.starts_with("result-")),
+        "{tool} must not use generic nested result blocks: {ids:?}"
+    );
 
     let ids = render_ids("tools.plugins_list", sample_raw("tools.plugins_list"));
     assert_has("tools.plugins_list", &ids, "discovery-plugins");
@@ -1232,10 +1161,10 @@ fn representative_plugin_payloads_render_complete_readable_facts() {
         (
             "tools.search",
             RawOutput {
-                text: "Matching tools for \"image\": returned 1 of 1 starting at offset 0.\n- openai.image_generation [network]: Generate an image".into(),
+                text: "Matching tools for \"image\": returned 1 of 1 starting at offset 0.\n- chatgpt.cloud_image_generation [network]: Generate an image in OpenAI cloud".into(),
                 ..RawOutput::default()
             },
-            vec!["openai.image_generation", "Generate an image"],
+            vec!["chatgpt.cloud_image_generation", "Generate an image"],
             false,
         ),
         (
@@ -1558,27 +1487,12 @@ fn representative_plugin_payloads_render_complete_readable_facts() {
             true,
         ),
         (
-            "fs.view_image",
+            "chatgpt.cloud_image_generation",
             RawOutput {
-                text: "Attached 'assets/diagram.png' for visual inspection (detail=high, 4096 bytes).".into(),
+                text: "Saved OpenAI cloud image artifact to '/workspace/generated.png'.".into(),
                 payload: Some(json!({
-                    "path": "assets/diagram.png",
-                    "detail": "high",
-                    "mime": "image/png",
-                    "size_bytes": 4096,
-                    "sha256": "deadbeef"
-                })),
-                ..RawOutput::default()
-            },
-            vec!["assets/diagram.png", "image/png", "deadbeef"],
-            false,
-        ),
-        (
-            "openai.image_generation",
-            RawOutput {
-                text: "Saved OpenAI image artifact to '/workspace/generated.png'.".into(),
-                payload: Some(json!({
-                    "provider": "openai",
+                    "provider": "chatgpt",
+                    "tool": "image_generation",
                     "model": "gpt-image-1",
                     "path": "/workspace/generated.png",
                     "mime": "image/png",
@@ -1752,7 +1666,7 @@ fn representative_plugin_payloads_render_complete_readable_facts() {
             false,
         ),
         (
-            "chatgpt.web_search",
+            "chatgpt.cloud_web_search",
             RawOutput {
                 text: "OpenAI found the latest Agena rendering guide.".into(),
                 payload: Some(json!({
@@ -1774,29 +1688,28 @@ fn representative_plugin_payloads_render_complete_readable_facts() {
             true,
         ),
         (
-            "claude.bash",
+            "chatgpt.cloud_shell",
             RawOutput {
-                text: "Claude returned a bash tool result for the requested command.".into(),
+                text: "OpenAI returned a hosted shell result for the requested command.".into(),
                 payload: Some(json!({
-                    "provider": "claude",
-                    "tool": "bash",
-                    "model": "claude-sonnet",
-                    "request_id": "req-claude-1",
-                    "response_id": "msg-1",
-                    "pending_calls": [{"type": "bash_20250124", "name": "bash", "id": "toolu-1"}],
-                    "assistant_content": [{"type": "tool_use", "name": "bash", "input": {"command": "pwd"}}],
+                    "provider": "chatgpt",
+                    "tool": "shell",
+                    "model": "gpt-5",
+                    "request_id": "req-shell-1",
+                    "response_id": "resp-shell-1",
+                    "pending_calls": [{"type": "shell_call", "id": "call-shell-1", "command": "pwd"}],
                     "sources": [],
                     "usage": {"input_tokens": 80, "output_tokens": 30},
-                    "response_receipt": {"path": ".agena/receipts/msg-1.json", "sha256": "claude-receipt"},
+                    "response_receipt": {"path": ".agena/receipts/resp-shell-1.json", "sha256": "shell-receipt"},
                     "continuation_required": true
                 })),
                 ..RawOutput::default()
             },
-            vec!["req-claude-1", "toolu-1", "claude-receipt"],
+            vec!["req-shell-1", "call-shell-1", "shell-receipt"],
             true,
         ),
         (
-            "gemini.google_search",
+            "gemini.cloud_google_search",
             RawOutput {
                 text: "Gemini returned grounded search context.".into(),
                 payload: Some(json!({
@@ -2059,15 +1972,6 @@ fn every_cloud_tool_keeps_its_location_visible_in_titles_and_result_views() {
                     .any(|text| text.contains("cloud"))
             );
         }
-        // Rendering a stored historical invocation remains supported without
-        // pretending the old name was itself a new cloud-named invocation.
-        let historical = BuiltinHumanRenderer::new(tool.previous_name)
-            .render_human(&render_context(), &sample_raw(tool.previous_name))
-            .unwrap();
-        assert!(has_tool_specific_projection(
-            tool.previous_name,
-            &historical
-        ));
     }
     for name in ["shell.run", "fs.read", "web.search"] {
         let invocation = ToolInvocation::new(name, StructuredObject::default());

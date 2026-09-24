@@ -111,8 +111,8 @@ mod tests {
         .expect("lazy Skill refs do not require instructions");
         assert!(
             serde_json::from_value::<SkillReference>(serde_json::json!({
-                "name": "legacy",
-                "instructions": "Legacy instructions.",
+                "name": "obsolete-shape",
+                "instructions": "Unexpected instructions.",
                 "content_hash": "sha256",
                 "source": "bundled",
                 "allowed_tools": ["agena.fs.read"]

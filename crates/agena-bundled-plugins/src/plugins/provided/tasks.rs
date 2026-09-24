@@ -23,7 +23,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::Notify;
 
 pub(crate) const TASKS_PLUGIN_ID: &str = "agena.tasks";
-const TASK_STORAGE_NAMESPACE: &str = "async_tasks.v1";
+const TASK_STORAGE_NAMESPACE: &str = "async_tasks";
 /// Prevent one parent session from filling the runtime with unbounded child
 /// executions. This is deliberately a per-parent admission boundary; global
 /// provider capacity remains owned by the runtime/provider layer.
@@ -968,7 +968,7 @@ mod tests {
     }
 
     #[test]
-    fn task_input_rejects_zero_timeout_and_unknown_legacy_fields() {
+    fn task_input_rejects_zero_timeout_and_unknown_fields() {
         let valid = serde_json::json!({
             "description": "verify",
             "prompt": "run the checks",

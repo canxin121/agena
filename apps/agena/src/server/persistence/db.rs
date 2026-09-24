@@ -32,7 +32,7 @@ pub(crate) struct ServerStateDb {
 
 impl ServerStateDb {
     pub(crate) async fn open() -> Result<Self, String> {
-        Self::open_at_path(crate::server::persistence::paths::server_state_db_path()?).await
+        Self::open_at_path(crate::server::persistence::paths::server_state_db_path()).await
     }
 
     pub(crate) async fn open_at_path(path: PathBuf) -> Result<Self, String> {
@@ -183,69 +183,87 @@ async fn secure_server_state_files(_path: &Path) -> Result<(), String> {
     Ok(())
 }
 
+const SCHEMA_STATEMENTS: &[&str] = &[
+    "CREATE TABLE IF NOT EXISTS server_kv (\n           key TEXT PRIMARY KEY,\n           value_json TEXT NOT NULL,\n           updated_at INTEGER NOT NULL\n         )",
+    "CREATE INDEX IF NOT EXISTS idx_server_kv_updated_at ON server_kv(updated_at DESC)",
+    "CREATE TABLE IF NOT EXISTS attachment_cache_blob_store (\n           digest_sha256 TEXT PRIMARY KEY,\n           bytes_b64 TEXT NOT NULL,\n           bytes_size INTEGER NOT NULL,\n           created_at INTEGER NOT NULL,\n           last_accessed_at INTEGER NOT NULL\n         )",
+    "CREATE TABLE IF NOT EXISTS attachment_cache_source_index (\n           source_path TEXT NOT NULL,\n           source_mtime_ns INTEGER NOT NULL,\n           source_size INTEGER NOT NULL,\n           mime TEXT NOT NULL,\n           digest_sha256 TEXT NOT NULL,\n           created_at INTEGER NOT NULL,\n           last_accessed_at INTEGER NOT NULL,\n           hit_count INTEGER NOT NULL DEFAULT 0,\n           PRIMARY KEY (source_path, source_mtime_ns, source_size, mime)\n         )",
+    "CREATE INDEX IF NOT EXISTS idx_attachment_cache_source_last_accessed\n           ON attachment_cache_source_index(last_accessed_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_attachment_cache_blob_last_accessed\n           ON attachment_cache_blob_store(last_accessed_at DESC)",
+];
+
+fn normalized_schema_sql(sql: &str) -> String {
+    sql.replacen(" IF NOT EXISTS ", " ", 1)
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn schema_identity(sql: &str) -> Result<(String, String), String> {
+    for (prefix, kind) in [
+        ("CREATE TABLE IF NOT EXISTS ", "table"),
+        ("CREATE INDEX IF NOT EXISTS ", "index"),
+        ("CREATE UNIQUE INDEX IF NOT EXISTS ", "index"),
+    ] {
+        if let Some(rest) = sql.strip_prefix(prefix) {
+            let name = rest
+                .split(|ch: char| ch.is_whitespace() || ch == '(')
+                .next()
+                .unwrap_or_default();
+            if !name.is_empty() {
+                return Ok((kind.to_owned(), name.to_owned()));
+            }
+        }
+    }
+    Err("invalid internal server-state schema declaration".to_owned())
+}
+
+async fn schema_objects(
+    pool: &SqlitePool,
+) -> Result<std::collections::BTreeMap<(String, String), String>, String> {
+    let rows = sqlx::query_as::<_, (String, String, String)>(
+        "SELECT type, name, sql FROM sqlite_schema WHERE name NOT GLOB 'sqlite_*'",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(|error| database_diagnostic("failed to inspect the server-state schema", &error))?;
+    Ok(rows
+        .into_iter()
+        .map(|(kind, name, sql)| ((kind, name), normalized_schema_sql(sql.as_str())))
+        .collect())
+}
+
 async fn initialize_schema(pool: &SqlitePool) -> Result<(), String> {
+    let actual = schema_objects(pool).await?;
+    if !actual.is_empty() {
+        let mut expected = std::collections::BTreeMap::new();
+        for statement in SCHEMA_STATEMENTS {
+            expected.insert(
+                schema_identity(statement)?,
+                normalized_schema_sql(statement),
+            );
+        }
+        if actual == expected {
+            return Ok(());
+        }
+        return Err(
+            "server-state database schema does not match this Agena build; delete the database and start with a fresh one"
+                .to_owned(),
+        );
+    }
+
     let mut tx = pool.begin().await.map_err(|error| {
         database_diagnostic(
             "failed to begin the server-state schema transaction",
             &error,
         )
     })?;
-
-    sqlx::query(
-        "CREATE TABLE IF NOT EXISTS server_kv (\n           key TEXT PRIMARY KEY,\n           value_json TEXT NOT NULL,\n           updated_at INTEGER NOT NULL\n         )",
-    )
-    .execute(&mut *tx)
-    .await
-    .map_err(|error| {
-        database_diagnostic("failed to create the server-state key-value table", &error)
-    })?;
-
-    sqlx::query(
-        "CREATE INDEX IF NOT EXISTS idx_server_kv_updated_at ON server_kv(updated_at DESC)",
-    )
-    .execute(&mut *tx)
-    .await
-    .map_err(|error| {
-        database_diagnostic("failed to index server-state update timestamps", &error)
-    })?;
-
-    // Attachment cache tables.
-    sqlx::query(
-        "CREATE TABLE IF NOT EXISTS attachment_cache_blob_store (\n           digest_sha256 TEXT PRIMARY KEY,\n           bytes_b64 TEXT NOT NULL,\n           bytes_size INTEGER NOT NULL,\n           created_at INTEGER NOT NULL,\n           last_accessed_at INTEGER NOT NULL\n         )",
-    )
-    .execute(&mut *tx)
-    .await
-    .map_err(|error| {
-        database_diagnostic("failed to create the attachment blob cache table", &error)
-    })?;
-
-    sqlx::query(
-        "CREATE TABLE IF NOT EXISTS attachment_cache_source_index (\n           source_path TEXT NOT NULL,\n           source_mtime_ns INTEGER NOT NULL,\n           source_size INTEGER NOT NULL,\n           mime TEXT NOT NULL,\n           digest_sha256 TEXT NOT NULL,\n           created_at INTEGER NOT NULL,\n           last_accessed_at INTEGER NOT NULL,\n           hit_count INTEGER NOT NULL DEFAULT 0,\n           PRIMARY KEY (source_path, source_mtime_ns, source_size, mime)\n         )",
-    )
-    .execute(&mut *tx)
-    .await
-    .map_err(|error| {
-        database_diagnostic("failed to create the attachment source cache table", &error)
-    })?;
-
-    sqlx::query(
-        "CREATE INDEX IF NOT EXISTS idx_attachment_cache_source_last_accessed\n           ON attachment_cache_source_index(last_accessed_at DESC)",
-    )
-    .execute(&mut *tx)
-    .await
-    .map_err(|error| {
-        database_diagnostic("failed to index attachment source access times", &error)
-    })?;
-
-    sqlx::query(
-        "CREATE INDEX IF NOT EXISTS idx_attachment_cache_blob_last_accessed\n           ON attachment_cache_blob_store(last_accessed_at DESC)",
-    )
-    .execute(&mut *tx)
-    .await
-    .map_err(|error| {
-        database_diagnostic("failed to index attachment blob access times", &error)
-    })?;
-
+    for statement in SCHEMA_STATEMENTS {
+        sqlx::query(*statement)
+            .execute(&mut *tx)
+            .await
+            .map_err(|error| database_diagnostic("failed to create server-state schema", &error))?;
+    }
     tx.commit().await.map_err(|error| {
         database_diagnostic(
             "failed to commit the server-state schema transaction",
@@ -304,5 +322,24 @@ mod permission_tests {
                 & 0o777,
             0o600
         );
+    }
+
+    #[tokio::test]
+    async fn modified_server_state_schema_is_rejected_without_repair() {
+        let fixture = tempfile::tempdir().expect("create server-state schema fixture");
+        let path = fixture.path().join("agena.db");
+        let db = ServerStateDb::open_at_path(path.clone())
+            .await
+            .expect("create current server-state database");
+        sqlx::query("ALTER TABLE server_kv ADD COLUMN obsolete TEXT")
+            .execute(&db.pool)
+            .await
+            .expect("mutate server-state schema");
+        drop(db);
+
+        let error = ServerStateDb::open_at_path(path)
+            .await
+            .expect_err("modified server-state schema must be rejected");
+        assert!(error.contains("does not match this Agena build"), "{error}");
     }
 }

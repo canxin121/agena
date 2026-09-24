@@ -3,43 +3,58 @@ import test from 'node:test'
 
 import { normalizeLspRuntimeList } from '../src/lib/lspRuntime'
 
-test('normalizeLspRuntimeList filters mixed-session payloads to active session', () => {
-  const payload = {
-    items: [
-      { id: 'rust-analyzer', sessionID: 'ses_1', rootDir: '/repo/a', status: 'connected' },
-      { id: 'tsserver', sessionId: 'ses_2', rootDir: '/repo/b', status: 'connected' },
-      { id: 'clangd', session_id: 'ses_1', rootDir: '/repo/a', status: 'ready' },
-    ],
-  }
+test('normalizeLspRuntimeList projects the canonical runtime operator LSP shape', () => {
+  const items = normalizeLspRuntimeList({
+    operator: {
+      lsp: {
+        servers: [
+          {
+            name: 'rust-analyzer',
+            command: 'rust-analyzer',
+            file_extensions: ['rs'],
+            root_markers: ['Cargo.toml'],
+          },
+          {
+            name: 'typescript-language-server',
+            command: 'typescript-language-server --stdio',
+            file_extensions: ['ts', 'tsx'],
+            root_markers: ['package.json'],
+          },
+        ],
+      },
+    },
+  })
 
-  const items = normalizeLspRuntimeList(payload, { sessionId: 'ses_1' })
-  assert.equal(items.length, 2)
-  assert.ok(items.every((item) => item.sessionID === 'ses_1'))
+  assert.deepEqual(items, [
+    {
+      id: 'rust-analyzer',
+      name: 'rust-analyzer',
+      status: 'configured',
+      transport: 'rust-analyzer',
+      fileExtensions: ['rs'],
+      rootMarkers: ['Cargo.toml'],
+    },
+    {
+      id: 'typescript-language-server',
+      name: 'typescript-language-server',
+      status: 'configured',
+      transport: 'typescript-language-server --stdio',
+      fileExtensions: ['ts', 'tsx'],
+      rootMarkers: ['package.json'],
+    },
+  ])
 })
 
-test('normalizeLspRuntimeList keeps payload when session ids are omitted', () => {
-  const payload = {
-    items: [
-      { id: 'rust-analyzer', rootDir: '/repo/a', status: 'connected' },
-      { id: 'tsserver', rootDir: '/repo/a', status: 'connected' },
-    ],
-  }
-
-  const items = normalizeLspRuntimeList(payload, { sessionId: 'ses_1' })
-  assert.equal(items.length, 2)
-})
-
-test('normalizeLspRuntimeList reads current-session bucket payloads', () => {
-  const payload = {
-    ses_1: {
-      items: [{ id: 'rust-analyzer', rootDir: '/repo/a', status: 'connected' }],
-    },
-    ses_2: {
-      items: [{ id: 'tsserver', rootDir: '/repo/b', status: 'connected' }],
-    },
-  }
-
-  const items = normalizeLspRuntimeList(payload, { sessionId: 'ses_1' })
-  assert.equal(items.length, 1)
-  assert.equal(items[0]?.id, 'rust-analyzer')
+test('normalizeLspRuntimeList rejects alternate list and field spellings', () => {
+  assert.deepEqual(normalizeLspRuntimeList({ items: [{ id: 'rust-analyzer' }] } as never), [])
+  assert.deepEqual(
+    normalizeLspRuntimeList({
+      operator: {
+        lsp: {
+          servers: [{ id: 'rust-analyzer', transport: 'stdio' }],
+        },
+      },
+    }),
+    [],
+  )
 })

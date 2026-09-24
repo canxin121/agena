@@ -52,13 +52,6 @@ impl DraftStore {
         };
         let persistent = serde_json::from_str::<PersistentDraftStore>(raw.as_str())
             .map_err(crate::UiFailure::internal)?;
-        if persistent.version != crate::persistent_draft_store_version() {
-            return Err(crate::UiFailure::message(format!(
-                "unsupported draft schema {}; expected {}",
-                persistent.version,
-                crate::persistent_draft_store_version()
-            )));
-        }
         Ok(persistent.into_store())
     }
 
@@ -119,20 +112,32 @@ impl PromptHistory {
         for line in raw.lines() {
             let line = line.trim();
             if line.is_empty() {
-                continue;
+                return Err(crate::UiFailure::message(
+                    "prompt history contains an empty record; delete the file and recreate current history",
+                ));
             }
             let entry = serde_json::from_str::<PromptHistoryRecord>(line)
                 .map_err(crate::UiFailure::internal)?;
-            if let Some(text) = Self::normalized_text(entry.text.as_str()) {
-                if items.last().is_some_and(|item| item == &text) {
-                    continue;
-                }
-                items.retain(|item| item != &text);
-                items.push(text);
-                if items.len() > MAX_PROMPT_HISTORY_ENTRIES {
-                    let excess = items.len() - MAX_PROMPT_HISTORY_ENTRIES;
-                    items.drain(0..excess);
-                }
+            let text = Self::normalized_text(entry.text.as_str()).ok_or_else(|| {
+                crate::UiFailure::message(
+                    "prompt history contains an empty prompt; delete the file and recreate current history",
+                )
+            })?;
+            if text != entry.text {
+                return Err(crate::UiFailure::message(
+                    "prompt history contains a non-canonical prompt; delete the file and recreate current history",
+                ));
+            }
+            if items.iter().any(|item| item == &text) {
+                return Err(crate::UiFailure::message(
+                    "prompt history contains duplicate prompts; delete the file and recreate current history",
+                ));
+            }
+            items.push(text);
+            if items.len() > MAX_PROMPT_HISTORY_ENTRIES {
+                return Err(crate::UiFailure::message(
+                    "prompt history exceeds the current entry limit; delete the file and recreate current history",
+                ));
             }
         }
         Ok(Self { items })
@@ -212,42 +217,12 @@ mod tests {
     }
 
     #[test]
-    fn rejects_pre_typed_terminal_response_draft_schema() {
+    fn rejects_unknown_draft_fields() {
         let directory = tempfile::tempdir().expect("temporary draft directory");
-        let path = directory.path().join("tui-drafts.json");
-        fs::write(
-            &path,
-            r#"{
-                "version": 1,
-                "sessions": {},
-                "new_session": {
-                    "text": "4;-2;rgb:fae0/fae0/fae0",
-                    "items": [],
-                    "elements": []
-                }
-            }"#,
-        )
-        .expect("write legacy draft store");
-
-        assert!(DraftStore::load(&path).is_err());
-    }
-
-    #[test]
-    fn rejects_legacy_or_forward_compatible_draft_shapes() {
-        let directory = tempfile::tempdir().expect("temporary draft directory");
-
-        let missing_version = directory.path().join("missing-version.json");
-        fs::write(&missing_version, r#"{"sessions": {}, "new_session": null}"#)
-            .expect("write versionless draft store");
-        assert!(DraftStore::load(&missing_version).is_err());
-
         let unknown_field = directory.path().join("unknown-field.json");
         fs::write(
             &unknown_field,
-            format!(
-                r#"{{"version": {}, "sessions": {{}}, "new_session": null, "legacy": true}}"#,
-                crate::persistent_draft_store_version()
-            ),
+            r#"{"sessions": {}, "new_session": null, "obsolete": true}"#,
         )
         .expect("write draft store with an unknown field");
         assert!(DraftStore::load(&unknown_field).is_err());
@@ -276,5 +251,22 @@ mod tests {
             restored.get(DraftSlot::NewSession).map(ComposerDraft::text),
             Some("4;-2;rgb:fae0/fae0/fae0".to_owned())
         );
+    }
+
+    #[test]
+    fn prompt_history_rejects_non_current_records_without_repair() {
+        let directory = tempfile::tempdir().expect("temporary prompt-history directory");
+        let path = directory.path().join("prompt-history.jsonl");
+
+        fs::write(&path, "{\"text\":\" hello \"}\n").expect("write non-canonical history");
+        assert!(PromptHistory::load(&path).is_err());
+
+        fs::write(&path, "{\"text\":\"hello\",\"obsolete\":true}\n")
+            .expect("write unknown-field history");
+        assert!(PromptHistory::load(&path).is_err());
+
+        fs::write(&path, "{\"text\":\"hello\"}\n{\"text\":\"hello\"}\n")
+            .expect("write duplicate history");
+        assert!(PromptHistory::load(&path).is_err());
     }
 }

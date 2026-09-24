@@ -1,4 +1,4 @@
-//! Provider Studio draft / save surface, migrated from
+//! Provider Studio draft / save surface. Previously located in
 //! `agena-tui-backend/src/backend_drafts/` (mod.rs + provider_draft_auth.rs +
 //! provider_draft_config.rs + provider_draft_validation.rs) and the Provider
 //! Studio save/delete helpers from `backend_provider/{selection,settings}.rs`,
@@ -10,7 +10,7 @@
 //! transport-safe types they operate on are re-exported here.
 
 // The submodules are `pub(crate)` so the crate-root `application_*.rs` modules
-// can reach the migrated helpers; nothing here is part of the public API beyond
+// can reach the helpers; nothing here is part of the public API beyond
 // the `pub use` surface below.
 pub(crate) mod catalog;
 pub(crate) mod draft_auth_data;

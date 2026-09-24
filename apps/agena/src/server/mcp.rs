@@ -61,8 +61,6 @@ const MAX_OAUTH_URI_BYTES: usize = 4096;
 const MAX_OAUTH_LABEL_BYTES: usize = 256;
 const MAX_OAUTH_TOKEN_BYTES: usize = 8192;
 const MAX_OAUTH_SCOPE_BYTES: usize = 512;
-const OAUTH_SIGNING_KEY_VERSION: u32 = 1;
-const OAUTH_RUNTIME_VERSION: u32 = 3;
 // ChatGPT submits the user-facing OAuth authorization form from its hosted
 // connector origin. Keep this allowlist explicit and narrow; arbitrary
 // browser origins must not be accepted for the MCP/OAuth surface.
@@ -82,7 +80,7 @@ pub(crate) struct McpServerState {
 fn mcp_tool_is_exposed(tool: &OperatorToolResource) -> bool {
     is_stateless_mcp_tool_exposed(StatelessMcpToolMetadata {
         name: tool.name.as_str(),
-        plugin_id: Some(tool.plugin_id.as_str()),
+        plugin_id: tool.plugin_id.as_str(),
         interactive: tool.interactive,
         task: tool.task,
     })
@@ -236,23 +234,17 @@ struct McpReadiness {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct PersistedMcpServerControl {
-    #[serde(default = "default_mcp_server_enabled")]
     enabled: bool,
-    #[serde(default)]
     public_url: Option<String>,
-    #[serde(default)]
     auth_mode: McpAuthMode,
-    #[serde(default)]
     anonymous_access: McpAnonymousAccess,
-    #[serde(default)]
     oauth_password_phc: Option<String>,
-    #[serde(default)]
     oauth_issuer_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 struct PersistedSigningKey {
-    version: u32,
     secret_key: String,
 }
 
@@ -324,18 +316,11 @@ impl OAuthSigningKey {
 async fn load_or_create_oauth_signing_key(
     database: &Arc<ServerStateDb>,
 ) -> Result<OAuthSigningKey, String> {
-    // Keep the signing key in Agena's private server-state database and never
-    // probe the legacy `agena` Keychain service during startup. Development
-    // builds are ad-hoc signed, so their code identity changes after rebuilds;
-    // reading that legacy item can therefore raise a macOS authorization
-    // dialog on every restart even though the server no longer needs it.
+    // Keep the signing key in Agena's private server-state database.
     if let Some(persisted) = database
         .get_json::<PersistedSigningKey>(KV_KEY_MCP_OAUTH_SIGNING_KEY)
         .await?
     {
-        if persisted.version != OAUTH_SIGNING_KEY_VERSION {
-            return Err("unsupported persisted MCP OAuth signing key version".to_owned());
-        }
         let key = decode_persisted_signing_key(persisted.secret_key.as_str())?;
         return Ok(key);
     }
@@ -346,7 +331,6 @@ async fn load_or_create_oauth_signing_key(
         .set_json(
             KV_KEY_MCP_OAUTH_SIGNING_KEY,
             &PersistedSigningKey {
-                version: OAUTH_SIGNING_KEY_VERSION,
                 secret_key: encoded,
             },
         )
@@ -362,10 +346,6 @@ fn decode_persisted_signing_key(value: &str) -> Result<OAuthSigningKey, String> 
         .try_into()
         .map_err(|_| "invalid persisted MCP OAuth signing key length".to_owned())?;
     OAuthSigningKey::from_secret_key(secret_key)
-}
-
-fn default_mcp_server_enabled() -> bool {
-    true
 }
 
 pub(crate) struct McpServerStartupConfig<'a> {
@@ -478,9 +458,8 @@ impl McpServerState {
             configured_resource = Some(normalize_public_mcp_url(public_url)?);
             if startup.oauth_issuer_url.is_none() {
                 // An explicit deployment resource without a matching issuer
-                // override selects the simple same-origin topology. This also
-                // clears a stale independently persisted issuer from an older
-                // deployment instead of silently mixing two environments.
+                // override selects the simple same-origin topology and keeps
+                // the effective connector identity internally coherent.
                 configured_issuer = None;
             }
         }
@@ -519,12 +498,6 @@ impl McpServerState {
         let persisted_runtime = database
             .get_json::<PersistedOAuthRuntime>(KV_KEY_MCP_OAUTH_RUNTIME)
             .await?;
-        if persisted_runtime
-            .as_ref()
-            .is_some_and(|runtime| runtime.version != OAUTH_RUNTIME_VERSION)
-        {
-            return Err("unsupported persisted MCP OAuth runtime version".to_owned());
-        }
         let oauth_runtime = if control_changed {
             None
         } else {
@@ -558,9 +531,9 @@ impl McpServerState {
         }
         // Persist normalized values so a later restart without the explicit
         // environment still has one coherent connector identity. Do
-        // this after invalidating the old OAuth runtime: if the control write
-        // fails, an old identity with cleared tokens is safer than a new
-        // identity accidentally retaining old token state.
+        // this after invalidating the previous OAuth runtime: if the control
+        // write fails, the previous identity with cleared tokens is safer than
+        // a new identity accidentally retaining prior token state.
         if control_changed {
             state
                 .persist_control(
@@ -947,9 +920,9 @@ impl McpServerState {
             || previous_resource != configured_resource
             || previous_issuer != configured_issuer;
         if control_changed {
-            // Invalidate the old token/client state before committing a new
-            // public identity or policy. A later persistence failure then
-            // leaves the old control with no valid stale credentials.
+            // Invalidate the previous token/client state before committing a
+            // new public identity or policy. A later persistence failure then
+            // leaves the previous control with no valid stale credentials.
             self.clear_oauth_runtime_state().await?;
         }
         self.persist_control(
@@ -2614,9 +2587,9 @@ struct AuthorizationCodeRecord {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 struct RefreshTokenRecord {
     client_id: String,
-    #[serde(default)]
     issuer: String,
     resource: String,
     scope: String,
@@ -2629,10 +2602,7 @@ struct RefreshTokenRecord {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct PersistedOAuthRuntime {
-    version: u32,
-    #[serde(default)]
     refresh_tokens: HashMap<String, RefreshTokenRecord>,
-    #[serde(default)]
     revoked_jti: HashMap<String, u64>,
 }
 
@@ -2712,7 +2682,6 @@ impl OAuthState {
             .set_json(
                 KV_KEY_MCP_OAUTH_RUNTIME,
                 &PersistedOAuthRuntime {
-                    version: OAUTH_RUNTIME_VERSION,
                     refresh_tokens,
                     revoked_jti,
                 },
@@ -3900,7 +3869,7 @@ mod tests {
             destructive: false,
             open_world: false,
             task: false,
-            plugin_id: plugin_id.unwrap_or("test.unclassified").to_owned(),
+            plugin_id: plugin_id.unwrap_or_default().to_owned(),
         }
     }
 
@@ -3926,7 +3895,6 @@ mod tests {
             .expect("persisted OAuth signing key");
 
         assert_eq!(first.kid, second.kid);
-        assert_eq!(persisted.version, OAUTH_SIGNING_KEY_VERSION);
         assert_eq!(persisted.secret_key, first.secret_key_b64());
     }
 
@@ -4052,7 +4020,7 @@ mod tests {
             tool("chatgpt.search", false, Some("agena.chatgpt")),
             tool("gemini.search", false, None),
             tool("claude.ask", false, None),
-            tool("openai.web_search", false, Some("agena.openai")),
+            tool("chatgpt.cloud_web_search", false, Some("agena.chatgpt")),
             tool("cron.create", false, Some("agena.cron")),
             tool("mcp.tools.call", false, Some("agena.mcp")),
             tool("memory.write", false, Some("agena.memory")),

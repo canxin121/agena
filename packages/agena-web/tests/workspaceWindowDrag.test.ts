@@ -34,7 +34,7 @@ test('workspace drag helpers ignore arbitrary plain text payloads', () => {
   assert.equal(readWorkspaceWindowTemplateFromDataTransfer(transfer as unknown as DataTransfer), null)
 })
 
-test('workspace drag helpers ignore legacy-like plain text that is not a valid workspace payload', () => {
+test('workspace drag helpers ignore invalid plain text that is not a valid workspace payload', () => {
   const transfer = new MockDataTransfer()
   transfer.setData('text/plain', 'files:not-json')
 

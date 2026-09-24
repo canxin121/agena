@@ -219,11 +219,10 @@ mod tests {
     }
 
     #[test]
-    fn rejects_removed_activation_frontmatter() {
-        let error =
-            Skill::from_raw("---\nname: legacy\nallowed-tools: [agena.fs.read]\n---\nLegacy.\n")
-                .expect_err("activation metadata is no longer part of a plain-text Skill");
-        assert!(error.to_string().contains("allowed-tools"));
+    fn rejects_unknown_frontmatter_fields() {
+        let error = Skill::from_raw("---\nname: demo\nobsolete: true\n---\nDemo.\n")
+            .expect_err("unknown Skill frontmatter must be rejected");
+        assert!(error.to_string().contains("obsolete"));
     }
 
     #[test]

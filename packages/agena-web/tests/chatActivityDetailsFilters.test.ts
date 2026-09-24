@@ -30,7 +30,7 @@ const BUILTIN_KIND_IDS = [
   'text',
 ]
 
-test('web fallback activity kinds mirror the server catalog instead of legacy OpenCode parts', () => {
+test('web fallback activity kinds mirror the current server catalog', () => {
   assert.deepEqual(
     BUILTIN_CHAT_ACTIVITY_KINDS.map((item) => item.id),
     BUILTIN_KIND_IDS,
@@ -42,9 +42,6 @@ test('web fallback activity kinds mirror the server catalog instead of legacy Op
   )
   for (const id of BUILTIN_KIND_IDS) {
     assert.ok(serverCatalog.includes(`= "${id}"`), `server activity catalog is missing ${id}`)
-  }
-  for (const retired of ['snapshot', 'patch', 'retry', 'justification', 'step-start', 'step-finish']) {
-    assert.equal(BUILTIN_KIND_IDS.includes(retired), false)
   }
 })
 
@@ -115,6 +112,11 @@ test('Agena namespaced tools map to categories while exact preferences stay dist
   assert.equal(normalizeChatToolActivityId('fs.apply_patch'), 'apply_patch')
   assert.equal(normalizeChatToolActivityId('shell.run'), 'bash')
   assert.equal(normalizeChatToolActivityId('web.search'), 'websearch')
+  assert.equal(normalizeChatToolActivityId('chatgpt.cloud_shell'), 'bash')
+  assert.equal(normalizeChatToolActivityId('claude.cloud_code_execution'), 'bash')
+  assert.equal(normalizeChatToolActivityId('gemini.cloud_url_context'), 'webfetch')
+  assert.equal(normalizeChatToolActivityId('gemini.cloud_google_search'), 'websearch')
+  assert.equal(normalizeChatToolActivityId('chatgpt.cloud_file_search'), 'codesearch')
   assert.equal(normalizeChatToolActivityId('custom.plugin_tool'), 'custom.plugin_tool')
 
   assert.equal(normalizeChatToolPreferenceId('agena.fs.read'), 'fs.read')
@@ -129,7 +131,7 @@ test('Agena namespaced tools map to categories while exact preferences stay dist
   )
 })
 
-test('settings page consumes the server activity catalog and has no legacy summary matrix', () => {
+test('settings page consumes the current server activity catalog', () => {
   const settingsPage = readFileSync(resolve(import.meta.dir, '../src/pages/SettingsPage.vue'), 'utf8')
   assert.ok(settingsPage.includes('response?.activity_kinds'))
   assert.ok(settingsPage.includes('v-for="opt in activityKindOptions"'))

@@ -33,7 +33,6 @@ const MAX_TERMINAL_SESSIONS: usize = 20;
 const TERMINAL_IDLE_TIMEOUT_ENV: &str = "AGENA_SERVER_TERMINAL_IDLE_TIMEOUT_SECS";
 const TERMINAL_CLEANUP_INTERVAL: Duration = Duration::from_secs(5 * 60);
 const TERMINAL_HEARTBEAT: Duration = Duration::from_secs(15);
-const TERMINAL_SESSION_FILE_VERSION: u64 = 1;
 const TMUX_SESSION_PREFIX: &str = "agena-";
 
 // Keep a bounded recent scrollback for resumable streams.
@@ -95,7 +94,7 @@ enum PersistedTerminalBackend {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct PersistedTerminalSession {
     cwd: String,
     cols: u16,
@@ -104,22 +103,10 @@ struct PersistedTerminalSession {
     updated_at: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct PersistedTerminalRegistry {
-    #[serde(default)]
-    version: u64,
-    #[serde(default)]
     sessions: BTreeMap<String, PersistedTerminalSession>,
-}
-
-impl Default for PersistedTerminalRegistry {
-    fn default() -> Self {
-        Self {
-            version: TERMINAL_SESSION_FILE_VERSION,
-            sessions: BTreeMap::new(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -252,48 +239,32 @@ fn tmux_kill_session(session_name: &str) -> anyhow::Result<()> {
     ))
 }
 
-fn normalize_persisted_registry(
-    mut registry: PersistedTerminalRegistry,
-) -> PersistedTerminalRegistry {
-    if registry.version == 0 {
-        registry.version = TERMINAL_SESSION_FILE_VERSION;
-    }
-    registry
-}
-
 async fn load_session_registry_from_store(
     db: &crate::server::persistence::db::ServerStateDb,
-) -> PersistedTerminalRegistry {
+) -> Result<PersistedTerminalRegistry, String> {
     match db
         .get_json::<PersistedTerminalRegistry>(
             crate::server::persistence::db::KV_KEY_TERMINAL_SESSION_REGISTRY,
         )
         .await
     {
-        Ok(Some(registry)) => return normalize_persisted_registry(registry),
+        Ok(Some(registry)) => return Ok(registry),
         Ok(None) => {}
         Err(error) => {
-            tracing::error!(
-                diagnostic = %error,
-                "failed to load the persisted terminal session registry; starting with an empty registry"
-            );
+            return Err(format!(
+                "persisted terminal session registry does not match this Agena build; delete the server-state database and recreate current state: {error}"
+            ));
         }
     }
 
     let registry = PersistedTerminalRegistry::default();
-    if let Err(error) = db
-        .set_json(
-            crate::server::persistence::db::KV_KEY_TERMINAL_SESSION_REGISTRY,
-            &registry,
-        )
-        .await
-    {
-        tracing::error!(
-            diagnostic = %error,
-            "failed to initialize the persisted terminal session registry"
-        );
-    }
-    registry
+    db.set_json(
+        crate::server::persistence::db::KV_KEY_TERMINAL_SESSION_REGISTRY,
+        &registry,
+    )
+    .await
+    .map_err(|error| format!("failed to initialize current terminal session registry: {error}"))?;
+    Ok(registry)
 }
 
 const TERMINAL_REGISTRY_FLUSH_DEBOUNCE: Duration = Duration::from_millis(180);
@@ -317,8 +288,10 @@ pub struct TerminalManager {
 }
 
 impl TerminalManager {
-    pub async fn new(db: Arc<crate::server::persistence::db::ServerStateDb>) -> Self {
-        let session_registry = load_session_registry_from_store(db.as_ref()).await;
+    pub async fn new(
+        db: Arc<crate::server::persistence::db::ServerStateDb>,
+    ) -> Result<Self, String> {
+        let session_registry = load_session_registry_from_store(db.as_ref()).await?;
         let prefer_tmux = *TMUX_AVAILABLE;
         let idle_timeout = terminal_idle_timeout();
 
@@ -330,7 +303,7 @@ impl TerminalManager {
             );
         }
 
-        Self {
+        Ok(Self {
             db,
             sessions: Arc::new(DashMap::new()),
             session_registry: Arc::new(Mutex::new(session_registry)),
@@ -338,7 +311,7 @@ impl TerminalManager {
             restore_lock: Arc::new(Mutex::new(())),
             idle_timeout,
             prefer_tmux,
-        }
+        })
     }
 
     fn queue_registry_flush(&self, registry: PersistedTerminalRegistry) {
@@ -441,9 +414,6 @@ impl TerminalManager {
             });
             if !mutator(&mut guard) {
                 return false;
-            }
-            if guard.version == 0 {
-                guard.version = TERMINAL_SESSION_FILE_VERSION;
             }
             guard.clone()
         };
@@ -1621,9 +1591,9 @@ pub async fn terminal_restart(
     let cols = body.cols.unwrap_or(80);
     let rows = body.rows.unwrap_or(24);
 
-    // A missing old id is acceptable for an idempotent restart. Every actual
-    // stop failure must abort the restart so the server never reports two
-    // overlapping terminals as a successful replacement.
+    // A missing replaced-session id is acceptable for an idempotent restart.
+    // Every actual stop failure must abort the restart so the server never
+    // reports two overlapping terminals as a successful replacement.
     if let Err(error) = state.terminal.kill_session(&old_session_id)
         && !matches!(error, TerminalError::NotFound)
     {

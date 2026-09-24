@@ -58,7 +58,7 @@ pub(super) fn run_abort_reason(error: &AppError) -> RunAbortReason {
 /// Resolve a pending tool ref to its decoded operation payload. The tool part
 /// is the durable `tool_call` part itself; the operation projection (with its
 /// call id, invocation, advertised identity, and lifecycle) is rebuilt from
-/// the flat canonical content (v2 has no separate in-memory message record).
+/// the flat canonical content (the current model has no separate in-memory message record).
 pub(super) fn resolve_pending_tool(
     session: &Session,
     pending_tool: &SessionPendingTool,
@@ -265,7 +265,7 @@ pub(super) fn reserve_background_external_id(
     )))
 }
 
-/// Find the pending tool whose decoded operation carries `call_id`. v2 has no
+/// Find the pending tool whose decoded operation carries `call_id`. the current model has no
 /// in-memory message record — the durable `tool_call` part is the record and
 /// the call id rides inside its operation payload, so this resolves by
 /// decoding each pending tool part.

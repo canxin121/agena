@@ -633,7 +633,9 @@ pub(crate) async fn run(args: crate::server::ServerArgs) -> Result<()> {
             .map_err(|error| anyhow!("failed to open agena server database: {error}"))?,
     );
     let terminal = Arc::new(
-        crate::server::terminal::manager::TerminalManager::new(server_state_db.clone()).await,
+        crate::server::terminal::manager::TerminalManager::new(server_state_db.clone())
+            .await
+            .map_err(|error| anyhow!("failed to initialize terminal persistence: {error}"))?,
     );
     terminal.clone().spawn_cleanup_task();
     let workspace_preview_registry = Arc::new(

@@ -644,7 +644,7 @@ async fn list_due_filters_paused_completed_future_and_claimed_jobs() {
 }
 
 #[tokio::test]
-async fn owned_history_survives_job_deletion_and_hides_legacy_rows() {
+async fn owned_history_survives_job_deletion_and_hides_unowned_host_rows() {
     for store in stores().await {
         let now = Utc::now();
         let mut job = ScheduledJob::new_once(now, "owned");

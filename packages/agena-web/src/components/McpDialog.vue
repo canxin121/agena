@@ -6,7 +6,7 @@ import { useI18n } from 'vue-i18n'
 import Dialog from '@/components/ui/Dialog.vue'
 import IconButton from '@/components/ui/IconButton.vue'
 import { apiJson } from '@/lib/api'
-import { mcpStatusTone, normalizeMcpStatus, type McpStatusItem } from '@/lib/mcpStatus'
+import { normalizeMcpStatus, type McpStatusItem } from '@/lib/mcpStatus'
 import { useUiStore } from '@/stores/ui'
 
 type RuntimeStatus = {
@@ -90,10 +90,7 @@ watch(
         <div v-for="entry in entries" :key="entry.name" class="flex items-center justify-between gap-3 py-2.5">
           <div class="min-w-0">
             <div class="break-words font-mono text-sm font-semibold">{{ entry.name }}</div>
-            <div
-              class="mt-0.5 text-[11px]"
-              :class="mcpStatusTone(entry.status) === 'ok' ? 'text-success' : 'text-muted-foreground'"
-            >
+            <div class="mt-0.5 text-[11px] text-success">
               {{ entry.status }}
             </div>
           </div>

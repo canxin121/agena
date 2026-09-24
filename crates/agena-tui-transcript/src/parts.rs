@@ -1,7 +1,7 @@
-//! v2 parts → transcript entry projection for terminal presentation.
+//! Durable parts → transcript entry projection for terminal presentation.
 //!
 //! The wire transcript is an ordered v2 part list (`SessionExecutionResource
-//! .parts`, database-design-v2.md §4.1.1). Each `run` marker is one turn/run:
+//! .parts`). Each `run` marker is one turn/run:
 //! it starts a [`TranscriptEntry`] whose `role`/`state`/`created_at` mirror the
 //! marker, and every following content part (`run_id` backlinked) becomes a
 //! part of that entry. `kind`/`role`/`state` are stable open-set strings, so

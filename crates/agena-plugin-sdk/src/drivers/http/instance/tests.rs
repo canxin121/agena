@@ -635,7 +635,7 @@ async fn invalid_initialization_does_not_retire_the_live_instance() {
         ("host_callback_url", serde_json::json!("file:///test")),
         ("host_callback_url", serde_json::json!("invalid-url")),
         ("host_callback_token", serde_json::json!("orphan-token")),
-        ("config", serde_json::json!({"legacy": true})),
+        ("config", serde_json::json!({"obsolete": true})),
     ] {
         let mut params = valid.clone();
         params[field] = value;

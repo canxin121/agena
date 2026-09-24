@@ -3,7 +3,6 @@ import type {
   MessagePartLike,
   MessageRenderBlock,
   RenderBlock,
-  RevertLike,
   TranscriptDisplayPart,
   TranscriptPartKind,
 } from '@/components/chat/messageList.types'
@@ -20,7 +19,6 @@ type JsonRecord = Record<string, JsonValue>
 
 export type TranscriptProjectionOptions = {
   showReasoning: boolean
-  revert: RevertLike | null
 }
 
 function isRecord(value: unknown): value is JsonRecord {
@@ -393,15 +391,7 @@ function finalAnswerPartId(role: string, parts: MessagePartLike[]): string | nul
 }
 
 export function projectTranscriptBlocks(messages: MessageLike[], options: TranscriptProjectionOptions): RenderBlock[] {
-  const visibleMessages: MessageLike[] = []
-  const revertId = options.revert?.messageID || ''
-  for (const message of messages || []) {
-    const id = String(message.info.id || '')
-    if (revertId && id && compareTranscriptIds(id, revertId) >= 0) break
-    visibleMessages.push(message)
-  }
-
-  const blocks: RenderBlock[] = foldAssistantMessages(visibleMessages).map(
+  return foldAssistantMessages(messages || []).map(
     ({ message, runIds }, messageIndex): MessageRenderBlock => {
       const role = text(message.info.role) || 'assistant'
       const ordered = [...(message.parts || [])].sort((a, b) =>
@@ -429,9 +419,4 @@ export function projectTranscriptBlocks(messages: MessageLike[], options: Transc
       }
     },
   )
-
-  if (options.revert) {
-    blocks.push({ kind: 'revert', key: `revert:${options.revert.messageID}`, revert: options.revert })
-  }
-  return blocks
 }

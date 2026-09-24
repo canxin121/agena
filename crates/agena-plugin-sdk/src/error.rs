@@ -397,11 +397,11 @@ mod tests {
     }
 
     #[test]
-    fn rpc_error_rejects_legacy_failure_shapes_and_preserves_untyped_diagnostics() {
+    fn rpc_error_preserves_untyped_diagnostics() {
         use super::*;
         for data in [
             None,
-            Some(serde_json::json!({"kind":"host_unavailable", "message":"legacy", "data":{}})),
+            Some(serde_json::json!({"unexpected":"diagnostic"})),
             Some(serde_json::json!({"kind":"unknown", "failure":{}, "diagnostic":{}})),
         ] {
             let error = crate::rpc::ErrorObject {

@@ -12,7 +12,6 @@ const HIDDEN_STATELESS_MCP_PLUGIN_IDS: &[&str] = &[
     "agena.chatgpt",
     "agena.gemini",
     "agena.claude",
-    "agena.openai",
     "agena.schema_lab",
     // These plugins depend on Agena session lifecycle, user interaction, UI
     // effects, subagents, or session notifications that stateless MCP cannot
@@ -51,48 +50,26 @@ const KNOWN_INTERACTIVE_TOOL_PREFIXES: &[&str] = &["web.browser_", "agena.web.br
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StatelessMcpToolMetadata<'a> {
     pub name: &'a str,
-    pub plugin_id: Option<&'a str>,
+    pub plugin_id: &'a str,
     pub interactive: bool,
     pub task: bool,
 }
 
 /// Return whether a runtime tool is meaningful on a stateless MCP transport.
 ///
-/// This is a compatibility/surface policy, not a read-only sandbox. Direct
+/// This is a surface policy, not a read-only sandbox. Direct
 /// workspace tools such as shell and filesystem writes remain eligible; OAuth
 /// and Agena's permission contracts govern their authority separately.
 pub fn is_stateless_mcp_tool_exposed(tool: StatelessMcpToolMetadata<'_>) -> bool {
-    !tool.interactive
+    !tool.plugin_id.trim().is_empty()
+        && !tool.interactive
         && !tool.task
-        && !tool_uses_hidden_plugin(tool.name, tool.plugin_id)
+        && !plugin_id_is_hidden(tool.plugin_id)
         && !tool_has_known_interactive_name(tool.name)
 }
 
-fn tool_uses_hidden_plugin(name: &str, plugin_id: Option<&str>) -> bool {
-    if plugin_id.is_some_and(plugin_id_is_hidden) {
-        return true;
-    }
-
-    // Older Agena servers may omit plugin_id. Compact and canonical tool names
-    // still carry the plugin namespace, so retain a conservative fallback.
-    HIDDEN_STATELESS_MCP_PLUGIN_IDS.iter().any(|hidden_id| {
-        let compact_id = hidden_id.strip_prefix("agena.").unwrap_or(hidden_id);
-        name_belongs_to_plugin(name, compact_id) || name_belongs_to_plugin(name, hidden_id)
-    })
-}
-
 fn plugin_id_is_hidden(plugin_id: &str) -> bool {
-    HIDDEN_STATELESS_MCP_PLUGIN_IDS.iter().any(|hidden_id| {
-        plugin_id == *hidden_id
-            || plugin_id == hidden_id.strip_prefix("agena.").unwrap_or(hidden_id)
-    })
-}
-
-fn name_belongs_to_plugin(name: &str, plugin_id: &str) -> bool {
-    name == plugin_id
-        || name
-            .strip_prefix(plugin_id)
-            .is_some_and(|suffix| suffix.starts_with('.'))
+    HIDDEN_STATELESS_MCP_PLUGIN_IDS.contains(&plugin_id)
 }
 
 fn tool_has_known_interactive_name(name: &str) -> bool {
@@ -110,7 +87,7 @@ mod tests {
 
     fn tool<'a>(
         name: &'a str,
-        plugin_id: Option<&'a str>,
+        plugin_id: &'a str,
         interactive: bool,
         task: bool,
     ) -> StatelessMcpToolMetadata<'a> {
@@ -125,16 +102,16 @@ mod tests {
     #[test]
     fn direct_workspace_tools_remain_exposed() {
         for candidate in [
-            tool("shell.run", Some("agena.shell"), false, false),
-            tool("shell.write", Some("agena.shell"), false, false),
-            tool("shell.resize", Some("agena.shell"), false, false),
-            tool("shell.signal", Some("agena.shell"), false, false),
-            tool("fs.write", Some("agena.fs"), false, false),
-            tool("code.search_ast", Some("agena.code"), false, false),
-            tool("lsp.definition", Some("agena.lsp"), false, false),
-            tool("notebook.edit_cell", Some("agena.notebook"), false, false),
-            tool("web.fetch", Some("agena.web"), false, false),
-            tool("third_party.execute", Some("vendor.plugin"), false, false),
+            tool("shell.run", "agena.shell", false, false),
+            tool("shell.write", "agena.shell", false, false),
+            tool("shell.resize", "agena.shell", false, false),
+            tool("shell.signal", "agena.shell", false, false),
+            tool("fs.write", "agena.fs", false, false),
+            tool("code.search_ast", "agena.code", false, false),
+            tool("lsp.definition", "agena.lsp", false, false),
+            tool("notebook.edit_cell", "agena.notebook", false, false),
+            tool("web.fetch", "agena.web", false, false),
+            tool("third_party.execute", "vendor.plugin", false, false),
         ] {
             assert!(
                 is_stateless_mcp_tool_exposed(candidate),
@@ -148,37 +125,24 @@ mod tests {
     fn interactive_and_task_tools_are_hidden_independently_of_plugin() {
         assert!(!is_stateless_mcp_tool_exposed(tool(
             "vendor.ask",
-            Some("vendor.plugin"),
+            "vendor.plugin",
             true,
             false,
         )));
         assert!(!is_stateless_mcp_tool_exposed(tool(
             "vendor.run_task",
-            Some("vendor.plugin"),
+            "vendor.plugin",
             false,
             true,
         )));
     }
 
     #[test]
-    fn every_internal_plugin_is_hidden_with_or_without_plugin_metadata() {
+    fn every_internal_plugin_is_hidden_by_current_plugin_identity() {
         for plugin_id in HIDDEN_STATELESS_MCP_PLUGIN_IDS {
-            let compact_id = plugin_id.strip_prefix("agena.").unwrap_or(plugin_id);
             assert!(!is_stateless_mcp_tool_exposed(tool(
                 "unrelated.name",
-                Some(plugin_id),
-                false,
-                false,
-            )));
-            assert!(!is_stateless_mcp_tool_exposed(tool(
-                &format!("{compact_id}.tool"),
-                None,
-                false,
-                false,
-            )));
-            assert!(!is_stateless_mcp_tool_exposed(tool(
-                &format!("{plugin_id}.tool"),
-                None,
+                plugin_id,
                 false,
                 false,
             )));
@@ -189,19 +153,19 @@ mod tests {
     fn browser_lifecycle_is_hidden_without_hiding_web_fetch() {
         assert!(!is_stateless_mcp_tool_exposed(tool(
             "web.browser_open",
-            Some("agena.web"),
+            "agena.web",
             false,
             false,
         )));
         assert!(!is_stateless_mcp_tool_exposed(tool(
             "agena.web.browser_wait",
-            None,
+            "agena.web",
             false,
             false,
         )));
         assert!(is_stateless_mcp_tool_exposed(tool(
             "web.fetch",
-            Some("agena.web"),
+            "agena.web",
             false,
             false,
         )));
@@ -212,10 +176,20 @@ mod tests {
         for name in ["sessionary.lookup", "planning.inspect", "memory_bank.read"] {
             assert!(is_stateless_mcp_tool_exposed(tool(
                 name,
-                Some("agena.utility"),
+                "agena.utility",
                 false,
                 false,
             )));
         }
+    }
+
+    #[test]
+    fn missing_plugin_identity_is_not_exposed() {
+        assert!(!is_stateless_mcp_tool_exposed(tool(
+            "third_party.execute",
+            "",
+            false,
+            false,
+        )));
     }
 }

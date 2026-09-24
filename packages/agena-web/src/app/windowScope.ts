@@ -17,19 +17,19 @@ function hasEmbeddedWorkspacePaneLocation(): boolean {
 }
 
 export const DEFAULT_WINDOW_SCOPE_ID = 'window-default'
-export const WORKSPACE_PANE_FOCUS_MESSAGE_TYPE = 'oc:workspace-pane-focus'
+export const WORKSPACE_PANE_FOCUS_MESSAGE_TYPE = 'agena:workspace-pane-focus'
 
 export function hasEmbeddedWorkspacePaneQuery(query: unknown): boolean {
   if (!query || typeof query !== 'object') return false
   const record = query as Record<string, unknown>
-  return firstQueryValue(record.ocEmbed) === '1'
+  return firstQueryValue(record.agenaEmbed) === '1'
 }
 
 export function hasEmbeddedWorkspacePaneSearch(search: string): boolean {
   const source = String(search || '').trim()
   if (!source) return false
   const params = new URLSearchParams(source.startsWith('?') ? source : `?${source}`)
-  return firstQueryValue(params.get('ocEmbed')) === '1'
+  return firstQueryValue(params.get('agenaEmbed')) === '1'
 }
 
 export function isEmbeddedWorkspacePaneContext(query?: unknown): boolean {
@@ -42,7 +42,7 @@ export function withEmbeddedWorkspaceScopeQuery(nextQuery: LocationQueryRaw, cur
 
   const out: LocationQueryRaw = {
     ...nextQuery,
-    ocEmbed: '1',
+    agenaEmbed: '1',
   }
   const windowId = readWindowIdFromQuery(currentQuery) || readWindowIdFromLocation()
   if (windowId && !firstQueryValue(out.windowId)) {
@@ -54,14 +54,14 @@ export function withEmbeddedWorkspaceScopeQuery(nextQuery: LocationQueryRaw, cur
 export function readWindowIdFromQuery(query: unknown): string {
   if (!query || typeof query !== 'object') return ''
   const record = query as Record<string, unknown>
-  return firstQueryValue(record.windowId || record.windowid)
+  return firstQueryValue(record.windowId)
 }
 
 export function readWindowIdFromSearch(search: string): string {
   const source = String(search || '').trim()
   if (!source) return ''
   const params = new URLSearchParams(source.startsWith('?') ? source : `?${source}`)
-  return firstQueryValue(params.get('windowId') || params.get('windowid'))
+  return firstQueryValue(params.get('windowId'))
 }
 
 export function readWindowIdFromLocation(): string {
@@ -83,7 +83,7 @@ export function readWorkspacePaneFocusWindowId(payload: unknown): string {
   const message = payload as Record<string, unknown>
   const messageType = String(message.type || '').trim()
   if (messageType !== WORKSPACE_PANE_FOCUS_MESSAGE_TYPE) return ''
-  return firstQueryValue(message.windowId || message.windowid)
+  return firstQueryValue(message.windowId)
 }
 
 export function normalizeWindowScopeId(raw: unknown, fallback = DEFAULT_WINDOW_SCOPE_ID): string {

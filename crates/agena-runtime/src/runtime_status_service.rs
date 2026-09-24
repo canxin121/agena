@@ -27,7 +27,6 @@ pub struct RuntimeStatusSnapshot {
     pub reload_interval_secs: u64,
     pub session_gc_enabled: bool,
     pub session_gc_interval_secs: u64,
-    pub session_cache: Option<agena_domain::SessionCacheStats>,
     pub model_catalog: agena_provider::ModelCatalogResponse,
     pub model_catalog_refreshing: bool,
     pub background_tasks: Vec<RuntimeBackgroundTask>,

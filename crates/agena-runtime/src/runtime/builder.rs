@@ -229,7 +229,7 @@ impl AgenaRuntime {
         }
 
         // Drain activity records onto the runtime's ephemeral live-signal
-        // stream. v2 has no event bus (14.3): the drain emits observer
+        // stream. There is no persisted event bus: the drain emits observer
         // notifications only, never persisted, never replayed.
         let runtime = Arc::new(runtime);
         // Finish fallible publication preflight before starting maintenance
@@ -298,7 +298,7 @@ impl AgenaRuntime {
     }
 
     /// Project delegated-task status into the unified background-activity
-    /// registry. v2 keeps subtask state in the `sessions` row; the facade's
+    /// registry. Subtask state is kept in the `sessions` row; the facade's
     /// [`SessionChange::SessionMetaUpdated`](agena_storage::SessionChange)
     /// notifications (emitted after commit, never persisted) drive this.
     fn spawn_subtask_activity_bridge(&self) {
@@ -2077,15 +2077,13 @@ impl agena_runtime::RuntimeStatusService for AgenaRuntime {
         };
 
         let session_manager = snapshot.session_manager();
-        let (session_cache, automation_available, scheduled_jobs) = match session_manager {
+        let session_runtime_available = session_manager.is_some();
+        let (automation_available, scheduled_jobs) = match session_manager {
             Some(manager) => (
-                Some(agena_runtime::SessionExecutionControl::cache_stats(
-                    manager.as_ref(),
-                )),
                 agena_runtime::SessionExecutionControl::scheduler_available(manager.as_ref()),
                 agena_runtime::SessionExecutionControl::list_scheduled_jobs(manager.as_ref()).await,
             ),
-            None => (None, false, Ok(Vec::new())),
+            None => (false, Ok(Vec::new())),
         };
         let plugin_manager = snapshot.plugin_manager();
         agena_runtime::RuntimeStatusSnapshot {
@@ -2096,13 +2094,12 @@ impl agena_runtime::RuntimeStatusService for AgenaRuntime {
             config_found: snapshot.config_found(),
             provider_ids,
             plugin_count: plugin_manager.plugins().len(),
-            session_runtime_available: session_cache.is_some(),
+            session_runtime_available,
             watch_paths: snapshot.watch_paths().to_vec(),
             reload_enabled: snapshot.reload_enabled(),
             reload_interval_secs: snapshot.reload_poll_interval().as_secs(),
             session_gc_enabled: snapshot.session_gc_enabled(),
             session_gc_interval_secs: snapshot.session_gc_interval().as_secs(),
-            session_cache,
             model_catalog: snapshot.model_catalog_response(),
             model_catalog_refreshing: self.model_catalog_refresh_active(),
             background_tasks: self.background_tasks(),

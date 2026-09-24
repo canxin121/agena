@@ -588,7 +588,7 @@ fn session_query_error(error: agena_runtime::SessionQueryError) -> ApplicationEr
     ApplicationError::from_failure(*error.failure)
 }
 
-/// Project a session's v2 part transcript for presentation. Reads the runtime
+/// Project a session's part transcript for presentation. Reads the runtime
 /// part projection (`list_projected_runs`) and flattens each run into its
 /// run marker plus content parts (shared `project_session_transcript`).
 async fn session_transcript_parts(

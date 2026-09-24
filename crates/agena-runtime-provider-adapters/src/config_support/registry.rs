@@ -12,8 +12,9 @@ use crate::{
         AmazonBedrockAdapter, AnthropicAdapter, AnthropicAdapterOptions, CatalogedModelsProvider,
         GeminiAdapter, GeminiAdapterOptions, GitlabProvider, ManagedCredential, ModelId,
         ModelRuntime, ModelSpeedMode, ModelThinkingMode, MultiAdapterProvider, OllamaAdapter,
-        OpenAiChatCompletionsAdapter, OpenAiChatCompletionsAdapterOptions, OpenAiResponsesAdapter, OpenAiResponsesAdapterOptions,
-        ProviderModelRoute, ProviderRegistry, parse_sap_ai_core_service_key,
+        OpenAiChatCompletionsAdapter, OpenAiChatCompletionsAdapterOptions, OpenAiResponsesAdapter,
+        OpenAiResponsesAdapterOptions, ProviderModelRoute, ProviderRegistry,
+        parse_sap_ai_core_service_key,
     },
 };
 use agena_provider::CompletionRequest;

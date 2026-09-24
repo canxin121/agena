@@ -19,7 +19,7 @@ function row(input: Partial<RunningSessionRow> & Pick<RunningSessionRow, 'id'>):
 test('running session rows use parent IDs from row/session and hide children until expanded', () => {
   const rows = [
     row({ id: 'parent', rootId: 'parent' }),
-    row({ id: 'child', depth: 1, rootId: 'parent', session: { id: 'child', parentID: 'parent' } }),
+    row({ id: 'child', depth: 1, rootId: 'parent', parentId: 'parent' }),
   ]
 
   const collapsed = buildRunningSessionRows(rows, new Set())
@@ -68,7 +68,7 @@ test('running session rows preserve standalone sessions', () => {
 })
 
 test('running session rows never surface child sessions as top-level roots', () => {
-  const childOnlyRows = [row({ id: 'child', session: { id: 'child', parentID: 'parent' } })]
+  const childOnlyRows = [row({ id: 'child', parentId: 'parent' })]
 
   const collapsed = buildRunningSessionRows(childOnlyRows, new Set())
   assert.deepEqual(

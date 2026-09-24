@@ -56,12 +56,6 @@ pub trait HostClient: Send + Sync + 'static {
 
     async fn read_config(&self, path: Option<String>) -> Result<serde_json::Value>;
 
-    /// Synchronous reload is available only in hosts that can preserve the
-    /// calling plugin. Agena rejects it; use request_config_reload instead.
-    async fn reload_config(&self) -> Result<HostConfigReloadResponse> {
-        Err(unavailable())
-    }
-
     /// Queue a reload after the originating plugin call (including its nested
     /// calls or stream) finishes. Return acceptance, never a completed report.
     /// Do not wait for completion inside the originating call: it is a barrier.
@@ -1585,14 +1579,6 @@ pub struct HostDisplayRemoveRequest {
 /// Response of removing a display block.
 pub struct HostDisplayRemoveResponse {
     pub removed: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-/// Response of a config reload.
-pub struct HostConfigReloadResponse {
-    pub previous_generation: u64,
-    pub generation: u64,
-    pub loaded_at: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

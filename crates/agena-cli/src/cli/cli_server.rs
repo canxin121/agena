@@ -81,7 +81,7 @@ pub(super) struct ServerMcpBackend {
 fn mcp_tool_is_exposed(tool: &OperatorToolResource) -> bool {
     is_stateless_mcp_tool_exposed(StatelessMcpToolMetadata {
         name: tool.name.as_str(),
-        plugin_id: Some(tool.plugin_id.as_str()),
+        plugin_id: tool.plugin_id.as_str(),
         interactive: tool.interactive,
         task: tool.task,
     })
@@ -2516,7 +2516,7 @@ mod tests {
             destructive: false,
             open_world: false,
             task: false,
-            plugin_id: plugin_id.unwrap_or("test.unclassified").to_owned(),
+            plugin_id: plugin_id.unwrap_or_default().to_owned(),
         }
     }
 
@@ -2537,7 +2537,6 @@ mod tests {
             "agena.chatgpt",
             "agena.gemini",
             "agena.claude",
-            "agena.openai",
             "agena.schema_lab",
             "agena.interaction",
             "agena.session",
@@ -2570,7 +2569,7 @@ mod tests {
         let tools = vec![
             operator_tool("fs.stat", false, Some("agena.fs")),
             operator_tool("interaction.ask", true, Some("agena.interaction")),
-            operator_tool("chatgpt.web_search", false, Some("agena.chatgpt")),
+            operator_tool("chatgpt.cloud_web_search", false, Some("agena.chatgpt")),
             operator_tool("plan.get", false, Some("agena.plan")),
             operator_tool("settings.get", false, Some("agena.settings")),
             operator_tool("mcp.tools.call", false, Some("agena.mcp")),
@@ -2578,8 +2577,11 @@ mod tests {
 
         assert!(mcp_tool_is_callable(&tools, "fs.stat"));
         assert!(!mcp_tool_is_callable(&tools, "interaction.ask"));
-        assert!(!mcp_tool_is_callable(&tools, "chatgpt.web_search"));
-        assert!(!mcp_tool_is_callable(&tools, "agena.chatgpt.web_search"));
+        assert!(!mcp_tool_is_callable(&tools, "chatgpt.cloud_web_search"));
+        assert!(!mcp_tool_is_callable(
+            &tools,
+            "agena.chatgpt.cloud_web_search"
+        ));
         assert!(!mcp_tool_is_callable(&tools, "plan.get"));
         assert!(!mcp_tool_is_callable(&tools, "settings.get"));
         assert!(!mcp_tool_is_callable(&tools, "mcp.tools.call"));
@@ -2587,14 +2589,14 @@ mod tests {
     }
 
     #[test]
-    fn mcp_catalog_uses_compact_name_fallback_for_older_servers() {
+    fn mcp_catalog_requires_plugin_identity_for_every_name() {
         assert!(!mcp_tool_is_exposed(&operator_tool(
-            "chatgpt.web_search",
+            "chatgpt.cloud_web_search",
             false,
             None,
         )));
         assert!(!mcp_tool_is_exposed(&operator_tool(
-            "agena.gemini.google_search",
+            "agena.gemini.cloud_google_search",
             false,
             None,
         )));
@@ -2611,10 +2613,16 @@ mod tests {
             false,
             None,
         )));
-        assert!(mcp_tool_is_exposed(&operator_tool(
+        assert!(!mcp_tool_is_exposed(&operator_tool(
             "custom.chatgpt_helper",
             false,
             None,
+        )));
+        assert!(!mcp_tool_is_exposed(&operator_tool("fs.read", false, None)));
+        assert!(mcp_tool_is_exposed(&operator_tool(
+            "custom.chatgpt_helper",
+            false,
+            Some("vendor.plugin"),
         )));
     }
 

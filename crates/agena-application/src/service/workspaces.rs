@@ -802,7 +802,7 @@ fn normalize_workspace_path(workspace_path: &str) -> Result<String, String> {
 /// Lexical normalization alone treats filesystem aliases such as macOS
 /// `/var` and `/private/var` (or an ordinary symlink) as different database
 /// workspaces. Canonicalize paths that exist before lookup/create so every
-/// client converges on one id. Nonexistent paths retain the historical lexical
+/// client converges on one id. Nonexistent paths retain the stable lexical
 /// behavior and can still be registered for later creation.
 fn canonical_workspace_identity(workspace_path: &str) -> Result<String, String> {
     let normalized = normalize_workspace_path(workspace_path)?;

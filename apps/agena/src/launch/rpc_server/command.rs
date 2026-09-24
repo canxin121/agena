@@ -1,6 +1,6 @@
 //! One-shot command dispatch.
 //!
-//! Server-backed commands and explicitly unavailable compatibility commands
+//! Server-backed commands and commands that do not require Runtime bootstrap
 //! skip Runtime bootstrap preflight. Pure local presentation/marketplace
 //! commands may still read local configuration, but the CLI crate has no
 //! Runtime bootstrap or execution-lease path.
@@ -50,7 +50,7 @@ pub(crate) async fn run_command(mut cli: AgenaCli) -> Result<(), AgenaProcessErr
             )
     );
     let tracing = if runtime_free_command {
-        // Thin clients and explicitly unavailable compatibility commands do
+        // Thin clients and Runtime-free commands do
         // not bootstrap or preflight Runtime config.
         agena_runtime::RuntimeTracingConfiguration::default()
     } else {

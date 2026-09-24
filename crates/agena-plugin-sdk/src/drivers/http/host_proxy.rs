@@ -90,10 +90,6 @@ impl HostClient for HostClientProxy {
         self.run(self.current().read_config(path)).await
     }
 
-    async fn reload_config(&self) -> Result<HostConfigReloadResponse> {
-        self.run(self.current().reload_config()).await
-    }
-
     async fn request_config_reload(&self) -> Result<HostConfigReloadRequestResponse> {
         self.run(self.current().request_config_reload()).await
     }

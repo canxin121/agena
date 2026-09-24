@@ -66,7 +66,10 @@ impl MarketplaceCache {
         }
         let text = fs::read_to_string(&path)?;
         if text.trim().is_empty() {
-            return Ok(InstalledRecords::default());
+            return Err(MarketplaceError::Config(format!(
+                "installed plugin state at {} is empty; delete it and reinstall current plugins",
+                path.display()
+            )));
         }
         Ok(serde_json::from_str(&text)?)
     }
@@ -180,13 +183,14 @@ mod tests {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 /// Installed plugin records.
 pub struct InstalledRecords {
-    #[serde(default)]
     pub records: BTreeMap<String, InstalledRecord>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 /// One installed plugin record.
 pub struct InstalledRecord {
     pub plugin_id: String,
@@ -200,20 +204,15 @@ pub struct InstalledRecord {
     pub installed_at: DateTime<Utc>,
     /// Registry id used to fetch this plugin. Required for `upgrade` and
     /// `outdated` to know which index to consult.
-    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub registry_id: String,
     /// Registry index URL stored verbatim so upgrades can re-resolve without
     /// requiring the user to pass `--registry` every time.
-    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub registry_url: String,
     /// Trust policy captured at install time. Upgrades must not silently
     /// weaken signature or GitHub provenance requirements.
-    #[serde(default)]
     pub require_signature: bool,
-    #[serde(default)]
     pub require_github_distribution: bool,
     /// True when the artifact was extracted from a tar.gz archive.
-    #[serde(default)]
     pub archive_extracted: bool,
 }
 
@@ -228,7 +227,7 @@ pub fn default_cache_root() -> PathBuf {
         .unwrap_or_else(|error| {
             tracing::error!(
                 diagnostic = %error,
-                "plugin marketplace home is unavailable; using the current-directory compatibility path"
+                "plugin marketplace home is unavailable; using the current-directory fallback path"
             );
             PathBuf::from(".")
         });

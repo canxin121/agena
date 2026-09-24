@@ -1,4 +1,4 @@
-//! Model resolution for run options, migrated from
+//! Model resolution for run options. Previously located in
 //! `agena-tui-backend/src/backend_provider/selection.rs`
 //! (`resolved_model_for_run_options`, `resolved_model_default_modes`).
 
@@ -41,7 +41,7 @@ impl Application {
     /// request does not pin a model, the global default selection's
     /// thinking/speed modes take precedence; otherwise the resolved model's
     /// own defaults are used.
-    /// Thinking falls back to the first listed mode for compatibility with
+    /// Thinking falls back to the first listed mode when
     /// catalogs that omit a thinking default. Speed only uses an explicitly
     /// marked default; `None` means the provider/model native speed default
     /// and therefore no speed override. Returns `(None, None)` when the model

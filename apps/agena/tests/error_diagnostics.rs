@@ -7,11 +7,8 @@ fn server_bootstrap_prints_the_complete_configuration_error_chain() {
     let workspace = root.path().join("workspace");
     std::fs::create_dir_all(home.join("agena")).expect("create config directory");
     std::fs::create_dir_all(&workspace).expect("create workspace");
-    std::fs::write(
-        home.join("agena/agena.json"),
-        r#"{"providers":{"default":"legacy"}}"#,
-    )
-    .expect("write deliberately retired configuration");
+    std::fs::write(home.join("agena/agena.json"), r#"{"obsolete":true}"#)
+        .expect("write deliberately invalid configuration");
 
     let output = Command::new(env!("CARGO_BIN_EXE_agena"))
         .args([
@@ -35,15 +32,13 @@ fn server_bootstrap_prints_the_complete_configuration_error_chain() {
 
     assert!(
         !output.status.success(),
-        "retired provider default unexpectedly started the server"
+        "invalid configuration unexpectedly started the server"
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("Error: configuration error:"), "{stderr}");
     assert!(stderr.contains("failed to build agena runtime"), "{stderr}");
-    assert!(stderr.contains("config validation failed"), "{stderr}");
-    assert!(stderr.contains("providers.default"), "{stderr}");
-    assert!(stderr.contains("is no longer supported"), "{stderr}");
-    assert!(stderr.contains("select a model explicitly"), "{stderr}");
+    assert!(stderr.contains("failed to parse config file"), "{stderr}");
+    assert!(stderr.contains("unknown field `obsolete`"), "{stderr}");
     assert!(!stderr.contains("Internal(\""), "{stderr}");
     assert_ne!(stderr.trim(), "Error: failed to build agena runtime");
 }

@@ -1,21 +1,11 @@
-//! Schema lifecycle for the dedicated scheduler SQLite database.
+//! Current schema for the dedicated scheduler SQLite database.
 //!
-//! The scheduler keeps its own SQLite database (`~/.agena/scheduler.db` by
-//! default) rather than sharing the chat database, so its tables and version
-//! marker live here instead of `agena-storage-sqlite`. Like the chat schema,
-//! versioning uses `PRAGMA user_version`; version zero means "not yet created"
-//! and a fresh database is created in one DDL transaction. Incompatible older
-//! versions are rejected rather than migrated.
-//!
-//! The scheduler's version space is independent from the chat schema's and
-//! starts at 1.
+//! The scheduler has no database migration layer. Empty databases are created
+//! from the current declarations; non-empty databases must match exactly.
 
 use std::path::{Path, PathBuf};
 
 use sea_orm::{ConnectionTrait, DatabaseConnection, DbErr, Statement, TransactionTrait};
-
-/// Current scheduler SQLite schema version written to `PRAGMA user_version`.
-pub const CURRENT_SCHEMA_VERSION: i64 = 1;
 
 /// How long `initialize_schema` waits for a concurrent process to finish
 /// building the schema before giving up.
@@ -94,18 +84,14 @@ async fn schema_lock_path(db: &DatabaseConnection) -> Result<Option<PathBuf>, Db
     Ok(Some(PathBuf::from(lock_path)))
 }
 
-/// Creates the scheduler schema and applies its version marker atomically.
-///
-/// Serialized across processes by a filesystem lock so concurrent cold starts
-/// of the same database file cannot race the WAL switch or the DDL transaction.
-/// A version-0 database is created from scratch; a database already at
-/// [`CURRENT_SCHEMA_VERSION`] is left untouched; anything else is rejected
-/// (Agena does not migrate incompatible databases).
+/// Create the current scheduler schema or validate an existing one exactly.
 pub async fn initialize_schema(db: &DatabaseConnection) -> Result<(), DbErr> {
     let _lock = SchemaLock::acquire(db).await?;
-    // Connection hardening: WAL journal (no-op for in-memory databases),
-    // bounded busy timeout, and NORMAL durability — identical to the chat
-    // schema so the scheduler database behaves the same under concurrency.
+    let objects = schema_objects(db).await?;
+    let fresh = objects.is_empty();
+    if !fresh {
+        validate_existing_schema(&objects)?;
+    }
     for pragma in [
         "PRAGMA journal_mode = WAL",
         "PRAGMA busy_timeout = 15000",
@@ -117,42 +103,73 @@ pub async fn initialize_schema(db: &DatabaseConnection) -> Result<(), DbErr> {
         ))
         .await?;
     }
-    let current_version = read_schema_version(db).await?;
-    match current_version {
-        0 => {
-            let txn = db.begin().await?;
-            for statement in TABLES.iter().chain(INDEXES) {
-                txn.execute(Statement::from_string(
-                    txn.get_database_backend(),
-                    (*statement).to_owned(),
-                ))
-                .await?;
-            }
-            txn.execute(Statement::from_string(
-                txn.get_database_backend(),
-                format!("PRAGMA user_version = {CURRENT_SCHEMA_VERSION}"),
-            ))
-            .await?;
-            txn.commit().await
-        }
-        v if v == CURRENT_SCHEMA_VERSION => Ok(()),
-        v => Err(DbErr::Custom(format!(
-            "scheduler database schema version {v} is incompatible with the supported version \
-             {CURRENT_SCHEMA_VERSION}; Agena does not migrate incompatible databases, so create a \
-             fresh database"
-        ))),
+    if !fresh {
+        return Ok(());
     }
+    let txn = db.begin().await?;
+    for statement in TABLES.iter().chain(INDEXES) {
+        txn.execute(Statement::from_string(
+            txn.get_database_backend(),
+            (*statement).to_owned(),
+        ))
+        .await?;
+    }
+    txn.commit().await
 }
 
-async fn read_schema_version(db: &DatabaseConnection) -> Result<i64, DbErr> {
-    let row = db
-        .query_one(Statement::from_string(
-            db.get_database_backend(),
-            "PRAGMA user_version".to_owned(),
+fn declaration(sql: &str) -> Result<(String, String, String), DbErr> {
+    for (prefix, kind) in [
+        ("CREATE TABLE IF NOT EXISTS ", "table"),
+        ("CREATE INDEX IF NOT EXISTS ", "index"),
+        ("CREATE UNIQUE INDEX IF NOT EXISTS ", "index"),
+    ] {
+        if let Some(rest) = sql.strip_prefix(prefix) {
+            let name = rest.split([' ', '(']).next().unwrap_or_default();
+            if !name.is_empty() {
+                return Ok((
+                    kind.into(),
+                    name.into(),
+                    sql.replacen(" IF NOT EXISTS ", " ", 1),
+                ));
+            }
+        }
+    }
+    Err(DbErr::Custom(
+        "invalid internal scheduler schema declaration".into(),
+    ))
+}
+
+async fn schema_objects<C: ConnectionTrait>(
+    db: &C,
+) -> Result<std::collections::BTreeMap<(String, String), String>, DbErr> {
+    db.query_all(Statement::from_string(
+        db.get_database_backend(),
+        "SELECT type, name, sql FROM sqlite_schema WHERE name NOT GLOB 'sqlite_*'",
+    ))
+    .await?
+    .into_iter()
+    .map(|row| {
+        Ok((
+            (row.try_get("", "type")?, row.try_get("", "name")?),
+            row.try_get("", "sql")?,
         ))
-        .await?
-        .ok_or_else(|| DbErr::Custom("SQLite did not return user_version".to_owned()))?;
-    row.try_get("", "user_version")
+    })
+    .collect()
+}
+
+fn validate_existing_schema(
+    actual: &std::collections::BTreeMap<(String, String), String>,
+) -> Result<(), DbErr> {
+    let mut expected = std::collections::BTreeMap::new();
+    for sql in TABLES.iter().chain(INDEXES) {
+        let (kind, name, stored) = declaration(sql)?;
+        expected.insert((kind, name), stored);
+    }
+    if actual == &expected {
+        Ok(())
+    } else {
+        Err(DbErr::Custom("scheduler database schema does not match this Agena build; delete it and start with a fresh database".into()))
+    }
 }
 
 /// `agena_scheduler_jobs` mirrors the hot scheduling fields of `ScheduledJob`
@@ -165,7 +182,7 @@ async fn read_schema_version(db: &DatabaseConnection) -> Result<i64, DbErr> {
 /// columns are derived copies of the JSON, written together with it.
 const TABLES: &[&str] = &[
     "CREATE TABLE IF NOT EXISTS agena_scheduler_jobs (id TEXT PRIMARY KEY, job_json JSON NOT NULL, next_fire_at_ms INTEGER NULL, retry_at_ms INTEGER NULL, delivery_key TEXT NULL, claimed_at_ms INTEGER NULL, paused INTEGER NOT NULL DEFAULT 0, completed INTEGER NOT NULL DEFAULT 0, updated_at_ms INTEGER NOT NULL)",
-    "CREATE TABLE IF NOT EXISTS agena_scheduler_history (id INTEGER PRIMARY KEY AUTOINCREMENT, job_id TEXT NOT NULL, run_json JSON NOT NULL, finished_at_ms INTEGER NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS agena_scheduler_history (id INTEGER PRIMARY KEY AUTOINCREMENT, job_id TEXT NOT NULL, owner_workspace TEXT NULL, owner_session_id INTEGER NULL, run_json JSON NOT NULL, finished_at_ms INTEGER NOT NULL)",
 ];
 
 const INDEXES: &[&str] = &[
@@ -177,64 +194,33 @@ const INDEXES: &[&str] = &[
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use sea_orm::{ConnectionTrait, Database, DatabaseBackend, Statement};
 
-    use super::*;
-
-    async fn read_version(db: &DatabaseConnection) -> i64 {
-        db.query_one(Statement::from_string(
-            DatabaseBackend::Sqlite,
-            "PRAGMA user_version".to_owned(),
-        ))
-        .await
-        .expect("query user_version")
-        .expect("user_version row")
-        .try_get("", "user_version")
-        .expect("user_version value")
+    #[tokio::test]
+    async fn fresh_scheduler_database_is_created_and_reopens_exactly() {
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        initialize_schema(&db).await.unwrap();
+        let before = schema_objects(&db).await.unwrap();
+        validate_existing_schema(&before).unwrap();
+        initialize_schema(&db).await.unwrap();
+        assert_eq!(schema_objects(&db).await.unwrap(), before);
     }
 
     #[tokio::test]
-    async fn fresh_scheduler_database_initializes_at_current_version() {
-        let db = Database::connect("sqlite::memory:")
-            .await
-            .expect("connect in-memory SQLite");
-        initialize_schema(&db)
-            .await
-            .expect("initialize scheduler schema");
-        assert_eq!(read_version(&db).await, CURRENT_SCHEMA_VERSION);
-        for table in ["agena_scheduler_jobs", "agena_scheduler_history"] {
-            let count: i64 = db
-                .query_one(Statement::from_string(
-                    DatabaseBackend::Sqlite,
-                    format!(
-                        "SELECT COUNT(*) AS count FROM sqlite_master \
-                         WHERE type = 'table' AND name = '{table}'"
-                    ),
-                ))
-                .await
-                .expect("query table")
-                .expect("table row")
-                .try_get("", "count")
-                .expect("count value");
-            assert_eq!(count, 1, "scheduler table {table} must exist");
-        }
-    }
-
-    #[tokio::test]
-    async fn incompatible_scheduler_database_is_rejected() {
-        let db = Database::connect("sqlite::memory:")
-            .await
-            .expect("connect in-memory SQLite");
+    async fn modified_scheduler_database_is_rejected_without_repair() {
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        initialize_schema(&db).await.unwrap();
         db.execute(Statement::from_string(
             DatabaseBackend::Sqlite,
-            "PRAGMA user_version = 99".to_owned(),
+            "ALTER TABLE agena_scheduler_jobs ADD COLUMN obsolete TEXT",
         ))
         .await
-        .expect("set schema version");
-
-        let error = initialize_schema(&db)
+        .unwrap();
+        let before = schema_objects(&db).await.unwrap();
+        initialize_schema(&db)
             .await
-            .expect_err("reject incompatible scheduler schema");
-        assert!(error.to_string().contains("does not migrate"));
+            .expect_err("modified schema must be rejected");
+        assert_eq!(schema_objects(&db).await.unwrap(), before);
     }
 }

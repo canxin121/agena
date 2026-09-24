@@ -21,9 +21,10 @@ Engineering guides:
 
 - [Development validation](docs/development.md)
 - [Interactive terminal tools](docs/interactive-terminals.md)
-- [Vendor-hosted tool boundary and migration](docs/provider-hosted-tools.md)
+- [Vendor-hosted cloud tool boundary](docs/provider-hosted-tools.md)
 - [Explicit media input, cloud files and clipboard](docs/media-inputs.md)
-- [Technical debt and reliability audit](docs/technical-debt-audit.md)
+- [Current data and compatibility contract](docs/current-data-contract.md)
+- [Provider adapter gate](docs/provider-adapter-gate.md)
 
 ## Install
 
@@ -39,8 +40,9 @@ Windows PowerShell:
 irm https://raw.githubusercontent.com/canxin121/agena/master/scripts/agena/install.ps1 | iex
 ```
 
-Only beta GitHub Releases are published. The installer discovers the newest
-`agena-vX.Y.Z-beta.N` prerelease, verifies its SHA-256, installs the native binary and Web
+GitHub Releases remain beta releases. The repository and binaries use version
+`0.1.0`; beta tags use `agena-v0.1.0-beta.N`. The installer discovers the
+newest beta release, verifies its SHA-256, installs the native binary and Web
 frontend, and starts Agena as a per-user service. See the
 [installation guide](docs/installation.md) for upgrade, stop/start, uninstall,
 custom workspace/port, and pinned-version commands.

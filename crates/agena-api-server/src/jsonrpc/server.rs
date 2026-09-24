@@ -166,7 +166,7 @@ where
                                     .map(|part| part.state.clone())
                                     .unwrap_or_else(|| "submitted".to_owned()),
                             });
-                        // Deliver the accepted parts as v2 part patches so live
+                        // Deliver the accepted parts as part patches so live
                         // clients can reconcile without re-reading the session.
                         for part in &result.parts {
                             self.events.publish(AppServerNotification::PartAdded {

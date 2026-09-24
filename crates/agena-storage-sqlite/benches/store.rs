@@ -2,7 +2,7 @@
 //!
 //! This intentionally uses a tiny custom harness instead of adding a benchmark
 //! framework dependency. It reports wall-clock latency for the three mandated
-//! v2 paths: warm facade reads, indexed usage aggregation, and D10 bounded
+//! Current store paths: warm facade reads, indexed usage aggregation, and D10 bounded
 //! streaming (including the run-end tail flush).
 
 use std::error::Error;
@@ -36,7 +36,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
 async fn run() -> Result<(), Box<dyn Error>> {
     let directory = tempfile::tempdir()?;
-    let database_path = directory.path().join("v2-store-bench.db");
+    let database_path = directory.path().join("store-bench.db");
     let db = Arc::new(
         Database::connect(format!("sqlite://{}?mode=rwc", database_path.display())).await?,
     );
@@ -52,7 +52,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
             parent_id: None,
             relation_kind: SessionRelationKind::Root,
             cutoff_part_id: None,
-            title: "v2 store benchmark".to_owned(),
+            title: "store benchmark".to_owned(),
             task_id: None,
             config_json: None,
             provider_anchors_json: None,
@@ -270,7 +270,7 @@ async fn benchmark_streaming(
 fn report(name: &str, elapsed: Duration, iterations: usize) {
     let nanos_per_iteration = elapsed.as_nanos() / iterations as u128;
     println!(
-        "v2_store/{name}: {nanos_per_iteration} ns/op ({iterations} iterations, {:.3?} total)",
+        "store/{name}: {nanos_per_iteration} ns/op ({iterations} iterations, {:.3?} total)",
         elapsed
     );
 }

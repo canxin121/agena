@@ -19,8 +19,8 @@ use thiserror::Error;
 use crate::{McpCredentialState, TokenStore};
 
 pub const MCP_KEYRING_SERVICE: &str = "agena.mcp";
-const KEYRING_KEY_PREFIX: &str = "mcp-bearer-v1-";
-const OAUTH_KEYRING_KEY_PREFIX: &str = "mcp-oauth-v1-";
+const KEYRING_KEY_PREFIX: &str = "mcp-bearer-";
+const OAUTH_KEYRING_KEY_PREFIX: &str = "mcp-oauth-";
 /// Keep this aligned with rmcp's refresh threshold. The health projection is
 /// intentionally read-only: it tells callers that a connection is likely to
 /// refresh soon, but never performs that refresh itself.

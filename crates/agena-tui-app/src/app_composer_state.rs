@@ -1036,7 +1036,7 @@ fn text_artifact_composer_activity(text: String) -> agena_domain::ComposerActivi
             label: Some(format!("paste {count} chars")),
         }),
         provenance: agena_domain::ActivityProvenance {
-            source: Some("legacy-test-fixture".to_owned()),
+            source: Some("text-artifact-test-fixture".to_owned()),
             content_hash: None,
             plugin_id: None,
         },

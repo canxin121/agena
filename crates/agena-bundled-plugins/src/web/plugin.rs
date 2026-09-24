@@ -1169,8 +1169,7 @@ impl WebPlugin {
     /// Register the browser activity adapter on first real browser use. The
     /// runtime installs its concrete callback host only after static plugin
     /// initialization has completed; doing this lazily avoids calling the
-    /// temporary `NoopHostClient` during startup while retaining compatibility
-    /// with hosts that do not implement activity sources.
+    /// temporary `NoopHostClient` during startup.
     async fn ensure_browser_activity_source(&self) -> SdkResult<()> {
         let host = self.state()?.host.clone();
         let state = Arc::clone(&self.browser_state);
@@ -1917,16 +1916,7 @@ impl WebPlugin {
         let owner = browser_owner(context)?;
         let url = prepare_fetch_url(input.url.as_str()).map_err(crawl_error_to_plugin)?;
         self.validate_network_target(&url).await?;
-        if let Err(error) = self.ensure_browser_activity_source().await {
-            // Activity-source support is optional for older hosts. Browser
-            // navigation remains usable; the host's generic activity fallback
-            // is still enough to show the session itself.
-            tracing::debug!(
-                operation = "register browser activity source",
-                diagnostic = %error.diagnostic_message(),
-                "browser activity source is unavailable"
-            );
-        }
+        self.ensure_browser_activity_source().await?;
         let preflight_redirects = self.browser_preflight_redirects(&url).await?;
         let browser = self.browser_client(None).await?;
         let browser_context_id = self.browser_context_for_owner(&browser, &owner).await?;

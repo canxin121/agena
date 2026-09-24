@@ -93,7 +93,7 @@ mod tests {
     #[test]
     fn anyhow_conversion_keeps_bootstrap_category_and_root_cause() {
         let bootstrap = agena_runtime::RuntimeBootstrapError::configuration(
-            "config validation failed: providers.default is no longer supported",
+            "config validation failed: unknown field `obsolete`",
         );
         let error = anyhow::Error::new(bootstrap).context("failed to build agena runtime");
 
@@ -103,7 +103,7 @@ mod tests {
         assert!(matches!(process, AgenaProcessError::Configuration(_)));
         assert!(rendered.starts_with("configuration error:"));
         assert!(rendered.contains("failed to build agena runtime"));
-        assert!(rendered.contains("providers.default is no longer supported"));
+        assert!(rendered.contains("unknown field `obsolete`"));
         assert!(!rendered.contains("Internal(\""));
     }
 

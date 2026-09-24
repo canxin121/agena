@@ -24,7 +24,7 @@ pub(crate) fn default_draft_store_path() -> PathBuf {
         .unwrap_or_else(|error| {
             tracing::error!(
                 diagnostic = %error,
-                "TUI draft-store home is unavailable; using the current-directory compatibility path"
+                "TUI draft-store home is unavailable; using the current-directory fallback path"
             );
             PathBuf::from(".")
         });
@@ -40,7 +40,7 @@ pub(crate) fn default_prompt_history_path() -> PathBuf {
         .unwrap_or_else(|error| {
             tracing::error!(
                 diagnostic = %error,
-                "TUI prompt-history home is unavailable; using the current-directory compatibility path"
+                "TUI prompt-history home is unavailable; using the current-directory fallback path"
             );
             PathBuf::from(".")
         });

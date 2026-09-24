@@ -28,7 +28,7 @@ const TERMINAL_UI_STATE_FILENAME: &str = "terminal-ui-state.json";
 const MAX_WORKSPACE_KEY_LEN: usize = 80;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct TerminalUiFolder {
     pub id: String,
     pub name: String,
@@ -41,7 +41,7 @@ struct SequencedTerminalUiStateEvent {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct TerminalUiSessionMeta {
     #[serde(default)]
     pub name: Option<String>,
@@ -58,19 +58,13 @@ fn is_false(value: &bool) -> bool {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct TerminalUiState {
-    #[serde(default)]
     pub version: u64,
-    #[serde(default)]
     pub updated_at: u64,
-    #[serde(default)]
     pub active_session_id: Option<String>,
-    #[serde(default)]
     pub session_ids: Vec<String>,
-    #[serde(default)]
     pub session_meta_by_id: BTreeMap<String, TerminalUiSessionMeta>,
-    #[serde(default)]
     pub folders: Vec<TerminalUiFolder>,
 }
 
@@ -110,26 +104,26 @@ impl TerminalUiStateStore {
         }
     }
 
-    async fn read(&self) -> TerminalUiState {
+    async fn read(&self) -> Result<TerminalUiState, String> {
         {
             let guard = self.cache.read().await;
             if let Some(state) = guard.as_ref() {
-                return state.clone();
+                return Ok(state.clone());
             }
         }
 
-        let loaded = self.load_from_disk().await;
+        let loaded = self.load_from_disk().await?;
         let mut guard = self.cache.write().await;
         if let Some(existing) = guard.as_ref() {
-            return existing.clone();
+            return Ok(existing.clone());
         }
         *guard = Some(loaded.clone());
-        loaded
+        Ok(loaded)
     }
 
     async fn replace(&self, body: TerminalUiState) -> Result<TerminalUiState, String> {
         let _guard = self.put_lock.lock().await;
-        let current = self.load_from_disk().await;
+        let current = self.load_from_disk().await?;
         self.write_cache(current.clone()).await;
 
         let mut next = sanitize_state(body);
@@ -142,44 +136,42 @@ impl TerminalUiStateStore {
         Ok(next)
     }
 
-    async fn load_from_disk(&self) -> TerminalUiState {
+    async fn load_from_disk(&self) -> Result<TerminalUiState, String> {
         let raw = match tokio::fs::read_to_string(&self.path).await {
             Ok(raw) => raw,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return TerminalUiState::default();
+                return Ok(TerminalUiState::default());
             }
             Err(error) => {
-                tracing::error!(
-                    path = %self.path.display(),
-                    diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
-                        "failed to read persisted terminal UI state",
-                        &error,
+                return Err(agena_failure::diagnostic::format_error_chain_with_context(
+                    format!(
+                        "failed to read persisted terminal UI state at {}",
+                        self.path.display()
                     ),
-                    "persisted terminal UI state could not be loaded"
-                );
-                return TerminalUiState::default();
+                    &error,
+                ));
             }
         };
 
         let trimmed = raw.trim();
         if trimmed.is_empty() {
-            return TerminalUiState::default();
+            return Err(format!(
+                "persisted terminal UI state at {} is empty; delete it and recreate current state",
+                self.path.display()
+            ));
         }
 
-        match serde_json::from_str::<TerminalUiState>(trimmed) {
-            Ok(state) => sanitize_state(state),
-            Err(error) => {
-                tracing::error!(
-                    path = %self.path.display(),
-                    diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
-                        "failed to decode persisted terminal UI state",
-                        &error,
+        serde_json::from_str::<TerminalUiState>(trimmed)
+            .map(sanitize_state)
+            .map_err(|error| {
+                agena_failure::diagnostic::format_error_chain_with_context(
+                    format!(
+                        "persisted terminal UI state at {} does not match this Agena build; delete it and recreate current state",
+                        self.path.display()
                     ),
-                    "persisted terminal UI state is invalid"
-                );
-                TerminalUiState::default()
-            }
-        }
+                    &error,
+                )
+            })
     }
 
     async fn persist_to_disk(&self, state: &TerminalUiState) -> Result<(), String> {
@@ -456,7 +448,14 @@ pub(crate) struct TerminalUiStateEventsQuery {
 
 pub(crate) async fn terminal_ui_state_get(State(state): State<Arc<crate::AppState>>) -> Response {
     let store = store_for_workspace(state.application.workspace_root());
-    Json(store.read().await).into_response()
+    match store.read().await {
+        Ok(snapshot) => Json(snapshot).into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": error })),
+        )
+            .into_response(),
+    }
 }
 
 pub(crate) async fn terminal_ui_state_put(
@@ -481,7 +480,17 @@ pub(crate) async fn terminal_ui_state_events(
     let _ = query.since;
     let store = store_for_workspace(state.application.workspace_root());
     let mut rx = store.subscribe();
-    let initial = match snapshot_payload(&store.read().await) {
+    let current = match store.read().await {
+        Ok(current) => current,
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": error })),
+            )
+                .into_response();
+        }
+    };
+    let initial = match snapshot_payload(&current) {
         Ok(initial) => initial,
         Err(error) => {
             let diagnostic = agena_failure::diagnostic::format_error_chain_with_context(
@@ -541,4 +550,46 @@ pub(crate) async fn terminal_ui_state_events(
                 .text("heartbeat"),
         )
         .into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{TerminalUiState, TerminalUiStateStore};
+
+    #[test]
+    fn persisted_terminal_ui_state_requires_the_current_complete_shape() {
+        let current = serde_json::json!({
+            "version": 0,
+            "updatedAt": 0,
+            "activeSessionId": null,
+            "sessionIds": [],
+            "sessionMetaById": {},
+            "folders": [{"id":"terminal-default","name":"Default"}]
+        });
+        serde_json::from_value::<TerminalUiState>(current.clone())
+            .expect("current terminal UI state must decode");
+
+        let mut missing = current.clone();
+        missing.as_object_mut().unwrap().remove("version");
+        assert!(serde_json::from_value::<TerminalUiState>(missing).is_err());
+
+        let mut extra = current;
+        extra["obsolete"] = serde_json::json!(true);
+        assert!(serde_json::from_value::<TerminalUiState>(extra).is_err());
+    }
+
+    #[tokio::test]
+    async fn incompatible_persisted_terminal_state_is_not_silently_replaced() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("terminal-ui-state.json");
+        tokio::fs::write(&path, r#"{"sessionIds":[]}"#)
+            .await
+            .unwrap();
+        let store = TerminalUiStateStore::new(path);
+        let error = store
+            .read()
+            .await
+            .expect_err("incompatible persisted state must fail");
+        assert!(error.contains("does not match this Agena build"), "{error}");
+    }
 }

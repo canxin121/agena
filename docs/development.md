@@ -124,7 +124,7 @@ Cancelling a whole host build also closes transports that it already received
 from the predecessor and records a failure there. This is not a transaction
 that restores the old plugin set; full reload rollback and non-stdio
 contribution/credential transfer remain
-tracked in `docs/technical-debt-audit.md`.
+covered by the repository's current tests, lint gates, and development checks.
 
 `PluginEffectScope::dispose` is called on an `Arc<PluginEffectScope>`. Cleanup
 runs independently of individual waiters and shares one report. A synchronous
@@ -682,9 +682,11 @@ the exact persisted JSON and claim owner, so prompt-only changes and pauses
 invalidate stale writes. Completion merges against the current job and commits
 its audit record in the same transaction. Do not append that record separately.
 
-The existing schema version remains **1**. The `delivery_key` column identifies
-one worker attempt; the stable business idempotency key remains in
-`pending_delivery`. `claimed_at_ms` holds the last lease renewal, while the
+The scheduler database has no schema-version or migration layer. An empty
+database is created from the current declarations; a non-empty database must
+match the current tables and indexes exactly or startup fails and the database
+must be recreated. The `delivery_key` column identifies one worker attempt; the
+stable business idempotency key remains in `pending_delivery`. `claimed_at_ms` holds the last lease renewal, while the
 attempt's original start time remains in the JSON. Workers renew every **30
 seconds** and abandoned claims become eligible after **90 seconds**, followed
 by the next poll. Jobs are claimed immediately before delivery, so a slow sink
@@ -714,20 +716,13 @@ Run the storage adapter independently when changing persistence:
 cargo test --locked -p agena-storage-sqlite
 ```
 
-The main store retains table-layout version **13**. `initialize_schema` creates
-only an empty version-zero database. A current version marker also requires
-the actual tables and required indexes to match Agena's canonical declarations;
-missing objects, unsupported columns/constraints, and unexpected Agena tables
-are rejected. Incompatible versions and structures are rejected before this
-function changes connection pragmas. This does not add table/column migrations.
-
-Compatible invariant-trigger corrections are applied to existing current
-databases as well as fresh ones. Initialization holds the schema file lock,
-takes the SQLite write lock, revalidates the layout, and replaces only changed
-or missing known triggers in one transaction. An unchanged set is left alone,
-so normal reopens do not invalidate the schema on every startup. The regression
-fixtures retain the historical version-13 failure triggers and exercise both
-reopening and concurrent connections to a temporary file database.
+The main store has no schema-version or migration layer. `initialize_schema`
+creates an empty database from the current table, index, seed, and invariant-
+trigger declarations. Reopening a non-empty database compares every Agena
+table, index, and trigger with those declarations. Missing, extra, or changed
+objects are rejected without repair; startup tells the operator to recreate
+the database. Initialization never upgrades columns, rewrites rows, refreshes
+triggers, or interprets a database as an older generation.
 
 Creation failures require string `id`, `code`, and `user.fallback` fields.
 Missing JSON properties return SQL NULL; use NULL-aware comparisons in trigger
@@ -745,9 +740,8 @@ it, and failed/cancelled markers require a string. Updating either `state` or
 `content` checks that shape. Duplicate top-level `run_kind`/`abort_reason` keys
 are rejected: SQLite selects the first duplicate whereas serde_json selects
 the last. Updating lifecycle timestamps also enforces the insertion bounds.
-The historical part triggers are retained in `schema_invariants/fixtures/`
-and exercised through the normal version-13 refresh path; table/index
-definitions and existing rows are not rewritten.
+The invariant tests exercise only the current declarations and verify that a
+modified table, index, or trigger is rejected without rewriting existing data.
 
 The two storage backends share `prepare_part_update` and
 `prepare_run_completion`. They validate a complete candidate before publishing

@@ -524,7 +524,7 @@ impl SessionManagerState {
 
 /// Manager of sessions: creation, runs, replies, and lifecycle.
 pub struct SessionManager {
-    /// The v2 sealed data facade (14.1). All chat data — creation, runs,
+    /// The sealed data facade (14.1). All chat data — creation, runs,
     /// parts, state, exports — flows through this adapter; the manager never
     /// touches raw storage or leases (15.6).
     store: Arc<StoreAdapter>,
@@ -1413,9 +1413,7 @@ impl SessionManager {
             Arc::new(agena_storage::store::SessionFacade::<
                 agena_storage_sqlite::SqliteEngine,
             >::new(
-                engine,
-                owner_id.clone(),
-                config.cache_policy().max_sessions,
+                engine, owner_id.clone(), config.max_cached_sessions
             ));
         let store = Arc::new(StoreAdapter::new(
             facade,
@@ -1432,7 +1430,7 @@ impl SessionManager {
         > = Arc::new(agena_storage_sqlite::SeaPermissionRuleTransactionWriter);
         // Workspace identity stays database-backed infra (design 19.1): the
         // facade's `NewSession.workspace_id` is derived from the tool
-        // executor's workspace root, as in v1.
+        // executor's workspace root, as before.
         let workspace_repository: Arc<dyn agena_storage::WorkspaceRepository> = Arc::new(
             agena_storage_sqlite::SeaWorkspaceRepository::new(Arc::clone(&db_arc)),
         );
@@ -1459,7 +1457,7 @@ impl SessionManager {
     }
 
     /// The workspace id owning this process's sessions, resolved once from the
-    /// tool executor's workspace root. v2 keeps workspace identity as
+    /// tool executor's workspace root. the current model keeps workspace identity as
     /// database-backed infra (19.1) because the facade requires it on every
     /// session create.
     pub(crate) async fn current_workspace_id(&self) -> Result<i64, AppError> {
@@ -1485,7 +1483,7 @@ impl SessionManager {
         self.execution_state().tool_executor.clone()
     }
 
-    /// The sealed v2 data facade (14.1). Live presentation consumers
+    /// The sealed data facade (14.1). Live presentation consumers
     /// subscribe to [`SessionChange`](agena_storage::store::SessionChange)
     /// here instead of any event stream (14.3).
     pub fn session_store(&self) -> Arc<dyn agena_storage::store::SessionStore> {
@@ -1890,13 +1888,6 @@ impl SessionManager {
                 Arc::clone(&previous.rule_snapshots),
                 Arc::clone(&previous.auto_projection),
             )));
-    }
-
-    /// Cache statistics are hidden inside the sealed facade (14.1): the
-    /// manager only configured `max_sessions`. Report the stable default so
-    /// the runtime surface stays unchanged.
-    pub fn cache_stats(&self) -> agena_domain::SessionCacheStats {
-        agena_domain::SessionCacheStats::default()
     }
 
     /// Settle one durable background-operation aggregate and enqueue its

@@ -1,9 +1,9 @@
-//! SQLite invariant-trigger declarations for the shared v2 Agena schema.
+//! SQLite invariant-trigger declarations for the current Agena schema.
 //!
-//! These triggers enforce the parts-first invariants from the v2 design at the
+//! These triggers enforce the parts-first invariants at the
 //! database layer, so no caller can bypass the facade and corrupt state:
 //!
-//! * parts identity is immutable; lifecycle follows the v2 state machine
+//! * parts identity is immutable; lifecycle follows the state machine
 //!   (including retry `failed`/`cancelled` → `in_progress` with a revision bump);
 //! * run markers are the root of their batch (`run_id`/`parent_part_id` NULL),
 //!   carry a `run_kind`, and must record an `abort_reason` on terminal states;
@@ -16,14 +16,10 @@
 
 use sea_orm::{ConnectionTrait, DbErr, Statement};
 
-use crate::schema::validation::{declaration, schema_objects};
-
 #[cfg(test)]
 mod tests;
 
-/// Install missing triggers while creating the schema. Open existing
-/// databases through [`crate::initialize_schema`] so changed definitions are
-/// checked and replaced within a write transaction as well.
+/// Install the current invariant triggers while creating a fresh schema.
 pub async fn install_invariant_triggers<C>(db: &C) -> Result<(), DbErr>
 where
     C: ConnectionTrait,
@@ -36,45 +32,7 @@ where
     Ok(())
 }
 
-/// Compatible invariant corrections do not change the versioned table layout.
-/// Return only definitions that need replacement, so reopening a current
-/// database does not rewrite its schema on every startup.
-pub(crate) async fn outdated_invariant_triggers<C>(db: &C) -> Result<Vec<&'static str>, DbErr>
-where
-    C: ConnectionTrait,
-{
-    let objects = schema_objects(db).await?;
-    let mut outdated = Vec::new();
-    for sql in INVARIANT_TRIGGERS {
-        let expected = declaration(sql)?;
-        if objects.get(&(expected.kind.to_owned(), expected.name.to_owned()))
-            != Some(&expected.stored_sql)
-        {
-            outdated.push(*sql);
-        }
-    }
-    Ok(outdated)
-}
-
-/// The caller holds the schema lock and an SQLite write transaction. A
-/// failed/cancelled refresh therefore never commits a partially installed set.
-pub(crate) async fn refresh_invariant_triggers(
-    txn: &sea_orm::DatabaseTransaction,
-) -> Result<(), DbErr> {
-    for sql in outdated_invariant_triggers(txn).await? {
-        let name = declaration(sql)?.name;
-        txn.execute(Statement::from_string(
-            txn.get_database_backend(),
-            format!("DROP TRIGGER IF EXISTS {name}"),
-        ))
-        .await?;
-        txn.execute(Statement::from_string(txn.get_database_backend(), sql))
-            .await?;
-    }
-    Ok(())
-}
-
-const INVARIANT_TRIGGERS: &[&str] = &[
+pub(crate) const INVARIANT_TRIGGERS: &[&str] = &[
     // --- parts identity ---
     "CREATE TRIGGER IF NOT EXISTS agena_parts_identity_immutable \
          BEFORE UPDATE OF part_id, kind, role, origin_session_id, created_at_ms ON agena_parts \

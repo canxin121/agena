@@ -118,7 +118,7 @@ fn execute_locked(
     ops: Vec<PatchOp>,
 ) -> Result<ApplyPatchExecution, ToolError> {
     // Resolve every hunk and validate every source/target before the first
-    // mutation. This removes the old deterministic partial-apply failure mode.
+    // mutation so a deterministic validation failure cannot partially apply.
     let prepared = prepare_operations(ops, |path| executor.resolve_target_path(path))?;
 
     let mut before_state = String::new();

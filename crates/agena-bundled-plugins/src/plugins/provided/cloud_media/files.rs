@@ -10,6 +10,7 @@ use std::{
 static GATES: LazyLock<Mutex<BTreeMap<PathBuf, Weak<tokio::sync::Mutex<()>>>>> =
     LazyLock::new(|| Mutex::new(BTreeMap::new()));
 #[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(super) struct Record {
     pub handle: String,
     pub provider: String,
@@ -110,7 +111,7 @@ impl Service<'_> {
         Ok(hmac(
             key.as_bytes(),
             format!(
-                "agena-cloud-media-connection-v1\0{}\0{}",
+                "agena-cloud-media-connection\0{}\0{}",
                 self.provider,
                 self.base()?
             )

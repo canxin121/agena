@@ -56,7 +56,7 @@ type MarkdownImageCacheState = {
 }
 
 const MD_IMAGE_PLACEHOLDER_SRC = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=='
-const MD_IMAGE_SIZE_CACHE_STORAGE_KEY = 'oc.markdown.image-size-cache.v1'
+const MD_IMAGE_SIZE_CACHE_STORAGE_KEY = 'agena.markdown.image-size-cache'
 const MD_IMAGE_SIZE_CACHE_LIMIT = 320
 const MD_IMAGE_META_PROBE_CONCURRENCY = 2
 const MD_IMAGE_META_PROBE_MAX_QUEUE = 96
@@ -66,16 +66,16 @@ const imageMetaProbeInFlight = new Set<string>()
 let imageMetaProbeActiveCount = 0
 
 function markdownImageCacheState(): MarkdownImageCacheState {
-  const g = globalThis as typeof globalThis & { __ocMarkdownImageCacheStateV1?: MarkdownImageCacheState }
-  if (!g.__ocMarkdownImageCacheStateV1) {
-    g.__ocMarkdownImageCacheStateV1 = {
+  const g = globalThis as typeof globalThis & { __agenaMarkdownImageCacheState?: MarkdownImageCacheState }
+  if (!g.__agenaMarkdownImageCacheState) {
+    g.__agenaMarkdownImageCacheState = {
       sizeBySrc: new Map<string, MarkdownImageSizeMeta>(),
       loadedSrc: new Set<string>(),
       storageLoaded: false,
       persistTimer: null,
     }
   }
-  return g.__ocMarkdownImageCacheStateV1
+  return g.__agenaMarkdownImageCacheState
 }
 
 function loadMarkdownImageSizeCacheFromStorage() {

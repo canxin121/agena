@@ -69,19 +69,5 @@ export default {
         },
       },
     },
-    opencodeConfig: {
-      sections: {
-        formatter: {
-          lsp: {
-            options: {
-              mode: {
-                config: 'config',
-                disabled: 'disabled',
-              },
-            },
-          },
-        },
-      },
-    },
   },
 }

@@ -82,7 +82,7 @@ async fn test_manager_with_database() -> (SessionManager, DatabaseConnection) {
     let processor = SessionProcessor::new(plugins);
     let database = Database::connect("sqlite::memory:")
         .await
-        .expect("open v2 test database");
+        .expect("open test database");
     initialize(&database).await;
     let manager = SessionManager::new(
         database.clone(),
@@ -98,7 +98,7 @@ async fn test_manager_with_database() -> (SessionManager, DatabaseConnection) {
 async fn initialize(database: &DatabaseConnection) {
     agena_storage_sqlite::initialize_schema(database)
         .await
-        .expect("initialize fresh v2 schema");
+        .expect("initialize fresh schema");
 }
 
 async fn create(manager: &SessionManager, title: &str) -> Session {
@@ -1053,7 +1053,7 @@ async fn projection_preserves_precise_part_kind() {
     assert_eq!(
         kinds,
         ["think", "tool_call"],
-        "projection must preserve the precise v2 part kind, not collapse to \"activity\""
+        "projection must preserve the precise part kind, not collapse to \"activity\""
     );
 }
 
@@ -1417,7 +1417,7 @@ async fn manager_with_provider(provider: Arc<dyn ModelRuntime>) -> SessionManage
     let processor = SessionProcessor::new(plugins);
     let database = Database::connect("sqlite::memory:")
         .await
-        .expect("open v2 test database");
+        .expect("open test database");
     initialize(&database).await;
     SessionManager::new(
         database,
@@ -2118,7 +2118,7 @@ async fn manager_with_tool_search_fixture(provider: Arc<dyn ModelRuntime>) -> Se
     let processor = SessionProcessor::new(plugins);
     let database = Database::connect("sqlite::memory:")
         .await
-        .expect("open v2 test database");
+        .expect("open test database");
     initialize(&database).await;
     SessionManager::new(
         database,
@@ -2131,7 +2131,7 @@ async fn manager_with_tool_search_fixture(provider: Arc<dyn ModelRuntime>) -> Se
 }
 
 #[tokio::test]
-async fn processor_run_turn_streams_parts_through_the_facade_without_v1_double_write() {
+async fn processor_run_turn_streams_parts_through_the_facade_once() {
     // 25 deltas > STREAMING_FLUSH_DELTA_COUNT (8): the facade must amortize
     // them into coalesced flushes rather than one revision per token.
     let tokens: Vec<String> = (0..25).map(|i| format!("tok{i} ")).collect();
@@ -2243,8 +2243,8 @@ async fn processor_run_turn_streams_parts_through_the_facade_without_v1_double_w
     );
     assert_eq!(think_parts[0].state, PartState::Completed);
 
-    // No v1 double-write: the facade holds exactly the marker plus the parts
-    // this turn created — no duplicate rows and no v1 message artifacts.
+    // No duplicate write: the facade holds exactly the marker plus the parts
+    // this turn created — no duplicate rows and no removed message artifacts.
     let view = manager
         .session_store()
         .load(session.id)
@@ -3230,7 +3230,7 @@ async fn non_host_user_input_reply_persists_on_tool_call() {
 
     // An assistant run marker carrying the canonical turn/reply identity, so
     // the reply continuation can resolve the conversation after the answer is
-    // committed (v2 stores the identity in the marker content).
+    // committed (the current model stores the identity in the marker content).
     let turn_id = TurnId::new();
     let reply_id = AssistantReplyId::new();
     let run_id = manager
@@ -3587,10 +3587,6 @@ fn tool_part_first_user_input(
 /// Regression: two host `ask_user` calls from unrelated operations whose
 /// provider operation id is empty (`agena.operation_id` absent — providers
 /// that stream no tool-call id) must never collide in the host re-entry dedup.
-/// The old key was `operation_id` + per-call sequence; with the empty id every
-/// host ask in a session collapsed into the `("", 0)` bucket, so a later
-/// `interaction.ask` would rediscover an earlier `plan.review` request, compare
-/// its (different) questions and fail with "host user input request mismatch".
 /// The dedup key is now the pending tool's durable part id, unique per
 /// operation, so the two asks stay fully independent.
 #[tokio::test]
@@ -3693,9 +3689,8 @@ async fn host_ask_user_from_unrelated_operations_with_empty_operation_id_do_not_
     });
 
     // Wait until the plan request is durable, then issue the interaction.ask
-    // for call 2 with DIFFERENT questions. Under the old empty-operation-id
-    // dedup this second call mismatched against the plan request; it must now
-    // create its own independent request.
+    // for call 2 with DIFFERENT questions. Each pending tool part owns an
+    // independent host-input request even when the provider emits no call id.
     let plan_request_id = wait_for_interaction_request_id(
         &store,
         session_id,

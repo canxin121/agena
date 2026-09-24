@@ -1248,7 +1248,7 @@ impl SessionManager {
     /// `PluginHost::drain_hook_runs` (session.start, user.prompt.submit,
     /// chat.params, command.before/after, agent.stop) records through here.
     ///
-    /// v2 (design 4.1): hook parts are ordinary parts appended onto the run
+    /// design 4.1: hook parts are ordinary parts appended onto the run
     /// that launched the hooks (kind `hook`, role Assistant) — no new run
     /// marker. The launching run is the last run marker in the session: an
     /// in-flight assistant `continue` marker, a terminal (Completed/Failed/
@@ -1460,7 +1460,7 @@ impl SessionManager {
             );
 
             // The assistant message's durable id is the run marker's part id
-            // (started below). v2 has no placeholder part allocator: the
+            // (started below). the current model has no placeholder part allocator: the
             // processor appends parts with placeholder ids of its own, which
             // the adapter remaps to engine ids on append.
             let run_id = agena_domain::RunId::new();
@@ -3280,7 +3280,7 @@ impl SessionManager {
                 tool_part.state = PartState::InProgress;
             }
         };
-        // Persist the refreshed title as a part delta checkpoint (v2 D10):
+        // Persist the refreshed title as a part delta checkpoint (D10):
         // the in-memory title change is written through the facade, which is
         // the single write path for streamed content. There is no separate
         // content-node title column to target.
@@ -3305,7 +3305,7 @@ impl SessionManager {
             return self.load_session_with_workspace_root(session_id).await;
         }
         // The single-source payload is written once at completion; a stream
-        // checkpoint is no longer persisted (the v2 live broadcast carries
+        // checkpoint is no longer persisted (the live broadcast carries
         // streaming detail, and the terminal frame replaces the payload).
         let _ = streamed_output;
         self.load_session_with_workspace_root(session_id).await
@@ -3411,8 +3411,8 @@ impl SessionManager {
             tool_part.state = PartState::Completed;
             Ok(())
         })?;
-        // Mirror the v1 message usage attribution into the owning run marker's
-        // `content["usage"]` (the v2 projection `aggregate_usage()` sums it).
+        // Mirror message usage attribution into the owning run marker's
+        // `content["usage"]` (the projection `aggregate_usage()` sums it).
         // Flush the marker content directly: `persist_tool_completion` only
         // persists the tool part and the cancelled request parts.
         if let Some(attributed_usage) = attributed_usage {

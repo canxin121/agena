@@ -34,7 +34,7 @@ fn scheduler_outcome_failure(
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 /// Kind of a scheduled job.
 pub enum JobKind {
     /// Recurring job driven by a cron expression.  After
@@ -81,7 +81,7 @@ pub enum MisfirePolicy {
 /// decision by the sink (such as a blocked owner session) and is advanced like
 /// a normal cron occurrence instead of being retried in a tight loop.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(default)]
+#[serde(deny_unknown_fields)]
 pub struct RetryPolicy {
     pub max_attempts: u32,
     pub initial_delay_seconds: u32,
@@ -102,7 +102,7 @@ impl Default for RetryPolicy {
 
 impl RetryPolicy {
     /// Normalize untrusted/deserialized values to a finite, non-zero retry
-    /// policy. This keeps old or hand-written job JSON from creating a busy
+    /// policy. This keeps untrusted or hand-written job JSON from creating a busy
     /// retry loop.
     fn normalized(self) -> Self {
         let initial_delay_seconds = self.initial_delay_seconds.max(1);
@@ -134,6 +134,7 @@ impl RetryPolicy {
 /// delivery: a crash after a claim but before completion makes the claim
 /// eligible for a retry after restart.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct JobDeliveryAttempt {
     pub delivery_key: String,
     pub scheduled_for: DateTime<Utc>,
@@ -142,6 +143,7 @@ pub struct JobDeliveryAttempt {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 /// Record of one job run.
 pub struct JobRunRecord {
     pub triggered_at: DateTime<Utc>,
@@ -167,6 +169,7 @@ pub struct JobRunRecord {
 /// identifier alongside a copy of one immutable run record so history remains
 /// queryable after a user deletes the job itself.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct SchedulerHistoryEntry {
     pub job_id: Uuid,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -177,6 +180,7 @@ pub struct SchedulerHistoryEntry {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 /// Result of delivering a job to the sink.
 pub struct JobDeliveryResult {
     pub status: JobRunStatus,
@@ -213,6 +217,7 @@ impl JobDeliveryResult {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 /// Exact assistant tool-call identity that created a scheduled job.
 ///
 /// This is persisted inside the scheduler's canonical job JSON. It is not a
@@ -236,7 +241,7 @@ pub struct ScheduledJob {
     /// to spawn a fresh headless session.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner_session_id: Option<i64>,
-    /// Trusted canonical workspace. Missing legacy ownership is host-only.
+    /// Trusted canonical workspace. Unowned jobs are host-only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner_workspace: Option<String>,
     /// Durable provenance for schedules created by an assistant tool call.
@@ -252,10 +257,8 @@ pub struct ScheduledJob {
     /// IANA timezone used to evaluate cron wall-clock fields. One-shot jobs use UTC.
     pub timezone: String,
     /// Explicit recovery policy for overdue jobs.
-    #[serde(default)]
     pub misfire_policy: MisfirePolicy,
     /// Bounded retry policy for failed deliveries.
-    #[serde(default)]
     pub retry_policy: RetryPolicy,
     /// A persisted claim is written before a sink is called. It is retained
     /// across restart until a delivery is successfully finalized or retries
@@ -267,10 +270,8 @@ pub struct ScheduledJob {
     pub retry_at: Option<DateTime<Utc>>,
     /// A paused job remains durable but cannot become due. Resuming a cron
     /// job computes the next future fire instead of replaying missed ticks.
-    #[serde(default)]
     pub paused: bool,
     /// Terminal jobs remain available for audit until explicitly deleted.
-    #[serde(default)]
     pub completed: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_run: Option<JobRunRecord>,
@@ -775,16 +776,29 @@ mod tests {
     }
 
     #[test]
-    fn scheduled_job_rejects_removed_per_job_run_history() {
+    fn scheduled_job_rejects_unknown_fields() {
         let job = ScheduledJob::new_once(Utc::now(), "wake");
         let mut encoded = serde_json::to_value(job).expect("encode scheduled job");
         encoded
             .as_object_mut()
             .expect("scheduled job is an object")
-            .insert("run_history".to_owned(), serde_json::json!([]));
+            .insert("obsolete".to_owned(), serde_json::json!(true));
         let error = serde_json::from_value::<ScheduledJob>(encoded)
-            .expect_err("removed run_history field must be rejected");
-        assert!(error.to_string().contains("unknown field `run_history`"));
+            .expect_err("unknown scheduled-job fields must be rejected");
+        assert!(error.to_string().contains("unknown field `obsolete`"));
+    }
+
+    #[test]
+    fn scheduled_job_requires_current_policy_fields() {
+        let job = ScheduledJob::new_once(Utc::now(), "wake");
+        for field in ["misfire_policy", "retry_policy", "paused", "completed"] {
+            let mut encoded = serde_json::to_value(&job).expect("encode scheduled job");
+            encoded.as_object_mut().unwrap().remove(field);
+            assert!(
+                serde_json::from_value::<ScheduledJob>(encoded).is_err(),
+                "missing current field unexpectedly accepted: {field}"
+            );
+        }
     }
 
     #[test]

@@ -92,7 +92,7 @@ impl StorageConfig {
             .unwrap_or_else(|error| {
                 tracing::error!(
                     diagnostic = %error,
-                    "storage home is unavailable; using the current-directory compatibility path"
+                    "storage home is unavailable; using the current-directory fallback path"
                 );
                 PathBuf::from(".")
             });
@@ -228,7 +228,6 @@ pub enum MemoryType {
     Feedback,
     Project,
     Reference,
-    #[serde(other)]
     Other,
 }
 
@@ -245,6 +244,7 @@ impl MemoryType {
 }
 
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
 /// Parsed frontmatter of a memory document.
 pub struct MemoryFrontmatter {
     #[serde(default)]
@@ -362,6 +362,7 @@ pub struct WorkspaceListQuery {
 /// Raw persisted model-catalog cache value. The provider/domain-specific
 /// document is intentionally opaque JSON at this storage boundary.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ModelCatalogCacheRecord {
     pub fetched_at_unix_ms: i64,
     pub source: String,

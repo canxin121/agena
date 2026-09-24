@@ -290,12 +290,6 @@ export function connectSse(opts: SseClientOptions): SseClient {
    *   { kind: "lagged",              data: { subscription, skipped } }
    *   { kind: "subscription_closed", data: { subscription, reason } }
    *
-   * Mapping (opencode SSE → agena):
-   *   message.part.created / .updated  → session_changed (part_added / part_updated)
-   *   message.part.removed             → session_changed (part_removed)
-   *   session.updated                  → session_changed (session_meta_updated)
-   *   session.status / idle            → runtime_signal
-   *   permission.asked / question.asked → session.state.data.requests (state-driven)
    */
   function normalizeAndQueue(raw: JsonLike, meta?: { directory?: string; lastEventId?: string }) {
     if (!isRecord(raw)) return

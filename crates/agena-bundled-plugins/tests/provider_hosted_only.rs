@@ -1,10 +1,10 @@
-//! Contract and migration tests run through real PluginHost/ToolExecutor routes.
+//! Contract tests run through real PluginHost/ToolExecutor routes.
 //! Network endpoints are synthetic loopback servers; credentials and HOME live
 //! only in child test processes. No real provider model is called.
 #[path = "support/hosted_fixture.rs"]
 mod fixture;
 use agena_domain::{StructuredObject, ToolInvocation};
-use agena_tool::provider_tools::{HOSTED_TOOLS, RETIRED_TOOLS};
+use agena_tool::provider_tools::HOSTED_TOOLS;
 use fixture::{Fixture, isolate};
 use serde_json::{Value, json};
 
@@ -26,7 +26,7 @@ fn input_for(name: &str) -> Value {
 }
 
 #[test]
-fn manifest_exposes_exactly_32_hosted_tools_and_no_retired_wrapper() {
+fn manifest_exposes_exactly_32_hosted_tools() {
     let manifest = agena_bundled_plugins::bundled_capability_manifest();
     assert_eq!(manifest.counts.execution_tools, 134);
     assert_eq!(manifest.counts.gateway_tools, 4);
@@ -51,19 +51,6 @@ fn manifest_exposes_exactly_32_hosted_tools_and_no_retired_wrapper() {
         .map(String::as_str)
         .collect::<std::collections::BTreeSet<_>>();
     assert_eq!(provider, HOSTED_TOOLS.iter().copied().collect());
-    for old in RETIRED_TOOLS {
-        assert!(
-            !all.contains(old.name),
-            "retired {} is still discoverable",
-            old.name
-        );
-        for alternative in old.alternatives {
-            assert!(
-                all.contains(*alternative),
-                "migration points to a nonexistent tool: {alternative}"
-            );
-        }
-    }
     for native in [
         "shell.run",
         "shell.write",
@@ -233,65 +220,6 @@ async fn invalid_modes_and_callback_histories_fail_before_network() {
 }
 
 #[tokio::test]
-async fn retired_names_have_explicit_errors_and_never_execute_local_fallbacks() {
-    let name = "retired_names_have_explicit_errors_and_never_execute_local_fallbacks";
-    if isolate(name) {
-        return;
-    }
-    let f = Fixture::new().await;
-    for old in RETIRED_TOOLS {
-        for requested in [
-            old.name.to_owned(),
-            format!("agena.{}", old.name),
-            format!("agena_{}", old.name.replacen('.', "_", 1)),
-        ] {
-            let error=f.call(&requested,json!({"prompt":"fixture","command":"must-not-run","path":"must-not-write","content":"x"})).await.unwrap_err();
-            match error {
-                agena_runtime_tools::tool::ToolError::ToolUnavailable(error) => {
-                    assert_eq!(error.source, "provider_tool_retirement");
-                    assert!(!error.retryable);
-                    assert!(error.reason.contains("not redirected automatically"));
-                }
-                error => panic!("wrong retired result for {requested}: {error}"),
-            }
-            // Direct executor calls must remain blocked even when a caller
-            // does not invoke prepare_invocation first.
-            let invocation = ToolInvocation::new(requested, StructuredObject::default());
-            let error = f
-                .executor
-                .execute_invocation_detailed(&invocation, 41, 3)
-                .await
-                .unwrap_err();
-            assert!(matches!(
-                error,
-                agena_runtime_tools::tool::ToolError::ToolUnavailable(_)
-            ));
-        }
-    }
-    assert!(f.requests().is_empty());
-    assert!(!f.dir.path().join("must-not-write").exists());
-    f.call(
-        "fs.write",
-        json!({"path":"native.txt","content":"native filesystem still works"}),
-    )
-    .await
-    .unwrap();
-    assert_eq!(
-        std::fs::read_to_string(f.dir.path().join("native.txt")).unwrap(),
-        "native filesystem still works"
-    );
-    let (output, _) = f
-        .call(
-            "shell.run",
-            json!({"command":"printf native-shell","reads":[],"writes":[],"network":[]}),
-        )
-        .await
-        .unwrap();
-    assert_eq!(output["output"], "native-shell");
-    assert!(f.requests().is_empty());
-}
-
-#[tokio::test]
 async fn client_actions_returned_by_a_provider_are_quarantined_not_replayed() {
     let name = "client_actions_returned_by_a_provider_are_quarantined_not_replayed";
     if isolate(name) {
@@ -390,11 +318,6 @@ async fn cloud_catalogue_and_help_make_execution_and_data_transfer_explicit() {
                 cloud.name
             );
         }
-        assert!(
-            !tools
-                .iter()
-                .any(|tool| tool.canonical_name() == format!("agena.{}", cloud.previous_name))
-        );
         if cloud.operation == "image_edit" {
             assert!(help.contains("uploaded"));
             assert!(help.contains("separate local artifacts"));
@@ -403,51 +326,6 @@ async fn cloud_catalogue_and_help_make_execution_and_data_transfer_explicit() {
     assert!(
         f.requests().is_empty(),
         "help discovery must not send provider requests"
-    );
-}
-
-#[tokio::test]
-async fn previous_provider_names_require_explicit_cloud_migration_without_side_effects() {
-    let name = "previous_provider_names_require_explicit_cloud_migration_without_side_effects";
-    if isolate(name) {
-        return;
-    }
-    let f = Fixture::new().await;
-    for cloud in agena_tool::provider_tools::CLOUD_TOOLS {
-        for previous in [
-            cloud.previous_name.to_owned(),
-            format!("agena.{}", cloud.previous_name),
-            format!("agena_{}", cloud.previous_name.replacen('.', "_", 1)),
-        ] {
-            let error = f.call(&previous, input_for(cloud.name)).await.unwrap_err();
-            match error {
-                agena_runtime_tools::tool::ToolError::ToolUnavailable(error) => {
-                    assert_eq!(error.source, "provider_cloud_tool_rename");
-                    assert_eq!(error.suggestions, vec![cloud.name]);
-                    assert!(!error.retryable);
-                    assert!(error.reason.contains("cloud execution"));
-                    assert!(error.reason.contains("not redirected automatically"));
-                }
-                error => panic!("unexpected migration error: {error}"),
-            }
-            let invocation = ToolInvocation::new(previous, StructuredObject::default());
-            let error = f
-                .executor
-                .execute_invocation_detailed(&invocation, 41, 5)
-                .await
-                .unwrap_err();
-            assert!(matches!(
-                error,
-                agena_runtime_tools::tool::ToolError::ToolUnavailable(_)
-            ));
-        }
-    }
-    assert!(f.requests().is_empty());
-    assert!(
-        !f.dir
-            .path()
-            .join(".agena/artifacts/provider-tools")
-            .exists()
     );
 }
 

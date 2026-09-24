@@ -24,6 +24,9 @@ function Quote-Arg([string]$Value) {
 }
 
 function Normalize-Version([string]$Raw) {
+  if ($Raw.StartsWith("agena-v")) {
+    return $Raw.Substring(7)
+  }
   if ($Raw.StartsWith("v")) {
     return $Raw.Substring(1)
   }
@@ -44,8 +47,12 @@ if (-not $Archive) {
     throw "Provide -Archive or -Version"
   }
   $NormalizedVersion = Normalize-Version $Version
+  if ($NormalizedVersion -notmatch '^\d+\.\d+\.\d+-beta\.[1-9]\d*$') {
+    throw "-Version must name a beta release, for example 0.1.0-beta.1"
+  }
+  $PackageVersion = $NormalizedVersion -replace '-beta\.[1-9]\d*$', ''
   $TargetTriple = Get-TargetTriple
-  $Archive = "https://github.com/$Repo/releases/download/agena-v$NormalizedVersion/agena-backend-$TargetTriple-v$NormalizedVersion.zip"
+  $Archive = "https://github.com/$Repo/releases/download/agena-v$NormalizedVersion/agena-backend-$TargetTriple-v$PackageVersion.zip"
 }
 
 $TempDir = Join-Path $env:TEMP ("agena-install-" + [Guid]::NewGuid().ToString("N"))

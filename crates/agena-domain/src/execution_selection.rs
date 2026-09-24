@@ -9,7 +9,7 @@ fn normalize_optional_string(value: Option<String>) -> Option<String> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 /// Provider/adapter/model selection for an execution, with overrides.
 pub struct ExecutionSelection {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -188,5 +188,14 @@ mod tests {
         assert_eq!(effective.model.as_deref(), Some("override-model"));
         assert!(effective.thinking_mode.is_none());
         assert_eq!(effective.speed_mode.as_deref(), Some("fast"));
+    }
+
+    #[test]
+    fn rejects_unknown_selection_fields() {
+        let error = serde_json::from_value::<ExecutionSelection>(serde_json::json!({
+            "obsolete": true
+        }))
+        .expect_err("unknown execution-selection fields must be rejected");
+        assert!(error.to_string().contains("unknown field"), "{error}");
     }
 }

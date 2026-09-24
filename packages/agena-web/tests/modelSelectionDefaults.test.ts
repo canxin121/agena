@@ -22,8 +22,8 @@ test('model selection keys preserve provider, adapter, and model identity', () =
   })
 })
 
-test('parseModelSlug rejects removed two-part and malformed storage entries', () => {
-  assert.deepEqual(parseModelSlug('anthropic/claude-sonnet'), { provider: '', adapter: '', model: '' })
+test('parseModelSlug rejects malformed selection keys', () => {
+  assert.deepEqual(parseModelSlug('two/parts'), { provider: '', adapter: '', model: '' })
   assert.deepEqual(parseModelSlug('invalid'), { provider: '', adapter: '', model: '' })
 })
 

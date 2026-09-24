@@ -27,12 +27,6 @@ pub enum ConfigError {
         path: PathBuf,
         source: serde_json::Error,
     },
-    #[error("config modes are no longer supported; remove `{field}` and use a single config file")]
-    UnsupportedModeConfig { field: &'static str },
-    #[error(
-        "AGENA_MODE is no longer supported; use a single config file or explicit --set overrides"
-    )]
-    UnsupportedModeEnvironment,
     #[error("invalid override `{0}`")]
     InvalidOverride(String),
     #[error("invalid numeric value for `{key}`: {value}")]
@@ -142,16 +136,6 @@ where
 {
     if let Some(value) = env.var(key) {
         apply(parse_numeric::<T>(value.as_str(), key)?);
-    }
-    Ok(())
-}
-
-/// Reject the retired process mode switch before a schema adapter loads files.
-pub fn reject_unsupported_mode_environment(
-    env: &dyn crate::ConfigEnvironment,
-) -> Result<(), ConfigError> {
-    if env.var("AGENA_MODE").is_some() {
-        return Err(ConfigError::UnsupportedModeEnvironment);
     }
     Ok(())
 }

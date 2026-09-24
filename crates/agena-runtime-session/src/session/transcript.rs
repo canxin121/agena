@@ -45,7 +45,7 @@ impl ProviderTranscript {
     /// * Only fields that are observable to the provider participate.
     pub fn digest(&self) -> Hash {
         let mut hasher = blake3::Hasher::new();
-        hasher.update(b"agena-transcript-v1\0");
+        hasher.update(b"agena-transcript\0");
         for fragment in &self.fragments {
             fragment.hash_into(&mut hasher);
         }

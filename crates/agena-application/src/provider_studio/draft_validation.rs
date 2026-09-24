@@ -1,4 +1,4 @@
-//! Draft provider validation / listing-request building, migrated from
+//! Draft provider validation / listing-request building. Previously located in
 //! `agena-tui-backend/src/backend_drafts/provider_draft_validation.rs`.
 
 use anyhow::{Result, anyhow};

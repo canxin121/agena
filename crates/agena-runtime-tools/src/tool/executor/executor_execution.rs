@@ -89,11 +89,6 @@ impl ToolExecutor {
         let definition = self.invocation_definition(invocation);
         let plugin_name = self.invocation_plugin_name_for(invocation);
         if definition.is_none() {
-            if agena_tool::provider_tools::retired(&model_tool_name).is_some()
-                || agena_tool::provider_tools::renamed(&model_tool_name).is_some()
-            {
-                return Err(self.unknown_tool_error(&model_tool_name));
-            }
             let mut prepared_invocation = invocation.clone();
             prepared_invocation.plugin_name = Some(plugin_name);
             return Ok(PreparedToolInvocation {

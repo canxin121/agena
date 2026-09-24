@@ -2,7 +2,7 @@ use agena_domain::{ActivityPayload, ComposerNode};
 
 use crate::{
     BTreeMap, ComposerDraft, ComposerItem, DraftSlot, DraftStore, PersistentComposerDraft,
-    PersistentDraftStore, persistent_draft_store_version,
+    PersistentDraftStore,
 };
 
 impl ComposerDraft {
@@ -108,7 +108,6 @@ impl PersistentDraftStore {
         }
 
         Self {
-            version: persistent_draft_store_version(),
             sessions,
             new_session,
         }

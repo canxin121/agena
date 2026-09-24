@@ -1,8 +1,5 @@
 type SessionLike = {
   id: string
-  parentID?: string | null
-  parentId?: string | null
-  parent_id?: string | null
   [k: string]: unknown
 }
 
@@ -23,11 +20,8 @@ function nonEmptyString(value: unknown): string {
 }
 
 function parentIdFromRow(row: RunningSessionRow): string | null {
-  const fromRow = nonEmptyString(row.parentId)
-  if (fromRow) return fromRow
-
-  const fromSession = nonEmptyString(row.session?.parentID ?? row.session?.parentId ?? row.session?.parent_id)
-  return fromSession || null
+  const parentId = nonEmptyString(row.parentId)
+  return parentId || null
 }
 
 function inferParentByDepth(rows: RunningSessionRow[]): Record<string, string | null> {

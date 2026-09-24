@@ -135,7 +135,7 @@ fn pending_tool_part_not_found_error(part_ref: &SessionPartRef) -> AppError {
 
 /// The run marker part owning `part_ref` (the part's `run_id`, or the part
 /// itself when it is a marker). The marker's `part_id` is the durable message
-/// id in v2 — the v1 bridge and the conversation identity both key off it.
+/// id; the conversation identity keys off it.
 pub(super) fn run_marker_for_part<'a>(
     session: &'a Session,
     part_ref: &SessionPartRef,
@@ -470,7 +470,7 @@ pub(super) fn matching_model_turn_id(
 /// Find the pending permission whose request id matches, re-expressed over
 /// parts: a `tool_call` part still in flight whose decoded operation carries a
 /// pending (unanswered) authorization record with `request_id`. The returned
-/// pending's `tool` references the tool part itself — the v1 semantics the
+/// pending's `tool` references the tool part itself — the tool-result semantics the
 /// reply flow (recording decisions into `operation.authorization`) depends on.
 pub(super) fn find_pending_permission_by_request_id(
     session: &Session,
@@ -641,7 +641,7 @@ pub(super) fn permission_request_id(session_id: i64, resolved: &ResolvedPendingT
 
 /// Stable request identity for a plugin-owned user-input pause.
 ///
-/// Preserve the provider call id for compatibility when one exists. Providers
+/// Use the provider call id when one exists. Providers
 /// are allowed to omit it, though; an empty request id would merge unrelated
 /// asks into one lookup/dedup bucket, so fall back to the session-local call id.
 pub(super) fn plugin_user_input_request_id(

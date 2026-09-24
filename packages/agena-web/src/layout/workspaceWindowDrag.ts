@@ -1,6 +1,6 @@
-export const WORKSPACE_WINDOW_DRAG_MIME = 'application/x-opencode-workspace-window-id'
-export const WORKSPACE_WINDOW_TEMPLATE_DRAG_MIME = 'application/x-opencode-workspace-window-template'
-const WORKSPACE_WINDOW_TEMPLATE_TEXT_PREFIX = 'oc-workspace-window-template:'
+export const WORKSPACE_WINDOW_DRAG_MIME = 'application/x-agena-workspace-window-id'
+export const WORKSPACE_WINDOW_TEMPLATE_DRAG_MIME = 'application/x-agena-workspace-window-template'
+const WORKSPACE_WINDOW_TEMPLATE_TEXT_PREFIX = 'agena-workspace-window-template:'
 
 export type WorkspaceWindowTemplateDragData = {
   tab: 'chat' | 'files' | 'preview' | 'terminal' | 'git' | 'settings'

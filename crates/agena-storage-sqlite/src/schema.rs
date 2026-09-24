@@ -1,4 +1,4 @@
-//! Concrete SQLite table and index definitions for the v2 Agena store.
+//! Concrete SQLite table, index, and trigger definitions for the Agena store.
 //!
 //! Chat-data tables (`parts`, `session_parts`, `sessions`,
 //! `execution_leases`, `sequences`, `workspaces`, `permission_rules`,
@@ -15,12 +15,11 @@ use std::path::{Path, PathBuf};
 
 use sea_orm::{ConnectionTrait, DatabaseConnection, DbErr, Statement, TransactionTrait};
 
-use crate::schema_invariants::{outdated_invariant_triggers, refresh_invariant_triggers};
-use crate::{CURRENT_SCHEMA_VERSION, install_invariant_triggers};
+use crate::install_invariant_triggers;
 
 pub(crate) mod validation;
 
-use validation::{require_empty_database, validate_existing_schema};
+use validation::{schema_objects, validate_existing_schema};
 
 /// How long `initialize_schema` waits for a concurrent process to finish
 /// building the schema before giving up.
@@ -98,28 +97,18 @@ async fn schema_lock_path(db: &DatabaseConnection) -> Result<Option<PathBuf>, Db
     Ok(Some(PathBuf::from(lock_path)))
 }
 
-/// Creates the complete v2 SQLite schema and applies its version marker
-/// atomically.
+/// Create the complete SQLite schema or validate the current schema exactly.
 ///
-/// Serialized across processes by a filesystem lock so concurrent cold starts
-/// of the same database file cannot race the WAL switch or the DDL transaction.
-/// A version-0 database must be empty and is created from scratch. A database
-/// at [`CURRENT_SCHEMA_VERSION`] must match the supported table and index
-/// declarations; compatible trigger corrections are refreshed atomically.
-/// Other versions and incompatible structures are rejected without changing
-/// their schema or connection pragmas.
+/// Agena has no database migration layer. An empty database is initialized
+/// from the current declarations. A non-empty database must match the current
+/// tables, indexes, and triggers exactly; otherwise startup fails and the
+/// database must be recreated.
 pub async fn initialize_schema(db: &DatabaseConnection) -> Result<(), DbErr> {
     let _lock = SchemaLock::acquire(db).await?;
-    let current_version = read_schema_version(db).await?;
-    match current_version {
-        0 => require_empty_database(db).await?,
-        CURRENT_SCHEMA_VERSION => validate_existing_schema(db).await?,
-        version => return Err(incompatible_version(version)),
+    let fresh = schema_objects(db).await?.is_empty();
+    if !fresh {
+        validate_existing_schema(db).await?;
     }
-    // Connection hardening: WAL journal (no-op for in-memory databases),
-    // bounded busy timeout, and NORMAL synchronous mode. In WAL mode NORMAL
-    // preserves consistency, but a power failure can lose recent commits
-    // that have not been synced by a checkpoint.
     for pragma in [
         "PRAGMA journal_mode = WAL",
         "PRAGMA busy_timeout = 15000",
@@ -131,55 +120,19 @@ pub async fn initialize_schema(db: &DatabaseConnection) -> Result<(), DbErr> {
         ))
         .await?;
     }
-    match current_version {
-        0 => {
-            let txn = db.begin().await?;
-            for statement in TABLES.iter().chain(INDEXES).chain(SEEDS) {
-                txn.execute(Statement::from_string(
-                    txn.get_database_backend(),
-                    (*statement).to_owned(),
-                ))
-                .await?;
-            }
-            install_invariant_triggers(&txn).await?;
-            txn.execute(Statement::from_string(
-                txn.get_database_backend(),
-                format!("PRAGMA user_version = {CURRENT_SCHEMA_VERSION}"),
-            ))
-            .await?;
-            txn.commit().await
-        }
-        _ if outdated_invariant_triggers(db).await?.is_empty() => Ok(()),
-        _ => {
-            let txn = crate::transaction::begin_with_write_lock(db).await?;
-            // Recheck under the write lock before touching any trigger.
-            let version = read_schema_version(&txn).await?;
-            if version != CURRENT_SCHEMA_VERSION {
-                return Err(incompatible_version(version));
-            }
-            validate_existing_schema(&txn).await?;
-            refresh_invariant_triggers(&txn).await?;
-            txn.commit().await
-        }
+    if !fresh {
+        return Ok(());
     }
-}
-
-fn incompatible_version(version: i64) -> DbErr {
-    DbErr::Custom(format!(
-        "database schema version {version} is incompatible with the supported version {CURRENT_SCHEMA_VERSION}; \
-         Agena does not migrate incompatible databases, so create a fresh database"
-    ))
-}
-
-async fn read_schema_version<C: ConnectionTrait>(db: &C) -> Result<i64, DbErr> {
-    let row = db
-        .query_one(Statement::from_string(
-            db.get_database_backend(),
-            "PRAGMA user_version".to_owned(),
+    let txn = db.begin().await?;
+    for statement in TABLES.iter().chain(INDEXES).chain(SEEDS) {
+        txn.execute(Statement::from_string(
+            txn.get_database_backend(),
+            (*statement).to_owned(),
         ))
-        .await?
-        .ok_or_else(|| DbErr::Custom("SQLite did not return user_version".to_owned()))?;
-    row.try_get("", "user_version")
+        .await?;
+    }
+    install_invariant_triggers(&txn).await?;
+    txn.commit().await
 }
 
 /// Seed rows for the database-backed part-id allocator. `next_val` is the next
@@ -287,7 +240,7 @@ mod tests {
     }
 
     /// Insert a run marker and one content part under it, in the canonical
-    /// v2 shape (run marker is the root of its batch; content part points at
+    /// parts-first shape (run marker is the root of its batch; content part points at
     /// the marker via `run_id`).
     async fn seed_parts(db: &DatabaseConnection) {
         execute(
@@ -319,10 +272,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn v2_schema_initializes_with_the_normalized_background_tables() {
+    async fn current_schema_initializes_with_the_normalized_background_tables() {
         let db = initialized_database().await;
         // Assert the complete Agena-owned table set, not only positive
-        // existence of the nine chat tables. Any historical chat table or
+        // existence of the nine chat tables. Any unexpected chat table or
         // accidental dead-data table makes this exact-set assertion fail.
         let expected = std::collections::BTreeSet::from(
             [
@@ -368,6 +321,37 @@ mod tests {
             .collect::<std::collections::BTreeSet<_>>();
         assert!(session_columns.contains("favorite"));
         assert!(session_columns.contains("pinned"));
+    }
+
+    #[tokio::test]
+    async fn current_schema_reopens_without_rewriting_objects() {
+        let db = initialized_database().await;
+        let before = validation::schema_objects(&db).await.unwrap();
+        initialize_schema(&db).await.unwrap();
+        assert_eq!(validation::schema_objects(&db).await.unwrap(), before);
+    }
+
+    #[tokio::test]
+    async fn modified_current_schema_is_rejected_without_repair() {
+        for mutation in [
+            "ALTER TABLE agena_parts ADD COLUMN obsolete TEXT",
+            "DROP INDEX uq_agena_workspace_path",
+            "DROP TRIGGER agena_parts_identity_immutable",
+            "CREATE TABLE agena_obsolete_content (id INTEGER PRIMARY KEY)",
+        ] {
+            let db = initialized_database().await;
+            execute(&db, mutation).await.unwrap();
+            let before = validation::schema_objects(&db).await.unwrap();
+            let error = initialize_schema(&db)
+                .await
+                .expect_err("modified schema must be rejected");
+            assert!(
+                error
+                    .to_string()
+                    .contains("does not match this Agena build")
+            );
+            assert_eq!(validation::schema_objects(&db).await.unwrap(), before);
+        }
     }
 
     #[tokio::test]

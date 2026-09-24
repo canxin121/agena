@@ -19,6 +19,35 @@ pub struct PluginSignature {
     pub signature: String,
 }
 
+#[cfg(test)]
+mod current_shape_tests {
+    use super::*;
+
+    #[test]
+    fn registry_records_reject_unknown_fields() {
+        let mut index = RegistryIndex::default();
+        index.plugins.push(PluginRecord {
+            id: "demo.plugin".to_owned(),
+            name: String::new(),
+            description: String::new(),
+            homepage: None,
+            repository: None,
+            license: None,
+            category: None,
+            tags: Vec::new(),
+            review_tier: MarketplaceReviewTier::Community,
+            featured: false,
+            versions: Vec::new(),
+        });
+
+        let mut value = serde_json::to_value(index).expect("serialize current registry");
+        value["plugins"][0]["obsolete"] = serde_json::json!(true);
+        let error = serde_json::from_value::<RegistryIndex>(value)
+            .expect_err("unknown plugin-record fields must be rejected");
+        assert!(error.to_string().contains("unknown field `obsolete`"));
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(default, deny_unknown_fields)]
 /// Human-facing marketplace identity. It is metadata only; plugin installation
@@ -40,15 +69,11 @@ pub struct MarketplaceOwner {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-/// Deterministic marketplace registry. Stable plugin ids are never silently
-/// reused: explicit rename chains preserve old install locators, following the
-/// same immutable-slug principle used by mature agent plugin marketplaces.
+#[serde(deny_unknown_fields)]
+/// Deterministic marketplace registry keyed by current plugin ids.
 pub struct RegistryIndex {
-    #[serde(default = "default_index_version")]
     pub version: u32,
     pub marketplace: MarketplaceMetadata,
-    pub renames: BTreeMap<String, String>,
     pub plugins: Vec<PluginRecord>,
 }
 
@@ -69,7 +94,6 @@ impl Default for RegistryIndex {
         Self {
             version: default_index_version(),
             marketplace: MarketplaceMetadata::default(),
-            renames: BTreeMap::new(),
             plugins: Vec::new(),
         }
     }
@@ -165,7 +189,6 @@ impl PluginReleaseSource {
 /// Immutable release manifest uploaded alongside GitHub Release assets.
 /// One manifest can describe every platform build for a single plugin version.
 pub struct PluginReleaseManifest {
-    #[serde(default = "default_index_version")]
     pub schema_version: u32,
     pub id: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -362,7 +385,6 @@ impl PluginReleaseManifest {
         Ok(RegistryIndex {
             version: 1,
             marketplace: MarketplaceMetadata::default(),
-            renames: BTreeMap::new(),
             plugins: vec![self.to_plugin_record(manifest_source)?],
         })
     }
@@ -557,29 +579,6 @@ impl RegistryIndex {
                 )));
             }
         }
-        for (alias, target) in &self.renames {
-            agena_plugin_contracts::validate_plugin_identity(alias).map_err(|error| {
-                MarketplaceError::Index(format!(
-                    "invalid marketplace rename source `{alias}`: {error}"
-                ))
-            })?;
-            agena_plugin_contracts::validate_plugin_identity(target).map_err(|error| {
-                MarketplaceError::Index(format!(
-                    "invalid marketplace rename target `{target}`: {error}"
-                ))
-            })?;
-            if alias == target {
-                return Err(MarketplaceError::Index(format!(
-                    "marketplace rename `{alias}` cannot point to itself"
-                )));
-            }
-            if plugin_ids.contains(alias.as_str()) {
-                return Err(MarketplaceError::Index(format!(
-                    "marketplace rename source `{alias}` is still an active plugin id"
-                )));
-            }
-            self.resolve_plugin_id(alias)?;
-        }
         if let Some(repository) = self.marketplace.repository.as_deref()
             && normalize_github_repository_url(repository).is_none()
         {
@@ -648,28 +647,6 @@ impl RegistryIndex {
         Ok(())
     }
 
-    /// Resolve an immutable old slug through the explicit rename graph. Rename
-    /// chains are allowed for long-lived catalogs, but cycles and dangling
-    /// targets are rejected by the same method used by validation and install.
-    pub fn resolve_plugin_id(&self, requested: &str) -> Result<String, MarketplaceError> {
-        agena_plugin_contracts::validate_plugin_identity(requested)
-            .map_err(|error| MarketplaceError::index_error(&error))?;
-        let mut current = requested.to_string();
-        let mut seen = std::collections::BTreeSet::new();
-        while let Some(next) = self.renames.get(&current) {
-            if !seen.insert(current.clone()) {
-                return Err(MarketplaceError::Index(format!(
-                    "marketplace rename cycle detected at `{current}`"
-                )));
-            }
-            current = next.clone();
-        }
-        if !self.plugins.iter().any(|plugin| plugin.id == current) {
-            return Err(MarketplaceError::PluginNotFound(current));
-        }
-        Ok(current)
-    }
-
     pub fn upsert_release(
         &mut self,
         release: &PluginReleaseManifest,
@@ -707,6 +684,7 @@ fn default_index_version() -> u32 {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 /// A plugin entry in the registry index.
 pub struct PluginRecord {
     pub id: String,
@@ -755,6 +733,7 @@ impl MarketplaceReviewTier {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 /// A version of a marketplace plugin.
 pub struct PluginVersion {
     pub version: String,
@@ -796,7 +775,7 @@ pub struct PluginVersion {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(tag = "format", rename_all = "snake_case")]
+#[serde(tag = "format", rename_all = "snake_case", deny_unknown_fields)]
 /// How a plugin archive is fetched.
 pub enum ArchiveSpec {
     /// gzip tar archive. The named entrypoint inside the archive is what the
@@ -806,6 +785,7 @@ pub enum ArchiveSpec {
 
 /// A single dependency reference: another plugin id + a semver requirement.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct DependencySpec {
     pub plugin_id: String,
     pub version_req: String,

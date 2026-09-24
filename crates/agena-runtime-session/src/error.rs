@@ -665,8 +665,8 @@ mod tests {
         assert!(!display.contains("/private/agena.sqlite"));
         // Machine code is not shown to the user.
         assert!(!display.contains(failure.code.as_str()));
-        // A real, human-readable message replaces the old generic fallback,
-        // with no correlation-id noise appended.
+        // The user sees a real, human-readable message with no correlation-id
+        // noise appended.
         assert!(!display.contains("Something went wrong."));
         assert!(display.contains("database error") || display.contains("<redacted>"));
         assert!(!display.contains("Reference:"));

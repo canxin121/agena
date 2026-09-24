@@ -50,22 +50,6 @@ impl WorkflowPlugin {
             }
         }
 
-        if let Some(renamed) = agena_tool::provider_tools::renamed(requested) {
-            return Err(PluginError::invalid_params_with_data(
-                renamed.migration_message(),
-                serde_json::json!({
-                    "kind":"renamed_cloud_provider_tool","requested":requested,"replacement":renamed.name,"execution_location":"vendor_cloud","automatically_redirected":false,
-                }),
-            ));
-        }
-        if let Some(retired) = agena_tool::provider_tools::retired(requested) {
-            return Err(PluginError::invalid_params_with_data(
-                retired.message(),
-                serde_json::json!({
-                    "kind":"retired_provider_tool","requested":requested,"alternatives":retired.alternatives,"automatically_redirected":false,
-                }),
-            ));
-        }
         let suggestions = Self::suggest_tool_names(requested, tools);
         let suggestion_text = if suggestions.is_empty() {
             String::new()

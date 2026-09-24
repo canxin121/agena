@@ -1017,7 +1017,7 @@ mod tests {
                     .iter()
                     .flat_map(|(_, entries)| entries)
                     .all(|(keys, _)| !keys.contains("PageUp")),
-                "{preset:?} must not advertise legacy page keys"
+                "{preset:?} must not advertise removed page keys"
             );
         }
     }

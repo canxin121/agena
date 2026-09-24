@@ -40,7 +40,7 @@ const SESSION_PAGE_SIZE = 30
 // group. The server keeps consecutive runs of one role together so a burst of
 // user sends or assistant continuations is never split at a page boundary.
 const MESSAGE_PAGE_SIZE = 2
-const STORAGE_SELECTED_SESSION = 'agena.chat.selected-session-id.v1'
+const STORAGE_SELECTED_SESSION = 'agena.chat.selected-session-id'
 
 function isRecord(value: JsonValue): value is JsonObject {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -490,9 +490,9 @@ const useChatStoreDefinition = defineStore('chat', () => {
   function extractRunConfigFromMessageInfo(info: MessageInfo | null | undefined): Partial<SessionRunConfig> {
     if (!info) return {}
     const out: Partial<SessionRunConfig> = {}
-    const providerID = readString(info.providerID as JsonValue) || readString(info.provider_id as JsonValue)
-    const modelID = readString(info.modelID as JsonValue) || readString(info.model_id as JsonValue)
-    const adapterID = readString(info.adapterID as JsonValue) || readString(info.adapter_id as JsonValue)
+    const providerID = readString(info.providerID as JsonValue)
+    const modelID = readString(info.modelID as JsonValue)
+    const adapterID = readString(info.adapterID as JsonValue)
     if (providerID) out.providerID = providerID
     if (adapterID) out.adapterID = adapterID
     if (modelID) out.modelID = modelID
@@ -1559,12 +1559,6 @@ const useChatStoreDefinition = defineStore('chat', () => {
    *   runtime_signal   properties.kind / session_id / payload
    *   lagged           → full resync (handled by useAppRuntime onEvent too)
    *
-   * Mapping (opencode SSE → agena):
-   *   message.part.created / .updated   → part_added / part_updated
-   *   message.part.removed / removed    → part_removed
-   *   session.updated                   → session_meta_updated
-   *   session.status / session.idle     → runtime_signal (session execution status)
-   *   permission.asked / question.asked → session.state.data.requests (via state refresh)
    */
   function applyEvent(evt: SseEvent) {
     const t = evt.type || ''
@@ -1805,7 +1799,7 @@ function scopedChat(store: ChatStore, pane: WorkspacePaneContext): ChatStore {
     const query: Record<string, string> = {}
     for (const [rawKey, rawValue] of Object.entries(pane.route.value.query || {})) {
       const key = String(rawKey || '').trim()
-      if (!key || ['session', 'sessionid', 'sessionId', 'windowid', 'windowId', 'ocEmbed'].includes(key)) continue
+      if (!key || ['sessionId', 'windowId', 'agenaEmbed'].includes(key)) continue
       const value = Array.isArray(rawValue)
         ? String(rawValue.find((item) => String(item || '').trim()) || '').trim()
         : String(rawValue || '').trim()

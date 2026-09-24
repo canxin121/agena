@@ -251,7 +251,7 @@ impl RuntimeSnapshot {
         } else {
             (None, None)
         };
-        // v2 has no persisted event store to resume (14.3): interrupted-run
+        // there is no persisted event store to resume: interrupted-run
         // reconciliation is deferred to `SessionManager::get_session` on open
         // (17.4), so there is nothing to do here.
         let services = agena_runtime::RuntimeServiceBundle::new(

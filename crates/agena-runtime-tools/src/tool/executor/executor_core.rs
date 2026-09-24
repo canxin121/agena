@@ -417,28 +417,6 @@ impl ToolExecutor {
     }
 
     pub(crate) fn unknown_tool_error(&self, requested: &str) -> ToolError {
-        if let Some(renamed) = agena_tool::provider_tools::renamed(requested) {
-            return ToolError::ToolUnavailable(Box::new(agena_domain::ToolUnavailableResult {
-                tool_name: requested.into(),
-                reason: renamed.migration_message(),
-                suggestions: vec![renamed.name.into()],
-                source: "provider_cloud_tool_rename".into(),
-                retryable: false,
-            }));
-        }
-        if let Some(retired) = agena_tool::provider_tools::retired(requested) {
-            return ToolError::ToolUnavailable(Box::new(agena_domain::ToolUnavailableResult {
-                tool_name: requested.into(),
-                reason: retired.message(),
-                suggestions: retired
-                    .alternatives
-                    .iter()
-                    .map(|name| (*name).to_owned())
-                    .collect(),
-                source: "provider_tool_retirement".into(),
-                retryable: false,
-            }));
-        }
         let suggestions = self.suggested_tool_names(requested);
         if suggestions.is_empty() {
             ToolError::ToolUnavailable(Box::new(agena_domain::ToolUnavailableResult {

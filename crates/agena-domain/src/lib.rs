@@ -72,7 +72,6 @@ mod prompt_tokens;
 mod provider_retry;
 mod reasoning;
 mod role;
-mod session_cache;
 mod session_cost;
 mod session_state;
 mod session_summary;
@@ -95,7 +94,7 @@ mod usage_stats;
 mod user_input;
 mod user_input_events;
 
-pub mod activity_v2;
+pub mod activity_view;
 pub use access::{AccessKind, AccessSelector};
 pub use activity::{
     ActivityPayload, ActivityProvenance, ActivityState, CancellationOutcome, CancellationResult,
@@ -110,7 +109,7 @@ pub use activity_kind::{
     ACTIVITY_KIND_SKILL_REFERENCE, ACTIVITY_KIND_TEXT, ActivityKind, ActivityKindCategory,
     ActivityKindId, builtin_activity_kind_defaults, builtin_activity_kinds,
 };
-pub use activity_v2::{ActivityView, DeltaMode, RawOutput, RenderDelta, ViewBlock};
+pub use activity_view::{ActivityView, DeltaMode, RawOutput, RenderDelta, ViewBlock};
 pub use attachment::{AttachmentItem, AttachmentKind, AttachmentPart, AttachmentSource};
 pub use auto_compaction::SessionAutoCompactionConfig;
 pub use background_activity::{
@@ -194,7 +193,6 @@ pub use prompt_tokens::PromptTokenUsageSnapshot;
 pub use provider_retry::{ProviderRetryEvent, ProviderRetryResolvedEvent};
 pub use reasoning::AssistantReasoningField;
 pub use role::Role;
-pub use session_cache::{SessionCacheLimits, SessionCacheStats};
 pub use session_cost::{ModelCostBreakdown, SessionCostSummary};
 pub use session_state::{SessionLifecycleState, SessionRelationKind, SubtaskStatus, WorkflowState};
 pub use session_summary::{SessionListRequest, SessionSummary};

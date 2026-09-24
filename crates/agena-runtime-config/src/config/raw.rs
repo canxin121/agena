@@ -48,7 +48,6 @@ impl RawConfigFile {
     pub fn read(path: &Path) -> Result<Self, ConfigError> {
         match crate::read_config_json(path)? {
             Some(value) => {
-                reject_unsupported_fields_value(&value)?;
                 let merge_keys = RawProjectMergeKeys::from_value(&value);
                 let config = serde_json::from_value::<RawConfig>(value).map_err(|source| {
                     ConfigError::ParseFile {
@@ -141,7 +140,6 @@ fn parse_raw_config_text(
     text: &str,
 ) -> Result<(RawConfig, RawProjectMergeKeys), ConfigError> {
     let value = crate::parse_config_json(path, text)?;
-    reject_unsupported_fields_value(&value)?;
     let merge_keys = RawProjectMergeKeys::from_value(&value);
     let config =
         serde_json::from_value::<RawConfig>(value).map_err(|source| ConfigError::ParseFile {
@@ -149,81 +147,6 @@ fn parse_raw_config_text(
             source,
         })?;
     Ok((config, merge_keys))
-}
-
-fn reject_unsupported_fields_value(value: &Value) -> Result<(), ConfigError> {
-    let Some(table) = value.as_object() else {
-        return Ok(());
-    };
-    if table.contains_key("mode") {
-        return Err(ConfigError::UnsupportedModeConfig { field: "mode" });
-    }
-    if table.contains_key("modes") {
-        return Err(ConfigError::UnsupportedModeConfig { field: "modes" });
-    }
-    if table.contains_key("telemetry") {
-        return Err(ConfigError::Validation(
-            "`telemetry` has been removed".to_string(),
-        ));
-    }
-    if table.contains_key("hooks") {
-        return Err(ConfigError::Validation(
-            "`hooks` has been removed; implement hook behavior as a regular plugin under `plugins.list.<id>`".to_string(),
-        ));
-    }
-    if let Some(providers) = table.get("providers").and_then(Value::as_object) {
-        if providers.contains_key("default") {
-            return Err(ConfigError::Validation(
-                "`providers.default` is no longer supported; select a model explicitly".to_string(),
-            ));
-        }
-        for (provider_id, provider) in providers {
-            let Some(provider) = provider.as_object() else {
-                continue;
-            };
-            if provider.contains_key("defaults") {
-                return Err(ConfigError::Validation(format!(
-                    "provider `{provider_id}` no longer supports `defaults`; select a model explicitly"
-                )));
-            }
-            if provider.contains_key("variants")
-                || provider.contains_key("thinking_variants")
-                || provider.contains_key("thinking_modes")
-                || provider.contains_key("speed_modes")
-            {
-                return Err(ConfigError::Validation(format!(
-                    "provider `{provider_id}` model modes must be configured under `providers.{provider_id}.adapters.<adapter-id>.models.\"<model-id>\".thinking_modes` or `.speed_modes`; provider-level modes are not supported"
-                )));
-            }
-            if let Some(adapters) = provider.get("adapters").and_then(Value::as_object) {
-                for (adapter_id, adapter) in adapters {
-                    let Some(adapter) = adapter.as_object() else {
-                        continue;
-                    };
-                    if let Some(models) = adapter.get("models").and_then(Value::as_object) {
-                        for (model_id, model) in models {
-                            let Some(model) = model.as_object() else {
-                                continue;
-                            };
-                            for field in [
-                                "target_model",
-                                "default_thinking_mode",
-                                "thinking_variants",
-                                "default_thinking_variant",
-                            ] {
-                                if model.contains_key(field) {
-                                    return Err(ConfigError::Validation(format!(
-                                        "provider `{provider_id}` adapter `{adapter_id}` model `{model_id}` does not support `{field}`"
-                                    )));
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-    Ok(())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
@@ -1224,9 +1147,7 @@ pub fn parse_adapter_model_ref(
 
 #[cfg(test)]
 mod openai_protocol_adapter_tests {
-    use super::{
-        RawConfig, reject_unsupported_fields_value, validate_config_text, validate_configured_modes,
-    };
+    use super::{validate_config_text, validate_configured_modes};
     use agena_provider::ConfiguredModelDefinition;
     use std::{fs, path::Path};
 
@@ -1256,10 +1177,7 @@ mod openai_protocol_adapter_tests {
 
     #[test]
     fn distinct_openai_protocol_adapters_are_accepted() {
-        for adapter_id in [
-            "openai_responses",
-            "openai_chat_completions",
-        ] {
+        for adapter_id in ["openai_responses", "openai_chat_completions"] {
             validate_config_text(
                 Path::new("agena.json"),
                 config_with_adapter(adapter_id, "").as_str(),
@@ -1269,51 +1187,19 @@ mod openai_protocol_adapter_tests {
     }
 
     #[test]
-    fn legacy_openai_adapter_id_is_rejected() {
-        let error = validate_config_text(
-            Path::new("agena.json"),
-            config_with_adapter("openai", "").as_str(),
-        )
-        .expect_err("legacy adapter id must be rejected");
-        assert!(error.to_string().contains("unknown provider kind `openai`"));
-    }
-
-    #[test]
-    fn removed_agent_configuration_is_rejected() {
-        for value in [
-            serde_json::json!({ "agents": { "default": "build" } }),
-            serde_json::json!({ "agent_profile": "build" }),
-        ] {
-            let error = serde_json::from_value::<RawConfig>(value)
-                .expect_err("removed agent configuration must not be silently accepted");
-            assert!(error.to_string().contains("unknown field"));
-        }
-    }
-
-    #[test]
-    fn legacy_api_mode_field_is_rejected() {
-        let error = validate_config_text(
-            Path::new("agena.json"),
-            config_with_adapter("openai_responses", r#""api_mode": "auto","#).as_str(),
-        )
-        .expect_err("legacy api_mode must be rejected");
-        assert!(error.to_string().contains("unknown field `api_mode`"));
-    }
-
-    #[test]
-    fn prompt_envelope_tool_mode_is_rejected() {
+    fn unknown_tool_mode_is_rejected() {
         let config = config_with_adapter("openai_chat_completions", "").replace(
             r#""gpt-test": {}"#,
             r#""gpt-test": {
-                "agena_tools": { "mode": "prompt_envelope" }
+                "agena_tools": { "mode": "unsupported_mode" }
             }"#,
         );
         validate_config_text(Path::new("agena.json"), config.as_str())
-            .expect_err("prompt-envelope mode was removed and must be rejected");
+            .expect_err("unknown tool mode must be rejected");
     }
 
     #[test]
-    fn provider_native_tools_are_rejected_for_every_mode() {
+    fn unknown_agena_tool_fields_are_rejected_for_every_mode() {
         for mode in ["provider_protocol", "disabled"] {
             let config = config_with_adapter("openai_chat_completions", "").replace(
                 r#""gpt-test": {}"#,
@@ -1321,87 +1207,25 @@ mod openai_protocol_adapter_tests {
                     r#""gpt-test": {{
                 "agena_tools": {{
                     "mode": "{mode}",
-                    "provider_native": {{
-                        "routes": {{ "web_search": "provider_hosted" }}
-                    }}
+                    "obsolete": true
                 }}
             }}"#
                 )
                 .as_str(),
             );
             let error = validate_config_text(Path::new("agena.json"), config.as_str())
-                .expect_err("provider-native model-route configuration must be rejected");
-            assert!(
-                error
-                    .to_string()
-                    .contains("unknown field `agena_tools.provider_native`")
-            );
+                .expect_err("unknown model-route configuration must be rejected");
+            assert!(error.to_string().contains("unknown field `obsolete`"));
         }
     }
 
     #[test]
-    fn direct_tool_policy_is_rejected_for_every_mode() {
-        for mode in ["provider_protocol", "disabled"] {
-            let config = config_with_adapter("openai_chat_completions", "").replace(
-                r#""gpt-test": {}"#,
-                format!(
-                    r#""gpt-test": {{
-                "agena_tools": {{
-                    "mode": "{mode}",
-                    "direct": {{ "max_tools": 3 }}
-                }}
-            }}"#
-                )
-                .as_str(),
-            );
-            let error = validate_config_text(Path::new("agena.json"), config.as_str())
-                .expect_err("direct model-route configuration must be rejected");
-            assert!(
-                error
-                    .to_string()
-                    .contains("unknown field `agena_tools.direct`")
-            );
-        }
-    }
-
-    #[test]
-    fn legacy_transport_key_is_rejected() {
-        let error = serde_json::from_value::<agena_provider::ResolvedProviderModelConfig>(
-            serde_json::json!({ "agena_tools": { "transport": "prompt_envelope" } }),
-        )
-        .expect_err("legacy transport key must be rejected");
-        assert!(error.to_string().contains("unknown field `transport`"));
-    }
-
-    #[test]
-    fn legacy_top_level_native_tool_keys_are_rejected() {
-        for key in ["provider_tools", "provider_native_tools", "native_tools"] {
-            let mut object = serde_json::Map::new();
-            object.insert(key.to_owned(), serde_json::json!({ "enabled": true }));
-            let error = serde_json::from_value::<agena_provider::ResolvedProviderModelConfig>(
-                serde_json::Value::Object(object),
-            )
-            .expect_err("legacy top-level native tool key must be rejected");
-            assert!(error.to_string().contains("unknown field"), "key: {key}");
-        }
-    }
-
-    #[test]
-    fn removed_tool_declarations_are_not_serialized() {
-        let model: agena_provider::ResolvedProviderModelConfig =
-            serde_json::from_value(serde_json::json!({
-                "agena_tools": {
-                    "mode": "provider_protocol"
-                }
-            }))
-            .expect("gateway-only model config should deserialize");
-
-        let serialized = serde_json::to_value(model).expect("model config should serialize");
-        assert!(serialized["agena_tools"].get("direct").is_none());
-        assert!(serialized["agena_tools"].get("provider_native").is_none());
-        assert!(serialized.get("provider_tools").is_none());
-        assert!(serialized.get("provider_native_tools").is_none());
-        assert!(serialized.get("native_tools").is_none());
+    fn unknown_model_fields_are_rejected() {
+        let config = config_with_adapter("openai_chat_completions", "")
+            .replace(r#""gpt-test": {}"#, r#""gpt-test": { "obsolete": true }"#);
+        let error = validate_config_text(Path::new("agena.json"), config.as_str())
+            .expect_err("unknown model fields must be rejected");
+        assert!(error.to_string().contains("unknown field `obsolete`"));
     }
 
     #[test]
@@ -1421,24 +1245,6 @@ mod openai_protocol_adapter_tests {
         let serialized =
             serde_json::to_value(disabled).expect("disabled model config should serialize");
         assert_eq!(serialized["native_compaction"], serde_json::json!(false));
-    }
-
-    #[test]
-    fn legacy_provider_native_enabled_switch_is_rejected() {
-        let error = serde_json::from_value::<agena_provider::ResolvedProviderModelConfig>(
-            serde_json::json!({
-                "agena_tools": {
-                    "mode": "provider_protocol",
-                    "provider_native": { "enabled": true }
-                }
-            }),
-        )
-        .expect_err("provider-native configuration was removed");
-        assert!(
-            error
-                .to_string()
-                .contains("unknown field `agena_tools.provider_native`")
-        );
     }
 
     #[test]
@@ -1464,45 +1270,8 @@ mod openai_protocol_adapter_tests {
     }
 
     #[test]
-    fn legacy_model_default_thinking_mode_field_is_rejected() {
-        let error = reject_unsupported_fields_value(&serde_json::json!({
-            "providers": {
-                "test": {
-                    "adapters": {
-                        "openai_responses": {
-                            "models": {
-                                "gpt-test": {
-                                    "default_thinking_mode": "medium"
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }))
-        .expect_err("the detached string default was removed");
-
-        assert!(error.to_string().contains("default_thinking_mode"));
-    }
-
-    #[test]
-    fn provider_defaults_are_rejected() {
+    fn global_default_selection_is_accepted() {
         let value = serde_json::json!({
-            "providers": {
-                "test": {
-                    "defaults": { "adapter": "openai_responses", "model": "gpt-test" },
-                    "adapters": {}
-                }
-            }
-        });
-        let error = reject_unsupported_fields_value(&value)
-            .expect_err("provider defaults must not be accepted");
-        assert!(error.to_string().contains("no longer supports"));
-    }
-
-    #[test]
-    fn global_default_selection_is_accepted_and_provider_default_is_rejected() {
-        let mut value = serde_json::json!({
             "providers": {
                 "default_selection": {
                     "provider": "test",
@@ -1531,11 +1300,6 @@ mod openai_protocol_adapter_tests {
         });
         validate_config_text(Path::new("agena.json"), &value.to_string())
             .expect("global default selection should be accepted");
-
-        value["providers"]["default"] = serde_json::json!("test");
-        let error = reject_unsupported_fields_value(&value)
-            .expect_err("providers.default must remain rejected");
-        assert!(error.to_string().contains("providers.default"));
     }
 
     #[test]
@@ -1641,59 +1405,5 @@ mod openai_protocol_adapter_tests {
         let error = validate_config_text(Path::new("agena.json"), &value.to_string())
             .expect_err("unknown global default provider must be rejected");
         assert!(error.to_string().contains("unknown provider"));
-    }
-
-    #[test]
-    fn legacy_provider_defaults_with_disabled_adapter_are_rejected() {
-        // The old provider defaults object is rejected before adapter-level
-        // validation, regardless of the adapter's enabled state.
-        let value = serde_json::json!({
-            "providers": {
-                "test": {
-                    "defaults": { "adapter": "openai_chat_completions" },
-                    "auth": {
-                        "mode": "api",
-                        "subtype": "custom",
-                        "base_url": "https://api.openai.com",
-                        "api_key": { "kind": "inline", "value": "test-key" }
-                    },
-                    "adapters": {
-                        "openai_chat_completions": { "enabled": false },
-                        "anthropic": { "enabled": true }
-                    }
-                }
-            }
-        });
-        let error = reject_unsupported_fields_value(&value)
-            .expect_err("provider defaults must be rejected");
-        assert!(error.to_string().contains("no longer supports"));
-    }
-
-    #[test]
-    fn provider_config_without_legacy_selection_fields_is_rejected_only_for_legacy_defaults() {
-        // This fixture represents a provider document after the global
-        // selection mechanism was removed; only the obsolete nested defaults
-        // object should make it fail.
-        let value = serde_json::json!({
-            "providers": {
-                "chatgpt": {
-                    "defaults": { "adapter": "openai_responses", "model": "gpt-5" },
-                    "auth": {
-                        "mode": "credential",
-                        "issuer": "openai_chatgpt"
-                    },
-                    "adapters": {
-                        "openai_responses": {
-                            "enabled": true,
-                            "backend": "chatgpt_codex",
-                            "models": { "gpt-5": {} }
-                        }
-                    }
-                }
-            }
-        });
-        let error = reject_unsupported_fields_value(&value)
-            .expect_err("provider defaults must be rejected");
-        assert!(error.to_string().contains("no longer supports"));
     }
 }

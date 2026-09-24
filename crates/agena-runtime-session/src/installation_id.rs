@@ -24,35 +24,38 @@ async fn resolve_installation_id_in(base_dir: &Path) -> io::Result<String> {
             match std::fs::read_to_string(&path) {
                 Ok(contents) => {
                     let trimmed = contents.trim();
-                    if !trimmed.is_empty()
-                        && let Ok(existing) = Uuid::parse_str(trimmed)
-                    {
-                        return Ok(existing.to_string());
-                    }
+                    let existing = Uuid::parse_str(trimmed).map_err(|error| {
+                        io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            format!(
+                                "installation id at {} does not match the current UUID format: {error}",
+                                path.display()
+                            ),
+                        )
+                    })?;
+                    return Ok(existing.to_string());
                 }
                 Err(error) if error.kind() == io::ErrorKind::NotFound => {}
                 Err(error) => return Err(error),
             }
 
             let installation_id = Uuid::new_v4().to_string();
-            if path.exists() {
-                agena_runtime_tools::atomic_replace_file(&path, installation_id.as_bytes())?;
-            } else {
-                match agena_runtime_tools::atomic_create_file(
-                    &path,
-                    installation_id.as_bytes(),
-                    None,
-                ) {
-                    Ok(()) => {}
-                    Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
-                        let winner = std::fs::read_to_string(&path)?;
-                        if let Ok(existing) = Uuid::parse_str(winner.trim()) {
-                            return Ok(existing.to_string());
-                        }
-                        return Err(error);
-                    }
-                    Err(error) => return Err(error),
+            match agena_runtime_tools::atomic_create_file(&path, installation_id.as_bytes(), None) {
+                Ok(()) => {}
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                    let winner = std::fs::read_to_string(&path)?;
+                    let existing = Uuid::parse_str(winner.trim()).map_err(|parse_error| {
+                        io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            format!(
+                                "installation id at {} does not match the current UUID format: {parse_error}",
+                                path.display()
+                            ),
+                        )
+                    })?;
+                    return Ok(existing.to_string());
                 }
+                Err(error) => return Err(error),
             }
             Ok(installation_id)
         })?
@@ -66,7 +69,7 @@ mod tests {
     use super::resolve_installation_id_in;
 
     #[tokio::test]
-    async fn reuses_valid_id_and_replaces_invalid_contents() {
+    async fn reuses_valid_id_and_rejects_invalid_contents() {
         let directory = tempfile::tempdir().expect("create installation-id directory");
         let first = resolve_installation_id_in(directory.path())
             .await
@@ -79,11 +82,16 @@ mod tests {
         tokio::fs::write(directory.path().join("installation_id"), "not-a-uuid")
             .await
             .expect("write invalid installation id");
-        let replacement = resolve_installation_id_in(directory.path())
+        let error = resolve_installation_id_in(directory.path())
             .await
-            .expect("replace invalid installation id");
-        assert_ne!(replacement, "not-a-uuid");
-        assert!(uuid::Uuid::parse_str(&replacement).is_ok());
+            .expect_err("invalid installation id must not be replaced");
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+        assert_eq!(
+            tokio::fs::read_to_string(directory.path().join("installation_id"))
+                .await
+                .unwrap(),
+            "not-a-uuid"
+        );
     }
 
     #[tokio::test]

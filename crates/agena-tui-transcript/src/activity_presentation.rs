@@ -11,7 +11,7 @@ use crate::{
 };
 
 /// Project an optimistic composer document into the same part shape used by
-/// the persisted v2 parts transcript.
+/// the persisted parts transcript.
 pub fn pending_user_entry<'a>(
     pending_id: u64,
     confirmed: bool,

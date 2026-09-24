@@ -70,7 +70,7 @@ pub(crate) struct RuntimeSessionBuildConfig {
     pub(crate) default_selection: agena_domain::ExecutionSelection,
     pub(crate) permission: agena_domain::PermissionConfig,
     pub(crate) auto_compaction: agena_domain::SessionAutoCompactionConfig,
-    pub(crate) cache_limits: agena_domain::SessionCacheLimits,
+    pub(crate) max_cached_sessions: usize,
     pub(crate) max_concurrent_tools: usize,
     /// Cap on model turns within one stable run; `None` uses the session
     /// manager's fallback (`DEFAULT_MAX_MODEL_TURNS`). Not yet wired to TOML;
@@ -91,7 +91,7 @@ pub(crate) fn session_build_config_from_resolved(
             enabled: config.session.compaction.auto,
             reserved_tokens: config.session.compaction.reserved_tokens,
         },
-        cache_limits: agena_domain::SessionCacheLimits::default(),
+        max_cached_sessions: 128,
         max_concurrent_tools: DEFAULT_MAX_CONCURRENT_TOOLS,
         // `None` falls back to `DEFAULT_MAX_MODEL_TURNS` (500) in
         // agena-runtime-session; `Some(0)` means unlimited (handled in

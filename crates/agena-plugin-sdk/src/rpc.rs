@@ -183,7 +183,6 @@ pub mod method {
     pub const HOST_EVENT_SUBSCRIBE: &str = "host/event.subscribe";
     pub const HOST_EVENT_UNSUBSCRIBE: &str = "host/event.unsubscribe";
     pub const HOST_CONFIG_READ: &str = "host/config.read";
-    pub const HOST_CONFIG_RELOAD: &str = "host/config.reload";
     pub const HOST_CONFIG_RELOAD_REQUEST: &str = "host/config.reload.request";
     pub const HOST_CONFIG_RELOAD_STATUS: &str = "host/config.reload.status";
     pub const HOST_TOOL_INVOKE: &str = "host/tool.invoke";

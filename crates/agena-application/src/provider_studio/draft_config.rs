@@ -1,4 +1,4 @@
-//! Draft provider configuration edited in the studio, migrated from
+//! Draft provider configuration edited in the studio. Previously located in
 //! `agena-tui-backend/src/backend_drafts/provider_draft_config.rs`.
 
 use anyhow::{Result, anyhow};

@@ -92,7 +92,7 @@ dependencies = [
 
 [[package]]
 name = "agena"
-version = "0.1.2-beta.1"
+version = "0.1.0"
 dependencies = [
  "agena-api",
  "agena-api-server",
@@ -153,7 +153,7 @@ dependencies = [
 
 [[package]]
 name = "agena-api"
-version = "0.1.2-beta.1"
+version = "0.1.0"
 dependencies = [
  "agena-domain",
  "agena-failure",
@@ -169,7 +169,7 @@ dependencies = [
 
 [[package]]
 name = "agena-api-server"
-version = "0.1.2-beta.1"
+version = "0.1.0"
 dependencies = [
  "agena-api",
  "agena-application",
@@ -210,7 +210,7 @@ dependencies = [
 
 [[package]]
 name = "agena-application"
-version = "0.1.2-beta.1"
+version = "0.1.0"
 dependencies = [
  "agena-api",
  "agena-domain",
@@ -244,7 +244,7 @@ dependencies = [
 
 [[package]]
 name = "agena-bundled-plugins"
-version = "0.1.2-beta.1"
+version = "0.1.0"
 dependencies = [
  "agena-domain",
  "agena-failure",
@@ -289,7 +289,7 @@ dependencies = [
 
 [[package]]
 name = "agena-cli"
-version = "0.1.2-beta.1"
+version = "0.1.0"
 dependencies = [
  "agena-api",
  "agena-application",
@@ -320,7 +320,7 @@ dependencies = [
 
 [[package]]
 name = "agena-client"
-version = "0.1.2-beta.1"
+version = "0.1.0"
 dependencies = [
  "agena-api",
  "agena-domain",
@@ -344,7 +344,7 @@ dependencies = [
 
 [[package]]
 name = "agena-domain"
-version = "0.1.2-beta.1"
+version = "0.1.0"
 dependencies = [
  "agena-failure",
  "chrono",
@@ -361,7 +361,7 @@ dependencies = [
 
 [[package]]
 name = "agena-e2e"
-version = "0.1.2-beta.1"
+version = "0.1.0"
 dependencies = [
  "agena-domain",
  "agena-mcp-client",
@@ -379,7 +379,7 @@ dependencies = [
 
 [[package]]
 name = "agena-echo-plugin"
-version = "0.1.2-beta.1"
+version = "0.1.0"
 dependencies = [
  "abi_stable",
  "agena-plugin-sdk",
@@ -392,7 +392,7 @@ dependencies = [
 
 [[package]]
 name = "agena-echo-plugin-stdio"
-version = "0.1.2-beta.1"
+version = "0.1.0"
 dependencies = [
  "agena-plugin-sdk",
  "async-trait",
@@ -404,7 +404,7 @@ dependencies = [
 
 [[package]]
 name = "agena-failure"
-version = "0.1.2-beta.1"
+version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -413,7 +413,7 @@ dependencies = [
 
 [[package]]
 name = "agena-git-http"
-version = "0.1.2-beta.1"
+version = "0.1.0"
 dependencies = [
  "agena-failure",
  "agena-process",
@@ -435,7 +435,7 @@ dependencies = [
 
 [[package]]
 name = "agena-keyring-store"
-version = "0.1.2-beta.1"
+version = "0.1.0"
 dependencies = [
  "apple-native-keyring-store",
  "keyring",
@@ -444,7 +444,7 @@ dependencies = [
 
 [[package]]
 name = "agena-lsp"
-version = "0.1.2-beta.1"
+version = "0.1.0"
 dependencies = [
  "agena-failure",
  "agena-process",
@@ -467,7 +467,7 @@ dependencies = [
 
 [[package]]
 name = "agena-macro-core"
-version = "0.1.2-beta.1"
+version = "0.1.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -477,7 +477,7 @@ dependencies = [
 
 [[package]]
 name = "agena-macros"
-version = "0.1.2-beta.1"
+version = "0.1.0"
 dependencies = [
  "agena-macro-core",
  "proc-macro2",
@@ -486,7 +486,7 @@ dependencies = [
 
 [[package]]
 name = "agena-marketplace-server"
-version = "0.1.2-beta.1"
+version = "0.1.0"
 dependencies = [
  "agena-plugin-marketplace",
  "axum",
@@ -497,7 +497,7 @@ dependencies = [
 
 [[package]]
 name = "agena-mcp-client"
-version = "0.1.2-beta.1"
+version = "0.1.0"
 dependencies = [
  "agena-failure",
  "agena-keyring-store",
@@ -521,7 +521,7 @@ dependencies = [
 
 [[package]]
 name = "agena-mcp-server"
-version = "0.1.2-beta.1"
+version = "0.1.0"
 dependencies = [
  "agena-failure",
  "agena-mcp-client",
@@ -535,7 +535,7 @@ dependencies = [
 
 [[package]]
 name = "agena-memory-index"
-version = "0.1.2-beta.1"
+version = "0.1.0"
 dependencies = [
  "agena-storage",
  "serde",
@@ -547,7 +547,7 @@ dependencies = [
 
 [[package]]
 name = "agena-multi-tool-plugin-stdio"
-version = "0.1.2-beta.1"
+version = "0.1.0"
 dependencies = [
  "agena-plugin-sdk",
  "async-trait",
@@ -559,7 +559,7 @@ dependencies = [
 
 [[package]]
 name = "agena-notification"
-version = "0.1.2-beta.1"
+version = "0.1.0"
 dependencies = [
  "agena-failure",
  "async-trait",
@@ -571,7 +571,7 @@ dependencies = [
 
 [[package]]
 name = "agena-permission"
-version = "0.1.2-beta.1"
+version = "0.1.0"
 dependencies = [
  "agena-domain",
  "async-trait",
@@ -581,7 +581,7 @@ dependencies = [
 
 [[package]]
 name = "agena-plugin-contracts"
-version = "0.1.2-beta.1"
+version = "0.1.0"
 dependencies = [
  "agena-failure",
  "regex",
@@ -593,7 +593,7 @@ dependencies = [
 
 [[package]]
 name = "agena-plugin-dev"
-version = "0.1.2-beta.1"
+version = "0.1.0"
 dependencies = [
  "agena-plugin-marketplace",
  "clap",
@@ -602,7 +602,7 @@ dependencies = [
 
 [[package]]
 name = "agena-plugin-host"
-version = "0.1.2-beta.1"
+version = "0.1.0"
 dependencies = [
  "abi_stable",
  "agena-failure",
@@ -638,7 +638,7 @@ dependencies = [
 
 [[package]]
 name = "agena-plugin-marketplace"
-version = "0.1.2-beta.1"
+version = "0.1.0"
 dependencies = [
  "agena-failure",
  "agena-plugin-contracts",
@@ -661,7 +661,7 @@ dependencies = [
 
 [[package]]
 name = "agena-plugin-sdk"
-version = "0.1.2-beta.1"
+version = "0.1.0"
 dependencies = [
  "abi_stable",
  "agena-domain",
@@ -706,7 +706,7 @@ dependencies = [
 
 [[package]]
 name = "agena-process"
-version = "0.1.2-beta.1"
+version = "0.1.0"
 dependencies = [
  "libc",
  "portable-pty",
@@ -718,7 +718,7 @@ dependencies = [
 
 [[package]]
 name = "agena-provider"
-version = "0.1.2-beta.1"
+version = "0.1.0"
 dependencies = [
  "agena-domain",
  "agena-failure",
@@ -739,7 +739,7 @@ dependencies = [
 
 [[package]]
 name = "agena-provider-bedrock-auth"
-version = "0.1.2-beta.1"
+version = "0.1.0"
 dependencies = [
  "agena-failure",
  "aws-config",
@@ -754,7 +754,7 @@ dependencies = [
 
 [[package]]
 name = "agena-provider-bedrock-signing"
-version = "0.1.2-beta.1"
+version = "0.1.0"
 dependencies = [
  "agena-failure",
  "agena-provider-bedrock-auth",
@@ -765,7 +765,7 @@ dependencies = [
 
 [[package]]
 name = "agena-provider-bedrock-streaming"
-version = "0.1.2-beta.1"
+version = "0.1.0"
 dependencies = [
  "async-stream",
  "aws-smithy-eventstream",
@@ -783,7 +783,7 @@ dependencies = [
 
 [[package]]
 name = "agena-provider-google-auth"
-version = "0.1.2-beta.1"
+version = "0.1.0"
 dependencies = [
  "agena-failure",
  "gcp_auth",
@@ -792,7 +792,7 @@ dependencies = [
 
 [[package]]
 name = "agena-rollout"
-version = "0.1.2-beta.1"
+version = "0.1.0"
 dependencies = [
  "chrono",
  "portable-atomic",
@@ -806,7 +806,7 @@ dependencies = [
 
 [[package]]
 name = "agena-runtime"
-version = "0.1.2-beta.1"
+version = "0.1.0"
 dependencies = [
  "agena-bundled-plugins",
  "agena-domain",
@@ -858,7 +858,7 @@ dependencies = [
 
 [[package]]
 name = "agena-runtime-config"
-version = "0.1.2-beta.1"
+version = "0.1.0"
 dependencies = [
  "agena-domain",
  "agena-failure",
@@ -881,7 +881,7 @@ dependencies = [
 
 [[package]]
 name = "agena-runtime-contracts"
-version = "0.1.2-beta.1"
+version = "0.1.0"
 dependencies = [
  "agena-domain",
  "agena-failure",
@@ -903,7 +903,7 @@ dependencies = [
 
 [[package]]
 name = "agena-runtime-notifications"
-version = "0.1.2-beta.1"
+version = "0.1.0"
 dependencies = [
  "agena-domain",
  "agena-notification",
@@ -915,7 +915,7 @@ dependencies = [
 
 [[package]]
 name = "agena-runtime-plugins"
-version = "0.1.2-beta.1"
+version = "0.1.0"
 dependencies = [
  "agena-failure",
  "agena-keyring-store",
@@ -938,7 +938,7 @@ dependencies = [
 
 [[package]]
 name = "agena-runtime-provider"
-version = "0.1.2-beta.1"
+version = "0.1.0"
 dependencies = [
  "agena-domain",
  "agena-failure",
@@ -973,7 +973,7 @@ dependencies = [
 
 [[package]]
 name = "agena-runtime-provider-adapters"
-version = "0.1.2-beta.1"
+version = "0.1.0"
 dependencies = [
  "agena-bundled-plugins",
  "agena-domain",
@@ -1006,7 +1006,7 @@ dependencies = [
 
 [[package]]
 name = "agena-runtime-session"
-version = "0.1.2-beta.1"
+version = "0.1.0"
 dependencies = [
  "agena-domain",
  "agena-failure",
@@ -1053,7 +1053,7 @@ dependencies = [
 
 [[package]]
 name = "agena-runtime-session-core"
-version = "0.1.2-beta.1"
+version = "0.1.0"
 dependencies = [
  "agena-domain",
  "agena-failure",
@@ -1068,7 +1068,7 @@ dependencies = [
 
 [[package]]
 name = "agena-runtime-tools"
-version = "0.1.2-beta.1"
+version = "0.1.0"
 dependencies = [
  "agena-domain",
  "agena-failure",
@@ -1121,7 +1121,7 @@ dependencies = [
 
 [[package]]
 name = "agena-scheduler"
-version = "0.1.2-beta.1"
+version = "0.1.0"
 dependencies = [
  "agena-failure",
  "async-trait",
@@ -1142,7 +1142,7 @@ dependencies = [
 
 [[package]]
 name = "agena-skills"
-version = "0.1.2-beta.1"
+version = "0.1.0"
 dependencies = [
  "agena-failure",
  "hex",
@@ -1157,7 +1157,7 @@ dependencies = [
 
 [[package]]
 name = "agena-stdio-codec"
-version = "0.1.2-beta.1"
+version = "0.1.0"
 dependencies = [
  "bytes",
  "httparse",
@@ -1167,7 +1167,7 @@ dependencies = [
 
 [[package]]
 name = "agena-storage"
-version = "0.1.2-beta.1"
+version = "0.1.0"
 dependencies = [
  "agena-domain",
  "agena-failure",
@@ -1187,7 +1187,7 @@ dependencies = [
 
 [[package]]
 name = "agena-storage-sqlite"
-version = "0.1.2-beta.1"
+version = "0.1.0"
 dependencies = [
  "agena-domain",
  "agena-failure",
@@ -1205,7 +1205,7 @@ dependencies = [
 
 [[package]]
 name = "agena-tool"
-version = "0.1.2-beta.1"
+version = "0.1.0"
 dependencies = [
  "agena-domain",
  "agena-failure",
@@ -1224,7 +1224,7 @@ dependencies = [
 
 [[package]]
 name = "agena-tui"
-version = "0.1.2-beta.1"
+version = "0.1.0"
 dependencies = [
  "agena-failure",
  "agena-tui-components",
@@ -1246,7 +1246,7 @@ dependencies = [
 
 [[package]]
 name = "agena-tui-app"
-version = "0.1.2-beta.1"
+version = "0.1.0"
 dependencies = [
  "agena-api",
  "agena-application",
@@ -1292,7 +1292,7 @@ dependencies = [
 
 [[package]]
 name = "agena-tui-components"
-version = "0.1.2-beta.1"
+version = "0.1.0"
 dependencies = [
  "crossterm",
  "ratatui",
@@ -1303,7 +1303,7 @@ dependencies = [
 
 [[package]]
 name = "agena-tui-media"
-version = "0.1.2-beta.1"
+version = "0.1.0"
 dependencies = [
  "agena-failure",
  "agena-tui",
@@ -1333,7 +1333,7 @@ dependencies = [
 
 [[package]]
 name = "agena-tui-permission-studio"
-version = "0.1.2-beta.1"
+version = "0.1.0"
 dependencies = [
  "agena-domain",
  "agena-tui",
@@ -1343,7 +1343,7 @@ dependencies = [
 
 [[package]]
 name = "agena-tui-platform"
-version = "0.1.2-beta.1"
+version = "0.1.0"
 dependencies = [
  "agena-failure",
  "agena-tui",
@@ -1367,7 +1367,7 @@ dependencies = [
 
 [[package]]
 name = "agena-tui-plugin-workbench"
-version = "0.1.2-beta.1"
+version = "0.1.0"
 dependencies = [
  "agena-application",
  "agena-domain",
@@ -1387,7 +1387,7 @@ dependencies = [
 
 [[package]]
 name = "agena-tui-provider-studio"
-version = "0.1.2-beta.1"
+version = "0.1.0"
 dependencies = [
  "agena-domain",
  "agena-failure",
@@ -1398,7 +1398,7 @@ dependencies = [
 
 [[package]]
 name = "agena-tui-session"
-version = "0.1.2-beta.1"
+version = "0.1.0"
 dependencies = [
  "agena-api",
  "agena-domain",
@@ -1411,7 +1411,7 @@ dependencies = [
 
 [[package]]
 name = "agena-tui-settings"
-version = "0.1.2-beta.1"
+version = "0.1.0"
 dependencies = [
  "agena-tui",
  "agena-tui-components",
@@ -1420,7 +1420,7 @@ dependencies = [
 
 [[package]]
 name = "agena-tui-transcript"
-version = "0.1.2-beta.1"
+version = "0.1.0"
 dependencies = [
  "agena-api",
  "agena-domain",
@@ -1448,7 +1448,7 @@ dependencies = [
 
 [[package]]
 name = "agena-web"
-version = "0.1.2-beta.1"
+version = "0.1.0"
 dependencies = [
  "agena-failure",
  "base64 0.22.1",

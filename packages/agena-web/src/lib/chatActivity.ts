@@ -159,7 +159,7 @@ export function normalizeChatToolActivityId(value: unknown): string {
   const [namespace = '', ...nameParts] = raw.split('.')
   const name = nameParts.join('.')
   if (namespace === 'fs') {
-    if (['read', 'read_many', 'stat', 'view_image'].includes(name)) return 'read'
+    if (['read', 'read_many', 'stat'].includes(name)) return 'read'
     if (name === 'write') return 'write'
     if (name === 'replace') return 'edit'
     if (name === 'apply_patch') return 'apply_patch'
@@ -175,12 +175,10 @@ export function normalizeChatToolActivityId(value: unknown): string {
   if (namespace === 'lsp') return 'lsp'
 
   if (['chatgpt', 'claude', 'gemini'].includes(namespace)) {
-    if (['bash', 'shell', 'local_shell', 'code_execution'].includes(name)) return 'bash'
-    if (name === 'apply_patch') return 'apply_patch'
-    if (name === 'text_editor') return 'edit'
-    if (['web_fetch', 'url_context'].includes(name)) return 'webfetch'
-    if (['web_search', 'web_search_preview', 'google_search'].includes(name)) return 'websearch'
-    if (['file_search', 'tool_search', 'tool_search_bm25', 'tool_search_regex'].includes(name)) return 'codesearch'
+    if (['cloud_shell', 'cloud_code_execution', 'cloud_code_interpreter'].includes(name)) return 'bash'
+    if (['cloud_web_fetch', 'cloud_url_context'].includes(name)) return 'webfetch'
+    if (['cloud_web_search', 'cloud_google_search'].includes(name)) return 'websearch'
+    if (name === 'cloud_file_search') return 'codesearch'
   }
 
   return raw

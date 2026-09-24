@@ -1,4 +1,4 @@
-//! Plugin-facing operations, migrated from
+//! Plugin-facing operations. Previously located in
 //! `agena-tui-backend/src/backend_plugins.rs` (`activity_kind_catalog`,
 //! `invoke_plugin_tool`, and the private `invoke_plugin_tool_checked`
 //! helper).

@@ -22,8 +22,9 @@ pub struct ProviderAdapterModelsResult {
 use super::{
     AmazonBedrockProviderOptions, AnthropicProviderOptions, ConfigEnvironment, ConfigError,
     GeminiProviderOptions, HttpProviderAdapterConfig, OllamaProviderOptions,
-    OpenAiChatCompletionsProviderOptions, OpenAiResponsesProviderOptions, ProviderAdapterDefinition, ProviderApiAuthConfig,
-    ProviderAuthConfig, ResolvedProviderAdapterConfig, ResolvedProviderConfig,
+    OpenAiChatCompletionsProviderOptions, OpenAiResponsesProviderOptions,
+    ProviderAdapterDefinition, ProviderApiAuthConfig, ProviderAuthConfig,
+    ResolvedProviderAdapterConfig, ResolvedProviderConfig,
 };
 const DEFAULT_BEDROCK_BASE_URL: &str = "https://bedrock-runtime.us-east-1.amazonaws.com";
 const DEFAULT_BEDROCK_REGION: &str = "us-east-1";

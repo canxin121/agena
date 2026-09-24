@@ -53,7 +53,7 @@ pub(crate) fn trimmed_owned(value: &str) -> Option<String> {
 }
 
 // ---------------------------------------------------------------------------
-// Config JSON helpers (migrated from backend_config.rs)
+// Config JSON helpers
 // ---------------------------------------------------------------------------
 
 /// Resolve a `plugins.list.<id>.settings.*` path into its plugin id and the
@@ -406,7 +406,7 @@ pub(crate) async fn save_provider_draft(
     if let Some(source_provider_id) = draft.source_provider_id.as_deref()
         && source_provider_id != provider_id
     {
-        // The provider was renamed; drop the old key after writing the new
+        // The provider was renamed; drop the previous key after writing the new
         // provider value. Provider-level model routing is not maintained
         // globally.
         let mut changes = JsonMap::new();

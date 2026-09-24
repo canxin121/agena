@@ -29,7 +29,7 @@ impl SessionManager {
     }
 
     /// Flush in-memory part mutations to their durable rows and merge the
-    /// authoritative engine rows back into the projection. v2 has no message
+    /// authoritative engine rows back into the projection. there is no message
     /// checkpoints: each changed part id becomes one `update_part` facade call
     /// carrying the part's current content/state/summary. Run terminalization
     /// (complete_run/cancel_run) is owned by the turn/tool paths, never here.

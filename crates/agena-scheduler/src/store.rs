@@ -407,12 +407,15 @@ impl SqliteJobStore {
         db: &impl ConnectionTrait,
         entry: &SchedulerHistoryEntry,
     ) -> SchedulerResult<()> {
-        let mut record = serde_json::to_value(&entry.record)?;
-        record["owner_workspace"] = serde_json::json!(entry.owner_workspace);
-        record["owner_session_id"] = serde_json::json!(entry.owner_session_id);
         db.execute(Statement::from_sql_and_values(DatabaseBackend::Sqlite,
-            "INSERT INTO agena_scheduler_history (job_id, run_json, finished_at_ms) VALUES (?, ?, ?)",
-            [entry.job_id.to_string().into(), serde_json::to_string(&record)?.into(), entry.record.finished_at.timestamp_millis().into()],
+            "INSERT INTO agena_scheduler_history (job_id, owner_workspace, owner_session_id, run_json, finished_at_ms) VALUES (?, ?, ?, ?, ?)",
+            [
+                entry.job_id.to_string().into(),
+                entry.owner_workspace.clone().into(),
+                entry.owner_session_id.into(),
+                serde_json::to_string(&entry.record)?.into(),
+                entry.record.finished_at.timestamp_millis().into(),
+            ],
         )).await?;
         db.execute(Statement::from_sql_and_values(
             DatabaseBackend::Sqlite,
@@ -602,12 +605,12 @@ impl JobStore for SqliteJobStore {
         let limit = limit.clamp(1, MAX_RETAINED_HISTORY_ENTRIES) as i64;
         let (sql, values) = if let Some(job_id) = job_id {
             (
-                "SELECT job_id, run_json FROM agena_scheduler_history WHERE job_id = ? ORDER BY finished_at_ms DESC, id DESC LIMIT ?",
+                "SELECT job_id, owner_workspace, owner_session_id, run_json FROM agena_scheduler_history WHERE job_id = ? ORDER BY finished_at_ms DESC, id DESC LIMIT ?",
                 vec![job_id.to_string().into(), limit.into()],
             )
         } else {
             (
-                "SELECT job_id, run_json FROM agena_scheduler_history ORDER BY finished_at_ms DESC, id DESC LIMIT ?",
+                "SELECT job_id, owner_workspace, owner_session_id, run_json FROM agena_scheduler_history ORDER BY finished_at_ms DESC, id DESC LIMIT ?",
                 vec![limit.into()],
             )
         };
@@ -627,12 +630,11 @@ impl JobStore for SqliteJobStore {
                     )))
                 })?;
                 let json: String = row.try_get("", "run_json")?;
-                let value: serde_json::Value = serde_json::from_str(&json)?;
                 Ok(SchedulerHistoryEntry {
                     job_id,
-                    owner_workspace: value["owner_workspace"].as_str().map(str::to_owned),
-                    owner_session_id: value["owner_session_id"].as_i64(),
-                    record: serde_json::from_value(value)?,
+                    owner_workspace: row.try_get("", "owner_workspace")?,
+                    owner_session_id: row.try_get("", "owner_session_id")?,
+                    record: serde_json::from_str(&json)?,
                 })
             })
             .collect()

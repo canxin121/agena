@@ -1,4 +1,4 @@
-//! Config-setting operations, migrated from
+//! Config-setting operations. Previously located in
 //! `agena-tui-backend/src/backend_workspace.rs` (config subset) using the JSON
 //! helpers from `backend_config.rs` (now in `provider_studio::save`).
 

@@ -1,4 +1,4 @@
-//! Session/workspace operations, migrated from
+//! Session/workspace operations. Previously located in
 //! `agena-tui-backend/src/backend_session.rs` and `backend_workspace.rs`
 //! (session-facing subset) plus the shared helpers from
 //! `backend_plugins.rs` (`resolve_workspace_resource`, `current_workspace_id`,

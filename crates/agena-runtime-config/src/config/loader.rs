@@ -35,8 +35,6 @@ where
         };
         let project_config_path = crate::project_config_path(workspace_root.as_path());
 
-        crate::reject_unsupported_mode_environment(&self.env)?;
-
         let file_state = RawConfigFile::read(&config_path)?;
         let project_file_state = RawConfigFile::read(&project_config_path)?;
         let env_overlay = RawConfig::from_env(&self.env)?;
@@ -426,32 +424,6 @@ mod tests {
             .expect_err("zero provider network timeout should fail");
 
         assert!(error.to_string().contains("greater than zero"));
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn removed_runtime_tuning_is_rejected() {
-        let root = test_root();
-        let config_dir = root.join("agena");
-        std::fs::create_dir_all(&config_dir).expect("create test config directory");
-        let config_path = config_dir.join("agena.json");
-        let env = TestEnvironment {
-            values: BTreeMap::from([("HOME".to_owned(), root.display().to_string())]),
-        };
-
-        std::fs::write(
-            &config_path,
-            r#"{"runtime":{"providers":{"http":{"timeout_secs":30}}}}"#,
-        )
-        .expect("write invalid config");
-        let error = ConfigLoader::new(env)
-            .load(&LoadConfigRequest {
-                workspace_root: Some(root.join("workspace")),
-                ..LoadConfigRequest::default()
-            })
-            .expect_err("unsupported setting should fail validation");
-        assert!(error.to_string().contains("http"));
-
         let _ = std::fs::remove_dir_all(root);
     }
 }

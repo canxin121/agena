@@ -39,7 +39,7 @@ This document is deterministically generated from the real `agena-bundled-plugin
 
 ## agena.chatgpt
 
-**Version** `0.1.2-beta.1` · **Tools** 11
+**Version** `0.1.0` · **Tools** 11
 
 OpenAI cloud search, computation and image capabilities. Inputs leave this computer; no local execution fallback.
 
@@ -950,7 +950,7 @@ OpenAI cloud search, computation and image capabilities. Inputs leave this compu
 
 ## agena.claude
 
-**Version** `0.1.2-beta.1` · **Tools** 9
+**Version** `0.1.0` · **Tools** 9
 
 Anthropic cloud search, fetch, computation and advisor capabilities. Inputs leave this computer; no local execution fallback.
 
@@ -1787,7 +1787,7 @@ Anthropic cloud search, fetch, computation and advisor capabilities. Inputs leav
 
 ## agena.code
 
-**Version** `0.1.2-beta.1` · **Tools** 2
+**Version** `0.1.0` · **Tools** 2
 
 Structured code search and syntax inspection tools.
 
@@ -1985,7 +1985,7 @@ Structured code search and syntax inspection tools.
 
 ## agena.cron
 
-**Version** `0.1.2-beta.1` · **Tools** 7
+**Version** `0.1.0` · **Tools** 7
 
 Cron-style and one-shot wakeup scheduling tools.
 
@@ -2415,7 +2415,7 @@ Cron-style and one-shot wakeup scheduling tools.
 
 ## agena.fs
 
-**Version** `0.1.2-beta.1` · **Tools** 10
+**Version** `0.1.0` · **Tools** 10
 
 Filesystem command tools for read/search and explicit edits.
 
@@ -3018,7 +3018,7 @@ Filesystem command tools for read/search and explicit edits.
 
 ## agena.gemini
 
-**Version** `0.1.2-beta.1` · **Tools** 12
+**Version** `0.1.0` · **Tools** 12
 
 Google cloud search, computation and image capabilities. Inputs leave this computer; no local execution fallback.
 
@@ -3940,7 +3940,7 @@ Google cloud search, computation and image capabilities. Inputs leave this compu
 
 ## agena.interaction
 
-**Version** `0.1.2-beta.1` · **Tools** 2
+**Version** `0.1.0` · **Tools** 2
 
 User interaction tools.
 
@@ -4121,7 +4121,7 @@ User interaction tools.
 
 ## agena.lsp
 
-**Version** `0.1.2-beta.1` · **Tools** 5
+**Version** `0.1.0` · **Tools** 5
 
 LSP read-only observability and navigation tools.
 
@@ -4326,7 +4326,7 @@ LSP read-only observability and navigation tools.
 
 ## agena.mcp
 
-**Version** `0.1.2-beta.1` · **Tools** 9 · **Condition** `runtime:mcp-manager`
+**Version** `0.1.0` · **Tools** 9 · **Condition** `runtime:mcp-manager`
 
 MCP discovery and bridge tools.
 
@@ -4665,7 +4665,7 @@ MCP discovery and bridge tools.
 
 ## agena.memory
 
-**Version** `0.1.2-beta.1` · **Tools** 5
+**Version** `0.1.0` · **Tools** 5
 
 Persistent memory with searchable retrieval and write tools.
 
@@ -4896,7 +4896,7 @@ Persistent memory with searchable retrieval and write tools.
 
 ## agena.monitor
 
-**Version** `0.1.2-beta.1` · **Tools** 2
+**Version** `0.1.0` · **Tools** 2
 
 Continuous-stream background monitoring tools.
 
@@ -5020,7 +5020,7 @@ Continuous-stream background monitoring tools.
 
 ## agena.notebook
 
-**Version** `0.1.2-beta.1` · **Tools** 1
+**Version** `0.1.0` · **Tools** 1
 
 Revision-safe Jupyter notebook cell editing.
 
@@ -5123,7 +5123,7 @@ Revision-safe Jupyter notebook cell editing.
 
 ## agena.plan
 
-**Version** `0.1.2-beta.1` · **Tools** 6
+**Version** `0.1.0` · **Tools** 6
 
 Plan orchestration and plan-autorun tools.
 
@@ -5552,7 +5552,7 @@ Plan orchestration and plan-autorun tools.
 
 ## agena.report
 
-**Version** `0.1.2-beta.1` · **Tools** 1
+**Version** `0.1.0` · **Tools** 1
 
 Structured review and verification findings.
 
@@ -5659,7 +5659,7 @@ Structured review and verification findings.
 
 ## agena.session
 
-**Version** `0.1.2-beta.1` · **Tools** 5
+**Version** `0.1.0` · **Tools** 5
 
 Inspect and manage the current runtime session and its environment, model, and token state.
 
@@ -5764,7 +5764,7 @@ Inspect and manage the current runtime session and its environment, model, and t
 
 ## agena.settings
 
-**Version** `0.1.2-beta.1` · **Tools** 7
+**Version** `0.1.0` · **Tools** 7
 
 Inspect and edit Agena's global and workspace agena.json settings.
 
@@ -6324,7 +6324,7 @@ Inspect and edit Agena's global and workspace agena.json settings.
 
 ## agena.shell
 
-**Version** `0.1.2-beta.1` · **Tools** 7
+**Version** `0.1.0` · **Tools** 7
 
 Shell command execution and background process tools.
 
@@ -6875,7 +6875,7 @@ Shell command execution and background process tools.
 
 ## agena.skills
 
-**Version** `0.1.2-beta.1` · **Tools** 7
+**Version** `0.1.0` · **Tools** 7
 
 Discover and read plain-text skills and slash commands.
 
@@ -6888,7 +6888,7 @@ Discover and read plain-text skills and slash commands.
 **Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
 
 **Help**:
-> Creates `.agena/skills/<name>/SKILL.md` from a complete SKILL.md document. Only workspace-local Skills are mutable; built-in, plugin, user-global, and compatibility Skills remain read-only.
+> Creates `.agena/skills/<name>/SKILL.md` from a complete SKILL.md document. Only workspace-local Skills are mutable; built-in, plugin, and user-global Skills remain read-only.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -6923,7 +6923,7 @@ Discover and read plain-text skills and slash commands.
 **Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
 
 **Help**:
-> Deletes only `.agena/skills/<name>/SKILL.md`; bundled, plugin, user-global, and compatibility Skills cannot be deleted through this tool.
+> Deletes only `.agena/skills/<name>/SKILL.md`; bundled, plugin, and user-global Skills cannot be deleted through this tool.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -7177,7 +7177,7 @@ Discover and read plain-text skills and slash commands.
 
 ## agena.snapshot
 
-**Version** `0.1.2-beta.1` · **Tools** 3
+**Version** `0.1.0` · **Tools** 3
 
 Managed snapshot tools backed by Rift or git worktree.
 
@@ -7302,7 +7302,7 @@ Managed snapshot tools backed by Rift or git worktree.
 
 ## agena.tasks
 
-**Version** `0.1.2-beta.1` · **Tools** 7
+**Version** `0.1.0` · **Tools** 7
 
 Delegated subtask orchestration tools.
 
@@ -7739,7 +7739,7 @@ Delegated subtask orchestration tools.
 
 ## agena.tools
 
-**Version** `0.1.2-beta.1` · **Tools** 7
+**Version** `0.1.0` · **Tools** 7
 
 Tool API discovery functions. The runtime resolves tools_call directly to its execution target.
 
@@ -8342,7 +8342,7 @@ Tool API discovery functions. The runtime resolves tools_call directly to its ex
 
 ## agena.web
 
-**Version** `0.1.2-beta.1` · **Tools** 13
+**Version** `0.1.0` · **Tools** 13
 
 Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication, and optional browser rendering.
 

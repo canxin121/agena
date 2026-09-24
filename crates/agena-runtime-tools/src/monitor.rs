@@ -17,9 +17,9 @@
 //! # Concurrency model
 //!
 //! The process runner, pipe readers, WebSocket reader, timeout, cancellation,
-//! and child wait all run on the caller's Tokio runtime. The registry retains a
-//! synchronous compatibility surface for non-async consumers; those reads sleep
-//! on a condition variable and async callers isolate them with `spawn_blocking`.
+//! and child wait all run on the caller's Tokio runtime. The registry also has
+//! synchronous readers for non-async consumers; those reads sleep on a condition
+//! variable and async callers isolate them with `spawn_blocking`.
 
 use portable_atomic::{AtomicI64, AtomicU64};
 use std::collections::{HashMap, VecDeque};

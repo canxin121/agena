@@ -49,7 +49,7 @@ pub fn snapshot_rift_database_path(workspace_root: &Path) -> PathBuf {
 
 /// Stable location for a generated image that belongs to one tool call.
 /// Runtime owns this process-managed artifact convention so tool/session
-/// implementations do not need a compatibility path shim.
+/// implementations do not need their own path convention.
 pub fn generated_image_artifact_path(
     workspace_root: &Path,
     session_id: i64,

@@ -41,7 +41,6 @@ const props = defineProps<{
   revertBusyMessageId: string
   isStreamingAssistantMessage: (message: MessageLike) => boolean
   showAssistantPlaceholder: boolean
-  revertMarkerBusy: boolean
   sessionEnded: boolean
   retryStatus: RetryStatusLike
   currentPhase: string
@@ -63,8 +62,6 @@ const emit = defineEmits<{
   (event: 'partToggle', part: TranscriptDisplayPart, expanded: boolean): void
   (event: 'foldExpand', fold: MessageFold, all: boolean): void
   (event: 'nodeSelect', key: string): void
-  (event: 'redoFromRevert'): void
-  (event: 'unrevertFromRevert'): void
   (event: 'copySessionError'): void
   (event: 'clearSessionError'): void
   (event: 'setActivityPageSize', size: number): void
@@ -75,7 +72,6 @@ const { t } = useI18n()
 const durableInteractionRequestIds = computed(() => {
   const ids = new Set<string>()
   for (const block of props.renderBlocks) {
-    if (block.kind !== 'message') continue
     for (const part of block.displayParts) {
       for (const requestId of partInteractionRequestIds(part)) ids.add(requestId)
     }
@@ -258,31 +254,6 @@ function forwardFoldExpand(fold: MessageFold, all: boolean) {
           @set-activity-page-size="$emit('setActivityPageSize', $event)"
         />
 
-        <div v-else class="rounded-md border border-border/60 px-3 py-2 text-sm" data-transcript-node="revert">
-          <div class="flex items-start justify-between gap-3">
-            <div class="min-w-0">
-              <div class="font-medium text-muted-foreground">
-                {{
-                  block.revert.revertedUserCount === 1
-                    ? t('chat.revertMarker.revertedMessageCountOne')
-                    : t('chat.revertMarker.revertedMessageCountMany', { count: block.revert.revertedUserCount })
-                }}
-              </div>
-              <div class="mt-0.5 font-mono text-[11px] text-muted-foreground/70">
-                {{ t('chat.revertMarker.boundaryLine', { id: block.revert.messageID }) }}
-              </div>
-            </div>
-            <div class="flex shrink-0 items-center gap-2">
-              <Button size="sm" variant="ghost" :disabled="revertMarkerBusy" @click="$emit('redoFromRevert')">
-                <RiLoader4Line v-if="revertMarkerBusy" class="h-4 w-4 animate-spin" />
-                <span v-else>{{ t('chat.revertMarker.redo') }}</span>
-              </Button>
-              <Button size="sm" variant="ghost" :disabled="revertMarkerBusy" @click="$emit('unrevertFromRevert')">
-                {{ t('chat.revertMarker.restoreAll') }}
-              </Button>
-            </div>
-          </div>
-        </div>
       </template>
 
       <!--

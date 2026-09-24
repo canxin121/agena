@@ -28,46 +28,29 @@ pub struct DiscoveryReport {
 /// Standard Skill roots ordered from lower to higher precedence. Later roots
 /// replace earlier skills with the same canonical name in the runtime catalog.
 pub fn default_roots(workspace: Option<&Path>) -> Vec<PathBuf> {
-    default_roots_with_home(
-        workspace,
-        user_home_dir().as_deref(),
-        agena_home_dir().as_deref(),
-    )
+    default_roots_with_home(workspace, agena_home_dir().as_deref())
 }
 
 /// Standard slash-command roots ordered from lower to higher precedence.
 pub fn default_command_roots(workspace: Option<&Path>) -> Vec<PathBuf> {
-    let user_home = user_home_dir();
     let agena_home = agena_home_dir();
     let mut roots = Vec::new();
     if let Some(home) = agena_home {
         roots.push(home.join("commands"));
     }
-    if let Some(home) = user_home {
-        roots.push(home.join(".agents/commands"));
-    }
     if let Some(workspace) = workspace {
         roots.push(workspace.join(".agena/commands"));
-        roots.push(workspace.join(".agents/commands"));
     }
     roots
 }
 
-fn default_roots_with_home(
-    workspace: Option<&Path>,
-    user_home: Option<&Path>,
-    agena_home: Option<&Path>,
-) -> Vec<PathBuf> {
+fn default_roots_with_home(workspace: Option<&Path>, agena_home: Option<&Path>) -> Vec<PathBuf> {
     let mut roots = Vec::new();
     if let Some(home) = agena_home {
         roots.push(home.join("skills"));
     }
-    if let Some(home) = user_home {
-        roots.push(home.join(".agents/skills"));
-    }
     if let Some(workspace) = workspace {
         roots.push(workspace.join(".agena/skills"));
-        roots.push(workspace.join(".agents/skills"));
     }
     roots
 }
@@ -215,16 +198,13 @@ mod tests {
     fn default_roots_are_ordered_by_scope_and_precedence() {
         let roots = default_roots_with_home(
             Some(Path::new("/workspace")),
-            Some(Path::new("/user")),
             Some(Path::new("/agena-home")),
         );
         assert_eq!(
             roots,
             [
                 PathBuf::from("/agena-home/skills"),
-                PathBuf::from("/user/.agents/skills"),
                 PathBuf::from("/workspace/.agena/skills"),
-                PathBuf::from("/workspace/.agents/skills"),
             ]
         );
     }

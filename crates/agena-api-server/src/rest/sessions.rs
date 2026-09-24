@@ -379,11 +379,6 @@ pub async fn fork_session(
     headers: HeaderMap,
     Json(request): Json<SessionForkRequestBody>,
 ) -> Result<impl IntoResponse, ServerError> {
-    if request.at_event_seq.is_some() && request.at_message_id.is_none() {
-        return Err(ServerError::bad_request(
-            "fork expects at_message_id; at_event_seq is no longer supported",
-        ));
-    }
     Ok(Json(
         state
             .fork_session(

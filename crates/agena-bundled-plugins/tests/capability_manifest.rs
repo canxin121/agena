@@ -37,12 +37,6 @@ fn bundled_manifest_separates_gateway_and_execution_tools() {
                     .any(|tool| tool.canonical_name == canonical_name && !tool.gateway)
         }));
     }
-    assert!(
-        !manifest
-            .plugins
-            .iter()
-            .any(|plugin| plugin.id == "agena.openai")
-    );
 }
 
 #[test]

@@ -1,67 +1,119 @@
-# AI 调用云端工具时的 adapter 门槛
+# AI 调用厂商云端工具时的 adapter 门槛
 
-只增加执行时校验，不改变工具发现、列表、搜索、帮助、manifest、权限配置或厂商请求参数。不推断模型完整能力，不重构 Provider 配置。
+Agena 只在 **AI 实际执行厂商云端工具** 时检查当前运行时 adapter。工具发现、列表、搜索和帮助不按 adapter 过滤。
 
-## 完整 adapter 对应规则
+这是一道粗粒度执行门槛，用于阻止明显错误的跨厂商调用；它不替代模型能力、账号权限、地区、套餐或具体端点能力校验。
 
-按配置中真实的七种 adapter 明确覆盖；只判断 AI 调用者所属协议组，不改变插件执行请求的协议。
+## 当前 adapter 规则
 
-| AI 当前实际选定 adapter | 可调用的厂商工具 | 处理依据 |
-| --- | --- | --- |
-| `openai_responses` | 已注册的 `chatgpt.cloud_*` | OpenAI 协议组 |
-| `openai_chat_completions` | 已注册的 `chatgpt.cloud_*` | OpenAI 协议组，不应遗漏 |
-| `anthropic` | 已注册的 `claude.cloud_*` | Anthropic 协议组 |
-| `gemini` | 已注册的 `gemini.cloud_*` | Google Gemini 协议组 |
-| `ollama` | 不放行上述三家的云端工具 | 不把本地/自建模型视为厂商云服务 |
-| `gitlab` | 不放行上述三家的云端工具 | GitLab 是独立路由，不按其内部模型名称猜厂商 |
-| `amazon_bedrock` | 不放行上述三家的云端工具 | AWS Bedrock 的凭据/执行入口不等于 Anthropic 直连 |
-| 未知、拼错、无法解析或跨组调用 | 拒绝本次云端工具调用 | 保守拒绝，不自动切换 |
+| 当前实际 adapter | 可以执行的厂商云端工具 |
+| --- | --- |
+| `openai_responses` | `chatgpt.cloud_*` |
+| `openai_chat_completions` | `chatgpt.cloud_*` |
+| `anthropic` | `claude.cloud_*` |
+| `gemini` | `gemini.cloud_*` |
+| `ollama` | 不执行上述三家的厂商云端工具 |
+| `gitlab` | 不执行上述三家的厂商云端工具 |
+| `amazon_bedrock` | 不执行上述三家的厂商云端工具 |
+| 未知、无法解析或跨组调用 | 拒绝 |
 
-OpenAI Chat Completions 放行的是 **AI 发起的 Agena 工具调用**；厂商插件仍独立构造其支持的服务请求。没有把 Responses 的 hosted-tool 定义直接塞入 Chat Completions，原生请求的能力校验没有放宽。
+OpenAI 只保留 Responses 与 Chat Completions 两个 adapter。其他 OpenAI 协议名不是 alias，也不会自动映射到这两个 adapter。
 
-Provider 自定义标签、模型名字、ChatGPT 订阅等配置名不是 adapter 身份。未显式选择 adapter 时继续用实际模型路由/default adapter。本次不为 Bedrock/GitLab 猜测底层厂商，也不改变端点或凭据选取。
+Google Gemini 自己的 WebSocket 流传输属于 Gemini adapter 内部实现，不属于 OpenAI adapter。
 
-## OpenAI adapter 范围
+## adapter 身份来源
 
-Agena 的 OpenAI adapter 只保留 Responses 与 Chat Completions 两种。配置中的其他 OpenAI 协议名按未知 adapter 拒绝，不做兼容映射或自动回退。Google Gemini 自己的 WebSocket 流传输模式属于 Google adapter 内部选项，不属于 OpenAI adapter。
+执行门槛只使用运行时已经解析出的可信 adapter：
 
-## 运行时行为
+- 显式选择的 adapter；
+- 模型路由选择的 adapter；
+- Provider 的 default adapter。
 
-AI 工具执行器携带可信的 adapter 快照。检查使用工具注册表解析出的 canonical identity，覆盖紧凑名、完整名以及经过 `tools_call` 分发的调用；原本不注册为调用别名的 wire 名继续返回工具不可用，不新增别名；工具输入中的 `adapter`/`provider` 字段不影响门槛。
+Provider 名称、模型名称、工具输入中的 `provider` / `adapter` 字段都不能覆盖这个结果。
 
-在执行预检进入插件 hook 前检查一次，在普通或流式插件实际执行前再次检查，避免已准备调用在切换执行 scope 后绕过。普通、并行和审批恢复的 AI 执行路径均安装门槛。错误返回 `CapabilityUnavailable`，capability 为 `provider_tool_adapter`，包含要求的和实际 adapter；不发送厂商请求、不自动切换服务商、不把失败作为可重复执行的请求。
+因此：
 
-发现/列表/帮助使用原目录；允许看见另一家工具，只在 AI 实际调用时拒绝。原生 Shell、文件、浏览器、MCP 等非厂商云端工具不受此门槛影响。没有 AI adapter 门槛的显式 application/host 工具调用保持原行为；用户直接发送附件仍使用已有媒体路由与权限检查，不改成厂商工具调用。
+- 一个叫作 `openai` 的 Provider 不会自动获得 OpenAI 工具；
+- 一个模型名里包含 `claude` 的 Bedrock/GitLab 路由不会自动获得 Anthropic 直连工具；
+- 模型不能通过伪造工具参数切换厂商。
 
-## 这不是完整兼容性认证
+## 执行行为
 
-adapter 匹配仅是第一道粗粒度门槛，不证明实际端点支持该厂商的所有工具，也不验证账号套餐、模型版本、地区或独立插件凭据是否可用。插件原有网络、文件权限、输入验证和远端错误处理继续生效；本次不改 endpoint/credential 选择，不增加自动探测或跨 Provider 授权框架。
+门槛在两个位置检查：
 
-## 测试
+1. tool invocation 预检进入插件 hook 之前；
+2. 普通或流式插件真正执行之前。
 
-- 32 个已注册云工具在错误/未知 adapter 下被拒绝，覆盖全部名字形式与伪造输入；拒绝前没有 HTTP 请求和上传工件。
-- 四个匹配 adapter（含两个 OpenAI 协议）可通过原工具流程访问本机模拟服务。
-- 已准备调用在执行 scope 改为错误 adapter 后仍被拒绝。
-- 执行门槛前后的完整工具定义和帮助相同；两份生成目录与修改前逐字节一致。
-- 原生文件/终端在未知 adapter 下仍可执行。
-- 实际默认、按模型选择、显式选择、禁用和不存在的 adapter，以及模型目录 wrapper 均有解析测试。
-- 合成模型发起真实 `tools_call`，验证顺序和并行运行中的拒绝，以及正确 default adapter 放行；拒绝作为工具结果反馈给模型。
+这样即使一个调用已经准备好，但随后运行时 scope 的 adapter 改变，真正执行时仍会再次拒绝。
 
-测试仅使用本地合成插件、输入和 HTTP 服务，没有读取真实 API 密钥或发起付费厂商请求。实现已提交为 `ef00f41f`；本地验证日志位于 `.tmp-artifacts/openai-adapter-cleanup/`，该目录不进入 Git。服务未因本次变更自动重启。
-## 前一轮验收记录（覆盖补齐前）
+覆盖的 AI 执行路径包括：
 
-本次选定测试共 621 项通过，0 失败，其中包括 10 项新增 adapter 门槛/路由回归。四个相关核心 crate 的严格 `--all-targets -- -D warnings` Clippy、六个下游 runtime/session/MCP/TUI/application/API 目标编译、生成契约一致性、仓库不变量、格式与 diff 检查均通过。
+- 顺序 tool calls；
+- 并行 tool calls；
+- 暂停/审批后恢复的 tool calls。
 
-工具定义、schema、生成帮助文件与改动前逐字节一致，执行工具总数仍为 134。测试使用本机合成插件和 HTTP 服务，无真实厂商付费调用。匹配规则只是简单门槛，未扩展为模型/套餐/端点能力探测。
+拒绝时返回 `CapabilityUnavailable`，capability 为 `provider_tool_adapter`，并说明要求的 adapter 组和当前实际 adapter。拒绝发生在厂商网络请求、文件上传和本地 provider artifact 创建之前。
 
-该段是前一轮门槛验证的历史记录；其“未 commit/push”描述只代表当时快照。当前实现的 durable source reference 为 `ef00f41f`。
+Agena 不会：
 
-验收调度说明：最终 621 项选定回归使用单线程测试调度。前一轮并行调度中两项原有取消时序测试失败，原断言和生产取消逻辑未改；完整串行复跑均通过。新增门槛测试中的并行 AI 调用场景仍真实并发执行，测试未被跳过。失败日志保留在 `final3-tests.log`。
+- 自动切换 Provider；
+- 自动换 adapter；
+- 失败后调用另一家云端工具；
+- 把工具参数中的 adapter 当作授权；
+- 因工具目录中存在另一家工具就允许执行。
 
-## adapter 完整性回归
+## OpenAI Chat Completions 的含义
 
-测试对真实 `ProviderKind` 的七个变体使用无兜底分支的穷尽匹配，再验证七种 adapter × 32 个已注册厂商工具，共 224 个组合。新增 enum 变体却未明确测试策略时会编译失败，避免继续把新增 adapter 悄悄落到通用拒绝分支。
+`openai_chat_completions` 可以让 AI 发起 Agena function/tool call，因此允许调用 `chatgpt.cloud_*`。
 
-匹配组验证能够通过运行时预检；不匹配组验证预检和直接执行都会拒绝，且不发送 HTTP 或写入厂商工件。OpenAI 两种入口另有真实 `model → tools_call → executor → model` 合成回归，并检查 Chat Completions 仍不能调用 Claude 工具。发现/帮助在全部七种 adapter 和未解析状态下保持一致。
+这并不意味着 Agena 把 OpenAI Responses 的 hosted-tool JSON 声明直接发送给 Chat Completions。厂商插件仍然独立构造其实际支持的 OpenAI 请求；Provider adapter 自己的原生工具协议校验不会被这道门槛放宽。
 
-当前七种 adapter 的结果见 `docs/provider-adapter-gate-status.json`；本地日志位于 `.tmp-artifacts/openai-adapter-cleanup/`，不作为克隆仓库后的持久证据。
+## 与工具发现的关系
+
+工具目录仍然是全量当前目录。
+
+因此使用 Anthropic 模型时，AI 仍可能在搜索结果中看到 OpenAI/Google 云端工具，但真正调用错误厂商工具时会在执行前被拒绝。
+
+这样可以保持 Tool API 简单，同时保证执行边界不会因为模型记住了一个错误工具名而被绕过。
+
+## 非厂商云端工具
+
+本门槛不影响 Agena 原生工具，例如：
+
+- `shell.run`
+- `fs.read`
+- `fs.apply_patch`
+- 浏览器工具
+- MCP 工具
+- memory / tasks / plan 等运行时工具
+
+这些能力继续使用自己的权限和运行时边界。
+
+用户直接发送图片、文件或其他附件也不经过厂商云端工具门槛；该路径使用媒体输入自己的 Provider 路由绑定和模态能力检查，见 `docs/media-inputs.md`。
+
+## 当前覆盖原则
+
+配置中的真实 `ProviderKind` 共有七种：
+
+- `ollama`
+- `openai_responses`
+- `openai_chat_completions`
+- `anthropic`
+- `gemini`
+- `gitlab`
+- `amazon_bedrock`
+
+adapter 门槛测试对这个枚举使用穷尽匹配。新增 ProviderKind 时，测试代码必须显式决定它属于哪个云端工具组，否则编译/测试会暴露缺口。
+
+测试矩阵覆盖七种 adapter × 当前 32 个厂商云端工具，并额外覆盖：
+
+- 匹配 adapter 放行；
+- 跨厂商 adapter 拒绝；
+- 未解析 adapter 拒绝；
+- 模型参数伪造 adapter 无效；
+- 已准备调用在 scope 改变后再次拒绝；
+- 顺序/并行模型工具循环；
+- 非厂商原生工具不受影响；
+- 工具发现和帮助不因 adapter 改变。
+
+所有这类测试使用合成 Provider/插件或本机 HTTP fixture，不要求真实厂商 API key，也不会发起付费调用。

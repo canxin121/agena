@@ -519,7 +519,7 @@ impl Application {
         &self.notifications
     }
 
-    /// Wire v2 live surfaces into the unified notification store.
+    /// Wire live surfaces into the unified notification store.
     ///
     /// Spawns background projection tasks that convert user-visible changes
     /// into unified notifications: notice parts arrive as `SessionChange` on
@@ -851,8 +851,8 @@ impl Application {
             DefaultSelectionResource, ModelCatalogResponse, RuntimeAutomationResource,
             RuntimeLspResource, RuntimeLspServerResource, RuntimeMcpResource,
             RuntimeMcpServerResource, RuntimeOperatorResource, RuntimePluginSurfaceResource,
-            RuntimeSessionCacheResource, RuntimeSkillResource, RuntimeSkillsResource,
-            RuntimeStatusResponse, RuntimeTaskResource,
+            RuntimeSkillResource, RuntimeSkillsResource, RuntimeStatusResponse,
+            RuntimeTaskResource,
         };
 
         let status = self.runtime_status().runtime_status().await;
@@ -881,19 +881,6 @@ impl Application {
             .into_iter()
             .map(crate::dto::runtime_background_task_resource)
             .collect();
-        let session_cache = status
-            .session_cache
-            .map(|stats| RuntimeSessionCacheResource {
-                max_sessions: agena_domain::SessionCacheLimits::default().max_sessions,
-                ttl_secs: agena_domain::SessionCacheLimits::default().ttl_secs,
-                max_bytes: agena_domain::SessionCacheLimits::default().max_bytes,
-                session_count: stats.session_count,
-                total_bytes: stats.total_bytes,
-                hits: stats.hits,
-                misses: stats.misses,
-                inserts: stats.inserts,
-                evictions: stats.evictions,
-            });
 
         let mcp = RuntimeMcpResource {
             server_count: status.mcp.servers.len(),
@@ -990,7 +977,6 @@ impl Application {
                 enabled: status.session_gc_enabled,
                 interval_secs: status.session_gc_interval_secs,
             },
-            session_cache,
             model_catalog: Some(model_catalog),
             default_selection,
             background_tasks,
@@ -1252,8 +1238,8 @@ fn notification_from_session_change(
         return None;
     };
     // Storage rows carry the canonical typed JSON keyed by the part's `kind`
-    // column (the v1 2-arm encoding is gone), so decode through the contracts
-    // dispatcher rather than deserializing a v1 payload.
+    // column (the removed 2-arm encoding is gone), so decode through the contracts
+    // dispatcher rather than deserializing removed payload shapes.
     let content = match agena_runtime_contracts::part_content::decode(&part.kind, &part.content) {
         Ok(content) => content,
         Err(error) => {

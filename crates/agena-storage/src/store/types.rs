@@ -329,9 +329,7 @@ pub struct BackgroundDelivery {
     pub created_at_ms: i64,
     pub updated_at_ms: i64,
     pub consumed_at_ms: Option<i64>,
-    /// Earliest time at which a pending delivery may be claimed again. Zero
-    /// keeps rows created before durable backoff immediately eligible.
-    #[serde(default)]
+    /// Earliest time at which a pending delivery may be claimed again.
     pub next_attempt_at_ms: i64,
 }
 
@@ -395,6 +393,7 @@ impl PartVisibility {
 /// Ordering within a session is always
 /// `(created_at_ms, part_id)` (decision D4).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Part {
     pub part_id: i64,
     pub kind: String,
@@ -519,6 +518,7 @@ pub struct SubmitOutcome {
 /// The session-level metadata row. `sessions` stores only identity/lineage,
 /// config, and provider anchors — session state is derived from parts + leases.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SessionMeta {
     pub id: i64,
     pub parent_id: Option<i64>,
@@ -529,10 +529,8 @@ pub struct SessionMeta {
     pub cutoff_part_id: Option<i64>,
     pub title: String,
     /// Whether the user marked this session as a favorite.
-    #[serde(default)]
     pub favorite: bool,
     /// Whether the user pinned this session in session navigation.
-    #[serde(default)]
     pub pinned: bool,
     /// Optimistic-lock counter, bumped on every session mutation.
     pub version: i64,
@@ -836,7 +834,8 @@ pub struct SessionPresentation {
 
 #[cfg(test)]
 mod visibility_tests {
-    use super::PartVisibility;
+    use super::{BackgroundDelivery, BackgroundDeliveryPhase, PartVisibility, SessionMeta};
+    use agena_domain::{SessionLifecycleState, SessionRelationKind};
 
     #[test]
     fn part_visibility_has_an_explicit_ai_and_human_truth_table() {
@@ -848,5 +847,69 @@ mod visibility_tests {
 
         assert!(!PartVisibility::User.visible_to_ai());
         assert!(PartVisibility::User.visible_to_user());
+    }
+
+    #[test]
+    fn session_meta_requires_current_favorite_and_pinned_fields() {
+        let current = SessionMeta {
+            id: 1,
+            parent_id: None,
+            depth: 0,
+            root_id: 1,
+            workspace_id: 1,
+            relation_kind: SessionRelationKind::Root,
+            cutoff_part_id: None,
+            title: "fixture".to_owned(),
+            favorite: false,
+            pinned: false,
+            version: 0,
+            lifecycle_state: SessionLifecycleState::Ready,
+            creation_failure: None,
+            task_id: None,
+            subtask_status: None,
+            subtask_started_at_ms: None,
+            subtask_finished_at_ms: None,
+            subtask_failure: None,
+            config_json: None,
+            provider_anchors_json: None,
+            created_at_ms: 1,
+            updated_at_ms: 1,
+        };
+        let value = serde_json::to_value(&current).expect("serialize current session meta");
+        serde_json::from_value::<SessionMeta>(value.clone()).expect("decode current session meta");
+
+        for field in ["favorite", "pinned"] {
+            let mut missing = value.clone();
+            missing.as_object_mut().unwrap().remove(field);
+            let error = serde_json::from_value::<SessionMeta>(missing)
+                .expect_err("current session metadata fields must be required");
+            assert!(error.to_string().contains(field), "{error}");
+        }
+    }
+
+    #[test]
+    fn background_delivery_requires_current_retry_timestamp() {
+        let current = BackgroundDelivery {
+            delivery_id: "delivery-1".to_owned(),
+            operation_id: "operation-1".to_owned(),
+            session_id: 1,
+            event_key: "event-1".to_owned(),
+            payload: serde_json::json!({}),
+            phase: BackgroundDeliveryPhase::Pending,
+            claim_owner: None,
+            claim_until_ms: None,
+            attempts: 0,
+            notification_part_id: None,
+            last_error: None,
+            created_at_ms: 1,
+            updated_at_ms: 1,
+            consumed_at_ms: None,
+            next_attempt_at_ms: 0,
+        };
+        let mut value = serde_json::to_value(&current).expect("serialize current delivery");
+        value.as_object_mut().unwrap().remove("next_attempt_at_ms");
+        let error = serde_json::from_value::<BackgroundDelivery>(value)
+            .expect_err("current delivery retry timestamp must be required");
+        assert!(error.to_string().contains("next_attempt_at_ms"), "{error}");
     }
 }

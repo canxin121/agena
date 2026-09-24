@@ -1,7 +1,7 @@
-//! Provider Studio entry points, migrated from
+//! Provider Studio entry points. Previously located in
 //! `agena-tui-backend/src/backend_provider/selection.rs` and
 //! `settings.rs`. These are thin `impl Application` delegations to the
-//! migrated free functions in `provider_studio::save`.
+//! provider-studio functions in `provider_studio::save`.
 
 use crate::provider_studio::save;
 use crate::provider_studio::{

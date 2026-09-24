@@ -693,9 +693,9 @@ use crate::{
 use agena_tui::main_focus::Focus;
 use agena_tui_session::session_view::SessionViewMode;
 
-/// Derive rewind picker targets from the v2 part projection: one target per
+/// Derive rewind picker targets from the part projection: one target per
 /// user `run` marker, with the run's text parts joined as the message preview.
-/// Mirrors the v1 turn list (one target per user turn boundary).
+/// Mirrors the removed turn list (one target per user turn boundary).
 fn rewind_targets_from_parts(
     parts: &[agena_api::resource::SessionTranscriptPart],
 ) -> Vec<crate::RewindTarget> {

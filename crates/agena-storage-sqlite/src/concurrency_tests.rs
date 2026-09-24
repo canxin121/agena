@@ -40,67 +40,11 @@ async fn concurrent_schema_initialization_is_idempotent() {
     r_a.expect("first schema initialization succeeds");
     r_b.expect("concurrent schema initialization must not fail with SQLITE_BUSY");
 
-    // Both connections see the current version marker.
+    // Both connections see the same exact current schema.
     for db in [&db_a, &db_b] {
-        let version: i64 = db
-            .query_one(Statement::from_string(
-                DatabaseBackend::Sqlite,
-                "PRAGMA user_version".to_owned(),
-            ))
+        crate::schema::validation::validate_existing_schema(db)
             .await
-            .expect("query user_version")
-            .expect("user_version row")
-            .try_get("", "user_version")
-            .expect("user_version value");
-        assert_eq!(version, crate::CURRENT_SCHEMA_VERSION);
-    }
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn concurrent_current_schema_refresh_preserves_rows_and_installs_failure_checks() {
-    let directory = tempfile::tempdir().expect("temporary database directory");
-    let db_a = connect_file(&directory, "refresh.db").await;
-    let db_b = connect_file(&directory, "refresh.db").await;
-    crate::initialize_schema(&db_a)
-        .await
-        .expect("initial schema");
-    for sql in [
-        "DROP TRIGGER agena_sessions_creation_failure_shape",
-        include_str!("schema_invariants/fixtures/v13_creation_failure.sql"),
-        "INSERT INTO agena_workspaces (id, path, created_at_ms, updated_at_ms) VALUES (1, '/refresh', 1, 1)",
-        "INSERT INTO agena_sessions (id, workspace_id, title, version, created_at_ms, updated_at_ms) VALUES (1, 1, 'preserved', 1, 1, 1)",
-    ] {
-        db_a.execute(Statement::from_string(DatabaseBackend::Sqlite, sql))
-            .await
-            .expect("historical schema fixture");
-    }
-    let (a, b) = tokio::join!(
-        crate::initialize_schema(&db_a),
-        crate::initialize_schema(&db_b)
-    );
-    a.expect("first refresh");
-    b.expect("concurrent refresh");
-    for db in [&db_a, &db_b] {
-        db.execute(Statement::from_string(
-            DatabaseBackend::Sqlite,
-            "UPDATE agena_sessions SET lifecycle_state = 'failed', creation_failure_json = '{}' WHERE id = 1",
-        ))
-        .await
-        .expect_err("both pools enforce corrected failure shape");
-        let row = db
-            .query_one(Statement::from_string(
-                DatabaseBackend::Sqlite,
-                "SELECT title, lifecycle_state, version FROM agena_sessions WHERE id = 1",
-            ))
-            .await
-            .expect("session")
-            .expect("row");
-        assert_eq!(row.try_get::<String>("", "title").unwrap(), "preserved");
-        assert_eq!(
-            row.try_get::<String>("", "lifecycle_state").unwrap(),
-            "creating"
-        );
-        assert_eq!(row.try_get::<i64>("", "version").unwrap(), 1);
+            .expect("current schema remains exact");
     }
 }
 

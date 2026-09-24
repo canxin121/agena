@@ -830,7 +830,7 @@ export async function patchSessionTitle(sessionId: string, title: string): Promi
   return patchSessionMetadata(sessionId, { title })
 }
 
-/** GET /api/v1/sessions/{id} — single session read-back (replaces opencode locateSession). */
+/** GET /api/v1/sessions/{id} — single session read-back. */
 export async function getSession(sessionId: string): Promise<Session> {
   const session = toSession(await apiJson<JsonValue>(`/api/v1/sessions/${encodeURIComponent(sessionId)}`))
   if (!session) throw new Error('Server did not return a session')

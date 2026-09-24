@@ -167,7 +167,7 @@ fn usage_from_run_marker_content(content: &serde_json::Value) -> Option<Completi
 ///
 /// Usage and model identity are read from the assistant run markers, which are
 /// the durable home for run cost input (the engine folds attributed usage into
-/// `content["usage"]`, mirroring the v2 `aggregate_usage()` projection).
+/// `content["usage"]`, mirroring the `aggregate_usage()` projection).
 pub(crate) fn summarize(parts: &[Part]) -> SessionCostSummary {
     let mut result = SessionCostSummary::default();
     let mut by_model: BTreeMap<(String, String), ModelCostBreakdown> = BTreeMap::new();

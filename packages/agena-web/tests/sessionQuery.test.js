@@ -8,7 +8,7 @@ import {
 } from '../src/app/navigation/sessionQuery.ts'
 
 test('readSessionIdFromQuery: reads canonical sessionId key only', () => {
-  assert.equal(readSessionIdFromQuery({ sessionid: 'legacy-1' }), '')
+  assert.equal(readSessionIdFromQuery({ unknown: 'ignored-1' }), '')
   assert.equal(readSessionIdFromQuery({ sessionId: 'camel-1' }), 'camel-1')
   assert.equal(readSessionIdFromQuery({ session: 'current-1' }), '')
 })
@@ -34,7 +34,7 @@ test('patchSessionIdInQuery: clears the canonical session key for empty values',
 })
 
 test('readSessionIdFromFullPath: parses canonical key from URL path', () => {
-  assert.equal(readSessionIdFromFullPath('/chat?sessionid=legacy-2'), '')
+  assert.equal(readSessionIdFromFullPath('/chat?unknown=ignored-2'), '')
   assert.equal(readSessionIdFromFullPath('/chat?sessionId=camel-2'), 'camel-2')
   assert.equal(readSessionIdFromFullPath('/chat?session=current-2'), '')
   assert.equal(readSessionIdFromFullPath('/chat?foo=bar'), '')

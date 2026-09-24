@@ -21,18 +21,17 @@ use agena_domain::ToolInvocation;
 use agena_domain::{StructuredObject, UserInputOption, UserInputQuestion};
 use agena_plugin_host::sdk::host_api::{
     AskUserRequest, AskUserResponse, CancelSubtaskRequest, EventSubscription, HostCallbackContext,
-    HostClient, HostConfigReloadRequestResponse, HostConfigReloadResponse,
-    HostConfigReloadStatusRequest, HostConfigReloadStatusResponse, HostContextStatusRequest,
-    HostContextStatusResponse, HostEnterSnapshotRequest, HostExitSnapshotRequest,
-    HostGetSessionRequest, HostGetSessionResponse, HostImageExecuteRequest,
-    HostImageExecuteResponse, HostImageOperation, HostLspDiagnostic, HostLspListDiagnosticsRequest,
-    HostLspListDiagnosticsResponse, HostLspListServersResponse, HostLspServer,
-    HostMcpAddServerRequest, HostMcpListServersResponse, HostMcpRemoveServerRequest,
-    HostMcpRemoveServerResponse, HostMcpServerSpec, HostPluginStatus, HostPluginStatusGetRequest,
-    HostPluginStatusGetResponse, HostPluginStatusListResponse, HostRenameSessionRequest,
-    HostRenameSessionResponse, HostSchedulerCreateRequest, HostSchedulerCreateResponse,
-    HostSchedulerDeleteRequest, HostSchedulerDeleteResponse, HostSchedulerJob,
-    HostSchedulerListResponse, HostSecretDeleteRequest, HostSecretGetRequest,
+    HostClient, HostConfigReloadRequestResponse, HostConfigReloadStatusRequest,
+    HostConfigReloadStatusResponse, HostContextStatusRequest, HostContextStatusResponse,
+    HostEnterSnapshotRequest, HostExitSnapshotRequest, HostGetSessionRequest,
+    HostGetSessionResponse, HostImageExecuteRequest, HostImageExecuteResponse, HostImageOperation,
+    HostLspDiagnostic, HostLspListDiagnosticsRequest, HostLspListDiagnosticsResponse,
+    HostLspListServersResponse, HostLspServer, HostMcpAddServerRequest, HostMcpListServersResponse,
+    HostMcpRemoveServerRequest, HostMcpRemoveServerResponse, HostMcpServerSpec, HostPluginStatus,
+    HostPluginStatusGetRequest, HostPluginStatusGetResponse, HostPluginStatusListResponse,
+    HostRenameSessionRequest, HostRenameSessionResponse, HostSchedulerCreateRequest,
+    HostSchedulerCreateResponse, HostSchedulerDeleteRequest, HostSchedulerDeleteResponse,
+    HostSchedulerJob, HostSchedulerListResponse, HostSecretDeleteRequest, HostSecretGetRequest,
     HostSecretGetResponse, HostSecretListResponse, HostSecretSetRequest, HostSession,
     HostSetSessionModelRequest, HostSetSessionModelResponse, HostSnapshotListResponse,
     HostSnapshotSummary, HostStorageDeleteRequest, HostStorageGetRequest, HostStorageGetResponse,
@@ -376,7 +375,7 @@ impl HostClient for RuntimeHostClient {
         let plugin_id = plugin_id.parse().unwrap_or_else(|_| {
             agena_plugin_host::PluginKey::new("unknown", "unknown").expect("static plugin key")
         });
-        // v2 has no event log (14.3): plugin events are ephemeral live
+        // there is no persisted event log: plugin events are ephemeral live
         // signals for in-process presentation consumers, never persisted.
         self.runtime()?
             .live_signals
@@ -420,13 +419,6 @@ impl HostClient for RuntimeHostClient {
     async fn read_config(&self, path: Option<String>) -> Result<serde_json::Value, PluginError> {
         agena_domain::get_json_path(&self.config, path.as_deref())
             .map_err(|e| PluginError::invalid_params_error(&e))
-    }
-
-    async fn reload_config(&self) -> Result<HostConfigReloadResponse, PluginError> {
-        self.runtime()?;
-        Err(PluginError::not_implemented(
-            "synchronous reload from a plugin callback is not supported; use host/config.reload.request, return from the originating call, then query host/config.reload.status",
-        ))
     }
 
     async fn request_config_reload(&self) -> Result<HostConfigReloadRequestResponse, PluginError> {

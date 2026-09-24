@@ -98,7 +98,6 @@ function assistantAppearedSince(messages: MessageLike[], cutoff: number): boolea
 export function useMessageStreaming(opts: {
   selectedSessionId: { value: string | null }
   messages: { value: MessageLike[] }
-  revertBoundaryId: { value: string | null }
 }) {
   const awaitingAssistant = ref(false)
   const pendingSendAt = ref<number | null>(null)
@@ -109,7 +108,6 @@ export function useMessageStreaming(opts: {
     const sid = opts.selectedSessionId.value
     if (!opt || !sid || opt.sessionId !== sid) return false
 
-    const revertId = (opts.revertBoundaryId.value || '').trim()
     const wantText = normalizeComparableText(opt.text || '')
     const wantFiles = Array.isArray(opt.files) ? opt.files : []
     const wantAnyFiles = wantFiles.length > 0
@@ -122,8 +120,6 @@ export function useMessageStreaming(opts: {
       if (String(info.role) !== 'user') continue
       const mid = typeof info.id === 'string' ? String(info.id) : ''
       if (baseline && mid && mid <= baseline) continue
-      if (revertId && mid && mid >= revertId) continue
-
       const gotText = normalizeComparableText(textFromMessageParts(Array.isArray(m.parts) ? m.parts : []))
       const gotFiles = filePartsFromMessageParts(Array.isArray(m.parts) ? m.parts : [])
 
@@ -183,7 +179,6 @@ export function useMessageStreaming(opts: {
     const sid = (args.sessionId || '').trim()
     if (!sid) return
 
-    const revertId = (opts.revertBoundaryId.value || '').trim()
     let baselineUserMessageId = ''
     for (let i = opts.messages.value.length - 1; i >= 0; i -= 1) {
       const m = opts.messages.value[i]
@@ -192,7 +187,6 @@ export function useMessageStreaming(opts: {
       if (String(info.role) !== 'user') continue
       const mid = typeof info.id === 'string' ? String(info.id) : ''
       if (!mid) continue
-      if (revertId && mid >= revertId) continue
       baselineUserMessageId = mid
       break
     }

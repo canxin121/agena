@@ -43,7 +43,7 @@ describe('TUI-parity transcript projection', () => {
           part('7', 'text', { text: 'final answer' }),
         ]),
       ],
-      { showReasoning: true, revert: null },
+      { showReasoning: true },
     )
 
     expect(blocks).toHaveLength(2)
@@ -68,7 +68,7 @@ describe('TUI-parity transcript projection', () => {
         message('14', 'system', [part('15', 'notice', { summary: 'boundary' })]),
         message('16', 'assistant', [part('17', 'text', { text: 'after boundary' })]),
       ],
-      { showReasoning: true, revert: null },
+      { showReasoning: true },
     )
 
     expect(blocks).toHaveLength(3)
@@ -83,25 +83,25 @@ describe('TUI-parity transcript projection', () => {
   test('retains unknown open-set parts as readable JSON instead of dropping them', () => {
     const blocks = projectTranscriptBlocks(
       [message('1', 'assistant', [part('2', 'future_kind', { summary: 'future payload', nested: { ok: true } })])],
-      { showReasoning: true, revert: null },
+      { showReasoning: true },
     )
     const projected = blocks[0]?.kind === 'message' ? blocks[0].displayParts[0] : null
     expect(projected?.kind).toBe('unknown')
     expect(projected?.copyText).toContain('future payload')
   })
 
-  test('uses numeric ids at the rewind boundary', () => {
+  test('orders durable numeric part ids numerically inside a message', () => {
     const blocks = projectTranscriptBlocks(
       [
-        message('2', 'user', [part('3', 'text', { text: 'before' })]),
-        message('10', 'user', [part('11', 'text', { text: 'after' })]),
+        message('2', 'assistant', [
+          part('10', 'text', { text: 'later' }),
+          part('3', 'text', { text: 'earlier' }),
+        ]),
       ],
-      {
-        showReasoning: true,
-        revert: { messageID: '10', revertedUserCount: 1, diffFiles: [] },
-      },
+      { showReasoning: true },
     )
-    expect(blocks.map((item) => item.key)).toEqual(['msg:2', 'revert:10'])
+    const projected = blocks[0]
+    expect(projected?.displayParts.map((item) => item.id)).toEqual(['3', '10'])
   })
 
   test('projects empty and terminal assistant reply lifecycle rows like the TUI', () => {
@@ -111,7 +111,7 @@ describe('TUI-parity transcript projection', () => {
         message('21', 'system', [part('22', 'notice', { summary: 'boundary' })]),
         message('23', 'assistant', [part('24', 'text', { text: 'partial response' })], 'failed'),
       ],
-      { showReasoning: true, revert: null },
+      { showReasoning: true },
     )
     const running = blocks[0]?.kind === 'message' ? blocks[0].displayParts : []
     const failed = blocks[2]?.kind === 'message' ? blocks[2].displayParts : []
@@ -130,7 +130,6 @@ describe('TUI-parity transcript projection', () => {
 
     const blocks = projectTranscriptBlocks([failed, running], {
       showReasoning: true,
-      revert: null,
     })
     const folded = blocks[0]?.kind === 'message' ? blocks[0] : null
 
@@ -145,7 +144,6 @@ describe('TUI-parity transcript projection', () => {
   test('does not turn an unknown backend run state into a synthetic failure', () => {
     const blocks = projectTranscriptBlocks([message('50', 'assistant', [], 'future_state')], {
       showReasoning: true,
-      revert: null,
     })
     const projected = blocks[0]?.kind === 'message' ? blocks[0].displayParts : []
 
@@ -173,7 +171,7 @@ describe('TUI-parity transcript projection', () => {
           'in_progress',
         ),
       ],
-      { showReasoning: true, revert: null },
+      { showReasoning: true },
     )
     const projected = blocks[0]?.kind === 'message' ? blocks[0].displayParts[0] : null
     expect(projected?.kind).toBe('operation')

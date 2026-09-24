@@ -5,8 +5,8 @@ on:
   workflow_dispatch:
     inputs:
       tag_name:
-        description: "Beta release tag name, for example agena-v0.1.2-beta.1"
-        required: false
+        description: "Beta release tag name, for example agena-v0.1.0-beta.1"
+        required: true
         type: string
       source_sha:
         description: "Commit SHA to build; defaults to the selected workflow ref"
@@ -35,6 +35,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.meta.outputs.version }}
+      release_version: ${{ steps.meta.outputs.release_version }}
       tag: ${{ steps.meta.outputs.tag }}
       source_sha: ${{ steps.meta.outputs.source_sha }}
       publish_release: ${{ steps.meta.outputs.publish_release }}
@@ -56,22 +57,21 @@ jobs:
             echo "failed to read version from Cargo.toml" >&2
             exit 1
           fi
-          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+-beta\.[0-9]+$ ]]; then
-            echo "Agena GitHub releases are beta-only; version must match x.y.z-beta.N (got $version)" >&2
+          if [[ "$version" != "0.1.0" ]]; then
+            echo "Agena repository version must be 0.1.0 (got $version)" >&2
             exit 1
           fi
 
           tag="$REQUESTED_TAG"
-          if [[ -z "$tag" ]]; then
-            tag="agena-v${version}"
-          fi
-          if [[ "$tag" != "agena-v${version}" ]]; then
-            echo "tag $tag does not match agena version $version" >&2
+          if [[ ! "$tag" =~ ^agena-v0\.1\.0-beta\.[1-9][0-9]*$ ]]; then
+            echo "beta tag must match agena-v${version}-beta.N (got $tag)" >&2
             exit 1
           fi
+          release_version="${tag#agena-v}"
 
           source_sha="$(git rev-parse HEAD)"
           echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "release_version=$release_version" >> "$GITHUB_OUTPUT"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
           echo "publish_release=$PUBLISH_RELEASE" >> "$GITHUB_OUTPUT"
@@ -460,7 +460,7 @@ jobs:
           )
       - uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
-          name: Agena ${{ needs.metadata.outputs.version }}
+          name: Agena ${{ needs.metadata.outputs.release_version }}
           tag_name: ${{ needs.metadata.outputs.tag }}
           target_commitish: ${{ needs.metadata.outputs.source_sha }}
           prerelease: true
@@ -490,7 +490,7 @@ jobs:
             shell_kind: pwsh
     env:
       RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
-      RELEASE_VERSION: ${{ needs.metadata.outputs.version }}
+      RELEASE_VERSION: ${{ needs.metadata.outputs.release_version }}
       TEST_PORT: "43220"
     steps:
       - name: Smoke published installer (Unix)

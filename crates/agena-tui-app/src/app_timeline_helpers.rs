@@ -6,7 +6,7 @@ pub(crate) fn format_timestamp(timestamp: DateTime<Utc>) -> String {
         .to_string()
 }
 
-/// Build the terminal item from one ordered v2 session part.
+/// Build the terminal item from one ordered session part.
 pub(crate) fn build_timeline_item(
     i18n: &I18n,
     record: &crate::app_backend::SessionTimelineEntry,

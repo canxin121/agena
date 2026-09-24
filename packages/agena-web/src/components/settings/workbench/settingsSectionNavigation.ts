@@ -14,7 +14,7 @@ export function normalizeSettingsSubpageId(value: unknown): string {
 
 export function settingsSubpageStorageKey(section: string): string {
   const normalized = normalizeSettingsSubpageId(section) || 'unknown'
-  return `studio.settings.subpage.${normalized}.v1`
+  return `studio.settings.subpage.${normalized}`
 }
 
 export function resolveSettingsSubpage(

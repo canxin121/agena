@@ -663,9 +663,4 @@ async fn audit_binary_fs_read_is_a_local_reference_not_an_implicit_model_upload(
         attachment.source,
         agena_domain::AttachmentSource::LocalPath { .. }
     )));
-    let error = f
-        .call("fs.view_image", json!({"path":"picture.png"}))
-        .await
-        .unwrap_err();
-    assert!(matches!(error, ToolError::ToolUnavailable(_)));
 }

@@ -28,26 +28,26 @@ use crate::hooks::{
 };
 use crate::host_api::{
     AskUserRequest, AskUserResponse, CancelSubtaskRequest, EventSubscription, HostClient,
-    HostConfigReloadRequestResponse, HostConfigReloadResponse, HostConfigReloadStatusRequest,
-    HostConfigReloadStatusResponse, HostContextStatusRequest, HostContextStatusResponse,
-    HostDisplayContributeRequest, HostDisplayRemoveRequest, HostDisplayRemoveResponse,
-    HostEnterSnapshotRequest, HostExitSnapshotRequest, HostHookListResponse,
-    HostImageExecuteRequest, HostImageExecuteResponse, HostLspListDiagnosticsRequest,
-    HostLspListDiagnosticsResponse, HostLspListServersResponse, HostMcpAddServerRequest,
-    HostMcpListServersResponse, HostMcpRemoveServerRequest, HostMcpRemoveServerResponse,
-    HostPluginStatusGetRequest, HostPluginStatusGetResponse, HostPluginStatusListResponse,
-    HostRegisteredToolListResponse, HostSchedulerCreateRequest, HostSchedulerCreateResponse,
-    HostSchedulerDeleteRequest, HostSchedulerDeleteResponse, HostSchedulerListResponse,
-    HostSecretDeleteRequest, HostSecretGetRequest, HostSecretGetResponse, HostSecretListResponse,
-    HostSecretSetRequest, HostSetSessionModelRequest, HostSetSessionModelResponse,
-    HostSnapshotListResponse, HostStorageDeleteRequest, HostStorageGetRequest,
-    HostStorageGetResponse, HostStorageListRequest, HostStorageListResponse, HostStorageSetRequest,
-    HostThemeListResponse, HostThemeRegisterRequest, HostThemeRemoveRequest,
-    HostThemeRemoveResponse, HostToolMutationResponse, HostToolRegisterRequest,
-    HostToolRemoveRequest, HostToolUpdateRequest, LogLevel, MessageSubtaskRequest, MonitorHandle,
-    MonitorReadRequest, MonitorReadResponse, MonitorStartRequest, MonitorStopRequest,
-    PluginNotifyRequest, ReadSubtaskOutputRequest, ReadSubtaskOutputResponse, RunSubtaskRequest,
-    RunSubtaskResponse, SubtaskControlResponse, ToolDescriptor,
+    HostConfigReloadRequestResponse, HostConfigReloadStatusRequest, HostConfigReloadStatusResponse,
+    HostContextStatusRequest, HostContextStatusResponse, HostDisplayContributeRequest,
+    HostDisplayRemoveRequest, HostDisplayRemoveResponse, HostEnterSnapshotRequest,
+    HostExitSnapshotRequest, HostHookListResponse, HostImageExecuteRequest,
+    HostImageExecuteResponse, HostLspListDiagnosticsRequest, HostLspListDiagnosticsResponse,
+    HostLspListServersResponse, HostMcpAddServerRequest, HostMcpListServersResponse,
+    HostMcpRemoveServerRequest, HostMcpRemoveServerResponse, HostPluginStatusGetRequest,
+    HostPluginStatusGetResponse, HostPluginStatusListResponse, HostRegisteredToolListResponse,
+    HostSchedulerCreateRequest, HostSchedulerCreateResponse, HostSchedulerDeleteRequest,
+    HostSchedulerDeleteResponse, HostSchedulerListResponse, HostSecretDeleteRequest,
+    HostSecretGetRequest, HostSecretGetResponse, HostSecretListResponse, HostSecretSetRequest,
+    HostSetSessionModelRequest, HostSetSessionModelResponse, HostSnapshotListResponse,
+    HostStorageDeleteRequest, HostStorageGetRequest, HostStorageGetResponse,
+    HostStorageListRequest, HostStorageListResponse, HostStorageSetRequest, HostThemeListResponse,
+    HostThemeRegisterRequest, HostThemeRemoveRequest, HostThemeRemoveResponse,
+    HostToolMutationResponse, HostToolRegisterRequest, HostToolRemoveRequest,
+    HostToolUpdateRequest, LogLevel, MessageSubtaskRequest, MonitorHandle, MonitorReadRequest,
+    MonitorReadResponse, MonitorStartRequest, MonitorStopRequest, PluginNotifyRequest,
+    ReadSubtaskOutputRequest, ReadSubtaskOutputResponse, RunSubtaskRequest, RunSubtaskResponse,
+    SubtaskControlResponse, ToolDescriptor,
 };
 use crate::plugin::Plugin;
 use crate::rpc::{
@@ -706,16 +706,6 @@ impl HostClient for StdioHostClient {
         self.call(
             method::HOST_CONFIG_READ,
             serde_json::json!({ "path": path }),
-        )
-        .await
-    }
-
-    async fn reload_config(&self) -> crate::error::Result<HostConfigReloadResponse> {
-        self.call(
-            method::HOST_CONFIG_RELOAD,
-            serde_json::json!({
-                "context": crate::host_api::current_host_callback_context(),
-            }),
         )
         .await
     }

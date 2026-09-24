@@ -112,7 +112,7 @@ pub(super) fn classify(provider: &str, value: &Value, pending: bool) -> Outcome 
             }
         }
     }
-    // A legacy Images endpoint has no completion status. Nonempty image data
+    // The OpenAI Images endpoint has no completion status. Nonempty image data
     // is evidence of a returned image response, not of local file persistence.
     if value
         .get("data")

@@ -22,7 +22,7 @@ import {
 import type { JsonObject as UnknownRecord, JsonValue } from '@/types/json'
 
 type SidebarFooterKind = 'pinned' | 'favorite' | 'recent' | 'running'
-// Agena has no opencode-style sidebar endpoints. The sidebar data sources are:
+// Sidebar data sources are:
 //   GET /api/v1/workspaces        → directory list (WorkspaceResource {id, path})
 //   GET /api/v1/sessions          → cross-workspace favorite/attention/running/recent buckets
 //   GET /api/v1/sessions          → flat session list (search/workspace filters)
@@ -701,7 +701,7 @@ function normalizeSidebarSessionRow(raw: JsonValue): SidebarSessionRow | null {
   const depthRaw = Number(record.depth)
   const depth = Number.isFinite(depthRaw) ? Math.max(0, Math.floor(depthRaw)) : 0
   const renderKey = typeof record.renderKey === 'string' && record.renderKey.trim() ? record.renderKey.trim() : id
-  const parentRaw = record.parentId ?? record.parentID ?? record.parent_id
+  const parentRaw = record.parentId
   const parentId = typeof parentRaw === 'string' && parentRaw.trim() ? parentRaw.trim() : null
   const rootId = typeof record.rootId === 'string' && record.rootId.trim() ? record.rootId.trim() : id
 
@@ -729,7 +729,7 @@ function normalizeSidebarFooterView(raw: JsonValue | null | undefined): SidebarF
 
   const totalRaw = Number(record?.total)
   const pageRaw = Number(record?.page)
-  const pageCountRaw = Number(record?.pageCount ?? record?.page_count)
+  const pageCountRaw = Number(record?.pageCount)
   const total = Number.isFinite(totalRaw) ? Math.max(0, Math.floor(totalRaw)) : rows.length
   const pageCount = Number.isFinite(pageCountRaw) ? Math.max(1, Math.floor(pageCountRaw)) : 1
   const page = Number.isFinite(pageRaw) ? Math.max(0, Math.min(pageCount - 1, Math.floor(pageRaw))) : 0
@@ -764,15 +764,15 @@ function normalizeDirectorySidebarSection(raw: JsonValue, directoryId: string): 
     if (row) recentRows.push(row)
   }
 
-  const sessionCountRaw = Number(section.sessionCount ?? section.session_count)
-  const rootPageRaw = Number(section.rootPage ?? section.root_page)
-  const rootPageCountRaw = Number(section.rootPageCount ?? section.root_page_count)
+  const sessionCountRaw = Number(section.sessionCount)
+  const rootPageRaw = Number(section.rootPage)
+  const rootPageCountRaw = Number(section.rootPageCount)
 
   const sessionCount = Number.isFinite(sessionCountRaw) ? Math.max(0, Math.floor(sessionCountRaw)) : recentRows.length
   const rootPageCount = Number.isFinite(rootPageCountRaw) ? Math.max(1, Math.floor(rootPageCountRaw)) : 1
   const rootPage = Number.isFinite(rootPageRaw) ? Math.max(0, Math.min(rootPageCount - 1, Math.floor(rootPageRaw))) : 0
 
-  const recentParentByIdRaw = asRecord((section.recentParentById ?? section.recent_parent_by_id) as JsonValue) || {}
+  const recentParentByIdRaw = asRecord(section.recentParentById as JsonValue) || {}
   const recentParentById: Record<string, string | null> = {}
   for (const [sessionIdRaw, parentRaw] of Object.entries(recentParentByIdRaw)) {
     const sessionId = String(sessionIdRaw || '').trim()
@@ -784,11 +784,7 @@ function normalizeDirectorySidebarSection(raw: JsonValue, directoryId: string): 
     recentParentById[sessionId] = null
   }
 
-  const recentRootIdsRaw = Array.isArray(section.recentRootIds)
-    ? section.recentRootIds
-    : Array.isArray(section.recent_root_ids)
-      ? section.recent_root_ids
-      : []
+  const recentRootIdsRaw = Array.isArray(section.recentRootIds) ? section.recentRootIds : []
   const recentRootIds = recentRootIdsRaw.map((value) => String(value || '').trim()).filter(Boolean)
 
   const hasRunningSessions = section.hasRunningSessions === true
@@ -825,11 +821,11 @@ function normalizeDirectoryRowsById(raw: JsonValue | null | undefined): Record<s
 
 function normalizeSidebarView(raw: JsonValue | null | undefined): NormalizedSidebarView {
   const view = asRecord((raw as JsonValue) || undefined)
-  const directoryRowsById = (view?.directoryRowsById ?? view?.directory_rows_by_id) as JsonValue
-  const pinnedFooter = (view?.pinnedFooter ?? view?.pinned_footer) as JsonValue
-  const favoriteFooter = (view?.favoriteFooter ?? view?.favorite_footer) as JsonValue
-  const recentFooter = (view?.recentFooter ?? view?.recent_footer) as JsonValue
-  const runningFooter = (view?.runningFooter ?? view?.running_footer) as JsonValue
+  const directoryRowsById = view?.directoryRowsById as JsonValue
+  const pinnedFooter = view?.pinnedFooter as JsonValue
+  const favoriteFooter = view?.favoriteFooter as JsonValue
+  const recentFooter = view?.recentFooter as JsonValue
+  const runningFooter = view?.runningFooter as JsonValue
 
   return {
     directorySidebarById: normalizeDirectoryRowsById(directoryRowsById),
@@ -1630,7 +1626,7 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
     }
     applyAuthoritativeUiPrefs((stateRecord.preferences as Partial<ChatSidebarUiPrefs>) || undefined)
 
-    applyDirectoriesPagePayload((stateRecord.directoriesPage ?? stateRecord.directories_page) as JsonValue)
+    applyDirectoriesPagePayload(stateRecord.directoriesPage as JsonValue)
 
     const knownRows = knownSidebarRowBySessionId()
     const normalizedViewRaw = normalizeSidebarView(stateRecord.view as JsonValue)

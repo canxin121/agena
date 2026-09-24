@@ -32,7 +32,7 @@ function normalizeQuery(raw: LocationQuery | Record<string, unknown> | null | un
   const out: Record<string, string> = {}
   for (const [rawKey, rawValue] of Object.entries(raw || {})) {
     const key = String(rawKey || '').trim()
-    if (!key || key === 'windowId' || key === 'windowid' || key === 'ocEmbed') continue
+    if (!key || key === 'windowId' || key === 'agenaEmbed') continue
     const value = Array.isArray(rawValue)
       ? String(rawValue.find((item) => String(item || '').trim()) || '').trim()
       : String(rawValue || '').trim()

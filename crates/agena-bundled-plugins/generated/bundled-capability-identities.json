@@ -147,7 +147,7 @@
           ]
         }
       ],
-      "version": "0.1.2-beta.1"
+      "version": "0.1.0"
     },
     {
       "conditional": null,
@@ -268,7 +268,7 @@
           ]
         }
       ],
-      "version": "0.1.2-beta.1"
+      "version": "0.1.0"
     },
     {
       "conditional": null,
@@ -304,7 +304,7 @@
           ]
         }
       ],
-      "version": "0.1.2-beta.1"
+      "version": "0.1.0"
     },
     {
       "conditional": null,
@@ -400,7 +400,7 @@
           ]
         }
       ],
-      "version": "0.1.2-beta.1"
+      "version": "0.1.0"
     },
     {
       "conditional": null,
@@ -530,7 +530,7 @@
           ]
         }
       ],
-      "version": "0.1.2-beta.1"
+      "version": "0.1.0"
     },
     {
       "conditional": null,
@@ -686,7 +686,7 @@
           ]
         }
       ],
-      "version": "0.1.2-beta.1"
+      "version": "0.1.0"
     },
     {
       "conditional": null,
@@ -719,7 +719,7 @@
           ]
         }
       ],
-      "version": "0.1.2-beta.1"
+      "version": "0.1.0"
     },
     {
       "conditional": null,
@@ -795,7 +795,7 @@
           ]
         }
       ],
-      "version": "0.1.2-beta.1"
+      "version": "0.1.0"
     },
     {
       "conditional": "runtime:mcp-manager",
@@ -920,7 +920,7 @@
           ]
         }
       ],
-      "version": "0.1.2-beta.1"
+      "version": "0.1.0"
     },
     {
       "conditional": null,
@@ -994,7 +994,7 @@
           ]
         }
       ],
-      "version": "0.1.2-beta.1"
+      "version": "0.1.0"
     },
     {
       "conditional": null,
@@ -1027,7 +1027,7 @@
           ]
         }
       ],
-      "version": "0.1.2-beta.1"
+      "version": "0.1.0"
     },
     {
       "conditional": null,
@@ -1049,7 +1049,7 @@
           ]
         }
       ],
-      "version": "0.1.2-beta.1"
+      "version": "0.1.0"
     },
     {
       "conditional": null,
@@ -1138,7 +1138,7 @@
           ]
         }
       ],
-      "version": "0.1.2-beta.1"
+      "version": "0.1.0"
     },
     {
       "conditional": null,
@@ -1160,7 +1160,7 @@
           ]
         }
       ],
-      "version": "0.1.2-beta.1"
+      "version": "0.1.0"
     },
     {
       "conditional": null,
@@ -1230,7 +1230,7 @@
           ]
         }
       ],
-      "version": "0.1.2-beta.1"
+      "version": "0.1.0"
     },
     {
       "conditional": null,
@@ -1342,7 +1342,7 @@
           ]
         }
       ],
-      "version": "0.1.2-beta.1"
+      "version": "0.1.0"
     },
     {
       "conditional": null,
@@ -1433,7 +1433,7 @@
           ]
         }
       ],
-      "version": "0.1.2-beta.1"
+      "version": "0.1.0"
     },
     {
       "conditional": null,
@@ -1529,7 +1529,7 @@
           ]
         }
       ],
-      "version": "0.1.2-beta.1"
+      "version": "0.1.0"
     },
     {
       "conditional": null,
@@ -1576,7 +1576,7 @@
           ]
         }
       ],
-      "version": "0.1.2-beta.1"
+      "version": "0.1.0"
     },
     {
       "conditional": null,
@@ -1673,7 +1673,7 @@
           ]
         }
       ],
-      "version": "0.1.2-beta.1"
+      "version": "0.1.0"
     },
     {
       "conditional": null,
@@ -1768,7 +1768,7 @@
           ]
         }
       ],
-      "version": "0.1.2-beta.1"
+      "version": "0.1.0"
     },
     {
       "conditional": null,
@@ -1944,7 +1944,7 @@
           ]
         }
       ],
-      "version": "0.1.2-beta.1"
+      "version": "0.1.0"
     }
   ],
   "schema_version": 2,
@@ -1969,7 +1969,7 @@
         "image-generate",
         "image-edit"
       ],
-      "content_sha256": "d9c3ed1a1c4322dac218ae3fe3c8d522a938e911e8ffb39c9f75d00e7438e2dc",
+      "content_sha256": "69210ac1e8b2b560a28bb17bff68b15e337b5e45b6d03dc6268508f85b9f8563",
       "name": "imagegen"
     },
     {

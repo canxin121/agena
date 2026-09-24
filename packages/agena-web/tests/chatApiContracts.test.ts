@@ -256,7 +256,7 @@ test('sent media preview keeps immutable provider-bound bytes instead of rereadi
   const part=normalizeAgenaPart('151','7','10',{
     part_id:151,kind:'file_ref',role:'user',state:'completed',content:{
       path:'.agena/uploads/may-change.png',name:'input.png',mime:'image/png',delivery:'model_input',
-      attachments:[{kind:'image',mime:'image/png',source:{source:'provider_data',route:'media-route-v1:opaque',data:'Zml4ZWQ='},filename:'input.png'}],
+      attachments:[{kind:'image',mime:'image/png',source:{source:'provider_data',route:'media-route:opaque',data:'Zml4ZWQ='},filename:'input.png'}],
     },
   })
   assert.equal(part?.url,'data:image/png;base64,Zml4ZWQ=')

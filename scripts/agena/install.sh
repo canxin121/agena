@@ -31,7 +31,7 @@ Lifecycle examples:
 
 Options:
   --repo OWNER/REPO        GitHub repository (default: canxin121/agena)
-  --version VERSION        Release version/tag; default is latest beta
+  --version VERSION        Beta release version/tag; default is latest beta
   --archive PATH_OR_URL    Install a specific release archive
   --checksum PATH_OR_URL   SHA256 file for --archive (defaults to ARCHIVE.sha256)
   --install-dir DIR        Install root (default: ~/.local/share/agena)
@@ -172,7 +172,7 @@ latest_version() {
     exit 1
   fi
   tag="$(printf '%s\n' "$releases" \
-    | sed -En 's/.*"tag_name"[[:space:]]*:[[:space:]]*"(agena-v[0-9]+\.[0-9]+\.[0-9]+-beta\.[0-9]+)".*/\1/p' \
+    | sed -En 's/.*"tag_name"[[:space:]]*:[[:space:]]*"(agena-v[0-9]+\.[0-9]+\.[0-9]+-beta\.[1-9][0-9]*)".*/\1/p' \
     | head -1)"
   if [[ -z "$tag" ]]; then
     echo "ERROR: no Agena beta release was found for ${REPO}" >&2
@@ -363,7 +363,7 @@ install_or_upgrade() {
   resolve_service_mode
   mkdir -p "$WORKSPACE"
 
-  local target archive_source checksum_source temp archive_path checksum_path stage binary_version
+  local target archive_source checksum_source temp archive_path checksum_path stage binary_version package_version=""
   target="$(target_triple)"
   if [[ -z "$ARCHIVE" ]]; then
     if [[ -z "$VERSION" ]]; then
@@ -371,11 +371,24 @@ install_or_upgrade() {
     else
       VERSION="$(normalize_version "$VERSION")"
     fi
-    archive_source="https://github.com/${REPO}/releases/download/agena-v${VERSION}/agena-backend-${target}-v${VERSION}.tar.gz"
+    if [[ ! "$VERSION" =~ ^([0-9]+\.[0-9]+\.[0-9]+)-beta\.[1-9][0-9]*$ ]]; then
+      echo "ERROR: --version must name a beta release, for example 0.1.0-beta.1" >&2
+      exit 2
+    fi
+    package_version="${BASH_REMATCH[1]}"
+    archive_source="https://github.com/${REPO}/releases/download/agena-v${VERSION}/agena-backend-${target}-v${package_version}.tar.gz"
     checksum_source="${archive_source}.sha256"
   else
     archive_source="$ARCHIVE"
     checksum_source="${CHECKSUM:-${ARCHIVE}.sha256}"
+    if [[ -n "$VERSION" ]]; then
+      VERSION="$(normalize_version "$VERSION")"
+      if [[ ! "$VERSION" =~ ^([0-9]+\.[0-9]+\.[0-9]+)-beta\.[1-9][0-9]*$ ]]; then
+        echo "ERROR: --version must name a beta release, for example 0.1.0-beta.1" >&2
+        exit 2
+      fi
+      package_version="${BASH_REMATCH[1]}"
+    fi
   fi
 
   temp="$(mktemp -d "${TMPDIR:-/tmp}/agena-install.XXXXXX")"
@@ -399,8 +412,8 @@ install_or_upgrade() {
     echo "ERROR: installed Agena binary did not report a version" >&2
     exit 1
   fi
-  if [[ -n "$VERSION" && "$binary_version" != "$VERSION" ]]; then
-    echo "ERROR: archive contains Agena $binary_version but $VERSION was requested" >&2
+  if [[ -n "$package_version" && "$binary_version" != "$package_version" ]]; then
+    echo "ERROR: archive contains Agena $binary_version but release $VERSION contains $package_version" >&2
     exit 1
   fi
   VERSION="$binary_version"

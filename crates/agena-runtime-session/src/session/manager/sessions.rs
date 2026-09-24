@@ -283,7 +283,7 @@ impl SessionManager {
         // unrelated sessions at startup.
         self.reconcile_session_on_open(session_id).await?;
         let mut session = self.load_session_with_workspace_root(session_id).await?;
-        // The persisted runtime contains a historical effective-permission
+        // The persisted runtime contains an effective-permission
         // snapshot. It is not the source of truth after a config reload or a
         // live session-permission edit. Rebuild it from the current shared
         // overlays before any caller creates a scoped executor from it.
@@ -786,10 +786,6 @@ impl agena_runtime::SessionExecutionControl for SessionManager {
                 "session {session_id} contains invalid persisted model reference: {error}"
             ))
         })
-    }
-
-    fn cache_stats(&self) -> agena_domain::SessionCacheStats {
-        SessionManager::cache_stats(self)
     }
 
     fn snapshot_status(

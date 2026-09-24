@@ -10,11 +10,10 @@ use crate::{ApiResult, AppError};
 
 use crate::server::persistence::db;
 
-const STATE_VERSION: u32 = 1;
 const CACHE_TTL: Duration = Duration::from_millis(750);
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct PreviewSessionRecord {
     pub(crate) id: String,
     pub(crate) directory: String,
@@ -66,19 +65,14 @@ pub(crate) struct PreviewSessionUpdatePatch {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct PreviewSessionsResponse {
-    pub(crate) version: u32,
     pub(crate) updated_at: i64,
     pub(crate) sessions: Vec<PreviewSessionRecord>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct PreviewSessionsFile {
-    #[serde(default = "default_state_version")]
-    version: u32,
-    #[serde(default)]
     updated_at: i64,
-    #[serde(default)]
     sessions: Vec<PreviewSessionRecord>,
 }
 
@@ -136,7 +130,6 @@ impl WorkspacePreviewRegistry {
         {
             Ok(Some(file)) => Ok(file),
             Ok(None) => Ok(PreviewSessionsFile {
-                version: STATE_VERSION,
                 updated_at: 0,
                 sessions: Vec::new(),
             }),
@@ -310,7 +303,6 @@ impl WorkspacePreviewRegistry {
             error: None,
         };
 
-        file.version = STATE_VERSION;
         file.updated_at = updated_at;
         file.sessions.push(record.clone());
         self.write_server_state_file(&file).await?;
@@ -510,7 +502,6 @@ fn remove_session_from_file(file: &mut PreviewSessionsFile, id: &str, updated_at
     if file.sessions.len() == before {
         return false;
     }
-    file.version = STATE_VERSION;
     file.updated_at = updated_at;
     true
 }
@@ -586,7 +577,6 @@ fn update_session_in_file(
     record.proxy_base_path = preview_proxy_base_path(&record.id);
 
     file.sessions[index] = record.clone();
-    file.version = STATE_VERSION;
     file.updated_at = updated_at;
     Ok(Some(record))
 }
@@ -609,7 +599,6 @@ fn mark_running_in_file(
     record.error = None;
 
     file.sessions[index] = record.clone();
-    file.version = STATE_VERSION;
     file.updated_at = updated_at;
     Ok(Some(record))
 }
@@ -638,7 +627,6 @@ fn mark_stopped_in_file(
     });
 
     file.sessions[index] = record.clone();
-    file.version = STATE_VERSION;
     file.updated_at = updated_at;
     Ok(Some(record))
 }
@@ -668,18 +656,12 @@ fn rename_session_in_file(
         return Ok(None);
     }
 
-    file.version = STATE_VERSION;
     file.updated_at = updated_at;
     Ok(updated)
 }
 
-fn default_state_version() -> u32 {
-    STATE_VERSION
-}
-
 fn empty_snapshot() -> PreviewSessionsResponse {
     PreviewSessionsResponse {
-        version: STATE_VERSION,
         updated_at: 0,
         sessions: Vec::new(),
     }
@@ -718,7 +700,6 @@ fn parse_preview_sessions(file: PreviewSessionsFile) -> PreviewSessionsResponse 
         sessions.push(session);
     }
     PreviewSessionsResponse {
-        version: file.version,
         updated_at: file.updated_at,
         sessions,
     }

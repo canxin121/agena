@@ -37,5 +37,6 @@ pub use gitlab::{
 };
 pub use ollama::OllamaAdapter;
 pub use openai::{
-    OpenAiChatCompletionsAdapter, OpenAiChatCompletionsAdapterOptions, OpenAiResponsesAdapter, OpenAiResponsesAdapterOptions,
+    OpenAiChatCompletionsAdapter, OpenAiChatCompletionsAdapterOptions, OpenAiResponsesAdapter,
+    OpenAiResponsesAdapterOptions,
 };

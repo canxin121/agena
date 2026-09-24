@@ -190,10 +190,6 @@ struct OpenAiResponsesToolPlan {
     include: Vec<String>,
 }
 
-fn response_id_metadata(response_id: Option<String>) -> Option<serde_json::Value> {
-    utils::response_id_metadata(response_id)
-}
-
 fn openai_reasoning_items_from_output(
     items: Option<&[OpenAiOutputItem]>,
 ) -> Vec<serde_json::Value> {

@@ -1,5 +1,0 @@
-error: unsupported inline tool flag 'streaming'
-  --> tests/ui/fail/old_stream_attr.rs:13:47
-   |
-13 |     #[tool(summary = "Echo text.", read_only, streaming)]
-   |                                               ^^^^^^^^^

@@ -16,8 +16,7 @@ pub enum UserInputReplyKind {
 /// dialog; `AskUser` is the explicit default chosen by the runtime.
 ///
 /// Serializes to the plain string (`"review"` / `"ask_user"` / the custom
-/// value). The decoder accepts one required non-empty string and never treats
-/// `null` or a missing field as a historical request.
+/// value). The decoder accepts one required non-empty string.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum UserInputKind {
     Review,
@@ -73,8 +72,6 @@ impl<'de> Deserialize<'de> for UserInputKind {
 
 /// Origin of an interactive user-input request: the runtime's own host
 /// `ask_user` (`Host`) vs a third-party/tool `interaction.ask` (`Plugin`).
-/// This is the typed replacement for the historical `host-input:` request-id
-/// prefix, which remains only an opaque correlation id.
 ///
 /// Serializes to the plain string (`"host"` / `"plugin"`). The decoder
 /// accepts only those two canonical values.

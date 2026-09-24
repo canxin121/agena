@@ -242,7 +242,7 @@ fn session_resource_from_storage_summary(
         source_message_id: None,
         is_subagent: summary.relation_kind.is_subagent(),
         task_id: summary.task_id.clone(),
-        // v2 dissolved per-summary `subtask_access` (13.2); wire keeps it None.
+        // The current design removed per-summary `subtask_access` (13.2); wire keeps it None.
         subtask_access: None,
         subtask_status,
         created_at: timestamp_millis_to_utc(summary.created_at_ms)?,
@@ -266,7 +266,7 @@ fn session_resource_from_storage_summary(
     })
 }
 
-/// Project a v2 `SessionMeta` (returned by create/rename) into the public
+/// Project a `SessionMeta` (returned by create/rename) into the public
 /// resource. Counts are zero — a freshly created/renamed session has no parts
 /// yet, and callers re-fetch via `get_session` when they need full stats.
 fn session_resource_from_storage_meta(

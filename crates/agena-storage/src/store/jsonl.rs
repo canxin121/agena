@@ -15,7 +15,7 @@ use agena_domain::{SessionLifecycleState, SessionRelationKind};
 /// `type` is used (not `kind`) so it does not collide with the `kind` field
 /// carried by every `Part`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ExportRecord {
     Meta {
         session_id: i64,
@@ -32,6 +32,58 @@ pub enum ExportRecord {
         provider_anchors_json: Option<Value>,
     },
     Part(Part),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn current_jsonl_rejects_unknown_meta_fields() {
+        let line = serde_json::json!({
+            "type":"meta",
+            "session_id":1,
+            "parent_id":null,
+            "depth":0,
+            "root_id":1,
+            "workspace_id":1,
+            "relation_kind":"root",
+            "cutoff_part_id":null,
+            "title":"fixture",
+            "lifecycle_state":"ready",
+            "task_id":null,
+            "config_json":null,
+            "provider_anchors_json":null,
+            "obsolete":true
+        });
+        let bundle = format!("{}\n", serde_json::to_string(&line).unwrap());
+        assert!(parse(&bundle).is_err());
+    }
+
+    #[test]
+    fn current_jsonl_rejects_unknown_part_fields() {
+        let part = serde_json::json!({
+            "type":"part",
+            "part_id":2,
+            "kind":"text",
+            "role":"user",
+            "state":"completed",
+            "content":{"text":"hello"},
+            "summary":null,
+            "visibility":"both",
+            "parent_part_id":null,
+            "run_id":1,
+            "origin_session_id":1,
+            "revision":0,
+            "started_at_ms":1,
+            "finished_at_ms":1,
+            "created_at_ms":1,
+            "updated_at_ms":1,
+            "provider_state":null,
+            "obsolete":true
+        });
+        assert!(serde_json::from_value::<ExportRecord>(part).is_err());
+    }
 }
 
 /// Serialize a session view to the JSONL bundle.

@@ -274,17 +274,10 @@ mod tests {
                 .expect("count value");
             assert_eq!(count, 1, "scheduler table {table} must exist");
         }
-        // The scheduler version space is independent from the chat schema.
-        let version: i64 = database
-            .query_one(Statement::from_string(
-                sea_orm::DatabaseBackend::Sqlite,
-                "PRAGMA user_version".to_owned(),
-            ))
+        // Reopening the scheduler database validates the exact current DDL;
+        // there is deliberately no schema-version/migration contract.
+        agena_scheduler::schema::initialize_schema(database.as_ref())
             .await
-            .expect("query user_version")
-            .expect("user_version row")
-            .try_get("", "user_version")
-            .expect("user_version value");
-        assert_eq!(version, agena_scheduler::schema::CURRENT_SCHEMA_VERSION);
+            .expect("reopen exact scheduler schema");
     }
 }

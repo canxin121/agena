@@ -84,7 +84,7 @@ impl ToolStreamAccumulator {
         let state = self.pending.entry(stream_key.clone()).or_default();
 
         let previous_model_call_id = state.model_call_id.clone();
-        let previous_name = state.name.clone();
+        let prior_name = state.name.clone();
         if let Some(provider_item_id) = input.provider_item_id {
             state.provider_item_id = Some(provider_item_id);
         }
@@ -137,7 +137,7 @@ impl ToolStreamAccumulator {
         }
 
         let metadata_changed =
-            previous_model_call_id != state.model_call_id || previous_name != state.name;
+            previous_model_call_id != state.model_call_id || prior_name != state.name;
         if updates.is_empty() && state.registered && metadata_changed {
             updates.push(state.registered_update(stream_key.as_ref()));
         }

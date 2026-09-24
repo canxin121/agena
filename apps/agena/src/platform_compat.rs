@@ -1,4 +1,4 @@
-//! Compatibility exports for older hosted targets used by the universal build.
+//! OS shims for hosted targets used by the universal build.
 //!
 //! These symbols bridge APIs expected by current dependencies to the stable OS
 //! primitives available in the pinned cross sysroots.  They are compiled only

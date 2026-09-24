@@ -35,6 +35,6 @@ test('settings subpage search covers labels, descriptions, ids, and keywords', (
 })
 
 test('settings subpage memory keys are isolated by top-level section', () => {
-  assert.equal(settingsSubpageStorageKey('models-providers'), 'studio.settings.subpage.models-providers.v1')
+  assert.equal(settingsSubpageStorageKey('models-providers'), 'studio.settings.subpage.models-providers')
   assert.notEqual(settingsSubpageStorageKey('permissions'), settingsSubpageStorageKey('plugins-tools'))
 })

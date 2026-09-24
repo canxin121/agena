@@ -149,14 +149,6 @@ impl HostClient for ScopedHostClient {
         .await
     }
 
-    async fn reload_config(&self) -> crate::sdk::Result<HostConfigReloadResponse> {
-        self.run_callback(async {
-            let inner = self.handle.inner.read().await.clone();
-            host_api::run_in_host_callback_context(self.context()?, inner.reload_config()).await
-        })
-        .await
-    }
-
     async fn request_config_reload(&self) -> crate::sdk::Result<HostConfigReloadRequestResponse> {
         self.run_callback(async {
             let inner = self.handle.inner.read().await.clone();
@@ -654,24 +646,24 @@ impl HostClient for ScopedHostClient {
 use super::{
     AskUserRequest, AskUserResponse, CancelSubtaskRequest, EventEnvelope, EventFilter,
     EventSubscription, HostCallbackContext, HostClient, HostConfigReloadRequestResponse,
-    HostConfigReloadResponse, HostConfigReloadStatusRequest, HostConfigReloadStatusResponse,
-    HostContextStatusRequest, HostContextStatusResponse, HostDisplayContributeRequest,
-    HostDisplayRemoveRequest, HostDisplayRemoveResponse, HostEnterSnapshotRequest,
-    HostExitSnapshotRequest, HostHookListResponse, HostImageExecuteRequest,
-    HostImageExecuteResponse, HostLspListDiagnosticsRequest, HostLspListDiagnosticsResponse,
-    HostLspListServersResponse, HostMcpAddServerRequest, HostMcpListServersResponse,
-    HostMcpRemoveServerRequest, HostMcpRemoveServerResponse, HostPluginStatusGetRequest,
-    HostPluginStatusGetResponse, HostPluginStatusListResponse, HostRegisteredToolListResponse,
-    HostSchedulerCreateRequest, HostSchedulerCreateResponse, HostSchedulerDeleteRequest,
-    HostSchedulerDeleteResponse, HostSchedulerListResponse, HostSecretDeleteRequest,
-    HostSecretGetRequest, HostSecretGetResponse, HostSecretListResponse, HostSecretSetRequest,
-    HostSnapshotListResponse, HostStorageDeleteRequest, HostStorageGetRequest,
-    HostStorageGetResponse, HostStorageListRequest, HostStorageListResponse, HostStorageSetRequest,
-    HostThemeListResponse, HostThemeRegisterRequest, HostThemeRemoveRequest,
-    HostThemeRemoveResponse, HostToolMutationResponse, HostToolRegisterRequest,
-    HostToolRemoveRequest, HostToolUpdateRequest, LogLevel, MessageSubtaskRequest, MonitorHandle,
-    MonitorReadRequest, MonitorReadResponse, MonitorStartRequest, MonitorStopRequest, PluginError,
-    PluginNotifyRequest, ReadSubtaskOutputRequest, ReadSubtaskOutputResponse, RunSubtaskRequest,
-    RunSubtaskResponse, ScopedHostClient, SubtaskControlResponse, ToolDescriptor, ToolInvokeOutput,
+    HostConfigReloadStatusRequest, HostConfigReloadStatusResponse, HostContextStatusRequest,
+    HostContextStatusResponse, HostDisplayContributeRequest, HostDisplayRemoveRequest,
+    HostDisplayRemoveResponse, HostEnterSnapshotRequest, HostExitSnapshotRequest,
+    HostHookListResponse, HostImageExecuteRequest, HostImageExecuteResponse,
+    HostLspListDiagnosticsRequest, HostLspListDiagnosticsResponse, HostLspListServersResponse,
+    HostMcpAddServerRequest, HostMcpListServersResponse, HostMcpRemoveServerRequest,
+    HostMcpRemoveServerResponse, HostPluginStatusGetRequest, HostPluginStatusGetResponse,
+    HostPluginStatusListResponse, HostRegisteredToolListResponse, HostSchedulerCreateRequest,
+    HostSchedulerCreateResponse, HostSchedulerDeleteRequest, HostSchedulerDeleteResponse,
+    HostSchedulerListResponse, HostSecretDeleteRequest, HostSecretGetRequest,
+    HostSecretGetResponse, HostSecretListResponse, HostSecretSetRequest, HostSnapshotListResponse,
+    HostStorageDeleteRequest, HostStorageGetRequest, HostStorageGetResponse,
+    HostStorageListRequest, HostStorageListResponse, HostStorageSetRequest, HostThemeListResponse,
+    HostThemeRegisterRequest, HostThemeRemoveRequest, HostThemeRemoveResponse,
+    HostToolMutationResponse, HostToolRegisterRequest, HostToolRemoveRequest,
+    HostToolUpdateRequest, LogLevel, MessageSubtaskRequest, MonitorHandle, MonitorReadRequest,
+    MonitorReadResponse, MonitorStartRequest, MonitorStopRequest, PluginError, PluginNotifyRequest,
+    ReadSubtaskOutputRequest, ReadSubtaskOutputResponse, RunSubtaskRequest, RunSubtaskResponse,
+    ScopedHostClient, SubtaskControlResponse, ToolDescriptor, ToolInvokeOutput,
     host_api::{self, BackgroundActivity, BackgroundActivityKind},
 };

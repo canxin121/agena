@@ -57,7 +57,7 @@ function Get-LatestVersion {
     Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue
   }
   $release = $releases | Where-Object {
-    -not $_.draft -and $_.prerelease -and ([string]$_.tag_name -match '^agena-v\d+\.\d+\.\d+-beta\.\d+$')
+    -not $_.draft -and $_.prerelease -and ([string]$_.tag_name -match '^agena-v\d+\.\d+\.\d+-beta\.[1-9]\d*$')
   } | Select-Object -First 1
   if (-not $release -or -not $release.tag_name) { throw "No Agena beta release was found for $Repo" }
   return Normalize-Version ([string]$release.tag_name)
@@ -295,13 +295,27 @@ function Install-OrUpgrade([string]$RequestedAction) {
   New-Item -ItemType Directory -Force -Path $Workspace | Out-Null
 
   $target = Get-TargetTriple
+  $packageVersion = ""
   if (-not $Archive) {
-    if (-not $Version) { $script:Version = Get-LatestVersion } else { $script:Version = Normalize-Version $Version }
-    $archiveSource = "https://github.com/$Repo/releases/download/agena-v$Version/agena-backend-$target-v$Version.zip"
+    if (-not $Version) { $releaseVersion = Get-LatestVersion } else { $releaseVersion = Normalize-Version $Version }
+    if ($releaseVersion -notmatch '^(\d+\.\d+\.\d+)-beta\.[1-9]\d*$') {
+      throw "-Version must name a beta release, for example 0.1.0-beta.1"
+    }
+    $script:Version = $releaseVersion
+    $packageVersion = $Matches[1]
+    $archiveSource = "https://github.com/$Repo/releases/download/agena-v$releaseVersion/agena-backend-$target-v$packageVersion.zip"
     $checksumSource = "$archiveSource.sha256"
   } else {
     $archiveSource = $Archive
     $checksumSource = if ($Checksum) { $Checksum } else { "$Archive.sha256" }
+    if ($Version) {
+      $releaseVersion = Normalize-Version $Version
+      if ($releaseVersion -notmatch '^(\d+\.\d+\.\d+)-beta\.[1-9]\d*$') {
+        throw "-Version must name a beta release, for example 0.1.0-beta.1"
+      }
+      $packageVersion = $Matches[1]
+      $script:Version = $releaseVersion
+    }
   }
 
   $temp = Join-Path $env:TEMP ("agena-install-" + [Guid]::NewGuid().ToString("N"))
@@ -339,8 +353,8 @@ function Install-OrUpgrade([string]$RequestedAction) {
       throw "Installed Agena binary did not report a version"
     }
     $binaryVersion = $Matches[1]
-    if ($Version -and $binaryVersion -ne $Version) {
-      throw "Archive contains Agena $binaryVersion but $Version was requested"
+    if ($packageVersion -and $binaryVersion -ne $packageVersion) {
+      throw "Archive contains Agena $binaryVersion but release $Version contains $packageVersion"
     }
     $script:Version = $binaryVersion
     Write-Host "Validated Agena $binaryVersion"

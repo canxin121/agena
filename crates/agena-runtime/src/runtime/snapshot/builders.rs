@@ -58,7 +58,7 @@ pub(super) fn build_or_prepare_session_manager(
         default_selection: build_config.default_selection.clone(),
         permission: build_config.permission.clone(),
         auto_compaction: build_config.auto_compaction,
-        cache_limits: build_config.cache_limits,
+        max_cached_sessions: build_config.max_cached_sessions,
         max_concurrent_tools: build_config.max_concurrent_tools,
         max_turns: build_config.max_turns,
     };

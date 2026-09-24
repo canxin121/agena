@@ -24,7 +24,7 @@ tempfile = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
 [[bench]]
-name = "v2_store"
+name = "store"
 harness = false
 
 [lints]

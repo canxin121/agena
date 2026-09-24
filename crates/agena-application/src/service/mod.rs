@@ -111,7 +111,7 @@ pub struct ApplicationService {
     workspace_repository: Arc<dyn WorkspaceRepository>,
     permission_rule_repository: Arc<dyn PermissionRuleRepository>,
     /// Sealed session store facade (14.1) — the only path application session
-    /// reads/writes take. v1 session repos and the runtime event publisher are
+    /// reads/writes take. removed session repos and the runtime event publisher are
     /// gone; session data lives in parts, surfaced through this facade.
     session_store: Arc<dyn agena_storage::store::SessionStore>,
 }

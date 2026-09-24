@@ -149,7 +149,7 @@ pub fn default_storage_root() -> PathBuf {
         .unwrap_or_else(|error| {
             tracing::error!(
                 diagnostic = %error,
-                "plugin storage home is unavailable; using the current-directory compatibility path"
+                "plugin storage home is unavailable; using the current-directory fallback path"
             );
             PathBuf::from(".")
         });

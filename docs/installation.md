@@ -22,9 +22,10 @@ Linux.
 irm https://raw.githubusercontent.com/canxin121/agena/master/scripts/agena/install.ps1 | iex
 ```
 
-Agena publishes beta GitHub Releases only. With no explicit `--version` /
-`-Version`, the installers select the newest prerelease whose tag matches
-`agena-vX.Y.Z-beta.N`.
+Agena publishes beta releases. The repository and binary versions are `0.1.0`;
+release tags add a beta sequence, such as `agena-v0.1.0-beta.1`. With no
+explicit `--version` / `-Version`, the installers select the newest beta
+release whose tag matches `agena-vX.Y.Z-beta.N`.
 
 The Windows installer supports x86_64 and ARM64 release packages.
 
@@ -95,14 +96,14 @@ macOS/Linux:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/canxin121/agena/master/scripts/agena/install.sh \
-  | bash -s -- install --version 0.1.2-beta.1
+  | bash -s -- install --version 0.1.0-beta.1
 ```
 
 Windows:
 
 ```powershell
 $installer = [scriptblock]::Create((irm https://raw.githubusercontent.com/canxin121/agena/master/scripts/agena/install.ps1))
-& $installer -Action Install -Version 0.1.2-beta.1
+& $installer -Action Install -Version 0.1.0-beta.1
 ```
 
 Both installers also accept a local or remote `--archive`/`-Archive` plus its

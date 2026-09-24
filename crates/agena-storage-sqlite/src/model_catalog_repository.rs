@@ -54,7 +54,7 @@ struct CachedOfficialCatalog {
 
 /// SeaORM-backed model-catalog cache adapter.
 ///
-/// The table schema remains compatible with the existing Agena SQLite
+/// The table schema is part of the current Agena SQLite
 /// database. This adapter intentionally uses SQL rather than importing core
 /// entities, so it can be composed without a dependency on `agena-core`.
 #[derive(Clone)]

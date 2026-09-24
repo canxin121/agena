@@ -9,9 +9,8 @@
 //!
 //! - [`SeaModelCatalogRepository`], [`SeaWorkspaceRepository`],
 //!   [`SeaPermissionRuleRepository`] — SQLite-backed infrastructure repositories.
-//! - [`initialize_schema`] — validate the v2 database layout, create it only
-//!   for a fresh DB, and refresh compatible invariant-trigger corrections.
-//! - [`CURRENT_SCHEMA_VERSION`] — the schema version this build targets.
+//! - [`initialize_schema`] — create the schema only for an empty database and
+//!   otherwise require an exact match with this build.
 //!
 //! The `schema_invariants` module installs database triggers that keep
 //! invariants enforced at the storage layer.
@@ -21,7 +20,6 @@ mod model_catalog_repository;
 mod permission_rule_repository;
 mod schema;
 mod schema_invariants;
-mod schema_lifecycle;
 mod transaction;
 mod workspace_repository;
 
@@ -32,7 +30,6 @@ pub use permission_rule_repository::{
 };
 pub use schema::initialize_schema;
 pub use schema_invariants::install_invariant_triggers;
-pub use schema_lifecycle::CURRENT_SCHEMA_VERSION;
 pub use transaction::{
     acquire_write_lock, is_sqlite_busy, run_transaction_app_effects, run_transaction_effects,
 };

@@ -39,7 +39,7 @@ mod init_context_tests {
     #[test]
     fn init_context_serializes_current_settings_shape() {
         let context = InitContext {
-            agena_version: "0.1.2".to_owned(),
+            agena_version: env!("CARGO_PKG_VERSION").to_owned(),
             workspace_root: std::path::PathBuf::from("/workspace"),
             plugin_id: "example.plugin".parse().expect("valid plugin id"),
             host_callback_url: None,
@@ -55,7 +55,7 @@ mod init_context_tests {
     }
 
     #[test]
-    fn init_context_rejects_legacy_config_and_unknown_fields() {
+    fn init_context_rejects_unknown_fields() {
         let valid = serde_json::json!({
             "agena_version": "test",
             "workspace_root": "/test",
@@ -63,7 +63,7 @@ mod init_context_tests {
             "settings": {},
             "protocol_version": crate::rpc::PROTOCOL_VERSION,
         });
-        for field in ["config", "unknown"] {
+        for field in ["obsolete", "unknown"] {
             let mut params = valid.clone();
             params[field] = serde_json::json!({});
             assert!(serde_json::from_value::<InitContext>(params).is_err());

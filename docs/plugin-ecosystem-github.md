@@ -56,8 +56,8 @@ catalog review are separate trust boundaries.
 
 A marketplace repository has three layers with one responsibility each:
 
-1. `agena-marketplace.toml` -- human-maintained marketplace identity and explicit
-   plugin-id rename graph;
+1. `agena-marketplace.toml` -- human-maintained marketplace identity and review
+   policy;
 2. `releases/<plugin-id>/<version>.json` -- reviewed immutable plugin release
    manifests copied from plugin repositories;
 3. `agena-marketplace.json` -- deterministic generated search/install index.
@@ -124,8 +124,8 @@ than hidden in cache metadata.
 
 - Plugin id is a long-lived slug, independent of repository name.
 - A published plugin-id/version is immutable.
-- Marketplace renames are explicit and acyclic; old ids are never silently
-  reassigned.
+- Marketplace indexes contain only current plugin ids; there is no plugin-id
+  rename or alias migration graph.
 - Plugin project, Cargo package, release tag and release manifest versions must
   agree.
 - Public release/source version remains `0.1.0` until the project intentionally

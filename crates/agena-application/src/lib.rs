@@ -14,7 +14,7 @@
 //! - [`AuthLoginKind`] — kinds of provider login flows.
 //! - [`dto`] — data-transfer objects for frontend resources.
 //! - [`service`], [`session`], [`provider_queries`] — use-case services and
-//!   projections. v2 dropped the global runtime event projection (D11):
+//!   projections. The current design dropped the global runtime event projection (D11):
 //!   chat history is per-session ordered parts, never a global event log.
 
 mod application;

@@ -3,7 +3,7 @@
 //! Provider routes only decide how the five fixed Agena Tool API gateway
 //! functions are transported. Ordinary execution tools never become provider
 //! declarations, and provider-service capabilities live in ordinary plugins
-//! such as `agena.openai`.
+//! such as `agena.chatgpt`.
 
 use serde::{Deserialize, Serialize};
 
@@ -18,8 +18,7 @@ pub struct ResolvedProviderModelConfig {
     /// endpoint before falling back to Agena's text summarizer.
     #[serde(skip_serializing_if = "is_true")]
     pub native_compaction: bool,
-    /// Transport mode for the fixed five-function Agena Tool API. Removed
-    /// `direct` and `provider_native` members are rejected when loading config.
+    /// Transport mode for the fixed five-function Agena Tool API.
     #[serde(default)]
     pub agena_tools: AgenaToolsConfig,
     #[serde(flatten)]
@@ -34,12 +33,40 @@ impl<'de> Deserialize<'de> for ResolvedProviderModelConfig {
         use serde::de::Error as _;
 
         let mut fields = serde_json::Map::<String, serde_json::Value>::deserialize(deserializer)?;
-        for removed_key in ["provider_tools", "provider_native_tools", "native_tools"] {
-            if fields.contains_key(removed_key) {
-                return Err(D::Error::custom(format!(
-                    "unknown field `{removed_key}`; provider service capabilities are ordinary plugins such as `agena.openai`"
-                )));
-            }
+        const CURRENT_MODEL_FIELDS: &[&str] = &[
+            "enabled",
+            "native_compaction",
+            "agena_tools",
+            "lifecycle",
+            "context_window_tokens",
+            "max_input_tokens",
+            "max_output_tokens",
+            "display_name",
+            "description",
+            "knowledge_cutoff",
+            "release_date",
+            "last_updated",
+            "open_weights",
+            "supports_parallel_tool_calls",
+            "supports_verbosity",
+            "default_verbosity",
+            "default_temperature",
+            "default_top_p",
+            "default_top_k",
+            "assistant_reasoning_interleaved",
+            "assistant_reasoning_field",
+            "output_modalities",
+            "pricing",
+            "thinking_modes",
+            "speed_modes",
+            "input",
+            "features",
+        ];
+        if let Some(unknown) = fields
+            .keys()
+            .find(|key| !CURRENT_MODEL_FIELDS.contains(&key.as_str()))
+        {
+            return Err(D::Error::custom(format!("unknown field `{unknown}`")));
         }
         let enabled = fields
             .remove("enabled")
@@ -54,17 +81,6 @@ impl<'de> Deserialize<'de> for ResolvedProviderModelConfig {
             .map_err(D::Error::custom)?
             .unwrap_or(true);
         let agena_tools = match fields.remove("agena_tools") {
-            Some(serde_json::Value::Object(value)) => {
-                for removed_field in ["direct", "provider_native"] {
-                    if value.contains_key(removed_field) {
-                        return Err(D::Error::custom(format!(
-                            "unknown field `agena_tools.{removed_field}`; only the five Tool API gateway functions use the provider tool protocol"
-                        )));
-                    }
-                }
-                serde_json::from_value(serde_json::Value::Object(value))
-                    .map_err(D::Error::custom)?
-            }
             Some(value) => serde_json::from_value(value).map_err(D::Error::custom)?,
             None => AgenaToolsConfig::default(),
         };

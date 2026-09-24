@@ -17,6 +17,6 @@ test('settings routes accept only current Agena section ids', () => {
 
 test('unknown settings routes do not resolve as aliases', () => {
   assert.equal(settingsTabFromRouteValue('/settings/general'), null)
-  assert.equal(settingsTabFromRouteValue('/settings/opencode/providers'), null)
+  assert.equal(settingsTabFromRouteValue('/settings/unknown/providers'), null)
   assert.equal(normalizeRememberedSettingsRoute('/settings/general'), '/settings/interface')
 })

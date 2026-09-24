@@ -638,7 +638,7 @@ fn media_route_fingerprint(
         ProviderError::Config(format!("cannot bind media destination: {error}"))
     })?;
     Ok(format!(
-        "media-route-v1:{}",
+        "media-route:{}",
         Sha256::digest(bytes)
             .iter()
             .map(|byte| format!("{byte:02x}"))

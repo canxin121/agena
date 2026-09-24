@@ -7,7 +7,7 @@ fn tool_input_direct_array_choices_auto_target_items() {
     assert_eq!(path_value.tools, vec!["cargo", "git"]);
 
     let renamed_value = RenamedAutoItemChoiceInput::parse_input(json!({
-        "legacyTools": ["cargo"]
+        "alternateTools": ["cargo"]
     }))
     .expect("field-level direct array choices should accept aliases");
     assert_eq!(renamed_value.tool_values, vec!["cargo"]);
@@ -47,7 +47,7 @@ fn tool_input_direct_array_choices_auto_target_items() {
     );
     assert_eq!(
         renamed_schema.pointer("/properties/tools/x-agena-aliases"),
-        Some(&json!(["tool_values", "legacyTools"]))
+        Some(&json!(["tool_values", "alternateTools"]))
     );
 }
 
@@ -125,7 +125,7 @@ fn tool_input_enum_variant_direct_array_constraints_auto_target_items() {
 
     let renamed_tools_value = VariantNormalizeInput::parse_input(json!({
         "action": "renamed_tools",
-        "legacyTools": ["cargo"]
+        "alternateTools": ["cargo"]
     }))
     .expect("variant-level direct array choices should accept aliases after remapping");
     assert_eq!(
@@ -383,8 +383,8 @@ fn tool_input_field_relation_constraints_apply_to_parse_and_schema() {
     assert_eq!(path_value.mode.as_deref(), Some("read"));
 
     let renamed_value = RenamedRelationInput::parse_input(json!({
-        "legacyPath": "README.md",
-        "legacyMode": "read",
+        "alternatePath": "README.md",
+        "alternateMode": "read",
         "filePath": "src/lib.rs",
         "tags": ["cargo"]
     }))
@@ -514,15 +514,15 @@ fn tool_input_field_relation_constraints_apply_to_parse_and_schema() {
     assert!(renamed_relations.contains(&"distinct_trimmed `tags[]`".to_string()));
     assert_eq!(
         renamed_schema.pointer("/properties/path/x-agena-aliases"),
-        Some(&json!(["file_path_value", "legacyPath"]))
+        Some(&json!(["file_path_value", "alternatePath"]))
     );
     assert_eq!(
         renamed_schema.pointer("/properties/filePath/x-agena-aliases"),
-        Some(&json!(["output_path", "legacyFilePath"]))
+        Some(&json!(["output_path", "alternateFilePath"]))
     );
     assert_eq!(
         renamed_schema.pointer("/properties/tags/x-agena-aliases"),
-        Some(&json!(["tag_values", "legacyTags"]))
+        Some(&json!(["tag_values", "alternateTags"]))
     );
 }
 
@@ -536,7 +536,7 @@ fn tool_input_field_group_constraints_apply_to_parse_and_schema() {
     assert_eq!(path_value.path.as_deref(), Some("README.md"));
 
     let renamed_value = RenamedGroupInput::parse_input(json!({
-        "legacyPath": "README.md",
+        "alternatePath": "README.md",
         "text": "hello"
     }))
     .expect("renamed field group sugar should accept aliases");
@@ -612,11 +612,11 @@ fn tool_input_field_group_constraints_apply_to_parse_and_schema() {
     assert!(renamed_relations.contains(&"at_least_one_of: `text`, `stdinPayload`".to_string()));
     assert_eq!(
         renamed_schema.pointer("/properties/filePath/x-agena-aliases"),
-        Some(&json!(["file_path_value", "legacyPath"]))
+        Some(&json!(["file_path_value", "alternatePath"]))
     );
     assert_eq!(
         renamed_schema.pointer("/properties/stdinPayload/x-agena-aliases"),
-        Some(&json!(["stdin_payload", "legacyStdin"]))
+        Some(&json!(["stdin_payload", "alternateStdin"]))
     );
 }
 

@@ -1,4 +1,4 @@
-//! Wire contract for the v2 live-update surface.
+//! Wire contract for the live-update surface.
 //!
 //! Persisted session history is an ordered list of parts. Live delivery is a
 //! best-effort stream of part patches plus ephemeral runtime signals; neither

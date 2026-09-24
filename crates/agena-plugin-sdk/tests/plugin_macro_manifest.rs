@@ -410,7 +410,7 @@ struct PathChoiceInput {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInput)]
 #[serde(deny_unknown_fields)]
 struct FieldChoiceInput {
-    #[arg(name = "tool", alias = "legacyTool", choices = ["cargo", "git"])]
+    #[arg(name = "tool", alias = "alternateTool", choices = ["cargo", "git"])]
     tool_name: String,
 }
 
@@ -574,7 +574,7 @@ struct PathGroupInput {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInput)]
 #[serde(deny_unknown_fields)]
 struct RenamedFormatInput {
-    #[arg(name = "endpoint", alias = "legacyEndpoint", format = "uri")]
+    #[arg(name = "endpoint", alias = "alternateEndpoint", format = "uri")]
     endpoint_value: String,
 }
 
@@ -583,7 +583,7 @@ struct RenamedFormatInput {
 struct RenamedPatternInput {
     #[arg(
         name = "slug",
-        alias = "legacySlug",
+        alias = "alternateSlug",
         non_empty,
         min_chars = 3,
         max_chars = 16,
@@ -595,7 +595,7 @@ struct RenamedPatternInput {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInput)]
 #[serde(deny_unknown_fields)]
 struct RenamedNumericInput {
-    #[arg(name = "count", alias = "legacyCount", minimum = 2, maximum = 4)]
+    #[arg(name = "count", alias = "alternateCount", minimum = 2, maximum = 4)]
     count_value: u32,
 }
 
@@ -604,7 +604,7 @@ struct RenamedNumericInput {
 struct RenamedExclusiveNumericInput {
     #[arg(
         name = "count",
-        alias = "legacyCount",
+        alias = "alternateCount",
         exclusive_minimum = 2,
         exclusive_maximum = 5
     )]
@@ -616,7 +616,7 @@ struct RenamedExclusiveNumericInput {
 struct RenamedObjectInput {
     #[arg(
         name = "metadata",
-        alias = "legacyMetadata",
+        alias = "alternateMetadata",
         min_properties = 1,
         max_properties = 2
     )]
@@ -626,7 +626,7 @@ struct RenamedObjectInput {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInput)]
 #[serde(deny_unknown_fields)]
 struct RenamedItemFormatInput {
-    #[arg(name = "ids", alias = "legacyIds", item_format = "uuid")]
+    #[arg(name = "ids", alias = "alternateIds", item_format = "uuid")]
     id_values: Vec<String>,
 }
 
@@ -635,7 +635,7 @@ struct RenamedItemFormatInput {
 struct RenamedItemPatternInput {
     #[arg(
         name = "tags",
-        alias = "legacyTags",
+        alias = "alternateTags",
         item_min_chars = 3,
         item_max_chars = 16,
         item_pattern = "^[a-z0-9-]+$"
@@ -646,7 +646,7 @@ struct RenamedItemPatternInput {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInput)]
 #[serde(deny_unknown_fields)]
 struct RenamedItemChoiceInput {
-    #[arg(name = "tools", alias = "legacyTools", item_choices = ["cargo", "git"])]
+    #[arg(name = "tools", alias = "alternateTools", item_choices = ["cargo", "git"])]
     tool_values: Vec<String>,
 }
 
@@ -655,7 +655,7 @@ struct RenamedItemChoiceInput {
 struct RenamedItemNumericInput {
     #[arg(
         name = "counts",
-        alias = "legacyCounts",
+        alias = "alternateCounts",
         item_minimum = 2,
         item_maximum = 4
     )]
@@ -667,7 +667,7 @@ struct RenamedItemNumericInput {
 struct RenamedItemExclusiveNumericInput {
     #[arg(
         name = "counts",
-        alias = "legacyCounts",
+        alias = "alternateCounts",
         item_exclusive_minimum = 2,
         item_exclusive_maximum = 5
     )]
@@ -679,7 +679,7 @@ struct RenamedItemExclusiveNumericInput {
 struct RenamedItemObjectInput {
     #[arg(
         name = "entries",
-        alias = "legacyEntries",
+        alias = "alternateEntries",
         item_min_properties = 1,
         item_max_properties = 2
     )]
@@ -691,7 +691,7 @@ struct RenamedItemObjectInput {
 struct RenamedItemNormalizeInput {
     #[arg(
         name = "tags",
-        alias = "legacyTags",
+        alias = "alternateTags",
         item_trim,
         item_trim_suffix = ".rs",
         item_non_empty
@@ -702,7 +702,7 @@ struct RenamedItemNormalizeInput {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInput)]
 #[serde(deny_unknown_fields)]
 struct RenamedOptionalItemNonEmptyInput {
-    #[arg(name = "tags", alias = "legacyTags", item_non_empty_if_present)]
+    #[arg(name = "tags", alias = "alternateTags", item_non_empty_if_present)]
     tag_values: Option<Vec<String>>,
 }
 
@@ -710,7 +710,7 @@ struct RenamedOptionalItemNonEmptyInput {
 #[serde(deny_unknown_fields)]
 #[input(forbid_substrings("tags", "..", "~"), distinct_trimmed("tags"))]
 struct RenamedItemValueRelationInput {
-    #[arg(name = "tags", alias = "legacyTags")]
+    #[arg(name = "tags", alias = "alternateTags")]
     tag_values: Vec<String>,
 }
 
@@ -719,7 +719,7 @@ struct RenamedItemValueRelationInput {
 struct RenamedAutoItemStringInput {
     #[arg(
         name = "tags",
-        alias = "legacyTags",
+        alias = "alternateTags",
         trim,
         trim_suffix = ".rs",
         min_chars = 3,
@@ -731,38 +731,38 @@ struct RenamedAutoItemStringInput {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInput)]
 #[serde(deny_unknown_fields)]
 struct RenamedAutoItemNumericInput {
-    #[arg(name = "counts", alias = "legacyCounts", minimum = 2, maximum = 4)]
+    #[arg(name = "counts", alias = "alternateCounts", minimum = 2, maximum = 4)]
     count_values: Vec<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInput)]
 #[serde(deny_unknown_fields)]
 struct RenamedAutoItemChoiceInput {
-    #[arg(name = "tools", alias = "legacyTools", choices = ["cargo", "git"])]
+    #[arg(name = "tools", alias = "alternateTools", choices = ["cargo", "git"])]
     tool_values: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInput)]
 #[serde(deny_unknown_fields)]
 struct RenamedRelationInput {
-    #[arg(name = "path", alias = "legacyPath", requires = "mode")]
+    #[arg(name = "path", alias = "alternatePath", requires = "mode")]
     file_path_value: Option<String>,
-    #[arg(name = "mode", alias = "legacyMode")]
+    #[arg(name = "mode", alias = "alternateMode")]
     mode_value: Option<String>,
-    #[arg(name = "filePath", alias = "legacyFilePath", forbid_substrings = ["..", "~"])]
+    #[arg(name = "filePath", alias = "alternateFilePath", forbid_substrings = ["..", "~"])]
     output_path: String,
-    #[arg(name = "tags", alias = "legacyTags", distinct_trimmed)]
+    #[arg(name = "tags", alias = "alternateTags", distinct_trimmed)]
     tag_values: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInput)]
 #[serde(deny_unknown_fields)]
 struct RenamedGroupInput {
-    #[arg(name = "filePath", alias = "legacyPath", exactly_one_of = ["stdin_payload"])]
+    #[arg(name = "filePath", alias = "alternatePath", exactly_one_of = ["stdin_payload"])]
     file_path_value: Option<String>,
-    #[arg(name = "stdinPayload", alias = "legacyStdin")]
+    #[arg(name = "stdinPayload", alias = "alternateStdin")]
     stdin_payload: Option<String>,
-    #[arg(name = "text", alias = "legacyText", at_least_one_of = ["stdin_payload"])]
+    #[arg(name = "text", alias = "alternateText", at_least_one_of = ["stdin_payload"])]
     text_value: Option<String>,
 }
 
@@ -839,7 +839,7 @@ enum VariantNormalizeInput {
     AutoTags { auto_tags: Vec<String> },
     #[input(choices("tools", "cargo", "git"))]
     RenamedTools {
-        #[serde(rename = "tools", alias = "legacyTools")]
+        #[serde(rename = "tools", alias = "alternateTools")]
         tool_values: Vec<String>,
     },
 }

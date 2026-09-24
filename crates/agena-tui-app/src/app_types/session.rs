@@ -144,15 +144,15 @@ pub(crate) enum SessionNavigationCommand {
     },
 }
 
-/// A user-run boundary offered as a rewind target, derived from the v2 parts
+/// A user-run boundary offered as a rewind target, derived from the parts
 /// projection (one `run` marker with role `user`, plus its text parts).
 ///
 /// The backend rewind contract (agena-api B1) still takes
-/// `agena_domain::TurnId`; the v2 part list carries only `part_id`. The TUI
+/// `agena_domain::TurnId`; the part list carries only `part_id`. The TUI
 /// synthesizes a deterministic `TurnId` from the run marker's `part_id` (the
-/// v2 turn identity, database-design-v2.md §4.1.1) so navigation keys stay
+/// turn identity from the current parts model) so navigation keys stay
 /// stable across refreshes. Bridging that id to the runtime's rewind target is
-/// the A3 migration's contract.
+/// the current session projection contract.
 #[derive(Debug, Clone)]
 pub(crate) struct RewindTarget {
     pub(crate) turn_id: agena_domain::TurnId,
@@ -176,8 +176,8 @@ impl RewindTarget {
     }
 }
 
-/// Deterministic `TurnId` for a run marker. The v2 part list carries only the
-/// run marker's `part_id` (the v2 turn identity); the backend rewind contract
+/// Deterministic `TurnId` for a run marker. The part list carries only the
+/// run marker's `part_id` (the turn identity); the backend rewind contract
 /// still takes a `TurnId`, so one is synthesized from the part id to keep
 /// navigation keys stable across refreshes. See [`RewindTarget`].
 fn turn_id_for_run(part_id: i64) -> agena_domain::TurnId {

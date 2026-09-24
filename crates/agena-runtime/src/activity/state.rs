@@ -293,7 +293,7 @@ fn persisted_subtask_failure(meta: &SessionMeta) -> Option<Failure> {
 }
 
 /// Project a session's persisted subtask state ([`SessionMeta`] columns) into
-/// the unified registry. v2 keeps subtask state in the `sessions` row; the
+/// the unified registry. Subtask state is kept in the `sessions` row; the
 /// facade's [`SessionChange::SessionMetaUpdated`] notifications drive this.
 pub(crate) fn upsert_task_activity_from_meta(registry: &ActivityRegistry, meta: &SessionMeta) {
     let Some(task_id) = meta.task_id.as_deref() else {

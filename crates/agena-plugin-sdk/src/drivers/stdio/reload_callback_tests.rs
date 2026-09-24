@@ -69,7 +69,7 @@ async fn reload_request_and_status_stdio_callbacks_preserve_authority_and_distin
 }
 
 #[test]
-fn reload_acceptance_and_status_reject_legacy_or_incompatible_shapes() {
+fn reload_acceptance_and_status_reject_incompatible_shapes() {
     assert!(
         serde_json::from_value::<HostConfigReloadRequestResponse>(
             serde_json::json!({"previous_generation":1,"generation":2,"loaded_at":"now"})
@@ -85,7 +85,7 @@ fn reload_acceptance_and_status_reject_legacy_or_incompatible_shapes() {
     ] {
         assert!(
             serde_json::from_value::<HostConfigReloadState>(state.clone()).is_err(),
-            "accepted incompatible state: {state}"
+            "accepted invalid state: {state}"
         );
     }
     assert!(

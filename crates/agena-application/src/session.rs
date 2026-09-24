@@ -43,9 +43,9 @@ pub async fn session_user_input_reply_request(
     .await
 }
 
-/// Flatten projected session runs into the v2 part transcript projection.
+/// Flatten projected session runs into the part transcript projection.
 ///
-/// Each projected run is one v2 run: its id is the run marker part id, so the
+/// Each projected run is one run: its id is the run marker part id, so the
 /// projection emits a `run` marker part followed by the run's content parts in
 /// order. `role` is the run's role; content parts carry `run_id` linking them
 /// back to the marker. This is the shared transcript shape for the REST

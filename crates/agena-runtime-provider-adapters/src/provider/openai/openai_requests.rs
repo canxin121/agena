@@ -13,9 +13,8 @@ use super::{
     CHAT_COMPLETIONS_ADAPTER_KIND, ChatCompletionRequest, ChatStreamOptions, CompletionRequest,
     ModelId, OpenAiChatCompletionResponse, OpenAiResponsesAdapter, OpenAiResponsesBackend,
     OpenAiResponsesToolPlan, OpenAiTransport, ProviderError, ProviderId, ProviderNativeToolKind,
-    RequestHeaderContext, Stream, ToolStreamAccumulator,
-    chat_tool_stream_input, chat_wire, completion_event_from_tool_stream_update, prompt_cache,
-    responses_wire_tool_name, sse, utils,
+    RequestHeaderContext, Stream, ToolStreamAccumulator, chat_tool_stream_input, chat_wire,
+    completion_event_from_tool_stream_update, prompt_cache, responses_wire_tool_name, sse, utils,
 };
 
 impl OpenAiTransport {

@@ -268,12 +268,6 @@ function getRecord(value: JsonValue, key: string): JsonObject {
   return typeof nested === 'object' && nested !== null ? (nested as JsonObject) : {}
 }
 
-function getSelectedSessionRevertId(): string {
-  const session = asRecord(chat.selectedSession)
-  const revert = getRecord(session, 'revert')
-  return typeof revert?.messageID === 'string' ? revert.messageID.trim() : ''
-}
-
 const chatCommands = useChatCommands({
   draft,
   composerRef,
@@ -697,7 +691,6 @@ function handleComposerPickerSelect(item: OptionMenuItem) {
 const scrollNav = useChatScrollNav({
   chat,
   ui,
-  getRevertId: getSelectedSessionRevertId,
   composerFullscreenActive,
   composerShellHeight,
   composerDividerHitPx: COMPOSER_DIVIDER_HIT_PX,
@@ -870,93 +863,6 @@ function handleDraftKeydown(e: KeyboardEvent) {
   handleDraftKeydownInner(e)
 }
 
-type RevertDiffFile = { filename: string; additions: number; deletions: number }
-type RevertState = { messageID: string; diff: string; diffFiles: RevertDiffFile[]; revertedUserCount: number }
-
-function parseDiffFiles(diffText: string): RevertDiffFile[] {
-  const t = (diffText || '').trim()
-  if (!t) return []
-
-  const lines = t.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n')
-  const byFile = new Map<string, { additions: number; deletions: number }>()
-  let current: string | null = null
-
-  function normalizeFilename(raw: string): string {
-    const v = (raw || '').trim()
-    if (!v || v === '/dev/null') return ''
-    return v.replace(/^[ab]\//, '')
-  }
-
-  function ensure(name: string) {
-    const filename = normalizeFilename(name)
-    if (!filename) return ''
-    if (!byFile.has(filename)) byFile.set(filename, { additions: 0, deletions: 0 })
-    return filename
-  }
-
-  for (const line of lines) {
-    if (line.startsWith('diff --git ')) {
-      const parts = line.split(' ')
-      const a = parts[2] || ''
-      const b = parts[3] || ''
-      current = ensure(b || a) || null
-      continue
-    }
-    if (line.startsWith('+++ ')) {
-      const name = line.replace(/^\+\+\+\s+/, '')
-      current = ensure(name) || current
-      continue
-    }
-
-    if (!current) continue
-    const record = byFile.get(current)
-    if (!record) continue
-
-    if (line.startsWith('+') && !line.startsWith('+++')) {
-      record.additions += 1
-    } else if (line.startsWith('-') && !line.startsWith('---')) {
-      record.deletions += 1
-    }
-  }
-
-  const out: RevertDiffFile[] = []
-  for (const [filename, counts] of byFile.entries()) {
-    out.push({ filename, additions: counts.additions, deletions: counts.deletions })
-  }
-  out.sort((a, b) => a.filename.localeCompare(b.filename))
-  return out
-}
-
-const revertState = computed<RevertState | null>(() => {
-  const s = asRecord(chat.selectedSession)
-  const rev = getRecord(s, 'revert')
-  const messageID = typeof rev?.messageID === 'string' ? rev.messageID.trim() : ''
-  if (!messageID) return null
-
-  const diff = typeof rev?.diff === 'string' ? rev.diff : ''
-  const diffFiles = parseDiffFiles(diff).slice(0, 12)
-  const revertedUserCount = chat.messages.filter((m: MessageEntry) => {
-    const id = typeof m?.info?.id === 'string' ? m.info.id : ''
-    const role = String(m?.info?.role || '')
-    return role === 'user' && id && id >= messageID
-  }).length
-
-  return { messageID, diff, diffFiles, revertedUserCount }
-})
-
-const revertMarkerBusy = ref(false)
-
-// Agena rewind is destructive (later parts are dropped server-side) and has no
-// "redo"/"unrevert" counterpart; the marker handlers are kept as no-ops for
-// template compatibility (revertState is always null so they never fire).
-async function handleRedoFromRevertMarker() {
-  // no-op
-}
-
-async function handleUnrevertFromRevertMarker() {
-  // no-op
-}
-
 const settingsData = computed<JsonObject>(() => asRecord(settings.data))
 
 const activityAutoCollapseOnIdle = computed(() => settingsData.value.chatActivityAutoCollapseOnIdle !== false)
@@ -996,7 +902,6 @@ const renderBlocksApi = useChatRenderBlocks({
   chat,
   settings,
   showThinking,
-  revertState,
   formatTime,
 })
 
@@ -1062,7 +967,6 @@ const {
 const stream = useMessageStreaming({
   selectedSessionId: computed(() => chat.selectedSessionId || null),
   messages: computed(() => chat.messages),
-  revertBoundaryId: computed(() => (revertState.value?.messageID ? String(revertState.value.messageID) : null)),
 })
 
 const {
@@ -1305,7 +1209,6 @@ const runUi = useChatRunUi({
   awaitingAssistant,
   pendingSendAt,
   renderBlocks,
-  getRevertId: () => (revertState.value?.messageID ? String(revertState.value.messageID) : ''),
   onSend: send,
   onCancellation: restoreCancelledComposer,
   collapseAllActivities,
@@ -2397,7 +2300,6 @@ const viewCtx = {
   revertBusyMessageId,
   isStreamingAssistantMessage,
   showAssistantPlaceholder,
-  revertMarkerBusy,
   currentPhase,
   awaitingAssistant,
   optimisticUser,
@@ -2406,8 +2308,6 @@ const viewCtx = {
   handleRevertFromMessage,
   handleCopyMessage,
   handleCopySessionError,
-  handleRedoFromRevertMarker,
-  handleUnrevertFromRevertMarker,
 
   // Activity rendering.
   activityInitiallyExpandedForPart,

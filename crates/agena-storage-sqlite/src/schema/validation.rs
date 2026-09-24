@@ -1,12 +1,12 @@
-//! Check the version marker against the declarations Agena actually created.
-//! A compatible trigger correction may be refreshed; incompatible tables and
-//! required indexes are never repaired or silently claimed as a fresh schema.
+//! Validate a non-empty Agena database against the one current schema.
+//! No migrations or repairs are performed.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use sea_orm::{ConnectionTrait, DbErr, Statement};
 
 use super::{INDEXES, TABLES};
+use crate::schema_invariants::INVARIANT_TRIGGERS;
 
 pub(crate) struct Declaration<'a> {
     pub kind: &'static str,
@@ -65,54 +65,48 @@ where
 
 fn incompatible(detail: impl std::fmt::Display) -> DbErr {
     DbErr::Custom(format!(
-        "database schema is incompatible: {detail}; Agena does not migrate incompatible databases, so create a fresh database"
+        "database schema does not match this Agena build: {detail}; delete the database and start with a fresh one"
     ))
 }
 
-pub(super) async fn require_empty_database<C>(db: &C) -> Result<(), DbErr>
+pub(crate) async fn validate_existing_schema<C>(db: &C) -> Result<(), DbErr>
 where
     C: ConnectionTrait,
 {
-    if let Some(((kind, name), _)) = schema_objects(db).await?.first_key_value() {
-        return Err(incompatible(format!(
-            "version zero requires an empty database, but {kind} {name} already exists"
-        )));
+    let actual = schema_objects(db).await?;
+    let mut expected = BTreeMap::new();
+    for sql in TABLES.iter().chain(INDEXES).chain(INVARIANT_TRIGGERS) {
+        let declaration = declaration(sql)?;
+        expected.insert(
+            (declaration.kind.to_owned(), declaration.name.to_owned()),
+            declaration.stored_sql,
+        );
     }
-    Ok(())
-}
-
-pub(super) async fn validate_existing_schema<C>(db: &C) -> Result<(), DbErr>
-where
-    C: ConnectionTrait,
-{
-    let objects = schema_objects(db).await?;
-    let mut expected_tables = BTreeSet::new();
-    for sql in TABLES.iter().chain(INDEXES) {
-        let expected = declaration(sql)?;
-        if expected.kind == "table" {
-            expected_tables.insert(expected.name);
-        }
-        match objects.get(&(expected.kind.to_owned(), expected.name.to_owned())) {
-            Some(actual) if actual == &expected.stored_sql => {}
-            Some(_) => {
-                return Err(incompatible(format!(
-                    "{} {} has an unsupported definition",
-                    expected.kind, expected.name
-                )));
-            }
+    if actual == expected {
+        return Ok(());
+    }
+    for (identity, sql) in &expected {
+        match actual.get(identity) {
             None => {
                 return Err(incompatible(format!(
                     "required {} {} is missing",
-                    expected.kind, expected.name
+                    identity.0, identity.1
                 )));
             }
+            Some(found) if found != sql => {
+                return Err(incompatible(format!(
+                    "{} {} has a different definition",
+                    identity.0, identity.1
+                )));
+            }
+            Some(_) => {}
         }
     }
-    for (kind, name) in objects.keys() {
-        if kind == "table" && name.starts_with("agena_") && !expected_tables.contains(name.as_str())
-        {
-            return Err(incompatible(format!("unexpected Agena table {name}")));
-        }
+    if let Some(((kind, name), _)) = actual
+        .iter()
+        .find(|(identity, _)| !expected.contains_key(*identity))
+    {
+        return Err(incompatible(format!("unexpected {kind} {name}")));
     }
-    Ok(())
+    Err(incompatible("schema differs from the current declarations"))
 }

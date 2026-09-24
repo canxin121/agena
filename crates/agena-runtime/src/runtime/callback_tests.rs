@@ -142,10 +142,6 @@ impl Plugin for CallbackPlugin {
         input: ToolInvokeInput,
     ) -> agena_plugin_sdk::Result<ToolInvokeOutput> {
         let host = self.0.host.lock().unwrap().clone().unwrap();
-        if input.input["legacy"] == true {
-            host.reload_config().await?;
-            return Ok(ToolInvokeOutput::text("unexpected synchronous reload"));
-        }
         let result = if input.input["nested"] == true {
             let output = host
                 .invoke_tool(
@@ -731,26 +727,6 @@ async fn nested_bundled_settings_reload_waits_for_the_outer_http_call() {
     assert!(result.is_ok(), "nested reload caller completes: {result:?}");
     wait_reload(&runtime, &accepted.task_id).await;
     assert_eq!(fixture.read_config().await, json!("zh-CN"));
-    runtime.current_snapshot().plugin_manager().shutdown().await;
-}
-
-#[tokio::test]
-async fn legacy_synchronous_reload_is_rejected_before_runtime_mutation() {
-    let mut fixture = Fixture::new().await;
-    fixture.write_config("en-US");
-    let runtime = fixture.start_with_maintenance(true).await;
-    let result = invoke_named(&runtime, KEY, "reload", json!({"legacy": true})).await;
-    assert!(
-        matches!(result, Err(error) if error.to_string().contains("host/config.reload.request"))
-    );
-    assert_eq!(runtime.current_snapshot().generation(), 1);
-    assert_eq!(fixture.read_config().await, json!("en-US"));
-    assert!(
-        !runtime
-            .background_tasks()
-            .iter()
-            .any(|task| task.kind == crate::RuntimeBackgroundTaskKind::RuntimeReload)
-    );
     runtime.current_snapshot().plugin_manager().shutdown().await;
 }
 

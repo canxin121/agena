@@ -1213,7 +1213,7 @@ pub struct AttributedCompletionUsage {
 /// Private metadata key used by provider-backed ordinary tools to transfer
 /// nested usage through the existing plugin ABI. Runtime removes this value
 /// before the tool metadata is shown to the model.
-pub const PROVIDER_TOOL_USAGE_METADATA_KEY: &str = "agena.provider_tool_usage.v1";
+pub const PROVIDER_TOOL_USAGE_METADATA_KEY: &str = "agena.provider_tool_usage";
 
 /// Normalized token and cost accounting for one provider request.
 ///

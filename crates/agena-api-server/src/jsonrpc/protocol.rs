@@ -86,7 +86,7 @@ pub mod method {
     pub const SESSIONS_LIST: &str = "sessions/list";
     pub const MESSAGES_LIST: &str = "messages/list";
     pub const RUN_CANCEL: &str = "run/cancel";
-    // The v1 `events/subscribe` method is removed in the v2 protocol: session
+    // The v1 `events/subscribe` method is removed in the current protocol: session
     // mutations are delivered as SessionChange part-patch notifications (see
     // `AppServerNotification`) rather than through an explicit subscription.
 }
@@ -121,7 +121,7 @@ pub struct SubmitRunParams {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-/// Result of the submit-message method: the accepted v2 run result.
+/// Result of the submit-message method: the accepted run result.
 ///
 /// `run_id` is the accepted run marker part id; `parts` carries that run's
 /// marker plus its content parts in creation order, aligned with the storage
@@ -203,7 +203,7 @@ pub struct ReadPartsParams {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-/// Result of the read-messages method: the session's v2 part transcript.
+/// Result of the read-messages method: the session's part transcript.
 pub struct ReadPartsResult {
     pub parts: Vec<agena_api::resource::SessionTranscriptPart>,
 }
@@ -227,11 +227,11 @@ pub struct CancelRunResult {
 #[serde(tag = "kind", rename_all = "snake_case")]
 /// Server-initiated notification sent to clients.
 ///
-/// The v1 `MessageDelta` / `ToolEvent` payloads are replaced by v2 part
+/// The v1 `MessageDelta` / `ToolEvent` payloads are replaced by part
 /// patches: every committed session mutation is delivered as a
 /// `PartAdded` / `PartUpdated` / `PartRemoved` / `SessionMetaUpdated`
 /// notification (mirroring `agena_api::live::SessionChangeResource`), with the
-/// part payload in the v2 `SessionTranscriptPart` shape. `PermissionRequest`
+/// part payload in the `SessionTranscriptPart` shape. `PermissionRequest`
 /// and `SessionStateChanged` remain dedicated lifecycle signals.
 pub enum AppServerNotification {
     PartAdded {

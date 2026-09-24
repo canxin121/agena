@@ -1137,10 +1137,9 @@ impl SkillsPlugin {
         self.config.get().cloned().unwrap_or_default()
     }
 
-    /// The only mutable Skill location. Discovery intentionally includes
-    /// bundled, user and compatibility roots, but mutation must not turn this
-    /// plugin into a general filesystem editor or alter another project's
-    /// global agent configuration.
+    /// The only mutable Skill location. Discovery includes bundled and Agena
+    /// roots, but mutation must not turn this plugin into a general filesystem
+    /// editor or alter another project's global configuration.
     fn managed_root(&self) -> SdkResult<PathBuf> {
         let workspace_root = self.workspace_root()?;
         let canonical_workspace = workspace_root.canonicalize().map_err(|error| {
@@ -1247,8 +1246,8 @@ impl SkillsPlugin {
         agena_runtime_tools::with_file_mutation_locks(std::slice::from_ref(&lock_path), || {
             let (existing, path) = self.managed_skill_document(canonical_name)?;
             check_skill_revision(&existing, expected_revision)?;
-            // Parse first so an invalid legacy document cannot be overwritten
-            // by accident. Names stay stable even when an alias was used.
+            // Parse first so an invalid document cannot be overwritten by
+            // accident. Names stay stable even when an alias was used.
             let existing_skill = parse_managed_skill_document(existing.as_str())?;
             if existing_skill.frontmatter.name != canonical_name {
                 return Err(PluginError::invalid_params(format!(
@@ -1931,7 +1930,7 @@ impl SkillsPlugin {
     #[tool(
         tags(mutate, filesystem),
         summary = "Create a workspace-managed Skill document.",
-        help = "Creates `.agena/skills/<name>/SKILL.md` from a complete SKILL.md document. Only workspace-local Skills are mutable; built-in, plugin, user-global, and compatibility Skills remain read-only.",
+        help = "Creates `.agena/skills/<name>/SKILL.md` from a complete SKILL.md document. Only workspace-local Skills are mutable; built-in, plugin, and user-global Skills remain read-only.",
         mutating
     )]
     async fn invoke_create(&self, input: &SkillsCreateInput) -> SdkResult<ToolInvokeOutput> {
@@ -1967,7 +1966,7 @@ impl SkillsPlugin {
     #[tool(
         tags(mutate, filesystem),
         summary = "Delete a workspace-managed Skill document.",
-        help = "Deletes only `.agena/skills/<name>/SKILL.md`; bundled, plugin, user-global, and compatibility Skills cannot be deleted through this tool.",
+        help = "Deletes only `.agena/skills/<name>/SKILL.md`; bundled, plugin, and user-global Skills cannot be deleted through this tool.",
         mutating
     )]
     async fn invoke_delete(&self, input: &SkillsDeleteInput) -> SdkResult<ToolInvokeOutput> {

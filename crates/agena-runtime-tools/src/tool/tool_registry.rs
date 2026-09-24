@@ -171,7 +171,7 @@ impl ToolApiBinding {
                 }),
                 output_schema: serde_json::json!({}),
                 strict: false,
-                definition_identity: "agena-tool-api:tools_call:v2".to_owned(),
+                definition_identity: "agena-tool-api:tools_call".to_owned(),
             },
             handler: None,
         }
@@ -270,12 +270,6 @@ where
 }
 
 pub(crate) fn unknown_tool_message(requested: &str, suggestions: &[String]) -> String {
-    if let Some(renamed) = agena_tool::provider_tools::renamed(requested) {
-        return renamed.migration_message();
-    }
-    if let Some(retired) = agena_tool::provider_tools::retired(requested) {
-        return retired.message();
-    }
     if suggestions.is_empty() {
         return format!("unknown tool '{requested}'");
     }

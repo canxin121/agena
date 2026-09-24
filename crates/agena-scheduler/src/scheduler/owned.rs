@@ -1,5 +1,5 @@
 //! Model-facing scheduler scope. Host administration retains separate unscoped
-//! methods; legacy rows without a workspace owner never appear in this scope.
+//! methods; unowned host rows without a workspace owner never appear in this scope.
 use super::*;
 
 impl Scheduler {

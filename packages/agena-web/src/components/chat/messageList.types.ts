@@ -79,12 +79,6 @@ export type TranscriptDisplayPart = {
   defaultExpanded: boolean
 }
 
-export type RevertLike = {
-  messageID: string
-  revertedUserCount: number
-  diffFiles: Array<{ filename: string; additions: number; deletions: number }>
-}
-
 export type RetryStatusLike = {
   next?: number
   attempt?: number
@@ -111,4 +105,4 @@ export type MessageRenderBlock = {
   hasActivity: boolean
 }
 
-export type RenderBlock = MessageRenderBlock | { kind: 'revert'; key: string; revert: RevertLike }
+export type RenderBlock = MessageRenderBlock

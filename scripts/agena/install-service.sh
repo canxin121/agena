@@ -8,7 +8,7 @@ Usage: install-service.sh [options]
 Options:
   --archive PATH_OR_URL    Backend package archive (.tar.gz)
   --repo OWNER/REPO        GitHub repo for release downloads (default: canxin121/agena)
-  --version VERSION        Release version, e.g. 0.1.0 or v0.1.0
+  --version VERSION        Beta release version, e.g. 0.1.0-beta.1
   --install-dir DIR        Install directory (default: ~/agena)
   --host HOST              Backend host (default: 127.0.0.1)
   --port PORT              Backend port (default: 3210)
@@ -66,6 +66,7 @@ esac
 
 normalize_version() {
   local raw="$1"
+  raw="${raw#agena-v}"
   raw="${raw#v}"
   printf '%s' "$raw"
 }
@@ -77,7 +78,12 @@ if [[ -z "$ARCHIVE" ]]; then
     exit 1
   fi
   VERSION="$(normalize_version "$VERSION")"
-  ARCHIVE="https://github.com/${REPO}/releases/download/agena-v${VERSION}/agena-backend-${TARGET_TRIPLE}-v${VERSION}.tar.gz"
+  if [[ ! "$VERSION" =~ ^([0-9]+\.[0-9]+\.[0-9]+)-beta\.[1-9][0-9]*$ ]]; then
+    echo "ERROR: --version must name a beta release, for example 0.1.0-beta.1" >&2
+    exit 2
+  fi
+  PACKAGE_VERSION="${BASH_REMATCH[1]}"
+  ARCHIVE="https://github.com/${REPO}/releases/download/agena-v${VERSION}/agena-backend-${TARGET_TRIPLE}-v${PACKAGE_VERSION}.tar.gz"
 fi
 
 TMP_DIR="$(mktemp -d)"

@@ -965,15 +965,6 @@ impl HostHandle {
                         )
                         .await
                     }
-                    method::HOST_CONFIG_RELOAD => {
-                        let _p: HostConfigReloadParams = parse(params)?;
-                        let out = host_api::run_in_host_callback_context(
-                            scoped_context(plugin_id, None),
-                            inner.reload_config(),
-                        )
-                        .await?;
-                        serde_json::to_value(out).map_err(|e| PluginError::invalid_params_error(&e))
-                    }
                     method::HOST_CONFIG_RELOAD_REQUEST => {
                         let _p: HostConfigReloadParams = parse(params)?;
                         let out = inner.request_config_reload().await?;

@@ -31,7 +31,6 @@ pub const AGENA_TEMPLATE_BASELINE_REF: &str = "f4968e4cceb885b57670ea81ac24e495e
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct PluginProjectManifest {
-    #[serde(default = "default_schema_version")]
     pub schema_version: u32,
     pub plugin: PluginProjectMetadata,
     #[serde(default)]
@@ -41,11 +40,8 @@ pub struct PluginProjectManifest {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct MarketplaceProjectManifest {
-    #[serde(default = "default_schema_version")]
     pub schema_version: u32,
     pub marketplace: MarketplaceMetadata,
-    #[serde(default)]
-    pub renames: BTreeMap<String, String>,
     #[serde(default)]
     pub plugins: BTreeMap<String, MarketplacePluginPolicy>,
 }
@@ -79,17 +75,6 @@ impl MarketplaceProjectManifest {
         }
         if let Some(repository) = self.marketplace.repository.as_deref() {
             validate_canonical_github_repository(repository)?;
-        }
-        for (alias, target) in &self.renames {
-            agena_plugin_contracts::validate_plugin_identity(alias)
-                .map_err(|error| MarketplaceError::project_error(&error))?;
-            agena_plugin_contracts::validate_plugin_identity(target)
-                .map_err(|error| MarketplaceError::project_error(&error))?;
-            if alias == target {
-                return Err(MarketplaceError::Project(format!(
-                    "marketplace rename `{alias}` cannot point to itself"
-                )));
-            }
         }
         for plugin_id in self.plugins.keys() {
             agena_plugin_contracts::validate_plugin_identity(plugin_id)
@@ -146,7 +131,6 @@ pub fn scaffold_marketplace(request: ScaffoldMarketplaceRequest) -> Result<(), M
                 url: None,
             }),
         },
-        renames: BTreeMap::new(),
         plugins: BTreeMap::new(),
     };
     write_text(
@@ -371,13 +355,11 @@ pub fn build_marketplace(
         MarketplaceProjectManifest {
             schema_version: 1,
             marketplace: MarketplaceMetadata::default(),
-            renames: BTreeMap::new(),
             plugins: BTreeMap::new(),
         }
     };
     let mut index = RegistryIndex {
         marketplace: project.marketplace,
-        renames: project.renames,
         ..RegistryIndex::default()
     };
     let plugin_policies = project.plugins;
@@ -421,10 +403,6 @@ pub fn build_marketplace(
         plugin_count: index.plugins.len(),
         release_count: release_ids.len(),
     })
-}
-
-fn default_schema_version() -> u32 {
-    1
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

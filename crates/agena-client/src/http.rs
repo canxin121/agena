@@ -1,5 +1,5 @@
 //! REST client. Wraps `reqwest` and serializes [`agena_api`] commands/queries
-//! into the v2 endpoints.
+//! into the current endpoints.
 
 use portable_atomic::AtomicU64;
 use std::{

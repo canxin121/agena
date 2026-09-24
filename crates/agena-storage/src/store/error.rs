@@ -1,4 +1,4 @@
-//! Error type for the v2 parts-first store.
+//! Error type for the parts-first store.
 //!
 //! One error type serves both the [`PersistenceEngine`](super::engine::PersistenceEngine)
 //! contract and the [`SessionStore`] facade. It carries no database types, so

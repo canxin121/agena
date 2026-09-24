@@ -155,7 +155,7 @@ export function useGitHistoryOps(opts: {
       )
       const tpl = (resp?.template || '').trimEnd()
       if (!tpl) {
-        toasts.push('info', i18n.global.t('settings.opencodeConfig.errors.noCommitTemplateConfigured'))
+        toasts.push('info', i18n.global.t('git.noCommitTemplateConfigured'))
         return
       }
       commitMessage.value = tpl

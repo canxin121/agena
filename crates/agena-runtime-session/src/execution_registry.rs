@@ -2,7 +2,7 @@
 //! steer. Concrete session code supplies its own steer payload type.
 //!
 //! The registry is purely in-memory execution coordination. Cross-process
-//! session exclusivity is no longer its job: in v2 the data facade owns
+//! session exclusivity is no longer its job: the data facade owns
 //! `execution_leases` and validates them on every write (design 14.2, 15.6),
 //! so the manager never holds a lease outside a facade call. `register` here
 //! only guarantees that one process does not run the same session twice.
@@ -215,7 +215,7 @@ impl<T: Send + 'static> Default for ExecutionRegistry<T> {
 
 impl<T: Send + 'static> ExecutionRegistry<T> {
     /// A registry with no database binding: in-process execution coordination
-    /// only. Cross-process session exclusivity is enforced by the v2 facade's
+    /// only. Cross-process session exclusivity is enforced by the facade's
     /// lease validation on every write, not here.
     pub fn new() -> Self {
         Self {

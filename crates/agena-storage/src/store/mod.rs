@@ -1,4 +1,4 @@
-//! The v2 parts-first store: pure types, the engine contract, the sealed
+//! The parts-first store: pure types, the engine contract, the sealed
 //! `SessionStore` facade, and the in-memory backend.
 //!
 //! The facade composes either [`PersistenceEngine`] backend — [`InMemoryEngine`]

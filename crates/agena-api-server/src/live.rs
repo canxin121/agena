@@ -1,4 +1,4 @@
-//! Shared v2 live feed for WS, SSE, and IPC transports.
+//! Shared live feed for WS, SSE, and IPC transports.
 //!
 //! Session data arrives as facade `SessionChange` callbacks. Ephemeral
 //! activity/plugin/tool-registry values arrive on `RuntimeLiveSignalService`.

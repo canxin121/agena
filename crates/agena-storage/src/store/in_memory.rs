@@ -1,4 +1,4 @@
-//! In-memory backend for the v2 parts-first store.
+//! In-memory backend for the parts-first store.
 //!
 //! Implements [`PersistenceEngine`] with plain Rust collections, so tests and
 //! small deployments run without SQLite while exercising the exact same

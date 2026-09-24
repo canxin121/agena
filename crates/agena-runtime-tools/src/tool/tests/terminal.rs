@@ -123,7 +123,7 @@ async fn observe(executor: &ToolExecutor, id: &str, session: i64, expected: &str
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn real_tool_route_preserves_session_input_screen_and_legacy_behavior() {
+async fn real_tool_route_preserves_session_input_screen_and_plain_shell_behavior() {
     let (_dir, executor) = fixture(ToolPermissionPolicy::allow_all()).await;
     let command = python(
         "import sys\nprint('TTY='+str(sys.stdin.isatty()),flush=True)\nwhile True:\n try: value=input('PROMPT> ')\n except EOFError: break\n print('VALUE='+repr(value),flush=True)",
@@ -210,7 +210,7 @@ async fn real_tool_route_preserves_session_input_screen_and_legacy_behavior() {
             &invoke(
                 "shell.run",
                 json!({
-                    "command":"printf legacy","reads":[],"writes":[],"network":[]
+                    "command":"printf plain","reads":[],"writes":[],"network":[]
                 }),
             ),
             41,
@@ -222,7 +222,7 @@ async fn real_tool_route_preserves_session_input_screen_and_legacy_behavior() {
     assert_eq!(plain["background"], false);
     assert!(plain["process_id"].is_null());
     assert!(plain["terminal"].is_null());
-    assert_eq!(plain["output"], "legacy");
+    assert_eq!(plain["output"], "plain");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

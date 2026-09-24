@@ -7,7 +7,7 @@ use agena_plugin_host::{PluginPackage, PluginsConfig};
 use agena_runtime_config::{McpHttpAuthConfig, McpServerConfig};
 
 // Keep the runtime composition boundary and plugin schema on one configuration
-// definition. These were historically duplicated, making it possible for the
+// definition. These must be derived from one definition so the
 // UI schema and the runtime parser to disagree about supported MCP fields.
 pub(crate) use agena_runtime_config::{
     MCP_PLUGIN_ID, McpConfig, McpRuntimeConfig, mcp_config_from_plugins,

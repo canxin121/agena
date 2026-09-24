@@ -120,19 +120,18 @@ pub use agena_runtime_config::{
     ConfigResolution, ConfigResolutionMeta, ConfigSource, EditorHarnessConfig,
     GeminiProviderOptions, GitlabProviderOptions, HarnessViewportConfig, HarnessesConfig,
     HttpProviderAdapterConfig, OllamaProviderOptions, OpenAiChatCompletionsProviderOptions,
-    OpenAiResponsesProviderOptions, ProviderAdapterDefinition,
-    ProviderApiAuthConfig, ProviderAuthConfig, ProviderClientVersionSettings,
-    ProviderGitlabAuthConfig, ResolvedConfig, ResolvedProviderAdapterConfig,
-    ResolvedProviderConfig, RuntimeConfig, RuntimeProvidersConfig, SessionCompactionConfig,
-    SessionConfig, ShellHarnessConfig, SimpleHttpProviderOptions, TuiColorSchemeConfig,
-    TuiGraphicsModeConfig, TuiUiConfig, UiConfig, config_resolution_json_value,
-    resolved_config_json_value,
+    OpenAiResponsesProviderOptions, ProviderAdapterDefinition, ProviderApiAuthConfig,
+    ProviderAuthConfig, ProviderClientVersionSettings, ProviderGitlabAuthConfig, ResolvedConfig,
+    ResolvedProviderAdapterConfig, ResolvedProviderConfig, RuntimeConfig, RuntimeProvidersConfig,
+    SessionCompactionConfig, SessionConfig, ShellHarnessConfig, SimpleHttpProviderOptions,
+    TuiColorSchemeConfig, TuiGraphicsModeConfig, TuiUiConfig, UiConfig,
+    config_resolution_json_value, resolved_config_json_value,
 };
 pub use agena_runtime_config::{ConfigEnvironment, ProcessEnvironment};
 pub(crate) use agena_runtime_config::{
     ConfigError, apply_config_env_number, config_error_to_settings_error, merge_optional_config,
     normalize_config_optional, parse_config_bool, parse_config_json, read_config_json,
-    reject_unsupported_mode_environment, settings_error_to_config_error,
+    settings_error_to_config_error,
 };
 pub(crate) use agena_runtime_config::{
     ConfigOverride, LoadConfigRequest, RuntimeConfigOverrideError,
@@ -176,7 +175,6 @@ pub(crate) use agena_runtime_provider::{configured_enabled_adapter_ids, configur
 pub(crate) use agena_runtime_session::ContextGovernor;
 pub use agena_runtime_session::RuntimeMetricsSnapshot;
 pub(crate) use agena_runtime_session::RuntimeSessionManagerConfig;
-pub(crate) use agena_runtime_session::SessionCachePolicy;
 pub(crate) use agena_runtime_session::merge_system_prompts;
 pub(crate) use agena_runtime_session::resolve_installation_id;
 pub(crate) use agena_runtime_session::run_session_maintenance;

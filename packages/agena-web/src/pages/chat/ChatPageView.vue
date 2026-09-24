@@ -78,7 +78,6 @@ const {
   formatTime,
   copiedMessageId,
   revertBusyMessageId,
-  revertMarkerBusy,
   sessionEnded,
   retryStatus,
   currentPhase,
@@ -227,8 +226,6 @@ const {
   handleRevertFromMessage,
   handleCopyMessage,
   handleCopySessionError,
-  handleRedoFromRevertMarker,
-  handleUnrevertFromRevertMarker,
 } = ctx
 
 type TooltipAnchorLike = { triggerEl?: unknown; $el?: unknown } | HTMLElement | null
@@ -438,7 +435,6 @@ void sessionActionsMenuRef
                 :revert-busy-message-id="revertBusyMessageId"
                 :is-streaming-assistant-message="isStreamingAssistantMessage"
                 :show-assistant-placeholder="showAssistantPlaceholder"
-                :revert-marker-busy="revertMarkerBusy"
                 :session-ended="sessionEnded"
                 :retry-status="retryStatus"
                 :current-phase="currentPhase"
@@ -457,8 +453,6 @@ void sessionActionsMenuRef
                 @part-toggle="setTranscriptPartExpanded"
                 @fold-expand="loadFoldedActivity"
                 @node-select="selectTranscriptNode"
-                @redo-from-revert="handleRedoFromRevertMarker"
-                @unrevert-from-revert="handleUnrevertFromRevertMarker"
                 @copySessionError="handleCopySessionError"
                 @clearSessionError="chat.selectedSessionId ? chat.clearSessionError(chat.selectedSessionId) : undefined"
                 @set-activity-page-size="ctx.setTranscriptPartPageSize"

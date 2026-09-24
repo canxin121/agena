@@ -105,7 +105,6 @@ export type ChatPageViewContext = {
   formatTime: (ms?: number) => string
   copiedMessageId: MaybeRef<string>
   revertBusyMessageId: MaybeRef<string>
-  revertMarkerBusy: MaybeRef<boolean>
   sessionEnded: MaybeRef<boolean>
   retryStatus: MaybeRef<RetryStatusLike>
   currentPhase: MaybeRef<string>
@@ -256,6 +255,4 @@ export type ChatPageViewContext = {
   handleForkFromMessage: (messageId: string) => void
   handleRevertFromMessage: (messageId: string) => void
   handleCopyMessage: (message: MessageRecordLike) => void
-  handleRedoFromRevertMarker: () => void
-  handleUnrevertFromRevertMarker: () => void
 }

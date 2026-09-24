@@ -57,7 +57,6 @@ pub(crate) use agena_tui::prompt_history::{PromptHistorySearchResult, PromptHist
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct PersistentDraftStore {
-    pub(crate) version: u32,
     pub(crate) sessions: BTreeMap<i64, PersistentComposerDraft>,
     pub(crate) new_session: Option<PersistentComposerDraft>,
 }
@@ -69,6 +68,7 @@ pub(crate) struct PersistentComposerDraft {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct PromptHistoryRecord {
     pub(crate) text: String,
 }

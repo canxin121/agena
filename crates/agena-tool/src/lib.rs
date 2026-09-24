@@ -81,10 +81,9 @@ pub fn is_tool_identity_title(title: &str, invocation: &ToolInvocation) -> bool 
 /// (for example `passed`, `36 matches`, or `1 file changed`) so it remains a
 /// scan label rather than becoming a second output dump.
 pub fn completed_tool_title(invocation: &ToolInvocation, output: &RawOutput) -> String {
-    completed_tool_title_with_action_for_invocation(
-        invocation,
-        initial_tool_title(invocation),
-        output,
+    complete_title(
+        initial_tool_title(invocation).as_str(),
+        result_title_fragment_for_invocation(invocation, output),
     )
 }
 
@@ -117,62 +116,6 @@ pub fn completed_tool_title_for_state(
     state: ToolResultState,
     output: &RawOutput,
 ) -> String {
-    completed_tool_title_with_action_for_state(
-        invocation,
-        initial_tool_title(invocation),
-        state,
-        output,
-    )
-}
-
-/// Complete an already-rendered action title with the compact result fact.
-/// Execution views use this variant because a tool may have a more specific
-/// action label than the generic invocation renderer can infer.
-pub fn completed_tool_title_with_action(
-    action_title: impl AsRef<str>,
-    output: &RawOutput,
-) -> String {
-    complete_title(action_title.as_ref(), result_title_fragment(output))
-}
-
-/// Complete the invocation's call-time title with a result fact while
-/// retaining the tool identity for tool-specific result semantics. The
-/// `_action_title` parameter remains for source compatibility with execution
-/// adapters that already have a plugin-provided action label, but it cannot
-/// replace the invocation title: the completed headline must retain the
-/// action/input that was visible when the call started. Keeping the invocation
-/// here lets a `200` mean `HTTP 200`, a `kind=updated` mean `updated`, and a
-/// provider `pending_calls` array mean `N pending calls` instead of falling
-/// back to an unhelpful generic scalar.
-pub fn completed_tool_title_with_action_for_invocation(
-    invocation: &ToolInvocation,
-    _action_title: impl AsRef<str>,
-    output: &RawOutput,
-) -> String {
-    // The call-time action/input title is the stable identity of the
-    // operation. A plugin may provide a nicer completion label, but allowing
-    // that label to replace the invocation title would make the headline lose
-    // the input that the user saw when the call started (for example,
-    // `Search web · Agena` becoming `ChatGPT web search · response received`).
-    // Keep the optional action argument for callers that need to supply an
-    // already-rendered title, while treating the invocation-aware path as the
-    // canonical lifecycle projection.
-    let action_title = initial_tool_title(invocation);
-    complete_title(
-        action_title.as_str(),
-        result_title_fragment_for_invocation(invocation, output),
-    )
-}
-
-/// State-aware form of the invocation-aware action-title completion helper.
-/// Plugin renderers and read-time API projections use it when the durable part
-/// carries both a raw result and a lifecycle state.
-pub fn completed_tool_title_with_action_for_state(
-    invocation: &ToolInvocation,
-    action_title: impl AsRef<str>,
-    state: ToolResultState,
-    output: &RawOutput,
-) -> String {
     // A partial/streaming raw output is not a terminal result. Keep the
     // call-time title until the lifecycle itself reaches a terminal state;
     // otherwise a checkpoint could briefly claim success from an incomplete
@@ -180,7 +123,7 @@ pub fn completed_tool_title_with_action_for_state(
     if matches!(state, ToolResultState::Pending | ToolResultState::Running) {
         return initial_tool_title(invocation);
     }
-    let title = completed_tool_title_with_action_for_invocation(invocation, action_title, output);
+    let title = completed_tool_title(invocation, output);
     let suffix = match state {
         ToolResultState::PolicyDenied => Some("permission denied"),
         ToolResultState::UserDeclined => Some("declined"),
@@ -952,13 +895,10 @@ fn tool_result_fragment(
                 });
             }
         }
-        "fs.view_image"
-        | "openai.image_generation"
-        | "openai.image_edit"
-        | "chatgpt.image_generation"
-        | "chatgpt.image_edit"
-        | "gemini.image_generation"
-        | "gemini.image_edit" => {
+        "chatgpt.cloud_image_generation"
+        | "chatgpt.cloud_image_edit"
+        | "gemini.cloud_image_generation"
+        | "gemini.cloud_image_edit" => {
             if let Some(bytes) = object.get("size_bytes").and_then(value_as_u64) {
                 return Some(format!("image · {}", format_bytes(bytes)));
             }
@@ -966,7 +906,7 @@ fn tool_result_fragment(
                 return Some(normalize_tool_title(mime));
             }
         }
-        "web.fetch" | "web_fetch" | "claude.web_fetch" => {
+        "web.fetch" | "web_fetch" | "claude.cloud_web_fetch" => {
             if let Some(status) = object.get("status").and_then(value_as_u64) {
                 return Some(format!("HTTP {status}"));
             }
@@ -1096,7 +1036,7 @@ fn provider_result_fragment(
     key: &str,
     object: &serde_json::Map<String, serde_json::Value>,
 ) -> Option<String> {
-    let key = provider_tools::operation_identity(key);
+    let key = provider_tools::canonical_cloud_identity(key);
     let pending = first_array(object, &["pending_calls", "pending_actions", "tool_calls"])
         .filter(|calls| !calls.is_empty())
         .map(|calls| format_count(calls.len(), "pending calls"));
@@ -1165,7 +1105,7 @@ fn provider_operation_result_fragment(
     };
 
     match key {
-        "chatgpt.file_search" | "claude.file_search" | "gemini.file_search" => count(
+        "chatgpt.cloud_file_search" | "gemini.cloud_file_search" => count(
             &[
                 "file_results",
                 "file_search_results",
@@ -1188,15 +1128,7 @@ fn provider_operation_result_fragment(
             )
         })
         .or_else(|| count(&["sources"], "files")),
-        "chatgpt.tool_search"
-        | "claude.tool_search_bm25"
-        | "claude.tool_search_regex"
-        | "claude.tool_search_tool_bm25"
-        | "claude.tool_search_tool_regex" => {
-            count(&["tool_references", "tools", "matches", "results"], "tools")
-                .or_else(|| count(&["tool_count", "result_count", "total"], "tools"))
-        }
-        "gemini.google_maps" => count(
+        "gemini.cloud_google_maps" => count(
             &[
                 "places",
                 "map_results",
@@ -1208,30 +1140,7 @@ fn provider_operation_result_fragment(
         )
         .or_else(|| count(&["place_count", "result_count", "total"], "places"))
         .or_else(|| count(&["sources"], "places")),
-        "gemini.retrieval" => count(
-            &[
-                "retrieved",
-                "matches",
-                "chunks",
-                "documents",
-                "results",
-                "groundingChunks",
-            ],
-            "matches",
-        )
-        .or_else(|| {
-            count(
-                &[
-                    "retrieved_count",
-                    "match_count",
-                    "chunk_count",
-                    "result_count",
-                ],
-                "matches",
-            )
-        })
-        .or_else(|| count(&["sources"], "matches")),
-        "gemini.url_context" | "claude.web_fetch" => {
+        "gemini.cloud_url_context" | "claude.cloud_web_fetch" => {
             if let Some(status) = provider_find_value(
                 &serde_json::Value::Object(object.clone()),
                 &["status", "http_status", "status_code"],
@@ -1247,44 +1156,10 @@ fn provider_operation_result_fragment(
             .or_else(|| count(&["fetched_count", "loaded_count", "page_count"], "pages"))
             .or_else(|| count(&["sources"], "pages"))
         }
-        "chatgpt.code_interpreter" | "claude.code_execution" | "gemini.code_execution" => {
-            provider_execution_result_fragment(object)
-        }
-        "chatgpt.computer"
-        | "chatgpt.computer_use_preview"
-        | "claude.computer"
-        | "gemini.computer_use" => provider_computer_result_fragment(object),
-        "gemini.mcp_server" | "claude.mcp_toolset" | "chatgpt.mcp" => {
-            provider_connection_result_fragment(object)
-        }
-        "claude.memory" => provider_memory_result_fragment(object),
-        "claude.text_editor" | "claude.str_replace_based_edit_tool" => {
-            let root = serde_json::Value::Object(object.clone());
-            if provider_find_value(&root, &["changed"]).and_then(serde_json::Value::as_bool)
-                == Some(true)
-            {
-                if let Some(replacements) =
-                    provider_find_value(&root, &["replacements"]).and_then(value_as_u64)
-                {
-                    return Some(format!(
-                        "updated · {}",
-                        format_count(replacements as usize, "replacements")
-                    ));
-                }
-                return Some("updated".to_owned());
-            }
-            None
-        }
-        "chatgpt.apply_patch" => {
-            let root = serde_json::Value::Object(object.clone());
-            provider_count_fact(&root, &["changes", "files"], "files changed").or_else(|| {
-                provider_find_value(&root, &["changed", "updated"])
-                    .and_then(serde_json::Value::as_bool)
-                    .filter(|changed| *changed)
-                    .map(|_| "updated".to_owned())
-            })
-        }
-        "claude.advisor" => {
+        "chatgpt.cloud_code_interpreter"
+        | "claude.cloud_code_execution"
+        | "gemini.cloud_code_execution" => provider_execution_result_fragment(object),
+        "claude.cloud_advisor" => {
             if provider_find_value(
                 &serde_json::Value::Object(object.clone()),
                 &["error", "errors"],
@@ -1296,13 +1171,11 @@ fn provider_operation_result_fragment(
                 Some("response received".to_owned())
             }
         }
-        "chatgpt.local_shell" | "chatgpt.shell" | "claude.bash" => {
-            provider_execution_result_fragment(object)
-        }
-        "chatgpt.image_generation"
-        | "chatgpt.image_edit"
-        | "gemini.image_generation"
-        | "gemini.image_edit" => count(&["images", "outputs", "image_count"], "images"),
+        "chatgpt.cloud_shell" => provider_execution_result_fragment(object),
+        "chatgpt.cloud_image_generation"
+        | "chatgpt.cloud_image_edit"
+        | "gemini.cloud_image_generation"
+        | "gemini.cloud_image_edit" => count(&["images", "outputs", "image_count"], "images"),
         _ => None,
     }
 }
@@ -1339,87 +1212,6 @@ fn provider_execution_result_fragment(
             .map(|values| format_count(values.len(), "outputs"))
             .or_else(|| value_as_u64(value).map(|count| format_count(count as usize, "outputs")))
     })
-}
-
-fn provider_computer_result_fragment(
-    object: &serde_json::Map<String, serde_json::Value>,
-) -> Option<String> {
-    let root = serde_json::Value::Object(object.clone());
-    let action = provider_find_value(&root, &["action", "action_type", "actionType"])
-        .and_then(|value| match value {
-            serde_json::Value::Object(object) => object
-                .get("type")
-                .or_else(|| object.get("action"))
-                .and_then(serde_json::Value::as_str),
-            serde_json::Value::String(value) => Some(value.as_str()),
-            _ => None,
-        })
-        .map(|value| normalize_tool_title(value.replace('_', " ")));
-    let page = provider_find_value(&root, &["page_title", "page", "title"])
-        .and_then(serde_json::Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-        .map(normalize_tool_title);
-    let mut parts = action.into_iter().chain(page).collect::<Vec<_>>();
-    if parts.is_empty()
-        && let Some(actions) =
-            provider_find_value(&root, &["actions"]).and_then(serde_json::Value::as_array)
-    {
-        parts.push(format_count(actions.len(), "actions"));
-    }
-    (!parts.is_empty()).then(|| parts.join(" · "))
-}
-
-fn provider_connection_result_fragment(
-    object: &serde_json::Map<String, serde_json::Value>,
-) -> Option<String> {
-    let root = serde_json::Value::Object(object.clone());
-    if let Some(connected) =
-        provider_find_value(&root, &["connected"]).and_then(serde_json::Value::as_bool)
-    {
-        return Some(if connected {
-            "connected".to_owned()
-        } else {
-            "disconnected".to_owned()
-        });
-    }
-    provider_find_value(&root, &["connection_status", "status"])
-        .and_then(serde_json::Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-        .map(|value| match value.to_ascii_lowercase().as_str() {
-            "connected" | "ready" | "ok" | "success" => "connected".to_owned(),
-            "disconnected" | "failed" | "error" => "disconnected".to_owned(),
-            _ => normalize_tool_title(value.replace('_', " ")),
-        })
-}
-
-fn provider_memory_result_fragment(
-    object: &serde_json::Map<String, serde_json::Value>,
-) -> Option<String> {
-    let root = serde_json::Value::Object(object.clone());
-    for (keys, label) in [
-        (&["removed", "deleted"][..], "removed"),
-        (&["saved", "written", "created"][..], "saved"),
-        (&["loaded", "retrieved"][..], "loaded"),
-    ] {
-        if provider_find_value(&root, keys).and_then(serde_json::Value::as_bool) == Some(true) {
-            return Some(label.to_owned());
-        }
-    }
-    provider_find_value(&root, &["operation", "action", "command"])
-        .and_then(serde_json::Value::as_str)
-        .and_then(|value| {
-            let value = value.to_ascii_lowercase();
-            if value.contains("delete") || value.contains("remove") {
-                Some("removed".to_owned())
-            } else if value.contains("write") || value.contains("save") || value.contains("create")
-            {
-                Some("saved".to_owned())
-            } else if value.contains("read") || value.contains("view") || value.contains("load") {
-                Some("loaded".to_owned())
-            } else {
-                None
-            }
-        })
 }
 
 fn provider_count_fact(root: &serde_json::Value, keys: &[&str], label: &str) -> Option<String> {
@@ -2586,7 +2378,6 @@ fn tool_action_label(tool_name: &str) -> String {
         "fs.grep" | "grep" => "Search files".to_owned(),
         "fs.replace" => "Replace text".to_owned(),
         "fs.stat" => "Inspect file".to_owned(),
-        "fs.view_image" => "View image".to_owned(),
         "code.search_ast" => "Search AST".to_owned(),
         "code.syntax_tree" => "Inspect syntax tree".to_owned(),
         "shell.run" | "shell" => "Run process".to_owned(),
@@ -2616,49 +2407,26 @@ fn tool_action_label(tool_name: &str) -> String {
         "interaction.ask" | "ask_user" => "Ask user".to_owned(),
         "interaction.notify" => "Send notification".to_owned(),
         "web.fetch" | "web_fetch" => "Fetch page".to_owned(),
-        "web.search" | "web_search" | "chatgpt.web_search" | "claude.web_search"
+        "web.search"
+        | "web_search"
+        | "chatgpt.cloud_web_search"
+        | "claude.cloud_web_search"
         | "gemini.web_search" => "Search web".to_owned(),
-        "chatgpt.web_search_preview" | "claude.web_search_preview" => "Search web".to_owned(),
-        "claude.web_fetch" => "Fetch page".to_owned(),
-        "gemini.google_search" => "Search web".to_owned(),
-        "gemini.google_maps" => "Search maps".to_owned(),
-        "gemini.url_context" => "Read web context".to_owned(),
-        "gemini.mcp_server" => "Connect MCP server".to_owned(),
-        "gemini.retrieval" => "Retrieve context".to_owned(),
-        "gemini.function" => "Declare function tool".to_owned(),
-        "chatgpt.code_interpreter" | "claude.code_execution" | "gemini.code_execution" => {
-            "Run code".to_owned()
-        }
-        "chatgpt.local_shell" | "claude.bash" | "bash" | "local_shell" => "Run process".to_owned(),
-        "chatgpt.tool_search"
-        | "claude.tool_search_bm25"
-        | "claude.tool_search_regex"
-        | "claude.tool_search_tool_bm25"
-        | "claude.tool_search_tool_regex" => "Search tools".to_owned(),
-        "chatgpt.programmatic_tool_calling" => "Call tools programmatically".to_owned(),
-        "chatgpt.mcp" => "Connect MCP server".to_owned(),
-        "chatgpt.shell" => "Run hosted shell".to_owned(),
-        "chatgpt.apply_patch" => "Apply patch".to_owned(),
-        "chatgpt.function" => "Declare function tool".to_owned(),
-        "chatgpt.custom" => "Declare custom tool".to_owned(),
-        "chatgpt.namespace" => "Declare tool namespace".to_owned(),
-        "claude.str_replace_based_edit_tool" => "Edit text".to_owned(),
-        "claude.text_editor" => "Edit text".to_owned(),
-        "claude.memory" => "Use memory".to_owned(),
-        "claude.advisor" => "Consult advisor".to_owned(),
-        "claude.mcp_toolset" => "Configure MCP toolset".to_owned(),
-        "chatgpt.file_search" | "claude.file_search" | "gemini.file_search" => {
-            "Search files".to_owned()
-        }
-        "openai.image_generation" | "chatgpt.image_generation" | "gemini.image_generation" => {
+        "claude.cloud_web_fetch" => "Fetch page".to_owned(),
+        "gemini.cloud_google_search" => "Search web".to_owned(),
+        "gemini.cloud_google_maps" => "Search maps".to_owned(),
+        "gemini.cloud_url_context" => "Read web context".to_owned(),
+        "chatgpt.cloud_code_interpreter"
+        | "claude.cloud_code_execution"
+        | "gemini.cloud_code_execution" => "Run code".to_owned(),
+        "bash" | "local_shell" => "Run process".to_owned(),
+        "chatgpt.cloud_shell" => "Run hosted shell".to_owned(),
+        "claude.cloud_advisor" => "Consult advisor".to_owned(),
+        "chatgpt.cloud_file_search" | "gemini.cloud_file_search" => "Search files".to_owned(),
+        "chatgpt.cloud_image_generation" | "gemini.cloud_image_generation" => {
             "Generate image".to_owned()
         }
-        "openai.image_edit" | "chatgpt.image_edit" | "gemini.image_edit" => "Edit image".to_owned(),
-        "openai.web_search" => "Search web".to_owned(),
-        "chatgpt.computer"
-        | "chatgpt.computer_use_preview"
-        | "claude.computer"
-        | "gemini.computer_use" => "Use computer".to_owned(),
+        "chatgpt.cloud_image_edit" | "gemini.cloud_image_edit" => "Edit image".to_owned(),
         "snapshot.enter" | "enter_snapshot" => "Enter snapshot".to_owned(),
         "snapshot.exit" | "exit_snapshot" => "Exit snapshot".to_owned(),
         "lsp.definition" | "lsp_definition" => "Find definition".to_owned(),
@@ -2814,7 +2582,6 @@ fn invocation_title_subject(tool_name: &str, input: &serde_json::Value) -> Strin
         &["paths", "path"]
     } else if key.ends_with("fs.replace")
         || key.ends_with("fs.stat")
-        || key.ends_with("fs.view_image")
         || key.ends_with("notebook.edit_cell")
     {
         &["file_path", "path", "notebook_path", "name"]
@@ -2983,7 +2750,7 @@ fn invocation_title_subject(tool_name: &str, input: &serde_json::Value) -> Strin
 }
 
 fn provider_invocation_title_subject(key: &str, input: &serde_json::Value) -> String {
-    let key = provider_tools::operation_identity(key);
+    let key = provider_tools::canonical_cloud_identity(key);
     let Some(object) = input.as_object() else {
         return String::new();
     };
@@ -3357,9 +3124,9 @@ pub fn invocation_call_summary(input: &serde_json::Value) -> String {
 mod tool_title_tests {
     use super::{
         RawOutput, TOOL_SUMMARY_MAX_DISPLAY_WIDTH, TOOL_TITLE_MAX_DISPLAY_WIDTH, ToolInvocation,
-        ToolResultState, completed_tool_title, completed_tool_title_with_action_for_invocation,
-        compose_tool_title, initial_tool_title, invocation_call_summary, is_tool_identity_title,
-        normalize_tool_summary, normalize_tool_title, result_title_fragment,
+        ToolResultState, completed_tool_title, compose_tool_title, initial_tool_title,
+        invocation_call_summary, is_tool_identity_title, normalize_tool_summary,
+        normalize_tool_title, result_title_fragment,
     };
     use agena_domain::StructuredObject;
     use serde_json::json;
@@ -3537,14 +3304,9 @@ mod tool_title_tests {
                 "Reconnect MCP server · demo",
             ),
             (
-                "agena.openai.image_generation",
+                "agena.chatgpt.cloud_image_generation",
                 json!({"prompt": "a watercolor city"}),
-                "Generate image · a watercolor city",
-            ),
-            (
-                "agena.chatgpt.programmatic_tool_calling",
-                json!({"prompt": "find the test tool"}),
-                "Call tools programmatically · find the test tool",
+                "Generate image in OpenAI cloud · a watercolor city",
             ),
             (
                 "agena.interaction.ask",
@@ -3714,7 +3476,7 @@ mod tool_title_tests {
         );
 
         let provider = ToolInvocation::new(
-            "agena.chatgpt.web_search",
+            "agena.chatgpt.cloud_web_search",
             StructuredObject::try_from(json!({"prompt": "Agena"})).expect("structured input"),
         );
         assert_eq!(
@@ -3727,7 +3489,7 @@ mod tool_title_tests {
                     ..RawOutput::default()
                 }
             ),
-            "Search web · Agena · 2 pending calls"
+            "Search web in OpenAI cloud · Agena · 2 pending calls"
         );
 
         let settings = ToolInvocation::new(
@@ -3749,18 +3511,20 @@ mod tool_title_tests {
     #[test]
     fn invocation_aware_completion_keeps_the_call_time_title() {
         let invocation = ToolInvocation::new(
-            "agena.chatgpt.web_search",
+            "agena.chatgpt.cloud_web_search",
             StructuredObject::try_from(json!({"prompt": "Agena"})).expect("input"),
         );
-        let title = completed_tool_title_with_action_for_invocation(
+        let title = completed_tool_title(
             &invocation,
-            "ChatGPT web search",
             &RawOutput {
                 payload: Some(json!({"response_id": "resp-1"})),
                 ..RawOutput::default()
             },
         );
-        assert_eq!(title, "Search web · Agena · response received");
+        assert_eq!(
+            title,
+            "Search web in OpenAI cloud · Agena · response received"
+        );
     }
 
     #[test]
@@ -3786,7 +3550,7 @@ mod tool_title_tests {
         );
 
         let provider = ToolInvocation::new(
-            "agena.chatgpt.web_search",
+            "agena.chatgpt.cloud_web_search",
             StructuredObject::try_from(json!({"prompt": "Agena"})).expect("input"),
         );
         assert_eq!(
@@ -3804,7 +3568,7 @@ mod tool_title_tests {
                     ..RawOutput::default()
                 }
             ),
-            "Search web · Agena · response received"
+            "Search web in OpenAI cloud · Agena · response received"
         );
 
         let provider_with_status = RawOutput {
@@ -3817,7 +3581,7 @@ mod tool_title_tests {
         };
         assert_eq!(
             completed_tool_title(&provider, &provider_with_status),
-            "Search web · Agena · 2 sources"
+            "Search web in OpenAI cloud · Agena · 2 sources"
         );
 
         let failed_provider = RawOutput {
@@ -3829,11 +3593,11 @@ mod tool_title_tests {
         };
         assert_eq!(
             completed_tool_title(&provider, &failed_provider),
-            "Search web · Agena · failed"
+            "Search web in OpenAI cloud · Agena · failed"
         );
 
         let image = ToolInvocation::new(
-            "agena.gemini.image_generation",
+            "agena.gemini.cloud_image_generation",
             StructuredObject::try_from(json!({"prompt": "a cat"})).expect("input"),
         );
         let image_title = completed_tool_title(
@@ -3858,7 +3622,7 @@ mod tool_title_tests {
             },
         );
         assert_eq!(
-            image_title, "Generate image · a cat · 1 image",
+            image_title, "Generate image in Google cloud · a cat · 1 image",
             "{image_title}"
         );
     }
@@ -3867,76 +3631,46 @@ mod tool_title_tests {
     fn provider_titles_surface_each_operation_result_fact() {
         let cases = [
             (
-                "agena.chatgpt.file_search",
+                "agena.chatgpt.cloud_file_search",
                 json!({"prompt": "rendering", "tool_options": {"vector_store_ids": ["vs-1"]}}),
                 json!({"results": [{"file_name": "a.md"}, {"file_name": "b.md"}]}),
                 "2 files",
             ),
             (
-                "agena.chatgpt.tool_search",
-                json!({"prompt": "find a search tool"}),
-                json!({"results": [{"name": "web.search"}, {"name": "fs.grep"}]}),
-                "2 tools",
-            ),
-            (
-                "agena.chatgpt.computer",
-                json!({"prompt": "open the docs"}),
-                json!({"action": {"type": "click"}, "page_title": "Agena docs"}),
-                "click · Agena docs",
-            ),
-            (
-                "agena.claude.code_execution",
+                "agena.claude.cloud_code_execution",
                 json!({"prompt": "run the tests"}),
                 json!({"status": "completed", "exit_code": 0}),
                 "passed",
             ),
             (
-                "agena.gemini.google_maps",
+                "agena.gemini.cloud_google_maps",
                 json!({"prompt": "cafes near me"}),
                 json!({"places": [{"name": "One"}, {"name": "Two"}]}),
                 "2 places",
             ),
             (
-                "agena.gemini.retrieval",
-                json!({"prompt": "find the policy"}),
-                json!({"retrieved_count": 4}),
-                "4 matches",
-            ),
-            (
-                "agena.gemini.url_context",
+                "agena.gemini.cloud_url_context",
                 json!({"prompt": "read https://example.test"}),
                 json!({"fetched_urls": ["https://example.test"]}),
                 "1 page",
             ),
             (
-                "agena.claude.web_fetch",
+                "agena.claude.cloud_web_fetch",
                 json!({"prompt": "https://example.test"}),
                 json!({"status": 200}),
                 "HTTP 200",
             ),
             (
-                "agena.claude.memory",
-                json!({"prompt": "save this"}),
-                json!({"saved": true}),
-                "saved",
-            ),
-            (
-                "agena.claude.advisor",
+                "agena.claude.cloud_advisor",
                 json!({"prompt": "review this"}),
                 json!({"error": {"message": "unavailable"}}),
                 "error",
             ),
             (
-                "agena.claude.bash",
+                "agena.chatgpt.cloud_shell",
                 json!({"prompt": "pwd"}),
                 json!({"exit_code": 1}),
                 "failed · exit 1",
-            ),
-            (
-                "agena.gemini.mcp_server",
-                json!({"prompt": "connect", "tool_options": {"url": "https://mcp.test"}}),
-                json!({"connected": true, "status": "ready"}),
-                "connected",
             ),
         ];
         for (name, input, payload, expected) in cases {
@@ -3956,18 +3690,6 @@ mod tool_title_tests {
                 "{name} omitted {expected:?}: {title}"
             );
         }
-    }
-
-    #[test]
-    fn provider_input_titles_use_nested_tool_targets() {
-        let invocation = ToolInvocation::new(
-            "agena.chatgpt.mcp",
-            StructuredObject::try_from(json!({
-                "tool_options": {"server_label": "docs"}
-            }))
-            .expect("input"),
-        );
-        assert_eq!(initial_tool_title(&invocation), "Connect MCP server · docs");
     }
 
     #[test]
@@ -4790,7 +4512,7 @@ mod tests {
     #[test]
     fn execution_summary_requires_the_result_summary_contract() {
         let error = serde_json::from_value::<ToolExecutionSummary>(serde_json::json!({
-            "title": "legacy",
+            "title": "missing-summary",
             "output_text": "output"
         }))
         .expect_err("summary is a required execution-result field");

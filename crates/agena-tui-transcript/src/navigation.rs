@@ -61,9 +61,6 @@ pub enum TranscriptActivitySection {
     Output,
     OutputMetadata,
     Presentation,
-    /// Compatibility key for older cached/default expansion state. New tool
-    /// rows use [`Self::Output`].
-    Result,
     StructuredResult,
     ManagedOutputs,
     Detail(usize),

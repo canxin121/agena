@@ -20,12 +20,11 @@ type ChatLike = {
 export function useChatScrollNav(opts: {
   chat: ChatLike
   ui: UiLike
-  getRevertId: () => string
   composerFullscreenActive: Ref<boolean>
   composerShellHeight: Ref<number>
   composerDividerHitPx: number
 }) {
-  const { chat, ui, getRevertId, composerFullscreenActive, composerShellHeight, composerDividerHitPx } = opts
+  const { chat, ui, composerFullscreenActive, composerShellHeight, composerDividerHitPx } = opts
 
   const loadingOlder = computed(() => chat.selectedHistory.loading)
 
@@ -48,14 +47,12 @@ export function useChatScrollNav(opts: {
 
   const navigableMessageIds = computed<string[]>(() => {
     const out: string[] = []
-    const revertId = (getRevertId() || '').trim()
     for (const m of chat.messages) {
       const role = String(m?.info?.role || '')
       // Only navigate between user messages.
       if (role !== 'user') continue
       const id = typeof m?.info?.id === 'string' ? m.info.id.trim() : ''
       if (!id) continue
-      if (revertId && id >= revertId) break
       const hasText = Array.isArray(m?.parts) ? m.parts.some((p: ChatPartValue) => hasUserTextPart(p)) : false
       if (!hasText) continue
       out.push(id)

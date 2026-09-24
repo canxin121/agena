@@ -374,9 +374,8 @@ async fn anonymous_mcp_is_stateless_and_hides_interactive_tools() {
 
     // Secure MCP Tunnel forwards each JSON-RPC request independently. Some
     // connector probes can therefore ask for tools before initialize and
-    // without a session ID. The old rmcp stateful dispatcher returned HTTP
-    // 422 for this exact sequence; the public stateless adapter must answer
-    // normally instead.
+    // without a session ID. The public stateless adapter must answer that
+    // sequence normally.
     let (status, pre_initialize_tools) = post_mcp(
         &client,
         &mcp_url,

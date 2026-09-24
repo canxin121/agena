@@ -1,4 +1,4 @@
-//! SQLite implementation of the v2 persistence engine.
+//! SQLite implementation of the persistence engine.
 //!
 //! `SqliteEngine` is the production backend behind the sealed `SessionStore`
 //! facade (design sections 14-15). It is the ONLY component that imports
@@ -70,7 +70,7 @@ const BACKGROUND_DELIVERY_COLS: &str = "\
     notification_part_id, CAST(last_error_json AS TEXT) AS last_error_json, \
     created_at_ms, updated_at_ms, consumed_at_ms, next_attempt_at_ms";
 
-/// The production [`PersistenceEngine`]: raw SQL over the v2 schema.
+/// The production [`PersistenceEngine`]: raw SQL over the current schema.
 #[derive(Clone)]
 pub struct SqliteEngine {
     db: Arc<DatabaseConnection>,

@@ -244,7 +244,7 @@ mod tests {
     }
 
     #[test]
-    fn configured_plugin_serializes_settings_and_rejects_legacy_config_key() {
+    fn configured_plugin_serializes_settings_and_rejects_unknown_keys() {
         let configured = ConfiguredPlugin::static_settings(serde_json::json!({"mode": "safe"}));
         let encoded = serde_json::to_value(&configured).expect("encode configured plugin settings");
         assert_eq!(encoded["settings"]["mode"], "safe");
@@ -252,10 +252,10 @@ mod tests {
 
         let error = serde_json::from_value::<ConfiguredPlugin>(serde_json::json!({
             "package": { "kind": "static" },
-            "config": { "mode": "legacy" }
+            "obsolete": { "mode": "safe" }
         }))
-        .expect_err("legacy plugin config key must be rejected");
-        assert!(error.to_string().contains("unknown field `config`"));
+        .expect_err("unknown plugin config key must be rejected");
+        assert!(error.to_string().contains("unknown field `obsolete`"));
     }
 
     #[test]

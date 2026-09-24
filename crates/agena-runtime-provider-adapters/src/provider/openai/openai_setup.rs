@@ -2,9 +2,8 @@ use super::{
     AuthData, CHATGPT_CODEX_ORIGINATOR, CapabilityFamily, DEFAULT_COPILOT_BASE_URL,
     DashscopeReasoningProfile, HashMap, ManagedCredential, ModelId, OpenAiChatCompletionResponse,
     OpenAiChatCompletionsAdapter, OpenAiChatCompletionsAdapterOptions, OpenAiProfile,
-    OpenAiResponsesAdapter,
-    OpenAiResponsesAdapterOptions, OpenAiResponsesBackend, OpenAiTransport, OpenAiTransportOptions,
-    ProviderError, append_query_param, normalize_domain, utils,
+    OpenAiResponsesAdapter, OpenAiResponsesAdapterOptions, OpenAiResponsesBackend, OpenAiTransport,
+    OpenAiTransportOptions, ProviderError, append_query_param, normalize_domain, utils,
 };
 use crate::provider::chat_wire::ChatCompletionResponse;
 use agena_domain::ModelThinkingMode;

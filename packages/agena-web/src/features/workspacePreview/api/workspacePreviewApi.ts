@@ -56,9 +56,7 @@ export function normalizeWorkspacePreviewSession(value: unknown): WorkspacePrevi
   const agenaSessionId =
     typeof record.agenaSessionId === 'string' && record.agenaSessionId.trim()
       ? record.agenaSessionId.trim()
-      : typeof record.opencodeSessionId === 'string' && record.opencodeSessionId.trim()
-        ? record.opencodeSessionId.trim()
-        : undefined
+      : undefined
 
   return {
     id,

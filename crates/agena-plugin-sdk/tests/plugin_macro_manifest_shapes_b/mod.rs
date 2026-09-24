@@ -7,7 +7,7 @@ fn tool_input_format_constraints_apply_to_parse_schema_and_usage() {
     assert_eq!(path_value.endpoint, "https://example.com/api");
 
     let renamed_value = RenamedFormatInput::parse_input(json!({
-        "legacyEndpoint": "https://example.com/v1"
+        "alternateEndpoint": "https://example.com/v1"
     }))
     .expect("renamed format should accept alias input");
     assert_eq!(renamed_value.endpoint_value, "https://example.com/v1");
@@ -43,7 +43,7 @@ fn tool_input_format_constraints_apply_to_parse_schema_and_usage() {
     );
     assert_eq!(
         renamed_schema.pointer("/properties/endpoint/x-agena-aliases"),
-        Some(&json!(["endpoint_value", "legacyEndpoint"]))
+        Some(&json!(["endpoint_value", "alternateEndpoint"]))
     );
     assert_eq!(
         RenamedFormatInput::input_usage().as_deref(),
@@ -60,7 +60,7 @@ fn tool_input_pattern_constraints_apply_to_parse_schema_and_usage() {
     let path_pattern = PathPatternInput::parse_input(json!({ "slug": "cargo-check" }))
         .expect("path-level pattern should accept matching values");
     assert_eq!(path_pattern.slug, "cargo-check");
-    let renamed = RenamedPatternInput::parse_input(json!({ "legacySlug": "git-status" }))
+    let renamed = RenamedPatternInput::parse_input(json!({ "alternateSlug": "git-status" }))
         .expect("renamed field pattern should accept alias input");
     assert_eq!(renamed.slug_value, "git-status");
 
@@ -122,7 +122,7 @@ fn tool_input_pattern_constraints_apply_to_parse_schema_and_usage() {
     );
     assert_eq!(
         renamed_schema.pointer("/properties/slug/x-agena-aliases"),
-        Some(&json!(["slug_value", "legacySlug"]))
+        Some(&json!(["slug_value", "alternateSlug"]))
     );
     assert_eq!(
         RenamedPatternInput::input_usage().as_deref(),
@@ -135,7 +135,7 @@ fn tool_input_numeric_constraints_apply_to_parse_schema_and_usage() {
     let path_numeric = PathNumericInput::parse_input(json!({ "count": 3 }))
         .expect("path-level numeric bounds should accept matching values");
     assert_eq!(path_numeric.count, 3);
-    let renamed = RenamedNumericInput::parse_input(json!({ "legacyCount": 4 }))
+    let renamed = RenamedNumericInput::parse_input(json!({ "alternateCount": 4 }))
         .expect("renamed numeric bounds should accept alias input");
     assert_eq!(renamed.count_value, 4);
 
@@ -194,7 +194,7 @@ fn tool_input_numeric_constraints_apply_to_parse_schema_and_usage() {
     );
     assert_eq!(
         renamed_schema.pointer("/properties/count/x-agena-aliases"),
-        Some(&json!(["count_value", "legacyCount"]))
+        Some(&json!(["count_value", "alternateCount"]))
     );
     assert_eq!(RenamedNumericInput::input_usage().as_deref(), Some("2"));
 }
@@ -204,7 +204,7 @@ fn tool_input_exclusive_numeric_constraints_apply_to_parse_schema_and_usage() {
     let path_numeric = PathExclusiveNumericInput::parse_input(json!({ "count": 3 }))
         .expect("path-level strict bounds should accept matching values");
     assert_eq!(path_numeric.count, 3);
-    let renamed = RenamedExclusiveNumericInput::parse_input(json!({ "legacyCount": 4 }))
+    let renamed = RenamedExclusiveNumericInput::parse_input(json!({ "alternateCount": 4 }))
         .expect("renamed strict bounds should accept alias input");
     assert_eq!(renamed.count_value, 4);
 
@@ -258,7 +258,7 @@ fn tool_input_exclusive_numeric_constraints_apply_to_parse_schema_and_usage() {
     );
     assert_eq!(
         renamed_schema.pointer("/properties/count/x-agena-aliases"),
-        Some(&json!(["count_value", "legacyCount"]))
+        Some(&json!(["count_value", "alternateCount"]))
     );
     assert_eq!(
         RenamedExclusiveNumericInput::input_usage().as_deref(),
@@ -275,7 +275,7 @@ fn tool_input_object_property_constraints_apply_to_parse_and_schema() {
     assert_eq!(path_value.labels.len(), 2);
 
     let renamed_value = RenamedObjectInput::parse_input(json!({
-        "legacyMetadata": { "alpha": "1" }
+        "alternateMetadata": { "alpha": "1" }
     }))
     .expect("renamed object bounds should accept aliases");
     assert_eq!(renamed_value.metadata_value.len(), 1);
@@ -339,7 +339,7 @@ fn tool_input_object_property_constraints_apply_to_parse_and_schema() {
     );
     assert_eq!(
         renamed_schema.pointer("/properties/metadata/x-agena-aliases"),
-        Some(&json!(["metadata_value", "legacyMetadata"]))
+        Some(&json!(["metadata_value", "alternateMetadata"]))
     );
 }
 
@@ -352,7 +352,7 @@ fn tool_input_item_constraints_apply_to_parse_and_schema() {
     assert_eq!(path_value.tags, vec!["cargo-check", "git-status"]);
 
     let renamed_value = RenamedItemPatternInput::parse_input(json!({
-        "legacyTags": ["cargo-check"]
+        "alternateTags": ["cargo-check"]
     }))
     .expect("renamed item constraints should accept aliases");
     assert_eq!(renamed_value.tag_values, vec!["cargo-check"]);
@@ -426,7 +426,7 @@ fn tool_input_item_constraints_apply_to_parse_and_schema() {
     );
     assert_eq!(
         renamed_schema.pointer("/properties/tags/x-agena-aliases"),
-        Some(&json!(["tag_values", "legacyTags"]))
+        Some(&json!(["tag_values", "alternateTags"]))
     );
 }
 
@@ -439,7 +439,7 @@ fn tool_input_item_choice_constraints_apply_to_parse_and_schema() {
     assert_eq!(path_value.tools, vec!["cargo", "git"]);
 
     let renamed_value = RenamedItemChoiceInput::parse_input(json!({
-        "legacyTools": ["cargo"]
+        "alternateTools": ["cargo"]
     }))
     .expect("renamed item choices should accept aliases");
     assert_eq!(renamed_value.tool_values, vec!["cargo"]);
@@ -490,7 +490,7 @@ fn tool_input_item_choice_constraints_apply_to_parse_and_schema() {
     );
     assert_eq!(
         renamed_schema.pointer("/properties/tools/x-agena-aliases"),
-        Some(&json!(["tool_values", "legacyTools"]))
+        Some(&json!(["tool_values", "alternateTools"]))
     );
 }
 
@@ -503,7 +503,7 @@ fn tool_input_item_format_constraints_apply_to_parse_and_schema() {
     assert_eq!(path_value.ids, vec!["550e8400-e29b-41d4-a716-446655440000"]);
 
     let renamed_value = RenamedItemFormatInput::parse_input(json!({
-        "legacyIds": ["550e8400-e29b-41d4-a716-446655440000"]
+        "alternateIds": ["550e8400-e29b-41d4-a716-446655440000"]
     }))
     .expect("renamed item format should accept alias input");
     assert_eq!(
@@ -542,7 +542,7 @@ fn tool_input_item_format_constraints_apply_to_parse_and_schema() {
     );
     assert_eq!(
         renamed_schema.pointer("/properties/ids/x-agena-aliases"),
-        Some(&json!(["id_values", "legacyIds"]))
+        Some(&json!(["id_values", "alternateIds"]))
     );
     assert_eq!(
         PathItemFormatInput::input_usage().as_deref(),
@@ -563,7 +563,7 @@ fn tool_input_item_numeric_constraints_apply_to_parse_and_schema() {
     assert_eq!(path_value.counts, vec![2, 4]);
 
     let renamed_value = RenamedItemNumericInput::parse_input(json!({
-        "legacyCounts": [3]
+        "alternateCounts": [3]
     }))
     .expect("renamed item numeric bounds should accept aliases");
     assert_eq!(renamed_value.count_values, vec![3]);
@@ -633,7 +633,7 @@ fn tool_input_item_numeric_constraints_apply_to_parse_and_schema() {
     );
     assert_eq!(
         renamed_schema.pointer("/properties/counts/x-agena-aliases"),
-        Some(&json!(["count_values", "legacyCounts"]))
+        Some(&json!(["count_values", "alternateCounts"]))
     );
 }
 
@@ -646,7 +646,7 @@ fn tool_input_item_exclusive_numeric_constraints_apply_to_parse_and_schema() {
     assert_eq!(path_value.counts, vec![3, 4]);
 
     let renamed_value = RenamedItemExclusiveNumericInput::parse_input(json!({
-        "legacyCounts": [3]
+        "alternateCounts": [3]
     }))
     .expect("renamed item strict bounds should accept aliases");
     assert_eq!(renamed_value.count_values, vec![3]);
@@ -709,7 +709,7 @@ fn tool_input_item_exclusive_numeric_constraints_apply_to_parse_and_schema() {
     );
     assert_eq!(
         renamed_schema.pointer("/properties/counts/x-agena-aliases"),
-        Some(&json!(["count_values", "legacyCounts"]))
+        Some(&json!(["count_values", "alternateCounts"]))
     );
     assert_eq!(
         RenamedItemExclusiveNumericInput::input_usage().as_deref(),
@@ -726,7 +726,7 @@ fn tool_input_item_object_constraints_apply_to_parse_and_schema() {
     assert_eq!(path_value.entries.len(), 2);
 
     let renamed_value = RenamedItemObjectInput::parse_input(json!({
-        "legacyEntries": [{ "alpha": "1" }]
+        "alternateEntries": [{ "alpha": "1" }]
     }))
     .expect("renamed item object bounds should accept aliases");
     assert_eq!(renamed_value.entry_values.len(), 1);
@@ -796,7 +796,7 @@ fn tool_input_item_object_constraints_apply_to_parse_and_schema() {
     );
     assert_eq!(
         renamed_schema.pointer("/properties/entries/x-agena-aliases"),
-        Some(&json!(["entry_values", "legacyEntries"]))
+        Some(&json!(["entry_values", "alternateEntries"]))
     );
 }
 
@@ -809,7 +809,7 @@ fn tool_input_item_normalization_and_non_empty_sugar_apply_to_parse_and_schema()
     assert_eq!(path_value.tags, vec!["cargo", "git"]);
 
     let renamed_value = RenamedItemNormalizeInput::parse_input(json!({
-        "legacyTags": [" cargo.rs ", " git.rs "]
+        "alternateTags": [" cargo.rs ", " git.rs "]
     }))
     .expect("renamed item normalization sugar should accept aliases and normalize items");
     assert_eq!(renamed_value.tag_values, vec!["cargo", "git"]);
@@ -849,7 +849,7 @@ fn tool_input_item_normalization_and_non_empty_sugar_apply_to_parse_and_schema()
     );
     assert_eq!(
         renamed_schema.pointer("/properties/tags/x-agena-aliases"),
-        Some(&json!(["tag_values", "legacyTags"]))
+        Some(&json!(["tag_values", "alternateTags"]))
     );
 }
 
@@ -904,7 +904,7 @@ fn tool_input_item_non_empty_if_present_sugar_applies_to_optional_arrays() {
     );
     assert_eq!(
         renamed_schema.pointer("/properties/tags/x-agena-aliases"),
-        Some(&json!(["tag_values", "legacyTags"]))
+        Some(&json!(["tag_values", "alternateTags"]))
     );
 }
 
@@ -917,7 +917,7 @@ fn tool_input_type_level_array_value_relations_apply_to_item_paths() {
     assert_eq!(path_value.tags, vec!["cargo", "git"]);
 
     let renamed_value = RenamedItemValueRelationInput::parse_input(json!({
-        "legacyTags": ["cargo"]
+        "alternateTags": ["cargo"]
     }))
     .expect("renamed type-level array value relations should accept aliases");
     assert_eq!(renamed_value.tag_values, vec!["cargo"]);
@@ -976,7 +976,7 @@ fn tool_input_type_level_array_value_relations_apply_to_item_paths() {
     assert!(renamed_relations.contains(&"distinct_trimmed `tags[]`".to_string()));
     assert_eq!(
         renamed_schema.pointer("/properties/tags/x-agena-aliases"),
-        Some(&json!(["tag_values", "legacyTags"]))
+        Some(&json!(["tag_values", "alternateTags"]))
     );
 }
 
@@ -989,7 +989,7 @@ fn tool_input_direct_array_string_constraints_auto_target_items() {
     assert_eq!(path_value.tags, vec!["cargo"]);
 
     let renamed_value = RenamedAutoItemStringInput::parse_input(json!({
-        "legacyTags": [" cargo.rs "]
+        "alternateTags": [" cargo.rs "]
     }))
     .expect("field-level direct array string constraints should normalize aliased items");
     assert_eq!(renamed_value.tag_values, vec!["cargo"]);
@@ -1037,7 +1037,7 @@ fn tool_input_direct_array_string_constraints_auto_target_items() {
     );
     assert_eq!(
         renamed_schema.pointer("/properties/tags/x-agena-aliases"),
-        Some(&json!(["tag_values", "legacyTags"]))
+        Some(&json!(["tag_values", "alternateTags"]))
     );
 }
 
@@ -1050,7 +1050,7 @@ fn tool_input_direct_array_numeric_constraints_auto_target_items() {
     assert_eq!(path_value.counts, vec![2, 4]);
 
     let renamed_value = RenamedAutoItemNumericInput::parse_input(json!({
-        "legacyCounts": [3]
+        "alternateCounts": [3]
     }))
     .expect("field-level direct array numeric constraints should accept aliases");
     assert_eq!(renamed_value.count_values, vec![3]);
@@ -1098,7 +1098,7 @@ fn tool_input_direct_array_numeric_constraints_auto_target_items() {
     );
     assert_eq!(
         renamed_schema.pointer("/properties/counts/x-agena-aliases"),
-        Some(&json!(["count_values", "legacyCounts"]))
+        Some(&json!(["count_values", "alternateCounts"]))
     );
 }
 use super::{

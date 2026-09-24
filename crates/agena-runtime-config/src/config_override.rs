@@ -71,8 +71,6 @@ pub fn parse_config_override_expressions(
 #[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
 /// Error applying a runtime configuration override.
 pub enum RuntimeConfigOverrideError {
-    #[error("config modes are no longer supported; remove `{field}` and use a single config file")]
-    UnsupportedModeConfig { field: &'static str },
     #[error("invalid override `{0}")]
     InvalidOverride(String),
     #[error("config validation failed: {0}")]
@@ -91,7 +89,6 @@ impl FromStr for ConfigOverride {
         let key = key.trim();
         let raw_value = raw_value.trim();
         match key {
-            "mode" => Err(RuntimeConfigOverrideError::UnsupportedModeConfig { field: "mode" }),
             "tracing.filter" => Ok(Self::TracingFilter(raw_value.to_owned())),
             "tracing.database" => Ok(Self::TracingDatabase(raw_value.to_owned())),
             "tracing.adapter" => Ok(Self::TracingAdapter(raw_value.to_owned())),
@@ -107,9 +104,6 @@ impl FromStr for ConfigOverride {
                     .map_err(RuntimeConfigOverrideError::Validation)?,
             )),
             "ui.tui.theme" => Ok(Self::UiTuiTheme(raw_value.to_owned())),
-            "providers.default" => Err(RuntimeConfigOverrideError::InvalidOverride(
-                "providers.default is no longer supported; select a model explicitly".to_owned(),
-            )),
             _ if key.starts_with("providers.") => parse_provider_override(key, raw_value),
             _ => Err(RuntimeConfigOverrideError::InvalidOverride(key.to_owned())),
         }
@@ -133,9 +127,6 @@ fn parse_provider_override(
             provider_id,
             value: parse_bool(key, raw_value)?,
         }),
-        _ if field.starts_with("defaults.") => Err(RuntimeConfigOverrideError::InvalidOverride(
-            format!("{key} is no longer supported; select a model explicitly"),
-        )),
         "network.request_timeout_secs" => Ok(ConfigOverride::ProviderRequestTimeoutSecs {
             provider_id,
             value: parse_numeric(raw_value, key)?,
@@ -144,9 +135,6 @@ fn parse_provider_override(
             provider_id,
             value: parse_numeric(raw_value, key)?,
         }),
-        "base_url" | "api_key" => Err(RuntimeConfigOverrideError::InvalidOverride(format!(
-            "{key} is no longer supported; use providers.{provider_id}.auth.{field}"
-        ))),
         _ => {
             let auth_field = field
                 .strip_prefix("auth.")
@@ -230,15 +218,17 @@ mod tests {
     }
 
     #[test]
-    fn rejects_legacy_and_invalid_override_forms() {
-        assert!(matches!(
-            "mode=dev".parse::<ConfigOverride>(),
-            Err(RuntimeConfigOverrideError::UnsupportedModeConfig { .. })
-        ));
-        assert!(matches!(
-            "providers.demo.defaults.parallel_tool_calls=true".parse::<ConfigOverride>(),
-            Err(RuntimeConfigOverrideError::InvalidOverride(_))
-        ));
+    fn rejects_unknown_override_keys() {
+        for input in [
+            "mode=dev",
+            "providers.demo.defaults.parallel_tool_calls=true",
+            "providers.demo.base_url=https://example.invalid",
+        ] {
+            assert!(matches!(
+                input.parse::<ConfigOverride>(),
+                Err(RuntimeConfigOverrideError::InvalidOverride(_))
+            ));
+        }
     }
 
     #[test]

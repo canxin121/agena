@@ -1291,9 +1291,9 @@ fn apply_meta_runtime(
 /// derived workflow state. `effective_permission` is deliberately excluded —
 /// it is re-derived from the permission policy at run start (refresh_execution_policy).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub(crate) struct PersistedExecutionConfig {
-    #[serde(flatten)]
+    #[serde(default, skip_serializing_if = "ExecutionSelection::is_empty")]
     pub selection: ExecutionSelection,
     #[serde(default, skip_serializing_if = "ExecutionAccess::is_inherit")]
     pub access: ExecutionAccess,

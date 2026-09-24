@@ -156,9 +156,9 @@ describe('TUI-parity part presentation', () => {
             {
               request: {
                 request_id: 'permission-3',
-                action: { kind: 'tool', tool_name: 'legacy.tool' },
+                action: { kind: 'tool', tool_name: 'custom.tool' },
               },
-              reply: { kind: 'legacy_decision' },
+              reply: { kind: 'custom_decision' },
             },
           ],
         },
@@ -167,7 +167,7 @@ describe('TUI-parity part presentation', () => {
     expect(projected.permissions).toMatchObject([
       { pending: false, status: 'Denied once', replyReason: 'The file contains private notes.' },
       { pending: false, status: 'Approved automatically', replyReason: '' },
-      { pending: false, status: 'Replied (legacy_decision)', replyReason: '' },
+      { pending: false, status: 'Replied (custom_decision)', replyReason: '' },
     ])
 
     const pending = operationPresentation(
@@ -404,7 +404,7 @@ describe('TUI-parity part presentation', () => {
           ],
         },
       ],
-      { showReasoning: true, revert: null },
+      { showReasoning: true },
     )
     expect(block?.kind).toBe('message')
     if (block?.kind === 'message') expect(block.displayParts[0]?.defaultExpanded).toBe(true)
@@ -570,7 +570,7 @@ describe('TUI-parity part presentation', () => {
 
 test('provider-bound media snapshots remain previewable without exposing route in the URL',()=>{
   const projected=operationPresentation(operationPart({name:'media.result',output:{attachments:[{
-    kind:'image',mime:'image/png',filename:'input.png',source:{source:'provider_data',route:'media-route-v1:opaque',data:'Zml4ZWQ='},
+    kind:'image',mime:'image/png',filename:'input.png',source:{source:'provider_data',route:'media-route:opaque',data:'Zml4ZWQ='},
   }]}}))
   expect(projected.attachments[0]?.url).toBe('data:image/png;base64,Zml4ZWQ=')
   expect(projected.attachments[0]?.url).not.toContain('media-route')

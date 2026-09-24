@@ -570,10 +570,10 @@ mod tests {
             anthropic_thinking_parts("claude-fable-5", Some(&ThinkingRequest::Disabled), 4_096);
         assert!(always_on.thinking.is_none());
 
-        let legacy =
+        let opus_45 =
             anthropic_thinking_parts("claude-opus-4-5", Some(&ThinkingRequest::Disabled), 4_096);
-        assert_eq!(legacy.thinking.as_ref().unwrap()["type"], "disabled");
-        assert!(!legacy.include_thinking());
+        assert_eq!(opus_45.thinking.as_ref().unwrap()["type"], "disabled");
+        assert!(!opus_45.include_thinking());
     }
 
     #[test]

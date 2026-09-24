@@ -405,11 +405,11 @@ mod tests {
                 .expect("deserialize provider declaration"),
             definition
         );
-        let mut removed_direct_shape = encoded;
-        removed_direct_shape["execution_tool"] = serde_json::json!("fs.read");
-        let error = serde_json::from_value::<ToolApiDefinition>(removed_direct_shape)
-            .expect_err("removed direct execution-tool binding must not deserialize");
-        assert!(error.to_string().contains("execution_tool"));
+        let mut invalid_shape = encoded;
+        invalid_shape["obsolete"] = serde_json::json!(true);
+        let error = serde_json::from_value::<ToolApiDefinition>(invalid_shape)
+            .expect_err("unknown provider tool fields must not deserialize");
+        assert!(error.to_string().contains("obsolete"));
     }
 
     #[test]

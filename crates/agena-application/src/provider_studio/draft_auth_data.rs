@@ -1,5 +1,5 @@
 //! Data types for provider draft authentication and provider-studio save
-//! results, migrated from `agena-tui-backend/src/backend_drafts/provider_draft_auth.rs`.
+//! results. Previously located in `agena-tui-backend/src/backend_drafts/provider_draft_auth.rs`.
 //!
 //! The interactive auth flow entry points (`start_provider_draft_auth` /
 //! `continue_provider_draft_auth`) live on [`crate::Application`], while the

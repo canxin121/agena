@@ -106,7 +106,7 @@ mod tests {
     }
 
     #[derive(Debug, thiserror::Error)]
-    #[error("providers.default is no longer supported")]
+    #[error("unknown field `obsolete`")]
     struct InnerError;
 
     #[test]
@@ -124,11 +124,7 @@ mod tests {
                 .message
                 .contains("failed to load runtime configuration")
         );
-        assert!(
-            error
-                .message
-                .contains("providers.default is no longer supported")
-        );
+        assert!(error.message.contains("unknown field `obsolete`"));
         assert!(error.to_string().contains("bootstrap configuration error"));
     }
 }

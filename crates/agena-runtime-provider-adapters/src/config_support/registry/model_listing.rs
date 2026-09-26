@@ -1,18 +1,19 @@
 use agena_domain::{AdapterId, ProviderId};
 
 use super::{
-    AdapterBuildContext, BTreeMap, ConfigEnvironment, ConfigError, GitlabRoutedBackend,
-    HttpAdapterKind, LIST_MODELS_DEFAULT_MODEL_ID, ProviderAdapterDefinition,
-    ProviderAdapterModelsResult, ProviderAuthConfig, ResolvedProviderAdapterConfig,
-    ResolvedProviderConfig, build_adapter_provider, gitlab_credential_proxy_base_url,
-    gitlab_proxy_base_url, parse_adapter_model_ref, provider_endpoint_root,
-    resolve_http_adapter_base_url,
+    AdapterBuildContext, BTreeMap, CatalogedModelsProvider, ConfigEnvironment, ConfigError,
+    GitlabRoutedBackend, HttpAdapterKind, LIST_MODELS_DEFAULT_MODEL_ID, ModelCatalogSnapshot,
+    ProviderAdapterDefinition, ProviderAdapterModelsResult, ProviderAuthConfig,
+    ResolvedProviderAdapterConfig, ResolvedProviderConfig, build_adapter_provider,
+    gitlab_credential_proxy_base_url, gitlab_proxy_base_url, parse_adapter_model_ref,
+    provider_endpoint_root, resolve_http_adapter_base_url,
 };
 
 pub async fn list_provider_adapter_models(
     provider_id: &str,
     auth: &ProviderAuthConfig,
     adapters: &BTreeMap<String, ResolvedProviderAdapterConfig>,
+    catalog: Option<&ModelCatalogSnapshot>,
     client: reqwest::Client,
     env: &dyn ConfigEnvironment,
     client_identity: &crate::ProviderClientIdentity,
@@ -59,6 +60,14 @@ pub async fn list_provider_adapter_models(
                 });
                 continue;
             }
+        };
+        // Model discovery uses a fresh adapter instead of the configured runtime
+        // provider. Apply the same catalog baseline so draft and saved listings
+        // expose the limits and capabilities used by actual sessions.
+        let provider = if let Some(catalog) = catalog {
+            CatalogedModelsProvider::new(provider, catalog.merged_models().into_provider_catalog())
+        } else {
+            provider
         };
 
         match provider.list_models().await {
@@ -348,7 +357,79 @@ pub(crate) fn resolved_adapter_models_base_url(
 #[cfg(test)]
 mod tests {
     use super::{adapter_models_config_failure, adapter_models_failure};
-    use agena_provider::ProviderErrorKind;
+    use agena_provider::{CatalogModelDefinition, ModelCatalogSnapshot, ProviderErrorKind};
+
+    #[tokio::test]
+    async fn adapter_listing_hydrates_prefixed_model_from_catalog() {
+        use tokio::io::AsyncWriteExt as _;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind model fixture");
+        let address = listener.local_addr().expect("model fixture address");
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.expect("accept model request");
+            let body = r#"{"object":"list","data":[{"id":"cline-pass/deepseek-v4.1-flash","object":"model"}]}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream
+                .write_all(response.as_bytes())
+                .await
+                .expect("write model response");
+        });
+
+        let target = agena_runtime_provider::config_support::draft_provider_adapter_models_target(
+            Some("cline"),
+            format!("http://{address}").as_str(),
+            agena_provider::ProviderProtocolPathsConfig::default(),
+            Some("fixture-key"),
+            None,
+            &["openai_chat_completions".to_owned()],
+        )
+        .expect("draft model target");
+        let mut catalog = ModelCatalogSnapshot::default();
+        catalog.official.models.insert(
+            "deepseek-v4.1-flash".to_owned(),
+            CatalogModelDefinition {
+                context_window_tokens: Some(1_000_000),
+                max_input_tokens: Some(1_000_000),
+                max_output_tokens: Some(384_000),
+                description: Some("Catalog description".to_owned()),
+                ..Default::default()
+            },
+        );
+
+        let results = super::list_provider_adapter_models(
+            &target.provider_id,
+            &target.auth,
+            &target.adapters,
+            Some(&catalog),
+            reqwest::Client::new(),
+            &agena_runtime_config::ProcessEnvironment,
+            &crate::ProviderClientIdentity::new(Default::default()),
+        )
+        .await;
+        server.abort();
+
+        assert_eq!(results.len(), 1);
+        assert!(results[0].failure.is_none());
+        assert_eq!(results[0].models.len(), 1);
+        let model = &results[0].models[0];
+        assert_eq!(model.id.as_ref(), "cline-pass/deepseek-v4.1-flash");
+        assert_eq!(
+            model.catalog_model_id.as_ref().map(AsRef::<str>::as_ref),
+            Some("deepseek-v4.1-flash")
+        );
+        assert_eq!(model.metadata.limits.context_window_tokens, Some(1_000_000));
+        assert_eq!(model.metadata.limits.max_input_tokens, Some(1_000_000));
+        assert_eq!(model.metadata.limits.max_output_tokens, Some(384_000));
+        assert_eq!(
+            model.metadata.description.as_deref(),
+            Some("Catalog description")
+        );
+    }
 
     #[test]
     fn adapter_model_listing_never_serializes_provider_diagnostics() {

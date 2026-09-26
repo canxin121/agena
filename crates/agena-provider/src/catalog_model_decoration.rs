@@ -127,8 +127,13 @@ fn decorate_provider_model(
 }
 
 fn apply_catalog_display_name_as_fallback(model: &mut Model, definition: &CatalogModelDefinition) {
-    if model.display_name.is_none() {
-        model.display_name = definition.display_name.clone();
+    if let Some(display_name) = &definition.display_name
+        && model
+            .display_name
+            .as_deref()
+            .is_none_or(|current| current == model.id.as_ref())
+    {
+        model.display_name = Some(display_name.clone());
     }
 }
 fn provider_model_thinking_modes(
@@ -172,4 +177,34 @@ fn catalog_definition_for_model_id<'a>(
             .as_ref()
             .and_then(|id| provider_record.models.get(id))
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::apply_catalog_display_name_as_fallback;
+    use crate::CatalogModelDefinition;
+    use agena_domain::Model;
+
+    #[test]
+    fn catalog_name_replaces_raw_id_placeholder_but_keeps_provider_name() {
+        let definition = CatalogModelDefinition {
+            display_name: Some("DeepSeek V4.1 Flash".to_owned()),
+            ..Default::default()
+        };
+        let mut placeholder = Model::new("cline", "cline-pass/deepseek-v4.1-flash");
+        placeholder.display_name = Some(placeholder.id.to_string());
+        apply_catalog_display_name_as_fallback(&mut placeholder, &definition);
+        assert_eq!(
+            placeholder.display_name.as_deref(),
+            Some("DeepSeek V4.1 Flash")
+        );
+
+        let mut provider_named = Model::new("cline", "cline-pass/deepseek-v4.1-flash");
+        provider_named.display_name = Some("Provider label".to_owned());
+        apply_catalog_display_name_as_fallback(&mut provider_named, &definition);
+        assert_eq!(
+            provider_named.display_name.as_deref(),
+            Some("Provider label")
+        );
+    }
 }

@@ -296,5 +296,9 @@ mod tests {
             "gpt.5"
         );
         assert_eq!(catalog_model_id_for_raw("   "), None);
+        assert_eq!(
+            catalog_model_id_for_raw("cline-pass/deepseek-v4.1-flash").as_deref(),
+            Some("deepseek-v4.1-flash")
+        );
     }
 }

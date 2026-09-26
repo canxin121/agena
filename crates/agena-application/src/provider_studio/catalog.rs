@@ -29,19 +29,13 @@ pub(crate) fn preferred_catalog_model_for_lookup_ids<'a>(
     models: &'a [crate::dto::CatalogModelResource],
     model_ids: &[String],
 ) -> Option<&'a crate::dto::CatalogModelResource> {
-    let lookup_ids = model_ids
-        .iter()
-        .map(|model_id| model_id.trim())
-        .filter(|model_id| !model_id.is_empty())
-        .collect::<Vec<_>>();
-    models
-        .iter()
-        .filter(|model| {
-            lookup_ids
-                .iter()
-                .any(|model_id| model.model_id == *model_id)
-        })
-        .min_by_key(|model| model.model_id.as_str())
+    // The candidates are ordered from exact provider ID to broader aliases.
+    // Keeping that order matters when both a dated snapshot and a moving
+    // family alias exist in the catalog.
+    model_ids.iter().find_map(|model_id| {
+        let model_id = model_id.trim();
+        models.iter().find(|model| model.model_id == model_id)
+    })
 }
 
 pub(crate) fn preferred_catalog_model_for_provider_model<'a>(

@@ -75,8 +75,13 @@ impl CatalogedModelsProvider {
     fn apply_to_model(&self, model_id: &ModelId, mut model: Model) -> Model {
         self.apply_catalog_model_id(model_id, &mut model);
         if let Some(definition) = self.provider_definition(model_id) {
-            if model.display_name.is_none() {
-                model.display_name = definition.display_name.clone();
+            if let Some(display_name) = &definition.display_name
+                && model
+                    .display_name
+                    .as_deref()
+                    .is_none_or(|current| current == model.id.as_ref())
+            {
+                model.display_name = Some(display_name.clone());
             }
             let capability_fallback = self
                 .target
@@ -366,6 +371,88 @@ impl ModelRuntime for CatalogedModelsProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct ListedModelRuntime {
+        model: ModelId,
+    }
+
+    #[async_trait]
+    impl ModelRuntime for ListedModelRuntime {
+        fn id(&self) -> &str {
+            "cline"
+        }
+
+        fn default_model(&self) -> &ModelId {
+            &self.model
+        }
+
+        async fn list_models(&self) -> Result<Vec<Model>, ProviderError> {
+            let mut model = Model::new("cline", self.model.as_ref());
+            model.display_name = Some(self.model.to_string());
+            Ok(vec![model])
+        }
+
+        async fn complete(
+            &self,
+            _request: CompletionRequest,
+        ) -> Result<CompletionResponse, ProviderError> {
+            unreachable!("model catalog test does not perform a completion")
+        }
+    }
+
+    #[tokio::test]
+    async fn catalog_matches_prefixed_model_for_listing_and_explicit_adapter() {
+        let raw_id = "cline-pass/deepseek-v4.1-flash";
+        let model = ModelId::new(raw_id);
+        let adapter = AdapterId::new("openai_chat_completions");
+        let target: Arc<dyn ModelRuntime> = Arc::new(ListedModelRuntime {
+            model: model.clone(),
+        });
+        let provider = CatalogedModelsProvider::new(
+            target,
+            ProviderModelCatalog {
+                models: [(
+                    "deepseek-v4.1-flash".to_owned(),
+                    ConfiguredModelDefinition {
+                        context_window_tokens: Some(1_000_000),
+                        max_input_tokens: Some(1_000_000),
+                        max_output_tokens: Some(384_000),
+                        display_name: Some("DeepSeek V4.1 Flash".to_owned()),
+                        ..Default::default()
+                    },
+                )]
+                .into_iter()
+                .collect(),
+                appendable_model_ids: Default::default(),
+            },
+        );
+
+        let listed = provider.list_models().await.expect("list models");
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, model);
+        assert_eq!(
+            listed[0]
+                .catalog_model_id
+                .as_ref()
+                .map(AsRef::<str>::as_ref),
+            Some("deepseek-v4.1-flash")
+        );
+        assert_eq!(
+            listed[0].display_name.as_deref(),
+            Some("DeepSeek V4.1 Flash")
+        );
+        assert_eq!(
+            listed[0].metadata.limits.context_window_tokens,
+            Some(1_000_000)
+        );
+        assert_eq!(listed[0].metadata.limits.max_input_tokens, Some(1_000_000));
+        assert_eq!(listed[0].metadata.limits.max_output_tokens, Some(384_000));
+
+        let metadata = provider.model_metadata_for_adapter(Some(&adapter), &model);
+        assert_eq!(metadata.limits.context_window_tokens, Some(1_000_000));
+        assert_eq!(metadata.limits.max_input_tokens, Some(1_000_000));
+        assert_eq!(metadata.limits.max_output_tokens, Some(384_000));
+    }
 
     struct ToolModeRuntime {
         default_model: ModelId,

@@ -116,6 +116,49 @@ mod tests {
     }
 
     #[test]
+    fn public_catalog_fields_survive_live_provider_refresh() {
+        let public = ModelCatalogPublicSourceResult {
+            models: BTreeMap::from([(
+                "deepseek-v4.1-flash".to_owned(),
+                CatalogModelDefinition {
+                    display_name: Some("DeepSeek V4.1 Flash".to_owned()),
+                    description: Some("Catalog description".to_owned()),
+                    context_window_tokens: Some(1_000_000),
+                    max_input_tokens: Some(1_000_000),
+                    max_output_tokens: Some(384_000),
+                    ..Default::default()
+                },
+            )]),
+            warnings: Vec::new(),
+            succeeded: 1,
+        };
+        let live = ModelCatalogDocument {
+            models: BTreeMap::from([(
+                "deepseek-v4.1-flash".to_owned(),
+                CatalogModelDefinition {
+                    display_name: Some("cline-pass/deepseek-v4.1-flash".to_owned()),
+                    description: Some("Provider description".to_owned()),
+                    context_window_tokens: Some(32_000),
+                    ..Default::default()
+                },
+            )]),
+        };
+
+        let (document, warning) = compose_model_catalog_document(public, Ok((Some(live), None)))
+            .expect("compose catalog");
+        assert!(warning.is_none());
+        let model = document
+            .models
+            .get("deepseek-v4.1-flash")
+            .expect("catalog model");
+        assert_eq!(model.display_name.as_deref(), Some("DeepSeek V4.1 Flash"));
+        assert_eq!(model.description.as_deref(), Some("Catalog description"));
+        assert_eq!(model.context_window_tokens, Some(1_000_000));
+        assert_eq!(model.max_input_tokens, Some(1_000_000));
+        assert_eq!(model.max_output_tokens, Some(384_000));
+    }
+
+    #[test]
     fn empty_sources_report_a_generation_failure() {
         let error = compose_model_catalog_document(
             ModelCatalogPublicSourceResult {

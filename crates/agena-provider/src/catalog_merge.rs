@@ -272,8 +272,9 @@ pub fn merge_catalog_definition(
     merge_source_priority(&mut current.source_priority, &next.source_priority);
 }
 
-/// Merges one live provider document into a mutable catalog, keeping the
-/// incoming definition as primary when duplicate model IDs are encountered.
+/// Merges one live provider document into a mutable catalog. Public catalog
+/// definitions remain authoritative; live models fill fields they omit and
+/// contribute models the public catalog does not yet contain.
 pub fn merge_live_provider_catalog_document(
     current: &mut BTreeMap<String, CatalogModelDefinition>,
     next: ModelCatalogDocument,
@@ -281,11 +282,7 @@ pub fn merge_live_provider_catalog_document(
     for (model_id, definition) in next.models {
         current
             .entry(model_id)
-            .and_modify(|existing| {
-                let mut merged = definition.clone();
-                merge_catalog_definition(&mut merged, existing);
-                *existing = merged;
-            })
+            .and_modify(|existing| merge_catalog_definition(existing, &definition))
             .or_insert(definition);
     }
 }
@@ -474,12 +471,13 @@ mod tests {
     }
 
     #[test]
-    fn live_provider_document_merge_prefers_the_later_definition() {
+    fn live_provider_document_merge_preserves_public_fields_and_fills_missing() {
         let mut models = BTreeMap::from([(
             "model".to_owned(),
             CatalogModelDefinition {
                 display_name: Some("first".to_owned()),
                 description: Some("fallback description".to_owned()),
+                context_window_tokens: Some(1_000_000),
                 ..Default::default()
             },
         )]);
@@ -490,13 +488,17 @@ mod tests {
                     "model".to_owned(),
                     CatalogModelDefinition {
                         display_name: Some("later".to_owned()),
+                        context_window_tokens: Some(32_000),
+                        max_output_tokens: Some(8_000),
                         ..Default::default()
                     },
                 )]),
             },
         );
         let merged = models.get("model").expect("merged model");
-        assert_eq!(merged.display_name.as_deref(), Some("later"));
+        assert_eq!(merged.display_name.as_deref(), Some("first"));
         assert_eq!(merged.description.as_deref(), Some("fallback description"));
+        assert_eq!(merged.context_window_tokens, Some(1_000_000));
+        assert_eq!(merged.max_output_tokens, Some(8_000));
     }
 }

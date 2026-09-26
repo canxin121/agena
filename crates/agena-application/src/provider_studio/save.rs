@@ -10,7 +10,8 @@ use super::catalog::{
     apply_provider_auth_required_adapter_defaults_to_json_adapters,
     apply_provider_auth_required_adapter_defaults_to_json_value,
     build_provider_auth_patch_value_for_save, build_provider_patch_value_for_save,
-    canonical_provider_model_id, merge_provider_model_adapter_patch_for_save,
+    canonical_provider_model_id, catalog_lookup_candidates,
+    merge_provider_model_adapter_patch_for_save, preferred_catalog_model_for_lookup_ids,
     preferred_catalog_model_for_provider_model, provider_adapter_settings_path,
     provider_model_catalog_lookup_candidates, provider_model_json_for_model_id,
     provider_model_overlay_to_json, provider_model_selection_contains,
@@ -357,19 +358,16 @@ pub(crate) async fn save_provider_draft(
                 )
             })
             .map(|model| -> Result<_, ProviderStudioSaveError> {
-                let generated = provider_model_json_for_model_id(
-                    &catalog_entries,
-                    model.id.as_ref(),
-                    Some(model),
-                )
-                .map_err(|error| {
-                    ProviderStudioSaveError::other(
-                        agena_failure::diagnostic::format_error_chain_with_context(
-                            "failed to serialize generated provider model settings",
-                            &error,
-                        ),
-                    )
-                })?;
+                let generated =
+                    generated_provider_model_settings(&catalog_entries, model.id.as_ref(), model)
+                        .map_err(|error| {
+                        ProviderStudioSaveError::other(
+                            agena_failure::diagnostic::format_error_chain_with_context(
+                                "failed to serialize generated provider model settings",
+                                &error,
+                            ),
+                        )
+                    })?;
                 let configured = model_config_values
                     .get(&format!("{}\u{1f}{}", adapter_id, model.id))
                     .cloned()
@@ -465,7 +463,7 @@ pub(crate) async fn save_provider_adapter_matches(
         .map(|model| -> Result<_, ProviderStudioSaveError> {
             let model_id = canonical_provider_model_id(adapter_id, model.id.as_ref());
             let generated =
-                provider_model_json_for_model_id(&catalog_entries, model_id.as_str(), Some(model))
+                generated_provider_model_settings(&catalog_entries, model_id.as_str(), model)
                     .map_err(|error| {
                         ProviderStudioSaveError::other(
                             agena_failure::diagnostic::format_error_chain_with_context(
@@ -573,9 +571,32 @@ fn apply_provider_adapter_selection(
     Ok(())
 }
 
+/// Persist only the route for a catalog-backed model. Its metadata is resolved
+/// from the refreshed catalog at runtime; copying catalog fields into config
+/// would pin their current values and prevent future automatic updates.
+fn generated_provider_model_settings(
+    catalog_entries: &[crate::dto::CatalogModelResource],
+    model_id: &str,
+    provider_model: &agena_api::resource::ProviderModelResource,
+) -> Result<JsonValue, serde_json::Error> {
+    let matched = preferred_catalog_model_for_lookup_ids(
+        catalog_entries,
+        &catalog_lookup_candidates(model_id),
+    )
+    .is_some()
+        || preferred_catalog_model_for_provider_model(catalog_entries, provider_model).is_some();
+    if matched {
+        let mut route = JsonMap::new();
+        if !provider_model.native_compaction {
+            route.insert("native_compaction".to_owned(), JsonValue::Bool(false));
+        }
+        return Ok(JsonValue::Object(route));
+    }
+    provider_model_json_for_model_id(catalog_entries, model_id, Some(provider_model))
+}
+
 /// Keep user-authored model overrides when a provider-level save refreshes the
-/// route list. The catalog is still the baseline for newly discovered models,
-/// but re-saving a provider must not silently reset a model edited earlier in
+/// route list. Re-saving a provider must not reset a model edited earlier in
 /// the Model Studio (display name, limits, capabilities, modes, etc.).
 fn preserve_existing_model_config(
     mut generated: JsonValue,
@@ -975,7 +996,9 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::super::catalog::canonical_provider_model_id;
-    use super::{default_speed_mode_name, preserve_existing_model_config};
+    use super::{
+        default_speed_mode_name, generated_provider_model_settings, preserve_existing_model_config,
+    };
 
     #[test]
     fn anthropic_discovery_aliases_use_the_stable_provider_studio_model_id() {
@@ -1006,6 +1029,43 @@ mod tests {
                 "features": ["tool_calling"],
                 "agena_tools": { "mode": "disabled" },
             })
+        );
+    }
+
+    #[test]
+    fn matched_model_save_keeps_catalog_metadata_dynamic() {
+        let catalog: crate::dto::CatalogModelResource = serde_json::from_value(json!({
+            "model_id": "deepseek-v4.1-flash",
+            "source": "generated",
+            "display_name": "DeepSeek V4.1 Flash",
+            "context_window_tokens": 1000000,
+            "max_input_tokens": 1000000,
+            "max_output_tokens": 384000,
+        }))
+        .expect("catalog model resource");
+        let mut model = agena_api::resource::ProviderModelResource::configured(
+            "openai_chat_completions",
+            "cline-pass/deepseek-v4.1-flash",
+        );
+        assert_eq!(
+            generated_provider_model_settings(
+                &[catalog.clone()],
+                "cline-pass/deepseek-v4.1-flash",
+                &model,
+            )
+            .expect("generate route"),
+            json!({}),
+        );
+
+        model.native_compaction = false;
+        assert_eq!(
+            generated_provider_model_settings(
+                &[catalog],
+                "cline-pass/deepseek-v4.1-flash",
+                &model,
+            )
+            .expect("generate route override"),
+            json!({ "native_compaction": false }),
         );
     }
 

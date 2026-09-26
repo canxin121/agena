@@ -2161,10 +2161,12 @@ impl AgenaRuntime {
             },
         )
         .map_err(|error| agena_provider::ProviderCatalogError::operation_error(&error))?;
+        let catalog = snapshot.model_catalog().snapshot();
         let adapters = agena_runtime_provider_adapters::config_support::registry::list_provider_adapter_models(
             target.provider_id.as_str(),
             &target.auth,
             &target.adapters,
+            Some(&catalog),
             client,
             &crate::config::ProcessEnvironment,
             snapshot.client_identity(),

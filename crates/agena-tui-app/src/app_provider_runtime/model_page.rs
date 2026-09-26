@@ -68,6 +68,7 @@ impl App {
             .selected_model_keys
             .insert(provider_studio_model_key(adapter_id.as_str(), model_id));
         self.open_provider_studio_model_page(dialog, adapter_id, model_id.to_owned(), None);
+        self.request_provider_studio_catalog_matches(dialog);
         Ok(())
     }
 
@@ -133,10 +134,48 @@ impl App {
         else {
             return;
         };
-        let Some(field) = provider_model_config_fields().get(selected).copied() else {
+        if selected == 0 {
+            self.open_provider_studio_catalog_picker(dialog);
+            return;
+        }
+        let Some(field) = provider_model_config_fields().get(selected - 1).copied() else {
             return;
         };
         self.activate_provider_studio_model_field_editor(dialog, field);
+    }
+
+    pub(crate) fn apply_provider_studio_catalog_selection(
+        &mut self,
+        dialog: &mut ProviderStudioOverlay,
+        catalog: agena_application::dto::CatalogModelResource,
+    ) -> UiResult<()> {
+        let Some(page) = dialog.model_page.as_ref() else {
+            return Err(crate::UiFailure::message(ui_text::t(
+                &self.i18n,
+                "flash-provider-studio-context-lost",
+            )));
+        };
+        let model_id = page.draft.model_id.clone();
+        let adapter_id = page.adapter_id.clone();
+        let original_model_id = page.original_model_id.clone();
+        let (_, current_value) = provider_model_config_draft_to_model_value(&page.draft)
+            .map_err(crate::UiFailure::message)?;
+        let value = agena_application::provider_studio::apply_catalog_template_to_model_value(
+            current_value,
+            &catalog,
+        )
+        .map_err(crate::UiFailure::internal)?;
+        let updated = provider_model_config_draft_from_value(model_id.as_str(), value)?;
+        if let Some(page) = dialog.model_page.as_mut() {
+            page.draft = updated;
+            page.selected_catalog = Some(catalog.clone());
+            page.catalog_selection_manual = true;
+        }
+        dialog.catalog_selections.insert(
+            provider_studio_model_key(adapter_id.as_str(), original_model_id.as_str()),
+            catalog,
+        );
+        Ok(())
     }
 
     pub(crate) fn commit_provider_studio_model_field(
@@ -216,12 +255,20 @@ impl App {
         key: KeyEvent,
         dialog: &mut ProviderStudioOverlay,
     ) -> bool {
-        let field_count = provider_model_config_fields().len();
+        let field_count = provider_model_config_fields().len() + 1;
         if dialog.model_page.is_none() {
             return false;
         }
         match resolve_tui_key(KeyContext::ProviderModel, key) {
             Some(KeyAction::Back) => {
+                if let Some(page) = dialog.model_page.as_ref()
+                    && page.catalog_selection_manual
+                {
+                    dialog.catalog_selections.remove(&provider_studio_model_key(
+                        page.adapter_id.as_str(),
+                        page.original_model_id.as_str(),
+                    ));
+                }
                 dialog.model_page = None;
                 false
             }
@@ -252,9 +299,9 @@ use crate::{
     App, ChoiceOverlayAction, Editor, KeyEvent, ProviderAdapterModelsResource,
     ProviderModelConfigField, ProviderStudioEditor, ProviderStudioEditorAction,
     ProviderStudioFocus, ProviderStudioOverlay, UiResult, commit_provider_model_config_field,
-    provider_model_config_draft_to_model_value, provider_model_config_field_editable,
-    provider_model_config_field_prompt, provider_model_config_field_value,
-    provider_model_config_fields, provider_studio_model_key,
+    provider_model_config_draft_from_value, provider_model_config_draft_to_model_value,
+    provider_model_config_field_editable, provider_model_config_field_prompt,
+    provider_model_config_field_value, provider_model_config_fields, provider_studio_model_key,
     remove_provider_studio_adapter_from_dialog, remove_provider_studio_model_from_dialog, ui_text,
 };
 use agena_api::resource::ProviderModelResource;

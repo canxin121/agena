@@ -8,9 +8,10 @@ use crate::ApplicationError;
 use crate::dto::{
     AuthBrowserStartResource, AuthCredentialIssuerResource, AuthCredentialType,
     AuthDeviceStartResource, AuthLoginKindResource, AuthLoginResultResource, AuthProviderResource,
-    CatalogModelResource, ConfigJsonSources, ModelCatalogListResponse, ModelCatalogRefreshResponse,
-    ModelCatalogResponse, ModelCatalogSourceKind, RuntimeDiagnosticsResource,
-    RuntimeMetricsResource, RuntimeSnapshotSummaryResource, TuiPreferencesResource,
+    CatalogModelMatchResource, CatalogModelResource, ConfigJsonSources, ModelCatalogListResponse,
+    ModelCatalogRefreshResponse, ModelCatalogResponse, ModelCatalogSourceKind,
+    RuntimeDiagnosticsResource, RuntimeMetricsResource, RuntimeSnapshotSummaryResource,
+    TuiPreferencesResource,
 };
 use crate::service::{ApplicationService, SNAPSHOT_WORKERS};
 
@@ -430,6 +431,32 @@ impl Application {
         model_catalog_resources(&catalog)
             .into_iter()
             .filter(|model| requested.contains(model.model_id.as_str()))
+            .collect()
+    }
+
+    /// Suggest a catalog entry for each raw provider ID without changing the
+    /// provider model or recording a permanent association.
+    pub fn match_model_catalog_models(
+        &self,
+        model_ids: &[String],
+    ) -> Vec<CatalogModelMatchResource> {
+        let candidates = model_ids
+            .iter()
+            .map(|model_id| crate::provider_studio::catalog::catalog_lookup_candidates(model_id))
+            .collect::<Vec<_>>();
+        let lookup_ids = candidates.iter().flatten().cloned().collect::<Vec<_>>();
+        let entries = self.lookup_model_catalog_models(&lookup_ids);
+        model_ids
+            .iter()
+            .zip(candidates)
+            .map(|(model_id, candidates)| CatalogModelMatchResource {
+                model_id: model_id.clone(),
+                catalog: crate::provider_studio::catalog::preferred_catalog_model_for_lookup_ids(
+                    &entries,
+                    &candidates,
+                )
+                .cloned(),
+            })
             .collect()
     }
 

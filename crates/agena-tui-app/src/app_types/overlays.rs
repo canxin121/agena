@@ -409,6 +409,11 @@ pub(crate) struct ProviderStudioOverlay {
     pub(crate) selection: DashboardSelectionState<ProviderStudioFocus>,
     pub(crate) draft: ProviderConfigDraft,
     pub(crate) adapter_models: Vec<ProviderAdapterModelsResource>,
+    pub(crate) catalog_matches: BTreeMap<String, agena_application::dto::CatalogModelResource>,
+    pub(crate) catalog_selections: BTreeMap<String, agena_application::dto::CatalogModelResource>,
+    pub(crate) catalog_match_generation: u64,
+    pub(crate) catalog_matches_loading: bool,
+    pub(crate) catalog_match_error: Option<String>,
     pub(crate) configured_adapter_ids: BTreeSet<String>,
     pub(crate) adapter_candidate_ids: Vec<String>,
     pub(crate) selected_adapter_ids: BTreeSet<String>,
@@ -481,6 +486,8 @@ pub(crate) struct ProviderStudioModelPage {
     pub(crate) adapter_id: String,
     pub(crate) original_model_id: String,
     pub(crate) draft: ProviderModelConfigDraft,
+    pub(crate) selected_catalog: Option<agena_application::dto::CatalogModelResource>,
+    pub(crate) catalog_selection_manual: bool,
     pub(crate) selection: SelectionCursor,
 }
 
@@ -520,4 +527,6 @@ pub(crate) struct ModelCatalogStudioOverlay {
     pub(crate) summary: ModelCatalogResponse,
     pub(crate) presentation: ModelCatalogPresentation,
     pub(crate) editor: Option<LineInputOverlay>,
+    pub(crate) model_target: Option<(String, String)>,
+    pub(crate) rows: Vec<agena_application::dto::CatalogModelResource>,
 }

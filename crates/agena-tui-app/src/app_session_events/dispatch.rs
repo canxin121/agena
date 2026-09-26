@@ -135,6 +135,9 @@ impl App {
                 offset,
                 result,
             } => self.handle_model_catalog_loaded(query, offset, result),
+            AppMessage::ProviderStudioCatalogMatchesLoaded { generation, result } => {
+                self.handle_provider_studio_catalog_matches_loaded(generation, result)
+            }
             AppMessage::ProviderStudioAdapterModelsLoaded {
                 request_key,
                 result,

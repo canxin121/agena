@@ -109,6 +109,25 @@ impl Application {
         save::provider_model_draft_value(self, draft, adapter_id, model_id, provider_model)
     }
 
+    pub fn provider_model_catalog_template_value(
+        &self,
+        catalog_model_id: &str,
+        model_value: serde_json::Value,
+    ) -> Result<serde_json::Value, ApplicationError> {
+        let catalog = self
+            .lookup_model_catalog_models(&[catalog_model_id.to_owned()])
+            .into_iter()
+            .find(|entry| entry.model_id == catalog_model_id)
+            .ok_or_else(|| ApplicationError::not_found("catalog model not found"))?;
+        crate::provider_studio::apply_catalog_template_to_model_value(model_value, &catalog)
+            .map_err(|error| {
+                ApplicationError::bad_request_with_diagnostic(
+                    "The model configuration is invalid.",
+                    error,
+                )
+            })
+    }
+
     pub async fn start_provider_draft_auth(
         &self,
         mut draft: ProviderConfigDraft,

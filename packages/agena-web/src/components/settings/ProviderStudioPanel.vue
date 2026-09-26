@@ -5,6 +5,8 @@ import { RiAddLine, RiCloudLine, RiDeleteBinLine, RiEditLine, RiPlugLine, RiRefr
 
 import SettingsDisclosureRow from '@/components/settings/SettingsDisclosureRow.vue'
 import SettingsSaveBar from '@/components/settings/SettingsSaveBar.vue'
+import ProviderModelCatalogPicker from '@/components/settings/ProviderModelCatalogPicker.vue'
+import type { CatalogPickerModel } from '@/components/settings/providerModelCatalogTypes'
 import Button from '@/components/ui/Button.vue'
 import IconButton from '@/components/ui/IconButton.vue'
 import Input from '@/components/ui/Input.vue'
@@ -30,6 +32,7 @@ type ProviderModel = {
   provider_id?: string
   adapter_id?: string | null
   id: string
+  catalog_model_id?: string | null
   display_name?: string | null
   native_compaction?: boolean
   capabilities?: LooseRecord
@@ -105,6 +108,13 @@ const modelJsonDirty = ref(false)
 const modelLoading = ref(false)
 const modelError = ref('')
 const modelConfigValues = ref<Record<string, LooseRecord>>({})
+const catalogMatches = ref<Record<string, CatalogPickerModel | null>>({})
+const manualCatalogSelections = ref<Record<string, CatalogPickerModel>>({})
+const catalogMatchesLoading = ref(false)
+const catalogMatchesLoaded = ref(false)
+const catalogMatchError = ref('')
+const catalogPickerOpen = ref(false)
+const catalogApplying = ref(false)
 const configuredAdapterIds = ref<Set<string>>(new Set())
 const configuredModelKeys = ref<Set<string>>(new Set())
 const mutationBusy = ref(false)
@@ -123,6 +133,8 @@ let draftRequestGeneration = 0
 let modelListingGeneration = 0
 let authRequestGeneration = 0
 let modelEditorGeneration = 0
+let catalogMatchGeneration = 0
+let catalogApplyGeneration = 0
 
 const authModeOptions = [
   {
@@ -431,6 +443,65 @@ function modelKey(adapterId: string, modelId: string): string {
   return `${adapterId}\u001f${modelId}`
 }
 
+function catalogMatch(adapterId: string, modelId: string): CatalogPickerModel | null {
+  const key = modelKey(adapterId, modelId)
+  return manualCatalogSelections.value[key] || catalogMatches.value[key] || null
+}
+
+function catalogMatchIsManual(adapterId: string, modelId: string): boolean {
+  return Boolean(manualCatalogSelections.value[modelKey(adapterId, modelId)])
+}
+
+function editingCatalogMatch(): CatalogPickerModel | null {
+  const editing = editingModel.value
+  return editing ? catalogMatch(editing.adapterId, editing.modelId) : null
+}
+
+function editingAutomaticMatch(): CatalogPickerModel | null {
+  const editing = editingModel.value
+  return editing ? catalogMatches.value[modelKey(editing.adapterId, editing.modelId)] || null : null
+}
+
+function catalogPickerQuery(): string {
+  return editingCatalogMatch()?.model_id || editingModel.value?.modelId.split('/').pop() || ''
+}
+
+async function refreshCatalogMatches() {
+  const models = adapterModels.value.flatMap((adapter) =>
+    adapter.models.map((model) => ({ key: modelKey(adapter.adapter_id, model.id), id: model.id })),
+  )
+  const request = ++catalogMatchGeneration
+  catalogMatches.value = {}
+  catalogMatchesLoaded.value = false
+  catalogMatchError.value = ''
+  if (models.length === 0) {
+    catalogMatches.value = {}
+    catalogMatchesLoading.value = false
+    catalogMatchesLoaded.value = true
+    return
+  }
+  catalogMatchesLoading.value = true
+  try {
+    const response = await apiJson<{ items?: Array<{ model_id: string; catalog?: CatalogPickerModel | null }> }>(
+      '/api/v1/model-catalog/match',
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ model_ids: [...new Set(models.map((model) => model.id))] }),
+      },
+    )
+    if (request !== catalogMatchGeneration) return
+    const byId = new Map((response.items || []).map((item) => [item.model_id, item.catalog || null]))
+    catalogMatches.value = Object.fromEntries(models.map((model) => [model.key, byId.get(model.id) || null]))
+    catalogMatchesLoaded.value = true
+  } catch (reason) {
+    if (request !== catalogMatchGeneration) return
+    catalogMatchError.value = reason instanceof Error ? reason.message : String(reason)
+  } finally {
+    if (request === catalogMatchGeneration) catalogMatchesLoading.value = false
+  }
+}
+
 type ProviderRow = {
   key: string
   providerId: string
@@ -583,11 +654,20 @@ function markModelJsonDirty() {
 function clearModelStudioState() {
   ++modelListingGeneration
   ++modelEditorGeneration
+  ++catalogMatchGeneration
+  ++catalogApplyGeneration
   clearModelJsonSyncTimer()
   listingModels.value = false
   adapterModels.value = []
   selectedModelKeys.value = new Set()
   modelConfigValues.value = {}
+  catalogMatches.value = {}
+  manualCatalogSelections.value = {}
+  catalogMatchesLoading.value = false
+  catalogMatchesLoaded.value = false
+  catalogMatchError.value = ''
+  catalogPickerOpen.value = false
+  catalogApplying.value = false
   manualModelAdapterId.value = ''
   editingModel.value = null
   modelLoading.value = false
@@ -1019,6 +1099,7 @@ async function loadDraft(providerId?: string) {
     // Save provider create routes the user never chose.
     selectedAdapterIds.value = new Set([...enabled].filter((adapterId) => supported.has(adapterId)))
     adapterModels.value = configuredAdapters
+    void refreshCatalogMatches()
     configuredAdapterIds.value = new Set(configuredAdapters.map((adapter) => adapter.adapter_id))
     configuredModelKeys.value = new Set(
       configuredAdapters.flatMap((adapter) => adapter.models.map((model) => modelKey(adapter.adapter_id, model.id))),
@@ -1095,6 +1176,7 @@ async function listDraftModels() {
     const byAdapter = new Map(adapterModels.value.map((adapter) => [adapter.adapter_id, adapter]))
     for (const adapter of refreshed) byAdapter.set(adapter.adapter_id, adapter)
     adapterModels.value = [...byAdapter.values()]
+    void refreshCatalogMatches()
 
     // Match the TUI restore behavior: keep configured routes, discard routes
     // that are no longer available, and select every model only when a
@@ -1187,7 +1269,7 @@ function setAuthSubtype(value: string) {
 }
 
 async function saveDraft() {
-  if (!draft.value || saving.value || mutationBusy.value || listingModels.value) return
+  if (!draft.value || saving.value || mutationBusy.value || listingModels.value || catalogApplying.value) return
   const draftSnapshot = clone(draft.value)
   const submittedDraftJson = JSON.stringify(draftSnapshot)
   const submittedDraftGeneration = draftRequestGeneration
@@ -1414,6 +1496,7 @@ function addManualModel() {
   pendingDeletedModelKeys.value = deleted
   markEditorDirty()
   newModelId.value = ''
+  void refreshCatalogMatches()
 }
 
 async function openModelEditor(adapterId: string, model: ProviderModel) {
@@ -1423,9 +1506,12 @@ async function openModelEditor(adapterId: string, model: ProviderModel) {
     return
   }
   const requestGeneration = ++modelEditorGeneration
+  ++catalogApplyGeneration
+  catalogApplying.value = false
   editingModel.value = { adapterId, modelId: model.id }
   modelLoading.value = true
   modelError.value = ''
+  catalogPickerOpen.value = false
   modelValue.value = null
   setModelJsonText('')
   const staged = modelConfigValues.value[modelKey(adapterId, model.id)]
@@ -1456,11 +1542,53 @@ async function openModelEditor(adapterId: string, model: ProviderModel) {
 
 function closeModelEditor() {
   ++modelEditorGeneration
+  ++catalogApplyGeneration
+  catalogApplying.value = false
   editingModel.value = null
+  catalogPickerOpen.value = false
   modelLoading.value = false
   modelValue.value = null
   setModelJsonText('')
   modelError.value = ''
+}
+
+async function applyCatalogTemplate(catalog: CatalogPickerModel, manual = true) {
+  const editing = editingModel.value
+  if (!editing || !modelValue.value || catalogApplying.value) return
+  const editorGeneration = modelEditorGeneration
+  const applyGeneration = ++catalogApplyGeneration
+  let current: LooseRecord
+  try {
+    current = modelJsonDirty.value ? syncModelValueFromJson() : modelValue.value
+  } catch (reason) {
+    modelError.value = reason instanceof Error ? reason.message : String(reason)
+    return
+  }
+  catalogApplying.value = true
+  modelError.value = ''
+  try {
+    const response = await apiJson<{ value?: JsonValue }>('/api/v1/provider-studio/draft/model/catalog-template', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ catalog_model_id: catalog.model_id, model_value: current }),
+    })
+    if (editorGeneration !== modelEditorGeneration || applyGeneration !== catalogApplyGeneration) return
+    const next = canonicalizeModelConfig(response.value ?? {})
+    modelValue.value = next
+    setModelJsonText(JSON.stringify(next, null, 2))
+    stageCurrentModelValue(next, true)
+    const key = modelKey(editing.adapterId, editing.modelId)
+    const selections = { ...manualCatalogSelections.value }
+    if (manual) selections[key] = catalog
+    else delete selections[key]
+    manualCatalogSelections.value = selections
+    catalogPickerOpen.value = false
+  } catch (reason) {
+    if (editorGeneration !== modelEditorGeneration || applyGeneration !== catalogApplyGeneration) return
+    modelError.value = reason instanceof Error ? reason.message : String(reason)
+  } finally {
+    if (applyGeneration === catalogApplyGeneration) catalogApplying.value = false
+  }
 }
 
 function modelPathValue(key: string): any {
@@ -1676,6 +1804,9 @@ async function deleteModel(adapterId: string, modelId: string) {
   const nextValues = { ...modelConfigValues.value }
   delete nextValues[key]
   modelConfigValues.value = nextValues
+  const nextSelections = { ...manualCatalogSelections.value }
+  delete nextSelections[key]
+  manualCatalogSelections.value = nextSelections
   adapterModels.value = adapterModels.value.map((adapter) =>
     adapter.adapter_id === adapterId
       ? { ...adapter, models: adapter.models.filter((model) => model.id !== modelId) }
@@ -1704,6 +1835,9 @@ async function deleteAdapter(adapterId: string) {
   const nextValues = { ...modelConfigValues.value }
   for (const key of Object.keys(nextValues)) if (key.startsWith(`${adapterId}\u001f`)) delete nextValues[key]
   modelConfigValues.value = nextValues
+  manualCatalogSelections.value = Object.fromEntries(
+    Object.entries(manualCatalogSelections.value).filter(([key]) => !key.startsWith(`${adapterId}\u001f`)),
+  )
   selectedModelKeys.value = new Set([...selectedModelKeys.value].filter((key) => !key.startsWith(`${adapterId}\u001f`)))
   markEditorDirty()
   const nextExpanded = new Set(expandedAdapterIds.value)
@@ -1746,7 +1880,10 @@ async function discardProviderChanges() {
 }
 
 async function refreshActiveProvider() {
-  if (providerDirty.value && !(await confirmAction(st('Discard unsaved provider changes and refresh from the server?'))))
+  if (
+    providerDirty.value &&
+    !(await confirmAction(st('Discard unsaved provider changes and refresh from the server?')))
+  )
     return
   const sourceProviderId = String(draft.value?.source_provider_id || selectedProviderId.value || '').trim()
   await loadDraft(sourceProviderId || undefined)
@@ -1781,7 +1918,8 @@ async function deleteProviderRow(row: ProviderRow) {
 
 async function createProvider() {
   if (mutationBusy.value || loading.value) return
-  if (providerDirty.value && !(await confirmAction(st('Discard unsaved provider changes and create a new provider?')))) return
+  if (providerDirty.value && !(await confirmAction(st('Discard unsaved provider changes and create a new provider?'))))
+    return
   await loadDraft()
   if (draft.value) {
     const next = clone(draft.value)
@@ -2149,14 +2287,39 @@ onBeforeUnmount(() => {
                     />
                     <button
                       type="button"
-                      class="min-w-0 flex-1 truncate text-left"
+                      class="min-w-0 flex-1 text-left"
                       :disabled="mutationBusy || listingModels"
                       @click.stop="openModelEditor(adapter.adapter_id, model)"
                     >
-                      <span>{{ model.display_name || model.id }}</span>
-                      <code v-if="model.display_name" class="ml-2 font-mono text-[10px] text-muted-foreground">{{
-                        model.id
-                      }}</code>
+                      <span class="block truncate">{{ model.display_name || model.id }}</span>
+                      <code
+                        v-if="model.display_name"
+                        class="block truncate font-mono text-[10px] text-muted-foreground"
+                        >{{ model.id }}</code
+                      >
+                      <span
+                        class="mt-0.5 block truncate text-[10px]"
+                        :class="
+                          catalogMatch(adapter.adapter_id, model.id)
+                            ? 'text-emerald-700 dark:text-emerald-300'
+                            : 'text-muted-foreground'
+                        "
+                      >
+                        <template v-if="catalogMatch(adapter.adapter_id, model.id)">
+                          {{
+                            catalogMatchIsManual(adapter.adapter_id, model.id)
+                              ? $st('Selected catalog')
+                              : $st('Suggested catalog')
+                          }}:
+                          {{
+                            catalogMatch(adapter.adapter_id, model.id)?.display_name ||
+                            catalogMatch(adapter.adapter_id, model.id)?.model_id
+                          }}
+                        </template>
+                        <template v-else-if="catalogMatchesLoading">{{ $st('Finding catalog match…') }}</template>
+                        <template v-else-if="!catalogMatchesLoaded">{{ $st('Catalog match unavailable') }}</template>
+                        <template v-else>{{ $st('No catalog match · choose in model settings') }}</template>
+                      </span>
                     </button>
                     <IconButton
                       variant="ghost"
@@ -2201,8 +2364,76 @@ onBeforeUnmount(() => {
                     <div v-if="modelLoading" class="text-sm text-muted-foreground">
                       {{ $st('Loading model configuration…') }}
                     </div>
-                    <div v-else-if="modelError" class="text-sm text-destructive">{{ modelError }}</div>
+                    <div v-else-if="!modelValue" class="text-sm text-destructive">{{ modelError }}</div>
                     <template v-else>
+                      <div class="rounded-lg border border-primary/20 bg-primary/5 p-3" :aria-busy="catalogApplying">
+                        <div class="flex flex-wrap items-center justify-between gap-3">
+                          <div class="min-w-0">
+                            <div class="text-[10px] font-semibold uppercase tracking-wide text-primary">
+                              {{ $st('Catalog template') }}
+                            </div>
+                            <div v-if="editingCatalogMatch()" class="mt-1 truncate text-sm font-medium">
+                              {{ editingCatalogMatch()?.display_name || editingCatalogMatch()?.model_id }}
+                              <code class="ml-1 font-mono text-[11px] text-muted-foreground">{{
+                                editingCatalogMatch()?.model_id
+                              }}</code>
+                            </div>
+                            <div v-else class="mt-1 text-sm text-muted-foreground">
+                              {{
+                                catalogMatchesLoading
+                                  ? $st('Finding catalog match…')
+                                  : catalogMatchesLoaded
+                                    ? $st('No catalog match yet')
+                                    : $st('Catalog match unavailable')
+                              }}
+                            </div>
+                            <p class="mt-1 text-xs text-muted-foreground">
+                              {{
+                                $st(
+                                  'Choose a catalog model to fill the fields below. The chosen catalog ID is not saved with this model.',
+                                )
+                              }}
+                            </p>
+                            <p v-if="catalogApplying" class="mt-1 text-xs font-medium text-primary" role="status">
+                              {{ $st('Applying catalog template…') }}
+                            </p>
+                          </div>
+                          <div class="flex shrink-0 flex-wrap gap-2">
+                            <Button
+                              v-if="
+                                catalogMatchIsManual(editingModel.adapterId, editingModel.modelId) &&
+                                editingAutomaticMatch()
+                              "
+                              variant="ghost"
+                              size="sm"
+                              :disabled="catalogApplying"
+                              @click.stop="applyCatalogTemplate(editingAutomaticMatch()!, false)"
+                              >{{ $st('Use suggested match') }}</Button
+                            >
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              :disabled="catalogApplying"
+                              @click.stop="catalogPickerOpen = !catalogPickerOpen"
+                            >
+                              {{ editingCatalogMatch() ? $st('Change catalog model') : $st('Choose catalog model') }}
+                            </Button>
+                          </div>
+                        </div>
+                        <div v-if="catalogMatchError" class="mt-2 text-xs text-destructive">
+                          {{ catalogMatchError }}
+                        </div>
+                      </div>
+                      <ProviderModelCatalogPicker
+                        v-if="catalogPickerOpen"
+                        :key="`${editingModel.adapterId}/${editingModel.modelId}`"
+                        :initial-query="catalogPickerQuery()"
+                        :selected-id="editingCatalogMatch()?.model_id"
+                        :suggested-id="editingAutomaticMatch()?.model_id"
+                        :disabled="catalogApplying"
+                        @select="applyCatalogTemplate($event)"
+                        @close="catalogPickerOpen = false"
+                      />
                       <div class="grid gap-2 sm:grid-cols-2">
                         <div
                           v-for="field in modelFields"
@@ -2233,6 +2464,7 @@ onBeforeUnmount(() => {
                               type="checkbox"
                               class="h-4 w-4 justify-self-start accent-primary"
                               :checked="modelFieldBooleanValue(field.key)"
+                              :disabled="catalogApplying"
                               @change="setModelFieldValue(field.key, ($event.target as HTMLInputElement).checked)"
                             />
                             <OptionPicker
@@ -2243,6 +2475,7 @@ onBeforeUnmount(() => {
                               :include-empty="field.key === 'lifecycle'"
                               :empty-label="field.key === 'lifecycle' ? $st('Default / unset') : undefined"
                               :title="field.label"
+                              :disabled="catalogApplying"
                               @update:model-value="setModelFieldValue(field.key, $event)"
                             />
                             <textarea
@@ -2250,6 +2483,7 @@ onBeforeUnmount(() => {
                               :id="`provider-model-${field.key.replaceAll('.', '-')}`"
                               :value="modelFieldValue(field.key)"
                               :placeholder="field.placeholder"
+                              :disabled="catalogApplying"
                               rows="3"
                               class="w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm outline-none focus:border-ring"
                               @input="setModelFieldValue(field.key, ($event.target as HTMLTextAreaElement).value)"
@@ -2260,6 +2494,7 @@ onBeforeUnmount(() => {
                               :model-value="modelFieldValue(field.key)"
                               :type="field.kind === 'number' ? 'number' : 'text'"
                               :placeholder="field.placeholder"
+                              :disabled="catalogApplying"
                               :class="field.kind === 'csv' || field.kind === 'number' ? 'font-mono' : ''"
                               @update:model-value="
                                 field.kind === 'csv' ? undefined : setModelFieldValue(field.key, $event)
@@ -2280,15 +2515,19 @@ onBeforeUnmount(() => {
                           v-model="modelJson"
                           rows="16"
                           spellcheck="false"
+                          :disabled="catalogApplying"
                           class="w-full rounded-md border border-input bg-transparent p-3 font-mono text-xs outline-none focus:border-ring"
                           @input="markModelJsonDirty"
                         />
                       </label>
                       <div v-if="modelError" class="text-xs text-destructive">{{ modelError }}</div>
                       <div class="flex flex-wrap items-center gap-2">
-                        <Button variant="outline" :disabled="mutationBusy" @click.stop="applyModelJson">{{
-                          $st('Apply JSON to provider draft')
-                        }}</Button>
+                        <Button
+                          variant="outline"
+                          :disabled="mutationBusy || catalogApplying"
+                          @click.stop="applyModelJson"
+                          >{{ $st('Apply JSON to provider draft') }}</Button
+                        >
                         <span class="text-xs text-muted-foreground">{{
                           $st('Model field changes are staged automatically and saved with the Provider.')
                         }}</span>
@@ -2337,7 +2576,7 @@ onBeforeUnmount(() => {
           <SettingsSaveBar
             :dirty="providerDirty"
             :saving="saving"
-            :disabled="mutationBusy || listingModels || !draft.provider_id.trim()"
+            :disabled="mutationBusy || listingModels || catalogApplying || !draft.provider_id.trim()"
             :error="error"
             :save-label="$st('Save provider changes')"
             sticky

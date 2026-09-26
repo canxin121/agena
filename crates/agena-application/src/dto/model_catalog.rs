@@ -32,6 +32,14 @@ pub struct ModelCatalogListResponse {
     pub items: Vec<CatalogModelResource>,
 }
 
+/// A verified, display-only catalog suggestion for a provider model ID.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CatalogModelMatchResource {
+    pub model_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub catalog: Option<CatalogModelResource>,
+}
+
 impl ModelCatalogListResponse {
     /// An empty listing used by synchronous remote-client consumers before a
     /// catalog page has been fetched from the server.

@@ -37,3 +37,17 @@ pub fn provider_model_draft_value_from_resource(
 ) -> Result<serde_json::Value, serde_json::Error> {
     catalog::provider_model_json_for_model_id(&[], model_id, provider_model)
 }
+
+/// Copy one selected catalog definition into an editable provider-model value.
+/// The selected catalog ID is UI state only; the returned value contains just
+/// ordinary model fields and keeps the route's operational settings.
+pub fn apply_catalog_template_to_model_value(
+    model_value: serde_json::Value,
+    catalog_model: &crate::dto::CatalogModelResource,
+) -> Result<serde_json::Value, serde_json::Error> {
+    let mut configured: agena_provider::ResolvedProviderModelConfig =
+        serde_json::from_value(model_value)?;
+    configured.definition =
+        catalog::catalog_model_to_catalog_definition(catalog_model).into_configured_definition();
+    serde_json::to_value(configured)
+}

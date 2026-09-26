@@ -2200,6 +2200,20 @@ impl TuiBackend {
         Ok(())
     }
 
+    pub(crate) async fn match_model_catalog_models(
+        &self,
+        model_ids: &[String],
+    ) -> Result<Vec<agena_application::dto::CatalogModelMatchResource>> {
+        let response = self
+            .inner
+            .client
+            .model_catalog_matches(model_ids)
+            .await
+            .context("failed to match provider models against the model catalog")?;
+        serde_json::from_value(response.get("items").cloned().unwrap_or_default())
+            .context("the server returned undecodable model-catalog matches")
+    }
+
     pub(crate) fn configured_model(
         &self,
         model: &agena_domain::ModelRef,

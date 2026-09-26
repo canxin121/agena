@@ -93,9 +93,45 @@ impl App {
                         build_detail_two_line_list_item(
                             sanitize_display_text(format!("{selected} {}", model.id)).into(),
                             Some(
-                                sanitize_display_text(provider_studio_model_list_detail(
-                                    &self.i18n, model,
-                                ))
+                                sanitize_display_text({
+                                    let key = crate::provider_studio_model_key(
+                                        adapter_models.adapter_id.as_str(),
+                                        model.id.as_str(),
+                                    );
+                                    let catalog = dialog
+                                        .catalog_selections
+                                        .get(&key)
+                                        .or_else(|| dialog.catalog_matches.get(&key));
+                                    let match_label = catalog
+                                        .map(|entry| {
+                                            let key = if dialog.catalog_selections.contains_key(&key) {
+                                                "overlay-provider-studio-catalog-selected"
+                                            } else {
+                                                "overlay-provider-studio-catalog-match"
+                                            };
+                                            self.i18n.text_args(
+                                                key,
+                                                &agena_tui::fl_args!(
+                                                    "model" => entry.display_name.as_deref().unwrap_or(entry.model_id.as_str())
+                                                ),
+                                            )
+                                        })
+                                        .unwrap_or_else(|| {
+                                            ui_text::t(
+                                                &self.i18n,
+                                                if dialog.catalog_matches_loading {
+                                                    "overlay-provider-studio-catalog-loading"
+                                                } else {
+                                                    "overlay-provider-studio-catalog-no-match"
+                                                },
+                                            )
+                                        });
+                                    format!(
+                                        "{} · {}",
+                                        match_label,
+                                        provider_studio_model_list_detail(&self.i18n, model)
+                                    )
+                                })
                                 .into(),
                             ),
                             Style::default().fg(agena_tui_components::theme::muted_color()),
@@ -200,40 +236,91 @@ impl App {
         );
 
         let detail_overlay = if let Some(model_page) = dialog.model_page.as_ref() {
-            let lines = provider_model_config_fields()
-                .iter()
-                .enumerate()
-                .map(|(field_index, field)| {
-                    let field = *field;
-                    let selected =
-                        dialog.editor.is_none() && model_page.selection.selected == field_index;
-                    let editable = provider_model_config_field_editable(field);
-                    let label_style = if selected {
-                        selection_highlight_style()
-                    } else if editable {
-                        Style::default().add_modifier(Modifier::BOLD)
+            let catalog_selected = dialog.editor.is_none() && model_page.selection.selected == 0;
+            let catalog_style = if catalog_selected {
+                selection_highlight_style()
+            } else {
+                Style::default().fg(agena_tui_components::theme::accent_color())
+            };
+            let catalog_value = model_page
+                .selected_catalog
+                .as_ref()
+                .map(|catalog| {
+                    let label = catalog
+                        .display_name
+                        .as_deref()
+                        .unwrap_or(catalog.model_id.as_str());
+                    let display = if label == catalog.model_id {
+                        label.to_owned()
                     } else {
-                        Style::default().fg(agena_tui_components::theme::muted_color())
+                        format!("{} ({})", label, catalog.model_id)
                     };
-                    let value_style = if selected {
-                        selection_highlight_style()
-                    } else if editable {
-                        Style::default()
-                    } else {
-                        Style::default().fg(agena_tui_components::theme::muted_color())
-                    };
-                    DetailTextLine::labeled(
-                        provider_model_config_field_label(&self.i18n, field),
-                        sanitize_display_text(provider_model_config_field_display(
-                            &self.i18n,
-                            &model_page.draft,
-                            field,
-                        )),
-                        label_style,
-                        value_style,
+                    self.i18n.text_args(
+                        if model_page.catalog_selection_manual {
+                            "overlay-provider-studio-catalog-selected"
+                        } else {
+                            "overlay-provider-studio-catalog-match"
+                        },
+                        &agena_tui::fl_args!("model" => display),
                     )
                 })
-                .collect::<Vec<_>>();
+                .or_else(|| dialog.catalog_match_error.clone())
+                .unwrap_or_else(|| {
+                    ui_text::t(
+                        &self.i18n,
+                        if dialog.catalog_matches_loading {
+                            "overlay-provider-studio-catalog-loading"
+                        } else {
+                            "overlay-provider-studio-catalog-no-match"
+                        },
+                    )
+                });
+            let mut lines = vec![DetailTextLine::labeled(
+                ui_text::t(&self.i18n, "provider-model-field-catalog-template"),
+                sanitize_display_text(catalog_value),
+                catalog_style,
+                catalog_style,
+            )];
+            lines.push(DetailTextLine::plain(
+                ui_text::t(&self.i18n, "provider-model-catalog-selection-note"),
+                Style::default().fg(agena_tui_components::theme::muted_color()),
+            ));
+            lines.extend(
+                provider_model_config_fields()
+                    .iter()
+                    .enumerate()
+                    .map(|(field_index, field)| {
+                        let field = *field;
+                        let selected = dialog.editor.is_none()
+                            && model_page.selection.selected == field_index + 1;
+                        let editable = provider_model_config_field_editable(field);
+                        let label_style = if selected {
+                            selection_highlight_style()
+                        } else if editable {
+                            Style::default().add_modifier(Modifier::BOLD)
+                        } else {
+                            Style::default().fg(agena_tui_components::theme::muted_color())
+                        };
+                        let value_style = if selected {
+                            selection_highlight_style()
+                        } else if editable {
+                            Style::default()
+                        } else {
+                            Style::default().fg(agena_tui_components::theme::muted_color())
+                        };
+                        DetailTextLine::labeled(
+                            provider_model_config_field_label(&self.i18n, field),
+                            sanitize_display_text(provider_model_config_field_display(
+                                &self.i18n,
+                                &model_page.draft,
+                                field,
+                            )),
+                            label_style,
+                            value_style,
+                        )
+                    })
+                    .collect::<Vec<_>>(),
+            );
             Some(DashboardDetailOverlaySpec::new(
                 DetailTextDialogSpec::new(
                     sanitize_display_text(model_page.title.as_str()).into(),

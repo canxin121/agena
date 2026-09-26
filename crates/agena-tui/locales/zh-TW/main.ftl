@@ -926,6 +926,12 @@ overlay-provider-studio-adapters = 適配器
 overlay-provider-studio-models = 模型
 
 overlay-provider-studio-catalog = 模型 Catalog
+overlay-provider-studio-catalog-picker-title = 選擇目錄範本
+overlay-provider-studio-catalog-picker-footer = 上下鍵選擇 · Ctrl+F 搜尋 · 左右鍵翻頁 · Enter 預填模型欄位 · Esc 返回
+overlay-provider-studio-catalog-match = 目錄匹配：{$model}
+overlay-provider-studio-catalog-selected = 已選目錄：{$model}
+overlay-provider-studio-catalog-loading = 正在查找目錄匹配…
+overlay-provider-studio-catalog-no-match = 未匹配目錄 · 可在模型設定中選擇
 
 overlay-provider-studio-detail = 詳情
 
@@ -1330,6 +1336,8 @@ provider-field-connect-timeout = 連接逾時（秒）
 provider-field-adapter-id = 適配器ID
 provider-field-model-id = 型號編號
 provider-model-field-model-id = 型號編號
+provider-model-field-catalog-template = 目錄範本
+provider-model-catalog-selection-note = 按 Enter 選擇範本；儲存只寫入欄位值，不儲存目錄 ID。
 provider-model-field-enabled = 啟用
 provider-model-field-native-compaction = 原生壓縮
 provider-model-field-agena-tool-mode = 工具模式（agena_tools.mode）
@@ -1473,6 +1481,7 @@ flash-provider-studio-model-required = 首先選擇列出的型號
 flash-provider-studio-model-id-required = 型號 ID 為必填項
 flash-provider-studio-no-auth-details = 當前身份驗證模式沒有可用的身份驗證詳細信息
 flash-provider-studio-catalog-refreshed = 更新的模型目錄
+flash-provider-studio-catalog-template-applied = 已從 {$model} 預填模型欄位；儲存後生效
 flash-provider-studio-invalid-model-json = 無效模型 JSON：{ $error }
 flash-provider-studio-live-listing-unavailable = 即時模型清單無法用於驗證 { $auth }
 flash-provider-studio-draft-listing-unsupported = 草稿模型清單僅支援具有即時模型發現的適配器。不支援：{ $adapters }

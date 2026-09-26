@@ -229,6 +229,12 @@ pub(crate) fn remove_provider_studio_model_from_dialog(
     dialog
         .selected_model_keys
         .remove(provider_studio_model_key(adapter_id, model_id).as_str());
+    dialog
+        .catalog_matches
+        .remove(&provider_studio_model_key(adapter_id, model_id));
+    dialog
+        .catalog_selections
+        .remove(&provider_studio_model_key(adapter_id, model_id));
     dialog.model_page = None;
     dialog.selection.clamp_right(
         provider_studio_selected_adapter_models(dialog)
@@ -250,6 +256,12 @@ pub(crate) fn remove_provider_studio_adapter_from_dialog(
     dialog
         .selected_model_keys
         .retain(|key| !key.starts_with(prefix.as_str()));
+    dialog
+        .catalog_matches
+        .retain(|key, _| !key.starts_with(prefix.as_str()));
+    dialog
+        .catalog_selections
+        .retain(|key, _| !key.starts_with(prefix.as_str()));
     if dialog
         .model_page
         .as_ref()

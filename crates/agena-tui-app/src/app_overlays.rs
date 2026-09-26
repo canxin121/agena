@@ -456,6 +456,48 @@ impl App {
         key: KeyEvent,
         dialog: &mut ModelCatalogStudioOverlay,
     ) -> bool {
+        if let Some((adapter_id, model_id)) = dialog.model_target.as_ref()
+            && dialog.editor.is_none()
+            && !dialog.presentation.loading()
+            && key.code == crossterm::event::KeyCode::Enter
+        {
+            let catalog = dialog.presentation.selected_item().and_then(|item| {
+                dialog
+                    .rows
+                    .iter()
+                    .find(|row| row.model_id == item.key)
+                    .cloned()
+            });
+            let Some(catalog) = catalog else {
+                return false;
+            };
+            let Some((host, mut parent)) = self.take_provider_studio_dialog() else {
+                self.flash_error(ui_text::t(&self.i18n, "flash-provider-studio-context-lost"));
+                return false;
+            };
+            if parent.model_page.as_ref().is_none_or(|page| {
+                page.adapter_id != *adapter_id || page.original_model_id != *model_id
+            }) {
+                self.restore_provider_studio_dialog(host, parent);
+                self.flash_error(ui_text::t(&self.i18n, "flash-provider-studio-context-lost"));
+                return false;
+            }
+            let result = self.apply_provider_studio_catalog_selection(&mut parent, catalog.clone());
+            self.restore_provider_studio_dialog(host, parent);
+            return match result {
+                Ok(()) => {
+                    self.flash_success(self.i18n.text_args(
+                        "flash-provider-studio-catalog-template-applied",
+                        &agena_tui::fl_args!("model" => catalog.model_id),
+                    ));
+                    true
+                }
+                Err(error) => {
+                    self.flash_error(error);
+                    false
+                }
+            };
+        }
         if let Some(editor) = dialog.editor.as_mut() {
             return match drive_input_dialog_key(editor, key) {
                 InputDialogKeyResult::Close => {

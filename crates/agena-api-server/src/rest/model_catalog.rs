@@ -45,6 +45,15 @@ pub async fn lookup_model_catalog(
     ))
 }
 
+pub async fn match_model_catalog(
+    State(state): State<AppState>,
+    Json(request): Json<ModelCatalogLookupRequest>,
+) -> Result<impl IntoResponse, ServerError> {
+    Ok(items_json(
+        state.match_model_catalog_models(request.model_ids.as_slice()),
+    ))
+}
+
 pub async fn refresh_model_catalog(
     State(state): State<AppState>,
 ) -> Result<impl IntoResponse, ServerError> {

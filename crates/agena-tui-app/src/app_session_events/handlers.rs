@@ -421,6 +421,7 @@ impl App {
         match result {
             Ok(response) => {
                 dialog.summary = response.summary;
+                dialog.rows = response.items.clone();
                 dialog.presentation.apply_page(
                     response
                         .items
@@ -438,6 +439,60 @@ impl App {
             }
         }
         self.restore_model_catalog_dialog(host, dialog);
+    }
+
+    pub(crate) fn handle_provider_studio_catalog_matches_loaded(
+        &mut self,
+        generation: u64,
+        result: UiResult<Vec<agena_application::dto::CatalogModelMatchResource>>,
+    ) {
+        let Some((host, mut dialog)) = self.take_provider_studio_dialog() else {
+            return;
+        };
+        if dialog.catalog_match_generation != generation {
+            self.restore_provider_studio_dialog(host, dialog);
+            return;
+        }
+        dialog.catalog_matches_loading = false;
+        match result {
+            Ok(matches) => {
+                let by_id = matches
+                    .into_iter()
+                    .filter_map(|entry| entry.catalog.map(|catalog| (entry.model_id, catalog)))
+                    .collect::<BTreeMap<_, _>>();
+                dialog.catalog_matches = dialog
+                    .adapter_models
+                    .iter()
+                    .flat_map(|adapter| {
+                        adapter.models.iter().filter_map(|model| {
+                            by_id.get(model.id.as_str()).cloned().map(|catalog| {
+                                (
+                                    provider_studio_model_key(
+                                        adapter.adapter_id.as_str(),
+                                        model.id.as_str(),
+                                    ),
+                                    catalog,
+                                )
+                            })
+                        })
+                    })
+                    .collect();
+                if let Some(page) = dialog.model_page.as_mut()
+                    && !page.catalog_selection_manual
+                {
+                    page.selected_catalog = dialog
+                        .catalog_matches
+                        .get(&provider_studio_model_key(
+                            page.adapter_id.as_str(),
+                            page.original_model_id.as_str(),
+                        ))
+                        .cloned();
+                }
+                dialog.catalog_match_error = None;
+            }
+            Err(error) => dialog.catalog_match_error = Some(error.to_string()),
+        }
+        self.restore_provider_studio_dialog(host, dialog);
     }
 
     pub(crate) fn handle_provider_studio_adapter_models_loaded(
@@ -478,6 +533,7 @@ impl App {
                         &previously_available,
                     ));
                 provider_studio_restore_model_selection(&mut dialog);
+                self.request_provider_studio_catalog_matches(&mut dialog);
             }
             Err(error) => self.flash_error(error),
         }
@@ -828,10 +884,11 @@ fn session_state_priority(state: &agena_api::resource::SessionState) -> u8 {
 }
 use crate::view::model_catalog_presentation_item;
 use crate::{
-    App, ComposerDraft, CurrentLineageState, DraftSlot, Instant, ModelCatalogListResponse, Overlay,
-    PaginatedResponse, PermissionReplyKind, ProviderAdapterModelsResponse, ProviderPickerPurpose,
-    ProviderStudioFocus, ProviderSummaryResource, Route, RunActivityTarget, RunOperation,
-    SelectableListState, SelectionPickerCommand, SelectionPickerQuery, SessionExecutionResource,
+    App, BTreeMap, ComposerDraft, CurrentLineageState, DraftSlot, Instant,
+    ModelCatalogListResponse, Overlay, PaginatedResponse, PermissionReplyKind,
+    ProviderAdapterModelsResponse, ProviderPickerPurpose, ProviderStudioFocus,
+    ProviderSummaryResource, Route, RunActivityTarget, RunOperation, SelectableListState,
+    SelectionPickerCommand, SelectionPickerQuery, SessionExecutionResource,
     SessionNavigationCommand, SessionNavigationQuery, SessionResource, UiResult,
     build_timeline_item, i18n_provider_list_detail, provider_draft_auth_action_message,
     provider_draft_auth_error_message, provider_draft_auth_message_is_pending,

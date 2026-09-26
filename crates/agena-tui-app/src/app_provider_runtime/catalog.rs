@@ -149,6 +149,11 @@ impl App {
                 .provider_config_draft(None)
                 .unwrap_or_else(|_| ProviderConfigDraft::new_empty()),
             adapter_models: Vec::new(),
+            catalog_matches: BTreeMap::new(),
+            catalog_selections: BTreeMap::new(),
+            catalog_match_generation: 0,
+            catalog_matches_loading: false,
+            catalog_match_error: None,
             configured_adapter_ids: BTreeSet::new(),
             adapter_candidate_ids: Vec::new(),
             selected_adapter_ids: BTreeSet::new(),
@@ -191,6 +196,10 @@ impl App {
                         &self.application,
                         provider_id,
                     );
+                dialog.catalog_matches.clear();
+                dialog.catalog_selections.clear();
+                dialog.catalog_matches_loading = false;
+                dialog.catalog_match_error = None;
                 let configured_adapters = provider_id
                     .and_then(|id| {
                         crate::app_backend::operations::list_configured_providers(&self.application)
@@ -228,6 +237,7 @@ impl App {
                     })
                     .collect();
                 self.sync_provider_studio_shape(dialog);
+                self.request_provider_studio_catalog_matches(dialog);
                 if let Some(first_selected) = dialog
                     .adapter_candidate_ids
                     .iter()
@@ -258,6 +268,8 @@ impl App {
                 50,
             ),
             editor: None,
+            model_target: None,
+            rows: Vec::new(),
         };
         self.request_model_catalog_page(String::new(), 0);
         self.current_route = Route::ModelCatalogStudio(dialog.clone());
@@ -281,6 +293,71 @@ impl App {
                     offset,
                     result,
                 })
+                .await;
+        });
+    }
+
+    pub(crate) fn open_provider_studio_catalog_picker(&mut self, dialog: &ProviderStudioOverlay) {
+        let Some(page) = dialog.model_page.as_ref() else {
+            return;
+        };
+        let query = page
+            .selected_catalog
+            .as_ref()
+            .map(|catalog| catalog.model_id.clone())
+            .unwrap_or_default();
+        let mut presentation = ModelCatalogPresentation::new(
+            ui_text::t(&self.i18n, "overlay-provider-studio-catalog-picker-title"),
+            ui_text::t(&self.i18n, "overlay-provider-studio-catalog-picker-footer"),
+            50,
+        );
+        let _ = presentation.begin_query(query.clone());
+        self.overlay = Some(crate::Overlay::ModelCatalogStudio(
+            ModelCatalogStudioOverlay {
+                summary: self.application.model_catalog().summary,
+                presentation,
+                editor: None,
+                model_target: Some((page.adapter_id.clone(), page.original_model_id.clone())),
+                rows: Vec::new(),
+            },
+        ));
+        self.request_model_catalog_page(query, 0);
+    }
+
+    pub(crate) fn request_provider_studio_catalog_matches(
+        &mut self,
+        dialog: &mut ProviderStudioOverlay,
+    ) {
+        dialog.catalog_match_generation += 1;
+        let generation = dialog.catalog_match_generation;
+        dialog.catalog_matches.clear();
+        if let Some(page) = dialog.model_page.as_mut()
+            && !page.catalog_selection_manual
+        {
+            page.selected_catalog = None;
+        }
+        dialog.catalog_matches_loading = true;
+        dialog.catalog_match_error = None;
+        let model_ids = dialog
+            .adapter_models
+            .iter()
+            .flat_map(|adapter| adapter.models.iter().map(|model| model.id.clone()))
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        if model_ids.is_empty() {
+            dialog.catalog_matches_loading = false;
+            return;
+        }
+        let application = self.application.clone();
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            let result = application
+                .match_model_catalog_models(&model_ids)
+                .await
+                .map_err(crate::UiFailure::internal);
+            let _ = tx
+                .send(AppMessage::ProviderStudioCatalogMatchesLoaded { generation, result })
                 .await;
         });
     }
@@ -427,7 +504,7 @@ impl App {
     }
 }
 use crate::{
-    App, AppMessage, BTreeSet, DashboardSelectionState, ModelCatalogResponse,
+    App, AppMessage, BTreeMap, BTreeSet, DashboardSelectionState, ModelCatalogResponse,
     ModelCatalogStudioOverlay, ProviderConfigDraft, ProviderPickerPurpose, ProviderStudioFocus,
     ProviderStudioOverlay, Route, SelectableListState, SelectionPickerCommand,
     SelectionPickerOverlay, SelectionPickerQuery, SessionModelChooserPurpose,

@@ -1315,6 +1315,18 @@ impl AgenaClient {
         self.parse_json(response).await
     }
 
+    /// Resolve display-only catalog suggestions for raw provider model IDs.
+    pub async fn model_catalog_matches(
+        &self,
+        model_ids: &[String],
+    ) -> Result<serde_json::Value, ClientError> {
+        self.post_json(
+            "/api/v1/model-catalog/match",
+            serde_json::json!({ "model_ids": model_ids }),
+        )
+        .await
+    }
+
     /// Request the server to refresh its model catalog through
     /// `POST /api/v1/model-catalog/refresh`.
     pub async fn refresh_model_catalog(&self) -> Result<serde_json::Value, ClientError> {

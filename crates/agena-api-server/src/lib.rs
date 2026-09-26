@@ -114,6 +114,10 @@ pub fn router(state: AppState) -> Router {
                 post(rest::lookup_model_catalog),
             )
             .route(
+                "/api/v1/model-catalog/match",
+                post(rest::match_model_catalog),
+            )
+            .route(
                 "/api/v1/model-catalog/refresh",
                 post(rest::refresh_model_catalog),
             )
@@ -284,6 +288,10 @@ pub fn router(state: AppState) -> Router {
             .route(
                 "/api/v1/provider-studio/draft/model",
                 post(rest::get_provider_studio_model_draft),
+            )
+            .route(
+                "/api/v1/provider-studio/draft/model/catalog-template",
+                post(rest::apply_provider_studio_catalog_template),
             )
             .route(
                 "/api/v1/provider-studio/save",

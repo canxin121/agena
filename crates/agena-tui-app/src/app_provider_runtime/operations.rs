@@ -346,6 +346,15 @@ impl App {
                             provider_model.as_ref(),
                             &mut draft,
                         );
+                        let catalog_key =
+                            provider_studio_model_key(adapter_id.as_str(), model_id.as_str());
+                        let selected_catalog = dialog
+                            .catalog_selections
+                            .get(&catalog_key)
+                            .or_else(|| dialog.catalog_matches.get(&catalog_key))
+                            .cloned();
+                        let catalog_selection_manual =
+                            dialog.catalog_selections.contains_key(&catalog_key);
                         dialog.detail_page = None;
                         dialog.model_page = Some(ProviderStudioModelPage {
                             title: self.i18n.text_args(
@@ -359,6 +368,8 @@ impl App {
                             adapter_id,
                             original_model_id: model_id,
                             draft,
+                            selected_catalog,
+                            catalog_selection_manual,
                             selection: SelectionCursor::default(),
                         });
                     }
@@ -536,11 +547,11 @@ use crate::{
     provider_studio_detail_fields, provider_studio_field_allows_clear,
     provider_studio_field_editable, provider_studio_field_prompt, provider_studio_field_value,
     provider_studio_missing_continue_auth_field, provider_studio_missing_start_auth_field,
-    provider_studio_no_auth_details_message, provider_studio_preferred_detail_field_index,
-    provider_studio_request_adapter_ids, provider_studio_selected_adapter_id,
-    provider_studio_selected_adapter_models, provider_studio_selected_adapter_models_for_save,
-    provider_studio_selected_model_target, provider_studio_visible_fields,
-    session_model_choice_item, ui_text,
+    provider_studio_model_key, provider_studio_no_auth_details_message,
+    provider_studio_preferred_detail_field_index, provider_studio_request_adapter_ids,
+    provider_studio_selected_adapter_id, provider_studio_selected_adapter_models,
+    provider_studio_selected_adapter_models_for_save, provider_studio_selected_model_target,
+    provider_studio_visible_fields, session_model_choice_item, ui_text,
 };
 use agena_api::resource::ProviderModelResource;
 use agena_tui::keymap::{KeyAction, KeyContext, resolve as resolve_tui_key};

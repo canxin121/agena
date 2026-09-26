@@ -751,6 +751,10 @@ pub(super) enum AppMessage {
         offset: usize,
         result: UiResult<ModelCatalogListResponse>,
     },
+    ProviderStudioCatalogMatchesLoaded {
+        generation: u64,
+        result: UiResult<Vec<agena_application::dto::CatalogModelMatchResource>>,
+    },
     ProviderStudioAdapterModelsLoaded {
         request_key: String,
         result: UiResult<ProviderAdapterModelsResponse>,

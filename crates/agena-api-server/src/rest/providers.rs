@@ -129,6 +129,12 @@ pub struct ProviderStudioModelDraftRequest {
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
+pub struct ProviderStudioCatalogTemplateRequest {
+    pub catalog_model_id: String,
+    pub model_value: serde_json::Value,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
 pub struct ProviderStudioSaveDraftRequest {
     pub draft: agena_application::provider_studio::ProviderConfigDraft,
     #[serde(default)]
@@ -213,6 +219,17 @@ pub async fn get_provider_studio_model_draft(
             request.model_id.as_str(),
             request.provider_model.as_ref(),
         )
+        .map_err(server_error_from_application)?;
+    Ok(Json(serde_json::json!({ "value": value })))
+}
+
+pub async fn apply_provider_studio_catalog_template(
+    State(state): State<AppState>,
+    Json(request): Json<ProviderStudioCatalogTemplateRequest>,
+) -> Result<impl IntoResponse, ServerError> {
+    let value = state
+        .application()
+        .provider_model_catalog_template_value(request.catalog_model_id.trim(), request.model_value)
         .map_err(server_error_from_application)?;
     Ok(Json(serde_json::json!({ "value": value })))
 }

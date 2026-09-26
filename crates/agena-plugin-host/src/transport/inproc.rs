@@ -18,6 +18,16 @@ pub struct InProcessTransport<P: Plugin> {
     dispatcher: Arc<PluginDispatcher<P>>,
 }
 
+/// Keep cancellation tied to the caller when a plugin is dispatched on a
+/// fresh Tokio task. Dropping a Tool API call must not leave its body running.
+struct AbortOnDrop<T>(tokio::task::JoinHandle<T>);
+
+impl<T> Drop for AbortOnDrop<T> {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
 impl<P: Plugin> InProcessTransport<P> {
     pub fn new(plugin: P) -> Self {
         Self {
@@ -40,22 +50,25 @@ impl<P: Plugin> PluginTransport for InProcessTransport<P> {
         let dispatcher = Arc::clone(&self.dispatcher);
         let method = method.to_string();
         let context = current_host_callback_context();
-        // Poll the in-process plugin on the caller that owns this transport
-        // future. Sync compatibility calls are driven by PluginHost's helper
-        // thread, so plugin code does not bounce back onto a Tokio worker and
-        // block the scheduler. Native async callers remain fully async.
-        // Catch panics locally to preserve the transport isolation previously
-        // provided by a spawned JoinHandle.
-        let dispatch = AssertUnwindSafe(async move {
-            let fut = dispatcher.dispatch(&method, params);
-            if let Some(context) = context {
-                run_in_host_callback_context(context, fut).await
-            } else {
-                fut.await
-            }
-        })
-        .catch_unwind()
-        .await;
+        // A Tool API call may arrive through several nested async layers.
+        // Dispatch it on a fresh worker stack while preserving the callback
+        // context and aborting the task if the caller cancels. This also keeps
+        // a large plugin callback from overflowing the initiating worker.
+        let mut task = AbortOnDrop(tokio::spawn(async move {
+            AssertUnwindSafe(async move {
+                let fut = Box::pin(dispatcher.dispatch(&method, params));
+                if let Some(context) = context {
+                    run_in_host_callback_context(context, fut).await
+                } else {
+                    fut.await
+                }
+            })
+            .catch_unwind()
+            .await
+        }));
+        let dispatch = (&mut task.0).await.map_err(|error| {
+            TransportError::disconnected_error("in-process plugin task stopped", &error)
+        })?;
         match dispatch {
             Ok(Ok(value)) => Ok(value),
             Ok(Err(error)) => Err(TransportError::Plugin(error)),

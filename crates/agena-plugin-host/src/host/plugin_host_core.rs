@@ -669,7 +669,7 @@ impl PluginHost {
         let params =
             serde_json::to_value(&input).map_err(|e| PluginError::invalid_params_error(&e))?;
         let plugin_key = plugin.key();
-        let invoke = self._host_handle.run_in_authorized_callback_context(
+        let invoke = Box::pin(self._host_handle.run_in_authorized_callback_context(
             &plugin_key,
             HostCallbackContext {
                 session_id: Some(session_id),
@@ -679,7 +679,7 @@ impl PluginHost {
                 ..Default::default()
             },
             call_with_timeout(&plugin, method::HOOK_TOOL_INVOKE, params, timeout),
-        );
+        ));
         let result = match cancellation {
             Some(cancellation) => tokio::select! {
                 biased;

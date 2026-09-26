@@ -397,74 +397,82 @@ impl ToolExecutor {
                 prepared_shell_command,
                 launch_provenance,
             };
-            let execution = match payload {
-                ToolPayloadInput::Shell(input) => {
-                    crate::tool::process_tool::execute_async(self, &input, context).await?
-                }
-                ToolPayloadInput::Monitor(input) => {
-                    crate::tool::monitor_tool::execute_async(self, &input, context).await?
-                }
-                ToolPayloadInput::CronCreate(input) => {
-                    crate::tool::cron::execute_create_async(self, &input, &context).await?
-                }
-                ToolPayloadInput::CronList(input) => {
-                    crate::tool::cron::execute_list_async(self, &input, &context).await?
-                }
-                ToolPayloadInput::CronDelete(input) => {
-                    crate::tool::cron::execute_delete_async(self, &input, &context).await?
-                }
-                ToolPayloadInput::CronUpdate(input) => {
-                    crate::tool::cron::execute_update_async(self, &input, &context).await?
-                }
-                ToolPayloadInput::CronPause(input) => {
-                    crate::tool::cron::execute_pause_async(self, &input, &context).await?
-                }
-                ToolPayloadInput::CronResume(input) => {
-                    crate::tool::cron::execute_resume_async(self, &input, &context).await?
-                }
-                ToolPayloadInput::CronHistory(input) => {
-                    crate::tool::cron::execute_history_async(self, &input, &context).await?
-                }
-                ToolPayloadInput::LspDefinition(input) => {
-                    crate::tool::lsp::execute_definition_async(self, &input).await?
-                }
-                ToolPayloadInput::LspReferences(input) => {
-                    crate::tool::lsp::execute_references_async(self, &input).await?
-                }
-                ToolPayloadInput::LspHover(input) => {
-                    crate::tool::lsp::execute_hover_async(self, &input).await?
-                }
-                ToolPayloadInput::LspDiagnostics(input) => {
-                    crate::tool::lsp::execute_diagnostics_async(self, &input).await?
-                }
-                payload => {
-                    let payload_name = payload.tool_name();
-                    let mut input = serde_json::to_value(payload)
-                        .map_err(|error| ToolError::invalid_input_error(&error))?;
-                    if let Some(input) = input.as_object_mut() {
-                        input.remove("tool");
+            // Each built-in branch can carry a large async state machine. Keep
+            // that state on the heap so an ordinary plugin call does not poll
+            // through the combined stack frame of every built-in tool.
+            let execution = Box::pin(async move {
+                let execution = match payload {
+                    ToolPayloadInput::Shell(input) => {
+                        crate::tool::process_tool::execute_async(self, &input, context).await?
                     }
-                    let executor = self.clone();
-                    let worker_permit = BUILTIN_BLOCKING_WORKERS.acquire().await.map_err(|_| {
-                        ToolError::plugin("builtin worker pool is unavailable".to_string())
-                    })?;
-                    tokio::task::spawn_blocking(move || {
-                        let _worker_permit = worker_permit;
-                        crate::tool::orchestrator::execute_tool(
-                            &executor,
-                            payload_name,
-                            input,
-                            context,
-                        )
-                    })
-                    .await
-                    .map_err(|error| {
-                        ToolError::plugin(format!(
-                            "builtin tool worker failed before completion: {error}"
-                        ))
-                    })??
-                }
-            };
+                    ToolPayloadInput::Monitor(input) => {
+                        crate::tool::monitor_tool::execute_async(self, &input, context).await?
+                    }
+                    ToolPayloadInput::CronCreate(input) => {
+                        crate::tool::cron::execute_create_async(self, &input, &context).await?
+                    }
+                    ToolPayloadInput::CronList(input) => {
+                        crate::tool::cron::execute_list_async(self, &input, &context).await?
+                    }
+                    ToolPayloadInput::CronDelete(input) => {
+                        crate::tool::cron::execute_delete_async(self, &input, &context).await?
+                    }
+                    ToolPayloadInput::CronUpdate(input) => {
+                        crate::tool::cron::execute_update_async(self, &input, &context).await?
+                    }
+                    ToolPayloadInput::CronPause(input) => {
+                        crate::tool::cron::execute_pause_async(self, &input, &context).await?
+                    }
+                    ToolPayloadInput::CronResume(input) => {
+                        crate::tool::cron::execute_resume_async(self, &input, &context).await?
+                    }
+                    ToolPayloadInput::CronHistory(input) => {
+                        crate::tool::cron::execute_history_async(self, &input, &context).await?
+                    }
+                    ToolPayloadInput::LspDefinition(input) => {
+                        crate::tool::lsp::execute_definition_async(self, &input).await?
+                    }
+                    ToolPayloadInput::LspReferences(input) => {
+                        crate::tool::lsp::execute_references_async(self, &input).await?
+                    }
+                    ToolPayloadInput::LspHover(input) => {
+                        crate::tool::lsp::execute_hover_async(self, &input).await?
+                    }
+                    ToolPayloadInput::LspDiagnostics(input) => {
+                        crate::tool::lsp::execute_diagnostics_async(self, &input).await?
+                    }
+                    payload => {
+                        let payload_name = payload.tool_name();
+                        let mut input = serde_json::to_value(payload)
+                            .map_err(|error| ToolError::invalid_input_error(&error))?;
+                        if let Some(input) = input.as_object_mut() {
+                            input.remove("tool");
+                        }
+                        let executor = self.clone();
+                        let worker_permit =
+                            BUILTIN_BLOCKING_WORKERS.acquire().await.map_err(|_| {
+                                ToolError::plugin("builtin worker pool is unavailable".to_string())
+                            })?;
+                        tokio::task::spawn_blocking(move || {
+                            let _worker_permit = worker_permit;
+                            crate::tool::orchestrator::execute_tool(
+                                &executor,
+                                payload_name,
+                                input,
+                                context,
+                            )
+                        })
+                        .await
+                        .map_err(|error| {
+                            ToolError::plugin(format!(
+                                "builtin tool worker failed before completion: {error}"
+                            ))
+                        })??
+                    }
+                };
+                Ok::<_, ToolError>(execution)
+            })
+            .await?;
             self.ensure_not_cancelled()?;
             return self
                 .finalize_execution_async(
@@ -477,21 +485,19 @@ impl ToolExecutor {
                 .await;
         }
 
-        let response = self
-            .plugins
-            .invoke_tool(
-                &resolution,
-                PluginToolInvokeInput {
-                    tool_name: resolution.tool_name().to_string(),
-                    session_id,
-                    call_id,
-                    workspace_root: self.workspace_root.to_string_lossy().to_string(),
-                    input: resolved_plugin_invocation_input_value(&resolution, &plugin_invocation),
-                },
-                self.cancellation_token.clone(),
-            )
-            .await
-            .map_err(|err| self.plugin_error_or_cancelled(err))?;
+        let response = Box::pin(self.plugins.invoke_tool(
+            &resolution,
+            PluginToolInvokeInput {
+                tool_name: resolution.tool_name().to_string(),
+                session_id,
+                call_id,
+                workspace_root: self.workspace_root.to_string_lossy().to_string(),
+                input: resolved_plugin_invocation_input_value(&resolution, &plugin_invocation),
+            },
+            self.cancellation_token.clone(),
+        ))
+        .await
+        .map_err(|err| self.plugin_error_or_cancelled(err))?;
         self.ensure_not_cancelled()?;
 
         let view = ToolExecutionView {
@@ -508,14 +514,15 @@ impl ToolExecutor {
             view,
             apply_patch: apply_patch_execution_from_tool_output(&output),
         };
-        self.finalize_execution_async(
+        let finalized = Box::pin(self.finalize_execution_async(
             invocation,
             session_id,
             resolution.canonical_name().as_str(),
             call_id,
             execution,
-        )
-        .await
+        ))
+        .await;
+        finalized
     }
 
     pub async fn execute_invocation_detailed(

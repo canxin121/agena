@@ -501,7 +501,20 @@ impl SessionManager {
             )
             .map(|estimate| estimate.total_tokens)
         });
-        let measured_prompt_tokens = session.runtime.prompt_tokens.prompt_tokens();
+        // A measurement from an earlier checkpoint generation or request
+        // shape is historical usage, not the size of the next request.
+        let measured_prompt_tokens = prompt_fingerprints.as_ref().and_then(|fingerprints| {
+            session
+                .runtime
+                .prompt_tokens
+                .matches_request(
+                    session.runtime.prompt_window.generation,
+                    fingerprints.system_fingerprint.as_str(),
+                    fingerprints.request_options_fingerprint.as_str(),
+                )
+                .then(|| session.runtime.prompt_tokens.prompt_tokens())
+                .flatten()
+        });
         let provider_compaction = options.as_ref().and_then(|options| {
             prompt_window::provider_compaction_for_model(
                 session,
@@ -511,8 +524,18 @@ impl SessionManager {
                 native_compaction_enabled,
             )
         });
-        let approximate_tokens = prompt_window::approximate_total_request_tokens_with_compaction(
-            session.active_window_parts(),
+        let approximate_tokens = prompt_window::approximate_session_request_tokens(
+            session,
+            options
+                .as_ref()
+                .map(|options| options.model.provider_id.as_ref()),
+            options
+                .as_ref()
+                .and_then(|options| options.model.adapter_id.as_ref().map(AsRef::as_ref)),
+            options
+                .as_ref()
+                .map(|options| options.model.model_id.as_ref()),
+            native_compaction_enabled,
             request_system.as_deref(),
             tool_api_functions.as_slice(),
             provider_compaction.as_ref(),

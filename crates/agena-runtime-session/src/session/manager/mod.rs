@@ -231,7 +231,6 @@ pub struct SessionSubtaskOutput {
 
 #[derive(Debug, Clone, Copy)]
 struct PromptTurnBudget {
-    max_prompt_chars: usize,
     max_prompt_tokens: u64,
     model_context_window_tokens: Option<u32>,
 }

@@ -99,11 +99,9 @@ impl SessionManager {
             .await
         {
             Ok(session) => Ok(session),
-            Err((mut session, error)) => {
-                session.runtime.prompt_window.record_compaction_failure();
-                let _ = self
-                    .persist_session_changes(session, Vec::new(), None, state)
-                    .await?;
+            Err((_session, AppError::Cancelled)) => Err(AppError::Cancelled),
+            Err((session, error)) => {
+                let _ = self.persist_compaction_failure(session).await?;
                 Err(error)
             }
         }
@@ -126,16 +124,13 @@ impl SessionManager {
         {
             Ok(session) => Ok(session),
             Err((_session, AppError::Cancelled)) => Err(AppError::Cancelled),
-            Err((mut session, error)) => {
-                session.runtime.prompt_window.record_compaction_failure();
+            Err((session, error)) => {
+                let session = self.persist_compaction_failure(session).await?;
                 let failures = session
                     .runtime
                     .prompt_window
                     .consecutive_compaction_failures;
                 let disabled = failures >= MAX_COMPACTION_FAILURES;
-                let session = self
-                    .persist_session_changes(session, Vec::new(), None, state)
-                    .await?;
                 tracing::warn!(
                     target: "agena::session::compact",
                     session_id = session.id,
@@ -147,6 +142,45 @@ impl SessionManager {
                 Ok(session)
             }
         }
+    }
+
+    /// Keep the failure count in parts so a reload or process restart cannot
+    /// retry the same failing compaction indefinitely. This marker has no
+    /// checkpoint payload and therefore never closes the prompt window.
+    pub(in crate::session::manager) async fn persist_compaction_failure(
+        &self,
+        mut session: Session,
+    ) -> Result<Session, AppError> {
+        let run_id = self
+            .store
+            .start_run(
+                session.id,
+                "compaction",
+                serde_json::json!({
+                    "summary": null,
+                    "checkpoint": null,
+                    "attempt_failure": true,
+                }),
+            )
+            .await?;
+        self.store
+            .complete_run(
+                session.id,
+                run_id,
+                agena_storage::store::RunOutcome {
+                    status: agena_storage::store::PartState::Failed,
+                    abort_reason: Some("compaction_failed".to_owned()),
+                    content: None,
+                    provider_state: None,
+                },
+            )
+            .await?;
+        let persisted = self.store.load_session(session.id).await?;
+        session.version = persisted.version;
+        session.updated_at = persisted.updated_at;
+        session.install_projected_parts(persisted.parts().to_vec());
+        session.runtime.prompt_window.record_compaction_failure();
+        Ok(session)
     }
 
     async fn compact_candidate(
@@ -164,7 +198,17 @@ impl SessionManager {
         // The compaction boundary is the last run marker's part id (v2: the
         // marker part id is the durable message id).
         let boundary = session
-            .last_run_marker()
+            .parts()
+            .iter()
+            .rev()
+            .find(|marker| {
+                marker.is_run_marker()
+                    && marker
+                        .content
+                        .get("run_kind")
+                        .and_then(serde_json::Value::as_str)
+                        != Some("compaction")
+            })
             .map(|marker| marker.part_id)
             .unwrap_or_default();
         let prompt_inputs = match self
@@ -174,7 +218,7 @@ impl SessionManager {
             Ok(inputs) => inputs,
             Err(error) => return Err((session, error)),
         };
-        if prompt_inputs.turns.len() < 2 && prompt_inputs.provider_compaction.is_none() {
+        if prompt_inputs.turns.is_empty() && prompt_inputs.provider_compaction.is_none() {
             return Err((
                 session,
                 AppError::Config("conversation is too small to compact safely".to_owned()),
@@ -295,13 +339,21 @@ impl SessionManager {
         } else {
             scoped_executor.available_tool_api_bindings_async().await
         };
-        let turns = prompt_window::compactable_prompt_runs(
+        let mut turns = prompt_window::compactable_prompt_runs(
             session,
             Some(options.model.provider_id.as_ref()),
             options.model.adapter_id.as_ref().map(AsRef::as_ref),
             Some(options.model.model_id.as_ref()),
             native_compaction_enabled,
         );
+        // Measure and summarize the same tool output that the model sees.
+        // A model switch can replay calls before the current checkpoint.
+        prompt_window::render_session_tool_results_for_model(
+            &mut turns,
+            session,
+            &state.tool_executor,
+        )
+        .await;
         let provider_compaction = prompt_window::provider_compaction_for_model(
             session,
             options.model.provider_id.as_ref(),
@@ -352,17 +404,10 @@ impl SessionManager {
         cancellation: tokio_util::sync::CancellationToken,
     ) -> Result<Option<ProviderCompactionOutput>, AppError> {
         let provider_registry = &state.provider_registry;
-        let mut turns = inputs.turns.clone();
-        prompt_window::render_tool_results_for_model(
-            &mut turns,
-            session.active_window_parts(),
-            &state.tool_executor,
-        )
-        .await;
         let mut request = super::completion_request(
             options,
             options.system.clone(),
-            turns,
+            inputs.turns.clone(),
             inputs.tools.clone(),
             Some(prompt_window::prompt_cache_key_for_session(session)),
             None,
@@ -397,9 +442,15 @@ impl SessionManager {
         // installed TextSummary checkpoint injection, so a re-compaction
         // re-summarizes the durable checkpoint too — minus assistant runs that
         // failed or were cancelled.
-        let source = prompt_window::normalize_prompt_runs(
-            prompt_window::compactable_prompt_runs(session, None, None, None, false).as_slice(),
-        );
+        let mut projected =
+            prompt_window::compactable_prompt_runs(session, None, None, None, false);
+        prompt_window::render_session_tool_results_for_model(
+            &mut projected,
+            session,
+            &state.tool_executor,
+        )
+        .await;
+        let source = prompt_window::normalize_prompt_runs(projected.as_slice());
         let recent_start = select_recent_start(source.as_slice());
 
         let mut recent_messages = source[recent_start..]
@@ -487,12 +538,21 @@ impl SessionManager {
                 "local compaction returned an invalid non-text response".to_owned(),
             ));
         }
-        let summary = response.text.trim().to_owned();
-        if summary.is_empty() {
+        let model_summary = response.text.trim();
+        if model_summary.is_empty() {
             return Err(AppError::Provider(
                 "local compaction returned an empty continuation record".to_owned(),
             ));
         }
+        // The model may summarize an inaccurate or incomplete input. Bind its
+        // record to the latest durable user request so repeated compaction
+        // cannot turn a real task into an "empty session".
+        let summary = match latest_durable_user_text(session) {
+            Some(user_text) => format!(
+                "## Latest verbatim user request (durable)\n{user_text}\n\n## Continuation record\n{model_summary}"
+            ),
+            None => model_summary.to_owned(),
+        };
 
         let mut candidate_messages = vec![checkpoint_message(session, summary.as_str())];
         candidate_messages.extend(recent_messages.iter().cloned());
@@ -502,21 +562,13 @@ impl SessionManager {
             inputs.tools.as_slice(),
         );
         // Preserve the newest user-authored turn while shedding recent suffix
-        // messages to satisfy the token budget. v1 identified it by message id;
-        // the projected messages carry no id, so identity is by value (the
-        // earliest duplicate is removed first, keeping the newest).
-        let newest_user = source
-            .iter()
-            .rev()
-            .find(|message| message.role == Role::User)
-            .cloned();
+        // messages. The retained messages have been converted to bounded text,
+        // so comparing them with the unconverted source cannot identify the
+        // user turn reliably.
         while (after_tokens >= inputs.before_tokens || after_tokens > inputs.hard_limit_tokens)
-            && recent_messages.len() > 1
+            && !recent_messages.is_empty()
         {
-            let remove_index = recent_messages
-                .iter()
-                .position(|message| Some(message) != newest_user.as_ref());
-            let Some(remove_index) = remove_index else {
+            let Some(remove_index) = oldest_removable_recent_index(&recent_messages) else {
                 break;
             };
             recent_messages.remove(remove_index);
@@ -597,8 +649,22 @@ impl SessionManager {
         ));
         let _compaction_run_id = self
             .store
-            .compact_session(session.id, summary, window)
+            .compact_session(
+                session.id,
+                summary,
+                window,
+                serde_json::to_value(&runtime).map_err(|error| {
+                    AppError::Internal(format!("serialize compaction checkpoint: {error}"))
+                })?,
+            )
             .await?;
+        // The marker closes the active window immediately. Install its durable
+        // projection before the next provider turn in this same execution.
+        let persisted = self.store.load_session(session.id).await?;
+        session.version = persisted.version;
+        session.updated_at = persisted.updated_at;
+        session.install_projected_parts(persisted.parts().to_vec());
+        session.runtime.prompt_window.compaction = Some(runtime);
         Ok(session)
     }
 }
@@ -608,8 +674,11 @@ fn select_recent_start(messages: &[CompletionInputRun]) -> usize {
     let mut chars = 0usize;
     let mut start = messages.len();
     for (index, message) in messages.iter().enumerate().rev() {
-        let next_chars =
-            chars.saturating_add(message.as_text_lossy().len().min(MAX_RECENT_CONTEXT_CHARS));
+        let next_chars = chars.saturating_add(
+            compaction_message_text(message)
+                .len()
+                .min(MAX_RECENT_CONTEXT_CHARS),
+        );
         if start < messages.len() && next_chars > MAX_RECENT_CONTEXT_CHARS {
             break;
         }
@@ -628,27 +697,26 @@ fn select_recent_start(messages: &[CompletionInputRun]) -> usize {
 }
 
 fn bound_recent_messages(messages: &mut Vec<CompletionInputRun>) {
-    // The newest user turn is preserved by value (the earliest duplicate is
-    // removed first, keeping the newest) — projected messages carry no id.
-    let newest_user = messages
-        .iter()
-        .rev()
-        .find(|message| message.role == Role::User)
-        .cloned();
     let mut total = messages
         .iter()
         .map(|message| message.as_text_lossy().len())
         .sum::<usize>();
     while total > MAX_RECENT_CONTEXT_CHARS && messages.len() > 1 {
-        let remove_index = messages
-            .iter()
-            .position(|message| Some(message) != newest_user.as_ref())
-            .unwrap_or(0);
+        let Some(remove_index) = oldest_removable_recent_index(messages) else {
+            break;
+        };
         total = total.saturating_sub(messages.remove(remove_index).as_text_lossy().len());
     }
     if let Some(last) = messages.last_mut() {
         *last = compaction_safe_message(last, MAX_RECENT_CONTEXT_CHARS);
     }
+}
+
+fn oldest_removable_recent_index(messages: &[CompletionInputRun]) -> Option<usize> {
+    let newest_user = messages
+        .iter()
+        .rposition(|message| message.role == Role::User);
+    (0..messages.len()).find(|index| Some(*index) != newest_user)
 }
 
 fn bounded_compactor_history(
@@ -717,7 +785,7 @@ fn compaction_safe_message(message: &CompletionInputRun, max_chars: usize) -> Co
     } else {
         message.role
     };
-    let mut text = message.as_text_lossy();
+    let mut text = compaction_message_text(message);
     if message.role == Role::Tool {
         text = format!("[Historical tool output]\n{text}");
     }
@@ -733,6 +801,71 @@ fn compaction_safe_message(message: &CompletionInputRun, max_chars: usize) -> Co
         parts: vec![CompletionInputPart::Text { text }],
         provider_state: Default::default(),
     }
+}
+
+/// A compactor needs the content of tool calls and results, not just their
+/// identifiers. `CompletionInputRun::as_text_lossy` intentionally emits only
+/// markers for those parts, which previously erased the evidence a summary
+/// needed to carry into the next prompt window.
+fn compaction_message_text(message: &CompletionInputRun) -> String {
+    message
+        .parts
+        .iter()
+        .map(|part| match part {
+            CompletionInputPart::Text { text }
+            | CompletionInputPart::Reasoning { text }
+            | CompletionInputPart::SystemMessage { text } => text.clone(),
+            CompletionInputPart::Attachment { attachment } => format!(
+                "[attachment: {}]",
+                attachment
+                    .filename
+                    .as_deref()
+                    .or(attachment.title.as_deref())
+                    .unwrap_or("unnamed")
+            ),
+            CompletionInputPart::ToolCall {
+                id,
+                function,
+                arguments_json,
+            } => format!(
+                "[tool call {} ({id})]\n{arguments_json}",
+                function.function_name()
+            ),
+            CompletionInputPart::ToolResult {
+                tool_call_id,
+                function,
+                status,
+                output_json,
+                ..
+            } => format!(
+                "[tool result {} ({tool_call_id}, {status:?})]\n{output_json}",
+                function.function_name()
+            ),
+        })
+        .filter(|text| !text.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn latest_durable_user_text(session: &Session) -> Option<String> {
+    crate::session::store::parts_into_runs(session.parts())
+        .into_iter()
+        .rev()
+        .find(|run| {
+            run.first().is_some_and(|marker| {
+                marker.kind == "run"
+                    && marker.role == agena_storage::store::PartRole::User
+                    && marker
+                        .content
+                        .get("run_kind")
+                        .and_then(serde_json::Value::as_str)
+                        == Some("user_send")
+            })
+        })
+        .map(|run| crate::provider::project_completion_input(&run))
+        .map(|message| compaction_message_text(&message))
+        .filter(|text| !text.trim().is_empty())
+        .map(|text| truncate_middle(&text, 4_096))
 }
 
 fn truncate_middle(value: &str, max_chars: usize) -> String {
@@ -850,6 +983,7 @@ fn remote_compaction_is_permanently_unavailable(error: &AppError) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use agena_provider::{CompletionInputToolResultStatus, ModelToolFunction};
 
     fn projected_message(role: Role, text: &str) -> CompletionInputRun {
         CompletionInputRun {
@@ -882,5 +1016,34 @@ mod tests {
         assert!(text.starts_with("BEGIN"));
         assert!(text.ends_with("END"));
         assert!(text.contains("truncated for compaction safety"));
+    }
+
+    #[test]
+    fn compactor_history_contains_tool_arguments_and_results() {
+        let call = CompletionInputRun {
+            role: Role::Assistant,
+            parts: vec![CompletionInputPart::ToolCall {
+                id: "call-17".to_owned(),
+                function: ModelToolFunction::new("tools_help"),
+                arguments_json: r#"{"tool":"session.model"}"#.to_owned(),
+            }],
+            provider_state: Default::default(),
+        };
+        let result = CompletionInputRun {
+            role: Role::Tool,
+            parts: vec![CompletionInputPart::ToolResult {
+                tool_call_id: "call-17".to_owned(),
+                function: ModelToolFunction::new("tools_help"),
+                arguments_json: r#"{"tool":"session.model"}"#.to_owned(),
+                status: CompletionInputToolResultStatus::Completed,
+                output_json: r#"{"description":"Live model selection"}"#.to_owned(),
+            }],
+            provider_state: Default::default(),
+        };
+        let call_text = compaction_safe_message(&call, 2_000).as_text_lossy();
+        let result_text = compaction_safe_message(&result, 2_000).as_text_lossy();
+        assert!(call_text.contains(r#"{"tool":"session.model"}"#));
+        assert!(result_text.contains("Live model selection"));
+        assert!(result_text.contains("call-17"));
     }
 }

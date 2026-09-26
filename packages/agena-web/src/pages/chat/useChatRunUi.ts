@@ -292,9 +292,7 @@ export function useChatRunUi(opts: {
         typeof canonical.model_context_window_tokens === 'number' &&
         Number.isFinite(canonical.model_context_window_tokens)
           ? canonical.model_context_window_tokens
-          : typeof canonical.limit_tokens === 'number' && Number.isFinite(canonical.limit_tokens)
-            ? canonical.limit_tokens
-            : null
+          : null
       return {
         tokensValue: tokens,
         tokensLabel: tokens != null ? `${formatTokensK(tokens)} used` : '--',

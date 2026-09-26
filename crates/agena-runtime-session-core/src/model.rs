@@ -766,7 +766,29 @@ pub struct Session {
 /// `content.run_kind == "compaction"` (engine.rs maps the compaction run kind
 /// to an assistant marker and stamps `content.run_kind`).
 fn is_compaction_marker(part: &Part) -> bool {
-    part.kind == "run" && part.content.get("run_kind") == Some(&serde_json::json!("compaction"))
+    if part.kind != "run" || part.content.get("run_kind") != Some(&serde_json::json!("compaction"))
+    {
+        return false;
+    }
+    match part.content.get("checkpoint") {
+        Some(value) if !value.is_null() => part.state == agena_storage::store::PartState::Completed,
+        // Historical summary-only markers were not terminalized by older
+        // builds. Keep them readable; new checkpoints become active only once
+        // their run has committed successfully.
+        None => part
+            .content
+            .get("summary")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|summary| !summary.trim().is_empty()),
+        Some(_) => {
+            part.state == agena_storage::store::PartState::Completed
+                && part
+                    .content
+                    .get("summary")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|summary| !summary.trim().is_empty())
+        }
+    }
 }
 
 /// Decode the [`OperationPart`] carried by a `tool_call` part's content: the
@@ -1816,6 +1838,28 @@ mod parts_projection_tests {
         ]);
 
         assert!(session.active_window_parts().is_empty());
+    }
+
+    #[test]
+    fn empty_failed_compaction_does_not_hide_the_transcript() {
+        let session = session_with(vec![
+            part(
+                1,
+                "text",
+                PartRole::User,
+                PartState::Completed,
+                json!({"text": "preserve this task"}),
+            ),
+            part(
+                2,
+                "run",
+                PartRole::Assistant,
+                PartState::Failed,
+                json!({"run_kind": "compaction", "summary": null, "checkpoint": null}),
+            ),
+        ]);
+        assert_eq!(session.active_window_parts().len(), 2);
+        assert_eq!(session.active_window_parts()[0].part_id, 1);
     }
 
     #[test]

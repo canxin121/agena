@@ -3,8 +3,8 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 /// Policy detecting repeated identical tool calls (doom loop).
 pub struct DoomLoopPolicy {
-    /// Number of immediately-consecutive identical tool calls that constitute
-    /// a doom loop. Values below 2 disable the check.
+    /// Number of identical calls with identical results that constitute a
+    /// doom loop. Help lookups may be interleaved. Values below 2 disable it.
     pub repeat_threshold: u8,
 }
 
@@ -38,7 +38,7 @@ pub struct DoomLoopHit {
 impl DoomLoopHit {
     pub fn message(&self) -> String {
         format!(
-            "doom-loop detected: tool `{}` was invoked with the same input {} times in a row; aborting run",
+            "doom-loop detected: tool `{}` returned the same result for the same input {} times; aborting run",
             self.tool_label, self.repeat_count
         )
     }

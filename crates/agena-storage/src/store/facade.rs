@@ -432,6 +432,7 @@ pub trait SessionStore: Send + Sync {
         owner_id: &str,
         summary: Option<String>,
         window: Option<String>,
+        checkpoint: Option<Value>,
     ) -> Result<i64, StoreError>;
 
     /// Delete a session (membership cascades; shared parts survive and are
@@ -1948,6 +1949,7 @@ where
         owner_id: &str,
         summary: Option<String>,
         window: Option<String>,
+        checkpoint: Option<Value>,
     ) -> Result<i64, StoreError> {
         let owner = self.owner(owner_id);
         self.ensure_lease(session_id, &owner).await?;
@@ -1961,21 +1963,41 @@ where
                 session_id,
                 &owner,
                 "compaction",
-                json!({ "summary": summary, "window": window }),
+                json!({ "summary": summary, "window": window, "checkpoint": checkpoint }),
                 None,
+                self.now(),
+            )
+            .await?;
+        // A compaction checkpoint is complete as soon as its marker and
+        // payload are durable. Leaving the marker in progress lets restart
+        // reconciliation mark a successful checkpoint failed, which obscures
+        // the prompt boundary and its summary in later projections.
+        let marker = self
+            .engine
+            .complete_run(
+                session_id,
+                &owner,
+                outcome.run_id,
+                RunOutcome {
+                    status: PartState::Completed,
+                    abort_reason: None,
+                    content: None,
+                    provider_state: None,
+                },
                 self.now(),
             )
             .await?;
         self.engine.set_provider_anchors(session_id, None).await?;
         let meta = self.engine.session_meta(session_id).await?;
-        self.memory
-            .apply_committed(session_id, &outcome.parts, Some(meta.version));
-        for part in &outcome.parts {
-            self.bus.emit(SessionChange::PartAdded {
-                session_id,
-                part: part.clone(),
-            });
-        }
+        self.memory.apply_committed(
+            session_id,
+            std::slice::from_ref(&marker),
+            Some(meta.version),
+        );
+        self.bus.emit(SessionChange::PartAdded {
+            session_id,
+            part: marker,
+        });
         self.bus
             .emit(SessionChange::SessionMetaUpdated { session_id, meta });
         Ok(outcome.run_id)
@@ -2777,7 +2799,13 @@ mod tests {
             .await
             .expect("set anchors");
         let compaction_id = facade
-            .compact_session(session_id, "owner-a", Some("checkpoint".to_owned()), None)
+            .compact_session(
+                session_id,
+                "owner-a",
+                Some("checkpoint".to_owned()),
+                None,
+                None,
+            )
             .await
             .expect("compact");
         assert!(compaction_id > 0);
@@ -2788,10 +2816,13 @@ mod tests {
             .expect("meta");
         assert!(meta.provider_anchors_json.is_none(), "anchors cleared");
         let view = facade.load(session_id).await.expect("load");
-        assert!(
-            view.parts.iter().any(|p| p.is_run_marker()),
-            "compaction run marker created"
-        );
+        let marker = view
+            .parts
+            .iter()
+            .find(|part| part.part_id == compaction_id)
+            .expect("compaction run marker created");
+        assert_eq!(marker.state, PartState::Completed);
+        assert_eq!(marker.content["summary"], "checkpoint");
     }
 
     #[tokio::test]
@@ -2805,6 +2836,7 @@ mod tests {
                 "owner-a",
                 Some(summary.to_owned()),
                 Some("through:42".to_owned()),
+                None,
             )
             .await
             .expect("compact");

@@ -8,8 +8,9 @@ use std::{collections::BTreeMap, collections::HashMap, sync::Arc};
 
 use agena_domain::{
     AssistantReasoningField, AssistantReplyId, ComposerDocument, ComposerNode, ModelId, ModelRef,
-    ProviderId, Role, StructuredObject, TimeRange, ToolInvocation, TurnId, UserInputOption,
-    UserInputQuestion, UserInputReply, UserInputReplyKind, UserInputSource,
+    PromptCompactionStrategy, PromptCompactionTrigger, ProviderId, Role, StructuredObject,
+    TimeRange, ToolInvocation, TurnId, UserInputOption, UserInputQuestion, UserInputReply,
+    UserInputReplyKind, UserInputSource,
 };
 use agena_plugin_host::{
     ConfiguredPlugin, PluginHost, PluginHostBuildConfig, PluginsConfig, StaticPluginRegistration,
@@ -31,6 +32,7 @@ use super::{
 use crate::provider::{ModelRuntime, ProviderError};
 use crate::session::manager::replies::{operation_from_part, operation_id_from_part};
 use crate::session::manager::runs::run_visible_text_lossy;
+use crate::session::model::{PromptCompactionContent, PromptCompactionRuntime};
 use crate::session::store::{
     OPERATION_ID_METADATA_KEY, ProcessorPartIdAllocator, new_part_from_content, parts_into_runs,
     run_marker_content, text_content, tool_call_from_operation, typed_content_from_value,
@@ -41,7 +43,7 @@ use crate::{
     authorization::ExecutionPrincipal,
     permission::{PermissionPolicy, ToolPermissionPolicy},
     provider::ProviderRegistry,
-    session::{Session, SessionProcessor},
+    session::{PromptCompactionMessage, Session, SessionProcessor},
     tool::ToolExecutor,
 };
 use agena_runtime_contracts::part_content::{
@@ -122,6 +124,444 @@ async fn create_with_model(
         .set_session_model_override(session.id, ModelRef::new(provider_id, model_id))
         .await
         .expect("persist explicit test model selection")
+}
+
+#[tokio::test]
+async fn compaction_checkpoint_and_user_request_survive_a_store_reload() {
+    let manager = test_manager().await;
+    let session = create(&manager, "durable compaction prompt").await;
+    let user_text = "Continue the repository cleanup; preserve the tool results already obtained.";
+    manager
+        .store
+        .submit_user_run(
+            session.id,
+            vec![
+                new_part_from_content(
+                    "text",
+                    PartRole::User,
+                    &TypedContent::Text(text_content(user_text)),
+                    PartState::Completed,
+                )
+                .expect("build user text"),
+            ],
+            None,
+        )
+        .await
+        .expect("persist original user request");
+
+    let checkpoint = PromptCompactionRuntime {
+        checkpoint_id: "durable-checkpoint".to_owned(),
+        compacted_through_message_id: 1,
+        trigger: PromptCompactionTrigger::Auto,
+        strategy: PromptCompactionStrategy::LocalSummary,
+        content: PromptCompactionContent::TextSummary {
+            summary: "The agent has inspected the repository.".to_owned(),
+            recent_messages: vec![PromptCompactionMessage {
+                id: 1,
+                role: Role::User,
+                source: agena_domain::MessageSource::User,
+                text: user_text.to_owned(),
+            }],
+        },
+        before_tokens: 500,
+        after_tokens: 100,
+        created_at_ms: 1,
+    };
+    let marker_id = manager
+        .store
+        .compact_session(
+            session.id,
+            Some("The agent has inspected the repository.".to_owned()),
+            Some("through_message:1".to_owned()),
+            serde_json::to_value(&checkpoint).expect("serialize checkpoint"),
+        )
+        .await
+        .expect("commit compaction checkpoint");
+    let loaded = manager
+        .store
+        .load_session(session.id)
+        .await
+        .expect("reload checkpoint");
+    assert_eq!(
+        loaded
+            .parts()
+            .iter()
+            .find(|part| part.part_id == marker_id)
+            .expect("checkpoint marker")
+            .state,
+        PartState::Completed
+    );
+    assert_eq!(loaded.runtime.prompt_window.compaction, Some(checkpoint));
+    let prompt = crate::session::prompt_window::compactable_prompt_runs(
+        &loaded,
+        Some("fake"),
+        None,
+        Some("fake-model"),
+        false,
+    );
+    assert!(
+        prompt[0]
+            .as_text_lossy()
+            .contains("inspected the repository")
+    );
+    assert_eq!(prompt[1].as_text_lossy(), user_text);
+
+    // Old checkpoints contained only a summary. Their immutable transcript
+    // must still restore the latest verbatim user request after a restart.
+    let legacy = create(&manager, "legacy compaction prompt").await;
+    manager
+        .store
+        .submit_user_run(
+            legacy.id,
+            vec![
+                new_part_from_content(
+                    "text",
+                    PartRole::User,
+                    &TypedContent::Text(text_content(user_text)),
+                    PartState::Completed,
+                )
+                .expect("build legacy user text"),
+            ],
+            None,
+        )
+        .await
+        .expect("persist legacy user request");
+    manager
+        .session_store()
+        .compact_session(
+            legacy.id,
+            manager.store.owner_id.as_str(),
+            Some("An old incomplete summary.".to_owned()),
+            None,
+            None,
+        )
+        .await
+        .expect("commit legacy checkpoint");
+    let loaded_legacy = manager
+        .store
+        .load_session(legacy.id)
+        .await
+        .expect("reload legacy checkpoint");
+    let legacy_prompt = crate::session::prompt_window::compactable_prompt_runs(
+        &loaded_legacy,
+        Some("fake"),
+        None,
+        Some("fake-model"),
+        false,
+    );
+    assert!(
+        legacy_prompt[0]
+            .as_text_lossy()
+            .contains("old incomplete summary")
+    );
+    assert!(
+        legacy_prompt
+            .iter()
+            .any(|run| run.as_text_lossy().contains(user_text)),
+        "legacy checkpoint must recover the original user request"
+    );
+
+    let empty_checkpoint = create(&manager, "empty failed compaction").await;
+    manager
+        .store
+        .submit_user_run(
+            empty_checkpoint.id,
+            vec![
+                new_part_from_content(
+                    "text",
+                    PartRole::User,
+                    &TypedContent::Text(text_content(user_text)),
+                    PartState::Completed,
+                )
+                .expect("build user text"),
+            ],
+            None,
+        )
+        .await
+        .expect("persist user request");
+    manager
+        .session_store()
+        .compact_session(
+            empty_checkpoint.id,
+            manager.store.owner_id.as_str(),
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect("persist empty marker");
+    let loaded_empty = manager
+        .store
+        .load_session(empty_checkpoint.id)
+        .await
+        .expect("reload empty marker");
+    assert!(loaded_empty.runtime.prompt_window.compaction.is_none());
+    let full_prompt = crate::session::prompt_window::compactable_prompt_runs(
+        &loaded_empty,
+        Some("fake"),
+        None,
+        Some("fake-model"),
+        false,
+    );
+    assert!(
+        full_prompt
+            .iter()
+            .any(|run| run.as_text_lossy() == user_text)
+    );
+}
+
+#[tokio::test]
+async fn failed_compaction_attempts_survive_reload_without_closing_history() {
+    let manager = test_manager().await;
+    let session = create(&manager, "failed compaction recovery").await;
+    let task = "Keep this original user task available after failed compaction.";
+    manager
+        .store
+        .submit_user_run(
+            session.id,
+            vec![
+                new_part_from_content(
+                    "text",
+                    PartRole::User,
+                    &TypedContent::Text(text_content(task)),
+                    PartState::Completed,
+                )
+                .expect("build user text"),
+            ],
+            None,
+        )
+        .await
+        .expect("persist user request");
+
+    for failures in 1..=3 {
+        let loaded = manager
+            .store
+            .load_session(session.id)
+            .await
+            .expect("reload before failed attempt");
+        manager
+            .persist_compaction_failure(loaded)
+            .await
+            .expect("persist failed attempt");
+        let reloaded = manager
+            .store
+            .load_session(session.id)
+            .await
+            .expect("reload durable failure count");
+        assert_eq!(
+            reloaded
+                .runtime
+                .prompt_window
+                .consecutive_compaction_failures,
+            failures
+        );
+        assert_eq!(
+            reloaded.runtime.prompt_window.auto_compaction_disabled,
+            failures >= 3
+        );
+        assert_eq!(reloaded.runtime.prompt_window.generation, 0);
+        let prompt = crate::session::prompt_window::compactable_prompt_runs(
+            &reloaded,
+            Some("fake"),
+            None,
+            Some("fake-model"),
+            false,
+        );
+        assert!(prompt.iter().any(|run| run.as_text_lossy() == task));
+    }
+
+    manager
+        .store
+        .compact_session(
+            session.id,
+            Some("The original task remains active.".to_owned()),
+            None,
+            serde_json::to_value(PromptCompactionRuntime {
+                checkpoint_id: "recovered".to_owned(),
+                compacted_through_message_id: 1,
+                trigger: PromptCompactionTrigger::Manual,
+                strategy: PromptCompactionStrategy::LocalSummary,
+                content: PromptCompactionContent::TextSummary {
+                    summary: "The original task remains active.".to_owned(),
+                    recent_messages: Vec::new(),
+                },
+                before_tokens: 100,
+                after_tokens: 20,
+                created_at_ms: 1,
+            })
+            .expect("serialize checkpoint"),
+        )
+        .await
+        .expect("persist successful checkpoint");
+    let recovered = manager
+        .store
+        .load_session(session.id)
+        .await
+        .expect("reload after successful checkpoint");
+    assert_eq!(
+        recovered
+            .runtime
+            .prompt_window
+            .consecutive_compaction_failures,
+        0
+    );
+    assert!(!recovered.runtime.prompt_window.auto_compaction_disabled);
+    assert_eq!(recovered.runtime.prompt_window.generation, 1);
+}
+
+#[tokio::test]
+async fn prompt_preparation_error_terminalizes_its_empty_assistant_run() {
+    let manager = test_manager().await;
+    let session = create(&manager, "preflight budget failure").await;
+    manager
+        .store
+        .submit_user_run(
+            session.id,
+            vec![
+                new_part_from_content(
+                    "text",
+                    PartRole::User,
+                    &TypedContent::Text(text_content("retain this task after preflight failure")),
+                    PartState::Completed,
+                )
+                .expect("build user text"),
+            ],
+            None,
+        )
+        .await
+        .expect("persist user request");
+    let marker_id = manager
+        .store
+        .start_run(
+            session.id,
+            "continue",
+            run_marker_content("continue", Some("fake"), Some("fake-model"), None, None),
+        )
+        .await
+        .expect("start model run before preflight");
+    manager
+        .terminalize_unfinished_model_run(
+            session.id,
+            marker_id,
+            &crate::AppError::PromptBudgetExceeded {
+                session_id: session.id,
+                estimated_tokens: 2_000,
+                limit_tokens: 1_000,
+            },
+        )
+        .await
+        .expect("terminalize over-budget run");
+    let reloaded = manager
+        .store
+        .load_session(session.id)
+        .await
+        .expect("reload session after preflight failure");
+    let marker = reloaded
+        .parts()
+        .iter()
+        .find(|part| part.part_id == marker_id)
+        .expect("model marker remains in history");
+    assert_eq!(marker.state, PartState::Failed);
+    assert!(
+        reloaded
+            .parts()
+            .iter()
+            .any(|part| { part.run_id == Some(marker_id) && part.kind == "error" })
+    );
+    let prompt = crate::session::prompt_window::compactable_prompt_runs(
+        &reloaded,
+        Some("fake"),
+        None,
+        Some("fake-model"),
+        false,
+    );
+    assert_eq!(prompt.len(), 1);
+    assert_eq!(
+        prompt[0].as_text_lossy(),
+        "retain this task after preflight failure"
+    );
+}
+
+#[tokio::test]
+async fn incomplete_new_checkpoint_does_not_hide_history() {
+    let manager = test_manager().await;
+    let session = create(&manager, "incomplete checkpoint").await;
+    manager
+        .store
+        .submit_user_run(
+            session.id,
+            vec![
+                new_part_from_content(
+                    "text",
+                    PartRole::User,
+                    &TypedContent::Text(text_content("original task before checkpoint")),
+                    PartState::Completed,
+                )
+                .expect("build user text"),
+            ],
+            None,
+        )
+        .await
+        .expect("persist original task");
+    let checkpoint = PromptCompactionRuntime {
+        checkpoint_id: "incomplete".to_owned(),
+        compacted_through_message_id: 1,
+        trigger: PromptCompactionTrigger::Auto,
+        strategy: PromptCompactionStrategy::LocalSummary,
+        content: PromptCompactionContent::TextSummary {
+            summary: "unfinished write".to_owned(),
+            recent_messages: Vec::new(),
+        },
+        before_tokens: 100,
+        after_tokens: 20,
+        created_at_ms: 1,
+    };
+    let marker_id = manager
+        .store
+        .start_run(
+            session.id,
+            "compaction",
+            serde_json::json!({
+                "summary": "unfinished write",
+                "window": "through_message:1",
+                "checkpoint": serde_json::to_value(&checkpoint).expect("serialize checkpoint"),
+            }),
+        )
+        .await
+        .expect("write in-progress checkpoint marker");
+    let incomplete = manager
+        .store
+        .load_session(session.id)
+        .await
+        .expect("reload incomplete checkpoint");
+    assert_eq!(incomplete.runtime.prompt_window.generation, 0);
+    assert!(incomplete.runtime.prompt_window.compaction.is_none());
+    assert!(incomplete.active_window_parts().iter().any(|part| {
+        part.kind == "text" && part.content["text"] == "original task before checkpoint"
+    }));
+
+    manager
+        .store
+        .complete_run(
+            session.id,
+            marker_id,
+            agena_storage::store::RunOutcome {
+                status: PartState::Completed,
+                abort_reason: None,
+                content: None,
+                provider_state: None,
+            },
+        )
+        .await
+        .expect("finish checkpoint write");
+    let complete = manager
+        .store
+        .load_session(session.id)
+        .await
+        .expect("reload completed checkpoint");
+    assert_eq!(complete.runtime.prompt_window.generation, 1);
+    assert_eq!(complete.runtime.prompt_window.compaction, Some(checkpoint));
+    assert!(complete.active_window_parts().is_empty());
 }
 
 #[tokio::test]

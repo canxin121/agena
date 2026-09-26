@@ -1,6 +1,7 @@
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use smol_str::SmolStr;
+use std::borrow::Cow;
 use std::sync::atomic::Ordering;
 
 use crate::{provider::project_completion_input, tool::ToolApiBinding};
@@ -141,8 +142,10 @@ fn prompt_window_items(
 ) -> Vec<WindowItem> {
     let compaction = session.runtime.prompt_window.compaction.as_ref();
     let active_parts = session.active_window_parts();
+    let (filtered_active, filtered_all) = prompt_parts_without_failed_rounds(session);
     let mut items = project_window_items(
-        active_parts,
+        filtered_active.as_ref(),
+        filtered_all.as_ref(),
         compaction,
         session,
         provider_id,
@@ -176,6 +179,7 @@ fn prompt_window_items(
 /// with the installed local-summary checkpoint injection prepended when present.
 fn project_window_items(
     parts: &[Part],
+    all_parts: &[Part],
     compaction: Option<&PromptCompactionRuntime>,
     session: &Session,
     provider_id: Option<&str>,
@@ -187,7 +191,7 @@ fn project_window_items(
         // Prompt-cache affinity depends on every later request preserving the
         // exact provider-visible prefix from earlier requests. Without an
         // installed compaction snapshot, the prompt path stays append-only.
-        return window_items_from_parts(parts);
+        return window_items_from_parts_with_parent_markers(parts, all_parts);
     };
 
     match &compaction.content {
@@ -204,7 +208,9 @@ fn project_window_items(
                 id: None,
                 run: checkpoint_recent_run(run),
             }));
-            items.extend(window_items_from_parts(parts));
+            items.extend(window_items_from_parts_with_parent_markers(
+                parts, all_parts,
+            ));
             items
         }
         PromptCompactionContent::OpenAiResponses {
@@ -220,18 +226,19 @@ fn project_window_items(
             // The window is still the parts after the last checkpoint marker;
             // the opaque native checkpoint travels as a
             // `ProviderCompactionContext` instead of replayed transcript.
-            window_items_from_parts(parts)
+            window_items_from_parts_with_parent_markers(parts, all_parts)
         }
         // Native provider checkpoints are not portable. A model switch must
-        // replay canonical Agena history rather than interpreting opaque data.
-        PromptCompactionContent::OpenAiResponses { .. } => window_items_from_parts(parts),
+        // replay canonical Agena history, including the parts preceding the
+        // checkpoint, rather than sending only the empty active suffix.
+        PromptCompactionContent::OpenAiResponses { .. } => window_items_from_parts(all_parts),
     }
 }
 
 /// Compaction source: the active window projected into the provider input
 /// contract (including any installed TextSummary checkpoint injection), minus
-/// assistant runs that failed or were cancelled — they carry no provider-visible
-/// content worth summarizing or counting toward compaction safety.
+/// the incomplete output of failed or cancelled assistant rounds. Earlier
+/// successful rounds in the same durable run remain available.
 pub(crate) fn compactable_prompt_runs(
     session: &Session,
     provider_id: Option<&str>,
@@ -239,13 +246,10 @@ pub(crate) fn compactable_prompt_runs(
     model_id: Option<&str>,
     native_compaction_enabled: bool,
 ) -> Vec<CompletionInputRun> {
-    let filtered: Vec<Part> = parts_into_runs(session.active_window_parts())
-        .into_iter()
-        .filter(|run| !run_is_failed_or_cancelled_assistant(run))
-        .flatten()
-        .collect();
+    let (filtered_active, filtered_all) = prompt_parts_without_failed_rounds(session);
     project_window_items(
-        filtered.as_slice(),
+        filtered_active.as_ref(),
+        filtered_all.as_ref(),
         session.runtime.prompt_window.compaction.as_ref(),
         session,
         provider_id,
@@ -255,16 +259,75 @@ pub(crate) fn compactable_prompt_runs(
     )
     .into_iter()
     .map(|item| item.run)
+    .filter(run_has_visible_prompt_payload)
     .collect()
 }
 
-/// True when a run group is an assistant run that failed or was cancelled.
-fn run_is_failed_or_cancelled_assistant(run: &[Part]) -> bool {
-    run.iter().any(|part| {
-        part.is_run_marker()
-            && part.role == PartRole::Assistant
-            && matches!(part.state, PartState::Failed | PartState::Cancelled)
-    })
+/// A shared assistant marker can contain several successful provider rounds
+/// before a later round fails. Its terminal Failed state must not erase those
+/// completed rounds or their tool results from the next model prompt. The
+/// marker's round records identify the successful content exactly; unrecorded
+/// partial output from the failed round is excluded. Background notifications
+/// and hook continuations are independent deliveries and remain visible.
+fn prompt_parts_without_failed_rounds(session: &Session) -> (Cow<'_, [Part]>, Cow<'_, [Part]>) {
+    let successful_parts_by_failed_run = session
+        .parts()
+        .iter()
+        .filter(|part| {
+            part.is_run_marker()
+                && part.role == PartRole::Assistant
+                && matches!(part.state, PartState::Failed | PartState::Cancelled)
+                && part
+                    .content
+                    .get("run_kind")
+                    .and_then(serde_json::Value::as_str)
+                    != Some("compaction")
+        })
+        .map(|marker| {
+            let successful_ids = marker
+                .content
+                .get(crate::session::processor::MARKER_ROUNDS_KEY)
+                .and_then(serde_json::Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|round| round.get("part_ids").and_then(serde_json::Value::as_array))
+                .flatten()
+                .filter_map(serde_json::Value::as_i64)
+                .collect::<std::collections::BTreeSet<_>>();
+            (marker.part_id, successful_ids)
+        })
+        .collect::<std::collections::BTreeMap<_, _>>();
+    if successful_parts_by_failed_run.is_empty() {
+        return (
+            Cow::Borrowed(session.active_window_parts()),
+            Cow::Borrowed(session.parts()),
+        );
+    }
+    let active_ids = session
+        .active_window_parts()
+        .iter()
+        .map(|part| part.part_id)
+        .collect::<std::collections::BTreeSet<_>>();
+    let filtered_all = session
+        .parts()
+        .iter()
+        .filter(|part| {
+            if let Some(run_id) = part.run_id
+                && let Some(successful_ids) = successful_parts_by_failed_run.get(&run_id)
+            {
+                return successful_ids.contains(&part.part_id)
+                    || matches!(part.kind.as_str(), "system_notification" | "hook");
+            }
+            true
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    let filtered_active = filtered_all
+        .iter()
+        .filter(|part| active_ids.contains(&part.part_id))
+        .cloned()
+        .collect::<Vec<_>>();
+    (Cow::Owned(filtered_active), Cow::Owned(filtered_all))
 }
 
 /// Durable proof that a successful assistant provider round actually received
@@ -335,6 +398,45 @@ pub(crate) fn provider_visible_notification_part_ids(session: &Session) -> Vec<i
         })
         .map(|part| part.part_id)
         .collect()
+}
+
+/// A compaction can land between provider rounds of one assistant run. Its
+/// marker predates the active suffix, while later tool parts still carry that
+/// marker's `run_id`. Reattach a temporary copy of the marker so round ids and
+/// provider replay state remain available when those later parts are sent.
+fn window_items_from_parts_with_parent_markers(
+    parts: &[Part],
+    all_parts: &[Part],
+) -> Vec<WindowItem> {
+    let present = parts
+        .iter()
+        .filter(|part| part.is_run_marker())
+        .map(|part| part.part_id)
+        .collect::<std::collections::BTreeSet<_>>();
+    let parents = all_parts
+        .iter()
+        .filter(|part| part.is_run_marker())
+        .map(|part| (part.part_id, part))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let mut inserted = std::collections::BTreeSet::new();
+    let mut expanded = Vec::with_capacity(parts.len());
+    for part in parts {
+        if !(part.kind == "system_notification" && part.role == PartRole::Assistant)
+            && let Some(run_id) = part.run_id
+            && !present.contains(&run_id)
+            && inserted.insert(run_id)
+            && let Some(marker) = parents.get(&run_id)
+            && marker
+                .content
+                .get("run_kind")
+                .and_then(serde_json::Value::as_str)
+                != Some("compaction")
+        {
+            expanded.push((*marker).clone());
+        }
+        expanded.push(part.clone());
+    }
+    window_items_from_parts(&expanded)
 }
 
 fn window_items_from_parts(parts: &[Part]) -> Vec<WindowItem> {
@@ -918,6 +1020,38 @@ pub(crate) fn approximate_total_request_tokens_with_compaction(
     agena_runtime::estimate_prompt_tokens_from_chars(total_chars)
 }
 
+/// Estimate the complete provider-visible window, including the injected
+/// checkpoint summary and retained messages. `active_window_parts()` alone
+/// cannot account for either after compaction.
+pub(crate) fn approximate_session_request_tokens(
+    session: &Session,
+    provider_id: Option<&str>,
+    adapter_id: Option<&str>,
+    model_id: Option<&str>,
+    native_compaction_enabled: bool,
+    system: Option<&str>,
+    tools: &[ToolApiBinding],
+    provider_compaction: Option<&ProviderCompactionContext>,
+) -> u64 {
+    let turns = prompt_window_items(
+        session,
+        provider_id,
+        adapter_id,
+        model_id,
+        native_compaction_enabled,
+    )
+    .into_iter()
+    .filter(|item| run_has_visible_prompt_payload(&item.run))
+    .map(|item| item.run)
+    .collect::<Vec<_>>();
+    approximate_request_tokens_from_runs_with_compaction(
+        turns.as_slice(),
+        system,
+        tools,
+        provider_compaction,
+    )
+}
+
 /// Char/token estimate over an already-projected message list (e.g. a
 /// compaction candidate assembled from a synthetic checkpoint message plus a
 /// hardened recent suffix, which has no backing parts). Mirrors
@@ -1069,7 +1203,7 @@ pub(crate) async fn render_tool_results_for_model(
     parts: &[Part],
     executor: &crate::tool::ToolExecutor,
 ) {
-    let mut operations = std::collections::HashMap::new();
+    let mut operations = std::collections::HashMap::<String, Vec<_>>::new();
     for part in parts {
         if part.kind != "tool_call" || !part.visibility.visible_to_ai() {
             continue;
@@ -1080,9 +1214,7 @@ pub(crate) async fn render_tool_results_for_model(
             continue;
         };
         let operation = agena_runtime_contracts::part_content::operation_from_tool_call(&content);
-        let Some(output) = operation.raw_output().cloned() else {
-            continue;
-        };
+        let output = operation.raw_output().cloned();
         let call_id = operation
             .metadata
             .get(OPERATION_ID_METADATA_KEY)
@@ -1091,10 +1223,21 @@ pub(crate) async fn render_tool_results_for_model(
             .filter(|value| !value.is_empty())
             .map(str::to_owned)
             .unwrap_or_else(|| operation.call_id.to_string());
-        operations.insert(call_id, (operation.invocation, output));
+        // Provider call ids can be reused in later rounds. Keep every durable
+        // occurrence instead of letting the newest result overwrite history.
+        operations
+            .entry(call_id)
+            .or_default()
+            .push((operation.invocation, output));
     }
 
-    let mut rendered = std::collections::HashMap::<String, String>::new();
+    let mut visible_counts = std::collections::HashMap::<String, usize>::new();
+    for part in turns.iter().flat_map(|turn| &turn.parts) {
+        if let CompletionInputPart::ToolResult { tool_call_id, .. } = part {
+            *visible_counts.entry(tool_call_id.clone()).or_default() += 1;
+        }
+    }
+    let mut seen_counts = std::collections::HashMap::<String, usize>::new();
     let original_turns = std::mem::take(turns);
     for mut turn in original_turns {
         let mut attachment_parts = Vec::new();
@@ -1107,17 +1250,25 @@ pub(crate) async fn render_tool_results_for_model(
             else {
                 continue;
             };
-            let Some((invocation, output)) = operations.get(tool_call_id) else {
+            let occurrence = seen_counts.entry(tool_call_id.clone()).or_default();
+            let visible_count = visible_counts
+                .get(tool_call_id)
+                .copied()
+                .unwrap_or_default();
+            let Some(records) = operations.get(tool_call_id) else {
                 continue;
             };
-            if let Some(model) = rendered.get(tool_call_id) {
-                *output_json = model.clone();
-            } else {
-                let projection = executor.render_tool_result(invocation, output).await;
-                if let Some(model) = projection.model {
-                    *output_json = model.clone();
-                    rendered.insert(tool_call_id.clone(), model);
-                }
+            // A continuation request may contain only the newest occurrence;
+            // a full replay contains all of them. Match the visible suffix of
+            // durable records in its original order.
+            let record_index = records.len().saturating_sub(visible_count) + *occurrence;
+            *occurrence += 1;
+            let Some((invocation, Some(output))) = records.get(record_index) else {
+                continue;
+            };
+            let projection = executor.render_tool_result(invocation, output).await;
+            if let Some(model) = projection.model {
+                *output_json = model;
             }
 
             if !output.attachments.is_empty() {
@@ -1143,6 +1294,44 @@ pub(crate) async fn render_tool_results_for_model(
             });
         }
     }
+}
+
+/// Render against the same durable parts that survived prompt projection.
+/// A failed later round may contain a tool call with the same provider id as
+/// an earlier successful round; that excluded call must not claim the earlier
+/// result's renderer slot.
+pub(crate) async fn render_session_tool_results_for_model(
+    turns: &mut Vec<CompletionInputRun>,
+    session: &Session,
+    executor: &crate::tool::ToolExecutor,
+) {
+    let (_, visible_history) = prompt_parts_without_failed_rounds(session);
+    render_tool_results_for_model(turns, visible_history.as_ref(), executor).await;
+}
+
+/// A continuation delta may contain a result for a call in the provider's
+/// earlier response. Scan in wire order so such results do not mask a later
+/// unanswered call that reuses the same provider call id.
+pub(crate) fn prompt_tool_call_status(turns: &[CompletionInputRun]) -> (usize, usize, bool) {
+    let mut pending = std::collections::HashMap::<&str, usize>::new();
+    let mut calls = 0;
+    let mut results = 0;
+    for part in turns.iter().flat_map(|turn| &turn.parts) {
+        match part {
+            CompletionInputPart::ToolCall { id, .. } => {
+                calls += 1;
+                *pending.entry(id.as_str()).or_default() += 1;
+            }
+            CompletionInputPart::ToolResult { tool_call_id, .. } => {
+                results += 1;
+                if let Some(count) = pending.get_mut(tool_call_id.as_str()) {
+                    *count = count.saturating_sub(1);
+                }
+            }
+            _ => {}
+        }
+    }
+    (calls, results, pending.values().any(|count| *count > 0))
 }
 
 fn completion_input_attachment_from_raw_output(
@@ -1200,6 +1389,7 @@ mod tool_result_render_tests {
     use super::{
         CompletionInputAttachmentKind, CompletionInputAttachmentSource, CompletionInputPart,
         CompletionInputRun, OPERATION_ID_METADATA_KEY, Part, PartRole, PartState, Role,
+        prompt_tool_call_status, render_session_tool_results_for_model,
         render_tool_results_for_model,
     };
     use crate::{
@@ -1215,6 +1405,7 @@ mod tool_result_render_tests {
     };
     use agena_provider::{CompletionInputToolResultStatus, ModelToolFunction};
     use agena_storage::store::PartVisibility;
+    use chrono::Utc;
 
     struct PromptRenderingPlugin;
 
@@ -1254,9 +1445,13 @@ mod tool_result_render_tests {
         ) -> agena_plugin_host::sdk::Result<Option<agena_plugin_host::sdk::ToolRenderOutput>>
         {
             assert_eq!(input.tool_name, "render");
-            assert_eq!(input.output.text, "durable raw output");
+            let model = match input.output.text.as_str() {
+                "durable raw output" => "plugin-only model projection",
+                "second durable output" => "second model projection",
+                other => panic!("unexpected tool output: {other}"),
+            };
             Ok(Some(agena_plugin_host::sdk::ToolRenderOutput {
-                model: Some("plugin-only model projection".to_owned()),
+                model: Some(model.to_owned()),
                 human: None,
             }))
         }
@@ -1387,6 +1582,223 @@ mod tool_result_render_tests {
         ));
         assert_eq!(durable.content, content);
         assert!(durable.summary.is_none());
+    }
+
+    #[tokio::test]
+    async fn repeated_provider_call_ids_keep_each_historical_result() {
+        let invocation =
+            ToolInvocation::new("test.prompt_renderer.render", StructuredObject::default());
+        let mut first = OperationPart::completed(
+            17,
+            invocation.clone(),
+            RawOutput::text("durable raw output"),
+            TimeRange::default(),
+        );
+        first.metadata.insert(
+            OPERATION_ID_METADATA_KEY.to_owned(),
+            serde_json::Value::String("reused-call-id".to_owned()),
+        );
+        let mut second = OperationPart::completed(
+            29,
+            invocation,
+            RawOutput::text("second durable output"),
+            TimeRange::default(),
+        );
+        second.metadata.insert(
+            OPERATION_ID_METADATA_KEY.to_owned(),
+            serde_json::Value::String("reused-call-id".to_owned()),
+        );
+        let make_part = |id, operation: &OperationPart| Part {
+            part_id: id,
+            kind: "tool_call".to_owned(),
+            role: PartRole::Assistant,
+            state: PartState::Completed,
+            content: agena_runtime_contracts::part_content::tool_call_from_operation(operation)
+                .as_value(),
+            summary: None,
+            visibility: PartVisibility::Both,
+            parent_part_id: None,
+            run_id: Some(id - 1),
+            origin_session_id: 1,
+            revision: 0,
+            started_at_ms: id,
+            finished_at_ms: Some(id + 1),
+            created_at_ms: id,
+            updated_at_ms: id + 1,
+            provider_state: None,
+        };
+        let durable = vec![make_part(17, &first), make_part(29, &second)];
+        let tool_result = || CompletionInputRun {
+            role: Role::Tool,
+            parts: vec![CompletionInputPart::ToolResult {
+                tool_call_id: "reused-call-id".to_owned(),
+                function: ModelToolFunction::new("test.prompt_renderer.render"),
+                arguments_json: "{}".to_owned(),
+                status: CompletionInputToolResultStatus::Completed,
+                output_json: "generic persisted projection".to_owned(),
+            }],
+            provider_state: Default::default(),
+        };
+        let executor = executor().await;
+        let mut full_replay = vec![tool_result(), tool_result()];
+        render_tool_results_for_model(&mut full_replay, &durable, &executor).await;
+        assert!(matches!(
+            &full_replay[0].parts[0],
+            CompletionInputPart::ToolResult { output_json, .. }
+                if output_json == "plugin-only model projection"
+        ));
+        assert!(matches!(
+            &full_replay[1].parts[0],
+            CompletionInputPart::ToolResult { output_json, .. }
+                if output_json == "second model projection"
+        ));
+
+        let mut continuation_delta = vec![tool_result()];
+        render_tool_results_for_model(&mut continuation_delta, &durable, &executor).await;
+        assert!(matches!(
+            &continuation_delta[0].parts[0],
+            CompletionInputPart::ToolResult { output_json, .. }
+                if output_json == "second model projection"
+        ));
+
+        let mut pending = OperationPart::pending(
+            41,
+            ToolInvocation::new("test.prompt_renderer.render", StructuredObject::default()),
+            TimeRange::default(),
+        );
+        pending.metadata.insert(
+            OPERATION_ID_METADATA_KEY.to_owned(),
+            serde_json::Value::String("reused-call-id".to_owned()),
+        );
+        let mut with_pending = durable;
+        with_pending.push(make_part(41, &pending));
+        let mut pending_delta = vec![tool_result()];
+        render_tool_results_for_model(&mut pending_delta, &with_pending, &executor).await;
+        assert!(matches!(
+            &pending_delta[0].parts[0],
+            CompletionInputPart::ToolResult { output_json, .. }
+                if output_json == "generic persisted projection"
+        ));
+    }
+
+    #[tokio::test]
+    async fn failed_later_round_cannot_claim_a_successful_result_renderer_slot() {
+        let invocation =
+            ToolInvocation::new("test.prompt_renderer.render", StructuredObject::default());
+        let make_operation = |id, output| {
+            let mut operation = OperationPart::completed(
+                id,
+                invocation.clone(),
+                RawOutput::text(output),
+                TimeRange::default(),
+            );
+            operation.metadata.insert(
+                OPERATION_ID_METADATA_KEY.to_owned(),
+                serde_json::Value::String("reused-call-id".to_owned()),
+            );
+            operation
+        };
+        let first = make_operation(17, "durable raw output");
+        let excluded = make_operation(29, "second durable output");
+        let mut session = super::Session::new(1, 1, "failed round", Utc::now());
+        let marker = Part {
+            part_id: 1,
+            kind: "run".to_owned(),
+            role: PartRole::Assistant,
+            state: PartState::Failed,
+            content: serde_json::json!({
+                "run_kind": "assistant",
+                "rounds": [{"part_ids": [17], "provider_state": null}]
+            }),
+            summary: None,
+            visibility: PartVisibility::Both,
+            parent_part_id: None,
+            run_id: None,
+            origin_session_id: 1,
+            revision: 0,
+            started_at_ms: 1,
+            finished_at_ms: Some(3),
+            created_at_ms: 1,
+            updated_at_ms: 3,
+            provider_state: None,
+        };
+        let make_part = |id, operation: &OperationPart| Part {
+            part_id: id,
+            kind: "tool_call".to_owned(),
+            role: PartRole::Assistant,
+            state: PartState::Completed,
+            content: agena_runtime_contracts::part_content::tool_call_from_operation(operation)
+                .as_value(),
+            summary: None,
+            visibility: PartVisibility::Both,
+            parent_part_id: None,
+            run_id: Some(1),
+            origin_session_id: 1,
+            revision: 0,
+            started_at_ms: id,
+            finished_at_ms: Some(id + 1),
+            created_at_ms: id,
+            updated_at_ms: id + 1,
+            provider_state: None,
+        };
+        session.install_projected_parts(vec![
+            marker,
+            make_part(17, &first),
+            make_part(29, &excluded),
+        ]);
+        let mut turns = vec![CompletionInputRun {
+            role: Role::Tool,
+            parts: vec![CompletionInputPart::ToolResult {
+                tool_call_id: "reused-call-id".to_owned(),
+                function: ModelToolFunction::new("test.prompt_renderer.render"),
+                arguments_json: "{}".to_owned(),
+                status: CompletionInputToolResultStatus::Completed,
+                output_json: "generic persisted projection".to_owned(),
+            }],
+            provider_state: Default::default(),
+        }];
+
+        render_session_tool_results_for_model(&mut turns, &session, &executor().await).await;
+        assert!(matches!(
+            &turns[0].parts[0],
+            CompletionInputPart::ToolResult { output_json, .. }
+                if output_json == "plugin-only model projection"
+        ));
+    }
+
+    #[test]
+    fn reused_provider_id_needs_a_result_for_each_later_call() {
+        let call = || CompletionInputPart::ToolCall {
+            id: "reused".to_owned(),
+            function: ModelToolFunction::new("tools_help"),
+            arguments_json: "{}".to_owned(),
+        };
+        let result = || CompletionInputPart::ToolResult {
+            tool_call_id: "reused".to_owned(),
+            function: ModelToolFunction::new("tools_help"),
+            arguments_json: "{}".to_owned(),
+            status: CompletionInputToolResultStatus::Completed,
+            output_json: "help".to_owned(),
+        };
+        let turn = |parts| CompletionInputRun {
+            role: Role::Assistant,
+            parts,
+            provider_state: Default::default(),
+        };
+        assert_eq!(
+            prompt_tool_call_status(&[turn(vec![call(), result(), call()])]),
+            (2, 1, true)
+        );
+        assert_eq!(
+            prompt_tool_call_status(&[turn(vec![result(), call()])]),
+            (1, 1, true),
+            "a continuation result from an earlier call cannot settle a later call"
+        );
+        assert_eq!(
+            prompt_tool_call_status(&[turn(vec![result()])]),
+            (0, 1, false),
+            "a provider continuation may send only the new result"
+        );
     }
 }
 
@@ -1710,7 +2122,10 @@ mod compaction_tests {
         PromptCompactionContent, PromptCompactionMessage, PromptCompactionRuntime,
     };
     use crate::session::store::{run_marker_content, text_content, typed_content_to_value};
-    use agena_domain::{MessageSource, PromptCompactionStrategy, PromptCompactionTrigger};
+    use agena_domain::{
+        MessageSource, PromptCompactionStrategy, PromptCompactionTrigger, RawOutput,
+        StructuredObject, TimeRange, ToolInvocation,
+    };
     use agena_provider::CompletionUsage;
     use agena_runtime_contracts::part_content::TypedContent;
     use agena_storage::store::{Part, PartRole, PartState, PartVisibility};
@@ -1912,6 +2327,111 @@ mod compaction_tests {
     }
 
     #[test]
+    fn recompaction_keeps_a_late_child_before_the_next_user_run() {
+        let mut session = session_with_checkpoint();
+        let mut parts = session.parts().to_vec();
+        let mut late_child = parts[3].clone();
+        late_child.part_id = 2500;
+        late_child.content =
+            typed_content_to_value(&TypedContent::Text(text_content("late assistant detail")))
+                .expect("serialize late assistant detail");
+        parts.insert(5, late_child);
+        session.install_projected_parts(parts);
+        session.runtime.prompt_window.generation = 1;
+        session.runtime.prompt_window.compaction = Some(PromptCompactionRuntime {
+            checkpoint_id: "checkpoint".to_owned(),
+            compacted_through_message_id: 2,
+            trigger: PromptCompactionTrigger::Auto,
+            strategy: PromptCompactionStrategy::LocalSummary,
+            content: PromptCompactionContent::TextSummary {
+                summary: "durable state".to_owned(),
+                recent_messages: Vec::new(),
+            },
+            before_tokens: 100,
+            after_tokens: 20,
+            created_at_ms: 1,
+        });
+
+        let runs = compactable_prompt_runs(&session, Some("p"), None, Some("m"), false);
+        let texts = text_lossy_list(&runs);
+        assert!(texts[0].contains("durable state"));
+        assert_eq!(texts[1], "late assistant detail");
+        assert_eq!(texts[2], "future user");
+    }
+
+    #[test]
+    fn failed_later_round_keeps_completed_round_and_discards_partial_output() {
+        let now = Utc::now();
+        let mut session = Session::new(7, 11, "failed later round", now);
+        let mut parts = run_parts(1, PartRole::User, "user", "original task", now);
+        let mut assistant = run_parts(
+            2,
+            PartRole::Assistant,
+            "assistant",
+            "completed earlier round",
+            now,
+        );
+        assistant[0].state = PartState::Failed;
+        assistant[0].content["rounds"] = serde_json::json!([{
+            "part_ids": [2000, 2002],
+            "provider_state": null,
+            "input_notification_part_ids": []
+        }]);
+        let mut invocation = ToolInvocation::new("tools_help", StructuredObject::default());
+        invocation.tool_api_call = Some(agena_domain::ToolApiCall {
+            function: agena_domain::ToolApiFunction::Help,
+            arguments: StructuredObject::default(),
+        });
+        let tool = crate::part::OperationPart::completed(
+            37,
+            invocation,
+            RawOutput::text("help result"),
+            TimeRange::default(),
+        );
+        let mut completed_tool = assistant[1].clone();
+        completed_tool.part_id = 2002;
+        completed_tool.kind = "tool_call".to_owned();
+        completed_tool.content =
+            agena_runtime_contracts::part_content::tool_call_from_operation(&tool).as_value();
+        assistant.push(completed_tool);
+        let mut partial = assistant[1].clone();
+        partial.part_id = 2001;
+        partial.state = PartState::Failed;
+        partial.content =
+            typed_content_to_value(&TypedContent::Text(text_content("partial failed round")))
+                .expect("serialize partial text");
+        assistant.push(partial);
+        parts.extend(assistant);
+        parts.extend(run_parts(3, PartRole::User, "user", "next task", now));
+        session.install_projected_parts(parts);
+
+        let live = prompt_window_items(&session, Some("p"), None, Some("m"), false)
+            .into_iter()
+            .map(|item| item.run)
+            .collect::<Vec<_>>();
+        let compactable = compactable_prompt_runs(&session, Some("p"), None, Some("m"), false);
+        for runs in [&live, &compactable] {
+            let texts = text_lossy_list(runs);
+            assert_eq!(texts.len(), 3);
+            assert_eq!(texts[0], "original task");
+            assert!(texts[1].contains("completed earlier round"));
+            assert_eq!(texts[2], "next task");
+            assert!(!texts.join("\n").contains("partial failed round"));
+            let tool_parts = &runs[1].parts;
+            assert!(
+                tool_parts
+                    .iter()
+                    .any(|part| matches!(part, CompletionInputPart::ToolCall { .. }))
+            );
+            assert!(tool_parts.iter().any(|part| matches!(
+                part,
+                CompletionInputPart::ToolResult { output_json, .. }
+                    if output_json.contains("help result")
+            )));
+        }
+    }
+
+    #[test]
     fn hook_only_activity_is_filtered_from_the_model_prompt() {
         let now = Utc::now();
         let mut session = session_with_checkpoint();
@@ -2061,8 +2581,9 @@ mod compaction_tests {
             Some("gpt"),
             false,
         );
-        // With native compaction disabled the window is still the parts after
-        // the checkpoint marker; the opaque checkpoint never replays as text.
+        // A native checkpoint cannot be replayed by a different route. Fall
+        // back to the full canonical transcript so switching models cannot
+        // silently erase the original user request.
         let projected = compactable_prompt_runs(&session, None, None, None, false);
         assert_eq!(locally_compacted.len(), projected.len());
         for (actual, expected) in locally_compacted.iter().zip(projected.iter()) {
@@ -2072,19 +2593,51 @@ mod compaction_tests {
             );
         }
         assert!(
+            projected
+                .iter()
+                .any(|run| run.as_text_lossy() == "old user")
+        );
+        assert!(
+            projected
+                .iter()
+                .any(|run| run.as_text_lossy() == "old assistant")
+        );
+        assert!(
+            projected
+                .iter()
+                .any(|run| run.as_text_lossy() == "future user")
+        );
+        assert!(
             provider_compaction_for_model(&session, "openai", Some("responses"), "gpt", false)
                 .is_none()
         );
 
         let wrong_adapter =
             compactable_prompt_runs(&session, Some("openai"), Some("chat"), Some("gpt"), true);
-        assert_eq!(wrong_adapter.len(), 1);
+        assert_eq!(wrong_adapter.len(), projected.len());
 
         let switched =
             compactable_prompt_runs(&session, Some("anthropic"), None, Some("claude"), true);
-        assert_eq!(switched.len(), 1);
+        assert_eq!(switched.len(), projected.len());
         assert!(
             provider_compaction_for_model(&session, "anthropic", None, "claude", true).is_none()
+        );
+
+        let mut parts = session.parts().to_vec();
+        parts[2].state = PartState::Failed;
+        session.install_projected_parts(parts);
+        let switched_after_failure =
+            compactable_prompt_runs(&session, Some("anthropic"), None, Some("claude"), true);
+        assert!(
+            switched_after_failure
+                .iter()
+                .any(|run| run.as_text_lossy() == "old user")
+        );
+        assert!(
+            switched_after_failure
+                .iter()
+                .all(|run| run.as_text_lossy() != "old assistant"),
+            "failed assistant content must not return through native fallback"
         );
     }
 

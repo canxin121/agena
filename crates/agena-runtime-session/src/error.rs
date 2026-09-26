@@ -84,6 +84,14 @@ pub enum AppError {
     EmptyResponse,
     #[error("model-turn budget exhausted (max_turns={max_turns}); the run stopped")]
     ModelTurnBudgetExhausted { max_turns: usize },
+    #[error(
+        "session {session_id} prompt is estimated at {estimated_tokens} tokens, above the model input limit of {limit_tokens}; compaction did not produce a usable window"
+    )]
+    PromptBudgetExceeded {
+        session_id: i64,
+        estimated_tokens: u64,
+        limit_tokens: u64,
+    },
     #[error("session {0} has no active execution")]
     NoActiveExecution(i64),
     #[error("internal error: {0}")]
@@ -176,6 +184,9 @@ impl AppError {
             }
             Self::ModelTurnBudgetExhausted { .. } => {
                 "The run reached the configured model-turn cap and stopped. Send a new message to continue, or raise the cap via `session.max_turns` in the config (`0` means unlimited)."
+            }
+            Self::PromptBudgetExceeded { .. } => {
+                "The conversation is too large for the selected model. Compact the conversation or choose a model with a larger context window."
             }
             Self::NoActiveExecution(_) => "This session has no active response.",
             Self::Database(error) if is_database_busy(error) => {
@@ -340,6 +351,13 @@ impl AppError {
                 Responsibility::Caller,
                 Retry::AfterUserAction,
                 Recovery::None,
+            ),
+            Self::PromptBudgetExceeded { .. } => (
+                "session.prompt_budget_exceeded",
+                Category::InvalidInput,
+                Responsibility::Caller,
+                Retry::AfterUserAction,
+                Recovery::ChooseAlternative,
             ),
             Self::Cancelled => (
                 // Cancellation is a terminal outcome. If it reaches a

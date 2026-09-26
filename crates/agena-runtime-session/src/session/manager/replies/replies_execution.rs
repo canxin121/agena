@@ -540,9 +540,10 @@ impl SessionManager {
                 continue;
             }
 
-            if !external_input_boundary_pending
+            if model_requested
+                && !external_input_boundary_pending
                 && let Some(hit) = crate::session::doom_loop::detect(
-                    session.active_window_parts(),
+                    session.parts(),
                     agena_domain::DoomLoopPolicy::default(),
                 )
             {
@@ -558,12 +559,15 @@ impl SessionManager {
                         "doom-loop detected; injecting recovery feedback and continuing"
                     );
                     let (continued, continuation_marker) = self
-                        .inject_continuation_message(session, DOOM_LOOP_RECOVERY_PROMPT.to_owned())
+                        .append_fresh_continuation_message(
+                            session,
+                            DOOM_LOOP_RECOVERY_PROMPT.to_owned(),
+                            true,
+                        )
                         .await?;
                     session = continued;
-                    // The continuation is a fresh assistant run (or an in-place
-                    // extension of the reply); never reuse the completed reply
-                    // marker for the next model turn.
+                    // The feedback is after the repeated calls in a fresh
+                    // assistant run, including across a compaction boundary.
                     turn_run_id = continuation_marker;
                     model_requested = true;
                     continue;
@@ -782,6 +786,7 @@ impl SessionManager {
                         .get("run_kind")
                         .and_then(serde_json::Value::as_str)
                         == Some("compaction")
+                    && session.active_window_parts().is_empty()
             });
             let session_usage = self.session_usage_async(&session).await?;
             if state.config.auto_compaction.enabled
@@ -849,7 +854,6 @@ impl SessionManager {
                         .store
                         .start_run(session.id, "continue", initial_marker_content.clone())
                         .await?;
-                    turn_run_id = Some(run_id);
                     run_id
                 }
             };
@@ -947,10 +951,29 @@ impl SessionManager {
                         .plugin_manager()
                         .broadcast_post_run(post_run_input)
                         .await;
+                    // Prompt preparation can fail before SessionProcessor
+                    // starts. Close the marker we already persisted for this
+                    // turn; otherwise an over-budget prompt leaves a phantom
+                    // in-progress assistant run after the execution exits.
+                    if let Err(cleanup_error) = Box::pin(self.terminalize_unfinished_model_run(
+                        session_id,
+                        marker_run_id,
+                        &err,
+                    ))
+                    .await
+                    {
+                        tracing::warn!(
+                            session_id,
+                            marker_run_id,
+                            error = %cleanup_error,
+                            "failed to terminalize a model run after preparation error"
+                        );
+                    }
                     if state.config.auto_compaction.enabled
                         && !reactive_compaction_attempted
-                        && err.provider_error_kind()
-                            == Some(agena_provider::ProviderErrorKind::ContextOverflow)
+                        && (matches!(err, AppError::PromptBudgetExceeded { .. })
+                            || err.provider_error_kind()
+                                == Some(agena_provider::ProviderErrorKind::ContextOverflow))
                     {
                         reactive_compaction_attempted = true;
                         let reloaded = self.load_session_with_workspace_root(session_id).await?;
@@ -967,12 +990,19 @@ impl SessionManager {
                             tracing::info!(
                                 target: "agena::session::compact",
                                 session_id,
-                                "provider context overflow recovered by reactive compaction; retrying once"
+                                "prompt budget overflow recovered by reactive compaction; retrying once"
                             );
                             session = compacted;
+                            // The failed request's marker predates the new
+                            // checkpoint. The retry is a fresh assistant run
+                            // after it, never another write under that marker.
+                            turn_run_id = None;
                             force_model_retry = true;
                             continue;
                         }
+                    }
+                    if matches!(err, AppError::PromptBudgetExceeded { .. }) {
+                        return Err(err);
                     }
                     // A failed model turn is retryable when an agent.stop
                     // hook (for example the workflow plan autorun) asks to
@@ -1031,6 +1061,47 @@ impl SessionManager {
                 }
             }
         }
+    }
+
+    pub(in crate::session::manager) async fn terminalize_unfinished_model_run(
+        &self,
+        session_id: i64,
+        marker_run_id: i64,
+        error: &AppError,
+    ) -> Result<(), AppError> {
+        let current = self.load_session_with_workspace_root(session_id).await?;
+        let Some(marker) = current
+            .parts()
+            .iter()
+            .find(|part| part.part_id == marker_run_id && part.is_run_marker())
+        else {
+            return Err(AppError::Internal(format!(
+                "assistant run marker {marker_run_id} is missing from session {session_id}"
+            )));
+        };
+        if marker.state.is_terminal() {
+            return Ok(());
+        }
+        if matches!(error, AppError::Cancelled) {
+            self.store.cancel_run(session_id, marker_run_id).await?;
+        } else {
+            self.store
+                .append_failure_part(session_id, marker_run_id, &error.failure())
+                .await?;
+            self.store
+                .complete_run(
+                    session_id,
+                    marker_run_id,
+                    agena_storage::store::RunOutcome {
+                        status: agena_storage::store::PartState::Failed,
+                        abort_reason: Some(run_abort_reason(error).to_string()),
+                        content: None,
+                        provider_state: None,
+                    },
+                )
+                .await?;
+        }
+        Ok(())
     }
 
     /// Surface a run failure to agent.stop hooks and, if a hook asks to
@@ -1212,18 +1283,26 @@ impl SessionManager {
             return Ok((session, None));
         }
 
-        // No assistant reply body to extend (a failed or tool-only turn). Open
-        // a fresh assistant `continue` marker and append the continuation text
-        // under it, exactly like the loop's normal model-turn marker. Reload so
-        // the projection carries the authoritative run marker plus its content
-        // part.
+        self.append_fresh_continuation_message(session, text, false)
+            .await
+    }
+
+    /// Put recovery feedback after every previous tool result and compaction
+    /// marker. Updating an earlier text part can leave the feedback before
+    /// the repeated calls, or outside the active prompt window entirely.
+    pub(in crate::session::manager) async fn append_fresh_continuation_message(
+        &self,
+        session: Session,
+        text: String,
+        doom_loop_recovery: bool,
+    ) -> Result<(Session, Option<i64>), AppError> {
+        let mut marker_content = run_marker_content("continue", None, None, None, None);
+        if doom_loop_recovery {
+            marker_content["doom_loop_recovery"] = serde_json::Value::Bool(true);
+        }
         let run_id = self
             .store
-            .start_run(
-                session.id,
-                "continue",
-                run_marker_content("continue", None, None, None, None),
-            )
+            .start_run(session.id, "continue", marker_content)
             .await?;
         self.store
             .append_parts(
@@ -1399,39 +1478,68 @@ impl SessionManager {
                 continuation_supported,
                 native_compaction_enabled,
             };
-            let prompt_fingerprints =
-                prompt_window::prompt_request_fingerprints(&prompt_request_options);
-            let active_window_parts = session.active_window_parts();
-            let prompt_exceeds_runtime_budget = prompt_window::estimate_prompt_tokens_from_runtime(
-                &session,
-                active_window_parts,
-                prompt_fingerprints.system_fingerprint.as_str(),
-                prompt_fingerprints.request_options_fingerprint.as_str(),
-            )
-            .is_some_and(|estimate| estimate.total_tokens > prompt_budget.max_prompt_tokens);
-            if prompt_exceeds_runtime_budget
-                || state.context_governor.prompt_exceeds_budget(
-                    prompt_window::approximate_prompt_payload_chars(active_window_parts),
-                    prompt_budget.max_prompt_chars,
-                )
-            {
-                tracing::warn!(
-                    session_id = session.id,
-                    prompt_message_count = active_window_parts.len(),
-                    max_prompt_chars = prompt_budget.max_prompt_chars,
-                    max_prompt_tokens = prompt_budget.max_prompt_tokens,
-                    "prompt exceeds configured budget threshold; preserving append-only provider prefix and sending the full prompt"
-                );
-            }
-
             let mut prepared =
                 prompt_window::build_prepared_prompt(&session, prompt_request_options);
-            prompt_window::render_tool_results_for_model(
+            prompt_window::render_session_tool_results_for_model(
                 &mut prepared.turns,
-                session.active_window_parts(),
+                &session,
                 &state.tool_executor,
             )
             .await;
+            let (replayed_tool_calls, replayed_tool_results, unanswered_tool_call) =
+                prompt_window::prompt_tool_call_status(&prepared.turns);
+            if unanswered_tool_call {
+                return Err(AppError::Internal(format!(
+                    "session {} prompt contains a tool call without its result",
+                    session.id
+                )));
+            }
+            let estimated_full_tokens = prompt_window::approximate_session_request_tokens(
+                &session,
+                Some(options.model.provider_id.as_ref()),
+                options.model.adapter_id.as_ref().map(AsRef::as_ref),
+                Some(options.model.model_id.as_ref()),
+                native_compaction_enabled,
+                request_system.as_deref(),
+                tool_api_functions.as_slice(),
+                prepared.provider_compaction.as_ref(),
+            )
+            .max(
+                prompt_window::approximate_request_tokens_from_runs_with_compaction(
+                    prepared.turns.as_slice(),
+                    request_system.as_deref(),
+                    tool_api_functions.as_slice(),
+                    prepared.provider_compaction.as_ref(),
+                ),
+            );
+            let metadata = provider_registry
+                .model_metadata(&options.model)
+                .unwrap_or_default();
+            let hard_input_tokens = agena_runtime::prompt_token_budget(
+                metadata.limits.context_window_tokens,
+                metadata.limits.max_input_tokens,
+                options
+                    .max_output_tokens
+                    .or(metadata.limits.max_output_tokens),
+            );
+            if let Some(limit) = hard_input_tokens
+                && estimated_full_tokens > u64::from(limit)
+            {
+                return Err(AppError::PromptBudgetExceeded {
+                    session_id: session.id,
+                    estimated_tokens: estimated_full_tokens,
+                    limit_tokens: u64::from(limit),
+                });
+            }
+            if estimated_full_tokens > prompt_budget.max_prompt_tokens {
+                tracing::warn!(
+                    session_id = session.id,
+                    estimated_full_tokens,
+                    max_prompt_tokens = prompt_budget.max_prompt_tokens,
+                    hard_input_tokens,
+                    "prompt exceeds the proactive size threshold"
+                );
+            }
             let provider_request_shape_fingerprint = prepared
                 .provider_request_shape
                 .as_ref()
@@ -1455,6 +1563,9 @@ impl SessionManager {
                     .provider_shape_changed(),
                 provider_request_shape_change_keys = ?provider_shape_change_keys,
                 prompt_message_count = prepared.turns.len(),
+                replayed_tool_calls,
+                replayed_tool_results,
+                estimated_full_tokens,
                 system_included = prepared.system.is_some(),
                 "prepared prompt for session run"
             );
@@ -1514,11 +1625,8 @@ impl SessionManager {
                 .transition(ExecutionPhase::StreamingModel)
                 .await
                 .map_err(execution_control_to_app_error)?;
-            let run_outcome = state
-                .processor
-                .run_turn(run, &state.provider_registry)
-                .instrument(run_span.clone())
-                .await;
+            let run_outcome = state.processor.run_turn(run, &state.provider_registry);
+            let run_outcome = Box::pin(run_outcome).instrument(run_span.clone()).await;
             match run_outcome {
                 Ok(result) => {
                     // Drain hook runs collected during this model turn
@@ -1767,7 +1875,6 @@ impl SessionManager {
         );
 
         PromptTurnBudget {
-            max_prompt_chars,
             max_prompt_tokens: agena_runtime::estimate_prompt_tokens_from_chars(max_prompt_chars),
             model_context_window_tokens: context_window_tokens,
         }
@@ -2560,15 +2667,16 @@ impl SessionManager {
         let execution_session_id = session.id;
         let _host_user_input_sequence = manager
             .host_user_input_sequence_guard(execution_session_id, execution_resolved.call_id);
-        let execution = scoped_executor
-            .execute_invocation_detailed_with_launch_provenance(
+        let execution = Box::pin(
+            scoped_executor.execute_invocation_detailed_with_launch_provenance(
                 &execution_resolved.invocation,
                 execution_session_id,
                 execution_resolved.call_id,
                 execution_resolved.prepared_shell_command.clone(),
                 Some(execution_resolved.scheduled_job_launch_provenance(execution_session_id)),
-            )
-            .await;
+            ),
+        )
+        .await;
 
         if let Some(operation) = background_intent {
             match &execution {

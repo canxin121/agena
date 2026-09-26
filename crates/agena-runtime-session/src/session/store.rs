@@ -553,9 +553,16 @@ impl StoreAdapter {
         session_id: i64,
         summary: Option<String>,
         window: Option<String>,
+        checkpoint: Value,
     ) -> Result<i64, AppError> {
         self.facade
-            .compact_session(session_id, &self.owner_id, summary, window)
+            .compact_session(
+                session_id,
+                &self.owner_id,
+                summary,
+                window,
+                Some(checkpoint),
+            )
             .await
             .map_err(store_error)
     }
@@ -769,8 +776,131 @@ pub(crate) fn session_from_view(view: SessionView) -> Result<Session, AppError> 
     session.updated_at = timestamp_millis_to_utc(meta.updated_at_ms)?;
     apply_meta_runtime(&mut session.runtime, &meta)?;
     session.bind_runtime_scope();
+    restore_prompt_window_from_parts(&mut session.runtime, &parts, session.id)?;
     session.install_projected_parts(parts);
     Ok(session)
+}
+
+/// The compaction marker is the durable prompt boundary. Restore the exact
+/// checkpoint alongside it so loading a session cannot discard the history
+/// that the boundary removed from the active suffix.
+fn restore_prompt_window_from_parts(
+    runtime: &mut crate::session::SessionRuntimeState,
+    parts: &[Part],
+    session_id: i64,
+) -> Result<(), AppError> {
+    use crate::session::model::{PromptCompactionContent, PromptCompactionRuntime};
+    use agena_domain::{PromptCompactionStrategy, PromptCompactionTrigger};
+
+    let mut generation = 0u64;
+    let mut latest = None;
+    for (index, part) in parts.iter().enumerate() {
+        if part.kind != "run"
+            || part.content.get("run_kind").and_then(Value::as_str) != Some("compaction")
+        {
+            continue;
+        }
+        let has_checkpoint = part
+            .content
+            .get("checkpoint")
+            .is_some_and(|value| !value.is_null());
+        let has_summary = part
+            .content
+            .get("summary")
+            .and_then(Value::as_str)
+            .is_some_and(|summary| !summary.trim().is_empty());
+        let legacy_summary = has_summary
+            && (part.content.get("checkpoint").is_none() || part.state == PartState::Completed);
+        if (has_checkpoint && part.state == PartState::Completed) || legacy_summary {
+            generation = generation.saturating_add(1);
+            latest = Some((index, part));
+            runtime.prompt_window.record_compaction_success();
+        } else if part.state == PartState::Failed
+            && part.content.get("attempt_failure").and_then(Value::as_bool) == Some(true)
+        {
+            runtime.prompt_window.record_compaction_failure();
+        }
+    }
+    if let Some((index, marker)) = latest {
+        let checkpoint = marker
+            .content
+            .get("checkpoint")
+            .filter(|value| !value.is_null());
+        runtime.prompt_window.compaction = if let Some(checkpoint) = checkpoint {
+            Some(
+                serde_json::from_value::<PromptCompactionRuntime>(checkpoint.clone()).map_err(
+                    |error| {
+                        AppError::Internal(format!(
+                            "decode compaction checkpoint {} for session {}: {error}",
+                            marker.part_id, session_id
+                        ))
+                    },
+                )?,
+            )
+        } else {
+            // Earlier Agena builds persisted only the summary. Recover the
+            // latest verbatim user request from the immutable transcript so
+            // existing sessions remain usable even when a later summary was
+            // inaccurate or contradicted that request.
+            let recent_user = parts_into_runs(&parts[..index])
+                .into_iter()
+                .rev()
+                .find(|run| {
+                    run.first().is_some_and(|part| {
+                        part.kind == "run"
+                            && part.role == PartRole::User
+                            && part.content.get("run_kind").and_then(Value::as_str)
+                                == Some("user_send")
+                    })
+                })
+                .and_then(|run| {
+                    let text = crate::provider::project_completion_input(&run).as_text_lossy();
+                    (!text.trim().is_empty()).then_some((run[0].part_id, text))
+                });
+            let summary = marker
+                .content
+                .get("summary")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            if summary.trim().is_empty() && recent_user.is_none() {
+                None
+            } else {
+                Some(PromptCompactionRuntime {
+                    checkpoint_id: format!("legacy:{session_id}:{}", marker.part_id),
+                    compacted_through_message_id: marker
+                        .content
+                        .get("window")
+                        .and_then(Value::as_str)
+                        .and_then(|window| window.strip_prefix("through_message:"))
+                        .and_then(|id| id.parse().ok())
+                        .unwrap_or(marker.part_id),
+                    trigger: PromptCompactionTrigger::Auto,
+                    strategy: PromptCompactionStrategy::LocalSummary,
+                    content: PromptCompactionContent::TextSummary {
+                        summary: if summary.trim().is_empty() {
+                            "Historical checkpoint text is unavailable. Continue from the verbatim user request below.".to_owned()
+                        } else {
+                            summary.to_owned()
+                        },
+                        recent_messages: recent_user
+                            .into_iter()
+                            .map(|(id, text)| crate::session::PromptCompactionMessage {
+                                id,
+                                role: Role::User,
+                                source: agena_domain::MessageSource::User,
+                                text,
+                            })
+                            .collect(),
+                    },
+                    before_tokens: 0,
+                    after_tokens: 0,
+                    created_at_ms: marker.created_at_ms,
+                })
+            }
+        };
+    }
+    runtime.prompt_window.generation = generation;
+    Ok(())
 }
 
 /// Group a flat ordered parts slice into logical messages: each run marker

@@ -1,5 +1,5 @@
 import { computed, onBeforeUnmount, ref, watch, type ComputedRef, type Ref } from 'vue'
-import type { AttachedFile } from './useChatAttachments'
+import type { AttachedFile, PendingAttachment } from './useChatAttachments'
 import type { RenderBlock } from './useChatRenderBlocks'
 import { i18n } from '@/i18n'
 import { formatCurrencyUSD, formatTimeHMS } from '@/i18n/intl'
@@ -10,10 +10,21 @@ import type { CancellationOutcome } from '@/stores/chat/api'
 
 type ToastsStore = { push: (kind: 'success' | 'error', message: string) => void }
 
+/**
+ * The runtime model metadata is an open key/value record, so the optional
+ * context-window limit is narrowed at the read site instead of assumed.
+ */
 type ModelMetaLike = {
-  limit?: {
-    context?: number | null
-  } | null
+  limit?: unknown
+  [key: string]: unknown
+}
+
+/** The optional context-window limit carried by the runtime model metadata. */
+function contextLimitFromMeta(meta: ModelMetaLike | null | undefined): number {
+  const limit = meta?.limit
+  if (!limit || typeof limit !== 'object' || Array.isArray(limit)) return 0
+  const context = (limit as { context?: unknown }).context
+  return typeof context === 'number' && Number.isFinite(context) ? context : 0
 }
 
 type ModelSelectionForUsage = {
@@ -164,6 +175,7 @@ export function useChatRunUi(opts: {
 
   draft: Ref<string>
   attachedFiles: Ref<AttachedFile[]>
+  pendingAttachments: Ref<PendingAttachment[]>
   sending: Ref<boolean>
 
   awaitingAssistant: Ref<boolean>
@@ -183,6 +195,7 @@ export function useChatRunUi(opts: {
     modelSelection,
     draft,
     attachedFiles,
+    pendingAttachments,
     sending,
     awaitingAssistant,
     pendingSendAt,
@@ -341,8 +354,8 @@ export function useChatRunUi(opts: {
     let percentUsed: number | null = null
     if (tokenTotal != null && providerID && modelID) {
       const meta = modelSelection.modelMetaFor(providerID, modelID)
-      const contextLimit = meta?.limit?.context
-      const limit = typeof contextLimit === 'number' && Number.isFinite(contextLimit) ? contextLimit : 0
+      const contextLimit = contextLimitFromMeta(meta)
+      const limit = contextLimit > 0 ? contextLimit : 0
       if (limit > 0) {
         percentUsed = contextUsagePercent(tokenTotal, limit)
       }
@@ -442,7 +455,9 @@ export function useChatRunUi(opts: {
     if (sending.value) return false
     if (!String(modelSelection.selectedProviderId.value || '').trim()) return false
     if (!String(modelSelection.selectedModelId.value || '').trim()) return false
-    return Boolean(String(draft.value || '').trim() || attachedFiles.value.length > 0)
+    return Boolean(
+      String(draft.value || '').trim() || attachedFiles.value.length > 0 || pendingAttachments.value.length > 0,
+    )
   })
 
   const composerActions = computed(() =>

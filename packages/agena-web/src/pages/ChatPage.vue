@@ -23,6 +23,7 @@ import { useToastsStore } from '@/stores/toasts'
 
 import { useMessageStreaming } from '@/composables/chat/useMessageStreaming'
 import { useChatAttachments, type AttachedFile } from './chat/useChatAttachments'
+import { getComposerInput, type ComposerExpose, type ComposerInput, type ComposerSegment } from './chat/composerInput'
 import { useChatScrollNav } from './chat/useChatScrollNav'
 import { useChatComposerLayout } from './chat/useChatComposerLayout'
 import { useChatModelSelection } from './chat/useChatModelSelection'
@@ -52,7 +53,7 @@ import { deriveSendRunConfig } from './chat/modelSendDefaults'
 import { useWorkspacePaneContext } from '@/app/workspace/workspacePaneContext'
 import type { OptionMenuGroup, OptionMenuItem } from '@/components/ui/optionMenu.types'
 import type { TranscriptDisplayPart } from '@/components/chat/messageList.types'
-import type { MessageEntry, MessageFold } from '@/types/chat'
+import type { MessageFold } from '@/types/chat'
 import type { JsonObject, JsonValue } from '@/types/json'
 import type { PluginOperationResult } from '@/lib/pluginOperations'
 import {
@@ -66,12 +67,6 @@ import {
 } from '@/lib/chatActivity'
 
 type ComposerActionItem = { id: string; label: string; description?: string; icon?: Component; disabled?: boolean }
-
-type ComposerExpose = {
-  shellEl?: HTMLDivElement | { value: HTMLDivElement | null } | null
-  textareaEl?: HTMLTextAreaElement | { value: HTMLTextAreaElement | null } | null
-  openFilePicker?: () => void
-}
 
 type OptionMenuExpose = {
   containsTarget?: (target: Node | null) => boolean
@@ -129,22 +124,44 @@ const draft = computed<string>({
 const sending = ref(false)
 const failedDraftSlot = createFailedAttachmentDraftSlot()
 const failedDraftVersion = ref(0)
-const failedAttachmentDraft = computed(() => { void failedDraftVersion.value; return failedDraftSlot.peek() })
+const failedAttachmentDraft = computed(() => {
+  void failedDraftVersion.value
+  return failedDraftSlot.peek()
+})
 function restoreFailedAttachmentDraft() {
-  const sid=chat.selectedSessionId
+  const sid = chat.selectedSessionId
   if (!sid) return
-  const restored=failedDraftSlot.take(sid,draft.value,attachedFiles.value)
-  if (!restored) { toasts.push('info', String(t('chat.attachments.recoveryNeedsEmptyDraft'))); return }
-  clearAttachments();draft.value=restored.text;attachedFiles.value=restored.files;failedDraftVersion.value++
+  const restored = failedDraftSlot.take(sid, draft.value, attachedFiles.value)
+  if (!restored) {
+    toasts.push('info', String(t('chat.attachments.recoveryNeedsEmptyDraft')))
+    return
+  }
+  clearAttachments()
+  draft.value = restored.text
+  attachedFiles.value = restored.files.map((file) => ({ ...file, state: 'ready' as const }))
+  failedDraftVersion.value++
+  if (restored.segments) void nextTick(() => composerRef.value?.restoreSegments?.(restored.segments!))
 }
-function discardFailedAttachmentDraft() { failedDraftSlot.discard();failedDraftVersion.value++ }
-
+function discardFailedAttachmentDraft() {
+  failedDraftSlot.discard()
+  failedDraftVersion.value++
+}
 
 const composerRef = ref<ComposerExpose | null>(null)
-const attachments = useChatAttachments({ toasts, composerRef, restoreText: (text) => { draft.value += text } })
+const attachments = useChatAttachments({
+  toasts,
+  composerRef,
+  restoreText: (text) => {
+    draft.value += text
+  },
+})
 const {
   attachedFiles,
+  pendingAttachments,
   attachmentsBusy,
+  waitForAttachments,
+  preparationErrorCount,
+  attachmentGeneration,
   attachProjectDialogOpen,
   attachProjectPath,
   formatBytes,
@@ -157,8 +174,13 @@ const {
   openProjectAttachDialog,
   addProjectAttachment,
 } = attachments
-watch(() => chat.selectedSessionId, () => { clearAttachments() }, { flush: 'sync' })
-
+watch(
+  () => chat.selectedSessionId,
+  () => {
+    clearAttachments()
+  },
+  { flush: 'sync' },
+)
 
 const editorFullscreen = ref(false)
 const editorClosing = ref(false)
@@ -250,12 +272,6 @@ type ModelSlugPickerOption = {
   adapterId?: string
   modelId?: string
   description?: string
-}
-
-function getComposerTextareaEl(composer: ComposerExpose | null): HTMLTextAreaElement | null {
-  const textarea = composer?.textareaEl
-  if (!textarea) return null
-  return textarea instanceof HTMLTextAreaElement ? textarea : textarea.value
 }
 
 function asRecord(value: JsonValue): JsonObject {
@@ -744,8 +760,8 @@ const {
   resetComposerHeight,
 } = composerLayout
 
-function composerTextarea(): HTMLTextAreaElement | null {
-  return getComposerTextareaEl(composerRef.value)
+function composerTextarea(): ComposerInput | null {
+  return getComposerInput(composerRef.value)
 }
 
 function setComposerCaret(position: number) {
@@ -758,10 +774,10 @@ function setComposerCaret(position: number) {
 }
 
 function applyComposerEdit(start: number, end: number, replacement: string, cursor: number) {
-  const value = draft.value
+  const textarea = composerTextarea()
+  const value = textarea?.value ?? ''
   if (start < 0 || end < start || end > value.length) return
-  draft.value = `${value.slice(0, start)}${replacement}${value.slice(end)}`
-  handleDraftInput()
+  textarea?.setRangeText(replacement, start, end, 'end')
   setComposerCaret(cursor)
 }
 
@@ -975,7 +991,6 @@ const {
   showOptimisticUser,
   resetForSessionSwitch,
   beginOptimisticSend,
-  markOptimisticQueued,
   markOptimisticSent,
   clearOnSendFailure,
   clearOnCancellation,
@@ -1020,7 +1035,8 @@ function restoredComposerFiles(document: JsonValue): AttachedFile[] {
         size,
         mime: typeof payload.media_type === 'string' ? payload.media_type : 'application/octet-stream',
         serverPath: path,
-        delivery: payload.delivery === 'model_input' ? 'model_input' as const : 'reference' as const,
+        delivery: payload.delivery === 'model_input' ? ('model_input' as const) : ('reference' as const),
+        state: 'ready' as const,
       },
     ]
   })
@@ -1047,6 +1063,7 @@ function restoreCancelledComposer(outcome: chatApi.CancellationOutcome) {
       ...(file.url ? { url: file.url } : {}),
       ...(file.serverPath ? { serverPath: file.serverPath } : {}),
       delivery: file.delivery || 'reference',
+      state: 'ready' as const,
     })) ?? restoredComposerFiles(document)
   draft.value = text
   attachedFiles.value = files
@@ -1205,6 +1222,7 @@ const runUi = useChatRunUi({
   modelSelection,
   draft,
   attachedFiles,
+  pendingAttachments,
   sending,
   awaitingAssistant,
   pendingSendAt,
@@ -1370,6 +1388,10 @@ const composerStatusExtra = computed(() => {
 const composerBottomLeftStatus = computed(() => {
   const sid = commandSessionId()
   if (!sid) return ''
+  // Prefer the server's session-scoped projection. The client-side activity
+  // snapshot is only a fallback until the first status refresh lands.
+  const serverKinds = chat.sessionBackgroundActivityKinds(sid)
+  if (serverKinds) return formatBackgroundActivitySummary(serverKinds)
   return formatBackgroundActivitySummary(activity.snapshot[sid]?.kinds || [])
 })
 
@@ -1919,19 +1941,55 @@ async function handleCommandSelected(command: Command) {
 }
 
 async function send() {
-  if (failedDraftSlot.peek()) { toasts.push('info', String(t('chat.attachments.recoverBeforeSend'))); return }
-  if (sending.value || attachmentsBusy.value) {
-    toasts.push('info', String(t('chat.attachments.preparing')))
+  if (failedDraftSlot.peek()) {
+    toasts.push('info', String(t('chat.attachments.recoverBeforeSend')))
     return
   }
+  if (sending.value) return
   const sid = chat.selectedSessionId
+  const generation = attachmentGeneration()
+  const errors = preparationErrorCount()
+  sending.value = true
+  try {
+    await waitForAttachments()
+    if (chat.selectedSessionId !== sid || attachmentGeneration() !== generation) return
+    if (preparationErrorCount() !== errors) {
+      toasts.push('info', String(t('chat.attachments.preparationFailed')))
+      return
+    }
+    try {
+      await sendReady(sid)
+    } catch (error) {
+      toasts.push('error', error instanceof Error ? error.message : String(error))
+    }
+  } finally {
+    sending.value = false
+  }
+}
+
+async function sendReady(sid: string | null) {
   let text = draft.value.trim()
   const filesSnapshot = attachedFiles.value.slice()
   const draftSnapshot = draft.value
+  const segmentsSnapshot: ComposerSegment[] = composerRef.value?.getSegments?.() ?? [
+    { type: 'text', text: draftSnapshot },
+    ...filesSnapshot.map((file) => ({ type: 'attachment' as const, id: file.id })),
+  ]
+  let outgoingSegments = segmentsSnapshot
+
+  // The editor document is what reaches the provider, so derive the outgoing
+  // body text from that same source instead of trusting the draft string alone.
+  // A send must never drop the text the user sees while still posting the
+  // attachments; the two sources drifting apart is what produced a text message
+  // plus a second, later attachment message in the transcript.
+  const segmentText = segmentsSnapshot
+    .filter((part): part is { type: 'text'; text: string } => part.type === 'text')
+    .map((part) => part.text)
+    .join('')
+  if (!text) text = segmentText.trim()
   if ((!sid && filesSnapshot.length > 0) || (!text && filesSnapshot.length === 0)) return
 
   if (text && filesSnapshot.length === 0) {
-    sending.value = true
     try {
       if (commands.value.length === 0) await loadCommands()
       const matchedCommand = matchSlashCommand(commands.value, text)
@@ -1946,6 +2004,7 @@ async function send() {
         const prompt = await applyPluginOperationResult(result, 'return')
         if (prompt) {
           text = prompt
+          outgoingSegments = [{ type: 'text', text: prompt }]
         } else {
           draft.value = ''
           closeCommandPalette()
@@ -1955,12 +2014,10 @@ async function send() {
     } catch (err) {
       toasts.push('error', err instanceof Error ? err.message : String(err))
       return
-    } finally {
-      sending.value = false
     }
   }
 
-  if (!sid) return
+  if (!sid || chat.selectedSessionId !== sid) return
 
   if (!modelSelection.selectedProviderId.value || !modelSelection.selectedModelId.value) {
     toasts.push('error', 'Select a model before sending')
@@ -1968,22 +2025,22 @@ async function send() {
   }
 
   const runCfg = deriveSendRunConfig({
-      selectedProviderId: modelSelection.selectedProviderId.value,
-      selectedAdapterId: modelSelection.selectedAdapterId.value,
-      selectedModelId: modelSelection.selectedModelId.value,
-      selectedThinkingMode: modelSelection.selectedThinkingMode.value,
-      selectedSpeedMode: modelSelection.selectedSpeedMode.value,
-    })
+    selectedProviderId: modelSelection.selectedProviderId.value,
+    selectedAdapterId: modelSelection.selectedAdapterId.value,
+    selectedModelId: modelSelection.selectedModelId.value,
+    selectedThinkingMode: modelSelection.selectedThinkingMode.value,
+    selectedSpeedMode: modelSelection.selectedSpeedMode.value,
+  })
 
   // UX: if the editor is expanded, collapse it on send.
   if (editorFullscreen.value && !editorClosing.value) {
     closeEditorFullscreen()
   }
 
-  sending.value = true
   beginOptimisticSend({
     sessionId: sid,
     text,
+    fileFallbackLabel: String(t('chat.messageItem.fileFallback')).trim(),
     files: filesSnapshot.map((f) => ({
       id: f.id,
       filename: f.filename,
@@ -1995,19 +2052,45 @@ async function send() {
     })),
   })
 
-  // UX: clear the composer immediately on send.
-  // If the request fails, we restore it in the catch block.
-  draft.value = ''
-  clearAttachments()
+  // Remove only the submitted draft and files. A newer edit or attachment
+  // staged while this send was preparing belongs to the next message.
+  if (draft.value === draftSnapshot) draft.value = ''
+  const sentFileIds = new Set(filesSnapshot.map((file) => file.id))
+  composerRef.value?.removeAttachmentNodes?.([...sentFileIds])
+  attachedFiles.value = attachedFiles.value.filter((file) => !sentFileIds.has(file.id))
   commandOpen.value = false
   commandQuery.value = ''
   await nextTick()
   scrollToBottom('smooth')
   try {
     const parts: OutgoingMessagePart[] = []
-    if (text) parts.push({ type: 'text', text })
     const workspace = filesSnapshot.length > 0 ? await chat.resolveSessionWorkspace(sid) : null
-    for (const f of filesSnapshot) {
+    const filesById = new Map(filesSnapshot.map((file) => [file.id, file]))
+    const orderedSegments: ComposerSegment[] = outgoingSegments.map((part) => ({ ...part }))
+    // Attachments below are force-included even when the editor has not
+    // rendered their chip yet. Mirror that guarantee for the body text: a
+    // message must never be submitted without the text the user sees.
+    if (text && !orderedSegments.some((part) => part.type === 'text' && part.text.trim())) {
+      orderedSegments.unshift({ type: 'text', text })
+    }
+    for (const file of filesSnapshot) {
+      if (!orderedSegments.some((part) => part.type === 'attachment' && part.id === file.id)) {
+        orderedSegments.push({ type: 'attachment', id: file.id })
+      }
+    }
+    // Preserve text around each inline attachment. Only outer whitespace is
+    // trimmed, matching the previous plain-text composer behavior.
+    const first = orderedSegments[0]
+    const last = orderedSegments[orderedSegments.length - 1]
+    if (first?.type === 'text') first.text = first.text.trimStart()
+    if (last?.type === 'text') last.text = last.text.trimEnd()
+    for (const segment of orderedSegments) {
+      if (segment.type === 'text') {
+        if (segment.text) parts.push({ type: 'text', text: segment.text })
+        continue
+      }
+      const f = filesById.get(segment.id)
+      if (!f) continue
       let path = ''
       let sha256: string | undefined
       let size = Number.isFinite(f.size) && f.size > 0 ? Math.floor(f.size) : undefined
@@ -2026,12 +2109,19 @@ async function send() {
         path = workspaceRelativePath(f.serverPath, workspace.path)
       }
       if (!path) throw new Error(`Attachment could not be prepared: ${f.filename}`)
-      parts.push(resourceComposerNode({ path, filename: f.filename, mime: f.mime, size, sha256, delivery: f.delivery || 'reference' }))
+      parts.push(
+        resourceComposerNode({
+          path,
+          filename: f.filename,
+          mime: f.mime,
+          size,
+          sha256,
+          delivery: f.delivery || 'reference',
+        }),
+      )
     }
 
-
-
-    const sendResult = await chat.sendMessage(sid, { ...runCfg, parts })
+    const state = await chat.sendMessage(sid, { ...runCfg, parts })
 
     // Match the TUI: only a successfully submitted plain-text draft enters
     // global prompt history. Messages containing resources/attachments are
@@ -2039,27 +2129,29 @@ async function send() {
     if (filesSnapshot.length === 0) recordPromptHistory(text)
 
     // Mark the optimistic message as sent (generation may still be running).
-    if (sendResult?.queued) {
-      markOptimisticQueued(sid)
-    } else {
-      markOptimisticSent(sid)
-    }
+    // Acknowledgement is the accepted user run id, not an id/text scan.
+    markOptimisticSent(sid, chatApi.acceptedUserRunId(state), chatApi.acceptedAssistantReplyId(state))
   } catch (e) {
     // Keep UI consistent if send fails.
     clearOnSendFailure()
 
     // Restore composer content on failure.
-    if (chat.selectedSessionId === sid && !draft.value && attachedFiles.value.length === 0) {
+    if (
+      chat.selectedSessionId === sid &&
+      !draft.value &&
+      attachedFiles.value.length === 0 &&
+      pendingAttachments.value.length === 0
+    ) {
       draft.value = draftSnapshot
       attachedFiles.value = filesSnapshot
+      await nextTick()
+      composerRef.value?.restoreSegments?.(segmentsSnapshot)
     } else {
-      failedDraftSlot.save({sessionId:sid,text:draftSnapshot,files:filesSnapshot})
+      failedDraftSlot.save({ sessionId: sid, text: draftSnapshot, files: filesSnapshot, segments: segmentsSnapshot })
       failedDraftVersion.value++
       toasts.push('error', String(t('chat.attachments.failedDraftSaved')))
     }
     throw e
-  } finally {
-    sending.value = false
   }
 }
 
@@ -2150,7 +2242,7 @@ onMounted(async () => {
 
     // Don't dismiss command suggestions while the user is still interacting
     // with the textarea.
-    const textarea = getComposerTextareaEl(composerRef.value)
+    const textarea = getComposerInput(composerRef.value)
     if (textarea && textarea.contains(target)) return
     closePromptHistory()
     closeCommandPalette()
@@ -2240,6 +2332,7 @@ const viewCtx = {
   discardFailedAttachmentDraft,
   draft,
   attachedFiles,
+  pendingAttachments,
   attachmentsBusy,
   attachmentsPanelOpen,
   formatBytes,

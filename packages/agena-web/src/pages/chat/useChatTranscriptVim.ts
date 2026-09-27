@@ -2,6 +2,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, type Comput
 
 import type { RenderBlock, TranscriptDisplayPart } from '@/components/chat/messageList.types'
 import { copyTextToClipboard } from '@/lib/clipboard'
+import { getComposerInput, type ComposerExpose } from './composerInput'
 import {
   lastTranscriptMessagePart,
   resolveTranscriptPageTarget,
@@ -41,10 +42,6 @@ import {
   type TranscriptVisualRow,
 } from './transcriptDomCursor'
 
-type ComposerExpose = {
-  textareaEl?: HTMLTextAreaElement | { value: HTMLTextAreaElement | null } | null
-}
-
 type ToastsLike = { push: (kind: 'success' | 'error' | 'info', message: string, duration?: number) => void }
 
 type PendingFind = { direction: 'forward' | 'backward'; till: boolean; count: number }
@@ -70,12 +67,6 @@ type CssHighlightRegistry = {
 }
 
 type HighlightConstructor = new (...ranges: Range[]) => unknown
-
-function composerTextarea(composer: ComposerExpose | null): HTMLTextAreaElement | null {
-  const value = composer?.textareaEl
-  if (!value) return null
-  return value instanceof HTMLTextAreaElement ? value : value.value
-}
 
 function isEditable(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false
@@ -1635,7 +1626,7 @@ export function useChatTranscriptVim(opts: {
       window.getSelection()?.removeAllRanges()
       ownsNativeSelection = false
     }
-    nextTick(() => composerTextarea(opts.composerRef.value)?.focus())
+    nextTick(() => getComposerInput(opts.composerRef.value)?.focus())
   }
 
   function returnToNavigate() {
@@ -1964,7 +1955,7 @@ export function useChatTranscriptVim(opts: {
     if (opts.enabled && !opts.enabled.value) return
     if (!opts.pageRef.value?.isConnected || event.defaultPrevented) return
     const target = event.target
-    const textarea = composerTextarea(opts.composerRef.value)
+    const textarea = getComposerInput(opts.composerRef.value)?.element
 
     if (target === opts.searchInputRef.value) return
     if (target === textarea) {

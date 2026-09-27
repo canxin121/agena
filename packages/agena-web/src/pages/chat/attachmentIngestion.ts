@@ -1,6 +1,13 @@
 /** Local staging only. This module never contacts a model provider. */
 export type AttachmentDelivery = 'reference' | 'model_input'
-export type StagedAttachment = {
+/**
+ * Preparation state of one composer attachment. It is the only difference
+ * between a chip that is still being prepared and one that is ready to
+ * send; no consumer relies on which list an item happens to live in.
+ */
+export type AttachmentState = 'preparing' | 'ready'
+/** One composer attachment, shaped like the `file_ref` payload it becomes. */
+export type ComposerAttachment = {
   id: string
   filename: string
   size: number
@@ -8,7 +15,11 @@ export type StagedAttachment = {
   url?: string
   serverPath?: string
   delivery?: AttachmentDelivery
+  state: AttachmentState
+  pastePreview?: string
 }
+/** @deprecated use {@link ComposerAttachment}; kept for older call sites. */
+export type StagedAttachment = ComposerAttachment
 export const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
 export const MAX_ATTACHMENT_TOTAL_BYTES = 40 * 1024 * 1024
 export const MAX_ATTACHMENTS = 8
@@ -19,7 +30,6 @@ export function pasteTextWithinBudget(text: string) {
   return text.length <= MAX_PASTE_TEXT_BYTES && new TextEncoder().encode(text).byteLength <= MAX_PASTE_TEXT_BYTES
 }
 
-
 type Options = {
   get: () => StagedAttachment[]
   set: (files: StagedAttachment[]) => void
@@ -27,73 +37,125 @@ type Options = {
   onError: (error: { kind: 'size' | 'total' | 'count' | 'read'; file: File }) => void
   onBusy: (count: number) => void
 }
+type StageOptions = {
+  idForFile?: (file: File) => string
+  shouldSkip?: (file: File) => boolean
+}
 export function createAttachmentIngestor(options: Options) {
   let generation = 0
   let pending = 0
   let queue: Promise<void> = Promise.resolve()
   const active = new Set<AbortController>()
-  async function process(files: File[], epoch: number): Promise<File[]> {
+  const activeById = new Map<string, AbortController>()
+  async function process(files: File[], epoch: number, stageOptions: StageOptions): Promise<File[]> {
     const accepted: File[] = []
     for (const file of files) {
       if (epoch !== generation) break
+      if (stageOptions.shouldSkip?.(file)) continue
       const current = options.get()
       if (current.length >= MAX_ATTACHMENTS) {
-        options.onError({ kind: 'count', file }); break
+        options.onError({ kind: 'count', file })
+        break
       }
       if (!Number.isFinite(file.size) || file.size <= 0 || file.size > MAX_ATTACHMENT_BYTES) {
-        options.onError({ kind: 'size', file }); continue
+        options.onError({ kind: 'size', file })
+        continue
       }
       if (current.reduce((n, f) => n + Math.max(0, f.size || 0), 0) + file.size > MAX_ATTACHMENT_TOTAL_BYTES) {
-        options.onError({ kind: 'total', file }); continue
+        options.onError({ kind: 'total', file })
+        continue
       }
-      const abort = new AbortController(); active.add(abort)
+      const abort = new AbortController()
+      active.add(abort)
+      const stagedId = stageOptions.idForFile?.(file)
+      if (stagedId) activeById.set(stagedId, abort)
       let url: string
-      try { url = await options.read(file, abort.signal) }
-      catch { if (epoch === generation) options.onError({ kind: 'read', file }); continue }
-      finally { active.delete(abort) }
+      try {
+        url = await options.read(file, abort.signal)
+      } catch {
+        if (epoch === generation && !stageOptions.shouldSkip?.(file)) options.onError({ kind: 'read', file })
+        continue
+      } finally {
+        active.delete(abort)
+        if (stagedId) activeById.delete(stagedId)
+      }
       if (epoch !== generation || abort.signal.aborted) break
+      if (stageOptions.shouldSkip?.(file)) continue
       if (!url.startsWith('data:') || !url.includes(';base64,')) {
-        options.onError({ kind: 'read', file }); continue
+        options.onError({ kind: 'read', file })
+        continue
       }
       // Actual contents decide duplicates. Same-name/same-size screenshots
       // may differ and must never disappear on a filename-only comparison.
       if (options.get().some((f) => f.url === url && f.filename === (file.name || 'file'))) {
-        accepted.push(file); continue
+        accepted.push(file)
+        continue
       }
       const latest = options.get()
-      if (latest.length >= MAX_ATTACHMENTS) { options.onError({ kind: 'count', file }); break }
-      if (latest.reduce((n, f) => n + Math.max(0, f.size || 0), 0) + file.size > MAX_ATTACHMENT_TOTAL_BYTES) {
-        options.onError({ kind: 'total', file }); continue
+      if (latest.length >= MAX_ATTACHMENTS) {
+        options.onError({ kind: 'count', file })
+        break
       }
-      options.set([...latest, {
-        id: `file-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-        filename: file.name || 'file', size: file.size,
-        mime: file.type || 'application/octet-stream', url, delivery: 'model_input',
-      }])
+      if (latest.reduce((n, f) => n + Math.max(0, f.size || 0), 0) + file.size > MAX_ATTACHMENT_TOTAL_BYTES) {
+        options.onError({ kind: 'total', file })
+        continue
+      }
+      options.set([
+        ...latest,
+        {
+          id: stagedId || `file-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+          filename: file.name || 'file',
+          size: file.size,
+          mime: file.type || 'application/octet-stream',
+          url,
+          delivery: 'model_input',
+          state: 'ready',
+        },
+      ])
       accepted.push(file)
     }
     return accepted
   }
-  function stage(files: FileList | File[]): Promise<File[]> {
-    const epoch = generation; const snapshot = Array.from(files)
-    pending++; options.onBusy(pending)
-    const result = queue.then(() => process(snapshot, epoch))
-    queue = result.then(() => undefined, () => undefined)
-    return result.finally(() => { if (epoch === generation) { pending--; options.onBusy(pending) } })
+  function stage(files: FileList | File[], stageOptions: StageOptions = {}): Promise<File[]> {
+    const epoch = generation
+    const snapshot = Array.from(files)
+    pending++
+    options.onBusy(pending)
+    const result = queue.then(() => process(snapshot, epoch, stageOptions))
+    queue = result.then(
+      () => undefined,
+      () => undefined,
+    )
+    return result.finally(() => {
+      if (epoch === generation) {
+        pending--
+        options.onBusy(pending)
+      }
+    })
   }
   function clear() {
     generation++
     for (const controller of active) controller.abort()
     active.clear()
+    activeById.clear()
     // A cancelled reader must not keep a later draft behind its old promise.
-    queue = Promise.resolve(); pending = 0; options.onBusy(0); options.set([])
+    queue = Promise.resolve()
+    pending = 0
+    options.onBusy(0)
+    options.set([])
   }
-  return { stage, clear, generation: () => generation }
+  function cancel(id: string) {
+    activeById.get(id)?.abort()
+  }
+  return { stage, clear, cancel, generation: () => generation }
 }
 
 export function filesFromClipboard(data: Pick<DataTransfer, 'items' | 'files'> | null): File[] {
   if (!data) return []
-  const fromItems = Array.from(data.items || []).filter((item) => item.kind === 'file').map((item) => item.getAsFile()).filter((file): file is File => !!file)
+  const fromItems = Array.from(data.items || [])
+    .filter((item) => item.kind === 'file')
+    .map((item) => item.getAsFile())
+    .filter((file): file is File => !!file)
   // Browsers expose the same files in both collections. Use items when
   // present; do not collapse distinct files on weak filename/size metadata.
   return fromItems.length ? fromItems : Array.from(data.files || [])
@@ -103,11 +165,27 @@ export function readLocalDataUrl(file: File, signal: AbortSignal): Promise<strin
   return new Promise((resolve, reject) => {
     const reader = new FileReader()
     const cleanup = () => signal.removeEventListener('abort', abort)
-    const abort = () => { reader.abort(); cleanup(); reject(new DOMException('Attachment read cancelled', 'AbortError')) }
-    reader.onload = () => { cleanup(); resolve(String(reader.result || '')) }
-    reader.onerror = () => { cleanup(); reject(reader.error || new Error('Attachment read failed')) }
-    reader.onabort = () => { cleanup(); reject(new DOMException('Attachment read cancelled', 'AbortError')) }
-    if (signal.aborted) { abort(); return }
+    const abort = () => {
+      reader.abort()
+      cleanup()
+      reject(new DOMException('Attachment read cancelled', 'AbortError'))
+    }
+    reader.onload = () => {
+      cleanup()
+      resolve(String(reader.result || ''))
+    }
+    reader.onerror = () => {
+      cleanup()
+      reject(reader.error || new Error('Attachment read failed'))
+    }
+    reader.onabort = () => {
+      cleanup()
+      reject(new DOMException('Attachment read cancelled', 'AbortError'))
+    }
+    if (signal.aborted) {
+      abort()
+      return
+    }
     signal.addEventListener('abort', abort, { once: true })
     reader.readAsDataURL(file)
   })

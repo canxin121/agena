@@ -147,17 +147,17 @@
     @apply h-full w-full;
   }
 
-  /* Avoid WebKit textarea styling in the chat composer */
-  textarea[data-chat-input='true'] {
+  /* Keep the chat editor free of browser input chrome. */
+  [data-chat-input='true'] {
     -webkit-appearance: none;
     background: transparent !important;
     border: none;
     box-shadow: none;
   }
 
-  textarea[data-chat-input='true']:focus,
-  textarea[data-chat-input='true']:focus-visible,
-  textarea[data-chat-input='true']:hover {
+  [data-chat-input='true']:focus,
+  [data-chat-input='true']:focus-visible,
+  [data-chat-input='true']:hover {
     outline: none;
     border: none;
     box-shadow: none;

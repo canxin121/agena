@@ -3,18 +3,12 @@ import { nextTick, ref, watch, type Component } from 'vue'
 import { RiRefreshLine } from '@remixicon/vue'
 import { useI18n } from 'vue-i18n'
 import ListRowButton from '@/components/ui/ListRowButton.vue'
+import type { Command } from '@/pages/chat/useChatCommands'
 
 // Intentionally UI-only; ChatPage keeps state + keyboard navigation.
 
-type CommandItem = {
-  name: string
-  isBuiltIn?: boolean
-  kind?: 'builtin' | 'plugin'
-  scope?: string
-  description?: string
-  aliases?: string[]
-  arguments?: string
-}
+/** The palette renders the shared command contract; it must not fork it. */
+type CommandItem = Command
 
 const props = defineProps<{
   open: boolean
@@ -101,7 +95,7 @@ function setIndex(i: number) {
               <span class="font-mono text-sm">/{{ cmd.name }}</span>
               <span v-if="cmd.arguments" class="font-mono text-[11px] text-muted-foreground">{{ cmd.arguments }}</span>
               <span
-                v-if="cmd.isBuiltIn || cmd.kind === 'builtin'"
+                v-if="cmd.kind === 'builtin'"
                 class="text-[10px] uppercase font-bold tracking-tight rounded border border-amber-300/40 bg-amber-200/10 text-amber-600 px-1.5 py-0.5"
               >
                 {{ t('chat.roles.system') }}

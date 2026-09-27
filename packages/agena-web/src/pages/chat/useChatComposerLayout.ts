@@ -1,18 +1,8 @@
 import { nextTick, onBeforeUnmount, onMounted, ref, watch, type Ref } from 'vue'
 import { localStorageKeys } from '@/lib/persistence/storageKeys'
+import { getComposerInput, type ComposerExpose } from './composerInput'
 
 type UiLike = { isCompactLayout: boolean; isCompactTouch: boolean; isTouchPointer: boolean }
-
-type ComposerExpose = {
-  shellEl?: HTMLDivElement | { value: HTMLDivElement | null } | null
-  textareaEl?: HTMLTextAreaElement | { value: HTMLTextAreaElement | null } | null
-}
-
-function getComposerTextareaEl(composer: ComposerExpose | null): HTMLTextAreaElement | null {
-  const textarea = composer?.textareaEl
-  if (!textarea) return null
-  return textarea instanceof HTMLTextAreaElement ? textarea : textarea.value
-}
 
 export function useChatComposerLayout(opts: {
   ui: UiLike
@@ -253,7 +243,7 @@ export function useChatComposerLayout(opts: {
 
       // Mobile UX: don't auto-open the IME just because the user toggled fullscreen.
       if (!ui.isTouchPointer) {
-        getComposerTextareaEl(composerRef.value)?.focus()
+        getComposerInput(composerRef.value)?.focus()
       }
     })
   }
@@ -265,7 +255,7 @@ export function useChatComposerLayout(opts: {
     // Mobile UX: collapsing the fullscreen editor should dismiss the IME.
     if (ui.isTouchPointer) {
       try {
-        getComposerTextareaEl(composerRef.value)?.blur()
+        getComposerInput(composerRef.value)?.blur()
       } catch {
         // ignore
       }
@@ -282,7 +272,7 @@ export function useChatComposerLayout(opts: {
 
       // Keep desktop behavior (restore focus), but avoid reopening the keyboard on mobile.
       if (!ui.isTouchPointer) {
-        getComposerTextareaEl(composerRef.value)?.focus()
+        getComposerInput(composerRef.value)?.focus()
       }
     }, 240) // Match transition duration
   }

@@ -64,8 +64,7 @@ export function installKeyboardShortcuts(): () => void {
     // focus, matching the TUI keymap.
     if (e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey && keyLower(e) === 'i') {
       e.preventDefault()
-      const textarea = document.querySelector<HTMLTextAreaElement>('textarea[data-chat-input="true"]')
-      textarea?.focus()
+      document.querySelector<HTMLElement>('[data-chat-input="true"]')?.focus()
       return
     }
 

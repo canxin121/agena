@@ -57,12 +57,12 @@ const {
   thinkingTriggerRef,
   speedTriggerRef,
   sessionActionsMenuRef,
-  transcriptSearchInputRef,
 
   // Stores / state.
   chat,
   ui,
   attachedFiles,
+  pendingAttachments,
   failedAttachmentDraft,
   restoreFailedAttachmentDraft,
   discardFailedAttachmentDraft,
@@ -117,6 +117,7 @@ const {
 
   // Composer layout.
   composerFullscreenActive,
+  composerMaxHeight,
   composerSplitTopCollapsed,
   composerTargetHeight,
   handleComposerResize,
@@ -529,10 +530,7 @@ void sessionActionsMenuRef
             class="pointer-events-none absolute inset-x-0 bottom-2 z-30"
           >
             <div class="chat-column">
-              <ChatRuntimeStatusOverlay
-                :is-compact-touch="ui.isCompactTouch"
-                @reserve-change="handleOverlayReserve"
-              />
+              <ChatRuntimeStatusOverlay :is-compact-touch="ui.isCompactTouch" @reserve-change="handleOverlayReserve" />
             </div>
           </div>
         </div>
@@ -557,14 +555,27 @@ void sessionActionsMenuRef
               />
               <div v-if="failedAttachmentDraft" role="status" class="mb-2 rounded border border-border p-2 text-sm">
                 <p>{{ t('chat.attachments.failedDraftSaved') }}</p>
-                <p class="text-xs text-muted-foreground">{{ t('chat.attachments.recoverySession', { session: failedAttachmentDraft.sessionId }) }}</p>
-                <button type="button" class="mr-3 underline" :disabled="sending || attachmentsBusy" @click="restoreFailedAttachmentDraft">{{ t('chat.attachments.restoreFailedDraft') }}</button>
-                <button type="button" class="underline" :disabled="sending" @click="discardFailedAttachmentDraft">{{ t('chat.attachments.discardFailedDraft') }}</button>
+                <p class="text-xs text-muted-foreground">
+                  {{ t('chat.attachments.recoverySession', { session: failedAttachmentDraft.sessionId }) }}
+                </p>
+                <button
+                  type="button"
+                  class="mr-3 underline"
+                  :disabled="sending || attachmentsBusy"
+                  @click="restoreFailedAttachmentDraft"
+                >
+                  {{ t('chat.attachments.restoreFailedDraft') }}
+                </button>
+                <button type="button" class="underline" :disabled="sending" @click="discardFailedAttachmentDraft">
+                  {{ t('chat.attachments.discardFailedDraft') }}
+                </button>
               </div>
               <Composer
                 ref="composerRef"
                 v-model:draft="draft"
                 :fullscreen="composerFullscreenActive"
+                :attached-files="attachedFiles"
+                :pending-attachments="pendingAttachments"
                 class="flex-1 shrink-0 sm:shrink min-h-min"
                 @toggleFullscreen="toggleEditorFullscreen"
                 @drop="handleDrop"
@@ -572,6 +583,7 @@ void sessionActionsMenuRef
                 @draftInput="handleDraftInput"
                 @draftKeydown="handleDraftKeydown"
                 @filesSelected="handleFileInputChange"
+                @removeAttachment="removeAttachment"
               >
                 <template #status>
                   <span class="flex items-center gap-1">
@@ -864,7 +876,11 @@ void sessionActionsMenuRef
     :desktop-viewport-margin-px="COMPOSER_DESKTOP_MENU_VIEWPORT_MARGIN_PX"
     :attached-files="attachedFiles"
     :provider-label="String(unref(modelStatusLabel) || 'selected model')"
-    @delivery="(id, delivery) => { attachedFiles = attachedFiles.map((file) => file.id === id ? { ...file, delivery } : file) }"
+    @delivery="
+      (id, delivery) => {
+        attachedFiles = attachedFiles.map((file) => (file.id === id ? { ...file, delivery } : file))
+      }
+    "
     :busy="attachmentsBusy"
     :format-bytes="formatBytes"
     @update:open="setAttachmentsPanelOpen"

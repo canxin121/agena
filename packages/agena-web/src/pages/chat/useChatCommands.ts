@@ -3,6 +3,7 @@ import { useI18n } from 'vue-i18n'
 import { RiCommandLine, RiFlashlightLine } from '@remixicon/vue'
 
 import { apiJson } from '@/lib/api'
+import { getComposerInput, type ComposerExpose } from './composerInput'
 import {
   BUILT_IN_COMMANDS,
   findBuiltInCommand,
@@ -38,20 +39,10 @@ export type PluginOperation = {
 
 export type Command = BuiltInCommand | PluginOperation
 
-type ComposerExpose = {
-  textareaEl?: HTMLTextAreaElement | { value: HTMLTextAreaElement | null } | null
-}
-
 type PluginSurfaceCatalog = {
   catalog?: {
     operations?: PluginOperationCatalogItem[]
   }
-}
-
-function getComposerTextareaEl(composer: ComposerExpose | null): HTMLTextAreaElement | null {
-  const textarea = composer?.textareaEl
-  if (!textarea) return null
-  return textarea instanceof HTMLTextAreaElement ? textarea : textarea.value
 }
 
 function text(value: unknown): string {
@@ -265,7 +256,7 @@ export function useChatCommands(opts: {
       draft.value = `/${command.name} `
       closeCommandPalette()
       await nextTick()
-      const input = getComposerTextareaEl(composerRef.value)
+      const input = getComposerInput(composerRef.value)
       if (!input) return
       input.focus()
       input.setSelectionRange(input.value.length, input.value.length)

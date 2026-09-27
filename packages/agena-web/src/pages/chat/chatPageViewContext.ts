@@ -3,9 +3,11 @@ import type { ComputedRef, Ref, Component } from 'vue'
 import type { RenderBlock, TranscriptDisplayPart } from '@/components/chat/messageList.types'
 import type { OptionMenuGroup, OptionMenuItem } from '@/components/ui/optionMenu.types'
 import type { OptimisticUserMessage } from '@/composables/chat/useMessageStreaming'
-import type { AttachedFile } from '@/pages/chat/useChatAttachments'
-import type { MessageEntry, MessageFold } from '@/types/chat'
+import type { AttachedFile, PendingAttachment } from '@/pages/chat/useChatAttachments'
+import type { ComposerAttachment } from '@/pages/chat/attachmentIngestion'
+import type { AttentionEvent, MessageEntry, MessageFold } from '@/types/chat'
 import type { Command } from './useChatCommands'
+import type { ComposerExpose } from './composerInput'
 import type { JsonObject } from '@/types/json'
 
 type DynamicRecord = JsonObject
@@ -25,12 +27,6 @@ type MessageRecordLike = {
 
 type ContainsTargetExpose = { containsTarget?: (target: Node | null) => boolean }
 
-type ComposerExpose = {
-  shellEl?: HTMLDivElement | { value: HTMLDivElement | null } | null
-  textareaEl?: HTMLTextAreaElement | { value: HTMLTextAreaElement | null } | null
-  openFilePicker?: () => void
-}
-
 type RetryStatusLike = {
   type: 'retry'
   next: number
@@ -38,7 +34,9 @@ type RetryStatusLike = {
   message: string
 } | null
 
-type AttentionLike = { kind: 'permission' | 'question'; payload: DynamicRecord } | null
+// The attention event is the shared chat contract; the context only ever
+// forwards it, so it must not re-declare a narrower shape of its own.
+type AttentionLike = AttentionEvent | null
 
 type SessionUsageLike = {
   tokensLabel: string
@@ -87,13 +85,15 @@ export type ChatPageViewContext = {
   ui: {
     isCompactLayout: boolean
     isCompactTouch: boolean
+    isTouchPointer: boolean
     isSessionSwitcherOpen: boolean
     setSessionSwitcherOpen: (open: boolean) => void
   }
-  failedAttachmentDraft: MaybeRef<{sessionId:string;text:string;files:AttachedFile[]} | null>
+  failedAttachmentDraft: MaybeRef<{ sessionId: string; text: string; files: ComposerAttachment[] } | null>
   restoreFailedAttachmentDraft: () => void
   discardFailedAttachmentDraft: () => void
   attachedFiles: Ref<AttachedFile[]>
+  pendingAttachments: Ref<PendingAttachment[]>
   attachmentsBusy: MaybeRef<boolean>
   attachmentsPanelOpen: MaybeRef<boolean>
   draft: MaybeRef<string>

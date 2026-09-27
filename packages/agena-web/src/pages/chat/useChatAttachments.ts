@@ -1,21 +1,55 @@
 import { computed, ref, onScopeDispose, type Ref } from 'vue'
 import { i18n } from '@/i18n'
-import { createAttachmentIngestor, filesFromClipboard, pasteTextWithinBudget, readLocalDataUrl, MAX_ATTACHMENT_TOTAL_BYTES, MAX_ATTACHMENTS, type StagedAttachment } from './attachmentIngestion'
+import {
+  createAttachmentIngestor,
+  filesFromClipboard,
+  pasteTextWithinBudget,
+  readLocalDataUrl,
+  MAX_ATTACHMENT_TOTAL_BYTES,
+  MAX_ATTACHMENTS,
+  type ComposerAttachment,
+} from './attachmentIngestion'
 
 type ToastKind = 'info' | 'success' | 'error'
 type Toasts = { push: (kind: ToastKind, message: string, timeoutMs?: number) => void }
 
 type ComposerExpose = {
   openFilePicker?: () => void
+  insertText?: (text: string) => void
+  replaceAttachmentWithText?: (id: string, text: string) => void
 }
 
-export type AttachedFile = StagedAttachment
+export type AttachedFile = ComposerAttachment & { state: 'ready' }
+export type PendingAttachment = ComposerAttachment & { state: 'preparing' }
 
 // Attachment handling (local uploads + project file references).
-export function useChatAttachments(opts: { toasts: Toasts; composerRef: Ref<ComposerExpose | null>; restoreText?: (text: string) => void }) {
+export function useChatAttachments(opts: {
+  toasts: Toasts
+  composerRef: Ref<ComposerExpose | null>
+  restoreText?: (text: string) => void
+}) {
   const { toasts, composerRef } = opts
 
-  const attachedFiles = ref<AttachedFile[]>([])
+  // One attachment list. Ready and pending chips are projections of it, and
+  // the `state` field is the only thing that tells them apart.
+  const attachments = ref<ComposerAttachment[]>([])
+  const attachedFiles = computed<AttachedFile[]>({
+    get: () => attachments.value.filter((file): file is AttachedFile => file.state === 'ready'),
+    set: (files) => {
+      const pending = attachments.value.filter((file) => file.state === 'preparing')
+      attachments.value = [...files.map((file) => ({ ...file, state: 'ready' as const })), ...pending]
+    },
+  })
+  const pendingAttachments = computed<PendingAttachment[]>({
+    get: () => attachments.value.filter((file): file is PendingAttachment => file.state === 'preparing'),
+    set: (files) => {
+      const ready = attachments.value.filter((file) => file.state === 'ready')
+      attachments.value = [...ready, ...files.map((file) => ({ ...file, state: 'preparing' as const }))]
+    },
+  })
+  const preparation = new Set<Promise<unknown>>()
+  const cancelled = new Set<string>()
+  let preparationErrors = 0
 
   const attachBusyCount = ref(0)
   const attachmentsBusy = computed(() => attachBusyCount.value > 0)
@@ -24,14 +58,23 @@ export function useChatAttachments(opts: { toasts: Toasts; composerRef: Ref<Comp
   const LONG_PASTE_TEXT_CHARS = 1_000
   const ingestion = createAttachmentIngestor({
     get: () => attachedFiles.value,
-    set: (files) => { attachedFiles.value = files },
+    set: (files) => {
+      attachedFiles.value = files.map((file) => ({ ...file, state: 'ready' as const }))
+    },
     read: readLocalDataUrl,
-    onBusy: (count) => { attachBusyCount.value = count },
+    onBusy: (count) => {
+      attachBusyCount.value = count
+    },
     onError: ({ kind, file }) => {
-      const message = kind === 'count' ? i18n.global.t('chat.attachments.errors.tooMany', { count: MAX_ATTACHMENTS })
-        : kind === 'total' ? i18n.global.t('chat.attachments.errors.totalTooLarge', { size: formatBytes(MAX_ATTACHMENT_TOTAL_BYTES) })
-        : kind === 'size' ? i18n.global.t('chat.attachments.errors.fileTooLarge', { name: file.name, size: formatBytes(file.size) })
-        : i18n.global.t('chat.attachments.errors.failedToReadFile', { name: file.name })
+      preparationErrors += 1
+      const message =
+        kind === 'count'
+          ? i18n.global.t('chat.attachments.errors.tooMany', { count: MAX_ATTACHMENTS })
+          : kind === 'total'
+            ? i18n.global.t('chat.attachments.errors.totalTooLarge', { size: formatBytes(MAX_ATTACHMENT_TOTAL_BYTES) })
+            : kind === 'size'
+              ? i18n.global.t('chat.attachments.errors.fileTooLarge', { name: file.name, size: formatBytes(file.size) })
+              : i18n.global.t('chat.attachments.errors.failedToReadFile', { name: file.name })
       toasts.push('error', message)
     },
   })
@@ -47,8 +90,69 @@ export function useChatAttachments(opts: { toasts: Toasts; composerRef: Ref<Comp
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
   }
 
-  async function attachLocalFiles(files: FileList | File[]) {
-    return await ingestion.stage(files)
+  function trackPreparation<T>(promise: Promise<T>): Promise<T> {
+    preparation.add(promise)
+    void promise.finally(() => preparation.delete(promise)).catch(() => undefined)
+    return promise
+  }
+
+  async function waitForAttachments() {
+    while (preparation.size > 0) await Promise.allSettled([...preparation])
+  }
+
+  function preparationErrorCount() {
+    return preparationErrors
+  }
+  function attachmentGeneration() {
+    return ingestion.generation()
+  }
+
+  function attachLocalFiles(files: FileList | File[], pastedText?: { file: File; preview: string; text: string }) {
+    const snapshot = Array.from(files)
+    const epoch = ingestion.generation()
+    const pending = snapshot.map((file) => ({
+      id: `pending-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      filename: file.name || 'file',
+      size: file.size,
+      mime: file.type || 'application/octet-stream',
+      state: 'preparing' as const,
+      ...(file === pastedText?.file ? { pastePreview: pastedText.preview } : {}),
+    }))
+    const idsByFile = new Map(snapshot.map((file, index) => [file, pending[index]!.id]))
+    pendingAttachments.value = [...pendingAttachments.value, ...pending]
+    return trackPreparation(
+      ingestion
+        .stage(snapshot, {
+          idForFile: (file) => idsByFile.get(file) || '',
+          shouldSkip: (file) => cancelled.has(idsByFile.get(file) || ''),
+        })
+        .then((accepted) => {
+          if (epoch !== ingestion.generation()) return accepted
+          const acceptedIds = new Set(attachedFiles.value.map((file) => file.id))
+          for (const item of pending) {
+            if (cancelled.has(item.id) && acceptedIds.has(item.id)) {
+              attachedFiles.value = attachedFiles.value.filter((file) => file.id !== item.id)
+            }
+          }
+          const pastedId = pastedText ? idsByFile.get(pastedText.file) : undefined
+          if (pastedId && attachedFiles.value.some((file) => file.id === pastedId)) {
+            attachedFiles.value = attachedFiles.value.map((file) =>
+              file.id === pastedId ? { ...file, pastePreview: pastedText!.preview } : file,
+            )
+          } else if (pastedId && !cancelled.has(pastedId)) {
+            // Failed staging returns the original text at the exact paste position.
+            if (composerRef.value?.replaceAttachmentWithText)
+              composerRef.value.replaceAttachmentWithText(pastedId, pastedText!.text)
+            else opts.restoreText?.(pastedText!.text)
+          }
+          return accepted
+        })
+        .finally(() => {
+          const ids = new Set(pending.map((file) => file.id))
+          pendingAttachments.value = pendingAttachments.value.filter((file) => !ids.has(file.id))
+          for (const id of ids) cancelled.delete(id)
+        }),
+    )
   }
 
   async function handleDrop(e: DragEvent) {
@@ -61,10 +165,17 @@ export function useChatAttachments(opts: { toasts: Toasts; composerRef: Ref<Comp
 
   function longPasteTextFile(text: string): File {
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-').replace(/Z$/, '')
-    return new File([text], `clipboard-paste-${timestamp}.txt`, {
+    return new File([text], `clipboard-paste-${timestamp}-${Math.random().toString(36).slice(2, 8)}.txt`, {
       type: 'text/plain;charset=utf-8',
       lastModified: Date.now(),
     })
+  }
+
+  function pastedTextPreview(text: string): string {
+    const compact = text.replace(/\s+/g, ' ').trim()
+    if (!compact) return String(i18n.global.t('chat.attachments.whitespaceOnly'))
+    const characters = Array.from(compact)
+    return characters.length > 240 ? `${characters.slice(0, 240).join('')}…` : compact
   }
 
   async function handlePaste(e: ClipboardEvent) {
@@ -76,24 +187,18 @@ export function useChatAttachments(opts: { toasts: Toasts; composerRef: Ref<Comp
       toasts.push('error', String(i18n.global.t('chat.attachments.errors.textPasteTooLarge')))
       return
     }
-    const longText = Array.from(text).length >= LONG_PASTE_TEXT_CHARS
-
-    if (longText) {
-      // Long text is an explicit model-input file, not a lazy path that the
-      // model may never read. Preserve the text in the editor if staging fails.
+    if (Array.from(text).length >= LONG_PASTE_TEXT_CHARS) {
       e.preventDefault()
-      const epoch = ingestion.generation()
       const textFile = longPasteTextFile(text)
-      const accepted = await attachLocalFiles([textFile, ...files])
-      if (epoch === ingestion.generation() && !accepted.includes(textFile)) opts.restoreText?.(text)
+      await attachLocalFiles([textFile, ...files], { file: textFile, preview: pastedTextPreview(text), text })
       return
     }
-
-    if (files.length) {
-      // Do not preventDefault: short clipboard text should still paste normally
-      // while image/file items are staged as attachments alongside it.
-      await attachLocalFiles(files)
+    e.preventDefault()
+    if (text) {
+      if (composerRef.value?.insertText) composerRef.value.insertText(text)
+      else opts.restoreText?.(text)
     }
+    if (files.length) await attachLocalFiles(files)
   }
 
   async function handleFileInputChange(e: Event | FileList) {
@@ -108,11 +213,16 @@ export function useChatAttachments(opts: { toasts: Toasts; composerRef: Ref<Comp
   }
 
   function removeAttachment(id: string) {
+    cancelled.add(id)
+    ingestion.cancel(id)
+    pendingAttachments.value = pendingAttachments.value.filter((f) => f.id !== id)
     attachedFiles.value = attachedFiles.value.filter((f) => f.id !== id)
   }
 
   function clearAttachments() {
     ingestion.clear()
+    pendingAttachments.value = []
+    cancelled.clear()
   }
 
   function openFilePicker() {
@@ -159,10 +269,7 @@ export function useChatAttachments(opts: { toasts: Toasts; composerRef: Ref<Comp
     const filename = basename(p)
     if (attachedFiles.value.some((f) => f.serverPath === p)) return
     if (attachedFiles.value.length >= MAX_RESOURCE_ATTACHMENTS) {
-      toasts.push(
-        'error',
-        i18n.global.t('chat.attachments.errors.tooMany', { count: MAX_RESOURCE_ATTACHMENTS }),
-      )
+      toasts.push('error', i18n.global.t('chat.attachments.errors.tooMany', { count: MAX_RESOURCE_ATTACHMENTS }))
       return
     }
 
@@ -180,6 +287,7 @@ export function useChatAttachments(opts: { toasts: Toasts; composerRef: Ref<Comp
         url: '',
         serverPath: p,
         delivery: 'reference',
+        state: 'ready',
       },
     ]
   }
@@ -193,7 +301,11 @@ export function useChatAttachments(opts: { toasts: Toasts; composerRef: Ref<Comp
 
   return {
     attachedFiles,
+    pendingAttachments,
     attachmentsBusy,
+    waitForAttachments,
+    preparationErrorCount,
+    attachmentGeneration,
     attachProjectDialogOpen,
     attachProjectPath,
     formatBytes,

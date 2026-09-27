@@ -8,16 +8,7 @@ import Button from '@/components/ui/Button.vue'
 import IconButton from '@/components/ui/IconButton.vue'
 import Skeleton from '@/components/ui/Skeleton.vue'
 import { useUiStore, type ImageViewerItem } from '@/stores/ui'
-
-type AttachedFile = {
-  id: string
-  filename: string
-  size: number
-  mime: string
-  url?: string
-  serverPath?: string
-  delivery?: 'reference' | 'model_input'
-}
+import type { AttachedFile } from '@/pages/chat/useChatAttachments'
 
 type DesktopAnchorLike =
   | HTMLElement
@@ -603,7 +594,13 @@ onBeforeUnmount(() => {
                 :aria-label="`${t('common.open')}: ${f.filename}`"
                 @click.stop="openAttachmentImage(f)"
               >
-                <img :src="f.url" alt="" aria-hidden="true" class="h-full w-full object-cover cursor-zoom-in" draggable="false" />
+                <img
+                  :src="f.url"
+                  alt=""
+                  aria-hidden="true"
+                  class="h-full w-full object-cover cursor-zoom-in"
+                  draggable="false"
+                />
               </button>
               <div
                 v-else
@@ -616,15 +613,31 @@ onBeforeUnmount(() => {
               </div>
 
               <div class="min-w-0 flex-1">
-                <div class="text-xs font-mono font-medium truncate" :title="f.filename">{{ f.filename }}</div>
+                <div
+                  class="text-xs font-medium truncate"
+                  :class="f.pastePreview === undefined ? 'font-mono' : ''"
+                  :title="f.filename"
+                >
+                  {{ f.pastePreview !== undefined ? t('chat.attachments.pastedText') : f.filename }}
+                </div>
+                <p
+                  v-if="f.pastePreview !== undefined"
+                  class="mt-1 line-clamp-2 break-words text-xs text-muted-foreground"
+                  :title="f.pastePreview"
+                >
+                  {{ f.pastePreview }}
+                </p>
                 <label class="mt-1 flex items-center gap-1 text-xs text-muted-foreground">
-                  <input type="checkbox" :checked="f.delivery === 'model_input'" :disabled="busy"
-                    @change="emit('delivery', f.id, ($event.target as HTMLInputElement).checked ? 'model_input' : 'reference')" />
+                  <input
+                    type="checkbox"
+                    :checked="f.delivery === 'model_input'"
+                    :disabled="busy"
+                    @change="
+                      emit('delivery', f.id, ($event.target as HTMLInputElement).checked ? 'model_input' : 'reference')
+                    "
+                  />
                   {{ t('chat.attachments.sendContents') }}
                 </label>
-                <p class="text-[11px] text-muted-foreground">
-                  {{ f.delivery === 'model_input' ? t('chat.attachments.deliveryNotice', { provider: providerLabel || 'selected model' }) : t('chat.attachments.referenceNotice') }}
-                </p>
                 <div
                   v-if="f.serverPath"
                   class="mt-0.5 text-[11px] text-muted-foreground font-mono truncate"
@@ -670,142 +683,168 @@ onBeforeUnmount(() => {
           @pointerdown.stop
           @click.stop
         >
-      <div class="flex items-center justify-between gap-3 px-4 py-3 border-b border-border/40">
-        <div class="min-w-0">
-          <div class="flex items-center gap-2">
-            <RiAttachmentLine class="h-4.5 w-4.5 text-muted-foreground" />
-            <DialogTitle class="text-sm font-semibold truncate">{{ effectiveTitle }}</DialogTitle>
-          </div>
-          <div class="mt-1 text-[12px] text-muted-foreground font-mono">
-            <span v-if="busy" class="inline-flex items-center gap-1">
-              <RiLoader4Line class="h-4 w-4 animate-spin" />
-              {{ t('chat.attachments.attaching') }}
-            </span>
-            <span v-else>{{ countLabel }}</span>
-          </div>
-        </div>
-        <IconButton
-          size="sm"
-          :tooltip="t('common.close')"
-          :is-compact-touch="isMobileSheet"
-          :title="t('common.close')"
-          :aria-label="t('common.close')"
-          @click="close"
-        >
-          <RiCloseLine class="h-4 w-4" />
-        </IconButton>
-      </div>
-
-      <div class="p-4 flex-1 min-h-0 overflow-hidden flex flex-col gap-3">
-        <div class="flex flex-wrap items-center gap-2">
-          <Button size="sm" variant="outline" class="h-9" @click="$emit('attachLocal')">
-            <RiFileUploadLine class="h-4 w-4 mr-2" />
-            {{ t('chat.attachments.actions.addFromComputer') }}
-          </Button>
-          <Button size="sm" variant="outline" class="h-9" @click="$emit('attachProject')">
-            <RiFileLine class="h-4 w-4 mr-2" />
-            {{ t('chat.attachments.actions.addFromProject') }}
-          </Button>
-          <Button
-            size="sm"
-            variant="ghost-destructive"
-            class="h-9 ml-auto"
-            :disabled="fileCount === 0"
-            @click="$emit('clear')"
-          >
-            {{ t('chat.attachments.actions.clear') }}
-          </Button>
-        </div>
-
-        <div class="flex-1 min-h-0 overflow-auto pr-1">
-          <div
-            v-if="busy && fileCount === 0"
-            class="rounded-lg border border-border/60 bg-muted/15 px-3 py-3 animate-in fade-in-0 duration-150"
-          >
-            <div class="space-y-2.5">
-              <Skeleton class="h-3.5 w-2/3" />
-              <Skeleton class="h-3.5 w-1/2" />
-              <div class="space-y-2 pt-1">
-                <Skeleton class="h-9 w-full" />
-                <Skeleton class="h-9 w-11/12" />
-                <Skeleton class="h-9 w-10/12" />
+          <div class="flex items-center justify-between gap-3 px-4 py-3 border-b border-border/40">
+            <div class="min-w-0">
+              <div class="flex items-center gap-2">
+                <RiAttachmentLine class="h-4.5 w-4.5 text-muted-foreground" />
+                <DialogTitle class="text-sm font-semibold truncate">{{ effectiveTitle }}</DialogTitle>
+              </div>
+              <div class="mt-1 text-[12px] text-muted-foreground font-mono">
+                <span v-if="busy" class="inline-flex items-center gap-1">
+                  <RiLoader4Line class="h-4 w-4 animate-spin" />
+                  {{ t('chat.attachments.attaching') }}
+                </span>
+                <span v-else>{{ countLabel }}</span>
               </div>
             </div>
-          </div>
-
-          <div
-            v-else-if="fileCount === 0"
-            class="rounded-lg border border-border/60 bg-muted/15 px-3 py-3 animate-in fade-in-0 duration-150"
-          >
-            <div class="text-sm font-medium">{{ t('chat.attachments.empty.title') }}</div>
-            <div class="mt-1 text-[13px] text-muted-foreground">{{ t('chat.attachments.empty.description') }}</div>
-          </div>
-
-          <div v-else class="space-y-2">
-            <div
-              v-for="f in attachedFiles"
-              :key="f.id"
-              class="flex items-center gap-3 rounded-lg border border-border/60 bg-background/60 px-3 py-2"
+            <IconButton
+              size="sm"
+              :tooltip="t('common.close')"
+              :is-compact-touch="isMobileSheet"
+              :title="t('common.close')"
+              :aria-label="t('common.close')"
+              @click="close"
             >
-              <button
-                v-if="isImageFile(f)"
-                type="button"
-                class="h-10 w-10 shrink-0 overflow-hidden rounded-lg border border-border/50 bg-muted/10 outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                :aria-label="`${t('common.open')}: ${f.filename}`"
-                @click.stop="openAttachmentImage(f)"
-              >
-                <img :src="f.url" alt="" aria-hidden="true" class="h-full w-full object-cover cursor-zoom-in" draggable="false" />
-              </button>
-              <div
-                v-else
-                class="h-10 w-10 shrink-0 rounded-lg border border-border/50 bg-muted/10 overflow-hidden flex items-center justify-center"
-                aria-hidden="true"
-              >
-                <span class="text-[10px] font-mono text-muted-foreground uppercase">
-                  {{ badgeTextForFilename(f.filename) }}
-                </span>
-              </div>
+              <RiCloseLine class="h-4 w-4" />
+            </IconButton>
+          </div>
 
-              <div class="min-w-0 flex-1">
-                <div class="text-sm font-mono font-medium truncate" :title="f.filename">{{ f.filename }}</div>
-                <label class="mt-1 flex items-center gap-1 text-xs text-muted-foreground">
-                  <input type="checkbox" :checked="f.delivery === 'model_input'" :disabled="busy"
-                    @change="emit('delivery', f.id, ($event.target as HTMLInputElement).checked ? 'model_input' : 'reference')" />
-                  {{ t('chat.attachments.sendContents') }}
-                </label>
-                <p class="text-[11px] text-muted-foreground">
-                  {{ f.delivery === 'model_input' ? t('chat.attachments.deliveryNotice', { provider: providerLabel || 'selected model' }) : t('chat.attachments.referenceNotice') }}
-                </p>
-                <div
-                  v-if="f.serverPath"
-                  class="mt-0.5 text-[13px] text-muted-foreground font-mono truncate"
-                  :title="f.serverPath"
-                >
-                  {{ f.serverPath }}
+          <div class="p-4 flex-1 min-h-0 overflow-hidden flex flex-col gap-3">
+            <div class="flex flex-wrap items-center gap-2">
+              <Button size="sm" variant="outline" class="h-9" @click="$emit('attachLocal')">
+                <RiFileUploadLine class="h-4 w-4 mr-2" />
+                {{ t('chat.attachments.actions.addFromComputer') }}
+              </Button>
+              <Button size="sm" variant="outline" class="h-9" @click="$emit('attachProject')">
+                <RiFileLine class="h-4 w-4 mr-2" />
+                {{ t('chat.attachments.actions.addFromProject') }}
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost-destructive"
+                class="h-9 ml-auto"
+                :disabled="fileCount === 0"
+                @click="$emit('clear')"
+              >
+                {{ t('chat.attachments.actions.clear') }}
+              </Button>
+            </div>
+
+            <div class="flex-1 min-h-0 overflow-auto pr-1">
+              <div
+                v-if="busy && fileCount === 0"
+                class="rounded-lg border border-border/60 bg-muted/15 px-3 py-3 animate-in fade-in-0 duration-150"
+              >
+                <div class="space-y-2.5">
+                  <Skeleton class="h-3.5 w-2/3" />
+                  <Skeleton class="h-3.5 w-1/2" />
+                  <div class="space-y-2 pt-1">
+                    <Skeleton class="h-9 w-full" />
+                    <Skeleton class="h-9 w-11/12" />
+                    <Skeleton class="h-9 w-10/12" />
+                  </div>
                 </div>
               </div>
 
-              <div class="shrink-0 flex items-center gap-2">
-                <span class="text-[12px] text-muted-foreground font-mono tabular-nums">
-                  <template v-if="f.serverPath">{{ t('chat.attachments.repo') }}</template>
-                  <template v-else>{{ formatBytes(f.size) }}</template>
-                </span>
-                <IconButton
-                  size="xs"
-                  class="text-muted-foreground hover:text-foreground hover:bg-secondary/50"
-                  :tooltip="t('common.remove')"
-                  :is-compact-touch="isMobileSheet"
-                  :title="t('common.remove')"
-                  :aria-label="t('chat.attachments.removeAttachmentAria')"
-                  @click="$emit('remove', f.id)"
+              <div
+                v-else-if="fileCount === 0"
+                class="rounded-lg border border-border/60 bg-muted/15 px-3 py-3 animate-in fade-in-0 duration-150"
+              >
+                <div class="text-sm font-medium">{{ t('chat.attachments.empty.title') }}</div>
+                <div class="mt-1 text-[13px] text-muted-foreground">{{ t('chat.attachments.empty.description') }}</div>
+              </div>
+
+              <div v-else class="space-y-2">
+                <div
+                  v-for="f in attachedFiles"
+                  :key="f.id"
+                  class="flex items-center gap-3 rounded-lg border border-border/60 bg-background/60 px-3 py-2"
                 >
-                  <RiCloseLine class="h-4 w-4" />
-                </IconButton>
+                  <button
+                    v-if="isImageFile(f)"
+                    type="button"
+                    class="h-10 w-10 shrink-0 overflow-hidden rounded-lg border border-border/50 bg-muted/10 outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    :aria-label="`${t('common.open')}: ${f.filename}`"
+                    @click.stop="openAttachmentImage(f)"
+                  >
+                    <img
+                      :src="f.url"
+                      alt=""
+                      aria-hidden="true"
+                      class="h-full w-full object-cover cursor-zoom-in"
+                      draggable="false"
+                    />
+                  </button>
+                  <div
+                    v-else
+                    class="h-10 w-10 shrink-0 rounded-lg border border-border/50 bg-muted/10 overflow-hidden flex items-center justify-center"
+                    aria-hidden="true"
+                  >
+                    <span class="text-[10px] font-mono text-muted-foreground uppercase">
+                      {{ badgeTextForFilename(f.filename) }}
+                    </span>
+                  </div>
+
+                  <div class="min-w-0 flex-1">
+                    <div
+                      class="text-sm font-medium truncate"
+                      :class="f.pastePreview === undefined ? 'font-mono' : ''"
+                      :title="f.filename"
+                    >
+                      {{ f.pastePreview !== undefined ? t('chat.attachments.pastedText') : f.filename }}
+                    </div>
+                    <p
+                      v-if="f.pastePreview !== undefined"
+                      class="mt-1 line-clamp-2 break-words text-[13px] text-muted-foreground"
+                      :title="f.pastePreview"
+                    >
+                      {{ f.pastePreview }}
+                    </p>
+                    <label class="mt-1 flex items-center gap-1 text-xs text-muted-foreground">
+                      <input
+                        type="checkbox"
+                        :checked="f.delivery === 'model_input'"
+                        :disabled="busy"
+                        @change="
+                          emit(
+                            'delivery',
+                            f.id,
+                            ($event.target as HTMLInputElement).checked ? 'model_input' : 'reference',
+                          )
+                        "
+                      />
+                      {{ t('chat.attachments.sendContents') }}
+                    </label>
+                    <div
+                      v-if="f.serverPath"
+                      class="mt-0.5 text-[13px] text-muted-foreground font-mono truncate"
+                      :title="f.serverPath"
+                    >
+                      {{ f.serverPath }}
+                    </div>
+                  </div>
+
+                  <div class="shrink-0 flex items-center gap-2">
+                    <span class="text-[12px] text-muted-foreground font-mono tabular-nums">
+                      <template v-if="f.serverPath">{{ t('chat.attachments.repo') }}</template>
+                      <template v-else>{{ formatBytes(f.size) }}</template>
+                    </span>
+                    <IconButton
+                      size="xs"
+                      class="text-muted-foreground hover:text-foreground hover:bg-secondary/50"
+                      :tooltip="t('common.remove')"
+                      :is-compact-touch="isMobileSheet"
+                      :title="t('common.remove')"
+                      :aria-label="t('chat.attachments.removeAttachmentAria')"
+                      @click="$emit('remove', f.id)"
+                    >
+                      <RiCloseLine class="h-4 w-4" />
+                    </IconButton>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
-        </div>
-      </div>
         </div>
       </DialogContent>
     </DialogPortal>

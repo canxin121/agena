@@ -5,20 +5,12 @@ import { useI18n } from 'vue-i18n'
 import { patchSessionIdInQuery } from '@/app/navigation/sessionQuery'
 import { isEmbeddedWorkspacePaneContext } from '@/app/windowScope'
 import type { JsonValue } from '@/types/json'
+import { attachmentLabel, attachmentLabelFromUrl } from '../../lib/attachmentLabels'
 import { buildAssistantErrorCopyText } from './assistantError'
+import { getComposerInput, type ComposerExpose } from './composerInput'
 
 type ToastKind = 'info' | 'success' | 'error'
 type ToastsStore = { push: (kind: ToastKind, message: string) => void }
-
-type ComposerExpose = {
-  textareaEl?: HTMLTextAreaElement | { value: HTMLTextAreaElement | null } | null
-}
-
-function getComposerTextareaEl(composer: ComposerExpose | null): HTMLTextAreaElement | null {
-  const textarea = composer?.textareaEl
-  if (!textarea) return null
-  return textarea instanceof HTMLTextAreaElement ? textarea : textarea.value
-}
 
 type AttachedFile = {
   id: string
@@ -26,7 +18,8 @@ type AttachedFile = {
   size: number
   mime: string
   url?: string
-  serverPath?: string; delivery?: 'reference' | 'model_input'
+  serverPath?: string
+  delivery?: 'reference' | 'model_input'
 }
 
 type MessagePartLike = {
@@ -61,18 +54,12 @@ type ChatLike = {
 }
 
 function filePartLabel(part: MessagePartLike): string {
-  const name = typeof part?.filename === 'string' ? part.filename.trim() : ''
+  const name = attachmentLabel({ filename: part?.filename })
   if (name) return name
   const url = typeof part?.url === 'string' ? part.url : ''
   if (!url) return 'file'
   if (url.startsWith('data:')) return 'attachment'
-  try {
-    const u = new URL(url)
-    const last = u.pathname.split('/').filter(Boolean).pop()
-    return last || 'file'
-  } catch {
-    return 'file'
-  }
+  return attachmentLabelFromUrl(url) || 'file'
 }
 
 export function useChatMessageActions(opts: {
@@ -192,7 +179,7 @@ export function useChatMessageActions(opts: {
         }
       }
       await nextTick()
-      getComposerTextareaEl(composerRef.value)?.focus()
+      getComposerInput(composerRef.value)?.focus()
     }
 
     // Ensure the view reflects the reverted state.

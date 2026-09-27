@@ -88,16 +88,10 @@ export function useChatModelSelection(opts: {
   commandOpen: Ref<boolean>
   commandQuery: Ref<string>
   commandIndex: Ref<number>
+  commandFocusSearch: Ref<boolean>
 }) {
-  const {
-    chat,
-    composerPickerOpen,
-    modelPickerQuery,
-    onOpenComposerPicker,
-    commandOpen,
-    commandQuery,
-    commandIndex,
-  } = opts
+  const { chat, composerPickerOpen, modelPickerQuery, onOpenComposerPicker, commandOpen, commandQuery, commandIndex } =
+    opts
 
   const catalog = useModelSelectionCatalog()
   const { providers, runtimeDefaultSelection, catalogLoading, catalogError, modelMetaFor } = catalog
@@ -334,9 +328,9 @@ export function useChatModelSelection(opts: {
         ? 'session'
         : configuredThinking
           ? 'default'
-        : selectedThinkingMode.value
-          ? 'model'
-          : 'empty'
+          : selectedThinkingMode.value
+            ? 'model'
+            : 'empty'
 
     const savedSpeed = text(speedModeByModelKey.value[key])
     const runSpeed = runMatches ? run.speedMode : ''

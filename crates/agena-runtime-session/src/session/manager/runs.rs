@@ -219,7 +219,7 @@ impl SessionManager {
         if !prompt_text.is_empty() {
             let input = agena_plugin_host::UserPromptSubmitInput {
                 session_id: request.run.session_id,
-                prompt: prompt_text,
+                prompt: prompt_text.clone(),
             };
             match state
                 .tool_executor
@@ -228,19 +228,31 @@ impl SessionManager {
                 .await
             {
                 Ok(updated) => {
-                    // Replace text parts with the (potentially rewritten) prompt.
-                    let mut replaced = false;
-                    for part in &mut request.parts {
-                        if typed_text(part).is_some() {
+                    // One user message is an ordered list of parts: body text plus
+                    // attachment parts at their inline positions. The hook input joined
+                    // every text part, so an unchanged prompt must leave that layout
+                    // untouched - rewriting only the first text part would replay part
+                    // of the body text twice to the model. A hook that really rewrote
+                    // the prompt owns the message text: the rewritten prompt takes the
+                    // first text part and the remaining text parts are dropped.
+                    if updated.prompt != prompt_text {
+                        let mut placed = false;
+                        request.parts.retain_mut(|part| {
+                            if typed_text(part).is_none() {
+                                return true;
+                            }
+                            if placed {
+                                return false;
+                            }
+                            placed = true;
                             *part = TypedContent::Text(text_content(updated.prompt.clone()));
-                            replaced = true;
-                            break;
+                            true
+                        });
+                        if !placed {
+                            request
+                                .parts
+                                .push(TypedContent::Text(text_content(updated.prompt.clone())));
                         }
-                    }
-                    if !replaced {
-                        request
-                            .parts
-                            .push(TypedContent::Text(text_content(updated.prompt)));
                     }
                 }
                 Err(err) => {

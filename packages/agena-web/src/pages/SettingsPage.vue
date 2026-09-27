@@ -92,8 +92,14 @@ function goToSettingsDestination(destination: SettingsSidebarDestination) {
   // A plugin detail deep link remains attached only while staying on Plugin
   // Workbench. Other destinations receive the shared workspace/window scope
   // query without stale Settings routing state.
-  const { view: _view, plugin, pluginTab, ...scopeQuery } = route.query
-  const query = { ...scopeQuery, view: destination.view }
+  // Settings routing state (view/plugin/pluginTab) must not leak into other
+  // destinations, so the query is read as the open location-query record.
+  const rawQuery = route.query as Record<string, string | string[] | undefined>
+  const { view: _view, plugin, pluginTab, ...scopeQuery } = rawQuery
+  const query: Record<string, string | string[] | undefined> = {
+    ...scopeQuery,
+    view: destination.view,
+  }
   if (
     destination.section === 'plugins-tools' &&
     destination.view === 'plugin-workbench' &&
@@ -400,9 +406,7 @@ const chatToolActivityDefaultExpandedOverrides = computed<ChatToolExpansionOverr
   },
 })
 
-const defaultExpandedToolCategories = computed(
-  () => new Set<string>(chatToolActivityDefaultExpandedCategories.value),
-)
+const defaultExpandedToolCategories = computed(() => new Set<string>(chatToolActivityDefaultExpandedCategories.value))
 
 function toolDefaultExpandedEnabled(toolId: string): boolean {
   return resolveChatToolDefaultExpanded(

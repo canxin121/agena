@@ -14,9 +14,13 @@ import { settingsText as st } from '@/i18n/settingsText'
 
 type ToolCatalogResponse = {
   catalog?: {
-    tui?: {
+    // The plugin surface catalog nests its presentation data under
+    // `terminal`, matching the runtime resource field name.
+    terminal?: {
+      display?: unknown[]
       themes?: Array<{ id?: string; display_name?: string; plugin_id?: string }>
     }
+    operations?: unknown[]
   }
   permission_tools?: Array<{ name?: string; summary?: string; tags?: string[] }>
   activity_kinds?: unknown
@@ -88,20 +92,21 @@ async function loadCatalog() {
     const response = await apiJson<ToolCatalogResponse>('/api/v1/plugins/surface')
     const kinds = normalizeChatActivityKindCatalog(response?.activity_kinds)
     activityKinds.value = kinds
-    themeOptions.value = (Array.isArray(response?.catalog?.terminal?.themes) ? response.catalog.terminal.themes : [])
-      .map((theme) => {
-        const id = String(theme?.id || '').trim()
-        const label = String(theme?.display_name || id).trim()
-        const pluginId = String(theme?.plugin_id || '').trim()
-        return id
-          ? {
-              value: id,
-              label: label || id,
-              description: pluginId ? st('Plugin: {pluginId}', { pluginId: pluginId }) : undefined,
-            }
-          : null
-      })
-      .filter((theme): theme is { value: string; label: string; description?: string } => Boolean(theme))
+    themeOptions.value = (
+      Array.isArray(response?.catalog?.terminal?.themes) ? response.catalog.terminal.themes : []
+    ).flatMap((theme) => {
+      const id = String(theme?.id || '').trim()
+      const label = String(theme?.display_name || id).trim()
+      const pluginId = String(theme?.plugin_id || '').trim()
+      if (!id) return []
+      return [
+        {
+          value: id,
+          label: label || id,
+          description: pluginId ? st('Plugin: {pluginId}', { pluginId: pluginId }) : undefined,
+        },
+      ]
+    })
     toolNames.value = [
       ...new Set([
         ...BUILTIN_ACTIVITY_TOOLS,

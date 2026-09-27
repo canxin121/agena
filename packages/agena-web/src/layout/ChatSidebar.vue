@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
-import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import {
   RiAddLine,
@@ -47,10 +46,8 @@ import type { FlatTreeRow } from '@/features/sessions/model/tree'
 import { normalizeDirForCompare } from '@/features/sessions/model/labels'
 import { useSidebarLocate } from '@/layout/chatSidebar/useSidebarLocate'
 import { normalizeSidebarUiPrefsForUi } from '@/features/sessions/model/sidebarUiPrefs'
-import { apiJson } from '@/lib/api'
 import { copyTextToClipboard } from '@/lib/clipboard'
 import { useUnifiedMultiSelect } from '@/composables/useUnifiedMultiSelect'
-import { sessionStateKind } from '@/types/chat'
 
 const props = withDefaults(
   defineProps<{
@@ -63,7 +60,6 @@ const props = withDefaults(
   },
 )
 
-const route = useRoute()
 const workspaceNavigation = useWorkspaceNavigation()
 
 const ui = useUiStore()
@@ -185,7 +181,6 @@ function pushSidebarErrorToast(key: string, message: string, timeoutMs = 4500, d
   lastSidebarErrorToastByKey.set(k, { at: now, message: msg })
   toasts.push('error', msg, timeoutMs)
 }
-
 
 function toIdSet(input: string[]): Set<string> {
   return new Set(input.map((v) => String(v || '').trim()).filter(Boolean))
@@ -1231,8 +1226,8 @@ async function toggleDirectoryCollapse(directoryId: string, _directoryPath: stri
 function hasAttention(sessionId: string): 'permission' | 'question' | null {
   const sid = (sessionId || '').trim()
   const state = directorySessions.stateBySessionId?.[sid]?.state
-  if (sessionStateKind(state) !== 'awaiting_interaction') return null
-  const request = state?.data.requests?.[0]
+  if (!state || state.kind !== 'awaiting_interaction') return null
+  const request = state.data?.requests?.[0]
   const kind = request && typeof request === 'object' && !Array.isArray(request) ? request.kind : undefined
   if (kind === 'permission') return 'permission'
   if (kind === 'user_input') return 'question'
@@ -1979,10 +1974,7 @@ async function deleteSession(sessionId: string) {
   const sid = (sessionId || '').trim()
   if (!sid) return
 
-  const resolved = await directorySessions.resolveDirectoryForSession(sid).catch(() => null)
-  const directory = resolved?.locatedDir || resolved?.directoryPath || null
-
-  await chat.deleteSession(sid, { directory })
+  await chat.deleteSession(sid)
 
   void revalidateSidebarState(undefined, { silent: true })
 }

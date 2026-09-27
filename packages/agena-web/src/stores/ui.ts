@@ -1281,6 +1281,7 @@ export const useUiStore = defineStore('ui', () => {
 
   // Global overlays
   const isHelpDialogOpen = ref(false)
+  const isMcpDialogOpen = ref(false)
   const isImageViewerOpen = ref(false)
   const imageViewerItems = ref<ImageViewerItem[]>([])
   const imageViewerActiveIndex = ref(0)
@@ -2151,6 +2152,10 @@ export const useUiStore = defineStore('ui', () => {
     isHelpDialogOpen.value = !isHelpDialogOpen.value
   }
 
+  function setMcpDialogOpen(open: boolean) {
+    isMcpDialogOpen.value = open
+  }
+
   function normalizeImageViewerItems(items: ImageViewerItem[]): ImageViewerItem[] {
     if (!Array.isArray(items)) return []
     const out: ImageViewerItem[] = []
@@ -2288,6 +2293,7 @@ export const useUiStore = defineStore('ui', () => {
     activeGlobalSelection,
     activeMainTab,
     isHelpDialogOpen,
+    isMcpDialogOpen,
     isImageViewerOpen,
     imageViewerItems,
     imageViewerActiveItem,
@@ -2370,6 +2376,7 @@ export const useUiStore = defineStore('ui', () => {
     enableSessionQuery,
     disableSessionQuery,
     toggleHelpDialog,
+    setMcpDialogOpen,
     openImageViewer,
     closeImageViewer,
     setImageViewerIndex,

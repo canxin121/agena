@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { useI18n } from 'vue-i18n'
 import { RiAddLine, RiCloudLine, RiDeleteBinLine, RiEditLine, RiPlugLine, RiRefreshLine } from '@remixicon/vue'
 
 import SettingsDisclosureRow from '@/components/settings/SettingsDisclosureRow.vue'
@@ -84,7 +83,6 @@ type ModelField = {
   help?: string
 }
 
-const { t } = useI18n()
 const toasts = useToastsStore()
 
 const loading = ref(false)
@@ -510,7 +508,7 @@ type ProviderRow = {
 }
 
 const providerRows = computed<ProviderRow[]>(() => {
-  const rows = providers.value.map((provider) => ({
+  const rows: ProviderRow[] = providers.value.map((provider) => ({
     key: provider.provider_id,
     providerId: provider.provider_id,
     summary: provider,
@@ -571,12 +569,6 @@ function toggleAdapterRow(adapterId: string) {
     if (editingModel.value?.adapterId === adapterId) closeModelEditor()
   } else next.add(adapterId)
   expandedAdapterIds.value = next
-}
-
-function canPersistExistingProvider(): boolean {
-  const source = String(draft.value?.source_provider_id || '').trim()
-  const providerId = String(draft.value?.provider_id || '').trim()
-  return Boolean(source && providerId && source === providerId)
 }
 
 function providerDraftIdentity(value: ProviderConfigDraft | null): string {

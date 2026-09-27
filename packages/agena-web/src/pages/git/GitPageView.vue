@@ -23,7 +23,6 @@ import type { OptionMenuGroup, OptionMenuItem } from '@/components/ui/optionMenu
 import ScrollArea from '@/components/ui/ScrollArea.vue'
 import SearchInput from '@/components/ui/SearchInput.vue'
 import SidebarIconButton from '@/components/ui/SidebarIconButton.vue'
-import ConfirmPopover from '@/components/ui/ConfirmPopover.vue'
 import GitCommitBox from '@/components/git/GitCommitBox.vue'
 import GitDiffPane from '@/components/git/GitDiffPane.vue'
 import GitMergeChangesSection from '@/components/git/GitMergeChangesSection.vue'

@@ -10,7 +10,6 @@ import ChatSidebar from '@/layout/ChatSidebar.vue'
 import BottomNav from '@/layout/BottomNav.vue'
 import WorkspaceEditorGroupPane from '@/layout/WorkspaceEditorGroupPane.vue'
 import WorkspacePrimaryPaneView from '@/layout/WorkspacePrimaryPaneView.vue'
-import { mainTabFromPath, mainTabPath, type MainTabId } from '@/app/navigation/mainTabs'
 import { useWorkspaceNavigation } from '@/app/navigation/useWorkspaceNavigation'
 import {
   hasEmbeddedWorkspacePaneQuery,
@@ -18,6 +17,8 @@ import {
   withEmbeddedWorkspaceScopeQuery,
 } from '@/app/windowScope'
 import { WORKSPACE_SIDEBAR_HOST_ID } from '@/layout/workspaceSidebarHost'
+import { mainTabFromPath } from '@/app/navigation/mainTabs'
+import type { MainTabId } from '@/app/navigation/mainTabs'
 import {
   hasWorkspaceWindowDragDataTransfer,
   readWorkspaceWindowDragIdFromDataTransfer,

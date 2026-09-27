@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
 import { onClickOutside } from '@vueuse/core'
 import { RiListUnordered } from '@remixicon/vue'
 import { useI18n } from 'vue-i18n'
@@ -35,7 +34,6 @@ const props = withDefaults(
 
 const html = ref('')
 const rootEl = ref<HTMLElement | null>(null)
-const route = useRoute()
 let timer: number | null = null
 let copiedTimer: number | null = null
 let mermaidTimer: number | null = null
@@ -264,7 +262,6 @@ function scrollToHeading(id: string) {
 const toasts = useToastsStore()
 const directoryStore = useDirectoryStore()
 const ui = useUiStore()
-const router = useRouter()
 const workspaceNavigation = useWorkspaceNavigation()
 const { t } = useI18n()
 

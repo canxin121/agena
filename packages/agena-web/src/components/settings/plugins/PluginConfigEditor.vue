@@ -5,7 +5,6 @@ import { RiDeleteBinLine, RiRefreshLine, RiSave3Line, RiShieldCheckLine } from '
 
 import JsonSchemaField from '@/components/settings/plugins/JsonSchemaField.vue'
 import Button from '@/components/ui/Button.vue'
-import IconButton from '@/components/ui/IconButton.vue'
 import { jsonPathForKey, setRuntimeSetting } from '@/lib/runtimeSettings'
 import { useToastsStore } from '@/stores/toasts'
 import type { JsonObject, JsonValue } from '@/types/json'

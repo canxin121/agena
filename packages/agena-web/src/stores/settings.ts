@@ -43,6 +43,25 @@ export type Settings = {
   chatToolActivityDefaultExpandedOverrides?: Record<string, boolean>
   diffLayoutPreference?: 'dynamic' | 'inline' | 'side-by-side'
   diffViewMode?: 'single' | 'stacked'
+
+  // Files + directory surfaces
+  directoryShowHidden?: boolean
+  filesViewShowGitignored?: boolean
+
+  // Git surface
+  gitAutoFetchEnabled?: boolean
+  gitAutoFetchIntervalMinutes?: number
+  gitAutoSyncEnabled?: boolean
+  gitAutoSyncIntervalMinutes?: number
+  gitAllowForcePush?: boolean
+  gitAllowNoVerifyCommit?: boolean
+  gitBranchProtection?: string[]
+  gitBranchProtectionPrompt?: 'alwaysCommit' | 'alwaysCommitToNewBranch' | 'alwaysPrompt'
+  gitPostCommitCommand?: 'none' | 'push' | 'sync'
+  gitmojiEnabled?: boolean
+
+  // Workspace project roots shown by the sidebar, files, and git surfaces.
+  projects?: { path: string; name?: string }[]
 }
 
 const STORAGE_KEY = 'agena.settings.ui-prefs'
@@ -97,6 +116,18 @@ export const useSettingsStore = defineStore('settings', () => {
     }
   }
 
+  /**
+   * Register one workspace project root. The files, git, and sidebar
+   * surfaces call this when a path is opened that is not listed yet.
+   */
+  async function addProject(path: string) {
+    const target = (path || '').trim()
+    if (!target) return
+    const projects = Array.isArray(data.value?.projects) ? data.value.projects : []
+    if (projects.some((project) => (project?.path || '').trim() === target)) return
+    await save({ projects: [...projects, { path: target }] })
+  }
+
   return {
     data,
     loading,
@@ -104,5 +135,6 @@ export const useSettingsStore = defineStore('settings', () => {
     hydrate,
     refresh,
     save,
+    addProject,
   }
 })

@@ -953,12 +953,6 @@ async function refreshPreview(opts?: { forceFrameReload?: boolean }) {
   }
 }
 
-async function selectSessionAfterAction(session: WorkspacePreviewSession) {
-  await refreshPreview()
-  preview.selectSession(session.id)
-  preview.bumpRefreshToken()
-}
-
 async function createManagedSession() {
   if (!currentDirectory.value.trim()) {
     actionError.value = String(t('workspaceDock.preview.emptyState.directoryRequired'))

@@ -609,7 +609,7 @@ onBeforeUnmount(clearRawHarnessJsonSyncTimer)
               :model-value="arrayText(shellConfig?.allow_commands)"
               class="font-mono"
               :disabled="busy"
-              @update:model-value="setShellField('allow_commands', $event)"
+              @update:model-value="setShellField('allow_commands', String($event))"
             />
           </label>
           <label class="grid gap-1.5">
@@ -618,7 +618,7 @@ onBeforeUnmount(clearRawHarnessJsonSyncTimer)
               :model-value="arrayText(shellConfig?.deny_commands)"
               class="font-mono"
               :disabled="busy"
-              @update:model-value="setShellField('deny_commands', $event)"
+              @update:model-value="setShellField('deny_commands', String($event))"
             />
           </label>
           <label class="grid gap-1.5 sm:col-span-2">

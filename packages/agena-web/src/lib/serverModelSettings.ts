@@ -6,6 +6,16 @@ export type ServerModelIdentity = {
   model: string
 }
 
+/**
+ * Model identity as it arrives from the runtime: unset fields are explicit
+ * nulls, so readers accept them instead of forcing callers to coerce.
+ */
+export type ServerModelIdentityInput = {
+  provider?: string | null
+  adapter?: string | null
+  model?: string | null
+}
+
 export type ServerModelModes = {
   thinkingMode?: string
   speedMode?: string
@@ -40,8 +50,8 @@ export function normalizeServerModelIdentity(
 }
 
 export function sameServerModelIdentity(
-  left: Partial<ServerModelIdentity> | null | undefined,
-  right: Partial<ServerModelIdentity> | null | undefined,
+  left: ServerModelIdentityInput | null | undefined,
+  right: ServerModelIdentityInput | null | undefined,
 ): boolean {
   const normalizedLeft = normalizeServerModelIdentity(left)
   const normalizedRight = normalizeServerModelIdentity(right)

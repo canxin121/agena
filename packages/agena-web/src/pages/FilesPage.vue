@@ -5,7 +5,6 @@ import { useRoute, useRouter } from 'vue-router'
 import Button from '@/components/ui/Button.vue'
 import ConfirmPopover from '@/components/ui/ConfirmPopover.vue'
 import FormDialog from '@/components/ui/FormDialog.vue'
-import IconButton from '@/components/ui/IconButton.vue'
 import Input from '@/components/ui/Input.vue'
 import SearchInput from '@/components/ui/SearchInput.vue'
 import SegmentedButton from '@/components/ui/SegmentedButton.vue'
@@ -4051,8 +4050,8 @@ watch(
     ui.setGlobalSelection('files-selection', filePath, {
       meta: {
         source: 'files-selection-change',
-        startLine: range.startLine,
-        endLine: range.endLine,
+        startLine: range.start,
+        endLine: range.end,
       },
     })
   },

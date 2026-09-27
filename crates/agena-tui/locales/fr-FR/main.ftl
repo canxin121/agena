@@ -836,6 +836,18 @@ overlay-provider-studio-adapters = Adaptateurs
 overlay-provider-studio-models = Modèles
 
 overlay-provider-studio-catalog = Catalogue des modèles
+overlay-provider-studio-catalog-picker-title = Choisir un modèle de catalogue
+
+overlay-provider-studio-catalog-picker-footer = Haut/Bas sélectionner · Ctrl+F rechercher · Gauche/Droite paginer · Entrée remplit les champs du modèle · Échap retour
+
+overlay-provider-studio-catalog-match = Catalogue : {$model}
+
+overlay-provider-studio-catalog-selected = Catalogue sélectionné : {$model}
+
+overlay-provider-studio-catalog-loading = Recherche d’une correspondance dans le catalogue…
+
+overlay-provider-studio-catalog-no-match = Aucune correspondance dans le catalogue · choisissez dans les réglages du modèle
+
 
 overlay-provider-studio-detail = Détail
 

@@ -242,7 +242,12 @@ impl App {
             if self.try_stage_pasted_path(text.as_str()) {
                 return;
             }
-
+            if text.len() > 1024 * 1024 {
+                self.flash_warning(
+                    "Paste exceeds the 1 MiB text limit; the draft was not changed.",
+                );
+                return;
+            }
             if paste_requires_workspace_text_file(text.as_str()) {
                 self.stage_long_paste_text_file(text);
                 return;

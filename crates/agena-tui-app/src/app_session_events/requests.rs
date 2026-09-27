@@ -473,7 +473,16 @@ impl App {
             return;
         }
         let pending_message_id =
-            existing_pending_message_id.unwrap_or_else(|| self.begin_pending_user_message(&draft));
+            // Only the displayed transcript gets the ghost row and the scroll:
+            // a send queued for another session must not draw into the session the
+            // user is reading, and that session own view confirms it later.
+            existing_pending_message_id.unwrap_or_else(|| {
+                if self.transcript.session_id == Some(session_id) {
+                    self.begin_pending_user_message(&draft)
+                } else {
+                    0
+                }
+            });
         self.begin_run_operation(
             RunActivityTarget::Session(session_id),
             RunOperation::SubmitMessage,

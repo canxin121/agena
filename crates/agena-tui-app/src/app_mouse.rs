@@ -327,10 +327,7 @@ impl App {
 
     pub(crate) fn copy_active_transcript_text_selection(&mut self) -> bool {
         let width = self.layout.transcript_body.width;
-        let Some(text) = self
-            .transcript
-            .selected_text(width, spinner_frame(current_spinner_millis()))
-        else {
+        let Some(text) = self.transcript.selected_text(width) else {
             return false;
         };
         if text.is_empty() {
@@ -364,7 +361,7 @@ fn rect_contains(rect: Rect, column: u16, row: u16) -> bool {
 use crate::{
     App, MouseButton, MouseEvent, MouseEventKind, Rect, SurfaceSelection, TranscriptClick,
     TranscriptPointerGesture, TranscriptScrollbarDrag, TranscriptTextPosition,
-    current_spinner_millis, spinner_frame, surface_selection_text, ui_text,
+    surface_selection_text, ui_text,
 };
 #[cfg(test)]
 use crate::{RenderedLine, RenderedTranscriptNode, Style, TranscriptNodeKey, TranscriptNodeKind};
@@ -440,28 +437,24 @@ mod tests {
             .collect()
     }
 
-    fn copied_text(
-        lines: &[RenderedLine],
-        selection: TranscriptTextSelection,
-        spinner: &str,
-    ) -> String {
+    fn copied_text(lines: &[RenderedLine], selection: TranscriptTextSelection) -> String {
         let line_nodes = vec![None; lines.len()];
-        transcript_text_selection_text(lines, &[], line_nodes.as_slice(), selection, spinner)
+        transcript_text_selection_text(lines, &[], line_nodes.as_slice(), selection)
     }
 
     #[test]
     fn mouse_selection_copies_forward_and_backward_cell_ranges() {
         let rendered = lines(&["abcdef"]);
-        assert_eq!(copied_text(&rendered, selection((0, 2), (0, 2)), ""), "c");
-        assert_eq!(copied_text(&rendered, selection((0, 1), (0, 3)), ""), "bcd");
-        assert_eq!(copied_text(&rendered, selection((0, 3), (0, 1)), ""), "bcd");
+        assert_eq!(copied_text(&rendered, selection((0, 2), (0, 2))), "c");
+        assert_eq!(copied_text(&rendered, selection((0, 1), (0, 3))), "bcd");
+        assert_eq!(copied_text(&rendered, selection((0, 3), (0, 1))), "bcd");
     }
 
     #[test]
     fn mouse_selection_preserves_line_breaks_and_partial_endpoints() {
         let rendered = lines(&["zero", "one", "two"]);
         assert_eq!(
-            copied_text(&rendered, selection((0, 2), (2, 1)), ""),
+            copied_text(&rendered, selection((0, 2), (2, 1))),
             "ro\none\ntw"
         );
     }
@@ -470,17 +463,18 @@ mod tests {
     fn mouse_selection_never_splits_wide_or_combining_graphemes() {
         let rendered = lines(&["a你e\u{301}z"]);
         assert_eq!(
-            copied_text(&rendered, selection((0, 2), (0, 3)), ""),
+            copied_text(&rendered, selection((0, 2), (0, 3))),
             "你e\u{301}"
         );
     }
 
     #[test]
-    fn mouse_selection_copies_the_visible_spinner_instead_of_its_placeholder() {
+    fn mouse_selection_copies_a_stable_placeholder_space_instead_of_a_live_spinner() {
         let rendered = lines(&["a\u{e000}b"]);
         assert_eq!(
-            copied_text(&rendered, selection((0, 0), (0, 2)), "⠋"),
-            "a⠋b"
+            copied_text(&rendered, selection((0, 0), (0, 2))),
+            "a b",
+            "copied text must not embed the spinner frame that happened to be live"
         );
     }
 
@@ -491,7 +485,7 @@ mod tests {
                 .with_copy_projection("plain text", 2),
         ];
         assert_eq!(
-            copied_text(&rendered, selection((0, 0), (0, 20)), ""),
+            copied_text(&rendered, selection((0, 0), (0, 20))),
             "plain text"
         );
     }
@@ -519,7 +513,6 @@ mod tests {
                 nodes.as_slice(),
                 &[Some(0), Some(0), Some(0)],
                 selection((0, 0), (2, usize::MAX)),
-                "",
             ),
             "\\frac{a}{b}"
         );
@@ -555,7 +548,6 @@ mod tests {
                 nodes.as_slice(),
                 &[Some(0), Some(0)],
                 selection((0, 6), (1, 8)),
-                "",
             ),
             "et very_long =42"
         );

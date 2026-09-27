@@ -15,7 +15,7 @@
 use agena_api::live::SessionTranscriptFoldResource;
 use agena_api::{
     part::{
-        AttachmentPartResource, ErrorPartResource, HookPartResource, PartExecutionStatusResource,
+        AttachmentPartResource, ErrorPartResource, PartExecutionStatusResource,
         ReasoningPartResource, SkillReferencePartResource, TextPartResource,
     },
     resource::{
@@ -24,8 +24,13 @@ use agena_api::{
         UserInputReplyKind, UserInputRequest,
     },
 };
+use agena_domain::AssistantReplyId;
 use agena_domain::TextSegmentActivity;
-use agena_runtime_contracts::part_content::{ToolCallContent, operation_from_tool_call};
+use agena_runtime_contracts::part_content::{
+    CompactionContent, FileRefContent, HookContent, NoticeContent, PasteRefContent,
+    SkillRefContent, SystemNotificationContent, TextContent, ThinkContent, ToolCallContent,
+    operation_from_tool_call,
+};
 use serde_json::Value;
 
 use crate::{
@@ -199,6 +204,8 @@ fn run_marker_entry(marker: &SessionTranscriptPart) -> TranscriptEntry<'static> 
         role: role_from_string(&marker.role),
         state: message_status_from_string(&marker.state),
         created_at: timestamp(marker.created_at_ms),
+        reply_id: string_field(&marker.content, "reply_id")
+            .and_then(|reply_id| reply_id.parse::<AssistantReplyId>().ok()),
         parts: Vec::new(),
     }
 }
@@ -258,8 +265,15 @@ fn finalize_run_entry(mut entry: TranscriptEntry<'static>) -> TranscriptEntry<'s
                 TranscriptEntryId::StoredMessage(id) => id,
                 _ => 0,
             };
+            // The reply's own identity is the lifecycle row's presentation
+            // identity; only legacy markers without one fall back to the
+            // marker part id.
+            let lifecycle_id = match entry.reply_id {
+                Some(reply_id) => TranscriptContentId::AssistantReplyLifecycle(reply_id),
+                None => TranscriptContentId::StoredPart(marker_id),
+            };
             entry.parts.push(TranscriptEntryPart {
-                id: TranscriptContentId::StoredPart(marker_id),
+                id: lifecycle_id,
                 status: part_status_from_state(state),
                 content: TranscriptPartContent::Activity(
                     TranscriptActivityContent::AssistantReplyLifecycle(assistant_reply_lifecycle(
@@ -272,6 +286,29 @@ fn finalize_run_entry(mut entry: TranscriptEntry<'static>) -> TranscriptEntry<'s
     entry
 }
 
+/// The summary the runtime already projected for this part. Presentation
+/// data is carried by the part, so it must win over re-probing the content
+/// JSON with client-side field guesses.
+fn part_summary(part: &SessionTranscriptPart) -> Option<String> {
+    part.summary
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+}
+
+/// Attachment kind as the part stores it. The runtime writes the resolved
+/// kind; rebuilds that guess from the file name lose it.
+fn attachment_kind_from_value(content: &serde_json::Value) -> Option<PartAttachmentKind> {
+    match string_field(content, "kind")?.as_str() {
+        "image" => Some(PartAttachmentKind::Image),
+        "audio" => Some(PartAttachmentKind::Audio),
+        "video" => Some(PartAttachmentKind::Video),
+        "pdf" => Some(PartAttachmentKind::Pdf),
+        _ => Some(PartAttachmentKind::File),
+    }
+}
+
 fn entry_part(part: &SessionTranscriptPart) -> TranscriptEntryPart<'static> {
     TranscriptEntryPart {
         id: TranscriptContentId::StoredPart(part.part_id),
@@ -281,32 +318,42 @@ fn entry_part(part: &SessionTranscriptPart) -> TranscriptEntryPart<'static> {
 }
 
 fn part_content(part: &SessionTranscriptPart) -> TranscriptPartContent<'static> {
-    let content = &part.content;
+    // Every kind decodes through its canonical contract shape: no field is
+    // guessed from raw JSON and no kind is re-encoded as another. Content that
+    // cannot be decoded degrades to a readable text part, never silently
+    // disappears.
     match part.kind.as_str() {
         "text" => {
-            let text = string_field(content, "text").unwrap_or_default();
-            if part.role == "assistant" && !text.trim().is_empty() {
+            let Some(content) = decode_part_content::<TextContent>(part) else {
+                return fallback_text_part(part);
+            };
+            if part.role == "assistant" && !content.text.trim().is_empty() {
                 // Assistant reply text projects as an owned activity so it
                 // renders as a toggleable part. [`finalize_run_entry`] promotes
                 // the final non-tool-followed text part to `Answer` (default
                 // expanded); earlier turn texts stay collapsible TextSegments.
                 TranscriptPartContent::Activity(TranscriptActivityContent::TextSegment(Box::new(
-                    TextSegmentActivity { text },
+                    TextSegmentActivity { text: content.text },
                 )))
             } else {
                 TranscriptPartContent::Text(TextPartResource {
-                    text,
-                    synthetic: bool_field(content, "synthetic").unwrap_or(false),
+                    text: content.text,
+                    synthetic: content.synthetic,
                 })
             }
         }
-        "think" => TranscriptPartContent::Activity(TranscriptActivityContent::Reasoning(
-            ReasoningPartResource {
-                summary: string_array_field(content, "summary"),
-                raw_content: string_array_field(content, "raw"),
-                encrypted_content: string_field(content, "encrypted_content"),
-            },
-        )),
+        "think" => {
+            let Some(content) = decode_part_content::<ThinkContent>(part) else {
+                return fallback_text_part(part);
+            };
+            TranscriptPartContent::Activity(TranscriptActivityContent::Reasoning(
+                ReasoningPartResource {
+                    summary: content.summary,
+                    raw_content: content.raw,
+                    encrypted_content: content.encrypted_content,
+                },
+            ))
+        }
         "tool_call" => {
             if let Some(operation) = tool_call_view_from_part(part) {
                 return TranscriptPartContent::Activity(TranscriptActivityContent::Operation(
@@ -314,92 +361,122 @@ fn part_content(part: &SessionTranscriptPart) -> TranscriptPartContent<'static> 
                 ));
             }
             TranscriptPartContent::Text(TextPartResource {
-                text: format!("invalid tool_call content: {}", fallback_json_text(content)),
+                text: format!(
+                    "invalid tool_call content: {}",
+                    fallback_json_text(&part.content)
+                ),
                 synthetic: false,
             })
         }
-        "file_ref" => TranscriptPartContent::Activity(TranscriptActivityContent::Attachment(
-            AttachmentPartResource {
-                attachments: vec![PartAttachment {
-                    kind: PartAttachmentKind::File,
-                    mime: string_field(content, "mime").unwrap_or_default(),
-                    source: string_field(content, "path")
-                        .map(|path| PartAttachmentSource::LocalPath { path })
-                        .unwrap_or_else(|| PartAttachmentSource::Url { url: String::new() }),
-                    filename: string_field(content, "name"),
-                    title: None,
-                    size_bytes: None,
-                    sha256: string_field(content, "sha"),
-                    width: None,
-                    height: None,
-                    duration_ms: None,
-                    page_count: None,
-                }],
-            },
-        )),
-        "paste_ref" => TranscriptPartContent::Text(TextPartResource {
-            text: string_field(content, "text").unwrap_or_default(),
-            synthetic: true,
-        }),
-        "skill_ref" => TranscriptPartContent::Activity(TranscriptActivityContent::SkillReference(
-            SkillReferencePartResource {
-                skills: vec![PartSkillReference {
-                    name: string_field(content, "skill").unwrap_or_default(),
-                    description: string_field(content, "description").unwrap_or_default(),
-                    content_hash: string_field(content, "content_hash").unwrap_or_default(),
-                    source: string_field(content, "source").unwrap_or_default(),
-                    aliases: Vec::new(),
-                }],
-            },
-        )),
-        "notice" | "hook" => TranscriptPartContent::Activity(TranscriptActivityContent::Hook(
-            Box::new(HookPartResource {
-                hook: string_field(content, "hook")
-                    .or_else(|| string_field(content, "kind"))
-                    .unwrap_or_else(|| part.kind.clone()),
-                plugin_id: string_field(content, "plugin_id"),
-                summary: string_field(content, "summary").unwrap_or_default(),
-                detail: string_field(content, "detail"),
-                message: string_field(content, "message"),
-            }),
-        )),
-        "compaction" => TranscriptPartContent::Activity(TranscriptActivityContent::Hook(Box::new(
-            HookPartResource {
-                hook: "compaction".to_owned(),
-                plugin_id: None,
-                summary: string_field(content, "summary").unwrap_or_default(),
-                detail: content.get("window").map(|window| window.to_string()),
-                message: None,
-            },
-        ))),
+        "file_ref" => {
+            let Some(content) = decode_part_content::<FileRefContent>(part) else {
+                return fallback_text_part(part);
+            };
+            TranscriptPartContent::Activity(TranscriptActivityContent::Attachment(
+                AttachmentPartResource {
+                    attachments: vec![PartAttachment {
+                        kind: attachment_kind_from_value(&part.content)
+                            .unwrap_or(PartAttachmentKind::File),
+                        mime: content.mime.unwrap_or_default(),
+                        source: content
+                            .path
+                            .map(|path| PartAttachmentSource::LocalPath { path })
+                            .unwrap_or_else(|| PartAttachmentSource::Url { url: String::new() }),
+                        filename: content.name,
+                        title: string_field(&part.content, "title"),
+                        size_bytes: part
+                            .content
+                            .get("size_bytes")
+                            .and_then(serde_json::Value::as_u64),
+                        sha256: content.sha,
+                        width: part
+                            .content
+                            .get("width")
+                            .and_then(serde_json::Value::as_u64)
+                            .map(|value| value as u32),
+                        height: part
+                            .content
+                            .get("height")
+                            .and_then(serde_json::Value::as_u64)
+                            .map(|value| value as u32),
+                        duration_ms: None,
+                        page_count: None,
+                    }],
+                },
+            ))
+        }
+        "paste_ref" => {
+            let Some(content) = decode_part_content::<PasteRefContent>(part) else {
+                return fallback_text_part(part);
+            };
+            TranscriptPartContent::Text(TextPartResource {
+                text: content.text,
+                synthetic: true,
+            })
+        }
+        "skill_ref" => {
+            let Some(content) = decode_part_content::<SkillRefContent>(part) else {
+                return fallback_text_part(part);
+            };
+            TranscriptPartContent::Activity(TranscriptActivityContent::SkillReference(
+                SkillReferencePartResource {
+                    skills: vec![PartSkillReference {
+                        name: content.skill.unwrap_or_default(),
+                        description: string_field(&part.content, "description").unwrap_or_default(),
+                        content_hash: string_field(&part.content, "content_hash")
+                            .unwrap_or_default(),
+                        source: string_field(&part.content, "source").unwrap_or_default(),
+                        aliases: Vec::new(),
+                    }],
+                },
+            ))
+        }
+        "notice" => match decode_part_content::<NoticeContent>(part) {
+            Some(content) => TranscriptPartContent::Activity(TranscriptActivityContent::Notice(
+                Box::new(NoticeContent {
+                    summary: part_summary(part).unwrap_or(content.summary),
+                    ..content
+                }),
+            )),
+            None => fallback_text_part(part),
+        },
+        "hook" => match decode_part_content::<HookContent>(part) {
+            Some(mut content) => {
+                if content.hook.is_empty() {
+                    content.hook =
+                        string_field(&part.content, "kind").unwrap_or_else(|| part.kind.clone());
+                }
+                TranscriptPartContent::Activity(TranscriptActivityContent::Hook(Box::new(
+                    HookContent {
+                        summary: part_summary(part).unwrap_or(content.summary),
+                        ..content
+                    },
+                )))
+            }
+            None => fallback_text_part(part),
+        },
+        "compaction" => match decode_part_content::<CompactionContent>(part) {
+            Some(content) => TranscriptPartContent::Activity(
+                TranscriptActivityContent::Compaction(Box::new(CompactionContent {
+                    summary: part_summary(part).or(content.summary),
+                    ..content
+                })),
+            ),
+            None => fallback_text_part(part),
+        },
         // A background-operation completion/event delivered to the model as a
         // System message (the agena analog of Claude's task-notification chip).
-        // Reuses the Hook activity renderer so it draws as a compact
-        // notification row with the operation identity in the hook slot.
-        "system_notification" => {
-            let operation_kind =
-                string_field(content, "operation_kind").unwrap_or_else(|| "background".to_string());
-            let operation_id = string_field(content, "operation_id").unwrap_or_default();
-            let status = string_field(content, "status").unwrap_or_default();
-            let hook = if operation_id.is_empty() {
-                operation_kind
-            } else {
-                format!("{operation_kind}:{operation_id}:{status}")
-            };
-            let summary = string_field(content, "summary")
-                .or_else(|| string_field(content, "body"))
-                .unwrap_or_default();
-            let detail = string_field(content, "detail").or_else(|| string_field(content, "body"));
-            TranscriptPartContent::Activity(TranscriptActivityContent::Hook(Box::new(
-                HookPartResource {
-                    hook,
-                    plugin_id: None,
-                    summary,
-                    detail,
-                    message: None,
-                },
-            )))
-        }
+        "system_notification" => match decode_part_content::<SystemNotificationContent>(part) {
+            Some(content) => {
+                TranscriptPartContent::Activity(TranscriptActivityContent::SystemNotification(
+                    Box::new(SystemNotificationContent {
+                        summary: part_summary(part).unwrap_or(content.summary),
+                        ..content
+                    }),
+                ))
+            }
+            None => fallback_text_part(part),
+        },
         "error" => match serde_json::from_value::<ErrorPartResource>(part.content.clone()) {
             Ok(error) => TranscriptPartContent::Activity(TranscriptActivityContent::Error(error)),
             Err(error) => {
@@ -412,18 +489,44 @@ fn part_content(part: &SessionTranscriptPart) -> TranscriptPartContent<'static> 
                     "rendering malformed transcript error content as plain text"
                 );
                 TranscriptPartContent::Text(TextPartResource {
-                    text: string_field(content, "message")
-                        .or_else(|| string_field(content, "summary"))
-                        .unwrap_or_else(|| fallback_json_text(content)),
+                    text: string_field(&part.content, "message")
+                        .or_else(|| string_field(&part.content, "summary"))
+                        .unwrap_or_else(|| fallback_json_text(&part.content)),
                     synthetic: false,
                 })
             }
         },
-        _ => TranscriptPartContent::Text(TextPartResource {
-            text: fallback_json_text(content),
-            synthetic: false,
-        }),
+        _ => fallback_text_part(part),
     }
+}
+
+/// Decode one part's content through its canonical contract shape. A part whose
+/// content cannot be decoded is reported and degraded by the caller.
+fn decode_part_content<T>(part: &SessionTranscriptPart) -> Option<T>
+where
+    T: for<'de> TryFrom<&'de serde_json::Value, Error = String>,
+{
+    match T::try_from(&part.content) {
+        Ok(content) => Some(content),
+        Err(diagnostic) => {
+            tracing::warn!(
+                part_id = part.part_id,
+                kind = part.kind.as_str(),
+                diagnostic,
+                "malformed persisted transcript part content"
+            );
+            None
+        }
+    }
+}
+
+/// A readable stand-in for content that could not be decoded: the raw payload
+/// stays visible instead of the part disappearing from the transcript.
+fn fallback_text_part(part: &SessionTranscriptPart) -> TranscriptPartContent<'static> {
+    TranscriptPartContent::Text(TextPartResource {
+        text: fallback_json_text(&part.content),
+        synthetic: false,
+    })
 }
 
 /// Decode the canonical `tool_call` facts and keep the human presentation in
@@ -522,24 +625,6 @@ fn fallback_json_text(content: &Value) -> String {
 
 fn string_field(content: &Value, key: &str) -> Option<String> {
     content.get(key).and_then(Value::as_str).map(str::to_owned)
-}
-
-fn string_array_field(content: &Value, key: &str) -> Vec<String> {
-    content
-        .get(key)
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(Value::as_str)
-                .map(str::to_owned)
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-fn bool_field(content: &Value, key: &str) -> Option<bool> {
-    content.get(key).and_then(Value::as_bool)
 }
 
 fn timestamp(created_at_ms: i64) -> chrono::DateTime<chrono::Utc> {
@@ -879,6 +964,94 @@ mod tests {
     }
 
     #[test]
+    fn notification_kinds_keep_their_canonical_shape() {
+        // A background notification carries its operation identity as typed
+        // fields. Nothing is packed into a hook string and no kind is
+        // re-encoded as another.
+        let parts = vec![
+            run(1, "user", "completed"),
+            content_part(2, "text", "user", serde_json::json!({ "text": "hi" })),
+            run(3, "assistant", "completed"),
+            content_part_for(
+                3,
+                4,
+                "system_notification",
+                "assistant",
+                serde_json::json!({
+                    "operation_id": "op-1",
+                    "operation_kind": "shell",
+                    "status": "completed",
+                    "summary": "Shell finished",
+                    "body": "exit 0",
+                }),
+            ),
+        ];
+        let entries = parts_entries(&parts);
+        let notification = entries[1]
+            .parts
+            .iter()
+            .find_map(|part| match &part.content {
+                TranscriptPartContent::Activity(TranscriptActivityContent::SystemNotification(
+                    notification,
+                )) => Some(notification.as_ref()),
+                _ => None,
+            })
+            .expect("the notification decodes as its canonical shape");
+        assert_eq!(notification.operation_kind, "shell");
+        assert_eq!(notification.operation_id, "op-1");
+        assert_eq!(notification.status, "completed");
+        assert_eq!(notification.summary, "Shell finished");
+    }
+
+    #[test]
+    fn malformed_notification_content_degrades_to_text_instead_of_vanishing() {
+        let parts = vec![
+            run(1, "assistant", "completed"),
+            content_part(
+                2,
+                "notice",
+                "assistant",
+                serde_json::json!(["not", "an", "object"]),
+            ),
+        ];
+        let entries = parts_entries(&parts);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].parts.len(), 1, "malformed content stays visible");
+        assert!(matches!(
+            entries[0].parts[0].content,
+            TranscriptPartContent::Text(_)
+        ));
+    }
+
+    #[test]
+    fn assistant_markers_key_the_lifecycle_row_on_their_reply_id() {
+        let reply_id = agena_domain::AssistantReplyId::new();
+        let mut marker = run(3, "assistant", "in_progress");
+        marker.content = serde_json::json!({
+            "run_kind": "assistant_turn",
+            "reply_id": reply_id.to_string(),
+        });
+        let parts = vec![run(1, "user", "completed"), marker];
+        let entries = parts_entries(&parts);
+        let lifecycle = entries[1]
+            .parts
+            .iter()
+            .find(|part| {
+                matches!(
+                    part.content,
+                    TranscriptPartContent::Activity(
+                        TranscriptActivityContent::AssistantReplyLifecycle(_)
+                    )
+                )
+            })
+            .expect("an empty assistant run renders its lifecycle row");
+        assert_eq!(
+            lifecycle.id,
+            TranscriptContentId::AssistantReplyLifecycle(reply_id)
+        );
+    }
+
+    #[test]
     fn cancelled_then_continued_reply_shows_the_live_continue_not_cancelled() {
         // Regression: the user cancels a reply, then runs `/continue`. The new
         // continue run reuses the reply identity and folds onto the cancelled
@@ -1118,7 +1291,7 @@ mod tests {
                 "lifecycle": { "start_ms": 100, "end_ms": 200 }
             }),
         );
-        tool.presentation = Some(agena_api::live::ToolHumanPresentationResource {
+        tool.presentation = Some(agena_api::live::HumanPresentationResource {
             title: "Search tools".to_owned(),
             summary: "Returned 3 matching tools.".to_owned(),
             blocks: vec![agena_domain::ViewBlock::Log {

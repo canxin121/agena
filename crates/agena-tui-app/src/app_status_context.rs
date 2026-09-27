@@ -1,5 +1,39 @@
 use super::permission_resource_override_summary;
 
+/// One composer/session status row. `kind` names what the row is and `state`
+/// carries its semantics, so the rendered text is never the only witness of
+/// what a chip reports.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum StatusRowState {
+    Normal,
+    Pending,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct StatusRow {
+    pub(crate) kind: &'static str,
+    pub(crate) state: StatusRowState,
+    pub(crate) text: String,
+}
+
+impl StatusRow {
+    pub(crate) fn normal(kind: &'static str, text: impl Into<String>) -> Self {
+        Self {
+            kind,
+            state: StatusRowState::Normal,
+            text: text.into(),
+        }
+    }
+
+    pub(crate) fn pending(kind: &'static str, text: impl Into<String>) -> Self {
+        Self {
+            kind,
+            state: StatusRowState::Pending,
+            text: text.into(),
+        }
+    }
+}
+
 impl App {
     pub(crate) fn current_session_activity_indicator(&self) -> Option<String> {
         match self.current_session_activity() {
@@ -65,7 +99,11 @@ impl App {
                 .summary(&self.i18n)
                 .unwrap_or_else(|| ui_text::t(&self.i18n, "runtime-status-default")),
         ];
-        parts.extend(self.current_execution_context_parts(false));
+        parts.extend(
+            self.current_execution_context_parts(false)
+                .into_iter()
+                .map(|row| row.text),
+        );
         parts.push(self.workspace_context_label());
         parts.push(self.i18n.text_args(
             "runtime-status-keys",
@@ -120,84 +158,106 @@ impl App {
     pub(crate) fn current_execution_context_parts(
         &self,
         include_workspace_root: bool,
-    ) -> Vec<String> {
+    ) -> Vec<StatusRow> {
         let Some(execution) = self.transcript.execution.as_ref() else {
             return Vec::new();
         };
 
         let mut parts = Vec::new();
-        parts.push(self.i18n.text_args(
-            "status-part-state",
-            &agena_tui::fl_args!(
-                "value" => ui_text::session_workflow_state_label(&self.i18n, execution)
+        parts.push(StatusRow::normal(
+            "session-state",
+            self.i18n.text_args(
+                "status-part-state",
+                &agena_tui::fl_args!(
+                    "value" => ui_text::session_workflow_state_label(&self.i18n, execution)
+                ),
             ),
         ));
-        parts.push(self.i18n.text_args(
-            "status-part-agent",
-            &agena_tui::fl_args!("value" => execution.execution.agent_id.as_str()),
+        parts.push(StatusRow::normal(
+            "session-agent",
+            self.i18n.text_args(
+                "status-part-agent",
+                &agena_tui::fl_args!("value" => execution.execution.agent_id.as_str()),
+            ),
         ));
         if let Some(task_id) = execution.execution.task_id.as_deref()
             && !task_id.trim().is_empty()
         {
-            parts.push(
+            parts.push(StatusRow::normal(
+                "session-task",
                 self.i18n
                     .text_args("status-part-task", &agena_tui::fl_args!("value" => task_id)),
-            );
+            ));
         }
         if let Some(model_label) = execution_model_status_label(&execution.execution) {
-            parts.push(self.i18n.text_args(
-                "status-part-model",
-                &agena_tui::fl_args!("value" => model_label),
+            parts.push(StatusRow::normal(
+                "session-model",
+                self.i18n.text_args(
+                    "status-part-model",
+                    &agena_tui::fl_args!("value" => model_label),
+                ),
             ));
         }
         let execution_model = execution_model_ref(&execution.execution);
         if let Some(thinking_mode) = execution.execution.model_thinking_mode.as_deref()
             && !thinking_mode.trim().is_empty()
         {
-            parts.push(self.i18n.text_args(
+            parts.push(StatusRow::normal("session-thinking", self.i18n.text_args(
                 "status-part-thinking",
                 &agena_tui::fl_args!("value" => ui_text::thinking_mode_display_value(thinking_mode)),
-            ));
+            )));
         }
         if let Some(speed_mode) = execution.execution.model_speed_mode.as_deref()
             && !speed_mode.trim().is_empty()
         {
-            parts.push(self.i18n.text_args(
-                "status-part-speed",
-                &agena_tui::fl_args!(
-                    "value" => speed_mode_display_value_for_model(
-                        &self.application,
-                        execution_model.as_ref(),
-                        speed_mode,
-                    )
+            parts.push(StatusRow::normal(
+                "session-speed",
+                self.i18n.text_args(
+                    "status-part-speed",
+                    &agena_tui::fl_args!(
+                        "value" => speed_mode_display_value_for_model(
+                            &self.application,
+                            execution_model.as_ref(),
+                            speed_mode,
+                        )
+                    ),
                 ),
             ));
         } else if model_has_speed_modes(&self.application, execution_model.as_ref()) {
-            parts.push(self.i18n.text_args(
-                "status-part-speed",
-                &agena_tui::fl_args!("value" => ui_text::t(&self.i18n, "value-default")),
+            parts.push(StatusRow::normal(
+                "session-speed",
+                self.i18n.text_args(
+                    "status-part-speed",
+                    &agena_tui::fl_args!("value" => ui_text::t(&self.i18n, "value-default")),
+                ),
             ));
         }
         if let Some(verbosity) = execution.execution.model_verbosity.as_deref()
             && !verbosity.trim().is_empty()
         {
-            parts.push(self.i18n.text_args(
-                "status-part-verbosity",
-                &agena_tui::fl_args!("value" => verbosity),
+            parts.push(StatusRow::normal(
+                "session-verbosity",
+                self.i18n.text_args(
+                    "status-part-verbosity",
+                    &agena_tui::fl_args!("value" => verbosity),
+                ),
             ));
         }
         if let Some(parallel_tool_calls) = execution.execution.model_parallel_tool_calls {
-            parts.push(self.i18n.text_args(
-                "status-part-parallel-tools",
-                &agena_tui::fl_args!(
-                    "value" => ui_text::t(
-                        &self.i18n,
-                        if parallel_tool_calls {
-                            "value-on"
-                        } else {
-                            "value-off"
-                        },
-                    )
+            parts.push(StatusRow::normal(
+                "session-parallel-tools",
+                self.i18n.text_args(
+                    "status-part-parallel-tools",
+                    &agena_tui::fl_args!(
+                        "value" => ui_text::t(
+                            &self.i18n,
+                            if parallel_tool_calls {
+                                "value-on"
+                            } else {
+                                "value-off"
+                            },
+                        )
+                    ),
                 ),
             ));
         }
@@ -205,40 +265,52 @@ impl App {
             && !workspace_root.trim().is_empty()
             && include_workspace_root
         {
-            parts.push(self.i18n.text_args(
-                "status-part-cwd",
-                &agena_tui::fl_args!("value" => workspace_root),
+            parts.push(StatusRow::normal(
+                "session-cwd",
+                self.i18n.text_args(
+                    "status-part-cwd",
+                    &agena_tui::fl_args!("value" => workspace_root),
+                ),
             ));
         }
         if !execution.execution.effective_permission.is_empty() {
-            parts.push(self.i18n.text_args(
-                "status-part-permission",
-                &agena_tui::fl_args!(
-                    "value" => permission_resource_override_summary(
-                        &self.i18n,
-                        &execution.execution.effective_permission,
-                    )
+            parts.push(StatusRow::normal(
+                "session-permission",
+                self.i18n.text_args(
+                    "status-part-permission",
+                    &agena_tui::fl_args!(
+                        "value" => permission_resource_override_summary(
+                            &self.i18n,
+                            &execution.execution.effective_permission,
+                        )
+                    ),
                 ),
             ));
         }
         let (permission_count, user_input_count) =
             pending_interactive_counts_for_execution(execution);
         if permission_count > 0 {
-            parts.push(self.i18n.text_args(
-                "status-part-permissions",
-                &agena_tui::fl_args!("count" => permission_count as i64),
+            parts.push(StatusRow::pending(
+                "session-permissions",
+                self.i18n.text_args(
+                    "status-part-permissions",
+                    &agena_tui::fl_args!("count" => permission_count as i64),
+                ),
             ));
         }
         if user_input_count > 0 {
-            parts.push(self.i18n.text_args(
-                "status-part-user-input",
-                &agena_tui::fl_args!("count" => user_input_count as i64),
+            parts.push(StatusRow::pending(
+                "session-user-input",
+                self.i18n.text_args(
+                    "status-part-user-input",
+                    &agena_tui::fl_args!("count" => user_input_count as i64),
+                ),
             ));
         }
         parts
     }
 
-    pub(crate) fn current_session_status_parts(&self) -> Vec<String> {
+    pub(crate) fn current_session_status_parts(&self) -> Vec<StatusRow> {
         let model_label = |model: &crate::ModelRef| {
             crate::app_backend::provider_mappings::model_display_name(&self.application, model)
                 .unwrap_or_else(|| model_name_status_label(model))
@@ -308,28 +380,37 @@ impl App {
         // far right — think/speed stay directly adjacent to the model name
         // instead of having the usage percentage between them.
         let mut parts =
-            agena_tui::session_status::session_summary_status_parts(model_part, None, None);
+            agena_tui::session_status::session_summary_status_parts(model_part, None, None)
+                .into_iter()
+                .map(|text| StatusRow::normal("session-summary", text))
+                .collect::<Vec<_>>();
         if let Some(thinking_mode) = thinking_mode {
-            parts.push(self.i18n.text_args(
+            parts.push(StatusRow::normal("session-thinking", self.i18n.text_args(
                 "session-status-thinking",
                 &agena_tui::fl_args!("value" => ui_text::thinking_mode_display_value(thinking_mode)),
-            ));
+            )));
         }
         if let Some(speed_mode) = speed_mode {
-            parts.push(self.i18n.text_args(
-                "session-status-speed",
-                &agena_tui::fl_args!(
-                    "value" => speed_mode_display_value_for_model(
-                        &self.application,
-                        status_model.as_ref(),
-                        speed_mode,
-                    )
+            parts.push(StatusRow::normal(
+                "session-speed",
+                self.i18n.text_args(
+                    "session-status-speed",
+                    &agena_tui::fl_args!(
+                        "value" => speed_mode_display_value_for_model(
+                            &self.application,
+                            status_model.as_ref(),
+                            speed_mode,
+                        )
+                    ),
                 ),
             ));
         } else if model_has_speed_modes(&self.application, status_model.as_ref()) {
-            parts.push(self.i18n.text_args(
-                "session-status-speed",
-                &agena_tui::fl_args!("value" => ui_text::t(&self.i18n, "value-default")),
+            parts.push(StatusRow::normal(
+                "session-speed",
+                self.i18n.text_args(
+                    "session-status-speed",
+                    &agena_tui::fl_args!("value" => ui_text::t(&self.i18n, "value-default")),
+                ),
             ));
         }
         if let Some(execution) = self.transcript.execution.as_ref() {
@@ -338,7 +419,10 @@ impl App {
                 execution.usage.projected_tokens,
                 execution.usage.model_context_window_tokens,
             );
-            parts.push(token_usage.label());
+            parts.push(StatusRow::normal(
+                "session-token-usage",
+                token_usage.label(),
+            ));
         }
         parts
     }

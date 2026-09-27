@@ -35,6 +35,35 @@ pub(crate) fn push_label_value(
     push_wrapped_line(out, label, continuation.as_str(), value, style, width);
 }
 
+/// One collapsed run of activities, rendered from the shared fold vocabulary.
+/// Server-projected folds and the client's visible-budget collapse must look
+/// and copy identically.
+pub(crate) fn fold_marker_summary(i18n: &I18n, hidden_count: usize) -> String {
+    i18n.text_args(
+        "message-activity-run-collapsed",
+        &agena_tui::fl_args!("count" => hidden_count as i64),
+    )
+}
+
+/// Push the collapsed-run marker row and return the text it carries, which is
+/// also the row's copy projection.
+pub(crate) fn push_fold_marker_row(
+    out: &mut Vec<RenderedLine>,
+    i18n: &I18n,
+    hidden_count: usize,
+    width: u16,
+) -> String {
+    let summary = fold_marker_summary(i18n, hidden_count);
+    push_single_line(
+        out,
+        "  ",
+        summary.as_str(),
+        Style::default().fg(agena_tui_components::theme::muted_color()),
+        width,
+    );
+    summary
+}
+
 pub(crate) fn push_single_line(
     out: &mut Vec<RenderedLine>,
     prefix: &str,

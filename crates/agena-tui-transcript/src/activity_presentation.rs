@@ -59,6 +59,7 @@ pub fn pending_user_entry<'a>(
             RunStatus::InProgress
         },
         created_at: DateTime::<Utc>::UNIX_EPOCH,
+        reply_id: None,
         parts,
     }
 }

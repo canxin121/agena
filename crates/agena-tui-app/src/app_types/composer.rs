@@ -18,7 +18,13 @@ pub struct ComposerDraft {
 pub struct ComposerItem {
     pub(crate) activity: ComposerActivity,
     pub(crate) placeholder: String,
-    pub(crate) label: String,
+    /// Execution state of this item's payload. `InProgress` while the part is
+    /// still being prepared (media upload, paste artifact); `Completed` once
+    /// the payload is the durable part this send will carry.
+    pub(crate) state: agena_api::part::PartExecutionStatusResource,
+    /// Recovery buffer for a preparation that fails, keyed by the item
+    /// identity so pending media needs no parallel model.
+    pub(crate) recovery_text: Option<String>,
 }
 
 #[derive(Debug, Clone)]

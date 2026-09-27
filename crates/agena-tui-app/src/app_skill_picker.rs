@@ -228,7 +228,8 @@ fn skill_reference_item(reference: SkillPickerReference) -> ComposerItem {
     } = reference;
     ComposerItem {
         placeholder: format!("[Skill: {name}]"),
-        label: format!("Skill: {name}"),
+        state: agena_api::part::PartExecutionStatusResource::Completed,
+        recovery_text: None,
         activity: agena_domain::ComposerActivity {
             id: agena_domain::ActivityId::new(),
             payload: agena_domain::ActivityPayload::SkillReference(

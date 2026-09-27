@@ -1101,15 +1101,10 @@ pub(crate) fn render_part_node(
                 content_id: part.id,
             };
             let expanded = expansions.get(&key).copied().unwrap_or(false);
-            let summary = i18n.text_args(
-                "message-activity-run-collapsed",
-                &agena_tui::fl_args!("count" => *hidden_count as i64),
-            );
-            push_single_line(
+            let summary = super::super::transcript_tool_summary::push_fold_marker_row(
                 out,
-                "  ",
-                summary.as_str(),
-                Style::default().fg(agena_tui_components::theme::muted_color()),
+                i18n,
+                *hidden_count,
                 width,
             );
             RenderedNodeDraft {
@@ -1427,11 +1422,33 @@ pub(crate) fn render_part_node(
                 expansions,
             )
         }
-        TranscriptPartContent::Activity(TranscriptActivityContent::Hook(hook)) => {
-            render_activity_canonical(
+        TranscriptPartContent::Activity(TranscriptActivityContent::Notice(notice)) => {
+            render_notice_row(
                 message,
                 part,
-                &agena_domain::ActivityPayload::Notice(agena_domain::NoticeActivity {
+                agena_domain::NoticeActivity {
+                    kind: if notice.kind.trim().is_empty() {
+                        "notice".to_owned()
+                    } else {
+                        notice.kind.clone()
+                    },
+                    summary: notice.summary.clone(),
+                    detail: notice.detail.clone(),
+                    occurred_at_ms: None,
+                    title: notice.title.clone(),
+                },
+                out,
+                width,
+                i18n,
+                defaults,
+                expansions,
+            )
+        }
+        TranscriptPartContent::Activity(TranscriptActivityContent::Hook(hook)) => {
+            render_notice_row(
+                message,
+                part,
+                agena_domain::NoticeActivity {
                     kind: "hook".to_owned(),
                     summary: hook.summary.clone(),
                     detail: hook
@@ -1442,8 +1459,7 @@ pub(crate) fn render_part_node(
                         .or_else(|| hook.detail.clone()),
                     occurred_at_ms: None,
                     title: None,
-                }),
-                None,
+                },
                 out,
                 width,
                 i18n,
@@ -1451,6 +1467,52 @@ pub(crate) fn render_part_node(
                 expansions,
             )
         }
+        TranscriptPartContent::Activity(TranscriptActivityContent::Compaction(compaction)) => {
+            render_notice_row(
+                message,
+                part,
+                agena_domain::NoticeActivity {
+                    kind: "compaction".to_owned(),
+                    summary: compaction.summary.clone().unwrap_or_default(),
+                    detail: compaction
+                        .window
+                        .as_ref()
+                        .map(|window| serde_json::Value::Array(window.clone()).to_string()),
+                    occurred_at_ms: None,
+                    title: None,
+                },
+                out,
+                width,
+                i18n,
+                defaults,
+                expansions,
+            )
+        }
+        TranscriptPartContent::Activity(TranscriptActivityContent::SystemNotification(
+            notification,
+        )) => render_notice_row(
+            message,
+            part,
+            agena_domain::NoticeActivity {
+                kind: if notification.operation_kind.trim().is_empty() {
+                    "system_notification".to_owned()
+                } else {
+                    notification.operation_kind.clone()
+                },
+                summary: notification.summary.clone(),
+                detail: notification
+                    .detail
+                    .clone()
+                    .or_else(|| (!notification.body.is_empty()).then(|| notification.body.clone())),
+                occurred_at_ms: None,
+                title: None,
+            },
+            out,
+            width,
+            i18n,
+            defaults,
+            expansions,
+        ),
         TranscriptPartContent::Activity(TranscriptActivityContent::AssistantReplyLifecycle(
             status,
         )) => {
@@ -2139,6 +2201,32 @@ fn ask_user_answer_summary(
     }
     parts.extend(answer.custom_values.iter().cloned());
     parts.join(", ")
+}
+
+/// Render one notification-class activity. Notices, hooks, compactions, and
+/// background notifications share one canonical Notice presentation, so their
+/// rows stay one vocabulary while their content shapes stay distinct.
+fn render_notice_row(
+    message: &TranscriptEntry,
+    part: &TranscriptEntryPart,
+    notice: agena_domain::NoticeActivity,
+    out: &mut Vec<RenderedLine>,
+    width: u16,
+    i18n: &I18n,
+    defaults: &TranscriptDetailDefaults,
+    expansions: &std::collections::BTreeMap<TranscriptNodeKey, bool>,
+) -> RenderedNodeDraft {
+    render_activity_canonical(
+        message,
+        part,
+        &agena_domain::ActivityPayload::Notice(notice),
+        None,
+        out,
+        width,
+        i18n,
+        defaults,
+        expansions,
+    )
 }
 
 /// Shared renderer for canonical Activity payloads. Tool-call operations,

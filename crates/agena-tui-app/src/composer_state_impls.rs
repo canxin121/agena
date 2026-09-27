@@ -1,4 +1,6 @@
 use agena_domain::{ActivityPayload, ComposerNode};
+use agena_plugin_sdk::AttachmentKind;
+use agena_tui::i18n::I18n;
 
 use crate::{
     BTreeMap, ComposerDraft, ComposerItem, DraftSlot, DraftStore, PersistentComposerDraft,
@@ -42,13 +44,63 @@ impl ComposerDraft {
     }
 }
 
+/// The composer item's human label, derived from its payload on demand. The
+/// placeholder owns identity (editor ranges, draft persistence); the label is
+/// only ever a projection of the activity facts.
+pub(crate) fn composer_item_label(item: &ComposerItem, i18n: &I18n) -> String {
+    match &item.activity.payload {
+        ActivityPayload::Resource(resource) => {
+            let mut label = crate::app_session_helpers::attachment_chip_label(
+                i18n,
+                resource_display_path(resource).as_path(),
+                attachment_kind_for_resource(resource.kind),
+                resource.kind == agena_domain::ResourceKind::Directory,
+                resource.width,
+                resource.height,
+                resource.size_bytes.unwrap_or_default(),
+            );
+            if resource.delivery == agena_domain::ResourceDelivery::ModelInput {
+                label.push_str(" · send contents to selected model");
+            }
+            label
+        }
+        ActivityPayload::SkillReference(skill) => format!("Skill: {}", skill.name),
+        ActivityPayload::TextArtifact(artifact) => crate::ui_text::text_artifact_display_label(
+            artifact.text.as_str(),
+            artifact.label.as_deref(),
+        ),
+        _ => composer_activity_presentation(&item.activity.payload).1,
+    }
+}
+
+fn resource_display_path(resource: &agena_domain::ResourceActivity) -> std::path::PathBuf {
+    match &resource.reference {
+        agena_domain::ResourceReference::WorkspacePath { path } => std::path::PathBuf::from(path),
+        agena_domain::ResourceReference::Url { url } => std::path::PathBuf::from(url),
+        agena_domain::ResourceReference::Artifact { uri, .. } => std::path::PathBuf::from(uri),
+        agena_domain::ResourceReference::ProviderFile { file_id, .. } => {
+            std::path::PathBuf::from(file_id)
+        }
+    }
+}
+
+fn attachment_kind_for_resource(kind: agena_domain::ResourceKind) -> AttachmentKind {
+    match kind {
+        agena_domain::ResourceKind::Image => AttachmentKind::Image,
+        agena_domain::ResourceKind::Audio => AttachmentKind::Audio,
+        agena_domain::ResourceKind::Video => AttachmentKind::Video,
+        agena_domain::ResourceKind::Pdf => AttachmentKind::Pdf,
+        _ => AttachmentKind::File,
+    }
+}
+
 impl ComposerItem {
     pub(crate) fn placeholder(&self) -> &str {
         self.placeholder.as_str()
     }
 
-    pub(crate) fn short_label(&self) -> &str {
-        self.label.as_str()
+    pub(crate) fn is_completed(&self) -> bool {
+        self.state == agena_api::part::PartExecutionStatusResource::Completed
     }
 
     pub(crate) fn payload(&self) -> &ActivityPayload {

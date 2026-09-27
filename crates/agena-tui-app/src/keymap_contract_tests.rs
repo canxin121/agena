@@ -25,9 +25,9 @@ fn visible_shortcut_hints_track_the_central_keymap() {
     assert!(composer.contains("Ctrl+G items"));
     assert!(composer.contains("Ctrl+R input"));
     assert!(composer.contains("Ctrl+L approval"));
-    // The pending-message edit shortcut is documented only in the Ctrl+H
+    // The in-flight-send edit shortcut is documented only in the Ctrl+H
     // help window, not in the always-visible status line.
-    assert!(composer_help.contains("Ctrl+P edits the pending message"));
+    assert!(composer_help.contains("Ctrl+P pulls back a message that is still being delivered"));
     assert!(composer_help.contains("Ctrl+X cancels"));
     for removed in ["F2", "Alt+U", "Alt+A", "F3", "F4", "F6"] {
         assert!(

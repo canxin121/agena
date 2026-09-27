@@ -247,6 +247,14 @@ impl SessionListLoadState {
 #[derive(Default)]
 pub(crate) struct SessionComposerState {
     pub(crate) pending_restore_draft: Option<ComposerDraft>,
+    pub(crate) pending_submit: Option<PendingComposerSubmit>,
+}
+
+/// A composer send that is still waiting for its attachment parts. One
+/// send is one request, so the deferred action carries no queueing mode.
+#[derive(Clone, Copy)]
+pub(crate) enum PendingComposerSubmit {
+    Send,
 }
 
 pub(crate) struct TranscriptState {

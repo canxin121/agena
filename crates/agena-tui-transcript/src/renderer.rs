@@ -206,15 +206,10 @@ pub fn render_entry_detailed_with_progressive_expansion(
                     // parent selection. An activity summary must never make
                     // the adjacent `assistant` header look selected.
                     let start_line = lines.len();
-                    let summary = i18n.text_args(
-                        "message-activity-run-collapsed",
-                        &agena_tui::fl_args!("count" => hidden_count as i64),
-                    );
-                    push_single_line(
+                    let summary = crate::renderer::transcript_tool_summary::push_fold_marker_row(
                         &mut lines,
-                        "  ",
-                        summary.as_str(),
-                        Style::default().fg(agena_tui_components::theme::muted_color()),
+                        i18n,
+                        hidden_count,
                         width,
                     );
                     nodes.push(RenderedTranscriptNode {
@@ -354,7 +349,7 @@ mod tests {
         PartExecutionStatusResource, ToolCallView, TranscriptActivityContent, TranscriptContentId,
         TranscriptEntryId, TranscriptEntryPart, TranscriptFixture, TranscriptPartContent,
     };
-    use agena_api::live::ToolHumanPresentationResource;
+    use agena_api::live::HumanPresentationResource;
     use agena_domain::{
         AttachmentItem, AttachmentKind, AttachmentSource, ExecutionStatus, OperationError,
         RawOutput, StructuredObject, TimeRange, ToolInvocation, ToolResultState, ViewBlock,
@@ -383,6 +378,7 @@ mod tests {
             role: Some(role),
             state,
             created_at,
+            reply_id: None,
             parts,
         }
     }
@@ -400,7 +396,7 @@ mod tests {
                 metadata: Default::default(),
                 lifecycle: TimeRange::default(),
             },
-            Some(ToolHumanPresentationResource {
+            Some(HumanPresentationResource {
                 title: title.to_owned(),
                 summary: String::new(),
                 blocks: Vec::new(),
@@ -1363,6 +1359,10 @@ mod tests {
         );
         assert!(!rendered.lines[0].text.contains("in_progress"));
         assert_eq!(
+            rendered.lines[0].copy_text, "assistant",
+            "copied text must not depend on the spinner frame"
+        );
+        assert_eq!(
             rendered.nodes[0].start_line, 1,
             "the empty-message body node must start after the role header"
         );
@@ -1407,7 +1407,7 @@ mod tests {
                 )]),
                 lifecycle: TimeRange::default(),
             },
-            Some(ToolHumanPresentationResource {
+            Some(HumanPresentationResource {
                 title: "Production ready".to_owned(),
                 summary: String::new(),
                 blocks: Vec::new(),
@@ -1460,7 +1460,7 @@ mod tests {
                 metadata: Default::default(),
                 lifecycle: TimeRange::default(),
             },
-            Some(ToolHumanPresentationResource {
+            Some(HumanPresentationResource {
                 title: "agena.test".to_owned(),
                 summary: String::new(),
                 blocks: vec![ViewBlock::Text {
@@ -1519,7 +1519,7 @@ mod tests {
                 metadata: Default::default(),
                 lifecycle: TimeRange::default(),
             },
-            Some(ToolHumanPresentationResource {
+            Some(HumanPresentationResource {
                 title: "fs.read · Read README.md".to_owned(),
                 summary: String::new(),
                 blocks: Vec::new(),
@@ -1624,7 +1624,7 @@ mod tests {
                 metadata: Default::default(),
                 lifecycle: TimeRange::default(),
             },
-            Some(ToolHumanPresentationResource {
+            Some(HumanPresentationResource {
                 title: "shell.run · Execute command".to_owned(),
                 summary: String::new(),
                 blocks: vec![ViewBlock::Command {
@@ -1850,7 +1850,7 @@ mod tests {
                 metadata: Default::default(),
                 lifecycle: TimeRange::default(),
             },
-            Some(ToolHumanPresentationResource {
+            Some(HumanPresentationResource {
                 title: "tools.call · web.search".to_owned(),
                 summary: String::new(),
                 blocks: Vec::new(),
@@ -1898,7 +1898,7 @@ mod tests {
                 metadata: Default::default(),
                 lifecycle: TimeRange::default(),
             },
-            Some(ToolHumanPresentationResource {
+            Some(HumanPresentationResource {
                 title: "agena.test".to_owned(),
                 summary: String::new(),
                 blocks: vec![
@@ -2116,7 +2116,7 @@ mod tests {
                 metadata: Default::default(),
                 lifecycle: TimeRange::default(),
             },
-            Some(ToolHumanPresentationResource {
+            Some(HumanPresentationResource {
                 title: "Apply patch".to_owned(),
                 summary: "1 file changed · +1 −1".to_owned(),
                 blocks: Vec::new(),
@@ -2181,7 +2181,7 @@ mod tests {
                 metadata: Default::default(),
                 lifecycle: TimeRange::default(),
             },
-            Some(ToolHumanPresentationResource {
+            Some(HumanPresentationResource {
                 title: "Grep TODO".to_owned(),
                 summary: "36 matches in crates".to_owned(),
                 blocks: Vec::new(),
@@ -2227,7 +2227,7 @@ mod tests {
                 metadata: Default::default(),
                 lifecycle: TimeRange::default(),
             },
-            Some(ToolHumanPresentationResource {
+            Some(HumanPresentationResource {
                 title: "Read secrets.env".to_owned(),
                 summary: "permission denied by workspace policy".to_owned(),
                 blocks: Vec::new(),

@@ -843,18 +843,44 @@ mod interaction_part_routing_tests {
     async fn pending_clipboard_media_blocks_submit_queue_and_steer_without_losing_text() {
         let mut app = seeded_app().await;
         app.composer.insert_str("preserve my draft");
-        app.composer_pending_media = 2;
+        for index in 0..2 {
+            app.composer_items.push(crate::ComposerItem {
+                activity: agena_domain::ComposerActivity {
+                    id: agena_domain::ActivityId::new(),
+                    payload: agena_domain::ActivityPayload::Resource(
+                        agena_domain::ResourceActivity {
+                            delivery: agena_domain::ResourceDelivery::ModelInput,
+                            kind: agena_domain::ResourceKind::Image,
+                            reference: agena_domain::ResourceReference::WorkspacePath {
+                                path: format!("clipboard-{index}.png"),
+                            },
+                            name: format!("clipboard-{index}.png"),
+                            media_type: None,
+                            size_bytes: None,
+                            width: None,
+                            height: None,
+                            duration_ms: None,
+                            page_count: None,
+                        },
+                    ),
+                    provenance: Default::default(),
+                },
+                placeholder: format!("[preparing: clipboard-{index}.png]"),
+                state: agena_api::part::PartExecutionStatusResource::InProgress,
+                recovery_text: None,
+            });
+        }
         app.submit_composer();
         assert_eq!(app.composer.text(), "preserve my draft");
         app.queue_or_submit();
         assert_eq!(app.composer.text(), "preserve my draft");
         app.submit_or_steer();
         assert_eq!(app.composer.text(), "preserve my draft");
-        assert_eq!(app.composer_pending_media, 2);
+        assert_eq!(app.pending_composer_media_count(), 2);
         assert_eq!(app.remaining_resource_attachment_slots(), 6);
         let epoch = app.composer_media_epoch;
         app.clear_composer_state();
-        assert_eq!(app.composer_pending_media, 0);
+        assert_eq!(app.pending_composer_media_count(), 0);
         assert_ne!(app.composer_media_epoch, epoch);
     }
 
@@ -864,7 +890,7 @@ mod interaction_part_routing_tests {
         app.composer.insert_str("keep current draft");
         app.stage_long_paste_text_file("中".repeat(400000));
         assert_eq!(app.composer.text(), "keep current draft");
-        assert_eq!(app.composer_pending_media, 0);
+        assert_eq!(app.pending_composer_media_count(), 0);
         assert!(app.composer_items.is_empty());
     }
 
@@ -2527,7 +2553,7 @@ mod transcript_character_cursor_tests {
         assert_eq!(block_ranges[first.0], Some(first.1..first.1 + 1));
         assert_eq!(block_ranges[second.0], Some(first.1..first.1 + 1));
         assert_eq!(
-            transcript.selected_text(80, ""),
+            transcript.selected_text(80),
             Some("a\n\nq".to_string()),
             "Ctrl+V copies the selected terminal-cell rectangle without card chrome"
         );
@@ -2693,11 +2719,11 @@ mod transcript_character_cursor_tests {
             super::super::TranscriptVisualSelectionMode::Character,
         );
         transcript.move_cursor_to_line_end(80, 20);
-        let selected = transcript.selected_text(80, "").expect("Visual text");
+        let selected = transcript.selected_text(80).expect("Visual text");
         assert_eq!(selected, "three");
         transcript.cancel_text_selection(80, 20);
         transcript.reselect_last_visual_selection(80, 20);
-        assert_eq!(transcript.selected_text(80, ""), Some("three".to_string()));
+        assert_eq!(transcript.selected_text(80), Some("three".to_string()));
 
         let two_column = display_column_before(
             transcript.rendered(80).lines[line].text.as_str(),
@@ -2712,10 +2738,10 @@ mod transcript_character_cursor_tests {
             },
         );
         assert!(transcript.select_current_word_text_object(80, 20, false));
-        assert_eq!(transcript.selected_text(80, ""), Some("two".to_string()));
+        assert_eq!(transcript.selected_text(80), Some("two".to_string()));
         transcript.cancel_text_selection(80, 20);
         assert!(transcript.select_current_word_text_object(80, 20, true));
-        assert_eq!(transcript.selected_text(80, ""), Some("two ".to_string()));
+        assert_eq!(transcript.selected_text(80), Some("two ".to_string()));
     }
 
     #[test]
@@ -2912,15 +2938,13 @@ mod transcript_character_cursor_tests {
         );
         assert!(transcript.select_current_text_object(80, 20, false));
         assert_eq!(
-            transcript.selected_text(80, ""),
+            transcript.selected_text(80),
             Some("first paragraph".to_string())
         );
 
         transcript.cancel_text_selection(80, 20);
         assert!(transcript.select_current_text_object(80, 20, true));
-        let message = transcript
-            .selected_text(80, "")
-            .expect("message Visual range");
+        let message = transcript.selected_text(80).expect("message Visual range");
         assert!(message.contains("first paragraph"));
         assert!(message.contains("second paragraph"));
     }
@@ -4122,7 +4146,7 @@ mod transcript_activity_copy_tests {
             },
         );
         transcript.toggle_visual_selection(120, 20, TranscriptVisualSelectionMode::Line);
-        let copied = transcript.selected_text(120, "").expect("Visual line copy");
+        let copied = transcript.selected_text(120).expect("Visual line copy");
         assert!(
             copied.contains("older parts hidden"),
             "copying the folded marker should keep the visible marker: {copied}"
@@ -5060,7 +5084,6 @@ mod transcript_expansion_tests {
                 rendered.nodes.as_slice(),
                 rendered.line_nodes.as_slice(),
                 selection,
-                "",
             )
         };
         assert_eq!(copied, "nsw");

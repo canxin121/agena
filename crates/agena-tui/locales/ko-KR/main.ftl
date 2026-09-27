@@ -836,6 +836,18 @@ overlay-provider-studio-adapters = 어댑터
 overlay-provider-studio-models = 모델
 
 overlay-provider-studio-catalog = 모델 카탈로그
+overlay-provider-studio-catalog-picker-title = 카탈로그 템플릿 선택
+
+overlay-provider-studio-catalog-picker-footer = 위/아래 선택 · Ctrl+F 검색 · 좌/우 페이지 · Enter로 모델 필드 채우기 · Esc 뒤로
+
+overlay-provider-studio-catalog-match = 카탈로그: {$model}
+
+overlay-provider-studio-catalog-selected = 선택한 카탈로그: {$model}
+
+overlay-provider-studio-catalog-loading = 카탈로그 일치 항목 찾는 중…
+
+overlay-provider-studio-catalog-no-match = 카탈로그 일치 없음 · 모델 설정에서 선택
+
 
 overlay-provider-studio-detail = 제품 정보
 

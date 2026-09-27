@@ -584,8 +584,11 @@ impl App {
 
     pub(crate) fn transcript_footer_text(&self) -> String {
         let mut parts = Vec::new();
-        if !self.queue.is_empty() {
-            let preview = self.queue.preview(28).unwrap_or_default();
+        if !self.queue.is_empty(self.current_draft_slot()) {
+            let preview = self
+                .queue
+                .preview(self.current_draft_slot(), 28)
+                .unwrap_or_default();
             if preview.is_empty() {
                 parts.push(ui_text::t(&self.i18n, "transcript-footer-pending"));
             } else {
@@ -678,18 +681,24 @@ impl App {
         }
     }
 
-    pub(crate) fn composer_status_parts(&self) -> Vec<String> {
-        let mut parts = Vec::new();
+    pub(crate) fn composer_status_parts(&self) -> Vec<crate::app_status_context::StatusRow> {
+        let mut parts: Vec<crate::app_status_context::StatusRow> = Vec::new();
         parts.extend(self.current_session_status_parts());
         if self.transcript.state_loading {
-            parts.push(ui_text::t(&self.i18n, "transcript-header-loading"));
+            parts.push(crate::app_status_context::StatusRow::normal(
+                "transcript-header-loading",
+                ui_text::t(&self.i18n, "transcript-header-loading"),
+            ));
         }
         if !self.transcript.search_query.trim().is_empty() {
-            parts.push(ui_text::transcript_search_summary(
-                &self.i18n,
-                self.transcript.search_query.as_str(),
-                self.transcript.current_search_match_number(),
-                self.transcript.current_search_match_count(),
+            parts.push(crate::app_status_context::StatusRow::normal(
+                "transcript-search",
+                ui_text::transcript_search_summary(
+                    &self.i18n,
+                    self.transcript.search_query.as_str(),
+                    self.transcript.current_search_match_number(),
+                    self.transcript.current_search_match_count(),
+                ),
             ));
         }
         if let Some(selected) = self
@@ -697,41 +706,50 @@ impl App {
             .selected()
             .and_then(|index| self.composer_items.get(index).map(|item| (index, item)))
         {
-            parts.push(self.i18n.text_args(
-                "composer-status-selected-item",
-                &agena_tui::fl_args!(
-                    "current" => selected.0.saturating_add(1) as i64,
-                    "total" => self.composer_items.len() as i64,
-                    "label" => selected.1.short_label(),
+            parts.push(crate::app_status_context::StatusRow::normal(
+                "composer-selected-item",
+                self.i18n.text_args(
+                    "composer-status-selected-item",
+                    &agena_tui::fl_args!(
+                        "current" => selected.0.saturating_add(1) as i64,
+                        "total" => self.composer_items.len() as i64,
+                        "label" => crate::composer_state_impls::composer_item_label(
+                            selected.1,
+                            &self.i18n,
+                        ),
+                    ),
                 ),
             ));
         }
         if let Some(state) = self.file_mention_suggestions.as_ref() {
-            parts.push(self.i18n.text_args(
+            parts.push(crate::app_status_context::StatusRow::normal("composer-mention", self.i18n.text_args(
                 "composer-status-mention",
                 &agena_tui::fl_args!("query" => ui_text::prefixed_query("@", state.input.text())),
-            ));
+            )));
         } else if let Some(state) = self.slash_command_suggestions.as_ref() {
-            parts.push(self.i18n.text_args(
+            parts.push(crate::app_status_context::StatusRow::normal("composer-slash", self.i18n.text_args(
                 "composer-status-slash",
                 &agena_tui::fl_args!("query" => ui_text::prefixed_query("/", state.input.text())),
-            ));
+            )));
         }
         if let Some(execution) = self.transcript.execution.as_ref() {
             let (_, user_input_count) = pending_interactive_counts_for_execution(execution);
             if user_input_count > 0 {
-                parts.push(self.i18n.text_args(
-                    "composer-status-pending-user-input",
-                    &agena_tui::fl_args!(
-                        "count" => user_input_count as i64,
+                parts.push(crate::app_status_context::StatusRow::pending(
+                    "composer-pending-user-input",
+                    self.i18n.text_args(
+                        "composer-status-pending-user-input",
+                        &agena_tui::fl_args!(
+                            "count" => user_input_count as i64,
+                        ),
                     ),
                 ));
             }
         }
         if self.has_suppressed_pending_interactive_overlay() {
-            parts.push(ui_text::t(
-                &self.i18n,
-                "composer-status-hidden-pending-dialog",
+            parts.push(crate::app_status_context::StatusRow::normal(
+                "composer-hidden-pending-dialog",
+                ui_text::t(&self.i18n, "composer-status-hidden-pending-dialog"),
             ));
         }
         parts
@@ -814,7 +832,14 @@ impl App {
     /// (top-right), and plan progress (bottom-right).
     fn composer_chip_texts(&self) -> ComposerChipTexts {
         ComposerChipTexts {
-            status: sanitize_display_text(self.composer_status_parts().join("  |  ").as_str()),
+            status: sanitize_display_text(
+                self.composer_status_parts()
+                    .iter()
+                    .map(|row| row.text.as_str())
+                    .collect::<Vec<_>>()
+                    .join("  |  ")
+                    .as_str(),
+            ),
             top_right: self
                 .composer_history_search_part()
                 .or_else(|| self.composer_pending_approval_part())

@@ -1,11 +1,10 @@
 //! Transcript render model: lines, blocks, and layout.
 
 use agena_api::{
-    live::ToolHumanPresentationResource,
+    live::HumanPresentationResource,
     part::{
-        AttachmentPartResource, ErrorPartResource, HookPartResource, PartDetailResource,
-        PartExecutionStatusResource, ReasoningPartResource, SkillReferencePartResource,
-        TextPartResource, ToolCallPartResource,
+        AttachmentPartResource, ErrorPartResource, PartDetailResource, PartExecutionStatusResource,
+        ReasoningPartResource, SkillReferencePartResource, TextPartResource, ToolCallPartResource,
     },
     resource::{RunResource, RunRole, RunStatus},
 };
@@ -28,6 +27,9 @@ use agena_tui_media::{MathLinePlacement, TranscriptMathPlacement};
 use crate::{
     RenderedTranscriptNode, TranscriptBlockCursor, TranscriptPointerSelection,
     TranscriptTextPosition, TranscriptTextSelection,
+};
+use agena_runtime_contracts::part_content::{
+    CompactionContent, HookContent, NoticeContent, SystemNotificationContent,
 };
 
 /// Stable identity of one top-level transcript entry.
@@ -91,13 +93,13 @@ pub struct TranscriptEntryPart<'a> {
 #[derive(Debug, Clone)]
 pub struct ToolCallView {
     pub operation: OperationPart,
-    pub presentation: ToolHumanPresentationResource,
+    pub presentation: HumanPresentationResource,
 }
 
 impl ToolCallView {
     pub fn from_operation(
         operation: OperationPart,
-        presentation: Option<ToolHumanPresentationResource>,
+        presentation: Option<HumanPresentationResource>,
     ) -> Self {
         let presentation = presentation.unwrap_or_else(|| {
             let title = operation
@@ -113,7 +115,7 @@ impl ToolCallView {
                 .unwrap_or_else(|| {
                     agena_tool::tool_title_for_state(&operation.invocation, operation.state)
                 });
-            ToolHumanPresentationResource {
+            HumanPresentationResource {
                 title,
                 summary: String::new(),
                 blocks: Vec::new(),
@@ -125,7 +127,10 @@ impl ToolCallView {
         }
     }
 
-    pub fn from_api(value: ToolCallPartResource) -> Self {
+    pub fn from_api(
+        value: ToolCallPartResource,
+        presentation: Option<agena_api::live::HumanPresentationResource>,
+    ) -> Self {
         Self::from_operation(
             OperationPart {
                 call_id: value.call_id,
@@ -138,7 +143,7 @@ impl ToolCallView {
                 metadata: value.metadata,
                 lifecycle: value.lifecycle,
             },
-            value.presentation,
+            presentation,
         )
     }
 
@@ -244,7 +249,14 @@ pub enum TranscriptActivityContent<'a> {
     SkillReference(SkillReferencePartResource),
     Error(ErrorPartResource),
     Operation(Box<ToolCallView>),
-    Hook(Box<HookPartResource>),
+    /// A system notice: hook bookkeeping, workflow notices, session notices.
+    Notice(Box<NoticeContent>),
+    /// One observed plugin hook run.
+    Hook(Box<HookContent>),
+    /// Compaction summary and the window it replaced.
+    Compaction(Box<CompactionContent>),
+    /// Background-operation notification delivered to the model.
+    SystemNotification(Box<SystemNotificationContent>),
     AssistantReplyLifecycle(TranscriptAssistantReplyLifecycle),
     /// Presentation-only marker for activity omitted by the server-side
     /// folded transcript page.
@@ -317,36 +329,54 @@ pub struct TranscriptActivityPresentation {
     /// from this value and cannot accept an arbitrary diagnostic string.
     pub problem: Option<agena_failure::UserProblem>,
 }
-impl From<PartDetailResource> for TranscriptPartContent<'static> {
-    fn from(content: PartDetailResource) -> Self {
-        match content {
-            PartDetailResource::Text(value) => Self::Text(value),
-            PartDetailResource::Reasoning(value) => {
-                Self::Activity(TranscriptActivityContent::Reasoning(value))
-            }
-            PartDetailResource::Attachment(value) => {
-                Self::Activity(TranscriptActivityContent::Attachment(value))
-            }
-            PartDetailResource::SkillReference(value) => {
-                Self::Activity(TranscriptActivityContent::SkillReference(value))
-            }
-            PartDetailResource::Error(value) => {
-                Self::Activity(TranscriptActivityContent::Error(value))
-            }
-            PartDetailResource::ToolCall(value) => Self::Activity(
-                TranscriptActivityContent::Operation(Box::new(ToolCallView::from_api(*value))),
-            ),
-            PartDetailResource::Hook(value) => {
-                Self::Activity(TranscriptActivityContent::Hook(Box::new(value)))
-            }
+
+/// Project one typed part into transcript content. The part-level human
+/// presentation is the only home for it, so it travels with every kind
+/// rather than hiding inside the tool-call detail.
+pub fn transcript_part_content(
+    part: &agena_api::part::PartResource,
+) -> Option<TranscriptPartContent<'static>> {
+    let content = part.content.clone()?;
+    Some(match content {
+        PartDetailResource::Text(value) => TranscriptPartContent::Text(value),
+        PartDetailResource::Reasoning(value) => {
+            TranscriptPartContent::Activity(TranscriptActivityContent::Reasoning(value))
         }
-    }
+        PartDetailResource::Attachment(value) => {
+            TranscriptPartContent::Activity(TranscriptActivityContent::Attachment(value))
+        }
+        PartDetailResource::SkillReference(value) => {
+            TranscriptPartContent::Activity(TranscriptActivityContent::SkillReference(value))
+        }
+        PartDetailResource::Error(value) => {
+            TranscriptPartContent::Activity(TranscriptActivityContent::Error(value))
+        }
+        PartDetailResource::ToolCall(value) => {
+            TranscriptPartContent::Activity(TranscriptActivityContent::Operation(Box::new(
+                ToolCallView::from_api(*value, part.presentation.clone()),
+            )))
+        }
+        PartDetailResource::Hook(value) => TranscriptPartContent::Activity(
+            TranscriptActivityContent::Hook(Box::new(HookContent {
+                hook: value.hook,
+                plugin_id: value.plugin_id,
+                summary: value.summary,
+                detail: value.detail,
+                message: value.message,
+                extra: Default::default(),
+            })),
+        ),
+    })
 }
 
 #[derive(Debug, Clone)]
 /// A transcript entry.
 pub struct TranscriptEntry<'a> {
     pub id: TranscriptEntryId,
+    /// The assistant reply this entry continues, when the run marker carries
+    /// one. It is the presentation identity of the reply lifecycle row, so a
+    /// reply keeps one id while it runs, fails, or is continued.
+    pub reply_id: Option<AssistantReplyId>,
     /// Message role when this entry is a Turn/Response. Session-owned
     /// activities are top-level Activity entries and therefore have no role.
     pub role: Option<RunRole>,
@@ -362,6 +392,9 @@ impl<'a> From<&'a RunResource> for TranscriptEntry<'a> {
             role: Some(message.role),
             state: message.state,
             created_at: message.created_at,
+            // This typed run projection carries no marker content, so a
+            // reply identity cannot be recovered here.
+            reply_id: None,
             parts: message
                 .parts
                 .as_deref()
@@ -377,7 +410,7 @@ impl<'a> From<&'a RunResource> for TranscriptEntry<'a> {
                     Some(TranscriptEntryPart {
                         id,
                         status: part.status,
-                        content: part.content.clone()?.into(),
+                        content: transcript_part_content(part)?,
                     })
                 })
                 .collect(),
@@ -442,12 +475,29 @@ pub struct RenderedLine {
     pub math: Vec<MathLinePlacement>,
 }
 
+/// Copy projections never carry the transient spinner frame: the inline
+/// placeholder becomes a same-width space so copied text is stable no
+/// matter when the copy happens.
+fn stable_copy_text(text: &str) -> String {
+    let placeholder = crate::transcript_spinner_placeholder();
+    if !text.contains(placeholder) {
+        return text.to_owned();
+    }
+    let mut stable = text.replace(placeholder, " ");
+    if text.ends_with(placeholder) {
+        // A trailing live spinner contributes no copyable content, so it
+        // must not leave its spacer behind either.
+        stable.truncate(stable.trim_end_matches(' ').len());
+    }
+    stable
+}
+
 impl RenderedLine {
     pub fn plain(text: impl Into<String>, style: Style) -> Self {
         let text = text.into();
         Self {
             rich_line: Some(Line::from(Span::styled(text.clone(), style))),
-            copy_text: text.clone(),
+            copy_text: stable_copy_text(&text),
             text,
             copy_column: 0,
             copy_segments: Vec::new(),
@@ -467,7 +517,7 @@ impl RenderedLine {
             .collect::<String>();
         let style = line.style;
         Self {
-            copy_text: text.clone(),
+            copy_text: stable_copy_text(&text),
             text,
             copy_column: 0,
             copy_segments: Vec::new(),
@@ -485,13 +535,20 @@ impl RenderedLine {
         copy_text: impl Into<String>,
         copy_column: usize,
     ) -> Self {
-        self.copy_text = copy_text.into();
+        let copy_text = copy_text.into();
+        self.copy_text = stable_copy_text(&copy_text);
         self.copy_column = copy_column;
         self
     }
 
     pub fn with_copy_segments(mut self, segments: Vec<RenderedCopySegment>) -> Self {
-        self.copy_segments = segments;
+        self.copy_segments = segments
+            .into_iter()
+            .map(|mut segment| {
+                segment.text = stable_copy_text(&segment.text);
+                segment
+            })
+            .collect();
         self
     }
 
@@ -500,8 +557,9 @@ impl RenderedLine {
         navigation_unit: usize,
         copy_text: impl Into<String>,
     ) -> Self {
+        let copy_text = copy_text.into();
         self.navigation_unit = Some(navigation_unit);
-        self.navigation_copy_text = copy_text.into();
+        self.navigation_copy_text = stable_copy_text(&copy_text);
         self
     }
 

@@ -133,6 +133,7 @@ impl TranscriptFixture {
             segment_id: Some(agena_domain::TextSegmentId::new()),
             operation_id: None,
             created_at,
+            presentation: None,
             content: Some(agena_api::part::PartDetailResource::Text(
                 agena_api::part::TextPartResource {
                     text: text.into(),
@@ -162,6 +163,7 @@ impl TranscriptFixture {
             segment_id: None,
             operation_id: None,
             created_at,
+            presentation: None,
             content: Some(agena_api::part::PartDetailResource::Reasoning(
                 agena_api::part::ReasoningPartResource {
                     summary: reasoning.summary,

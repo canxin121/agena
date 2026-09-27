@@ -837,6 +837,18 @@ overlay-provider-studio-models = モデル
 
 overlay-provider-studio-catalog = モデル カタログ
 
+overlay-provider-studio-catalog-picker-title = カタログ テンプレートを選択
+
+overlay-provider-studio-catalog-picker-footer = 上下で選択 · Ctrl+F で検索 · 左右でページ · Enter でモデル項目を反映 · Esc で戻る
+
+overlay-provider-studio-catalog-match = カタログ: {$model}
+
+overlay-provider-studio-catalog-selected = 選択中のカタログ: {$model}
+
+overlay-provider-studio-catalog-loading = カタログの一致を検索中…
+
+overlay-provider-studio-catalog-no-match = カタログに一致なし · モデル設定で選択
+
 overlay-provider-studio-detail = 詳細を見る
 
 overlay-provider-studio-adapter-models-empty = アダプターを選択し、ライブモデルをリスト

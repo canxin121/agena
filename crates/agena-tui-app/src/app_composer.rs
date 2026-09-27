@@ -349,7 +349,15 @@ impl App {
     }
 
     pub(crate) fn remove_composer_item(&mut self, index: usize) {
-        let Some(range) = self.composer.draft_elements().get(index).cloned() else {
+        let Some(item) = self.composer_items.get(index) else {
+            return;
+        };
+        let placeholder = item.placeholder().to_owned();
+        let Some(range) =
+            self.composer.draft_elements().into_iter().find(|range| {
+                self.composer.text().get(range.clone()) == Some(placeholder.as_str())
+            })
+        else {
             return;
         };
         self.composer.remove_range(range.start, range.end);
@@ -840,31 +848,23 @@ impl App {
     /// anything was pulled (so the caller skips the default cursor-up
     /// behavior).
     pub(crate) fn try_pop_queue_into_editor(&mut self) -> bool {
-        let Some(combined) = self.queue.take() else {
+        let Some(combined) = self.queue.take(self.current_draft_slot()) else {
             return false;
         };
-        // Merge the queued draft on top of whatever's already in the
-        // editor.
-        let mut existing = self.take_composer_draft();
-        let existing_render = existing.render_text();
-        if !existing_render.is_empty() && !existing_render.ends_with('\n') {
-            existing.document.0.push(agena_domain::ComposerNode::Text {
-                text: "\n\n".to_owned(),
-            });
-        }
-        existing.document.0.extend(combined.document.0);
-        self.restore_composer_draft(existing);
+        // Capture the editor without clearing it so an attachment that is
+        // still preparing keeps its placeholder, then merge this document on top.
+        self.merge_in_flight_send_into_editor(combined);
         true
     }
 
     /// Cancel the single pending message (Ctrl+X). Shows a hint when there
     /// is nothing to cancel so the key never silently disappears.
     pub(crate) fn cancel_pending_message(&mut self) {
-        if self.queue.is_empty() {
+        if self.queue.is_empty(self.current_draft_slot()) {
             self.flash_info(ui_text::t(&self.i18n, "flash-no-pending-message"));
             return;
         }
-        self.queue.clear();
+        self.queue.clear(self.current_draft_slot());
         self.flash_success(ui_text::t(&self.i18n, "flash-pending-cancelled"));
     }
 }

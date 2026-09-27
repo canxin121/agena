@@ -54,6 +54,13 @@ macro_rules! uuid_id {
                 Self::new()
             }
         }
+        impl std::str::FromStr for $name {
+            type Err = uuid::Error;
+
+            fn from_str(value: &str) -> Result<Self, Self::Err> {
+                Uuid::parse_str(value).map(Self)
+            }
+        }
         impl From<Uuid> for $name {
             fn from(value: Uuid) -> Self {
                 Self(value)

@@ -486,7 +486,6 @@ pub struct App {
     pub(super) composer: Editor,
     pub(super) composer_items: Vec<ComposerItem>,
     pub(super) composer_media_epoch: u64,
-    pub(super) composer_pending_media: usize,
     pub(super) slash_command_suggestions: Option<SlashCommandSuggestionState>,
     pub(super) slash_command_suggestion_actions: BTreeMap<String, SlashCommandSuggestionAction>,
     pub(super) dismissed_slash_command_suggestions_for: Option<String>,

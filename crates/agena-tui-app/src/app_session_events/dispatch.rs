@@ -292,6 +292,7 @@ impl App {
         }
         match result {
             Ok(session) => {
+                self.queue.rebind_new_session(session.id);
                 self.request_sessions(false);
                 if submit_draft.is_some() {
                     self.clear_draft_for_slot(DraftSlot::NewSession);
@@ -619,8 +620,17 @@ impl App {
                     .confirm_pending_user_message(pending_message_id);
                 self.record_prompt_history_from_draft(&draft);
                 self.session_composer.pending_restore_draft = None;
-                self.clear_draft_for_slot(DraftSlot::Session(session_id));
-                if self.transcript.session_id != Some(session_id) {
+                let slot = DraftSlot::Session(session_id);
+                if self.draft_store.get(slot) == Some(&draft) {
+                    self.clear_draft_for_slot(slot);
+                }
+                // A queued send does not own the editor. Persist any newer
+                // draft the user wrote while this request was in flight.
+                self.sync_current_draft_slot();
+                // Never pull the user out of the session they are reading: a
+                // background submit only opens its session when nothing is displayed
+                // (the session list is refreshed above either way).
+                if self.transcript.session_id.is_none() {
                     self.open_session(session_id, execution.session.title.clone());
                 }
                 if self.apply_transcript_execution(execution) {
@@ -629,13 +639,19 @@ impl App {
                 }
                 self.request_refresh(session_id, true);
                 self.request_sessions(false);
+                // The terminal execution can arrive before this submit
+                // response. Its earlier drain attempt sees the local submit
+                // operation as busy; retry now that the operation is clear.
+                self.try_send_pending();
             }
             Err(error) => {
                 self.transcript
                     .remove_pending_user_message(pending_message_id);
                 self.session_composer.pending_restore_draft = None;
                 if self.transcript.session_id == Some(session_id) {
-                    self.restore_composer_draft(draft);
+                    self.restore_failed_composer_draft(draft);
+                    self.sync_current_draft_slot();
+                    self.persist_draft_store_with_feedback(true);
                 }
                 self.flash_error(error);
                 // Pause draining: a failed run typically means the user
@@ -646,23 +662,34 @@ impl App {
         }
     }
 
-    /// Send the single pending message as the next user turn. Called
-    /// whenever an active execution completes (or is successfully cancelled)
-    /// so the user's parked message runs automatically.
+    /// Deliver the document captured by an interrupt-and-send. Called whenever
+    /// an active execution completes or a cancel is acknowledged, because the
+    /// runtime only accepts a new user run once the previous one released the
+    /// session.
     pub(crate) fn try_send_pending(&mut self) {
-        if self.current_session_activity().is_busy()
-            || self.current_session_pending_interactive_kind().is_some()
-        {
-            return;
+        // Deliver every in-flight send whose session has released. The
+        // document targets the session it was captured in, so switching
+        // sessions while an interrupted run unwinds cannot strand it.
+        let slots = self.queue.slots().collect::<Vec<_>>();
+        for slot in slots {
+            let DraftSlot::Session(session_id) = slot else {
+                continue;
+            };
+            if self.session_activity(session_id) != crate::SessionActivity::Idle
+                || self
+                    .pending_interactive_kind_for_session(session_id)
+                    .is_some()
+            {
+                continue;
+            }
+            let Some(draft) = self.queue.take(slot) else {
+                continue;
+            };
+            // Submit the captured document directly. The editor may already
+            // contain the next draft, and restoring into a nonempty editor would
+            // discard this captured document before submission.
+            self.request_submit_message_with_pending(session_id, draft, None);
         }
-        let Some(draft) = self.queue.take() else {
-            return;
-        };
-        // Reuse the normal submit path. We stash it into the editor
-        // first so any error path can put the text back in front of the
-        // user.
-        self.restore_composer_draft(draft);
-        self.submit_composer();
     }
 
     pub(crate) fn handle_turn_cancelled(
@@ -695,6 +722,12 @@ impl App {
                         self.set_draft_for_slot(DraftSlot::Session(session_id), draft);
                         self.persist_draft_store_with_feedback(true);
                         self.focus = Focus::Composer;
+                    } else {
+                        // The withdrawn message is still user content: merge it with
+                        // the draft being written instead of dropping it.
+                        self.restore_failed_composer_draft(draft.clone());
+                        self.set_draft_for_slot(DraftSlot::Session(session_id), draft);
+                        self.persist_draft_store_with_feedback(true);
                     }
                     self.session_composer.pending_restore_draft = None;
                 } else {

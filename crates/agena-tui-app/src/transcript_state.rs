@@ -1799,7 +1799,7 @@ impl TranscriptState {
             .collect()
     }
 
-    pub(crate) fn selected_text(&mut self, width: u16, spinner: &str) -> Option<String> {
+    pub(crate) fn selected_text(&mut self, width: u16) -> Option<String> {
         if self.interaction.visual_selection == Some(TranscriptVisualSelectionMode::Block) {
             let ranges = self.selection_cell_ranges(width);
             let rendered = self.rendered(width);
@@ -1823,7 +1823,6 @@ impl TranscriptState {
                         rendered.nodes.as_slice(),
                         rendered.line_nodes.as_slice(),
                         selection,
-                        spinner,
                     ))
                 })
                 .collect::<Vec<_>>();
@@ -1837,7 +1836,6 @@ impl TranscriptState {
             rendered.nodes.as_slice(),
             rendered.line_nodes.as_slice(),
             selection,
-            spinner,
         ))
     }
 
@@ -3421,17 +3419,43 @@ fn inject_remembered_failures(
         if has_error {
             continue;
         }
-        entry.parts.push(agena_tui_transcript::TranscriptEntryPart {
-            id: agena_tui_transcript::TranscriptContentId::StoredPart(run_id),
-            status: agena_api::part::PartExecutionStatusResource::Failed,
-            content: agena_tui_transcript::TranscriptPartContent::Activity(
-                agena_tui_transcript::TranscriptActivityContent::Error(
-                    agena_api::part::ErrorPartResource {
-                        problem: problem.clone(),
-                    },
-                ),
+        let lifecycle = agena_tui_transcript::TranscriptPartContent::Activity(
+            agena_tui_transcript::TranscriptActivityContent::AssistantReplyLifecycle(
+                agena_tui_transcript::TranscriptAssistantReplyLifecycle::Failed {
+                    problem: Some(problem.clone()),
+                },
             ),
+        );
+        // Render the remembered outcome as the reply lifecycle the transcript
+        // already models. Fabricating an Error content part here duplicated the
+        // run marker id and bypassed the documented failure view.
+        let existing = entry.parts.iter_mut().find(|part| {
+            matches!(
+                part.content,
+                agena_tui_transcript::TranscriptPartContent::Activity(
+                    agena_tui_transcript::TranscriptActivityContent::AssistantReplyLifecycle(_)
+                )
+            )
         });
+        match existing {
+            Some(part) => {
+                part.status = agena_api::part::PartExecutionStatusResource::Failed;
+                part.content = lifecycle;
+            }
+            None => {
+                let id = entry
+                    .reply_id
+                    .map(agena_tui_transcript::TranscriptContentId::AssistantReplyLifecycle)
+                    .unwrap_or(agena_tui_transcript::TranscriptContentId::StoredPart(
+                        run_id,
+                    ));
+                entry.parts.push(agena_tui_transcript::TranscriptEntryPart {
+                    id,
+                    status: agena_api::part::PartExecutionStatusResource::Failed,
+                    content: lifecycle,
+                })
+            }
+        }
     }
 }
 

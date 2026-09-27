@@ -7,18 +7,26 @@ struct ClipboardUploadCandidate {
     path: PathBuf,
     temporary: bool,
     image_info: Option<PastedImageInfo>,
+    placeholder: String,
 }
 
 #[derive(Debug)]
 struct UploadedClipboardAttachment {
     resource: agena_application::dto::WorkspaceFileUploadResource,
     image_info: Option<PastedImageInfo>,
+    placeholder: String,
 }
 
 #[derive(Debug, Default)]
 struct ClipboardUploadBatch {
     uploaded: Vec<UploadedClipboardAttachment>,
-    failures: Vec<String>,
+    failures: Vec<(String, String)>,
+}
+
+struct PendingComposerRemoval {
+    start: usize,
+    end: usize,
+    cursor: usize,
 }
 
 impl App {
@@ -173,12 +181,78 @@ impl App {
         );
     }
 
+    /// Reserve one in-flight media part. The reservation is an ordinary
+    /// composer item whose payload already describes the resource it will
+    /// become; only its `state` marks it as still preparing.
+    pub(crate) fn reserve_pending_composer_media(
+        &mut self,
+        resource: agena_domain::ResourceActivity,
+        recovery_text: Option<String>,
+    ) -> String {
+        let label = sanitize_editor_text(&format!(
+            "[preparing: {}]",
+            resource.name.chars().take(80).collect::<String>()
+        ));
+        let placeholder = self.make_unique_composer_placeholder(label);
+        self.composer.insert_element(placeholder.as_str());
+        self.composer_items.push(ComposerItem {
+            activity: agena_domain::ComposerActivity {
+                id: agena_domain::ActivityId::new(),
+                payload: agena_domain::ActivityPayload::Resource(resource),
+                provenance: Default::default(),
+            },
+            placeholder: placeholder.clone(),
+            state: agena_api::part::PartExecutionStatusResource::InProgress,
+            recovery_text,
+        });
+        placeholder
+    }
+
+    fn remove_pending_composer_media(
+        &mut self,
+        placeholder: &str,
+    ) -> (Option<PendingComposerRemoval>, Option<String>) {
+        let fallback = self
+            .composer_items
+            .iter()
+            .position(|item| item.placeholder() == placeholder)
+            .and_then(|index| self.composer_items.remove(index).recovery_text);
+        let range = self
+            .composer
+            .draft_elements()
+            .into_iter()
+            .find(|range| self.composer.text().get(range.clone()) == Some(placeholder));
+        if let Some(range) = range {
+            let removal = PendingComposerRemoval {
+                start: range.start,
+                end: range.end,
+                cursor: self.composer.cursor(),
+            };
+            self.composer.remove_range(range.start, range.end);
+            (Some(removal), fallback)
+        } else {
+            (None, fallback)
+        }
+    }
+
+    fn restore_cursor_after_pending_media(&mut self, removal: PendingComposerRemoval) {
+        let inserted = self.composer.cursor().saturating_sub(removal.start);
+        let position = if removal.cursor <= removal.start {
+            removal.cursor
+        } else if removal.cursor >= removal.end {
+            removal.cursor - (removal.end - removal.start) + inserted
+        } else {
+            removal.start + inserted
+        };
+        self.composer.set_cursor(position);
+    }
+
     pub(crate) fn stage_long_paste_text_file(&mut self, text: String) {
         if text.len() > 1024 * 1024 {
             self.flash_warning("Paste exceeds the 1 MiB text limit. The clipboard and current draft are unchanged.");
             return;
         }
-        if self.composer_pending_media > 0 || self.remaining_resource_attachment_slots() == 0 {
+        if self.remaining_resource_attachment_slots() == 0 {
             self.composer.insert_str(&text);
             self.after_composer_text_mutated();
             self.flash_warning(
@@ -188,9 +262,25 @@ impl App {
         }
         let epoch = self.composer_media_epoch;
         let slot = self.current_draft_slot();
-        self.composer_pending_media += 1;
         let filename = format!("clipboard-paste-{}.txt", uuid::Uuid::new_v4().simple());
-        let fallback = text.clone();
+        let placeholder = self.reserve_pending_composer_media(
+            agena_domain::ResourceActivity {
+                delivery: agena_domain::ResourceDelivery::Reference,
+                kind: agena_domain::ResourceKind::File,
+                reference: agena_domain::ResourceReference::WorkspacePath {
+                    path: filename.clone(),
+                },
+                name: filename.clone(),
+                media_type: Some("text/plain; charset=utf-8".to_owned()),
+                size_bytes: Some(text.len() as u64),
+                width: None,
+                height: None,
+                duration_ms: None,
+                page_count: None,
+            },
+            Some(text.clone()),
+        );
+        self.after_composer_text_mutated();
         self.dispatch_backend_operation(
             move |application| async move {
                 application
@@ -203,27 +293,33 @@ impl App {
             },
             move |app, result| {
                 if app.composer_media_epoch != epoch || app.current_draft_slot() != slot {
-                    app.flash_warning(
-                        "Paste completed for an earlier draft; the current draft was not modified.",
-                    );
                     return;
                 }
-                app.composer_pending_media = app.composer_pending_media.saturating_sub(1);
-                match result {
-                    Ok(uploaded) => match app.stage_uploaded_attachment(uploaded, None) {
-                        Ok(()) => app.after_composer_text_mutated(),
-                        Err(error) => {
-                            app.composer.insert_str(&fallback);
-                            app.after_composer_text_mutated();
-                            app.flash_warning(error);
+                let (removal, fallback) = app.remove_pending_composer_media(&placeholder);
+                let mut successful = removal.is_some();
+                if let Some(removal) = removal {
+                    match result {
+                        Ok(uploaded) => {
+                            if let Err(error) = app.stage_uploaded_attachment(uploaded, None) {
+                                if let Some(text) = fallback {
+                                    app.composer.insert_str(&text);
+                                }
+                                app.flash_warning(error);
+                                successful = false;
+                            }
                         }
-                    },
-                    Err(error) => {
-                        app.composer.insert_str(&fallback);
-                        app.after_composer_text_mutated();
-                        app.flash_error(error.to_string());
+                        Err(error) => {
+                            if let Some(text) = fallback {
+                                app.composer.insert_str(&text);
+                            }
+                            app.flash_error(error.to_string());
+                            successful = false;
+                        }
                     }
+                    app.restore_cursor_after_pending_media(removal);
+                    app.after_composer_text_mutated();
                 }
+                app.composer_media_finished(successful);
             },
         );
     }
@@ -296,14 +392,22 @@ impl App {
         Ok(())
     }
 
+    /// Number of media parts still being prepared. Derived from the items
+    /// themselves so it can never drift from the composer document.
+    pub(crate) fn pending_composer_media_count(&self) -> usize {
+        self.composer_items
+            .iter()
+            .filter(|item| item.state != agena_api::part::PartExecutionStatusResource::Completed)
+            .count()
+    }
+
     pub(crate) fn remaining_resource_attachment_slots(&self) -> usize {
         let used = self
             .composer_items
             .iter()
             .filter(|item| matches!(item.payload(), agena_domain::ActivityPayload::Resource(_)))
             .count();
-        MAX_RESOURCE_ATTACHMENTS_PER_MESSAGE
-            .saturating_sub(used.saturating_add(self.composer_pending_media))
+        MAX_RESOURCE_ATTACHMENTS_PER_MESSAGE.saturating_sub(used)
     }
 
     fn stage_resource_with_metadata(
@@ -343,18 +447,6 @@ impl App {
             agena_domain::ResourceKind::Pdf => AttachmentKind::Pdf,
             _ => AttachmentKind::File,
         };
-        let mut label = attachment_chip_label(
-            &self.i18n,
-            display_path,
-            kind,
-            is_directory,
-            resource.width,
-            resource.height,
-            size_bytes,
-        );
-        if resource.delivery == agena_domain::ResourceDelivery::ModelInput {
-            label.push_str(" · send contents to selected model");
-        }
         let placeholder = self.make_unique_composer_placeholder(attachment_placeholder_base(
             &self.i18n,
             display_path,
@@ -365,7 +457,8 @@ impl App {
         self.composer.insert_element(placeholder.as_str());
         self.composer_items.push(ComposerItem {
             placeholder,
-            label,
+            state: agena_api::part::PartExecutionStatusResource::Completed,
+            recovery_text: None,
             activity: agena_domain::ComposerActivity {
                 id: agena_domain::ActivityId::new(),
                 payload: agena_domain::ActivityPayload::Resource(resource),
@@ -424,7 +517,7 @@ impl App {
 
     pub(crate) fn clear_composer_state(&mut self) {
         self.composer_media_epoch = self.composer_media_epoch.wrapping_add(1);
-        self.composer_pending_media = 0;
+        self.session_composer.pending_submit = None;
         self.composer.clear();
         self.composer_items.clear();
         self.slash_command_suggestions = None;
@@ -471,7 +564,7 @@ impl App {
 
     pub(crate) fn restore_draft_for_slot(&mut self, slot: DraftSlot) {
         self.composer_media_epoch = self.composer_media_epoch.wrapping_add(1);
-        self.composer_pending_media = 0;
+        self.session_composer.pending_submit = None;
         if let DraftSlot::Session(session_id) = slot
             && self.run_activity.has_operation(
                 RunActivityTarget::Session(session_id),
@@ -577,6 +670,88 @@ impl App {
         }
     }
 
+    /// Keep both messages when a send fails after the user has begun another
+    /// draft. Rebuild the editor without advancing the media epoch so an
+    /// attachment currently being prepared for the newer draft still lands.
+    pub(crate) fn restore_failed_composer_draft(&mut self, failed: ComposerDraft) {
+        self.sync_composer_items_with_editor();
+        // Preserve in-flight placeholders here. The normal draft projection
+        // substitutes fallback text, which would remove their editor anchors.
+        let current = ComposerDraft {
+            document: composer_document_from_editor(
+                self.composer.text(),
+                self.composer.draft_elements().as_slice(),
+                self.composer_items.as_slice(),
+            ),
+        };
+        if current.is_empty() {
+            self.restore_composer_draft(failed);
+            return;
+        }
+        let mut document = failed.document;
+        document.0.push(agena_domain::ComposerNode::Text {
+            text: "\n\n".to_owned(),
+        });
+        document.0.extend(current.document.0);
+        let (text, mut elements, items) = rebuild_placeholders(document);
+        for pending in self
+            .composer_items
+            .iter()
+            .filter(|item| !item.is_completed())
+        {
+            if let Some(range) = find_placeholder_occurrence(&text, &pending.placeholder, &elements)
+            {
+                elements.push(range);
+            }
+        }
+        self.composer.set_text(text);
+        self.composer.set_elements(elements);
+        self.composer_items = items;
+        self.sync_composer_suggestions();
+    }
+
+    /// Merge an in-flight interrupt-and-send document back into the editor.
+    /// The editor is captured without clearing it, so attachments that are
+    /// still being prepared keep their placeholders.
+    pub(crate) fn merge_in_flight_send_into_editor(&mut self, combined: ComposerDraft) {
+        // Capture the editor WITHOUT the pending-media substitution used for
+        // submission: a still-preparing placeholder must keep its anchor so the
+        // upload can replace it instead of being dropped without a trace.
+        self.sync_composer_items_with_editor();
+        let mut existing = ComposerDraft {
+            document: composer_document_from_editor(
+                self.composer.text(),
+                self.composer.draft_elements().as_slice(),
+                self.composer_items.as_slice(),
+            ),
+        };
+        let existing_render = existing.render_text();
+        if !existing_render.is_empty() && !existing_render.ends_with('\n') {
+            existing.document.0.push(agena_domain::ComposerNode::Text {
+                text: "
+
+"
+                .to_owned(),
+            });
+        }
+        existing.document.0.extend(combined.document.0);
+        let (text, mut elements, items) = rebuild_placeholders(existing.document);
+        for pending in self
+            .composer_items
+            .iter()
+            .filter(|item| !item.is_completed())
+        {
+            if let Some(range) = find_placeholder_occurrence(&text, &pending.placeholder, &elements)
+            {
+                elements.push(range);
+            }
+        }
+        self.composer.set_text(text);
+        self.composer.set_elements(elements);
+        self.composer_items = items;
+        self.sync_composer_suggestions();
+    }
+
     pub(crate) fn apply_external_editor_text(&mut self, text: String) {
         let mut occupied = Vec::new();
         let mut retained = Vec::new();
@@ -670,6 +845,7 @@ impl App {
                             path,
                             temporary: false,
                             image_info: None,
+                            placeholder: String::new(),
                         })
                         .collect::<Vec<_>>();
                     if !candidates.is_empty() {
@@ -720,6 +896,7 @@ impl App {
                         path: item.path,
                         temporary: item.temporary,
                         image_info: item.image_info,
+                        placeholder: String::new(),
                     })
                     .collect::<Vec<_>>();
                 if !candidates.is_empty() {
@@ -755,9 +932,52 @@ impl App {
 
     fn dispatch_clipboard_uploads(
         &mut self,
-        candidates: Vec<ClipboardUploadCandidate>,
+        mut candidates: Vec<ClipboardUploadCandidate>,
         cleanup_root: Option<PathBuf>,
     ) {
+        for candidate in &mut candidates {
+            let name = candidate
+                .path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("file");
+            let kind = AttachmentKind::detect(
+                "",
+                candidate.path.file_name().and_then(|name| name.to_str()),
+            );
+            candidate.placeholder = self.reserve_pending_composer_media(
+                agena_domain::ResourceActivity {
+                    delivery: if kind == AttachmentKind::File {
+                        agena_domain::ResourceDelivery::Reference
+                    } else {
+                        agena_domain::ResourceDelivery::ModelInput
+                    },
+                    kind: match kind {
+                        AttachmentKind::Image => agena_domain::ResourceKind::Image,
+                        AttachmentKind::Audio => agena_domain::ResourceKind::Audio,
+                        AttachmentKind::Video => agena_domain::ResourceKind::Video,
+                        AttachmentKind::Pdf => agena_domain::ResourceKind::Pdf,
+                        AttachmentKind::File => agena_domain::ResourceKind::File,
+                    },
+                    reference: agena_domain::ResourceReference::WorkspacePath {
+                        path: name.to_owned(),
+                    },
+                    name: name.to_owned(),
+                    media_type: None,
+                    size_bytes: None,
+                    width: candidate.image_info.as_ref().map(|info| info.width),
+                    height: candidate.image_info.as_ref().map(|info| info.height),
+                    duration_ms: None,
+                    page_count: None,
+                },
+                None,
+            );
+        }
+        self.after_composer_text_mutated();
+        let placeholders = candidates
+            .iter()
+            .map(|candidate| candidate.placeholder.clone())
+            .collect::<Vec<_>>();
         let cleanup_files = candidates
             .iter()
             .filter(|candidate| candidate.temporary)
@@ -765,8 +985,6 @@ impl App {
             .collect::<Vec<_>>();
         let epoch = self.composer_media_epoch;
         let slot = self.current_draft_slot();
-        let reserved = candidates.len();
-        self.composer_pending_media = self.composer_pending_media.saturating_add(reserved);
         let remaining_bytes = 40_u64 * 1024 * 1024
             - self
                 .composer_items
@@ -844,12 +1062,13 @@ impl App {
                             batch.uploaded.push(UploadedClipboardAttachment {
                                 resource,
                                 image_info: candidate.image_info,
+                                placeholder: candidate.placeholder,
                             });
                         }
                         Err(error) => {
                             batch
                                 .failures
-                                .push(format!("{}: {}", candidate.path.display(), error))
+                                .push((candidate.placeholder, format!("{}: {}", candidate.path.display(), error)))
                         }
                     }
                 }
@@ -857,37 +1076,53 @@ impl App {
                 Ok::<_, anyhow::Error>(batch)
             },
             move |app, result| {
-                if app.composer_media_epoch!=epoch || app.current_draft_slot()!=slot {
-                    app.flash_warning("Attachment upload finished for an earlier draft; nothing was inserted into the current draft.");return;
-                }
-                app.composer_pending_media=app.composer_pending_media.saturating_sub(reserved);
+                if app.composer_media_epoch!=epoch || app.current_draft_slot()!=slot { return; }
+                let mut successful = true;
                 match result {
                 Ok(mut batch) => {
                     let mut staged = 0usize;
                     for attachment in batch.uploaded {
-                        match app.stage_uploaded_attachment(
+                        let (removal, _) = app.remove_pending_composer_media(&attachment.placeholder);
+                        let Some(removal) = removal else { successful = false; continue; };
+                        let staged_result = app.stage_uploaded_attachment(
                             attachment.resource,
                             attachment.image_info.as_ref(),
-                        ) {
+                        );
+                        app.restore_cursor_after_pending_media(removal);
+                        match staged_result {
                             Ok(()) => staged += 1,
-                            Err(error) => batch.failures.push(error.to_string()),
+                            Err(error) => batch.failures.push((String::new(), error.to_string())),
                         }
                     }
-                    if staged > 0 {
-                        app.after_composer_text_mutated();
+                    for (placeholder, _) in &batch.failures {
+                        if !placeholder.is_empty() {
+                            let (removal, _) = app.remove_pending_composer_media(placeholder);
+                            if let Some(removal) = removal { app.restore_cursor_after_pending_media(removal); }
+                        }
                     }
+                    if staged > 0 || !batch.failures.is_empty() { app.after_composer_text_mutated(); }
                     if !batch.failures.is_empty() {
+                        successful = false;
                         app.flash_warning(app.i18n.text_args(
                             "flash-clipboard-paste-failed",
-                            &agena_tui::fl_args!("error" => batch.failures.join("; ")),
+                            &agena_tui::fl_args!("error" => batch.failures.into_iter().map(|(_, message)| message).collect::<Vec<_>>().join("; ")),
                         ));
                     }
                 }
-                Err(error) => app.flash_error(app.i18n.text_args(
-                    "flash-clipboard-paste-failed",
-                    &agena_tui::fl_args!("error" => error.to_string()),
-                )),
+                Err(error) => {
+                    successful = false;
+                    for placeholder in &placeholders {
+                        let (removal, _) = app.remove_pending_composer_media(placeholder);
+                        if let Some(removal) = removal { app.restore_cursor_after_pending_media(removal); }
+                    }
+                    app.after_composer_text_mutated();
+                    app.flash_error(app.i18n.text_args(
+                        "flash-clipboard-paste-failed",
+                        &agena_tui::fl_args!("error" => error.to_string()),
+                    ));
                 }
+                }
+                app.composer_media_finished(successful);
             },
         );
     }
@@ -1043,6 +1278,9 @@ fn text_artifact_composer_activity(text: String) -> agena_domain::ComposerActivi
     }
 }
 
+/// Capture the composer document from the editor projection. Completed items
+/// contribute their activity payload; items still preparing contribute only
+/// their recovery text, so a draft never persists a provisional part.
 fn composer_document_from_editor(
     text: &str,
     element_ranges: &[std::ops::Range<usize>],
@@ -1050,15 +1288,35 @@ fn composer_document_from_editor(
 ) -> agena_domain::ComposerDocument {
     let mut nodes = Vec::new();
     let mut cursor = 0usize;
-    for (range, item) in element_ranges.iter().zip(items) {
+    for range in element_ranges {
         let start = range.start.min(text.len());
         let end = range.end.min(text.len());
+        if start < cursor
+            || end <= start
+            || !text.is_char_boundary(start)
+            || !text.is_char_boundary(end)
+        {
+            continue;
+        }
         if cursor < start {
             nodes.push(agena_domain::ComposerNode::Text {
                 text: text[cursor..start].to_owned(),
             });
         }
-        nodes.push(agena_domain::ComposerNode::activity(item.activity.clone()));
+        let placeholder = &text[start..end];
+        if let Some(item) = items.iter().find(|item| item.placeholder() == placeholder) {
+            if item.is_completed() {
+                nodes.push(agena_domain::ComposerNode::activity(item.activity.clone()));
+            } else if let Some(recovery) = &item.recovery_text {
+                nodes.push(agena_domain::ComposerNode::Text {
+                    text: recovery.clone(),
+                });
+            }
+        } else {
+            nodes.push(agena_domain::ComposerNode::Text {
+                text: placeholder.to_owned(),
+            });
+        }
         cursor = end;
     }
     if cursor < text.len() {
@@ -1086,8 +1344,9 @@ fn rebuild_placeholders(
         match node {
             agena_domain::ComposerNode::Text { text: value } => text.push_str(&value),
             agena_domain::ComposerNode::Activity { activity } => {
-                let (base_placeholder, label) =
-                    crate::composer_state_impls::composer_activity_presentation(&activity.payload);
+                let base_placeholder =
+                    crate::composer_state_impls::composer_activity_presentation(&activity.payload)
+                        .0;
                 let placeholder = unique_composer_placeholder_text(&base_placeholder, &mut used);
                 let start = text.len();
                 text.push_str(&placeholder);
@@ -1095,7 +1354,8 @@ fn rebuild_placeholders(
                 items.push(ComposerItem {
                     activity: *activity,
                     placeholder,
-                    label,
+                    state: agena_api::part::PartExecutionStatusResource::Completed,
+                    recovery_text: None,
                 });
             }
         }
@@ -1168,7 +1428,8 @@ mod tests {
             &[
                 ComposerItem {
                     placeholder: skill_placeholder.to_owned(),
-                    label: "Skill: doctor".to_owned(),
+                    state: agena_api::part::PartExecutionStatusResource::Completed,
+                    recovery_text: None,
                     activity: ComposerActivity {
                         id: skill_id,
                         payload: ActivityPayload::SkillReference(SkillReferenceActivity {
@@ -1183,7 +1444,8 @@ mod tests {
                 },
                 ComposerItem {
                     placeholder: directory_placeholder.to_owned(),
-                    label: "folder apps".to_owned(),
+                    state: agena_api::part::PartExecutionStatusResource::Completed,
+                    recovery_text: None,
                     activity: ComposerActivity {
                         id: directory_id,
                         payload: ActivityPayload::Resource(ResourceActivity {
@@ -1298,7 +1560,8 @@ mod tests {
 
         let item = ComposerItem {
             placeholder: placeholder.clone(),
-            label: "文件: LICENSE".to_owned(),
+            state: agena_api::part::PartExecutionStatusResource::Completed,
+            recovery_text: None,
             activity: ComposerActivity {
                 id: ActivityId::new(),
                 payload: ActivityPayload::Resource(ResourceActivity {
@@ -1352,9 +1615,9 @@ use crate::{
     App, AttachmentKind, BTreeMap, ClipboardTextError, ComposerDraft, ComposerItem,
     DRAFT_PERSIST_INTERVAL_MS, DraftSlot, Duration, HashSet, Instant, Overlay, Path, PathBuf,
     PromptHistory, Route, RunActivityTarget, RunOperation, TerminalRuntime, UiAction, UiResult,
-    attachment_chip_label, attachment_placeholder_base, cleanup_temporary_composer_item,
-    cleanup_temporary_composer_items, download_providers, edit_text, find_placeholder_occurrence,
-    normalize_pasted_path, open_path, request_download, set_clipboard_text, ui_text,
+    attachment_placeholder_base, cleanup_temporary_composer_item, cleanup_temporary_composer_items,
+    download_providers, edit_text, find_placeholder_occurrence, normalize_pasted_path, open_path,
+    request_download, set_clipboard_text, ui_text,
 };
 use agena_tui::main_focus::Focus;
 use agena_tui::terminal_lifecycle::SuspendReason;

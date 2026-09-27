@@ -7,7 +7,7 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::{
     RenderedLine, RenderedTranscriptNode, TranscriptPointerSelection, TranscriptTextPosition,
-    TranscriptTextSelection, transcript_semantic_line_range, transcript_spinner_placeholder,
+    TranscriptTextSelection, transcript_semantic_line_range,
 };
 
 /// Apply only pointer-specific atomicity to a raw cell range. Keyboard
@@ -100,7 +100,6 @@ pub fn transcript_text_selection_text(
     nodes: &[RenderedTranscriptNode],
     line_nodes: &[Option<usize>],
     selection: TranscriptTextSelection,
-    spinner: &str,
 ) -> String {
     let first_line = selection.anchor.line.min(selection.head.line);
     let last_line = selection
@@ -140,14 +139,12 @@ pub fn transcript_text_selection_text(
                 return None;
             }
             let text = if rendered_line.copy_segments.is_empty() {
-                let copy_text = rendered_line
-                    .copy_text
-                    .replace(transcript_spinner_placeholder(), spinner);
+                let copy_text = rendered_line.copy_text.as_str();
                 let copy_range = range.start.saturating_sub(rendered_line.copy_column)
                     ..range.end.saturating_sub(rendered_line.copy_column);
-                display_cell_slice(copy_text.as_str(), copy_range)
+                display_cell_slice(copy_text, copy_range)
             } else {
-                segmented_line_slice(rendered_line, range, spinner)
+                segmented_line_slice(rendered_line, range)
             };
             (!text.is_empty()).then_some((line, text))
         })
@@ -155,17 +152,11 @@ pub fn transcript_text_selection_text(
     join_selection_fragments(lines, fragments)
 }
 
-fn segmented_line_slice(
-    line: &RenderedLine,
-    selected: std::ops::Range<usize>,
-    spinner: &str,
-) -> String {
+fn segmented_line_slice(line: &RenderedLine, selected: std::ops::Range<usize>) -> String {
     let mut output = String::new();
     for segment in &line.copy_segments {
-        let text = segment
-            .text
-            .replace(transcript_spinner_placeholder(), spinner);
-        let width = UnicodeWidthStr::width(text.as_str());
+        let text = segment.text.as_str();
+        let width = UnicodeWidthStr::width(text);
         let display = segment.display_column..segment.display_column.saturating_add(width);
         let overlap = selected.start.max(display.start)..selected.end.min(display.end);
         if overlap.start >= overlap.end {
@@ -173,7 +164,7 @@ fn segmented_line_slice(
         }
         let local =
             overlap.start.saturating_sub(display.start)..overlap.end.saturating_sub(display.start);
-        let fragment = display_cell_slice(text.as_str(), local);
+        let fragment = display_cell_slice(text, local);
         if fragment.is_empty() {
             continue;
         }
@@ -261,6 +252,16 @@ mod tests {
     }
 
     #[test]
+    fn copy_projection_is_stable_for_live_spinners() {
+        let line = RenderedLine::plain(
+            format!("assistant {}", crate::transcript_spinner_placeholder()),
+            Style::default(),
+        );
+        assert_eq!(line.copy_text, "assistant");
+        assert!(!line.copy_text.contains('\u{e000}'));
+    }
+
+    #[test]
     fn keyboard_semantic_rows_do_not_force_pointer_atomicity() {
         for kind in [
             TranscriptNodeKind::MarkdownCode,
@@ -276,7 +277,7 @@ mod tests {
                 raw
             );
             assert_eq!(
-                transcript_text_selection_text(&lines, &nodes, &[Some(0)], raw, ""),
+                transcript_text_selection_text(&lines, &nodes, &[Some(0)], raw),
                 "bcd"
             );
         }
@@ -303,7 +304,6 @@ mod tests {
                 &[],
                 &[None],
                 selection((0, 3), (0, 5)),
-                "",
             ),
             "nsw"
         );
@@ -313,7 +313,6 @@ mod tests {
                 &[],
                 &[None],
                 selection((0, 2), (0, 12)),
-                "",
             ),
             "answer\t42"
         );
@@ -344,7 +343,6 @@ mod tests {
                 &nodes,
                 &[Some(0), Some(0), Some(0)],
                 normalized,
-                "",
             ),
             r"a &= \frac{b}{c}"
         );

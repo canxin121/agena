@@ -917,16 +917,27 @@ pub fn attachment_text(item: &AttachmentItem) -> Option<String> {
 }
 
 /// Serialize one [`AttachmentItem`] to an OpenAI Chat content-part JSON value.
+///
+/// Chat Completions has no portable `file` content part. A user-selected text
+/// resource (for example a long clipboard paste prepared as a bounded UTF-8 text
+/// file) must reach the model as text: gateways that only implement Chat
+/// Completions drop the Responses-only `file` part silently, which is how a
+/// submitted message arrived "empty" while its attachment looked as if it had
+/// only been delivered on a later turn. Text-like files are therefore inlined
+/// verbatim, matching the Anthropic and Bedrock adapters; binary documents keep
+/// the `file` shape and fall back to a stable hint when no bytes are attached.
 pub fn attachment_to_openai_content_value(item: &AttachmentItem) -> serde_json::Value {
     match item.kind {
         AttachmentKind::Image => media_url(item)
             .map(|url| serde_json::json!({ "type": "image_url", "image_url": { "url": url } }))
             .unwrap_or_else(|| serde_json::json!({ "type": "text", "text": hint_text(item) })),
-        AttachmentKind::Audio
-        | AttachmentKind::Video
-        | AttachmentKind::Pdf
-        | AttachmentKind::File => attachment_file_content_value(item)
+        AttachmentKind::File => attachment_text(item)
+            .map(|text| serde_json::json!({ "type": "text", "text": text }))
             .unwrap_or_else(|| serde_json::json!({ "type": "text", "text": hint_text(item) })),
+        AttachmentKind::Audio | AttachmentKind::Video | AttachmentKind::Pdf => {
+            attachment_file_content_value(item)
+                .unwrap_or_else(|| serde_json::json!({ "type": "text", "text": hint_text(item) }))
+        }
     }
 }
 
@@ -1411,6 +1422,42 @@ mod tests {
         marker.run_id = None;
         marker.provider_state = provider_state;
         marker
+    }
+
+    /// A user-selected text resource (a bounded UTF-8 text file prepared from a
+    /// clipboard paste) must reach a Chat Completions route as text. Emitting
+    /// the Responses-only `file` content part dropped the user's content on
+    /// gateways that only implement Chat Completions, so the model answered an
+    /// apparently empty message while the attachment never arrived.
+    #[test]
+    fn chat_wire_inlines_text_file_attachments_as_text() {
+        use base64::Engine as _;
+
+        let body = "pasted clipboard task body";
+        let item = agena_domain::AttachmentItem {
+            kind: agena_domain::AttachmentKind::File,
+            mime: "text/plain".to_owned(),
+            source: agena_domain::AttachmentSource::ProviderData {
+                route: "provider=cline adapter=openai_chat_completions model=x".to_owned(),
+                data: base64::engine::general_purpose::STANDARD.encode(body.as_bytes()),
+            },
+            filename: Some("clipboard-paste-1.txt".to_owned()),
+            title: None,
+            size_bytes: Some(body.len() as u64),
+            sha256: None,
+            width: None,
+            height: None,
+            duration_ms: None,
+            page_count: None,
+        };
+
+        let value = super::attachment_to_openai_content_value(&item);
+        assert_eq!(value["type"], serde_json::json!("text"), "{value}");
+        assert_eq!(value["text"], serde_json::json!(body), "{value}");
+        assert!(
+            value.get("file").is_none(),
+            "a text attachment must never travel as a Responses-only file part: {value}"
+        );
     }
 
     #[test]

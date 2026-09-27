@@ -1,14 +1,33 @@
+import { compareTranscriptIds, optimisticUserParts } from '@/pages/chat/transcriptProjection'
+import type { TranscriptDisplayPart } from '@/components/chat/messageList.types'
 import { computed, ref, watch } from 'vue'
 
 export type OptimisticUserMessage = {
   key: string
   sessionId: string
   createdAt: number
-  status: 'sending' | 'queued' | 'sent'
+  status: 'sending' | 'sent'
   text: string
-  files: Array<{ id?: string; filename: string; size?: number; mime: string; url?: string; serverPath?: string; delivery?: 'reference' | 'model_input' }>
+  files: Array<{
+    id?: string
+    filename: string
+    size?: number
+    mime: string
+    url?: string
+    serverPath?: string
+    delivery?: 'reference' | 'model_input'
+  }>
+  // The user run the server accepted for this send, when the response
+  // carried it. Acknowledgement is id equality, never a heuristic scan.
+  runId: string | null
+  // The assistant reply the accepted send created, when the response already
+  // carried its marker. The live row then renders under the durable identity.
+  replyId: string | null
+  // Local parts projected from the same document the request carried, so
+  // the pending row is a part projection rather than a second model.
+  parts: TranscriptDisplayPart[]
   // Last user message id visible in the timeline when the send started.
-  // Used to avoid falsely acknowledging against an older (updated) message.
+  // Only used while no accepted run id is known.
   baselineUserMessageId: string
 }
 
@@ -19,7 +38,8 @@ type MessagePartLike = {
   text?: string
   content?: string
   url?: string
-  serverPath?: string; delivery?: 'reference' | 'model_input'
+  serverPath?: string
+  delivery?: 'reference' | 'model_input'
   filename?: string
   id?: string
 }
@@ -108,6 +128,15 @@ export function useMessageStreaming(opts: {
     const sid = opts.selectedSessionId.value
     if (!opt || !sid || opt.sessionId !== sid) return false
 
+    if (opt.runId) {
+      return opts.messages.value.some((message) => {
+        const info = message?.info
+        if (!info) return false
+        if (String(info.role) !== 'user') return false
+        return String(info.id) === opt.runId
+      })
+    }
+
     const wantText = normalizeComparableText(opt.text || '')
     const wantFiles = Array.isArray(opt.files) ? opt.files : []
     const wantAnyFiles = wantFiles.length > 0
@@ -119,7 +148,9 @@ export function useMessageStreaming(opts: {
       if (!info) continue
       if (String(info.role) !== 'user') continue
       const mid = typeof info.id === 'string' ? String(info.id) : ''
-      if (baseline && mid && mid <= baseline) continue
+      // Message ids are decimal strings; compare them as numbers so a new id
+      // that crosses a digit boundary is never mistaken for an older one.
+      if (baseline && mid && compareTranscriptIds(mid, baseline) <= 0) continue
       const gotText = normalizeComparableText(textFromMessageParts(Array.isArray(m.parts) ? m.parts : []))
       const gotFiles = filePartsFromMessageParts(Array.isArray(m.parts) ? m.parts : [])
 
@@ -167,13 +198,15 @@ export function useMessageStreaming(opts: {
   function beginOptimisticSend(args: {
     sessionId: string
     text: string
+    fileFallbackLabel: string
     files: Array<{
       id?: string
       filename: string
       size?: number
       mime: string
       url?: string
-      serverPath?: string; delivery?: 'reference' | 'model_input'
+      serverPath?: string
+      delivery?: 'reference' | 'model_input'
     }>
   }) {
     const sid = (args.sessionId || '').trim()
@@ -192,25 +225,39 @@ export function useMessageStreaming(opts: {
     }
 
     const now = Date.now()
+    const key = `optimistic-user-${now}-${Math.random().toString(36).slice(2, 8)}`
     optimisticUser.value = {
-      key: `optimistic-user-${now}-${Math.random().toString(36).slice(2, 8)}`,
+      key,
       sessionId: sid,
       createdAt: now,
       status: 'sending',
       text: args.text,
       files: args.files,
+      parts: optimisticUserParts({
+        key,
+        text: args.text,
+        files: args.files,
+        status: 'sending',
+        fileFallbackLabel: args.fileFallbackLabel,
+      }),
+      runId: null,
+      replyId: null,
       baselineUserMessageId,
     }
     awaitingAssistant.value = true
     pendingSendAt.value = Date.now()
   }
 
-  function markOptimisticSent(sessionId: string) {
+  function markOptimisticSent(sessionId: string, runId?: string | null, replyId?: string | null) {
     setOptimisticStatus(optimisticUser, sessionId, 'sent')
-  }
-
-  function markOptimisticQueued(sessionId: string) {
-    setOptimisticStatus(optimisticUser, sessionId, 'queued')
+    const current = optimisticUser.value
+    const sid = (sessionId || '').trim()
+    if (!current || !sid || current.sessionId !== sid) return
+    optimisticUser.value = {
+      ...current,
+      ...(runId ? { runId } : {}),
+      ...(replyId ? { replyId } : {}),
+    }
   }
 
   function clearOnSendFailure() {
@@ -268,7 +315,6 @@ export function useMessageStreaming(opts: {
     showOptimisticUser,
     resetForSessionSwitch,
     beginOptimisticSend,
-    markOptimisticQueued,
     markOptimisticSent,
     clearOnSendFailure,
     clearOnCancellation,

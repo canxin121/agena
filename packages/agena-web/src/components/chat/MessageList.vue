@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { RiCheckLine, RiLoader4Line, RiSparkling2Line, RiTimeLine } from '@remixicon/vue'
+import { RiCheckLine, RiLoader4Line, RiSparkling2Line } from '@remixicon/vue'
 import { useI18n } from 'vue-i18n'
 
 import Button from '@/components/ui/Button.vue'
@@ -8,7 +8,6 @@ import ToolbarChipButton from '@/components/ui/ToolbarChipButton.vue'
 import MobileSidebarEmptyState from '@/components/ui/MobileSidebarEmptyState.vue'
 import MessageItem from '@/components/chat/MessageItem.vue'
 import AgenaTranscriptPart from '@/components/chat/AgenaTranscriptPart.vue'
-import AgenaInteractionPart from '@/components/chat/AgenaInteractionPart.vue'
 import type {
   MessageLike,
   RenderBlock,
@@ -19,10 +18,8 @@ import type {
 import type { AttentionEvent, MessageFold } from '@/types/chat'
 import { formatTimeHMS } from '@/i18n/intl'
 import type { OptimisticUserMessage } from '@/composables/chat/useMessageStreaming'
-import {
-  pendingInteractionPresentationFromAttention,
-  partInteractionRequestIds,
-} from '@/pages/chat/transcriptPartPresentation'
+import { partInteractionRequestIds, pendingInteractionPartSource } from '@/pages/chat/transcriptPartPresentation'
+import { optimisticUserParts, projectLocalPart } from '@/pages/chat/transcriptProjection'
 
 const props = defineProps<{
   isCompactLayout: boolean
@@ -80,8 +77,27 @@ const durableInteractionRequestIds = computed(() => {
 })
 
 const pendingInteractionFallback = computed(() =>
-  pendingInteractionPresentationFromAttention(props.pendingAttention, durableInteractionRequestIds.value),
+  pendingInteractionPartSource(props.pendingAttention, durableInteractionRequestIds.value),
 )
+
+// The outstanding-request row is a part projection too: it carries the
+// durable tool_call shape, so the persistent part that replaces it renders
+// through exactly the same path (and the same label vocabulary).
+const pendingInteractionPart = computed<TranscriptDisplayPart | null>(() => {
+  const source = pendingInteractionFallback.value
+  if (!source) return null
+  return projectLocalPart(
+    {
+      id: `interaction:${source.requestId}`,
+      type: 'tool',
+      partState: 'pending',
+      agenaKind: 'tool_call',
+      agenaRole: 'assistant',
+      agenaContent: { call_id: 0, name: 'interaction', metadata: {}, ...source.content },
+    },
+    'assistant',
+  )
+})
 
 // The pending user turn follows the same canonical part projection as the
 // persisted transcript. It is temporary, but it must not be a second prose
@@ -90,65 +106,58 @@ const pendingInteractionFallback = computed(() =>
 const optimisticDisplayParts = computed<TranscriptDisplayPart[]>(() => {
   const message = props.optimisticUser
   if (!message) return []
-  const status = message.status === 'sending' ? 'in_progress' : 'completed'
-  const parts: TranscriptDisplayPart[] = []
-  if (message.text.trim()) {
-    parts.push({
-      key: `${message.key}:text`,
-      id: `${message.key}:text`,
-      kind: 'text',
-      status,
-      role: 'user',
-      source: {
-        id: `${message.key}:text`,
-        type: 'text',
-        partState: status,
-        agenaKind: 'text',
-        agenaRole: 'user',
-        text: message.text,
-        agenaContent: { text: message.text },
+  if (message.parts.length) return message.parts
+  return optimisticUserParts({
+    key: message.key,
+    text: message.text,
+    files: message.files,
+    status: message.status,
+    fileFallbackLabel: String(t('chat.messageItem.fileFallback')).trim(),
+  })
+})
+
+const assistantPlaceholderPart = computed<TranscriptDisplayPart>(() => {
+  // The in-flight assistant row is a part projection like every other row:
+  // the lifecycle part the durable projection uses, in its running state,
+  // so this element shares one label vocabulary with the server-rendered one.
+  // Once the accepted send reports the reply id, the live row already renders
+  // under the identity the durable row will use.
+  const replyId = props.optimisticUser?.replyId || ''
+  return projectLocalPart(
+    {
+      id: replyId ? `lifecycle:${replyId}` : 'lifecycle:pending',
+      type: 'tool',
+      partState: 'in_progress',
+      agenaKind: 'assistant_reply_lifecycle',
+      agenaRole: 'assistant',
+      agenaContent: { state: 'in_progress' },
+    },
+    'assistant',
+  )
+})
+
+const sessionErrorPart = computed<TranscriptDisplayPart | null>(() => {
+  const error = props.sessionError
+  if (!error) return null
+  // The session error row is a part projection as well: one runtime error
+  // element, with its classification carried as presentation metadata so the
+  // label vocabulary lives in the projection instead of the template.
+  const body = sessionErrorBody()
+  return projectLocalPart(
+    {
+      id: 'session-error',
+      type: 'tool',
+      partState: 'failed',
+      agenaKind: 'error',
+      agenaRole: 'runtime',
+      agenaContent: {
+        message: body,
+        classification: String(error.error?.classification || '') || null,
       },
-      title: '',
-      summary: '',
-      copyText: message.text,
-      toggleable: false,
-      defaultExpanded: true,
-    })
-  }
-  for (const [index, file] of message.files.entries()) {
-    const id = `${message.key}:file:${index}`
-    const label = String(file.filename || file.serverPath || file.url || t('chat.messageItem.fileFallback')).trim()
-    parts.push({
-      key: id,
-      id,
-      kind: 'resource',
-      status,
-      role: 'user',
-      source: {
-        id,
-        type: 'file',
-        partState: status,
-        agenaKind: 'file_ref',
-        agenaRole: 'user',
-        ...(file.filename ? { filename: file.filename } : {}),
-        ...(file.mime ? { mime: file.mime } : {}),
-        ...(file.url ? { url: file.url } : {}),
-        ...(file.serverPath ? { serverPath: file.serverPath } : {}),
-        agenaContent: {
-          ...(file.filename ? { name: file.filename } : {}),
-          ...(file.mime ? { mime: file.mime } : {}),
-          ...(file.url ? { url: file.url } : {}),
-          ...(file.serverPath ? { path: file.serverPath } : {}),
-        },
-      },
-      title: 'Attachment',
-      summary: label,
-      copyText: label,
-      toggleable: false,
-      defaultExpanded: true,
-    })
-  }
-  return parts
+      agenaPresentation: { title: sessionErrorClassificationLabel(), summary: body },
+    },
+    'runtime',
+  )
 })
 
 function sessionErrorClassificationLabel(): string {
@@ -253,7 +262,6 @@ function forwardFoldExpand(fold: MessageFold, all: boolean) {
           @node-select="$emit('nodeSelect', $event)"
           @set-activity-page-size="$emit('setActivityPageSize', $event)"
         />
-
       </template>
 
       <!--
@@ -270,9 +278,10 @@ function forwardFoldExpand(fold: MessageFold, all: boolean) {
         data-transcript-node="interaction"
         :data-interaction-request-id="pendingInteractionFallback.requestId"
       >
-        <AgenaInteractionPart
-          :interaction="pendingInteractionFallback.interaction"
-          :permission="pendingInteractionFallback.permission"
+        <AgenaTranscriptPart
+          :part="pendingInteractionPart!"
+          :expanded="true"
+          :collapse-signal="activityCollapseSignal"
           :session-id="selectedSessionId"
         />
       </article>
@@ -285,10 +294,6 @@ function forwardFoldExpand(fold: MessageFold, all: boolean) {
             <template v-if="optimisticUser.status === 'sending'">
               <RiLoader4Line class="h-3.5 w-3.5 animate-spin" />
               {{ t('chat.messages.optimistic.sending') }}
-            </template>
-            <template v-else-if="optimisticUser.status === 'queued'">
-              <RiTimeLine class="h-3.5 w-3.5" />
-              {{ t('chat.messages.optimistic.queued') }}
             </template>
             <template v-else>
               <RiCheckLine class="h-3.5 w-3.5 text-emerald-500" />
@@ -313,10 +318,12 @@ function forwardFoldExpand(fold: MessageFold, all: boolean) {
           <span class="font-semibold text-emerald-700 dark:text-emerald-300">assistant</span>
           <RiLoader4Line class="h-3.5 w-3.5 animate-spin text-primary" />
         </header>
-        <div class="ml-7 flex items-center gap-2 py-1 text-[13px] text-muted-foreground">
-          <span class="font-mono text-primary">▸ ⠋</span>
-          <span class="font-semibold">Response running</span>
-        </div>
+        <AgenaTranscriptPart
+          :part="assistantPlaceholderPart"
+          :expanded="true"
+          :collapse-signal="activityCollapseSignal"
+          :session-id="selectedSessionId"
+        />
       </article>
     </TransitionGroup>
 
@@ -326,8 +333,12 @@ function forwardFoldExpand(fold: MessageFold, all: boolean) {
         <span v-if="sessionErrorAtLabel()" class="font-mono text-[10px]">{{ sessionErrorAtLabel() }}</span>
       </header>
       <div class="ml-7 rounded-r-md border-l-2 border-rose-500/60 py-1 pl-3 text-sm text-rose-800 dark:text-rose-200">
-        <div class="font-semibold">{{ sessionErrorClassificationLabel() }}</div>
-        <div class="mt-1 break-words">{{ sessionErrorBody() }}</div>
+        <AgenaTranscriptPart
+          :part="sessionErrorPart!"
+          :expanded="true"
+          :collapse-signal="activityCollapseSignal"
+          :session-id="selectedSessionId"
+        />
         <div class="mt-2 flex items-center gap-2" data-transcript-chrome="true">
           <ToolbarChipButton
             :tooltip="t('chat.sessionError.actions.copyDetails')"

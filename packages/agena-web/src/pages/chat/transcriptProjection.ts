@@ -13,6 +13,7 @@ import {
   isRunInFlight,
   normalizeRunState,
 } from '../../lib/chatRunState'
+import { attachmentLabel, attachmentLabelFromRecord, attachmentLabelFromUrl } from '../../lib/attachmentLabels'
 import type { JsonValue } from '@/types/json'
 
 type JsonRecord = Record<string, JsonValue>
@@ -159,15 +160,99 @@ function operationCopyText(part: MessagePartLike): string {
 function attachmentLabels(part: MessagePartLike): string[] {
   const content = durablePartContent(part)
   const attachments = Array.isArray(content.attachments) ? content.attachments : []
-  const labels = attachments
-    .map((value) => {
-      const item = record(value)
-      return firstText(item, ['title', 'filename', 'mime'])
-    })
-    .filter(Boolean)
-  const own = text(part.filename) || firstText(content, ['name', 'title', 'path'])
+  const labels = attachments.map(attachmentLabelFromRecord).filter(Boolean)
+  const own = attachmentLabel({
+    title: content.title,
+    filename: part.filename,
+    name: content.name,
+    path: content.path,
+  })
   if (own && !labels.includes(own)) labels.unshift(own)
   return labels
+}
+
+/**
+ * Local parts for a pending user turn. They use the same projection as the
+ * persisted transcript, so a row never changes shape when the server
+ * acknowledges the user run it came from.
+ */
+export function optimisticUserParts(args: {
+  key: string
+  text: string
+  files: Array<{
+    id?: string
+    filename: string
+    size?: number
+    mime: string
+    url?: string
+    serverPath?: string
+    delivery?: 'reference' | 'model_input'
+  }>
+  status: 'sending' | 'sent'
+  fileFallbackLabel: string
+}): TranscriptDisplayPart[] {
+  const status = args.status === 'sending' ? 'in_progress' : 'completed'
+  const parts: TranscriptDisplayPart[] = []
+  if (args.text.trim()) {
+    parts.push({
+      key: `${args.key}:text`,
+      id: `${args.key}:text`,
+      kind: 'text',
+      status,
+      role: 'user',
+      source: {
+        id: `${args.key}:text`,
+        type: 'text',
+        partState: status,
+        agenaKind: 'text',
+        agenaRole: 'user',
+        text: args.text,
+        agenaContent: { text: args.text },
+      },
+      title: '',
+      summary: '',
+      copyText: args.text,
+      toggleable: false,
+      defaultExpanded: true,
+    })
+  }
+  for (const [index, file] of args.files.entries()) {
+    const id = `${args.key}:file:${index}`
+    const label =
+      attachmentLabel({ filename: file.filename, path: file.serverPath }) ||
+      attachmentLabelFromUrl(file.url) ||
+      args.fileFallbackLabel
+    parts.push({
+      key: id,
+      id,
+      kind: 'resource',
+      status,
+      role: 'user',
+      source: {
+        id,
+        type: 'file',
+        partState: status,
+        agenaKind: 'file_ref',
+        agenaRole: 'user',
+        ...(file.filename ? { filename: file.filename } : {}),
+        ...(file.mime ? { mime: file.mime } : {}),
+        ...(file.url ? { url: file.url } : {}),
+        ...(file.serverPath ? { serverPath: file.serverPath } : {}),
+        agenaContent: {
+          ...(file.filename ? { name: file.filename } : {}),
+          ...(file.mime ? { mime: file.mime } : {}),
+          ...(file.url ? { url: file.url } : {}),
+          ...(file.serverPath ? { path: file.serverPath } : {}),
+        },
+      },
+      title: 'Attachment',
+      summary: label,
+      copyText: label,
+      toggleable: false,
+      defaultExpanded: true,
+    })
+  }
+  return parts
 }
 
 function skillLabels(part: MessagePartLike): string[] {
@@ -229,10 +314,26 @@ function classifyPart(part: MessagePartLike, answerPartId: string | null, assist
   return 'unknown'
 }
 
+/// The label a row shows is the one its part carries; the derived label is
+/// only the fallback. Copy/jump text must use the same value or it would
+/// disagree with the visible transcript.
+function shownTitle(_part: MessagePartLike, presented: string, derived: string): string {
+  return presented || derived
+}
+
+function shownSummary(_part: MessagePartLike, presented: string, derived: string): string {
+  return presented || derived
+}
+
 function displayFields(
   part: MessagePartLike,
   kind: TranscriptPartKind,
 ): Pick<TranscriptDisplayPart, 'title' | 'summary' | 'copyText'> {
+  // Presentation is part metadata: when the runtime already projects a
+  // human title/summary for this part, that wins over the client default.
+  const presented = record(part.agenaPresentation)
+  const presentedTitle = firstText(presented, ['title'])
+  const presentedSummary = firstText(presented, ['summary'])
   if (kind === 'text' || kind === 'answer' || kind === 'text_segment' || kind === 'reasoning') {
     const body = transcriptPartText(part)
     const firstLine = body
@@ -240,8 +341,10 @@ function displayFields(
       .map((line) => line.trim())
       .find(Boolean)
     return {
-      title: kind === 'answer' ? 'Answer' : kind === 'reasoning' ? 'thinking' : kind === 'text_segment' ? 'Text' : '',
-      summary: firstLine || '',
+      title:
+        presentedTitle ||
+        (kind === 'answer' ? 'Answer' : kind === 'reasoning' ? 'thinking' : kind === 'text_segment' ? 'Text' : ''),
+      summary: presentedSummary || firstLine || '',
       copyText: body,
     }
   }
@@ -250,11 +353,19 @@ function displayFields(
   }
   if (kind === 'resource') {
     const labels = attachmentLabels(part)
-    return { title: 'Attachment', summary: labels.join(', '), copyText: labels.join('\n') }
+    return {
+      title: presentedTitle || 'Attachment',
+      summary: presentedSummary || labels.join(', '),
+      copyText: labels.join('\n'),
+    }
   }
   if (kind === 'skill') {
     const labels = skillLabels(part)
-    return { title: 'Skill', summary: labels.join(', '), copyText: labels.join('\n') }
+    return {
+      title: presentedTitle || 'Skill',
+      summary: presentedSummary || labels.join(', '),
+      copyText: labels.join('\n'),
+    }
   }
   if (kind === 'lifecycle') {
     const state = normalizeRunState(text(part.partState) || firstText(durablePartContent(part), ['state']))
@@ -267,20 +378,31 @@ function displayFields(
           : isRunFailureState(state)
             ? 'Response failed'
             : state
-    return { title, summary: '', copyText: title }
+    return { title: presentedTitle || title, summary: presentedSummary || '', copyText: title }
   }
   if (kind === 'error') {
     const body = transcriptPartText(part) || 'The run failed.'
-    return { title: 'Error', summary: body, copyText: `${body}\n${prettyJson(durablePartContent(part))}` }
+    return {
+      title: presentedTitle || 'Error',
+      summary: presentedSummary || body,
+      copyText: `${body}\n${prettyJson(durablePartContent(part))}`,
+    }
   }
   if (kind === 'notice' || kind === 'compaction') {
-    const title = noticeTitle(part)
-    const summary = noticeSummary(part)
+    const title = shownTitle(part, presentedTitle, noticeTitle(part))
+    const summary = shownSummary(part, presentedSummary, noticeSummary(part))
     return { title, summary, copyText: [title, summary].filter(Boolean).join('\n') }
   }
   const content = durablePartContent(part)
   const body = transcriptPartText(part) || compactJson(content)
   return { title: durablePartKind(part), summary: body, copyText: body }
+}
+
+/// Project a client-local element (optimistic row, in-flight placeholder)
+/// through the same part projection the durable transcript uses, so a local
+/// element can never drift from the server-rendered one.
+export function projectLocalPart(source: MessagePartLike, role: string): TranscriptDisplayPart {
+  return projectPart(source, role, null)
 }
 
 function projectPart(part: MessagePartLike, role: string, answerPartId: string | null): TranscriptDisplayPart {
@@ -307,7 +429,9 @@ function lifecyclePart(message: MessageLike, runIds: string[]): TranscriptDispla
   const state = text(message.info.runState) || text(message.info.finish)
   if (!state) return null
 
-  const id = runIds.at(-1) || String(message.info.id || '')
+  // The reply id is the durable identity of this lifecycle row; run ids only
+  // remain as a fallback for markers written before it was published.
+  const id = text(message.info.replyId) || runIds.at(-1) || String(message.info.id || '')
   const source: MessagePartLike = {
     id: `lifecycle:${id}`,
     type: 'tool',
@@ -391,32 +515,30 @@ function finalAnswerPartId(role: string, parts: MessagePartLike[]): string | nul
 }
 
 export function projectTranscriptBlocks(messages: MessageLike[], options: TranscriptProjectionOptions): RenderBlock[] {
-  return foldAssistantMessages(messages || []).map(
-    ({ message, runIds }, messageIndex): MessageRenderBlock => {
-      const role = text(message.info.role) || 'assistant'
-      const ordered = [...(message.parts || [])].sort((a, b) =>
-        compareTranscriptIds(String(a.id || ''), String(b.id || '')),
-      )
-      const answerId = finalAnswerPartId(role, ordered)
-      const displayParts = ordered
-        .map((part) => projectPart(part, role, answerId))
-        .filter((part) => {
-          if (part.kind === 'reasoning') return options.showReasoning
-          return true
-        })
-      const runState = text(message.info.runState) || text(message.info.finish)
-      if (runNeedsLifecycle(runState, displayParts)) {
-        const lifecycle = lifecyclePart(message, runIds)
-        if (lifecycle) displayParts.push(lifecycle)
-      }
-      return {
-        kind: 'message',
-        key: `msg:${String(message.info.id || messageIndex)}`,
-        message,
-        displayParts,
-        runIds,
-        hasActivity: displayParts.some((part) => part.kind !== 'text'),
-      }
-    },
-  )
+  return foldAssistantMessages(messages || []).map(({ message, runIds }, messageIndex): MessageRenderBlock => {
+    const role = text(message.info.role) || 'assistant'
+    const ordered = [...(message.parts || [])].sort((a, b) =>
+      compareTranscriptIds(String(a.id || ''), String(b.id || '')),
+    )
+    const answerId = finalAnswerPartId(role, ordered)
+    const displayParts = ordered
+      .map((part) => projectPart(part, role, answerId))
+      .filter((part) => {
+        if (part.kind === 'reasoning') return options.showReasoning
+        return true
+      })
+    const runState = text(message.info.runState) || text(message.info.finish)
+    if (runNeedsLifecycle(runState, displayParts)) {
+      const lifecycle = lifecyclePart(message, runIds)
+      if (lifecycle) displayParts.push(lifecycle)
+    }
+    return {
+      kind: 'message',
+      key: `msg:${String(message.info.id || messageIndex)}`,
+      message,
+      displayParts,
+      runIds,
+      hasActivity: displayParts.some((part) => part.kind !== 'text'),
+    }
+  })
 }

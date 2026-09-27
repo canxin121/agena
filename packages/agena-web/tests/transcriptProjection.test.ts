@@ -29,6 +29,28 @@ describe('TUI-parity transcript projection', () => {
     expect(durablePartKind({ agenaKind: 'tool_call', type: 'tool' })).toBe('tool_call')
   })
 
+  test('an attachment-only user message still projects its resource part', () => {
+    // Regression: a user message without body text must render its
+    // attachment. The send path stores the payload under `text`, so the wire
+    // publishes the canonical `file_ref` kind that clients render by.
+    const filePart: MessagePartLike = {
+      id: '2',
+      type: 'file',
+      partState: 'completed',
+      agenaKind: 'file_ref',
+      agenaRole: 'user',
+      filename: 'report.pdf',
+      serverPath: 'uploads/report.pdf',
+      agenaContent: { path: 'uploads/report.pdf', name: 'report.pdf', mime: 'application/pdf' },
+    }
+    const blocks = projectTranscriptBlocks([message('1', 'user', [filePart])])
+    expect(blocks).toHaveLength(1)
+    const displayParts = blocks[0]?.displayParts ?? []
+    const resource = displayParts.find((entry) => entry.kind === 'resource')
+    expect(resource).toBeDefined()
+    expect(`${resource?.title} ${resource?.summary}`).toContain('report.pdf')
+  })
+
   test('keeps parts inside their run and promotes only the final assistant text to Answer', () => {
     const blocks = projectTranscriptBlocks(
       [
@@ -92,12 +114,7 @@ describe('TUI-parity transcript projection', () => {
 
   test('orders durable numeric part ids numerically inside a message', () => {
     const blocks = projectTranscriptBlocks(
-      [
-        message('2', 'assistant', [
-          part('10', 'text', { text: 'later' }),
-          part('3', 'text', { text: 'earlier' }),
-        ]),
-      ],
+      [message('2', 'assistant', [part('10', 'text', { text: 'later' }), part('3', 'text', { text: 'earlier' })])],
       { showReasoning: true },
     )
     const projected = blocks[0]

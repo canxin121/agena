@@ -1,6 +1,7 @@
 import type { TranscriptDisplayPart } from '@/components/chat/messageList.types'
 import type { ToolDetailSection } from '@/stores/chat/api'
 import type { JsonValue } from '@/types/json'
+import { attachmentLabel } from '../../lib/attachmentLabels'
 
 export type JsonRecord = Record<string, JsonValue>
 
@@ -322,11 +323,20 @@ function attachmentFromRecord(value: JsonValue, index: number): AttachmentPresen
   const path = firstString(source, ['path']) || firstString(item, ['path'])
   const directUrl = firstString(source, ['data_url', 'url']) || firstString(item, ['data_url', 'url'])
   const base64 =
-    (sourceKind === 'base64' || sourceKind === 'provider_data' ? firstString(source, ['data']) : firstString(source, ['base64'])) ||
-    firstString(item, ['base64'])
+    (sourceKind === 'base64' || sourceKind === 'provider_data'
+      ? firstString(source, ['data'])
+      : firstString(source, ['base64'])) || firstString(item, ['base64'])
   const fileId = firstString(source, ['file_id']) || firstString(item, ['file_id'])
   const url = directUrl || (base64 && mime ? `data:${mime};base64,${base64}` : '') || path
-  const label = firstString(item, ['title', 'filename', 'name']) || path || fileId || mime || `attachment-${index + 1}`
+  const label =
+    attachmentLabel({
+      title: firstString(item, ['title']),
+      filename: firstString(item, ['filename']),
+      name: firstString(item, ['name']),
+      path,
+      fileId,
+      mime,
+    }) || `attachment-${index + 1}`
   return {
     key: firstString(item, ['sha256']) || url || `${label}:${index}`,
     label,
@@ -506,7 +516,13 @@ export function attachmentPresentations(part: TranscriptDisplayPart): Attachment
   const path = stringValue(part.source.serverPath) || firstString(content, ['path'])
   const url = stringValue(part.source.url) || path
   const label =
-    stringValue(part.source.filename) || firstString(content, ['name', 'title']) || path || mime || 'attachment'
+    attachmentLabel({
+      title: firstString(content, ['title']),
+      filename: stringValue(part.source.filename),
+      name: firstString(content, ['name']),
+      path,
+      mime,
+    }) || 'attachment'
   return [
     {
       key: url || label,
@@ -642,6 +658,25 @@ export function permissionPresentationFromAttention(
     replyReason: '',
     provenance: [firstString(request, ['source']), firstString(request, ['scope'])].filter(Boolean).join(' · '),
   }
+}
+
+/**
+ * Durable `tool_call` content for an outstanding interaction attention.
+ * The pending row is then projected by the same part render as the durable
+ * part that replaces it (request-id dedup keeps them from doubling up).
+ */
+export function pendingInteractionPartSource(
+  attention: AttentionPresentationSource | null | undefined,
+  durableRequestIds: ReadonlySet<string>,
+): { requestId: string; content: JsonRecord } | null {
+  if (!attention) return null
+  const requestId = attentionRequestId(attention.payload)
+  if (!requestId || durableRequestIds.has(requestId)) return null
+  const request = { ...attentionRequest(attention), request_id: requestId }
+  const entry = { request, reply: null, replied_at_ms: null }
+  if (attention.kind === 'question') return { requestId, content: { user_input: { requests: [entry] } } }
+  if (attention.kind === 'permission') return { requestId, content: { authorization: { permissions: [entry] } } }
+  return null
 }
 
 /**

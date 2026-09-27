@@ -97,6 +97,10 @@ export type AgenaExecutionState = {
   session: AgenaSession
   parts: AgenaPart[]
   latest_event_seq?: number | null
+  /// Server-projected background activities for this session. This is the
+  /// single session-scoped projection shared with composer footers; the web
+  /// must not rebuild it from the global activity list.
+  background_activities?: JsonValue[] | null
   execution?: {
     agent_id?: string
     model_provider_id?: string | null
@@ -177,14 +181,12 @@ function messageFoldsFromWire(folds: AgenaSessionParts['folds']): MessageFold[] 
     }))
 }
 
-export type SendMessageResponse = {
-  queued?: boolean
-}
-
 export type SessionExecutionStatus = {
   state: SessionState
   execution?: AgenaExecutionState['execution']
   usage?: AgenaExecutionState['usage']
+  /** Server-projected background activity kinds (lowercased, id-free). */
+  backgroundActivityKinds: string[]
 }
 
 export type CancellationResult = 'cancellation_requested' | 'already_terminal' | 'not_found' | 'execution_mismatch'
@@ -287,10 +289,12 @@ function entriesFromParts(
       const adapterID = str(content.adapter_id)
       const modelID = str(content.model_id)
       const turnId = str(content.turn_id)
+      const replyId = str(content.reply_id)
       if (providerID) info.providerID = providerID
       if (adapterID) info.adapterID = adapterID
       if (modelID) info.modelID = modelID
       if (turnId) info.turnId = turnId
+      if (replyId) info.replyId = replyId
       ensure(partIdStr, info)
       continue
     }
@@ -1001,14 +1005,45 @@ export function buildMessageRequestBody(payload: SendMessagePayload): JsonObject
 }
 
 /** POST /api/v1/sessions/{id}/messages — submit a composer document + run options. */
-export async function sendMessage(sessionId: string, payload: SendMessagePayload): Promise<SendMessageResponse> {
-  const resp = await apiJson<JsonValue>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/messages`, {
+export async function sendMessage(sessionId: string, payload: SendMessagePayload): Promise<AgenaExecutionState | null> {
+  return await apiJson<AgenaExecutionState>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/messages`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(buildMessageRequestBody(payload)),
   })
-  const body = asRecord(resp)
-  return { queued: body.queued === true }
+}
+
+/**
+ * The user run the server accepted for a submitted message. Run markers are
+ * the durable identity of a message, so acknowledgement matches this id
+ * instead of scanning ids and comparing text.
+ */
+export function acceptedUserRunId(state: AgenaExecutionState | null | undefined): string | null {
+  const parts = Array.isArray(state?.parts) ? state.parts : []
+  for (let index = parts.length - 1; index >= 0; index -= 1) {
+    const part = asRecord(parts[index] as JsonValue)
+    if (str(part.kind) !== 'run') continue
+    if (str(part.role) !== 'user') continue
+    return typeof part.part_id === 'number' ? String(part.part_id) : null
+  }
+  return null
+}
+
+/**
+ * The assistant reply the accepted send created, when its run marker is
+ * already part of the response. The reply id is the one identity every later
+ * projection of that reply (live, failed, continued) keys on.
+ */
+export function acceptedAssistantReplyId(state: AgenaExecutionState | null | undefined): string | null {
+  const parts = Array.isArray(state?.parts) ? state.parts : []
+  for (let index = parts.length - 1; index >= 0; index -= 1) {
+    const part = asRecord(parts[index] as JsonValue)
+    if (str(part.kind) !== 'run') continue
+    if (str(part.role) !== 'assistant') continue
+    const replyId = str(asRecord(part.content as JsonValue).reply_id)
+    return replyId || null
+  }
+  return null
 }
 
 /** POST /api/v1/sessions/{id}/continue — resume a paused/interrupted run. */
@@ -1179,10 +1214,16 @@ export async function getSessionExecutionStatus(sessionId: string): Promise<Sess
       },
     }
     const s = normalizeSessionState(state.session?.state)
+    const backgroundActivityKinds = Array.isArray(raw.background_activities)
+      ? raw.background_activities
+          .map((item) => str(asRecord(item).kind).toLowerCase())
+          .filter((kind) => kind.length > 0)
+      : []
     return {
       state: s,
       execution: state.execution,
       usage: state.usage,
+      backgroundActivityKinds,
     }
   } catch {
     return null

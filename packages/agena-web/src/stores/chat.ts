@@ -123,6 +123,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
   // config.  The composer status line needs agent/task/permission/activity
   // fields that are not part of the model picker configuration.
   const sessionExecutionBySession = ref<Record<string, NonNullable<chatApi.AgenaExecutionState['execution']>>>({})
+  const backgroundActivityKindsBySession = ref<Record<string, string[]>>({})
   sessionRunConfigBySession.value = loadSessionRunConfigMap(STORAGE_RUN_CONFIG)
   const runConfigPersister = createSessionRunConfigPersister(STORAGE_RUN_CONFIG, () => sessionRunConfigBySession.value)
 
@@ -225,8 +226,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
       indexSessions(list)
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
-      const authRequired =
-        err instanceof ApiError && err.status === 401 && (err.code || '').trim() === 'auth.required'
+      const authRequired = err instanceof ApiError && err.status === 401 && (err.code || '').trim() === 'auth.required'
       sessionsError.value = null
       if (!authRequired) {
         pushErrorToastWithDedupe('sessions', msg || 'Failed to load sessions', 4500, 12_000)
@@ -323,14 +323,18 @@ const useChatStoreDefinition = defineStore('chat', () => {
 
   // ─── selection ────────────────────────────────────────────────────────────
 
-  async function selectSession(id: string | null) {
+  /**
+   * Select one session and hydrate it. `opts.windowId` targets the pane the
+   * selection came from, so a window-scoped view hydrates its own state.
+   */
+  async function selectSession(id: string | null, opts?: { windowId?: string | null }) {
     const sid = (id || '').trim()
     selectedSessionId.value = sid || null
     persistSelectedSession(sid || null)
     messagesError.value = null
 
     if (!sid) return
-    await hydrateSession(sid)
+    await hydrateSession(sid, opts)
   }
 
   // ─── messages ─────────────────────────────────────────────────────────────
@@ -560,8 +564,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
     } catch (err) {
       if (!isLatestRefreshMessagesRequest(sid, requestSeq, generation)) return
       const msg = err instanceof Error ? err.message : String(err)
-      const authRequired =
-        err instanceof ApiError && err.status === 401 && (err.code || '').trim() === 'auth.required'
+      const authRequired = err instanceof ApiError && err.status === 401 && (err.code || '').trim() === 'auth.required'
       if (isSelected) {
         messagesError.value = null
         if (authRequired) {
@@ -793,6 +796,10 @@ const useChatStoreDefinition = defineStore('chat', () => {
     const st = await chatApi.getSessionExecutionStatus(sid).catch(() => null)
     if (!st) return
     upsertSessionCache({ id: sid, state: st.state })
+    backgroundActivityKindsBySession.value = {
+      ...backgroundActivityKindsBySession.value,
+      [sid]: [...st.backgroundActivityKinds],
+    }
 
     const execution = st.execution
     if (execution && typeof execution === 'object') {
@@ -1083,6 +1090,17 @@ const useChatStoreDefinition = defineStore('chat', () => {
     return sid ? sessionUsageBySession.value[sid] || null : null
   }
 
+  /**
+   * Server-projected background activity kinds for a session, or `null` when
+   * no status snapshot has been fetched yet. This is the single
+   * session-scoped projection shared with the composer footer.
+   */
+  function sessionBackgroundActivityKinds(sessionId: string): string[] | null {
+    const sid = (sessionId || '').trim()
+    if (!sid) return null
+    return backgroundActivityKindsBySession.value[sid] ?? null
+  }
+
   function getSessionExecution(
     sessionId: string | null | undefined,
   ): NonNullable<chatApi.AgenaExecutionState['execution']> | null {
@@ -1318,13 +1336,13 @@ const useChatStoreDefinition = defineStore('chat', () => {
   ) {
     const sid = (sessionId || '').trim()
     const document = buildDocument(opts)
-    if (document.length === 0) return { queued: false }
+    if (document.length === 0) return null
     clearSessionError(sid)
-    await chatApi.sendMessage(sid, { document, ...buildRunOptions(opts) })
+    const state = await chatApi.sendMessage(sid, { document, ...buildRunOptions(opts) })
     // Let SSE stream parts in; one coalesced status refresh is enough after
     // the POST.  The timer also absorbs a burst of runtime signals.
     scheduleSessionStatusRefresh(sid, 200)
-    return { queued: true }
+    return state
   }
 
   async function sendText(sessionId: string, text: string) {
@@ -1739,6 +1757,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
     selectedSessionUsage,
     selectedSessionExecution,
     getSessionExecution,
+    sessionBackgroundActivityKinds,
     sessionErrorBySession,
     sessionRunConfigBySession,
     attentionBySession,

@@ -200,6 +200,11 @@ export type MessageInfo = {
   modelID?: string
   providerID?: string
   adapterID?: string
+  // Conversation identities carried by the run marker content. The reply id
+  // is the presentation identity of the reply lifecycle row, so a reply keeps
+  // one id while it runs, fails, or is continued.
+  turnId?: string
+  replyId?: string
   // Durable numeric ids that back this message (agena run marker).
   runId?: number
   // Preserve the run marker's durable state/content. Transcript projection

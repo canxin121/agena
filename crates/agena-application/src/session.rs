@@ -74,12 +74,15 @@ pub fn project_session_transcript(
             run_id: None,
         });
         for part in &run.parts {
+            let content = part.content.clone().unwrap_or(serde_json::Value::Null);
             parts.push(agena_api::resource::SessionTranscriptPart {
                 part_id: part.id,
-                kind: part.kind.to_string(),
+                // Clients render by kind, and a user message stores every
+                // payload under `text`; publish the canonical kind.
+                kind: agena_runtime_contracts::part_content::canonical_kind(&part.kind, &content),
                 role: run.role.to_string(),
                 state: part.status.to_string(),
-                content: part.content.clone().unwrap_or(serde_json::Value::Null),
+                content,
                 presentation: None,
                 summary: part.summary.clone(),
                 created_at_ms: part.created_at.timestamp_millis(),

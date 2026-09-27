@@ -14,12 +14,26 @@ impl Application {
             .await
     }
 
-    pub(crate) async fn render_transcript_tool_presentations(
+    pub(crate) async fn render_transcript_presentations(
         &self,
         parts: &mut [agena_api::resource::SessionTranscriptPart],
     ) {
         for part in parts {
             if part.kind != agena_runtime_contracts::part_content::ToolCallContent::kind() {
+                // Non-tool kinds use the same kind-agnostic contract: the
+                // runtime-derived summary when there is one, so clients render
+                // a row without probing the payload.
+                if let Some(summary) = part
+                    .summary
+                    .clone()
+                    .filter(|summary| !summary.trim().is_empty())
+                {
+                    part.presentation = Some(agena_api::live::HumanPresentationResource {
+                        title: String::new(),
+                        summary,
+                        blocks: Vec::new(),
+                    });
+                }
                 continue;
             }
             let Ok(content) =
@@ -56,7 +70,7 @@ impl Application {
                     ..Default::default()
                 }
             };
-            part.presentation = Some(agena_api::live::ToolHumanPresentationResource {
+            part.presentation = Some(agena_api::live::HumanPresentationResource {
                 title: human.title,
                 summary: human.summary,
                 blocks: human.blocks,

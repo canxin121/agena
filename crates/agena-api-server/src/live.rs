@@ -12,8 +12,8 @@ use std::sync::atomic::Ordering;
 #[cfg(any(feature = "ws", feature = "sse"))]
 use agena_api::Scope;
 use agena_api::live::{
-    PartResource, RuntimeSignalResource, SessionChangeResource, SessionPartsResource,
-    ToolDetailResource, ToolDetailSection, ToolHumanPresentationResource,
+    HumanPresentationResource, PartResource, RuntimeSignalResource, SessionChangeResource,
+    SessionPartsResource, ToolDetailResource, ToolDetailSection,
 };
 use agena_runtime::{RuntimeLiveSignal, RuntimeLiveSignalItem};
 use agena_runtime_contracts::part_content::ToolCallContent;
@@ -238,7 +238,9 @@ pub(crate) async fn project_part_for_sections(
     };
     PartResource {
         part_id: part.part_id,
-        kind: part.kind.clone(),
+        // The stored kind keeps user payloads under `text`; clients need the
+        // canonical kind to render an attachment row at all.
+        kind: agena_runtime_contracts::part_content::canonical_kind(&part.kind, &part.content),
         role: part.role.as_str().to_owned(),
         state: part.state.as_str().to_owned(),
         content: if part.kind == ToolCallContent::kind() {
@@ -318,7 +320,7 @@ pub(crate) async fn project_parts_for_user(state: &AppState, parts: &[Part]) -> 
 async fn project_tool_presentation(
     state: &AppState,
     part: &Part,
-) -> Option<ToolHumanPresentationResource> {
+) -> Option<HumanPresentationResource> {
     if part.kind != ToolCallContent::kind() {
         return None;
     }
@@ -353,7 +355,7 @@ async fn project_tool_presentation(
         input,
     };
     let Some(output) = content.output else {
-        return Some(ToolHumanPresentationResource {
+        return Some(HumanPresentationResource {
             title: agena_tool::tool_title_for_state(&invocation, content.state),
             summary: part.summary.clone().unwrap_or_default(),
             blocks: Vec::new(),
@@ -364,7 +366,7 @@ async fn project_tool_presentation(
         .render_tool_result(&invocation, &output)
         .await;
     let title = agena_tool::completed_tool_title_for_state(&invocation, content.state, &output);
-    Some(ToolHumanPresentationResource {
+    Some(HumanPresentationResource {
         title,
         summary: projection.human.summary,
         blocks: projection.human.blocks,

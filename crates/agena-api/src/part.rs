@@ -35,6 +35,11 @@ pub struct PartResource {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub operation_id: Option<String>,
     pub created_at: chrono::DateTime<chrono::Utc>,
+    /// Human presentation of this part's durable facts. Kind-agnostic: every
+    /// part kind may carry one, so consumers never probe `content` to render a
+    /// row.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub presentation: Option<crate::live::HumanPresentationResource>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content: Option<PartDetailResource>,
 }
@@ -160,7 +165,7 @@ pub struct HookPartResource {
 /// The durable facts are the same fields as the canonical runtime contract:
 /// invocation, lifecycle, state, error, metadata, and one optional
 /// [`agena_domain::RawOutput`]. Human presentation is explicitly ephemeral
-/// and is kept beside those facts rather than flattened into a second result
+/// and is kept on the part header rather than flattened into a second result
 /// envelope. AI output is not represented here; it is projected from
 /// `output` when needed.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -187,8 +192,6 @@ pub struct ToolCallPartResource {
     pub metadata: std::collections::BTreeMap<String, serde_json::Value>,
     #[serde(default)]
     pub lifecycle: agena_domain::TimeRange,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub presentation: Option<crate::live::ToolHumanPresentationResource>,
 }
 
 #[cfg(test)]
@@ -223,7 +226,6 @@ mod tests {
                 error: None,
                 metadata: Default::default(),
                 lifecycle: Default::default(),
-                presentation: None,
             },
         )))
         .expect("serialize canonical tool call");
@@ -231,6 +233,40 @@ mod tests {
         assert!(value.get("result").is_none());
         assert!(value.get("blocks").is_none());
         assert!(value.get("output").is_some());
+    }
+
+    #[test]
+    fn part_presentation_is_kind_agnostic() {
+        let part = super::PartResource {
+            id: 1,
+            message_id: 2,
+            part_index: 0,
+            status: super::PartExecutionStatusResource::Completed,
+            kind: super::PartKindResource::Activity,
+            name: None,
+            summary: None,
+            has_detail: true,
+            activity_id: None,
+            segment_id: None,
+            operation_id: None,
+            created_at: chrono::Utc::now(),
+            presentation: Some(crate::live::HumanPresentationResource {
+                title: String::new(),
+                summary: "hook finished".to_owned(),
+                blocks: Vec::new(),
+            }),
+            content: Some(PartDetailResource::Text(TextPartResource {
+                text: "non-tool kind".to_owned(),
+                synthetic: false,
+            })),
+        };
+        let value = serde_json::to_value(part).expect("serialize part");
+        assert_eq!(
+            value
+                .get("presentation")
+                .and_then(|presentation| presentation.get("summary")),
+            Some(&serde_json::json!("hook finished")),
+        );
     }
 
     #[test]

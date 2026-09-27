@@ -228,7 +228,10 @@ impl Application {
             .skip(skip)
             .map(|part| SessionPartView {
                 part_id: part.part_id,
-                kind: part.kind,
+                kind: agena_runtime_contracts::part_content::canonical_kind(
+                    &part.kind,
+                    &part.content,
+                ),
                 role: part.role,
                 state: part.state,
                 summary: part.summary,
@@ -304,7 +307,7 @@ impl Application {
                 .map(agena_api::resource::BackgroundActivityResource::from)
                 .collect();
         }
-        self.render_transcript_tool_presentations(&mut resource.parts)
+        self.render_transcript_presentations(&mut resource.parts)
             .await;
         Ok(resource)
     }

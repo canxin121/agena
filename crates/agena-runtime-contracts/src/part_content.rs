@@ -506,6 +506,71 @@ pub enum TypedContent {
     Error(ErrorContent),
 }
 
+impl TypedContent {
+    /// Canonical kind of this typed payload. It is the kind a projection
+    /// publishes, which can differ from the stored kind for the payloads a
+    /// user message keeps under `text`.
+    pub const fn kind(&self) -> &'static str {
+        match self {
+            Self::Run(_) => RunContent::kind(),
+            Self::Text(_) => TextContent::kind(),
+            Self::Think(_) => ThinkContent::kind(),
+            Self::ToolCall(_) => ToolCallContent::kind(),
+            Self::FileRef(_) => FileRefContent::kind(),
+            Self::PasteRef(_) => PasteRefContent::kind(),
+            Self::SkillRef(_) => SkillRefContent::kind(),
+            Self::Notice(_) => NoticeContent::kind(),
+            Self::Hook(_) => HookContent::kind(),
+            Self::SystemNotification(_) => SystemNotificationContent::kind(),
+            Self::Compaction(_) => CompactionContent::kind(),
+            Self::Error(_) => ErrorContent::kind(),
+        }
+    }
+}
+
+/// The wire kind one stored part reports to clients. Clients render by kind
+/// (`text` versus `file_ref` versus `skill_ref`) while the user-send path stores
+/// every payload under `text`, so projections publish the canonical kind
+/// whenever the payload is decodable and keep the stored kind otherwise.
+pub fn canonical_kind(stored_kind: &str, value: &Value) -> String {
+    decode(stored_kind, value)
+        .map(|content| content.kind().to_owned())
+        .unwrap_or_else(|_| stored_kind.to_owned())
+}
+
+/// Whether a `text`-kinded payload carries body text. The user-send path stores
+/// every payload under `text`, so a `text` string is what distinguishes prose
+/// from the reference payloads that ride the same kind.
+fn is_body_text(value: &Value) -> bool {
+    value.get("text").is_some_and(Value::is_string)
+}
+
+/// Whether a `text`-kinded payload is really a file reference. A resource
+/// either rides the lossless `attachments` list or carries the single-file
+/// reference fields the composer persisted for it.
+fn is_file_reference(value: &Value) -> bool {
+    const FILE_REFERENCE_KEYS: [&str; 14] = [
+        "path",
+        "name",
+        "mime",
+        "sha",
+        "size_bytes",
+        "width",
+        "height",
+        "file_id",
+        "data_url",
+        "base64",
+        "delivery",
+        "page_count",
+        "duration_ms",
+        "source",
+    ];
+    value.get("attachments").is_some_and(Value::is_array)
+        || FILE_REFERENCE_KEYS
+            .iter()
+            .any(|key| value.get(*key).is_some())
+}
+
 /// Decode a part's canonical JSON payload into its typed shape, dispatching on
 /// the part's `kind` column (4.1.1). Unknown kinds are an error; every known
 /// kind uses its declared serde contract. In particular, `tool_call` rejects
@@ -513,6 +578,18 @@ pub enum TypedContent {
 pub fn decode(kind: &str, value: &Value) -> Result<TypedContent, String> {
     Ok(match kind {
         "run" => TypedContent::Run(RunContent::try_from(value)?),
+        // A user message persists its ordered payloads under the "text" part kind,
+        // so the payload shape decides what a part really is. Body text carries a
+        // `text` string; a resource carries `skills`, the lossless
+        // `attachments` list, or the single-file reference fields. Decoding those
+        // as empty text silently dropped the attachment from every model request
+        // and rendered the part as an empty row in both clients.
+        "text" if !is_body_text(value) && value.get("skills").is_some_and(Value::is_array) => {
+            TypedContent::SkillRef(SkillRefContent::try_from(value)?)
+        }
+        "text" if !is_body_text(value) && is_file_reference(value) => {
+            TypedContent::FileRef(FileRefContent::try_from(value)?)
+        }
         "text" => TypedContent::Text(TextContent::try_from(value)?),
         "think" => TypedContent::Think(ThinkContent::try_from(value)?),
         "tool_call" => TypedContent::ToolCall(Box::new(ToolCallContent::try_from(value)?)),
@@ -988,6 +1065,53 @@ mod tests {
         assert_eq!(part.summary, "Hook ran");
         assert_eq!(part.detail.as_deref(), Some("details"));
         assert_eq!(part.title.as_deref(), Some("Title"));
+    }
+
+    #[test]
+    fn text_kinded_reference_payloads_decode_as_their_canonical_shape() {
+        // The user-send path stores every payload under `text`; a single-file
+        // reference carries the reference fields instead of a body text.
+        let single_file = serde_json::json!({
+            "path": "uploads/report.pdf",
+            "name": "report.pdf",
+            "mime": "application/pdf",
+            "sha": "abc123",
+            "size_bytes": 42,
+            "kind": "pdf",
+            "delivery": "reference",
+        });
+        assert!(matches!(
+            decode("text", &single_file),
+            Ok(TypedContent::FileRef(_))
+        ));
+        assert_eq!(canonical_kind("text", &single_file), "file_ref");
+
+        let multi_file = serde_json::json!({ "attachments": [{ "path": "a.txt" }] });
+        assert_eq!(canonical_kind("text", &multi_file), "file_ref");
+
+        let skill = serde_json::json!({ "skills": [{ "name": "doctor" }] });
+        assert_eq!(canonical_kind("text", &skill), "skill_ref");
+    }
+
+    #[test]
+    fn canonical_kind_keeps_body_text_and_unknown_kinds() {
+        assert_eq!(
+            canonical_kind("text", &serde_json::json!({ "text": "hello" })),
+            "text"
+        );
+        assert_eq!(canonical_kind("text", &serde_json::json!({})), "text");
+        // A body that also carries reference metadata stays body text.
+        assert_eq!(
+            canonical_kind(
+                "text",
+                &serde_json::json!({ "text": "see report.pdf", "name": "report.pdf" })
+            ),
+            "text"
+        );
+        assert_eq!(
+            canonical_kind("custom_kind", &serde_json::json!({ "x": 1 })),
+            "custom_kind"
+        );
     }
 
     #[test]

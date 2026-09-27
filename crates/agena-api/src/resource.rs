@@ -1343,7 +1343,7 @@ pub struct SessionTranscriptPart {
     pub state: String,
     pub content: serde_json::Value,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub presentation: Option<crate::live::ToolHumanPresentationResource>,
+    pub presentation: Option<crate::live::HumanPresentationResource>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub summary: Option<String>,
     pub created_at_ms: i64,

@@ -27,6 +27,87 @@ pub struct ClassifierCandidate {
     pub policy_reason: String,
 }
 
+/// A candidate returned from classification with its outcome attached.
+///
+/// `verdict` is `None` when automatic approval could not resolve at all, in
+/// which case `failure` explains why and the caller falls back to interactive
+/// confirmation (fail closed). `verdict: Some(_)` with `failure: Some(_)` is
+/// the third case: the model did answer, but with a block that cites no rule
+/// from the taxonomy, so the answer is not honored as a denial — the caller
+/// also falls back to confirmation, and `failure` carries the model's own
+/// words into the prompt.
+#[derive(Debug, Clone, PartialEq, Eq)]
+/// Outcome of classifying one candidate.
+pub struct ClassifiedCandidate {
+    pub candidate: ClassifierCandidate,
+    pub verdict: Option<crate::ClassifierVerdict>,
+    pub failure: Option<crate::ClassifyFailure>,
+}
+
+impl ClassifiedCandidate {
+    /// Convert a classifier outcome into the permission decision it licenses.
+    ///
+    /// This is the single place the automatic-approval contract is enforced,
+    /// and both hosts (the interactive reply path and the tool-execution
+    /// batch) route through it so they cannot drift apart:
+    ///
+    /// - an allow is an allow;
+    /// - a block is a terminal `Deny` only when the verdict cites a BLOCK rule
+    ///   from [`crate::AUTO_APPROVAL_BLOCK_RULES`] — the model had to justify
+    ///   itself against the enumerated taxonomy;
+    /// - everything else (an uncited block, an unparseable verdict, a provider
+    ///   error, a timeout) falls back to an interactive `Ask`, which is the
+    ///   fail-closed outcome, and `failure` explains why.
+    pub fn decision(&self) -> PermissionDecision {
+        let verdict_reason = |verdict: &crate::ClassifierVerdict| {
+            let text = verdict.reason.trim();
+            if text.is_empty() {
+                self.candidate.policy_reason.clone()
+            } else {
+                text.to_owned()
+            }
+        };
+        match self.verdict.as_ref() {
+            Some(verdict) if verdict.allowed => PermissionDecision::Allow,
+            Some(verdict) => match verdict.block_rule {
+                Some(cited) => PermissionDecision::Deny {
+                    reason: crate::deny_reason(format!(
+                        "automatic approval classifier blocked the action [{cited}]: {}",
+                        verdict_reason(verdict)
+                    )),
+                },
+                None => PermissionDecision::Ask {
+                    reason: format!(
+                        "automatic approval classifier blocked the action without naming a \
+                         block rule; confirm it yourself: {}",
+                        verdict_reason(verdict)
+                    ),
+                },
+            },
+            None => PermissionDecision::Ask {
+                reason: format!(
+                    "automatic approval unavailable: {}",
+                    self.failure.as_ref().map_or_else(
+                        || "the classifier produced no verdict".to_owned(),
+                        ToString::to_string,
+                    )
+                ),
+            },
+        }
+    }
+
+    /// Why this outcome could not be auto-approved.
+    ///
+    /// Every outcome whose [`Self::decision`] is `Ask` carries a failure; the
+    /// fallback is unreachable and exists only so callers never need an
+    /// `unwrap` on a path that must not panic.
+    pub fn failure(&self) -> crate::ClassifyFailure {
+        self.failure.clone().unwrap_or_else(|| {
+            crate::ClassifyFailure::UnparseableVerdict(self.candidate.policy_reason.clone())
+        })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 /// Outcome of a synchronous permission decision.
 pub enum SyncOutcome {
@@ -198,5 +279,96 @@ mod tests {
             outcome,
             SyncOutcome::Final(PermissionDecision::Ask { .. })
         ));
+    }
+
+    fn candidate(policy_reason: &str) -> ClassifierCandidate {
+        ClassifierCandidate {
+            action: tool("fs.write", &["filesystem_write"], None),
+            policy_reason: policy_reason.to_owned(),
+        }
+    }
+
+    fn verdict(text: &str) -> crate::ClassifierVerdict {
+        crate::ClassifierVerdict::parse(text).expect("verdict")
+    }
+
+    #[test]
+    fn an_allowed_verdict_allows() {
+        let classified = ClassifiedCandidate {
+            candidate: candidate("eligible"),
+            verdict: Some(verdict(
+                r#"{"shouldBlock":false,"reason":"routine test run"}"#,
+            )),
+            failure: None,
+        };
+        assert_eq!(classified.decision(), PermissionDecision::Allow);
+    }
+
+    #[test]
+    fn a_cited_block_is_a_terminal_denial_naming_the_rule() {
+        let classified = ClassifiedCandidate {
+            candidate: candidate("eligible"),
+            verdict: Some(verdict(
+                r#"{"shouldBlock":true,"reason":"[Exfiltration] uploads the .env to a paste site."}"#,
+            )),
+            failure: None,
+        };
+        let PermissionDecision::Deny { reason } = classified.decision() else {
+            panic!("a cited block must be a denial");
+        };
+        assert!(reason.contains("[Exfiltration]"));
+        assert!(reason.contains("uploads the .env"));
+    }
+
+    #[test]
+    fn an_uncited_block_asks_with_the_models_own_words() {
+        let classified = ClassifiedCandidate {
+            candidate: candidate("eligible"),
+            verdict: Some(verdict(
+                r#"{"shouldBlock":true,"reason":"This feels risky."}"#,
+            )),
+            failure: Some(crate::ClassifyFailure::UncitedBlock("risky".to_owned())),
+        };
+        let PermissionDecision::Ask { reason } = classified.decision() else {
+            panic!("an uncited block must fall back to confirmation");
+        };
+        assert!(reason.contains("without naming a block rule"));
+        assert!(reason.contains("This feels risky."));
+    }
+
+    #[test]
+    fn an_empty_reason_falls_back_to_the_policy_reason() {
+        // The user must never see a denial with no explanation at all.
+        let classified = ClassifiedCandidate {
+            candidate: candidate("tool is eligible for automatic approval"),
+            verdict: Some(verdict(r#"{"shouldBlock":true,"reason":"   "}"#)),
+            failure: Some(crate::ClassifyFailure::UncitedBlock("  ".to_owned())),
+        };
+        let PermissionDecision::Ask { reason } = classified.decision() else {
+            panic!("expected a fallback ask");
+        };
+        assert!(reason.contains("tool is eligible for automatic approval"));
+    }
+
+    #[test]
+    fn an_unresolved_candidate_asks_and_carries_its_failure() {
+        for failure in [
+            crate::ClassifyFailure::Timeout,
+            crate::ClassifyFailure::EmptyResponse,
+            crate::ClassifyFailure::Provider("connection reset".to_owned()),
+            crate::ClassifyFailure::ApprovalModelUnavailable("no model".to_owned()),
+            crate::ClassifyFailure::UnparseableVerdict("not json".to_owned()),
+        ] {
+            let classified = ClassifiedCandidate {
+                candidate: candidate("eligible"),
+                verdict: None,
+                failure: Some(failure.clone()),
+            };
+            let PermissionDecision::Ask { reason } = classified.decision() else {
+                panic!("{failure} must fall back to confirmation");
+            };
+            assert!(reason.contains("automatic approval unavailable"));
+            assert_eq!(classified.failure(), failure);
+        }
     }
 }

@@ -576,7 +576,7 @@ void sessionActionsMenuRef
                 :fullscreen="composerFullscreenActive"
                 :attached-files="attachedFiles"
                 :pending-attachments="pendingAttachments"
-                class="flex-1 shrink-0 sm:shrink min-h-min"
+                class="flex-1 shrink-0 sm:shrink min-h-0"
                 @toggleFullscreen="toggleEditorFullscreen"
                 @drop="handleDrop"
                 @paste="handlePaste"

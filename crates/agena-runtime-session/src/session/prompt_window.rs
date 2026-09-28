@@ -1972,10 +1972,16 @@ mod response_id_tests {
 
 /// Project a bounded transcript for permission classification, anchoring the
 /// first message and the most recent messages, truncating to `budget_chars`.
+///
+/// Uses the classifier projection (role labels, tool names, tool arguments,
+/// and tool outputs) rather than the provider text-lossy projection. A
+/// permission reviewer that cannot see what a tool was called with, or what it
+/// returned, cannot judge whether the next action exfiltrates or destroys
+/// anything — which is precisely the judgement being asked of it.
 pub(crate) fn project_transcript(parts: &[Part], budget_chars: usize) -> String {
     let projected = parts_into_runs(parts)
         .iter()
-        .map(|run| crate::provider::project_session_text_lossy(run))
+        .map(|run| crate::provider::project_classifier_run_text(run))
         .filter(|text| !text.trim().is_empty())
         .collect::<Vec<_>>();
     if projected.is_empty() {

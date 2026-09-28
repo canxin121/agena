@@ -2863,21 +2863,17 @@ impl SessionManager {
                         .collect(),
                 )
                 .await;
-            for ((action, mut resolution, candidate), outcome) in
+            for ((action, mut resolution, requested), classified) in
                 candidates.into_iter().zip(outcomes)
             {
-                resolution.decision = match outcome {
-                    Ok(true) => PermissionDecision::Allow,
-                    Ok(false) => PermissionDecision::Deny {
-                        reason: agena_permission::deny_reason(format!(
-                            "automatic approval classifier denied the action: {}",
-                            candidate.policy_reason
-                        )),
-                    },
-                    Err(failure) => PermissionDecision::Ask {
-                        reason: format!("automatic approval unavailable: {failure}"),
-                    },
-                };
+                // The candidate comes back with its verdict attached; the
+                // original request is only needed to prove the pairing held.
+                debug_assert_eq!(classified.candidate, requested);
+                // The verdict-to-decision contract (cited block = terminal
+                // denial, anything unresolved = fail-closed ask) lives in
+                // `ClassifiedCandidate::decision` so this batch path and the
+                // interactive auto-approve reply path cannot drift.
+                resolution.decision = classified.decision();
                 decisions.push((action, resolution, true));
             }
         }

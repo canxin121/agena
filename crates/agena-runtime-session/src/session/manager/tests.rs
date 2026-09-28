@@ -6724,3 +6724,4 @@ async fn a_settle_whose_steer_reaches_a_turn_that_never_drains_it_still_wakes_th
 }
 
 mod adapter_gate;
+mod auto_approval;

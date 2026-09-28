@@ -580,6 +580,137 @@ pub fn project_persisted_text_lossy(parts: &[Part]) -> String {
     }
 }
 
+// ─── Classifier transcript projection ─────────────────────────────────────────
+
+/// Per-part character cap for the classifier transcript. One runaway tool
+/// output must not consume the whole budget: the classifier needs breadth
+/// (which actions ran, in what order, with what arguments) far more than it
+/// needs the tail of a 200k-character build log.
+const CLASSIFIER_PART_CHARS: usize = 4_000;
+
+/// Render one run's parts as a role-labelled, tool-visible transcript block for
+/// the automatic-approval classifier.
+///
+/// This is deliberately *not* [`project_persisted_text_lossy`]: that projection
+/// is the lossy text fallback for providers whose protocol has no tool
+/// representation, so it collapses a call to `[tool_call:name:id]` and a result
+/// to `[tool_result:id]` — the arguments and the output are dropped. A
+/// permission reviewer cannot judge "does this exfiltrate data / delete the
+/// right thing" without seeing them. Both reference implementations show their
+/// reviewer the full exchange: codex renders `tool {name} call` with arguments
+/// and `tool {name} result` with output, and claude-code renders an XML
+/// transcript carrying tool inputs and outputs.
+pub fn project_classifier_run_text(parts: &[Part]) -> String {
+    let run = project_completion_input(parts);
+    let role = classifier_role_label(run.role);
+    let mut lines: Vec<String> = Vec::new();
+    for part in &run.parts {
+        match part {
+            CompletionInputPart::Text { text } => push_classifier_line(&mut lines, role, text),
+            // The agent's own narration. Labelled distinctly because it is
+            // evidence of intent, never evidence about the action itself.
+            CompletionInputPart::Reasoning { text } => {
+                push_classifier_line(&mut lines, "assistant (reasoning)", text)
+            }
+            CompletionInputPart::SystemMessage { text } => {
+                push_classifier_line(&mut lines, "system", text)
+            }
+            CompletionInputPart::Attachment { attachment } => {
+                let label = attachment
+                    .filename
+                    .as_deref()
+                    .or(attachment.title.as_deref())
+                    .filter(|label| !label.trim().is_empty())
+                    .unwrap_or("attachment");
+                lines.push(format!("{role}: [attachment: {label}]"));
+            }
+            CompletionInputPart::ToolCall {
+                function,
+                arguments_json,
+                ..
+            } => lines.push(format!(
+                "tool {} call: {}",
+                classifier_tool_label(function, arguments_json),
+                truncate_classifier_part(arguments_json)
+            )),
+            CompletionInputPart::ToolResult {
+                function,
+                arguments_json,
+                status,
+                output_json,
+                ..
+            } => lines.push(format!(
+                "tool {} result ({}): {}",
+                classifier_tool_label(function, arguments_json),
+                classifier_result_status_label(*status),
+                truncate_classifier_part(output_json)
+            )),
+        }
+    }
+    lines.join("\n")
+}
+
+/// Human-readable target of a tool call.
+///
+/// Every gateway call projects under the single protocol name `tools_call`, so
+/// a transcript of `tool tools_call call: {"tool":"shell.run",…}` buries the
+/// one fact the reviewer judges — *which* tool ran. The `tool` argument inside
+/// the call payload names it, and names the matching result too (that result
+/// carries no arguments of its own), which keeps a call and its result legible
+/// as a pair.
+fn classifier_tool_label(function: &ModelToolFunction, arguments_json: &str) -> String {
+    if function.function_name() != agena_domain::ToolApiFunction::Call.function_name() {
+        return function.function_name().to_owned();
+    }
+    serde_json::from_str::<serde_json::Value>(arguments_json.trim())
+        .ok()
+        .and_then(|value| {
+            value
+                .get("tool")
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|target| !target.is_empty())
+                .map(ToOwned::to_owned)
+        })
+        .unwrap_or_else(|| function.function_name().to_owned())
+}
+
+fn classifier_role_label(role: Role) -> &'static str {
+    match role {
+        Role::User => "user",
+        Role::Assistant => "assistant",
+        Role::System => "system",
+        Role::Tool => "tool",
+    }
+}
+
+fn classifier_result_status_label(
+    status: agena_provider::CompletionInputToolResultStatus,
+) -> &'static str {
+    use agena_provider::CompletionInputToolResultStatus as Status;
+    match status {
+        Status::Completed => "completed",
+        Status::Failed => "failed",
+        Status::Cancelled => "cancelled",
+    }
+}
+
+fn push_classifier_line(lines: &mut Vec<String>, label: &str, text: &str) {
+    if text.trim().is_empty() {
+        return;
+    }
+    lines.push(format!("{label}: {}", truncate_classifier_part(text)));
+}
+
+fn truncate_classifier_part(text: &str) -> String {
+    if text.chars().count() <= CLASSIFIER_PART_CHARS {
+        return text.to_owned();
+    }
+    let mut out = text.chars().take(CLASSIFIER_PART_CHARS).collect::<String>();
+    out.push_str("…[truncated]");
+    out
+}
+
 // ─── Part helpers ─────────────────────────────────────────────────────────────
 
 /// Map a storage part role onto the domain role, matching the session
@@ -981,11 +1112,16 @@ fn invocation_name_and_args(invocation: &ToolInvocation) -> Option<(ModelToolFun
             return None;
         }
     };
-    let json_value: serde_json::Value = invocation
-        .tool_api_call
-        .as_ref()
-        .map(|call| call.arguments.clone())?
-        .into();
+    // A direct tool call (any function other than the opaque `tools_call`
+    // envelope) carries its payload in `invocation.input`; only the envelope
+    // stores the payload inside its own arguments. Reading `arguments`
+    // unconditionally sent an empty object to the provider for every non-
+    // envelope call, so the model replayed a call with no arguments at all.
+    let source = match invocation.tool_api_call.as_ref() {
+        Some(call) if call.function == ToolApiFunction::Call => call.arguments.clone(),
+        _ => invocation.input.clone(),
+    };
+    let json_value: serde_json::Value = source.into();
     let arguments = match serde_json::to_string(&json_value) {
         Ok(arguments) => arguments,
         Err(error) => {
@@ -1009,6 +1145,12 @@ pub fn tool_api_function_for_invocation(
     let stored_name = invocation.name.as_str();
     if let Some(call) = invocation.tool_api_call.as_ref() {
         if call.function == ToolApiFunction::Call {
+            // A result records the envelope function but repeats no arguments;
+            // its own name is the target, exactly as it is on the request that
+            // produced it. Only a *call* must name its target in `arguments`.
+            if stored_name == call.function.function_name() {
+                return Ok(call.function);
+            }
             let target = call
                 .arguments
                 .get("tool")
@@ -1396,6 +1538,8 @@ mod tests {
     use agena_storage::store::{Part, PartRole, PartState, PartVisibility};
     use serde_json::Value;
 
+    use super::project_classifier_run_text;
+
     fn part(kind: &str, role: PartRole, state: PartState, content: Value) -> Part {
         Part {
             part_id: 1,
@@ -1520,6 +1664,73 @@ mod tests {
                 TimeRange::default(),
             )),
         )
+    }
+
+    #[test]
+    fn classifier_transcript_shows_roles_tool_arguments_and_tool_output() {
+        // The classifier transcript must not be the provider text-lossy
+        // projection: that one renders a call as `[tool_call:name:id]` and a
+        // result as `[tool_result:id]`, dropping the arguments and the output.
+        // A permission reviewer cannot judge an exfiltration or a deletion
+        // without them.
+        let mut invocation = ToolInvocation::new(
+            ToolApiFunction::Call.function_name(),
+            StructuredObject::try_from(serde_json::json!({
+                "tool": "shell.run",
+                "input": {"command": "rm -rf /var"}
+            }))
+            .expect("structured Tool API payload"),
+        );
+        invocation.tool_api_call = Some(agena_domain::ToolApiCall {
+            function: ToolApiFunction::Call,
+            arguments: invocation.input.clone(),
+        });
+        invocation.name = "shell.run".to_owned();
+        invocation.plugin_name = Some("builtin".to_owned());
+        let marker = run_marker(PartRole::Assistant, None);
+        let operation = assistant_operation(invocation);
+        let text_part = part(
+            "text",
+            PartRole::Assistant,
+            PartState::Completed,
+            serde_json::json!({"text": "running the migration"}),
+        );
+        let rendered = project_classifier_run_text(&[marker, text_part, operation]);
+
+        assert!(
+            rendered.contains("assistant: running the migration"),
+            "assistant text must be role-labelled: {rendered}"
+        );
+        assert!(
+            rendered.contains("tool shell.run call:"),
+            "the tool name and its arguments must be visible: {rendered}"
+        );
+        assert!(
+            rendered.contains("tool shell.run result (completed):"),
+            "the tool output must be visible, with its status: {rendered}"
+        );
+        assert!(
+            !rendered.contains("[tool_call:"),
+            "the classifier view must never fall back to the id-only rendering: {rendered}"
+        );
+    }
+
+    #[test]
+    fn classifier_transcript_truncates_a_single_runaway_part() {
+        let marker = run_marker(PartRole::User, None);
+        let huge = part(
+            "text",
+            PartRole::User,
+            PartState::Completed,
+            serde_json::json!({"text": "x".repeat(20_000)}),
+        );
+        let rendered = project_classifier_run_text(&[marker, huge]);
+        assert!(
+            rendered.len() < 10_000,
+            "one part must not consume the whole transcript budget: {} chars",
+            rendered.len()
+        );
+        assert!(rendered.contains("[truncated]"));
     }
 
     #[test]

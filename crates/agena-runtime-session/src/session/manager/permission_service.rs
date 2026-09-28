@@ -17,6 +17,29 @@ use super::{
 use crate::session::prompt_window;
 use agena_domain::Role;
 
+/// Output budget for one classifier verdict.
+///
+/// The verdict itself is tiny (a tool call with one rule name and one
+/// sentence), but 256 was too tight: a model that reasons before it emits the
+/// tool call — or a provider that bills reasoning tokens against this same
+/// budget — gets truncated before the verdict exists, which is the failure
+/// mode claude-code works around with dedicated thinking headroom ("Without
+/// headroom, stop_reason=max_tokens yields an empty text response →
+/// unparseable → safe commands blocked"). The budget leaves room for that
+/// reasoning behind the verdict.
+const AUTO_APPROVAL_MAX_OUTPUT_TOKENS: u32 = 2_048;
+
+/// Verdict attempts per candidate: the first request, then one retry after
+/// [`AUTO_APPROVAL_VERDICT_REMINDER`]. Two is deliberate — a third attempt
+/// buys little and delays the fail-closed `Ask` the user is waiting on.
+const AUTO_APPROVAL_ATTEMPTS: usize = 2;
+
+/// Reminder appended as a user turn when an attempt produced no verdict at
+/// all. It names the two tools rather than restating the whole policy, and
+/// mirrors the wording of the runtime's other retry notes
+/// (`append_empty_response_nudge`, `DOOM_LOOP_RECOVERY_PROMPT`).
+const AUTO_APPROVAL_VERDICT_REMINDER: &str = "Trusted Agena runtime note: the previous response did not submit a verdict. Submit your verdict now as a tool call: call approve_action to allow the action, or call block_action with the exact name of the BLOCK rule that matched to block it. Do not answer with prose.";
+
 /// Versioned per-session snapshot of persisted permission rules, grouped by
 /// action key. Loaded once with a single query; invalidated on writes.
 #[derive(Debug, Clone, Default)]
@@ -189,43 +212,47 @@ impl SessionManager {
 
     /// Classify a batch of auto-approval candidates with one shared context:
     /// one model resolution, one variant resolution, one transcript. Returns
-    /// per-candidate `Ok(allowed)`; `Err(failure)` means the candidate fell
-    /// back to interactive `ask` (fail closed) because automatic approval
-    /// could not resolve. The failure reason is surfaced to the user.
+    /// the candidates with their [`agena_permission::ClassifierVerdict`] filled
+    /// in; a candidate whose verdict is `None` fell back to interactive `ask`
+    /// (fail closed) because automatic approval could not resolve, and carries
+    /// its [`agena_permission::ClassifyFailure`] for the user.
     pub(in crate::session::manager) async fn classify_auto_candidates(
         &self,
         session: Option<&Session>,
         state: &SessionManagerState,
         session_id: Option<i64>,
         candidates: Vec<agena_permission::ClassifierCandidate>,
-    ) -> Vec<Result<bool, agena_permission::ClassifyFailure>> {
+    ) -> Vec<agena_permission::ClassifiedCandidate> {
         if candidates.is_empty() {
             return Vec::new();
         }
+        let fail_all = |candidates: Vec<agena_permission::ClassifierCandidate>,
+                        failure: agena_permission::ClassifyFailure| {
+            candidates
+                .into_iter()
+                .map(|candidate| agena_permission::ClassifiedCandidate {
+                    candidate,
+                    verdict: None,
+                    failure: Some(failure.clone()),
+                })
+                .collect::<Vec<_>>()
+        };
         let Some((model, selection)) = (match self.resolve_approval_model(session, state) {
             Ok(Some(resolved)) => Some(resolved),
             Ok(None) => {
                 let reason =
                     "no approval model is configured and no session model could be resolved"
                         .to_owned();
-                return candidates
-                    .into_iter()
-                    .map(|_| {
-                        Err(agena_permission::ClassifyFailure::ApprovalModelUnavailable(
-                            reason.clone(),
-                        ))
-                    })
-                    .collect();
+                return fail_all(
+                    candidates,
+                    agena_permission::ClassifyFailure::ApprovalModelUnavailable(reason),
+                );
             }
             Err(error) => {
-                return candidates
-                    .into_iter()
-                    .map(|_| {
-                        Err(agena_permission::ClassifyFailure::ApprovalModelUnavailable(
-                            error.to_string(),
-                        ))
-                    })
-                    .collect();
+                return fail_all(
+                    candidates,
+                    agena_permission::ClassifyFailure::ApprovalModelUnavailable(error.to_string()),
+                );
             }
         }) else {
             return Vec::new();
@@ -246,7 +273,7 @@ impl SessionManager {
             request_override: Default::default(),
             system: None,
             temperature: Some(0.0),
-            max_output_tokens: Some(256),
+            max_output_tokens: Some(AUTO_APPROVAL_MAX_OUTPUT_TOKENS),
         };
         if let Some(parallel_tool_calls) = selection
             .as_ref()
@@ -257,14 +284,10 @@ impl SessionManager {
                 .set_parallel_tool_calls(Some(parallel_tool_calls));
         }
         if let Err(error) = self.apply_model_mode_requests(&mut options) {
-            return candidates
-                .into_iter()
-                .map(|_| {
-                    Err(agena_permission::ClassifyFailure::ModeUnavailable(
-                        error.to_string(),
-                    ))
-                })
-                .collect();
+            return fail_all(
+                candidates,
+                agena_permission::ClassifyFailure::ModeUnavailable(error.to_string()),
+            );
         }
 
         let transcript_budget_chars = state
@@ -311,6 +334,24 @@ impl SessionManager {
             &recent_decisions,
         );
 
+        // A route whose `agena_tools.mode` is not `provider_protocol` strips
+        // every declared tool before the request leaves the registry, so the
+        // verdict tools never reach that model and it can only answer in text.
+        // The text recovery path in the classifier still resolves those
+        // verdicts; the log makes the degraded route visible when one is
+        // misconfigured.
+        if state
+            .provider_registry
+            .agena_tool_mode(&model)
+            .is_ok_and(|mode| mode.is_disabled())
+        {
+            tracing::debug!(
+                model_id = model.model_id.as_ref(),
+                "automatic approval route disables Agena tools; verdict tool calls are stripped and only the text recovery path can resolve a verdict"
+            );
+        }
+
+        let decision_tools = auto_approval_decision_tools();
         let mut futures = Vec::with_capacity(candidates.len());
         for candidate in candidates {
             let model_ref = model.clone();
@@ -318,88 +359,216 @@ impl SessionManager {
             let thinking = options.thinking.clone();
             let verbosity = options.verbosity.clone();
             let request_override = options.request_override.clone();
+            let decision_tools = decision_tools.clone();
             futures.push(async move {
+                let requested = candidate.clone();
                 let action = serde_json::to_string(&candidate.action)
                     .unwrap_or_else(|_| r#"{"action":"unserializable"}"#.to_owned());
                 let action_message = agena_permission::build_classifier_action_message(
                     &action,
                     &candidate.policy_reason,
                 );
-                let request = agena_provider::CompletionRequest {
-                    model: model_ref.model_id.clone(),
-                    system: Some(agena_permission::AUTO_APPROVAL_SYSTEM_PROMPT.to_owned()),
-                    turns: {
-                        let mut turns = Vec::with_capacity(2);
-                        if let Some(context) = &context {
-                            turns.push(agena_provider::CompletionInputRun {
-                                role: Role::User,
-                                parts: vec![agena_provider::CompletionInputPart::Text {
-                                    text: context.clone(),
-                                }],
-                                provider_state: Default::default(),
-                            });
-                        }
+                let build_request = |reminder: Option<&str>| {
+                    let mut turns = Vec::with_capacity(3);
+                    if let Some(context) = &context {
                         turns.push(agena_provider::CompletionInputRun {
                             role: Role::User,
                             parts: vec![agena_provider::CompletionInputPart::Text {
-                                text: action_message,
+                                text: context.clone(),
                             }],
                             provider_state: Default::default(),
                         });
-                        turns
-                    },
-                    tool_api_functions: Vec::new(),
-                    provider_native_tools: Default::default(),
-                    disable_tools: true,
-                    temperature: Some(0.0),
-                    max_output_tokens: Some(256),
-                    prompt_cache_key: Some(format!("agena:auto:{}", model_ref.model_id)),
-                    previous_response_id: None,
-                    prompt_window_generation: None,
-                    provider_compaction: None,
-                    stop_sequences: Vec::new(),
-                    top_p: None,
-                    top_k: None,
-                    seed: None,
-                    thinking,
-                    verbosity,
-                    response_format: Some(agena_provider::ResponseFormat::JsonSchema {
-                        name: "permission_verdict".to_owned(),
-                        schema: agena_permission::classifier_json_schema(),
-                        strict: true,
-                    }),
-                    responses_api_metadata: None,
-                    request_override,
+                    }
+                    turns.push(agena_provider::CompletionInputRun {
+                        role: Role::User,
+                        parts: vec![agena_provider::CompletionInputPart::Text {
+                            text: action_message.clone(),
+                        }],
+                        provider_state: Default::default(),
+                    });
+                    if let Some(reminder) = reminder {
+                        turns.push(agena_provider::CompletionInputRun {
+                            role: Role::User,
+                            parts: vec![agena_provider::CompletionInputPart::Text {
+                                text: reminder.to_owned(),
+                            }],
+                            provider_state: Default::default(),
+                        });
+                    }
+                    agena_provider::CompletionRequest {
+                        model: model_ref.model_id.clone(),
+                        system: Some(agena_permission::AUTO_APPROVAL_SYSTEM_PROMPT.to_owned()),
+                        turns,
+                        tool_api_functions: decision_tools.clone(),
+                        provider_native_tools: Default::default(),
+                        // The verdict tools must survive the registry
+                        // boundary: `disable_tools` (and a disabled route)
+                        // would strip every declaration and then reject the
+                        // very tool call the model is asked to make.
+                        disable_tools: false,
+                        temperature: Some(0.0),
+                        max_output_tokens: Some(AUTO_APPROVAL_MAX_OUTPUT_TOKENS),
+                        prompt_cache_key: Some(format!("agena:auto:{}", model_ref.model_id)),
+                        previous_response_id: None,
+                        prompt_window_generation: None,
+                        provider_compaction: None,
+                        stop_sequences: Vec::new(),
+                        top_p: None,
+                        top_k: None,
+                        seed: None,
+                        thinking: thinking.clone(),
+                        verbosity: verbosity.clone(),
+                        // The verdict is a tool call now, not a JSON body, so
+                        // there is no response schema to constrain.
+                        response_format: None,
+                        responses_api_metadata: None,
+                        request_override: request_override.clone(),
+                    }
                 };
-                match tokio::time::timeout(
-                    agena_permission::AUTO_APPROVAL_CLASSIFY_TIMEOUT,
-                    state.provider_registry.complete(&model_ref, request),
-                )
-                .await
-                {
-                    Ok(Ok(response)) => {
-                        if response.text.trim().is_empty() {
-                            return Err(agena_permission::ClassifyFailure::EmptyResponse);
-                        }
-                        match agena_permission::parse_classifier_verdict(response.text.as_str()) {
-                            Some(allowed) => {
-                                self.record_auto_decision(session_id, allowed);
-                                Ok(allowed)
+
+                // One deadline for every attempt, so a slow first attempt
+                // cannot double the time the user waits before the fail-closed
+                // `Ask`.
+                let deadline = tokio::time::Instant::now()
+                    + agena_permission::AUTO_APPROVAL_CLASSIFY_TIMEOUT;
+                let mut verdict = None;
+                let mut failure = None;
+                let mut last_text = String::new();
+                for attempt in 0..AUTO_APPROVAL_ATTEMPTS {
+                    let reminder =
+                        (attempt > 0).then_some(AUTO_APPROVAL_VERDICT_REMINDER);
+                    let request = build_request(reminder);
+                    match tokio::time::timeout_at(
+                        deadline,
+                        state.provider_registry.complete(&model_ref, request),
+                    )
+                    .await
+                    {
+                        Ok(Ok(response)) => {
+                            last_text = response.text.clone();
+                            match classifier_verdict_from_response(&response) {
+                                Some(resolved) => {
+                                    verdict = Some(resolved);
+                                    break;
+                                }
+                                None if attempt + 1 < AUTO_APPROVAL_ATTEMPTS => {
+                                    // No verdict at all: the model answered
+                                    // with prose the recovery parser could not
+                                    // read. Remind it and ask once more rather
+                                    // than interrupting the user.
+                                    tracing::debug!(
+                                        model_id = model_ref.model_id.as_ref(),
+                                        "automatic approval attempt produced no verdict; retrying with a reminder"
+                                    );
+                                }
+                                None => {
+                                    failure = Some(if last_text.trim().is_empty() {
+                                        agena_permission::ClassifyFailure::EmptyResponse
+                                    } else {
+                                        agena_permission::ClassifyFailure::UnparseableVerdict(
+                                            truncate_classifier_text(last_text.as_str()),
+                                        )
+                                    });
+                                }
                             }
-                            None => Err(agena_permission::ClassifyFailure::UnparseableVerdict(
-                                truncate_classifier_text(response.text.as_str()),
-                            )),
+                        }
+                        // A provider error or an expired deadline is not a
+                        // formatting problem a reminder can fix, and the
+                        // registry already retried the transport call.
+                        Ok(Err(error)) => {
+                            failure = Some(agena_permission::ClassifyFailure::Provider(
+                                error.to_string(),
+                            ));
+                            break;
+                        }
+                        Err(_elapsed) => {
+                            failure = Some(agena_permission::ClassifyFailure::Timeout);
+                            break;
                         }
                     }
-                    Ok(Err(error)) => Err(agena_permission::ClassifyFailure::Provider(
-                        error.to_string(),
-                    )),
-                    Err(_elapsed) => Err(agena_permission::ClassifyFailure::Timeout),
+                }
+
+                let Some(verdict) = verdict else {
+                    return agena_permission::ClassifiedCandidate {
+                        candidate: requested,
+                        verdict: None,
+                        failure: Some(failure.unwrap_or(
+                            agena_permission::ClassifyFailure::UnparseableVerdict(
+                                truncate_classifier_text(last_text.as_str()),
+                            ),
+                        )),
+                    };
+                };
+                // The denial budget counts classifier *decisions*. An uncited
+                // block is not honored as a denial (the caller falls back to
+                // confirmation), so recording it as one would trip the
+                // "disabled after repeated denials" cutoff on verdicts that
+                // never denied anything. One record per candidate, on the
+                // final verdict, so a retry cannot double-count a decision.
+                let honored_denial = !verdict.allowed && verdict.cites_block_rule();
+                self.record_auto_decision(session_id, !honored_denial);
+                let failure = (!verdict.cites_block_rule()).then(|| {
+                    agena_permission::ClassifyFailure::UncitedBlock(truncate_classifier_text(
+                        verdict.reason.as_str(),
+                    ))
+                });
+                agena_permission::ClassifiedCandidate {
+                    candidate: requested,
+                    verdict: Some(verdict),
+                    failure,
                 }
             });
         }
         futures_util::future::join_all(futures).await
     }
+}
+
+/// The two verdict tools as provider-facing declarations, built from the pure
+/// contract in `agena-permission`.
+///
+/// The binding fields are fixed strings: these tools are never executed by the
+/// runtime — the verdict is read off the call and the call is dropped — so they
+/// deliberately share one identity that no execution tool can claim.
+fn auto_approval_decision_tools() -> Vec<agena_provider::ToolApiDefinition> {
+    agena_permission::auto_approval_decision_tools()
+        .into_iter()
+        .map(
+            |(name, description, input_schema)| agena_provider::ToolApiDefinition {
+                handler_key: format!("agena.auto_approval.{name}"),
+                plugin_name: "agena.auto_approval".to_owned(),
+                name: name.to_owned(),
+                description: description.to_owned(),
+                input_schema,
+                output_schema: serde_json::json!({}),
+                strict: true,
+                definition_identity: format!("agena-auto-approval:{name}"),
+            },
+        )
+        .collect()
+}
+
+/// Resolve one completion into a verdict: the tool call the model submitted
+/// first, then the text recovery path.
+///
+/// The tool call is the primary contract — the decision is carried by the tool
+/// *name* and the cited rule by a schema-constrained field — and prose is only
+/// read for routes that cannot carry tool calls at all.
+fn classifier_verdict_from_response(
+    response: &agena_provider::CompletionResponse,
+) -> Option<agena_permission::ClassifierVerdict> {
+    for call in &response.tool_calls {
+        let agena_provider::CompletionToolCall::Function {
+            name,
+            arguments_json,
+            ..
+        } = call;
+        if let Some(verdict) =
+            agena_permission::ClassifierVerdict::from_tool_call(name, arguments_json)
+        {
+            return Some(verdict);
+        }
+    }
+    agena_permission::ClassifierVerdict::parse(response.text.as_str())
 }
 
 /// Bound the classifier text echoed into a fallback `Ask` reason so a

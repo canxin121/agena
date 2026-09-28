@@ -1059,22 +1059,33 @@ impl SessionManager {
                     vec![candidate],
                 )
                 .await;
-            let verdict = outcomes.into_iter().next().unwrap_or_else(|| {
-                Err(agena_permission::ClassifyFailure::ApprovalModelUnavailable(
-                    "no classification outcome was produced".to_owned(),
-                ))
-            });
-            match verdict {
-                Ok(true) => {
+            let classified = outcomes.into_iter().next().ok_or_else(|| {
+                AppError::AutoApproveClassifyFailed(
+                    agena_permission::ClassifyFailure::ApprovalModelUnavailable(
+                        "no classification outcome was produced".to_owned(),
+                    ),
+                )
+            })?;
+            // The reply kind is derived from the same verdict-to-decision
+            // contract the tool-execution batch uses, so the two auto-approval
+            // entry points cannot disagree about what a verdict means. Only an
+            // allow or a rule-citing block (which `decision()` maps to
+            // `Allow`/`Deny` respectively) may be recorded as a reply; every
+            // unresolved outcome stays an `AppError`, which leaves the request
+            // pending for the user — the fail-closed behaviour this path has
+            // always had.
+            match classified.decision() {
+                agena_domain::PermissionDecision::Allow => {
                     request.request.reply.kind = PermissionReplyKind::AllowOnce;
                     request.request.reply.scope = None;
                 }
-                Ok(false) => {
+                agena_domain::PermissionDecision::Deny { .. } => {
                     request.request.reply.kind = PermissionReplyKind::DenyOnce;
                     request.request.reply.scope = None;
                 }
-                Err(failure) => {
-                    return Err(AppError::AutoApproveClassifyFailed(failure));
+                agena_domain::PermissionDecision::Ask { .. }
+                | agena_domain::PermissionDecision::Auto { .. } => {
+                    return Err(AppError::AutoApproveClassifyFailed(classified.failure()));
                 }
             }
         }

@@ -36,6 +36,42 @@ pub enum ToolApiFunction {
 /// missing-`tool` message.
 pub const TOOLS_CALL_ARGUMENTS_DIAGNOSTIC_FIELD: &str = "__tools_call_arguments_diagnostic";
 
+/// Function the automatic-approval model calls to submit an allow verdict.
+/// See [`CONTROL_FUNCTION_NAMES`].
+pub const APPROVE_ACTION_FUNCTION: &str = "approve_action";
+
+/// Function the automatic-approval model calls to submit a block verdict.
+/// See [`CONTROL_FUNCTION_NAMES`].
+pub const BLOCK_ACTION_FUNCTION: &str = "block_action";
+
+/// Provider-facing function names that Agena declares outside the Tool API
+/// gateway because they carry a *decision* back to the runtime instead of
+/// naming an execution tool.
+///
+/// A control function's call is read and dropped by the component that
+/// declared it; it is never routed to the tool executor and never becomes a
+/// transcript operation. That is the whole point of the shape: the decision
+/// lives in the tool *name*, and the arguments are constrained by a schema, so
+/// a model submits a verdict structurally instead of as prose a parser has to
+/// guess at.
+///
+/// Membership is deliberately tiny and closed. Adding a name here widens what
+/// can be advertised to a provider as a direct function call, which is exactly
+/// what the Tool API gateway exists to prevent — an execution tool must reach
+/// a provider only through `tools_call`, never as its own function name.
+pub const CONTROL_FUNCTION_NAMES: [&str; 2] = [APPROVE_ACTION_FUNCTION, BLOCK_ACTION_FUNCTION];
+
+/// Whether `name` is one of Agena's runtime-owned [`CONTROL_FUNCTION_NAMES`].
+///
+/// Names are dot-free and disjoint from every Tool API gateway function name,
+/// so a control function can never be confused with a gateway call or with an
+/// execution tool (whose canonical names all contain a dot).
+pub const fn is_control_function_name(name: &str) -> bool {
+    // A byte match keeps this `const`; a unit test pins it against
+    // `CONTROL_FUNCTION_NAMES` so the two cannot drift apart.
+    matches!(name.as_bytes(), b"approve_action" | b"block_action")
+}
+
 impl ToolApiFunction {
     /// All Tool API function kinds.
     pub const ALL: [Self; 8] = [
@@ -87,6 +123,24 @@ impl std::fmt::Display for ToolApiFunction {
 #[cfg(test)]
 mod tests {
     use super::ToolApiFunction;
+
+    #[test]
+    fn control_function_names_are_closed_and_disjoint() {
+        use super::{CONTROL_FUNCTION_NAMES, is_control_function_name};
+        // The `const fn` must agree with the constant it documents.
+        for name in CONTROL_FUNCTION_NAMES {
+            assert!(is_control_function_name(name), "{name} must be recognized");
+            // Never a gateway function name, and never an execution tool name
+            // (whose canonical names always contain a dot).
+            assert!(ToolApiFunction::from_function_name(name).is_none());
+            assert!(!name.contains('.'));
+        }
+        assert!(is_control_function_name("approve_action"));
+        assert!(is_control_function_name("block_action"));
+        for other in ["", "approve", "approve_actions", "tools_call", "fs.read"] {
+            assert!(!is_control_function_name(other), "{other} must not match");
+        }
+    }
 
     #[test]
     fn protocol_names_round_trip_without_aliases() {

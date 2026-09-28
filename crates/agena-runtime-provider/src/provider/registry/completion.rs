@@ -368,13 +368,8 @@ fn validate_provider_native_tool_definition_boundary(
 
     let mut declared = BTreeSet::new();
     for tool in &request.tool_api_functions {
-        let is_gateway =
-            agena_domain::ToolApiFunction::from_function_name(tool.name.as_str()).is_some();
-        if !is_gateway {
-            return Err(ProviderError::Config(format!(
-                "provider-bound tool {:?} is not one of the five Tool API gateway functions",
-                tool.name
-            )));
+        if let Err(reason) = validate_provider_bound_tool_name(tool.name.as_str()) {
+            return Err(ProviderError::Config(reason));
         }
         if !has_valid_provider_function_name(tool.name.as_str()) {
             return Err(ProviderError::Config(format!(
@@ -384,19 +379,19 @@ fn validate_provider_native_tool_definition_boundary(
         }
         if !declared.insert(tool.name.clone()) {
             return Err(ProviderError::Config(format!(
-                "Tool API function `{}` is declared more than once",
+                "provider-bound function `{}` is declared more than once",
                 tool.name
             )));
         }
         let schema = tool.input_schema.as_object().ok_or_else(|| {
             ProviderError::Config(format!(
-                "provider-bound Tool API function `{}` must use an object input schema",
+                "provider-bound function `{}` must use an object input schema",
                 tool.name
             ))
         })?;
         if schema.get("type").and_then(serde_json::Value::as_str) != Some("object") {
             return Err(ProviderError::Config(format!(
-                "provider-bound Tool API function `{}` must use an object input schema",
+                "provider-bound function `{}` must use an object input schema",
                 tool.name
             )));
         }
@@ -405,7 +400,7 @@ fn validate_provider_native_tool_definition_boundary(
             .is_some_and(|properties| !properties.is_object())
         {
             return Err(ProviderError::Config(format!(
-                "provider-bound Tool API function `{}` has non-object schema properties",
+                "provider-bound function `{}` has non-object schema properties",
                 tool.name
             )));
         }
@@ -415,12 +410,33 @@ fn validate_provider_native_tool_definition_boundary(
                 .is_none_or(|items| items.iter().any(|item| !item.is_string()))
         }) {
             return Err(ProviderError::Config(format!(
-                "provider-bound Tool API function `{}` has a non-string schema required list",
+                "provider-bound function `{}` has a non-string schema required list",
                 tool.name
             )));
         }
     }
     Ok(())
+}
+
+/// A provider-bound function is either one of the five Tool API gateway
+/// functions or one of the runtime's closed set of control functions.
+///
+/// The gateway rule is what keeps an execution tool from ever reaching a
+/// provider as its own function name; control functions are the deliberate,
+/// tiny exception for runtime-owned requests whose "tool call" *is* the
+/// answer (the automatic-approval verdict). Their calls are read and dropped
+/// by the component that declared them and never enter the executor, so they
+/// carry no execution capability. [`agena_domain::is_control_function_name`]
+/// is the single source of truth for the set.
+fn validate_provider_bound_tool_name(name: &str) -> Result<(), String> {
+    if agena_domain::ToolApiFunction::from_function_name(name).is_some()
+        || agena_domain::is_control_function_name(name)
+    {
+        return Ok(());
+    }
+    Err(format!(
+        "provider-bound tool {name:?} is not one of the five Tool API gateway functions and not a runtime control function; execution tools reach a provider only through `tools_call`"
+    ))
 }
 
 fn has_valid_provider_function_name(name: &str) -> bool {
@@ -490,6 +506,14 @@ fn validate_tool_api_arguments(
     name: &str,
     arguments_json: &str,
 ) -> Result<(), ProviderError> {
+    // A control function's decision is carried by its *name*, not by its
+    // arguments, so a call whose arguments were dropped, wrapped, or mangled
+    // by a gateway is still a complete answer and must not be sent back to the
+    // model for protocol repair. The declaring component reads whatever fields
+    // did survive (see `ClassifierVerdict::from_tool_call`).
+    if agena_domain::is_control_function_name(name) {
+        return Ok(());
+    }
     let Some(arguments) = parse_tool_api_arguments_tolerant(arguments_json) else {
         let detail = serde_json::from_str::<serde_json::Value>(arguments_json)
             .err()
@@ -2239,11 +2263,7 @@ mod tool_api_function_validation_tests {
         let invalid = request_with_tool_api_schema(serde_json::json!({ "type": "array" }));
         let error = validate_provider_native_tool_definition_boundary(&invalid)
             .expect_err("provider-bound schema must be object-shaped");
-        assert!(
-            error
-                .to_string()
-                .contains("provider-bound Tool API function")
-        );
+        assert!(error.to_string().contains("provider-bound function"));
 
         let mut duplicate = valid;
         duplicate
@@ -2263,9 +2283,47 @@ mod tool_api_function_validation_tests {
             }));
             request.tool_api_functions[0].name = invalid_name.to_owned();
             let error = validate_provider_native_tool_definition_boundary(&request)
-                .expect_err("non-gateway tools must fail");
-            assert!(error.to_string().contains("not one of the five Tool API"));
+                .expect_err("execution tools must never be declared as functions");
+            assert!(
+                error
+                    .to_string()
+                    .contains("not one of the five Tool API gateway functions")
+            );
         }
+    }
+
+    #[test]
+    fn control_functions_are_declarable_and_their_arguments_are_never_repaired() {
+        // The automatic-approval verdict tools are the one deliberate exception
+        // to the gateway rule: the runtime declares them itself, and their call
+        // is the answer rather than a tool execution.
+        for name in agena_domain::CONTROL_FUNCTION_NAMES {
+            assert!(
+                agena_domain::ToolApiFunction::from_function_name(name).is_none(),
+                "{name} must stay disjoint from the gateway function names"
+            );
+            let mut request = request_with_tool_api_schema(serde_json::json!({
+                "type": "object",
+                "properties": { "rule": { "type": "string" } }
+            }));
+            request.tool_api_functions[0].name = name.to_owned();
+            validate_provider_native_tool_definition_boundary(&request)
+                .unwrap_or_else(|error| panic!("{name} must be declarable: {error}"));
+        }
+        assert!(!agena_domain::is_control_function_name("tools_help"));
+        assert!(!agena_domain::is_control_function_name("fs.read"));
+
+        // A control function's decision lives in its name, so a gateway that
+        // dropped or mangled the arguments must not trigger protocol repair.
+        for arguments in ["", "null", "[]", "{not json"] {
+            validate_tool_api_arguments("test", agena_domain::BLOCK_ACTION_FUNCTION, arguments)
+                .unwrap_or_else(|error| {
+                    panic!("{arguments:?} must not be repaired for a control function: {error}")
+                });
+        }
+        // Ordinary gateway calls keep the strict argument contract.
+        validate_tool_api_arguments("test", "tools_help", "")
+            .expect_err("a gateway call with empty arguments still fails");
     }
 
     #[test]

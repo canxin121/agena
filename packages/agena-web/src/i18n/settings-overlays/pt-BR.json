@@ -22,7 +22,9 @@
       "toolDetailsTable": {
         "expand": "Abertura padrão",
         "tool": "Ferramenta"
-      }
+      },
+      "transcriptVim": "Modo Vim da transcrição",
+      "transcriptVimHint": "Navegação por teclado no histórico. Ativado por padrão no desktop e desativado no celular."
     },
     "fonts": {
       "label": "Fontes",

@@ -47,6 +47,7 @@ import {
   type ChatToolExpansionOverrides,
 } from '@/lib/chatActivity'
 import { settingsText as st } from '@/i18n/settingsText'
+import { resolveTranscriptVimEnabled } from '@/pages/chat/transcriptVimPreference'
 
 const settings = useSettingsStore()
 const ui = useUiStore()
@@ -264,6 +265,18 @@ const monoFontPickerOptions = computed(() => [
 
 const showChatTimestamps = makeSetting('showChatTimestamps', true)
 const showReasoningTraces = makeSetting('showReasoningTraces', true)
+
+// The stored value wins, but before the user ever touches the switch the
+// effective default is device-based (desktop on, mobile off), so the checkbox
+// shows the mode the transcript is actually running.
+const chatTranscriptVim = computed<boolean>({
+  get() {
+    return resolveTranscriptVimEnabled(settings.data?.chatTranscriptVim, ui.isMobileDevice)
+  },
+  set(value: boolean) {
+    void settings.save({ chatTranscriptVim: value })
+  },
+})
 
 const chatActivityAutoCollapseOnIdle = makeSetting('chatActivityAutoCollapseOnIdle', true)
 
@@ -629,6 +642,15 @@ const dirtyHint = computed(() => (settings.error ? settings.error : null))
                     <label class="inline-flex items-center gap-2 text-sm">
                       <input type="checkbox" v-model="chatActivityAutoCollapseOnIdle" />
                       {{ t('settings.appearance.chat.autoCollapseActivity') }}
+                    </label>
+                    <label class="flex items-start gap-2 text-sm">
+                      <input type="checkbox" class="mt-0.5" v-model="chatTranscriptVim" />
+                      <span class="min-w-0">
+                        <span>{{ t('settings.appearance.chat.transcriptVim') }}</span>
+                        <span class="block text-[11px] text-muted-foreground">
+                          {{ t('settings.appearance.chat.transcriptVimHint') }}
+                        </span>
+                      </span>
                     </label>
                     <div class="mt-1">
                       <div class="text-xs font-medium text-muted-foreground">

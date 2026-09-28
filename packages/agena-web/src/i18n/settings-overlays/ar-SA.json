@@ -22,7 +22,9 @@
       "toolDetailsTable": {
         "expand": "الخزنة",
         "tool": "Tool"
-      }
+      },
+      "transcriptVim": "وضع Vim لسجل المحادثة",
+      "transcriptVimHint": "تنقّل في سجل المحادثة بلوحة المفاتيح. مفعّل افتراضيًا على سطح المكتب، ومتوقف على الجوال."
     },
     "fonts": {
       "label": "Fonts",

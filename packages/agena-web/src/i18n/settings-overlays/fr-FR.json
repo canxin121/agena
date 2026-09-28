@@ -22,7 +22,9 @@
       "toolDetailsTable": {
         "expand": "Ouverture par défaut",
         "tool": "Outil"
-      }
+      },
+      "transcriptVim": "Mode Vim de la transcription",
+      "transcriptVimHint": "Navigation au clavier dans l’historique. Activé par défaut sur ordinateur, désactivé sur mobile."
     },
     "fonts": {
       "label": "Polices",

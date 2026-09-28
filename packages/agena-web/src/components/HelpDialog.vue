@@ -23,6 +23,7 @@ import Dialog from '@/components/ui/Dialog.vue'
 import { reloadAgenaRuntime } from '@/lib/reload'
 import { useSettingsStore } from '@/stores/settings'
 import { useUiStore } from '@/stores/ui'
+import { resolveTranscriptVimEnabled } from '@/pages/chat/transcriptVimPreference'
 
 function getModifierLabel(): string {
   if (typeof navigator === 'undefined') return 'Ctrl'
@@ -36,11 +37,18 @@ const { t } = useI18n()
 
 const mod = computed(() => getModifierLabel())
 
-type ShortcutItem = { keys: string; description: string; icon?: Component }
+// Vim shortcuts only work while the transcript Vim mode is on.
+const transcriptVimEnabled = computed(() =>
+  resolveTranscriptVimEnabled(settings.data?.chatTranscriptVim, ui.isMobileDevice),
+)
 
-const sections = computed((): Array<{ category: string; items: ShortcutItem[] }> => {
+type ShortcutItem = { keys: string; description: string; icon?: Component; vimOnly?: boolean }
+type ShortcutSection = { category: string; items: ShortcutItem[]; vimOnly?: boolean }
+
+const sections = computed((): ShortcutSection[] => {
   const m = mod.value
-  return [
+  const vim = transcriptVimEnabled.value
+  const groups: ShortcutSection[] = [
     {
       category: String(t('help.dialog.sections.navigationCommands')),
       items: [
@@ -58,6 +66,7 @@ const sections = computed((): Array<{ category: string; items: ShortcutItem[] }>
     },
     {
       category: String(t('help.dialog.sections.transcriptVim')),
+      vimOnly: true,
       items: [
         { keys: 'i / Esc', description: String(t('help.dialog.shortcuts.vimModes')), icon: RiText },
         { keys: '[count] h/l · j/k', description: String(t('help.dialog.shortcuts.vimMotions')) },
@@ -71,6 +80,7 @@ const sections = computed((): Array<{ category: string; items: ShortcutItem[] }>
     },
     {
       category: String(t('help.dialog.sections.transcriptSelection')),
+      vimOnly: true,
       items: [
         { keys: 'v / V / Ctrl+V', description: String(t('help.dialog.shortcuts.vimVisual')) },
         { keys: 'y / yy / Y', description: String(t('help.dialog.shortcuts.vimYank')) },
@@ -93,12 +103,32 @@ const sections = computed((): Array<{ category: string; items: ShortcutItem[] }>
           icon: RiAddLine,
         },
         { keys: `${m}+Enter`, description: String(t('help.dialog.shortcuts.sendMessage')) },
-        { keys: `i`, description: String(t('help.dialog.shortcuts.focusChatInput')), icon: RiText },
-        { keys: `Ctrl+P`, description: String(t('help.dialog.shortcuts.openPlan')) },
+        // Vim enters INSERT with `i`; without the mode the platform focus
+        // shortcut (macOS) remains the only keyboard route into the composer.
+        ...(vim
+          ? [
+              {
+                keys: 'i',
+                description: String(t('help.dialog.shortcuts.focusChatInput')),
+                icon: RiText,
+                vimOnly: true,
+              },
+            ]
+          : m === 'Cmd'
+            ? [
+                {
+                  keys: `${m}+I`,
+                  description: String(t('help.dialog.shortcuts.focusChatInput')),
+                  icon: RiText,
+                },
+              ]
+            : []),
+        { keys: `Ctrl+P`, description: String(t('help.dialog.shortcuts.openPlan')), vimOnly: true },
         {
           keys: `Ctrl+C`,
           description: String(t('help.dialog.shortcuts.abortActiveRunDouble')),
           icon: RiCloseCircleLine,
+          vimOnly: true,
         },
       ],
     },
@@ -115,6 +145,13 @@ const sections = computed((): Array<{ category: string; items: ShortcutItem[] }>
       ],
     },
   ]
+
+  // Vim rows describe keys that do nothing while the mode is off, so the
+  // dialog never advertises shortcuts the transcript would ignore.
+  return groups
+    .map((group) => ({ ...group, items: group.items.filter((item) => vim || !item.vimOnly) }))
+    .filter((group) => vim || !group.vimOnly)
+    .filter((group) => group.items.length > 0)
 })
 
 async function reloadConfiguration() {

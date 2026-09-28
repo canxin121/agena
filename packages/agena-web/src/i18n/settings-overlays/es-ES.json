@@ -22,7 +22,9 @@
       "toolDetailsTable": {
         "expand": "Default open",
         "tool": "Herramienta"
-      }
+      },
+      "transcriptVim": "Modo Vim de la transcripción",
+      "transcriptVimHint": "Navegación por teclado del historial. Activado por defecto en escritorio y desactivado en móvil."
     },
     "fonts": {
       "label": "Fuentes",

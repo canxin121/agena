@@ -894,6 +894,8 @@ export default {
         showTimestamps: 'Show timestamps',
         showReasoning: 'Show reasoning traces',
         autoCollapseActivity: 'Auto-collapse activity after assistant finishes',
+        transcriptVim: 'Transcript Vim mode',
+        transcriptVimHint: 'Keyboard-driven transcript navigation. Desktop defaults to on, mobile to off.',
         activityDetails: 'Collapsible part defaults',
         activityTable: {
           type: 'Part type',
@@ -1288,6 +1290,11 @@ export default {
         previousUserMessage: 'Previous user message',
         nextUserMessage: 'Next user message',
         bottom: 'Bottom',
+      },
+      transcriptSearch: {
+        open: 'Search transcript',
+        previous: 'Previous match',
+        next: 'Next match',
       },
       attachments: 'Attachments',
       attachmentsWithCount: 'Attachments ({count})',

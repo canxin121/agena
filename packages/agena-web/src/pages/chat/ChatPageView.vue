@@ -91,6 +91,7 @@ const {
   transcriptPartExpanded,
   setTranscriptPartExpanded,
   loadFoldedActivity,
+  transcriptVimEnabled,
   transcriptVimModeLabel,
   transcriptVimCommandLabel,
   transcriptSearchOpen,
@@ -101,6 +102,8 @@ const {
   isTranscriptNodeSearchMatch,
   setTranscriptSearchQuery,
   handleTranscriptSearchKeydown,
+  openTranscriptSearch,
+  jumpTranscriptSearch,
   closeTranscriptSearch,
 
   // Scroll/nav.
@@ -367,16 +370,28 @@ void sessionActionsMenuRef
               </div>
               <div class="flex shrink-0 items-center gap-2 font-mono text-[10px] text-muted-foreground">
                 <span v-if="currentPhase !== 'idle'">{{ currentPhase }}</span>
-                <span v-if="transcriptVimCommandLabel" class="text-foreground">{{ transcriptVimCommandLabel }}</span>
-                <span
-                  class="font-semibold"
-                  :class="{
-                    'text-primary': transcriptVimModeLabel === 'INSERT',
-                    'text-amber-600 dark:text-amber-400': transcriptVimModeLabel.startsWith('VISUAL'),
-                    'text-emerald-700 dark:text-emerald-300': transcriptVimModeLabel === 'NAVIGATE',
-                  }"
-                  >{{ transcriptVimModeLabel }}</span
+                <template v-if="transcriptVimEnabled">
+                  <span v-if="transcriptVimCommandLabel" class="text-foreground">{{ transcriptVimCommandLabel }}</span>
+                  <span
+                    class="font-semibold"
+                    :class="{
+                      'text-primary': transcriptVimModeLabel === 'INSERT',
+                      'text-amber-600 dark:text-amber-400': transcriptVimModeLabel.startsWith('VISUAL'),
+                      'text-emerald-700 dark:text-emerald-300': transcriptVimModeLabel === 'NAVIGATE',
+                    }"
+                    >{{ transcriptVimModeLabel }}</span
+                  >
+                </template>
+                <IconButton
+                  v-if="chat.selectedSessionId"
+                  class="h-6 w-6"
+                  :tooltip="t('chat.page.transcriptSearch.open')"
+                  :is-touch-pointer="ui.isTouchPointer"
+                  :aria-label="t('chat.page.transcriptSearch.open')"
+                  @click="openTranscriptSearch(true)"
                 >
+                  <RiSearchLine class="h-3.5 w-3.5" />
+                </IconButton>
               </div>
             </div>
 
@@ -385,7 +400,7 @@ void sessionActionsMenuRef
               class="chat-message-column flex items-center gap-2 border-t border-border/50 py-1.5"
             >
               <RiSearchLine class="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-              <span class="font-mono text-xs text-primary">{{
+              <span v-if="transcriptVimEnabled" class="font-mono text-xs text-primary">{{
                 transcriptVimCommandLabel.startsWith('?') ? '?' : '/'
               }}</span>
               <input
@@ -395,15 +410,33 @@ void sessionActionsMenuRef
                 class="h-7 min-w-0 flex-1 border-0 bg-transparent px-0 font-mono text-xs outline-none"
                 autocomplete="off"
                 spellcheck="false"
-                aria-label="Search transcript"
+                :aria-label="t('chat.page.transcriptSearch.open')"
                 @input="setTranscriptSearchQuery(($event.target as HTMLInputElement).value)"
                 @keydown="handleTranscriptSearchKeydown"
               />
               <span class="font-mono text-[10px] text-muted-foreground">{{ transcriptSearchSummary }}</span>
+              <IconButton
+                class="h-6 w-6"
+                :tooltip="t('chat.page.transcriptSearch.previous')"
+                :is-touch-pointer="ui.isTouchPointer"
+                :aria-label="t('chat.page.transcriptSearch.previous')"
+                @click="jumpTranscriptSearch(true)"
+              >
+                <RiArrowUpLine class="h-3.5 w-3.5" />
+              </IconButton>
+              <IconButton
+                class="h-6 w-6"
+                :tooltip="t('chat.page.transcriptSearch.next')"
+                :is-touch-pointer="ui.isTouchPointer"
+                :aria-label="t('chat.page.transcriptSearch.next')"
+                @click="jumpTranscriptSearch(false)"
+              >
+                <RiArrowDownLine class="h-3.5 w-3.5" />
+              </IconButton>
               <button
                 type="button"
                 class="inline-flex h-6 w-6 items-center justify-center text-muted-foreground hover:text-foreground"
-                aria-label="Close transcript search"
+                :aria-label="t('common.close')"
                 @click="closeTranscriptSearch(false)"
               >
                 <RiCloseLine class="h-3.5 w-3.5" />

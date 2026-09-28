@@ -144,6 +144,13 @@ export function useChatTranscriptVim(opts: {
   let transcriptResizeObserver: ResizeObserver | null = null
   let cachedTextModel: TextModel | null = null
 
+  // Vim mode is a switch, not a constant. Every visual side effect below is
+  // gated on the same source of truth the key handler uses, so the transcript
+  // can run as an ordinary scrollable document without modal chrome.
+  function vimActive(): boolean {
+    return !opts.enabled || opts.enabled.value
+  }
+
   function invalidateTextModel() {
     cachedTextModel = null
   }
@@ -332,7 +339,7 @@ export function useChatTranscriptVim(opts: {
   }
 
   function selectNode(key: string) {
-    if (!key) return
+    if (!vimActive() || !key) return
     const changed = activeNodeKey.value !== key
     activeNodeKey.value = key
     if (changed) {
@@ -874,6 +881,11 @@ export function useChatTranscriptVim(opts: {
   }
 
   function syncNativeSelection(options?: { updatePreferredX?: boolean; preserveScreenAnchor?: boolean }) {
+    if (!vimActive()) {
+      clearVisualBlockHighlight()
+      removeCursorOverlay()
+      return
+    }
     if (typeof document === 'undefined' || mode.value === 'INSERT' || mode.value === 'SEARCH') {
       clearVisualBlockHighlight()
       removeCursorOverlay()
@@ -1171,6 +1183,9 @@ export function useChatTranscriptVim(opts: {
   }
 
   function onTranscriptPointerDown(event: PointerEvent) {
+    // With the mode off the transcript must keep the browser's own selection
+    // and drag behaviour instead of owning the pointer.
+    if (!vimActive()) return
     if (event.button !== 0 || !(event.target instanceof Element)) return
     const scroll = opts.scrollEl.value
     if (!scroll) return
@@ -2060,6 +2075,7 @@ export function useChatTranscriptVim(opts: {
       clearPending()
       mode.value = 'NAVIGATE'
       nextTick(() => {
+        if (!vimActive()) return
         ensureActive(true)
         syncNativeSelection({ updatePreferredX: true })
       })
@@ -2071,10 +2087,35 @@ export function useChatTranscriptVim(opts: {
     () =>
       nextTick(() => {
         invalidateTextModel()
+        if (!vimActive()) {
+          scheduleSearchHighlight()
+          return
+        }
         ensureActive(true)
         syncNativeSelection({ updatePreferredX: true })
         scheduleSearchHighlight()
       }),
+  )
+
+  watch(
+    () => (opts.enabled ? opts.enabled.value : true),
+    (enabled) => {
+      if (enabled) return
+      // Switching the mode off leaves no modal chrome behind: the transcript
+      // returns to plain browser scrolling and selection.
+      removeCursorOverlay()
+      clearVisualBlockHighlight()
+      clearMouseSelection()
+      if (ownsNativeSelection) {
+        window.getSelection()?.removeAllRanges()
+        ownsNativeSelection = false
+      }
+      mode.value = 'NAVIGATE'
+      activeNodeKey.value = ''
+      visualAnchorKey.value = ''
+      commandEcho.value = ''
+      clearPending()
+    },
   )
 
   onMounted(() => {
@@ -2138,6 +2179,8 @@ export function useChatTranscriptVim(opts: {
     isNodeSearchMatch,
     setSearchQuery,
     handleSearchKeydown,
+    openSearch,
+    jumpSearch,
     closeSearch,
     enterInsertMode,
     returnToNavigate,

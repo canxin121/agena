@@ -123,11 +123,14 @@ export type ChatPageViewContext = {
   transcriptPartExpanded: (part: TranscriptDisplayPart) => boolean
   setTranscriptPartExpanded: (part: TranscriptDisplayPart, expanded: boolean) => void
   loadFoldedActivity: (fold: MessageFold, all: boolean) => void
+  transcriptVimEnabled: MaybeRef<boolean>
   transcriptVimModeLabel: MaybeRef<string>
   transcriptVimCommandLabel: MaybeRef<string>
   transcriptSearchOpen: MaybeRef<boolean>
   transcriptSearchQuery: MaybeRef<string>
   transcriptSearchSummary: MaybeRef<string>
+  openTranscriptSearch: (forward: boolean) => void
+  jumpTranscriptSearch: (reverse: boolean) => void
   selectTranscriptNode: (key: string) => void
   isTranscriptNodeSelected: (key: string) => boolean
   isTranscriptNodeSearchMatch: (key: string) => boolean

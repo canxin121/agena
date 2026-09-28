@@ -35,6 +35,7 @@ export type Settings = {
   // Chat message UX
   showChatTimestamps?: boolean
   showReasoningTraces?: boolean
+  chatTranscriptVim?: boolean
   chatActivityAutoCollapseOnIdle?: boolean
   chatActivitySummaryFilters?: string[]
   chatToolActivitySummaryFilters?: string[]

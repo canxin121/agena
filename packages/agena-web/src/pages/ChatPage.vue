@@ -32,6 +32,7 @@ import type { BuiltInCommand, Command } from './chat/useChatCommands'
 import { useChatSessionActions } from './chat/useChatSessionActions'
 import { useChatRunUi } from './chat/useChatRunUi'
 import { useChatTranscriptVim } from './chat/useChatTranscriptVim'
+import { resolveTranscriptVimEnabled } from './chat/transcriptVimPreference'
 import {
   composerLineEnd,
   composerLineStart,
@@ -1254,8 +1255,14 @@ const {
   handleComposerStopAction,
 } = runUi
 
+// Vim mode is a browser preference: desktop defaults to on, mobile to off. The
+// focused-pane gate stays on top so embedded panes keep one keyboard owner.
+const transcriptVimEnabled = computed(() =>
+  resolveTranscriptVimEnabled(settings.data?.chatTranscriptVim, ui.isMobileDevice),
+)
+
 const transcriptVim = useChatTranscriptVim({
-  enabled: isFocusedWorkspacePane,
+  enabled: computed(() => transcriptVimEnabled.value && isFocusedWorkspacePane.value),
   pageRef,
   scrollEl,
   composerRef,
@@ -1293,6 +1300,8 @@ const {
   isNodeSearchMatch: isTranscriptNodeSearchMatch,
   setSearchQuery: setTranscriptSearchQuery,
   handleSearchKeydown: handleTranscriptSearchKeydown,
+  openSearch: openTranscriptSearch,
+  jumpSearch: jumpTranscriptSearch,
   closeSearch: closeTranscriptSearch,
 } = transcriptVim
 
@@ -2420,6 +2429,7 @@ const viewCtx = {
 
   // TUI-parity transcript navigation and search.
   transcriptSearchInputRef,
+  transcriptVimEnabled,
   transcriptVimModeLabel,
   transcriptVimCommandLabel,
   transcriptSearchOpen,
@@ -2430,6 +2440,8 @@ const viewCtx = {
   isTranscriptNodeSearchMatch,
   setTranscriptSearchQuery,
   handleTranscriptSearchKeydown,
+  openTranscriptSearch,
+  jumpTranscriptSearch,
   closeTranscriptSearch,
 
   // Scroll + nav.

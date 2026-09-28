@@ -889,6 +889,8 @@ export default {
         showTimestamps: '显示时间戳',
         showReasoning: '显示思考过程',
         autoCollapseActivity: '助手完成后自动收起活动信息',
+        transcriptVim: '对话记录 Vim 模式',
+        transcriptVimHint: '键盘驱动的对话记录导航。桌面端默认开启，移动端默认关闭。',
         activityDetails: '可折叠 Part 默认状态',
         activityTable: {
           type: 'Part 类型',
@@ -1283,6 +1285,11 @@ export default {
         previousUserMessage: '上一条用户消息',
         nextUserMessage: '下一条用户消息',
         bottom: '底部',
+      },
+      transcriptSearch: {
+        open: '搜索对话记录',
+        previous: '上一处匹配',
+        next: '下一处匹配',
       },
       attachments: '附件',
       attachmentsWithCount: '附件 ({count})',

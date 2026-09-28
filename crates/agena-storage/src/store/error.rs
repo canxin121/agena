@@ -10,18 +10,8 @@ use std::fmt;
 /// Errors returned by the persistence engine and the session facade.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StoreError {
-    /// The session, part, or lease does not exist.
+    /// The session or part does not exist.
     NotFound(String),
-    /// A write required holding the session lease, but this caller does not
-    /// own a fresh lease for it.
-    LeaseNotHeld { session_id: i64 },
-    /// The lease is held by another owner (fresh heartbeat), so the write or
-    /// acquisition was refused.
-    LeaseHeldByOther {
-        session_id: i64,
-        owner_id: String,
-        heartbeat_at_ms: i64,
-    },
     /// The operation violates a session/part invariant (invalid lifecycle
     /// transition, terminal part updated, fork of a failed session, etc.).
     InvalidState(String),
@@ -55,17 +45,6 @@ impl fmt::Display for StoreError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::NotFound(message) => write!(f, "not found: {message}"),
-            Self::LeaseNotHeld { session_id } => {
-                write!(f, "session {session_id} lease is not held by this caller")
-            }
-            Self::LeaseHeldByOther {
-                session_id,
-                owner_id,
-                heartbeat_at_ms,
-            } => write!(
-                f,
-                "session {session_id} lease is held by {owner_id} (heartbeat {heartbeat_at_ms})"
-            ),
             Self::InvalidState(message) => write!(f, "invalid state: {message}"),
             Self::Constraint(message) => write!(f, "constraint violation: {message}"),
             Self::Conflict(message) => write!(f, "conflict: {message}"),

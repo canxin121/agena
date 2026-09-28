@@ -1049,7 +1049,7 @@ mod tests {
         );
         assert_eq!(
             generated_provider_model_settings(
-                &[catalog.clone()],
+                std::slice::from_ref(&catalog),
                 "cline-pass/deepseek-v4.1-flash",
                 &model,
             )

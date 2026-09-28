@@ -40,7 +40,7 @@ use super::model::{PromptCompactionRuntime, ProviderPromptAnchor, SessionPending
 use super::processor::{SessionRunRequest, SessionRunTermination};
 use super::prompt_window::PromptRequestOptions;
 use super::store::{StoreAdapter, new_part_from_content};
-use super::{ExecutionControl, ExecutionControlError, ExecutionRegistry};
+use super::{ExecutionControl, ExecutionControlError, ExecutionPermit, ExecutionRegistry};
 use crate::session::{Session, SessionProcessor};
 use agena_domain::{SessionListRequest, SessionSummary, UsageStats, UsageStatsQuery};
 
@@ -525,7 +525,7 @@ impl SessionManagerState {
 pub struct SessionManager {
     /// The sealed data facade (14.1). All chat data — creation, runs,
     /// parts, state, exports — flows through this adapter; the manager never
-    /// touches raw storage or leases (15.6).
+    /// touches raw storage (15.6).
     store: Arc<StoreAdapter>,
     /// Kept infrastructure (design 19.1): permission-rule persistence ports.
     permission_rules: Arc<dyn agena_storage::PermissionRuleRepository>,
@@ -540,11 +540,13 @@ pub struct SessionManager {
     execution: ArcSwap<SessionManagerState>,
     execution_registry: Arc<ExecutionRegistry>,
     session_mutations: session_mutation::SessionMutationCoordinator,
-    /// Sessions whose interrupted-run reconciliation has already run in this
-    /// process. `get_session` reconciles a session once (plus its subagent
-    /// children) so the per-session event scan is not repeated on every
-    /// refresh; after that, per-run cleanup and per-load projection catch-up
-    /// keep the session current.
+    /// Sessions whose abandoned-run reconciliation has already succeeded in
+    /// this process. `get_session` reconciles a session once (plus its
+    /// subagent children) so the per-session scan is not repeated on every
+    /// refresh; after that, per-run cleanup, the settle-time reconcile, and
+    /// per-load projection catch-up keep the session current. An execution
+    /// this process is running is never latched — the execution registry
+    /// already answers for it — so the latch cannot suppress recovery.
     reconciled_sessions: Arc<Mutex<HashSet<i64>>>,
     host_user_input_waiters: Arc<Mutex<HashMap<String, PendingHostUserInput>>>,
     host_user_input_sequences: Arc<StdMutex<HashMap<HostUserInputSequenceKey, usize>>>,
@@ -1184,7 +1186,7 @@ impl SessionManager {
         let identity = self
             .conversation_identity_for_execution(session_id, source, conversation_target)
             .await?;
-        let (control, steer_rx) = self
+        let (permit, steer_rx) = self
             .execution_registry
             .register(session_id, identity.turn_id, identity.reply_id)
             .await
@@ -1193,11 +1195,12 @@ impl SessionManager {
         // There is intentionally no `.await` between successful registration
         // and spawning the lifecycle owner. Once a registry slot exists, its
         // owner therefore always exists as well, even if the calling request
-        // is cancelled while awaiting the result.
+        // is cancelled while awaiting the result — and the owner holds the
+        // permit, so the slot is released exactly when that owner stops.
         let manager = self.background_handle();
         let owner = tokio::spawn(async move {
             manager
-                .drive_registered(session_id, task_name, control, steer_rx, operation)
+                .drive_registered(session_id, task_name, permit, steer_rx, operation)
                 .await
         });
         owner.await.map_err(|error| {
@@ -1268,7 +1271,7 @@ impl SessionManager {
                 .await
                 .map_err(execution_control_to_app_error)?;
         }
-        let (control, steer_rx) = self
+        let (permit, steer_rx) = self
             .execution_registry
             .register_with_restore(
                 session_id,
@@ -1281,14 +1284,14 @@ impl SessionManager {
             .map_err(execution_control_to_app_error)?;
         let outcome = crate::SessionExecutionCommandOutcome::accepted(
             session_id,
-            control.execution_id(),
-            control.turn_id(),
-            control.reply_id(),
+            permit.control().execution_id(),
+            permit.control().turn_id(),
+            permit.control().reply_id(),
         );
         let manager = self.background_handle();
         tokio::spawn(async move {
             if let Err(error) = manager
-                .drive_registered(session_id, task_name, control, steer_rx, operation)
+                .drive_registered(session_id, task_name, permit, steer_rx, operation)
                 .await
             {
                 let failure = error.failure();
@@ -1309,7 +1312,7 @@ impl SessionManager {
         &self,
         session_id: i64,
         task_name: &'static str,
-        control: Arc<ExecutionControl>,
+        permit: ExecutionPermit,
         steer_rx: mpsc::Receiver<Vec<TypedContent>>,
         operation: F,
     ) -> Result<T, AppError>
@@ -1321,6 +1324,7 @@ impl SessionManager {
         Fut: Future<Output = Result<T, AppError>> + Send + 'static,
     {
         agena_runtime::session_started();
+        let control = Arc::clone(permit.control());
         let manager = self.background_handle();
         let task_control = Arc::clone(&control);
         let mut task = tokio::task::spawn(operation(manager, task_control, steer_rx));
@@ -1359,21 +1363,42 @@ impl SessionManager {
         };
         agena_runtime::session_finished();
 
-        // Terminalize the execution first: the run's own persist wrote the
-        // marker's terminal state (complete_run / cancel_run). Reconcile
-        // afterwards so any residual in-flight marker that survived cleanup
-        // (for example a run whose persist was interrupted by a crash) is
-        // aborted by the facade as `process_restart` (17.4 step 2c).
+        // The registry slot is released *after* the terminal work, and
+        // releasing it resolves the execution: a task that panicked past the
+        // join, or that never returned, would otherwise leave the slot
+        // occupied forever and make every later read treat a dead run as
+        // live. The permit is dropped explicitly rather than at the end of
+        // scope so the release cannot be skipped by an early return (`?`) in
+        // the bookkeeping below; everything after it is bookkeeping.
         let outcome = Self::execution_outcome(control.as_ref(), &result);
         let terminal_result = self
             .finish_execution(session_id, control.as_ref(), outcome)
             .await;
-        let reconciliation_result = self.store.reconcile(session_id).await;
-        self.execution_registry
-            .unregister_if_matches(session_id, &control)
-            .await;
+        // Terminalize the execution first: the run's own persist wrote the
+        // marker's terminal state (complete_run / cancel_run). Reconcile
+        // afterwards so any residual in-flight marker that survived cleanup
+        // (for example a run whose persist was interrupted by a crash) is
+        // aborted by the facade as `process_restart` (17.4). The registry slot
+        // is still held here, so the run this execution just settled is
+        // already terminal and the reconcile pass cannot resurrect it.
+        let reconciliation_result = match self.store.in_flight_run_ids(session_id).await {
+            Ok(run_ids) => self.store.reconcile(session_id, &run_ids).await,
+            Err(error) => Err(error),
+        };
+        drop(permit);
+        if terminal_result.is_ok()
+            && let Err(error) = &reconciliation_result
+        {
+            tracing::warn!(
+                session_id,
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "reconcile abandoned runs after a settled execution",
+                    error,
+                ),
+                "post-execution run reconciliation failed"
+            );
+        }
         terminal_result?;
-        reconciliation_result?;
         result
     }
 
@@ -1403,20 +1428,16 @@ impl SessionManager {
     ) -> Self {
         let db_arc = Arc::new(db.clone());
         let engine = agena_storage_sqlite::SqliteEngine::new(Arc::clone(&db_arc));
-        // One facade owns the lease and notification lifecycle for this
-        // process; the manager talks to it exclusively through `StoreAdapter`
-        // (14.2, 15.6). `owner_id` is the process identity stamped on every
-        // facade write.
-        let owner_id = uuid::Uuid::new_v4().to_string();
+        // One facade owns the notification lifecycle for this process; the
+        // manager talks to it exclusively through `StoreAdapter` (14.2, 15.6).
+        // This process is the only writer for the data directory, so no write
+        // carries an ownership handshake.
         let facade: Arc<dyn agena_storage::store::SessionStore> =
             Arc::new(agena_storage::store::SessionFacade::<
                 agena_storage_sqlite::SqliteEngine,
-            >::new(
-                engine, owner_id.clone(), config.max_cached_sessions
-            ));
+            >::new(engine, config.max_cached_sessions));
         let store = Arc::new(StoreAdapter::new(
             facade,
-            owner_id,
             Arc::new(|| Utc::now().timestamp_millis()),
         ));
         let permission_rules = Arc::new(agena_storage_sqlite::SeaPermissionRuleRepository::new(
@@ -2029,10 +2050,10 @@ impl SessionManager {
         unreachable!("bounded launch-failure retry returns from the loop")
     }
 
-    /// Convert the short launch lease into a renewable runtime ownership lease
-    /// after the adapter returns its receipt. This lets another process
-    /// distinguish live work from a restart orphan without consulting an
-    /// in-memory registry. A very fast completion may already be terminal.
+    /// Extend the launch claim window into the long background-operation claim
+    /// window after the adapter returns its receipt. The window is a liveness
+    /// hint for reconciliation, never the source of truth for who is running
+    /// the work. A very fast completion may already be terminal.
     async fn finish_background_launch_handoff(&self, operation_id: &str) -> Result<(), AppError> {
         for attempt in 0..4 {
             let current = self
@@ -2056,7 +2077,7 @@ impl SessionManager {
                     external_id: None,
                     outcome: None,
                     failure: None,
-                    owner_id: Some(self.store.background_owner_id().to_owned()),
+                    owner_id: Some(StoreAdapter::CLAIMANT.to_owned()),
                     lease_until_ms: Some(Utc::now().timestamp_millis() + 120_000),
                 })
                 .await;
@@ -2517,10 +2538,10 @@ impl SessionManager {
         Ok(recovered)
     }
 
-    /// Renew ownership only for work this runtime can prove is still live.
-    /// The durable lease is a cross-process liveness hint, never the source of
+    /// Renew the claim only for work this runtime can prove is still live.
+    /// The durable claim window is a liveness hint, never the source of
     /// lifecycle truth; failure to renew merely makes the operation eligible
-    /// for reconciliation after the bounded lease window.
+    /// for reconciliation after the bounded window.
     pub async fn renew_background_operation_leases(&self, limit: usize) -> Result<usize, AppError> {
         let operations = self.store.active_background_operations(None, limit).await?;
         let process_summaries = self
@@ -2531,9 +2552,7 @@ impl SessionManager {
             .unwrap_or_default();
         let mut renewed = 0usize;
         for operation in operations {
-            if operation.owner_id.as_deref() != Some(self.store.background_owner_id())
-                || operation.phase != BackgroundOperationPhase::Running
-            {
+            if operation.phase != BackgroundOperationPhase::Running {
                 continue;
             }
             let live = match operation.kind {
@@ -2572,7 +2591,7 @@ impl SessionManager {
                     external_id: None,
                     outcome: None,
                     failure: None,
-                    owner_id: Some(self.store.background_owner_id().to_owned()),
+                    owner_id: Some(StoreAdapter::CLAIMANT.to_owned()),
                     lease_until_ms: Some(Utc::now().timestamp_millis() + 120_000),
                 })
                 .await
@@ -2584,17 +2603,18 @@ impl SessionManager {
                 Err(error) => tracing::debug!(
                     target: "agena_background",
                     %error,
-                    "background lease renewal lost a concurrent transition"
+                    "background claim renewal lost a concurrent transition"
                 ),
             }
         }
         Ok(renewed)
     }
 
-    /// Reconcile shell/monitor operations whose owning runtime disappeared or
-    /// whose terminal callback was lost. A live lease owned by another
-    /// process wins; after expiry the local process registry is checked and an
-    /// absent process becomes an explicit Interrupted notification.
+    /// Reconcile shell/monitor operations whose launching runtime disappeared
+    /// or whose terminal callback was lost. A live claim window means the work
+    /// is still being driven; after it lapses the local process registry is
+    /// checked and an absent process becomes an explicit Interrupted
+    /// notification.
     pub async fn reconcile_background_processes(&self, limit: usize) -> Result<usize, AppError> {
         let mut operations = self
             .store
@@ -2637,7 +2657,7 @@ impl SessionManager {
             match summary.map(|summary| summary.status) {
                 Some(ProcessStatus::Running) => {
                     // The local registry proves the process is alive; adopt
-                    // ownership if its previous lease merely expired.
+                    // the claim if its previous window merely lapsed.
                     self.finish_background_launch_handoff(&operation.operation_id)
                         .await?;
                 }
@@ -2686,7 +2706,7 @@ impl SessionManager {
                     self.record_interrupted_background_operation(
                         operation,
                         format!(
-                            "background process {external_id} is absent after its owner lease expired"
+                            "background process {external_id} is absent after its claim window lapsed"
                         ),
                     )
                     .await?;
@@ -2771,8 +2791,9 @@ impl SessionManager {
                     .is_some_and(|until| until > Utc::now().timestamp_millis());
                 if launch_is_live {
                     // The task tool published Running immediately before
-                    // execute_registered installs the child lease. The
-                    // operation's short launch lease closes that handoff race.
+                    // execute_registered installs the child's registry slot.
+                    // The operation's short launch claim closes that handoff
+                    // race.
                     continue;
                 }
                 self.reconcile_interrupted_session(child_id).await?;

@@ -514,15 +514,14 @@ impl ToolExecutor {
             view,
             apply_patch: apply_patch_execution_from_tool_output(&output),
         };
-        let finalized = Box::pin(self.finalize_execution_async(
+        Box::pin(self.finalize_execution_async(
             invocation,
             session_id,
             resolution.canonical_name().as_str(),
             call_id,
             execution,
         ))
-        .await;
-        finalized
+        .await
     }
 
     pub async fn execute_invocation_detailed(

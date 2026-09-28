@@ -20,8 +20,8 @@ use agena_provider::{
     CompletionStreamEvent, CompletionUsage,
 };
 use agena_storage::store::{
-    NewPart, PartDelta, PartRole, PartState, PartVisibility, PersistenceEngine, SessionChange,
-    SessionState, SubmitOutcome,
+    NewPart, PartDelta, PartRole, PartState, PartVisibility, SessionChange, SessionState,
+    SubmitOutcome,
 };
 use sea_orm::{ConnectionTrait, Database, DatabaseBackend, DatabaseConnection, Statement};
 
@@ -230,7 +230,6 @@ async fn compaction_checkpoint_and_user_request_survive_a_store_reload() {
         .session_store()
         .compact_session(
             legacy.id,
-            manager.store.owner_id.as_str(),
             Some("An old incomplete summary.".to_owned()),
             None,
             None,
@@ -281,13 +280,7 @@ async fn compaction_checkpoint_and_user_request_survive_a_store_reload() {
         .expect("persist user request");
     manager
         .session_store()
-        .compact_session(
-            empty_checkpoint.id,
-            manager.store.owner_id.as_str(),
-            None,
-            None,
-            None,
-        )
+        .compact_session(empty_checkpoint.id, None, None, None)
         .await
         .expect("persist empty marker");
     let loaded_empty = manager
@@ -1239,8 +1232,8 @@ async fn default_manager_fork_includes_the_complete_last_message() {
 }
 
 #[tokio::test]
-async fn open_session_preserves_a_run_paused_for_user_input_without_a_lease() {
-    let (manager, database) = test_manager_with_database().await;
+async fn open_session_reconciles_a_run_paused_for_user_input() {
+    let (manager, _database) = test_manager_with_database().await;
     let session = create(&manager, "awaiting user").await;
     let run_id = manager
         .store
@@ -1284,26 +1277,17 @@ async fn open_session_preserves_a_run_paused_for_user_input_without_a_lease() {
         .await
         .expect("append pending tool call");
 
-    // Fault injection through the persistence engine: an open session must
-    // derive AwaitingInteraction even when the paused run has no lease. Production
-    // manager code itself continues to access chat data only through
-    // SessionStore.
-    let engine = agena_storage_sqlite::SqliteEngine::new(Arc::new(database));
-    assert!(
-        engine
-            .release_lease(session.id, manager.store.owner_id.as_str())
-            .await
-            .expect("release paused run lease")
-    );
     let facade = manager.session_store();
     let before = facade
         .session_state(session.id)
         .await
-        .expect("derive awaiting state without a lease");
+        .expect("derive awaiting state");
     assert_eq!(before.state, SessionState::AwaitingInteraction);
 
-    // Exercise the manager's lazy reconciliation-on-open path. If its
-    // AwaitingInteraction guard regresses, this call terminalizes the paused run.
+    // Nothing in this process is executing the run: the registry slot was
+    // never taken. A run paused on a question is still abandoned work, so
+    // opening the session terminalizes it: only the process that owns the
+    // execution may keep a marker in flight (17.4).
     let opened = manager
         .get_session(session.id)
         .await
@@ -1316,25 +1300,26 @@ async fn open_session_preserves_a_run_paused_for_user_input_without_a_lease() {
         .iter()
         .find(|part| part.part_id == run_id)
         .expect("run marker remains");
+    assert_eq!(marker.state, PartState::Failed);
+    assert_eq!(marker.content["abort_reason"], "process_restart");
     let tool = after
         .parts
         .iter()
         .find(|part| part.kind == "tool_call")
         .expect("tool call remains");
-    assert!(marker.state.is_in_flight(), "paused run is not aborted");
-    assert_eq!(tool.state, PartState::Pending);
+    assert_eq!(tool.state, PartState::Cancelled);
     assert_eq!(
         facade
             .session_state(session.id)
             .await
             .expect("derive state after open")
             .state,
-        SessionState::AwaitingInteraction
+        SessionState::Ready
     );
 }
 
 #[tokio::test]
-async fn open_session_leaves_another_process_fresh_run_intact() {
+async fn open_session_leaves_the_live_execution_run_intact() {
     let manager = test_manager().await;
     let session = create(&manager, "fresh run").await;
     let run_id = manager
@@ -1347,10 +1332,22 @@ async fn open_session_leaves_another_process_fresh_run_intact() {
         .await
         .expect("start fresh run");
 
+    // A run this process is executing holds the registry slot until it
+    // settles; that slot — not a lease — is what marks the work as live.
+    let (_control, _steer) = manager
+        .execution_registry
+        .register(
+            session.id,
+            agena_domain::TurnId::new(),
+            agena_domain::AssistantReplyId::new(),
+        )
+        .await
+        .expect("register live execution");
+
     manager
         .get_session(session.id)
         .await
-        .expect("open session with fresh lease");
+        .expect("open session owned by the live execution");
 
     let presentation = manager
         .session_store()
@@ -1498,7 +1495,7 @@ async fn projection_preserves_precise_part_kind() {
 }
 
 #[tokio::test]
-async fn derived_state_tracks_run_marker_and_lease() {
+async fn derived_state_tracks_the_run_marker() {
     let manager = test_manager().await;
     let session = create(&manager, "derived state").await;
     let run_id = manager
@@ -1870,7 +1867,7 @@ async fn manager_with_provider(provider: Arc<dyn ModelRuntime>) -> SessionManage
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn opening_a_new_subtask_at_running_publication_cannot_mark_it_interrupted() {
+async fn opening_a_new_subtask_at_running_publication_cannot_be_reconciled_as_abandoned() {
     let provider = Arc::new(FakeProvider {
         provider_id: "fake",
         model: ModelId::new("fake-model"),
@@ -1893,8 +1890,9 @@ async fn opening_a_new_subtask_at_running_publication_cannot_mark_it_interrupted
     // Force the exact production race: a session-tree consumer opens the
     // child synchronously from the notification that first publishes its
     // Running metadata. This is before run_subtask reaches
-    // execute_registered. Without the live-launch reconciliation claim,
-    // get_session classifies the brand-new child as a restart orphan and
+    // execute_registered, so the child has no execution-registry slot yet.
+    // Without the launch latch claimed before Running is published,
+    // get_session classifies the brand-new child as abandoned work and
     // writes Interrupted four milliseconds before execution starts.
     let _subscription = manager
         .session_store()
@@ -1944,7 +1942,7 @@ async fn opening_a_new_subtask_at_running_publication_cannot_mark_it_interrupted
     assert_eq!(
         opened_status,
         agena_domain::SubtaskStatus::Running,
-        "a child owned by this live launch must not be rewritten as Interrupted"
+        "a child this process is launching must not be rewritten as Interrupted"
     );
     assert_eq!(response.status, agena_domain::SubtaskStatus::Completed);
 }
@@ -3477,12 +3475,7 @@ async fn host_user_input_does_not_downgrade_an_in_progress_tool_part() {
     .expect("build tool part");
     let store = manager.session_store();
     let outcome = store
-        .submit_user_run(
-            session.id,
-            manager.store.owner_id.as_str(),
-            vec![tool_part],
-            None,
-        )
+        .submit_user_run(session.id, vec![tool_part], None)
         .await
         .expect("submit run with in-progress tool part");
     let tool_part_id = outcome.parts[1].part_id;
@@ -3565,12 +3558,7 @@ async fn host_ask_user_is_reply_resolvable_on_tool_call() {
     .expect("build tool part");
     let store = manager.session_store();
     let outcome = store
-        .submit_user_run(
-            session.id,
-            manager.store.owner_id.as_str(),
-            vec![tool_part],
-            None,
-        )
+        .submit_user_run(session.id, vec![tool_part], None)
         .await
         .expect("submit run with in-progress tool part");
     let tool_part_id = outcome.parts[1].part_id;
@@ -3857,12 +3845,7 @@ async fn host_ask_user_tool_call_born_in_progress_and_reply_completes() {
     .expect("build tool part");
     let store = manager.session_store();
     store
-        .submit_user_run(
-            session.id,
-            manager.store.owner_id.as_str(),
-            vec![tool_part],
-            None,
-        )
+        .submit_user_run(session.id, vec![tool_part], None)
         .await
         .expect("submit run with in-progress tool part");
 
@@ -4057,7 +4040,6 @@ async fn host_ask_user_from_unrelated_operations_with_empty_operation_id_do_not_
     let outcome = store
         .submit_user_run(
             session.id,
-            manager.store.owner_id.as_str(),
             vec![
                 new_part_from_content(
                     "tool_call",
@@ -4555,6 +4537,18 @@ async fn hook_runs_append_to_the_in_flight_launching_run() {
         )
         .await
         .expect("start launching run marker");
+    // The launching run belongs to a live execution: the registry slot is what
+    // marks it as this process's work, so opening the session must leave it in
+    // flight (17.4).
+    let (_control, _steer) = manager
+        .execution_registry
+        .register(
+            session_id,
+            agena_domain::TurnId::new(),
+            agena_domain::AssistantReplyId::new(),
+        )
+        .await
+        .expect("register the live execution owning the launching run");
     let session = manager
         .get_session(session_id)
         .await
@@ -5719,7 +5713,53 @@ async fn recovery_consumes_a_delivery_whose_response_committed_before_the_outbox
 }
 
 #[tokio::test]
-async fn restarted_running_task_without_live_child_lease_becomes_interrupted() {
+async fn opening_a_session_reconciles_an_abandoned_run_written_by_a_previous_process() {
+    let provider = Arc::new(FakeProvider {
+        provider_id: "fake",
+        model: ModelId::new("fake-model"),
+        deltas: vec!["acknowledged".to_owned()],
+        thinking_deltas: Vec::new(),
+        finish_reason: Some(CompletionFinishReason::Stop),
+    });
+    let manager = manager_with_provider(provider).await;
+    let session = create_with_model(&manager, "startup recovery", "fake", "fake-model").await;
+    // Exactly the durable shape a killed process leaves: a run marker still in
+    // flight with nobody executing it. No clock participates, so recovery is
+    // deterministic rather than time-dependent.
+    manager
+        .store
+        .start_run(
+            session.id,
+            "continue",
+            run_marker_content("continue", Some("fake"), Some("fake-model"), None, None),
+        )
+        .await
+        .expect("start the abandoned run");
+
+    // A fresh process's manager has an empty registry and an empty latch, so
+    // this is the startup path. Reading the session must settle the run.
+    let opened = manager
+        .get_session(session.id)
+        .await
+        .expect("open the session owned by a dead process");
+    let failed_markers = opened
+        .parts()
+        .iter()
+        .filter(|part| {
+            part.is_run_marker()
+                && part.state == agena_storage::store::PartState::Failed
+                && part
+                    .content
+                    .get("abort_reason")
+                    .and_then(serde_json::Value::as_str)
+                    == Some("process_restart")
+        })
+        .count();
+    assert_eq!(failed_markers, 1, "the abandoned run is terminalized once");
+}
+
+#[tokio::test]
+async fn abandoned_running_task_without_a_live_execution_becomes_interrupted() {
     let provider = Arc::new(FakeProvider {
         provider_id: "fake",
         model: ModelId::new("fake-model"),
@@ -5799,7 +5839,7 @@ async fn restarted_running_task_without_live_child_lease_becomes_interrupted() {
 }
 
 #[tokio::test]
-async fn expired_process_owner_without_registry_entry_becomes_interrupted() {
+async fn lapsed_process_claim_without_a_local_process_becomes_interrupted() {
     let provider = Arc::new(FakeProvider {
         provider_id: "fake",
         model: ModelId::new("fake-model"),

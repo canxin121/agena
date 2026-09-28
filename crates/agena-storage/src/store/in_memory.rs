@@ -3,7 +3,7 @@
 //! Implements [`PersistenceEngine`] with plain Rust collections, so tests and
 //! small deployments run without SQLite while exercising the exact same
 //! contract, invariants (identity, lifecycle, shared-part read/append-only,
-//! lease write-ownership), and state derivation as the production SQLite
+//! and state derivation) as the production SQLite
 //! engine. The facade cannot distinguish the two (design 15.4).
 
 use portable_atomic::AtomicI64;
@@ -22,12 +22,12 @@ use super::PendingInteraction;
 use super::{
     BackgroundDelivery, BackgroundDeliveryPhase, BackgroundEventRequest, BackgroundOperation,
     BackgroundOperationPhase, BackgroundOperationTransition, BackgroundSettleOutcome, InFlightRun,
-    LEASE_STALENESS_MS, LeaseAcquire, LeaseState, MaintenanceOutcome, NewBackgroundOperation,
-    NewPart, NewSession, Part, PartCursor, PartDelta, PartRole, PartState, PartVisibility,
-    PersistenceEngine, ReconcileOutcome, RunOutcome, SessionListQuery, SessionMeta,
-    SessionMetadataPatch, SessionPartPage, SessionState, SessionSummary, SessionView, StateInputs,
-    StoreError, SubmitOutcome, UsageGroup, UsageQuery, UsageRecord, UsageStats,
-    derive_session_state, prepare_part_update, prepare_run_completion, validate_run_content,
+    MaintenanceOutcome, NewBackgroundOperation, NewPart, NewSession, Part, PartCursor, PartDelta,
+    PartRole, PartState, PartVisibility, PersistenceEngine, ReconcileOutcome, RunOutcome,
+    SessionListQuery, SessionMeta, SessionMetadataPatch, SessionPartPage, SessionState,
+    SessionSummary, SessionView, StateInputs, StoreError, SubmitOutcome, UsageGroup, UsageQuery,
+    UsageRecord, UsageStats, derive_session_state, prepare_part_update, prepare_run_completion,
+    validate_run_content,
 };
 use crate::store::jsonl;
 
@@ -56,7 +56,6 @@ pub struct InMemoryEngine {
     parts: Arc<RwLock<HashMap<i64, Part>>>,
     /// session_id -> ordered set of member part_ids.
     membership: Arc<RwLock<HashMap<i64, BTreeSet<i64>>>>,
-    leases: Arc<RwLock<HashMap<i64, LeaseState>>>,
     usage: Arc<RwLock<Vec<UsageRecord>>>,
     /// (session_id, idempotency_key) -> run_id.
     idempotency: Arc<RwLock<HashMap<(i64, String), i64>>>,
@@ -87,7 +86,6 @@ impl InMemoryEngine {
             sessions: Arc::new(RwLock::new(BTreeMap::new())),
             parts: Arc::new(RwLock::new(HashMap::new())),
             membership: Arc::new(RwLock::new(HashMap::new())),
-            leases: Arc::new(RwLock::new(HashMap::new())),
             usage: Arc::new(RwLock::new(Vec::new())),
             idempotency: Arc::new(RwLock::new(HashMap::new())),
             background_operations: Arc::new(RwLock::new(HashMap::new())),
@@ -269,28 +267,6 @@ impl InMemoryEngine {
             .collect();
         out.sort_by_key(|part| (part.created_at_ms, part.part_id));
         out
-    }
-
-    /// Check that `owner_id` holds a fresh lease on `session_id`, distinguishing
-    /// "no lease" from "held by someone else".
-    fn ensure_lease(&self, session_id: i64, owner_id: &str, now_ms: i64) -> Result<(), StoreError> {
-        let leases = self.leases.read().expect("leases lock");
-        match leases.get(&session_id) {
-            None => Err(StoreError::LeaseNotHeld { session_id }),
-            Some(lease) => {
-                if lease.owner_id != owner_id {
-                    return Err(StoreError::LeaseHeldByOther {
-                        session_id,
-                        owner_id: lease.owner_id.clone(),
-                        heartbeat_at_ms: lease.heartbeat_at_ms,
-                    });
-                }
-                if now_ms - lease.heartbeat_at_ms > LEASE_STALENESS_MS {
-                    return Err(StoreError::LeaseNotHeld { session_id });
-                }
-                Ok(())
-            }
-        }
     }
 
     /// The child's `(depth, root_id)` given its parent: `depth = parent.depth +
@@ -889,12 +865,6 @@ impl PersistenceEngine for InMemoryEngine {
             let Some(meta) = meta else {
                 continue;
             };
-            let lease = self
-                .leases
-                .read()
-                .expect("leases lock")
-                .get(&session_id)
-                .cloned();
             let view = SessionView {
                 meta: meta.clone(),
                 parts: self.ordered_parts(session_id),
@@ -906,7 +876,6 @@ impl PersistenceEngine for InMemoryEngine {
                     Some(&meta),
                     &inputs.in_flight_runs,
                     &inputs.pending_interactions,
-                    lease.as_ref(),
                     now_ms,
                 ),
             );
@@ -1055,119 +1024,6 @@ impl PersistenceEngine for InMemoryEngine {
         }
         let _ = &mut membership;
         Ok(())
-    }
-
-    async fn try_acquire_lease(
-        &self,
-        session_id: i64,
-        owner_id: &str,
-        now_ms: i64,
-    ) -> Result<LeaseAcquire, StoreError> {
-        if !self
-            .sessions
-            .read()
-            .expect("sessions lock")
-            .contains_key(&session_id)
-        {
-            return Err(StoreError::not_found(format!("session {session_id}")));
-        }
-        let mut leases = self.leases.write().expect("leases lock");
-        if let Some(existing) = leases.get(&session_id) {
-            if now_ms - existing.heartbeat_at_ms <= LEASE_STALENESS_MS {
-                return Ok(LeaseAcquire::HeldBy {
-                    owner_id: existing.owner_id.clone(),
-                    heartbeat_at_ms: existing.heartbeat_at_ms,
-                });
-            }
-            // Stale: steal atomically — take the lease and abort the residual
-            // in-flight run markers in the same critical section (invariant 2).
-            let aborted = self
-                .in_flight_runs(session_id)
-                .iter()
-                .map(|run| run.part_id)
-                .collect::<Vec<_>>();
-            let outcome = self.abort_runs(session_id, &aborted, "lease_stolen", now_ms)?;
-            leases.insert(
-                session_id,
-                LeaseState {
-                    session_id,
-                    owner_id: owner_id.to_owned(),
-                    run_id: None,
-                    lease_started_at_ms: now_ms,
-                    heartbeat_at_ms: now_ms,
-                },
-            );
-            return Ok(LeaseAcquire::Acquired {
-                reconciled_runs: outcome.aborted_runs,
-                updated_parts: outcome.updated_parts,
-            });
-        }
-        leases.insert(
-            session_id,
-            LeaseState {
-                session_id,
-                owner_id: owner_id.to_owned(),
-                run_id: None,
-                lease_started_at_ms: now_ms,
-                heartbeat_at_ms: now_ms,
-            },
-        );
-        Ok(LeaseAcquire::Acquired {
-            reconciled_runs: Vec::new(),
-            updated_parts: Vec::new(),
-        })
-    }
-
-    async fn heartbeat_lease(
-        &self,
-        session_id: i64,
-        owner_id: &str,
-        now_ms: i64,
-    ) -> Result<bool, StoreError> {
-        let mut leases = self.leases.write().expect("leases lock");
-        let Some(lease) = leases.get_mut(&session_id) else {
-            return Ok(false);
-        };
-        if lease.owner_id != owner_id {
-            return Ok(false);
-        }
-        lease.heartbeat_at_ms = now_ms;
-        Ok(true)
-    }
-
-    async fn release_lease(&self, session_id: i64, owner_id: &str) -> Result<bool, StoreError> {
-        let mut leases = self.leases.write().expect("leases lock");
-        if leases
-            .get(&session_id)
-            .is_some_and(|lease| lease.owner_id == owner_id)
-        {
-            leases.remove(&session_id);
-            Ok(true)
-        } else {
-            Ok(false)
-        }
-    }
-
-    async fn current_lease(&self, session_id: i64) -> Result<Option<LeaseState>, StoreError> {
-        Ok(self
-            .leases
-            .read()
-            .expect("leases lock")
-            .get(&session_id)
-            .cloned())
-    }
-
-    async fn reap_stale_leases(&self, stale_before_ms: i64) -> Result<Vec<i64>, StoreError> {
-        let mut leases = self.leases.write().expect("leases lock");
-        let stale: Vec<i64> = leases
-            .iter()
-            .filter(|(_, lease)| lease.heartbeat_at_ms < stale_before_ms)
-            .map(|(id, _)| *id)
-            .collect();
-        for id in &stale {
-            leases.remove(id);
-        }
-        Ok(stale)
     }
 
     async fn create_background_operation(
@@ -1811,12 +1667,10 @@ impl PersistenceEngine for InMemoryEngine {
     async fn submit_user_run(
         &self,
         session_id: i64,
-        owner_id: &str,
         parts: Vec<NewPart>,
         idempotency_key: Option<String>,
         now_ms: i64,
     ) -> Result<SubmitOutcome, StoreError> {
-        self.ensure_lease(session_id, owner_id, now_ms)?;
         let marker_state = if parts.iter().all(|part| part.state.is_terminal()) {
             PartState::Completed
         } else {
@@ -1836,13 +1690,11 @@ impl PersistenceEngine for InMemoryEngine {
     async fn submit_user_run_for_execution(
         &self,
         session_id: i64,
-        owner_id: &str,
         parts: Vec<NewPart>,
         idempotency_key: Option<String>,
         execution_id: &str,
         now_ms: i64,
     ) -> Result<SubmitOutcome, StoreError> {
-        self.ensure_lease(session_id, owner_id, now_ms)?;
         let marker_state = if parts.iter().all(|part| part.state.is_terminal()) {
             PartState::Completed
         } else {
@@ -1862,53 +1714,11 @@ impl PersistenceEngine for InMemoryEngine {
     async fn settle_background_run(
         &self,
         session_id: i64,
-        owner_id: &str,
         run_id: i64,
         tool_part: Option<(i64, PartState, serde_json::Value)>,
         new_parts: Vec<NewPart>,
         now_ms: i64,
     ) -> Result<Vec<Part>, StoreError> {
-        // Lease refresh (see the trait doc): a stale lease (held by this
-        // owner or another) is re-heartbeated so the settle may write; a fresh
-        // lease held by another owner is a live conflict. Other in-flight runs
-        // are deliberately NOT aborted — the settle targets one specific
-        // launching run and must never destroy a different run a live
-        // execution is still driving.
-        {
-            let mut leases = self.leases.write().expect("leases lock");
-            if let Some(existing) = leases.get(&session_id) {
-                if existing.owner_id != owner_id
-                    && now_ms - existing.heartbeat_at_ms <= LEASE_STALENESS_MS
-                {
-                    return Err(StoreError::LeaseHeldByOther {
-                        session_id,
-                        owner_id: existing.owner_id.clone(),
-                        heartbeat_at_ms: existing.heartbeat_at_ms,
-                    });
-                }
-                leases.insert(
-                    session_id,
-                    LeaseState {
-                        session_id,
-                        owner_id: owner_id.to_owned(),
-                        run_id: None,
-                        lease_started_at_ms: now_ms,
-                        heartbeat_at_ms: now_ms,
-                    },
-                );
-            } else {
-                leases.insert(
-                    session_id,
-                    LeaseState {
-                        session_id,
-                        owner_id: owner_id.to_owned(),
-                        run_id: None,
-                        lease_started_at_ms: now_ms,
-                        heartbeat_at_ms: now_ms,
-                    },
-                );
-            }
-        }
         // Transition the launching tool part when supplied. An InProgress
         // transition is the atomic background-launch checkpoint; terminal
         // transitions settle the operation.
@@ -1997,12 +1807,10 @@ impl PersistenceEngine for InMemoryEngine {
     async fn append_parts(
         &self,
         session_id: i64,
-        owner_id: &str,
         run_id: i64,
         parts: Vec<NewPart>,
         now_ms: i64,
     ) -> Result<Vec<Part>, StoreError> {
-        self.ensure_lease(session_id, owner_id, now_ms)?;
         let run = self
             .parts
             .read()
@@ -2053,12 +1861,10 @@ impl PersistenceEngine for InMemoryEngine {
     async fn update_part(
         &self,
         session_id: i64,
-        owner_id: &str,
         part_id: i64,
         delta: PartDelta,
         now_ms: i64,
     ) -> Result<Part, StoreError> {
-        self.ensure_lease(session_id, owner_id, now_ms)?;
         let updated = {
             let mut parts = self.parts.write().expect("parts lock");
             let part = parts
@@ -2081,12 +1887,10 @@ impl PersistenceEngine for InMemoryEngine {
     async fn complete_run(
         &self,
         session_id: i64,
-        owner_id: &str,
         run_id: i64,
         outcome: RunOutcome,
         now_ms: i64,
     ) -> Result<Part, StoreError> {
-        self.ensure_lease(session_id, owner_id, now_ms)?;
         let updated = {
             let mut parts = self.parts.write().expect("parts lock");
             let part = parts
@@ -2113,13 +1917,11 @@ impl PersistenceEngine for InMemoryEngine {
     async fn start_run(
         &self,
         session_id: i64,
-        owner_id: &str,
         run_kind: &str,
         content: Value,
         idempotency_key: Option<String>,
         now_ms: i64,
     ) -> Result<SubmitOutcome, StoreError> {
-        self.ensure_lease(session_id, owner_id, now_ms)?;
         let role = match run_kind {
             "user_send" => PartRole::User,
             "continue" | "compaction" | "steer" | "execution" => PartRole::Assistant,
@@ -2143,11 +1945,9 @@ impl PersistenceEngine for InMemoryEngine {
     async fn cancel_run(
         &self,
         session_id: i64,
-        owner_id: &str,
         run_id: i64,
         now_ms: i64,
     ) -> Result<Vec<Part>, StoreError> {
-        self.ensure_lease(session_id, owner_id, now_ms)?;
         Ok(self
             .abort_runs(session_id, &[run_id], "user_cancelled", now_ms)?
             .updated_parts)
@@ -2156,12 +1956,9 @@ impl PersistenceEngine for InMemoryEngine {
     async fn withdraw_user_run(
         &self,
         session_id: i64,
-        owner_id: &str,
         run_id: i64,
         now_ms: i64,
     ) -> Result<Vec<Part>, StoreError> {
-        self.ensure_lease(session_id, owner_id, now_ms)?;
-
         let member_ids = self
             .membership
             .read()
@@ -2278,22 +2075,42 @@ impl PersistenceEngine for InMemoryEngine {
         Ok(child_meta)
     }
 
+    async fn in_flight_session_ids(&self) -> Result<Vec<i64>, StoreError> {
+        let sessions: Vec<i64> = self
+            .sessions
+            .read()
+            .expect("sessions lock")
+            .keys()
+            .copied()
+            .collect();
+        let mut ids = Vec::new();
+        for session_id in sessions {
+            if !self.in_flight_runs(session_id).is_empty() {
+                ids.push(session_id);
+            }
+        }
+        Ok(ids)
+    }
+
+    async fn in_flight_run_ids(&self, session_id: i64) -> Result<Vec<i64>, StoreError> {
+        Ok(self
+            .in_flight_runs(session_id)
+            .into_iter()
+            .map(|run| run.part_id)
+            .collect())
+    }
+
     async fn reconcile(
         &self,
         session_id: i64,
+        run_ids: &[i64],
         now_ms: i64,
     ) -> Result<ReconcileOutcome, StoreError> {
-        let in_flight = self.in_flight_runs(session_id);
-        let run_ids: Vec<i64> = in_flight.iter().map(|run| run.part_id).collect();
-        self.abort_runs(session_id, &run_ids, "process_restart", now_ms)
+        self.abort_runs(session_id, run_ids, "process_restart", now_ms)
     }
 
-    async fn maintenance(&self, now_ms: i64) -> Result<MaintenanceOutcome, StoreError> {
-        let reaped = self.reap_stale_leases(now_ms - LEASE_STALENESS_MS).await?;
-        let mut outcome = MaintenanceOutcome {
-            reaped_sessions: reaped,
-            ..Default::default()
-        };
+    async fn maintenance(&self, _now_ms: i64) -> Result<MaintenanceOutcome, StoreError> {
+        let mut outcome = MaintenanceOutcome::default();
 
         // Refcount-guarded GC (7.6 + invariant 4): a part is deleted only when
         // it has zero membership AND it is not itself an in-flight run marker
@@ -2482,12 +2299,6 @@ fn derive_state(
         .expect("sessions lock")
         .get(&session_id)
         .cloned();
-    let lease = engine
-        .leases
-        .read()
-        .expect("leases lock")
-        .get(&session_id)
-        .cloned();
     let now_ms = engine.now_ms();
     let mut parts = engine.ordered_parts(session_id);
     parts.sort_by_key(|part| (part.created_at_ms, part.part_id));
@@ -2524,7 +2335,6 @@ fn derive_state(
         &in_flight,
         &pending_interactions,
         last_error.as_ref(),
-        lease.as_ref(),
         now_ms,
     )
 }
@@ -2581,15 +2391,7 @@ mod tests {
             })
             .await
             .expect("create session");
-        let session_id = meta.id;
-        let acquire = engine
-            .try_acquire_lease(session_id, "owner-a", engine.now_ms())
-            .await
-            .expect("acquire lease");
-        assert!(
-            matches!(acquire, LeaseAcquire::Acquired { reconciled_runs, .. } if reconciled_runs.is_empty())
-        );
-        (engine, session_id)
+        (engine, meta.id)
     }
 
     #[tokio::test]
@@ -2658,13 +2460,7 @@ mod tests {
     async fn user_send_creates_marker_and_content_parts_with_membership() {
         let (engine, session_id) = setup().await;
         let outcome = engine
-            .submit_user_run(
-                session_id,
-                "owner-a",
-                vec![text_part("hello")],
-                None,
-                engine.now_ms(),
-            )
+            .submit_user_run(session_id, vec![text_part("hello")], None, engine.now_ms())
             .await
             .expect("submit");
         assert!(outcome.created);
@@ -2685,7 +2481,7 @@ mod tests {
         let mut input = text_part("already committed");
         input.state = PartState::Completed;
         let outcome = engine
-            .submit_user_run(session_id, "owner-a", vec![input], None, engine.now_ms())
+            .submit_user_run(session_id, vec![input], None, engine.now_ms())
             .await
             .expect("submit completed input");
         let marker = &outcome.parts[0];
@@ -2709,7 +2505,6 @@ mod tests {
         let first = engine
             .submit_user_run(
                 session_id,
-                "owner-a",
                 vec![text_part("hi")],
                 Some("key-1".to_owned()),
                 engine.now_ms(),
@@ -2719,7 +2514,6 @@ mod tests {
         let second = engine
             .submit_user_run(
                 session_id,
-                "owner-a",
                 vec![text_part("hi again")],
                 Some("key-1".to_owned()),
                 engine.now_ms(),
@@ -2732,12 +2526,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn execution_aware_user_send_is_withdrawable_and_replay_keeps_original_owner() {
+    async fn execution_aware_user_send_is_withdrawable_and_replay_keeps_original_execution() {
         let (engine, session_id) = setup().await;
         let first = engine
             .submit_user_run_for_execution(
                 session_id,
-                "owner-a",
                 vec![text_part("first")],
                 Some("key-execution".to_owned()),
                 "execution-a",
@@ -2754,7 +2547,6 @@ mod tests {
         let replay = engine
             .submit_user_run_for_execution(
                 session_id,
-                "owner-a",
                 vec![text_part("replay")],
                 Some("key-execution".to_owned()),
                 "execution-b",
@@ -2775,7 +2567,7 @@ mod tests {
         );
 
         let removed = engine
-            .withdraw_user_run(session_id, "owner-a", first.run_id, engine.now_ms())
+            .withdraw_user_run(session_id, first.run_id, engine.now_ms())
             .await
             .expect("withdraw");
         assert_eq!(removed.len(), 2);
@@ -2789,7 +2581,7 @@ mod tests {
         );
         assert!(
             engine
-                .withdraw_user_run(session_id, "owner-a", first.run_id, engine.now_ms())
+                .withdraw_user_run(session_id, first.run_id, engine.now_ms())
                 .await
                 .expect("repeat withdraw")
                 .is_empty()
@@ -2797,7 +2589,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn writes_without_a_fresh_lease_are_refused() {
+    async fn writes_land_on_the_named_session_only() {
         let engine = InMemoryEngine::new(InMemoryEngineConfig::default());
         engine.set_now(1_000_000);
         let meta = engine
@@ -2813,46 +2605,32 @@ mod tests {
             })
             .await
             .expect("create");
-        let error = engine
-            .submit_user_run(
-                meta.id,
-                "no-lease",
-                vec![text_part("x")],
-                None,
-                engine.now_ms(),
-            )
+        engine
+            .submit_user_run(meta.id, vec![text_part("x")], None, engine.now_ms())
             .await
-            .expect_err("no lease");
-        assert!(matches!(error, StoreError::LeaseNotHeld { .. }));
+            .expect("submit");
+        let view = engine.load_session(meta.id).await.expect("load");
+        assert_eq!(view.parts.len(), 2);
+        assert!(view.parts[0].is_run_marker());
     }
 
     #[tokio::test]
-    async fn lease_steal_aborts_stale_run_atomically() {
+    async fn reconcile_terminalizes_the_orphaned_run_and_its_children() {
         let (engine, session_id) = setup().await;
         engine
-            .submit_user_run(
-                session_id,
-                "owner-a",
-                vec![text_part("hello")],
-                None,
-                engine.now_ms(),
-            )
+            .submit_user_run(session_id, vec![text_part("hello")], None, engine.now_ms())
             .await
             .expect("submit");
-        // Let the lease go stale and another owner steal it.
-        engine.set_now(engine.now_ms() + 60_000);
-        let stolen = engine
-            .try_acquire_lease(session_id, "owner-b", engine.now_ms())
+        // A restart is the only reason an in-flight run is not this process's
+        // own work; reconcile is the recovering process's startup pass.
+        let run_ids = engine
+            .in_flight_run_ids(session_id)
             .await
-            .expect("steal");
-        match stolen {
-            LeaseAcquire::Acquired {
-                reconciled_runs, ..
-            } => {
-                assert_eq!(reconciled_runs.len(), 1);
-            }
-            LeaseAcquire::HeldBy { .. } => panic!("lease must be stale"),
-        }
+            .expect("read in-flight runs");
+        engine
+            .reconcile(session_id, &run_ids, engine.now_ms())
+            .await
+            .expect("reconcile");
         let view = engine.load_session(session_id).await.expect("load");
         let marker = view
             .parts
@@ -2860,7 +2638,7 @@ mod tests {
             .find(|part| part.is_run_marker())
             .expect("marker");
         assert_eq!(marker.state, PartState::Failed);
-        assert_eq!(marker.content["abort_reason"], "lease_stolen");
+        assert_eq!(marker.content["abort_reason"], "process_restart");
         let child = view
             .parts
             .iter()
@@ -2873,24 +2651,12 @@ mod tests {
     async fn fork_copies_edges_up_to_cutoff_and_child_reads_shared_prefix() {
         let (engine, session_id) = setup().await;
         engine
-            .submit_user_run(
-                session_id,
-                "owner-a",
-                vec![text_part("one")],
-                None,
-                engine.now_ms(),
-            )
+            .submit_user_run(session_id, vec![text_part("one")], None, engine.now_ms())
             .await
             .expect("first send");
         engine.set_now(engine.now_ms() + 1000);
         engine
-            .submit_user_run(
-                session_id,
-                "owner-a",
-                vec![text_part("two")],
-                None,
-                engine.now_ms(),
-            )
+            .submit_user_run(session_id, vec![text_part("two")], None, engine.now_ms())
             .await
             .expect("second send");
         let view = engine.load_session(session_id).await.expect("load");
@@ -2930,7 +2696,6 @@ mod tests {
         let outcome = engine
             .submit_user_run(
                 session_id,
-                "owner-a",
                 vec![NewPart {
                     kind: "text".to_owned(),
                     role: PartRole::Assistant,
@@ -2957,13 +2722,8 @@ mod tests {
             .await
             .expect("fork stream");
         engine
-            .try_acquire_lease(child.id, "child-owner", engine.now_ms())
-            .await
-            .expect("child lease");
-        engine
             .update_part(
                 session_id,
-                "owner-a",
                 streamed_id,
                 PartDelta {
                     state: Some(PartState::Completed),
@@ -2986,7 +2746,6 @@ mod tests {
         let error = engine
             .update_part(
                 child.id,
-                "child-owner",
                 streamed_id,
                 PartDelta {
                     content: Some(json!({"text": "overwrite"})),
@@ -3000,7 +2759,6 @@ mod tests {
         let appended = engine
             .append_parts(
                 child.id,
-                "child-owner",
                 outcome.run_id,
                 vec![text_part("child divergence")],
                 engine.now_ms(),
@@ -3016,7 +2774,6 @@ mod tests {
         let outcome = engine
             .submit_user_run(
                 session_id,
-                "owner-a",
                 vec![NewPart {
                     kind: "tool_call".to_owned(),
                     role: PartRole::Assistant,
@@ -3036,7 +2793,6 @@ mod tests {
         engine
             .update_part(
                 session_id,
-                "owner-a",
                 call_id,
                 PartDelta {
                     state: Some(PartState::Failed),
@@ -3050,7 +2806,6 @@ mod tests {
         let retried = engine
             .update_part(
                 session_id,
-                "owner-a",
                 call_id,
                 PartDelta {
                     state: Some(PartState::InProgress),
@@ -3069,7 +2824,6 @@ mod tests {
         engine
             .complete_run(
                 session_id,
-                "owner-a",
                 marker_id,
                 RunOutcome {
                     status: PartState::Failed,
@@ -3084,7 +2838,6 @@ mod tests {
         let error = engine
             .update_part(
                 session_id,
-                "owner-a",
                 marker_id,
                 PartDelta {
                     state: Some(PartState::InProgress),
@@ -3103,7 +2856,6 @@ mod tests {
         let outcome = engine
             .submit_user_run(
                 session_id,
-                "owner-a",
                 vec![NewPart {
                     kind: "tool_call".to_owned(),
                     role: PartRole::Assistant,
@@ -3122,7 +2874,6 @@ mod tests {
         engine
             .update_part(
                 session_id,
-                "owner-a",
                 tool_id,
                 PartDelta {
                     state: Some(PartState::Failed),
@@ -3135,7 +2886,6 @@ mod tests {
         engine
             .append_parts(
                 session_id,
-                "owner-a",
                 outcome.run_id,
                 vec![NewPart {
                     kind: "error".to_owned(),
@@ -3153,7 +2903,6 @@ mod tests {
         engine
             .update_part(
                 session_id,
-                "owner-a",
                 tool_id,
                 PartDelta {
                     state: Some(PartState::InProgress),
@@ -3166,7 +2915,6 @@ mod tests {
         engine
             .update_part(
                 session_id,
-                "owner-a",
                 tool_id,
                 PartDelta {
                     state: Some(PartState::Completed),
@@ -3185,7 +2933,6 @@ mod tests {
         engine
             .complete_run(
                 session_id,
-                "owner-a",
                 outcome.run_id,
                 RunOutcome {
                     status: PartState::Completed,
@@ -3220,20 +2967,13 @@ mod tests {
     async fn complete_run_requires_abort_reason_on_failure_and_keeps_children() {
         let (engine, session_id) = setup().await;
         let outcome = engine
-            .submit_user_run(
-                session_id,
-                "owner-a",
-                vec![text_part("hello")],
-                None,
-                engine.now_ms(),
-            )
+            .submit_user_run(session_id, vec![text_part("hello")], None, engine.now_ms())
             .await
             .expect("submit");
         let run_id = outcome.run_id;
         let missing = engine
             .complete_run(
                 session_id,
-                "owner-a",
                 run_id,
                 RunOutcome {
                     status: PartState::Failed,
@@ -3249,7 +2989,6 @@ mod tests {
         let done = engine
             .complete_run(
                 session_id,
-                "owner-a",
                 run_id,
                 RunOutcome {
                     status: PartState::Completed,
@@ -3270,13 +3009,7 @@ mod tests {
     async fn state_derivation_covers_all_sessions_states() {
         let (engine, session_id) = setup().await;
         engine
-            .submit_user_run(
-                session_id,
-                "owner-a",
-                vec![text_part("hi")],
-                None,
-                engine.now_ms(),
-            )
+            .submit_user_run(session_id, vec![text_part("hi")], None, engine.now_ms())
             .await
             .expect("submit");
         let presentation = derive_state(&engine, session_id).expect("presentation");
@@ -3284,44 +3017,34 @@ mod tests {
         // The marker is the first allocated part (id 1); the text part is 2.
         assert_eq!(presentation.active_run_id, Some(1));
 
-        // Stale lease -> Interrupted.
+        // Time passing never changes the state: an in-flight run is durable
+        // work until something terminalizes it.
         engine.set_now(engine.now_ms() + 60_000);
-        let interrupted = derive_state(&engine, session_id).expect("presentation");
-        assert_eq!(interrupted.state, SessionState::Interrupted);
+        let still_running = derive_state(&engine, session_id).expect("presentation");
+        assert_eq!(still_running.state, SessionState::Running);
 
-        // Reconcile -> Ready. The stale lease row remains; the process
-        // re-acquires a fresh lease before running again (17.4).
+        // Reconcile (the restart path) -> Ready.
+        let run_ids = engine
+            .in_flight_run_ids(session_id)
+            .await
+            .expect("read in-flight runs");
         engine
-            .reconcile(session_id, engine.now_ms())
+            .reconcile(session_id, &run_ids, engine.now_ms())
             .await
             .expect("reconcile");
         let ready = derive_state(&engine, session_id).expect("presentation");
         assert_eq!(ready.state, SessionState::Ready);
-        let acquire = engine
-            .try_acquire_lease(session_id, "owner-a", engine.now_ms())
-            .await
-            .expect("re-acquire lease");
-        assert!(
-            matches!(acquire, LeaseAcquire::Acquired { reconciled_runs, .. } if reconciled_runs.is_empty())
-        );
 
-        // Pending interaction -> AwaitingInteraction, even when the lease is gone.
+        // Pending interaction -> AwaitingInteraction.
         let paused = engine
             .submit_user_run(
                 session_id,
-                "owner-a",
                 vec![pending_tool_call("Approve?", "review")],
                 None,
                 engine.now_ms(),
             )
             .await
             .expect("submit with interaction");
-        assert!(
-            engine
-                .release_lease(session_id, "owner-a")
-                .await
-                .expect("release paused lease")
-        );
         let awaiting = derive_state(&engine, session_id).expect("presentation");
         assert_eq!(awaiting.state, SessionState::AwaitingInteraction);
         let interaction = awaiting.pending_interaction.expect("pending interaction");
@@ -3335,7 +3058,7 @@ mod tests {
                 .expect("paused run marker")
                 .state
                 .is_in_flight(),
-            "a pending interaction wins even without a lease"
+            "a pending interaction wins even without a live execution"
         );
     }
 
@@ -3343,13 +3066,7 @@ mod tests {
     async fn gc_deletes_only_refcount_orphans() {
         let (engine, session_id) = setup().await;
         let outcome = engine
-            .submit_user_run(
-                session_id,
-                "owner-a",
-                vec![text_part("hello")],
-                None,
-                engine.now_ms(),
-            )
+            .submit_user_run(session_id, vec![text_part("hello")], None, engine.now_ms())
             .await
             .expect("submit");
         // Complete the run so its rows are no longer referenced by an active
@@ -3357,7 +3074,6 @@ mod tests {
         engine
             .complete_run(
                 session_id,
-                "owner-a",
                 outcome.run_id,
                 RunOutcome {
                     status: PartState::Completed,
@@ -3383,13 +3099,7 @@ mod tests {
         let (engine, session_id) = setup().await;
         for _ in 0..3 {
             engine
-                .submit_user_run(
-                    session_id,
-                    "owner-a",
-                    vec![text_part("page")],
-                    None,
-                    engine.now_ms(),
-                )
+                .submit_user_run(session_id, vec![text_part("page")], None, engine.now_ms())
                 .await
                 .expect("append page fixture");
         }
@@ -3440,13 +3150,7 @@ mod tests {
     async fn jsonl_round_trip_preserves_ordering_and_references() {
         let (engine, session_id) = setup().await;
         engine
-            .submit_user_run(
-                session_id,
-                "owner-a",
-                vec![text_part("hello")],
-                None,
-                engine.now_ms(),
-            )
+            .submit_user_run(session_id, vec![text_part("hello")], None, engine.now_ms())
             .await
             .expect("submit");
         let bundle = engine
@@ -3517,7 +3221,6 @@ mod tests {
         let submitted = engine
             .submit_user_run(
                 session_id,
-                "owner-a",
                 vec![text_part("hello")],
                 Some("send-1".to_owned()),
                 engine.now_ms(),
@@ -3528,7 +3231,6 @@ mod tests {
         let replay = engine
             .submit_user_run(
                 session_id,
-                "owner-a",
                 vec![text_part("ignored")],
                 Some("send-1".to_owned()),
                 engine.now_ms(),
@@ -3541,7 +3243,6 @@ mod tests {
         let appended = engine
             .append_parts(
                 session_id,
-                "owner-a",
                 submitted.run_id,
                 vec![NewPart::pending(
                     "text",
@@ -3557,7 +3258,6 @@ mod tests {
         engine
             .update_part(
                 session_id,
-                "owner-a",
                 appended[0].part_id,
                 PartDelta {
                     state: Some(PartState::InProgress),
@@ -3572,7 +3272,6 @@ mod tests {
         engine
             .update_part(
                 session_id,
-                "owner-a",
                 appended[0].part_id,
                 PartDelta {
                     summary: Some("updated".to_owned()),
@@ -3587,7 +3286,6 @@ mod tests {
         engine
             .complete_run(
                 session_id,
-                "owner-a",
                 submitted.run_id,
                 RunOutcome {
                     status: PartState::Completed,
@@ -3602,41 +3300,27 @@ mod tests {
         assert_eq!(engine.session_meta(session_id).await.unwrap().version, 6);
 
         let cancelled = engine
-            .start_run(
-                session_id,
-                "owner-a",
-                "continue",
-                json!({}),
-                None,
-                engine.now_ms(),
-            )
+            .start_run(session_id, "continue", json!({}), None, engine.now_ms())
             .await
             .expect("start cancellation run");
         assert_eq!(engine.session_meta(session_id).await.unwrap().version, 7);
         engine
-            .cancel_run(session_id, "owner-a", cancelled.run_id, engine.now_ms())
+            .cancel_run(session_id, cancelled.run_id, engine.now_ms())
             .await
             .expect("cancel");
         assert_eq!(engine.session_meta(session_id).await.unwrap().version, 8);
 
         engine
-            .start_run(
-                session_id,
-                "owner-a",
-                "continue",
-                json!({}),
-                None,
-                engine.now_ms(),
-            )
+            .start_run(session_id, "continue", json!({}), None, engine.now_ms())
             .await
             .expect("start interrupted run");
         assert_eq!(engine.session_meta(session_id).await.unwrap().version, 9);
-        engine
-            .release_lease(session_id, "owner-a")
+        let run_ids = engine
+            .in_flight_run_ids(session_id)
             .await
-            .expect("release lease");
+            .expect("read in-flight runs");
         engine
-            .reconcile(session_id, engine.now_ms())
+            .reconcile(session_id, &run_ids, engine.now_ms())
             .await
             .expect("reconcile");
         assert_eq!(engine.session_meta(session_id).await.unwrap().version, 10);
@@ -3660,13 +3344,7 @@ mod tests {
     async fn updating_a_shared_part_bumps_every_member_session_version() {
         let (engine, session_id) = setup().await;
         let submitted = engine
-            .submit_user_run(
-                session_id,
-                "owner-a",
-                vec![text_part("shared")],
-                None,
-                engine.now_ms(),
-            )
+            .submit_user_run(session_id, vec![text_part("shared")], None, engine.now_ms())
             .await
             .expect("submit");
         let child = engine
@@ -3685,7 +3363,6 @@ mod tests {
         engine
             .complete_run(
                 session_id,
-                "owner-a",
                 submitted.run_id,
                 RunOutcome {
                     status: PartState::Completed,
@@ -3714,7 +3391,6 @@ mod tests {
         let submitted = engine
             .start_run(
                 session_id,
-                "owner-a",
                 "continue",
                 json!({"run_kind": "continue", "abort_reason": null}),
                 None,
@@ -3725,7 +3401,6 @@ mod tests {
         let submitted_parts = engine
             .append_parts(
                 session_id,
-                "owner-a",
                 submitted.run_id,
                 vec![NewPart::pending(
                     "tool_call",

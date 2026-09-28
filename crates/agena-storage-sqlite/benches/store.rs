@@ -44,7 +44,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
     let workspace_id = SeaWorkspaceRepository::new(Arc::clone(&db))
         .ensure_id("/bench/workspace")
         .await?;
-    let facade = SessionFacade::new(SqliteEngine::new(db), "bench-owner", 32)
+    let facade = SessionFacade::new(SqliteEngine::new(db), 32)
         .with_streaming_flush_delta_count(STREAM_FLUSH_THRESHOLD);
     let session_id = facade
         .create_session(NewSession {
@@ -84,13 +84,12 @@ async fn seed_read_session(
         })
         .collect();
     let run_id = facade
-        .submit_user_run(session_id, "bench-owner", parts, None)
+        .submit_user_run(session_id, parts, None)
         .await?
         .run_id;
     facade
         .complete_run(
             session_id,
-            "bench-owner",
             run_id,
             RunOutcome {
                 status: PartState::Completed,
@@ -190,7 +189,6 @@ async fn benchmark_streaming(
         let run_id = facade
             .submit_user_run(
                 session_id,
-                "bench-owner",
                 vec![NewPart {
                     kind: "text".to_owned(),
                     role: PartRole::Assistant,
@@ -218,7 +216,6 @@ async fn benchmark_streaming(
             facade
                 .update_part(
                     session_id,
-                    "bench-owner",
                     streamed_part_id,
                     PartDelta {
                         content_text_delta: Some("x".to_owned()),
@@ -230,7 +227,6 @@ async fn benchmark_streaming(
         facade
             .complete_run(
                 session_id,
-                "bench-owner",
                 run_id,
                 RunOutcome {
                     status: PartState::Completed,

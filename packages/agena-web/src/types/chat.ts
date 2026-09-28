@@ -1,5 +1,40 @@
 import type { SseEvent } from '../lib/sse'
 import type { JsonValue as JsonLike } from './json'
+import {
+  EXECUTION_PHASES,
+  SESSION_STATE_ATTENTION_KINDS,
+  SESSION_STATE_BUSY_KINDS,
+  SESSION_STATE_KINDS,
+  WORKFLOW_STATES,
+} from '../generated/agenaState'
+import type {
+  ActiveExecutionResource,
+  ExecutionPhase,
+  ExecutionStatus,
+  SessionLifecycleState,
+  SessionRelationKind,
+  SessionState,
+  SessionStateKind,
+  SubtaskStatus,
+  WorkflowState,
+} from '../generated/agenaState'
+
+// State types are generated from the backend definitions; the web client never
+// keeps a hand-written copy of a state union. Regenerate the mirror with
+// `cargo run -p agena-web-types > packages/agena-web/src/generated/agenaState.ts`.
+// The mirror is imported relatively so the shipped parser stays loadable by the
+// `node:test` contract suite without a bundler alias.
+export type {
+  ActiveExecutionResource,
+  ExecutionPhase,
+  ExecutionStatus,
+  SessionLifecycleState,
+  SessionRelationKind,
+  SessionState,
+  SessionStateKind,
+  SubtaskStatus,
+  WorkflowState,
+}
 
 // ---------------------------------------------------------------------------
 // Agena wire types (mirror crates/agena-api/src/resource.rs + live.rs).
@@ -10,46 +45,32 @@ import type { JsonValue as JsonLike } from './json'
 // survives round-trips.
 // ---------------------------------------------------------------------------
 
-export type SessionWorkflowState = 'quiescent' | 'tool_pending' | 'awaiting_interaction'
-
-export type SessionExecutionSnapshot = {
-  execution_id: string
-  phase: string
-}
+/** Live execution snapshot attached to a session state (generated type). */
+export type SessionExecutionSnapshot = ActiveExecutionResource
 
 export type SessionPendingInteraction = JsonLike
 
-/** Canonical server-owned session state. Clients branch on `kind`. */
-export type SessionState =
-  | { kind: 'creating' }
-  | { kind: 'ready'; data: { last_failure?: JsonLike } }
-  | {
-      kind: 'running'
-      data: {
-        execution?: SessionExecutionSnapshot
-        workflow: SessionWorkflowState
-        requests?: SessionPendingInteraction[]
-      }
-    }
-  | {
-      kind: 'awaiting_interaction'
-      data: {
-        run_id?: number
-        execution?: SessionExecutionSnapshot
-        requests?: SessionPendingInteraction[]
-      }
-    }
-  | {
-      kind: 'interrupted'
-      data: {
-        run_id?: number
-        reason?: string
-        last_failure?: JsonLike
-      }
-    }
-  | { kind: 'failed'; data: { failure?: JsonLike } }
+const SESSION_STATE_KIND_SET: readonly string[] = SESSION_STATE_KINDS
+const SESSION_STATE_BUSY_SET: readonly string[] = SESSION_STATE_BUSY_KINDS
+const SESSION_STATE_ATTENTION_SET: readonly string[] = SESSION_STATE_ATTENTION_KINDS
+const EXECUTION_PHASE_SET: readonly string[] = EXECUTION_PHASES
+const WORKFLOW_STATE_SET: readonly string[] = WORKFLOW_STATES
 
-export type SessionStateKind = SessionState['kind']
+function hasOwn(record: Record<string, unknown>, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(record, key)
+}
+
+function isSessionStateKind(value: unknown): value is SessionStateKind {
+  return typeof value === 'string' && SESSION_STATE_KIND_SET.includes(value)
+}
+
+function isExecutionPhase(value: unknown): value is ExecutionPhase {
+  return typeof value === 'string' && EXECUTION_PHASE_SET.includes(value)
+}
+
+function isWorkflowState(value: unknown): value is WorkflowState {
+  return typeof value === 'string' && WORKFLOW_STATE_SET.includes(value)
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -62,63 +83,64 @@ function jsonObject(value: unknown): Record<string, JsonLike> {
 function executionSnapshot(value: unknown): SessionExecutionSnapshot | undefined {
   if (!isRecord(value)) return undefined
   const executionId = typeof value.execution_id === 'string' ? value.execution_id.trim() : ''
-  const phase = typeof value.phase === 'string' ? value.phase : ''
-  if (!executionId || !phase) return undefined
+  const phase = value.phase
+  if (!executionId || !isExecutionPhase(phase)) return undefined
   return { execution_id: executionId, phase }
 }
 
 /** Normalize the tagged wire value once at the API boundary. */
 export function normalizeSessionState(value: unknown): SessionState {
-  if (!isRecord(value) || typeof value.kind !== 'string') {
+  if (!isRecord(value) || !isSessionStateKind(value.kind)) {
+    // Unknown kinds fall back to `ready`: the single documented fallback for a
+    // payload this client version does not know yet.
     return { kind: 'ready', data: {} }
   }
 
   const data = jsonObject(value.data)
-  switch (value.kind) {
+  const kind = value.kind
+  switch (kind) {
     case 'creating':
       return { kind: 'creating' }
     case 'ready':
-      return { kind: 'ready', data }
+      return {
+        kind: 'ready',
+        data: hasOwn(data, 'last_failure') ? { last_failure: data.last_failure } : {},
+      }
     case 'running': {
-      const workflow =
-        data.workflow === 'tool_pending' || data.workflow === 'awaiting_interaction' ? data.workflow : 'quiescent'
-      const requests = Array.isArray(data.requests) ? data.requests : undefined
+      const requests = Array.isArray(data.requests) ? (data.requests as JsonLike[]) : undefined
+      const execution = executionSnapshot(data.execution)
       return {
         kind: 'running',
         data: {
-          workflow,
-          ...(executionSnapshot(data.execution) ? { execution: executionSnapshot(data.execution) } : {}),
+          workflow: isWorkflowState(data.workflow) ? data.workflow : 'quiescent',
+          ...(execution ? { execution } : {}),
           ...(requests ? { requests } : {}),
         },
       }
     }
     case 'awaiting_interaction': {
-      const requests = Array.isArray(data.requests) ? data.requests : undefined
+      const requests = Array.isArray(data.requests) ? (data.requests as JsonLike[]) : undefined
+      const execution = executionSnapshot(data.execution)
       return {
         kind: 'awaiting_interaction',
         data: {
           ...(typeof data.run_id === 'number' ? { run_id: data.run_id } : {}),
-          ...(executionSnapshot(data.execution) ? { execution: executionSnapshot(data.execution) } : {}),
+          ...(execution ? { execution } : {}),
           ...(requests ? { requests } : {}),
         },
       }
     }
-    case 'interrupted':
-      return {
-        kind: 'interrupted',
-        data: {
-          ...(typeof data.run_id === 'number' ? { run_id: data.run_id } : {}),
-          ...(typeof data.reason === 'string' ? { reason: data.reason } : {}),
-          ...(Object.prototype.hasOwnProperty.call(data, 'last_failure') ? { last_failure: data.last_failure } : {}),
-        },
-      }
     case 'failed':
       return {
         kind: 'failed',
-        data: Object.prototype.hasOwnProperty.call(data, 'failure') ? { failure: data.failure } : {},
+        data: hasOwn(data, 'failure') ? { failure: data.failure } : {},
       }
-    default:
-      return { kind: 'ready', data: {} }
+    default: {
+      // Exhaustiveness guard: every generated kind is handled above, so a new
+      // backend state kind fails to compile here instead of degrading silently.
+      const unhandled: never = kind
+      return unhandled
+    }
   }
 }
 
@@ -127,38 +149,30 @@ export function sessionStateKind(state: SessionState | null | undefined): Sessio
 }
 
 export function sessionStateData(state: SessionState | null | undefined): Record<string, JsonLike> {
-  return state && state.kind !== 'creating' ? (state.data as Record<string, JsonLike>) : {}
+  if (!state || state.kind === 'creating') return {}
+  return state.data as Record<string, JsonLike>
 }
 
 export function sessionStateExecution(state: SessionState | null | undefined): SessionExecutionSnapshot | undefined {
-  const data = sessionStateData(state)
-  return executionSnapshot(data.execution)
+  return executionSnapshot(sessionStateData(state).execution)
 }
 
 export function sessionStateRequests(state: SessionState | null | undefined): SessionPendingInteraction[] {
-  const data = sessionStateData(state)
-  return Array.isArray(data.requests) ? data.requests : []
+  const requests = sessionStateData(state).requests
+  return Array.isArray(requests) ? (requests as SessionPendingInteraction[]) : []
 }
 
 export function sessionStateIsBusy(state: SessionState | null | undefined): boolean {
-  return sessionStateKind(state) === 'running'
+  return SESSION_STATE_BUSY_SET.includes(sessionStateKind(state))
 }
 
 export function sessionStateNeedsAttention(state: SessionState | null | undefined): boolean {
   const kind = sessionStateKind(state)
   return (
-    kind === 'awaiting_interaction' ||
-    kind === 'interrupted' ||
-    kind === 'failed' ||
-    (kind === 'running' && sessionStateRequests(state).length > 0)
+    SESSION_STATE_ATTENTION_SET.includes(kind) ||
+    (SESSION_STATE_BUSY_SET.includes(kind) && sessionStateRequests(state).length > 0)
   )
 }
-
-export function sessionStateNeedsRecovery(state: SessionState | null | undefined): boolean {
-  return sessionStateKind(state) === 'interrupted'
-}
-
-export type SessionRelationKind = 'root' | 'child' | 'fork' | 'rewind' | 'subagent'
 
 export type Session = {
   id: string
@@ -178,17 +192,8 @@ export type Session = {
   [k: string]: JsonLike
 }
 
-// Agena part execution states → tool status mapping in reducers.ts.
-export type PartState =
-  | 'pending'
-  | 'in_progress'
-  | 'completed'
-  | 'policy_denied'
-  | 'user_declined'
-  | 'capability_unavailable'
-  | 'tool_unavailable'
-  | 'failed'
-  | 'cancelled'
+/** Agena part execution states → tool status mapping in reducers.ts. */
+export type PartState = ExecutionStatus
 
 export type MessageInfo = {
   id: string

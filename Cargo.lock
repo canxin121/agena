@@ -160,6 +160,7 @@ dependencies = [
  "agena-notification",
  "agena-plugin-sdk",
  "chrono",
+ "schemars",
  "serde",
  "serde_json",
  "smol_str",
@@ -1474,6 +1475,17 @@ dependencies = [
  "tracing",
  "url",
  "urlencoding",
+]
+
+[[package]]
+name = "agena-web-types"
+version = "0.1.0"
+dependencies = [
+ "agena-api",
+ "agena-domain",
+ "agena-notification",
+ "schemars",
+ "serde_json",
 ]
 
 [[package]]

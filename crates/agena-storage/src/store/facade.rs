@@ -18,8 +18,7 @@
 //!
 //! ## Write path (commit-then-notify, 15.6)
 //!
-//! Every ordinary facade write validates the session lease against the
-//! caller's `owner_id`, commits one transaction through the engine, then
+//! Every ordinary facade write commits one transaction through the engine, then
 //! notifies subscribers before returning. Text-stream deltas are accumulated
 //! in the [`MemoryLayer`] and flushed after a bounded number of deltas or when
 //! the run ends (D10); ordinary semantic checkpoints remain commit-synchronous.
@@ -35,9 +34,9 @@ use serde_json::{Value, json};
 
 use super::{
     BackgroundDelivery, BackgroundEventRequest, BackgroundOperation, BackgroundOperationKind,
-    BackgroundOperationTransition, BackgroundSettleOutcome, LEASE_STALENESS_MS, LeaseAcquire,
-    MaintenanceOutcome, NewBackgroundOperation, NewPart, NewSession, Part, PartCursor, PartDelta,
-    PartState, PersistenceEngine, RunOutcome, SessionChange, SessionListQuery, SessionMeta,
+    BackgroundOperationTransition, BackgroundSettleOutcome, MaintenanceOutcome,
+    NewBackgroundOperation, NewPart, NewSession, Part, PartCursor, PartDelta, PartState,
+    PersistenceEngine, RunOutcome, SessionChange, SessionListQuery, SessionMeta,
     SessionMetadataPatch, SessionPartPage, SessionPresentation, SessionState, SessionSummary,
     SessionView, StateInputs, StoreError, SubmitOutcome, UsageQuery, UsageRecord, UsageStats,
     apply_part_transition, presentation,
@@ -223,20 +222,20 @@ pub trait SessionStore: Send + Sync {
     async fn claim_background_delivery(
         &self,
         delivery_id: &str,
-        owner_id: &str,
+        claimant: &str,
         claim_until_ms: i64,
     ) -> Result<Option<BackgroundDelivery>, StoreError>;
 
     async fn consume_background_delivery(
         &self,
         delivery_id: &str,
-        owner_id: &str,
+        claimant: &str,
     ) -> Result<BackgroundDelivery, StoreError>;
 
     async fn retry_background_delivery(
         &self,
         delivery_id: &str,
-        owner_id: &str,
+        claimant: &str,
         error: Value,
         next_attempt_at_ms: i64,
     ) -> Result<BackgroundDelivery, StoreError>;
@@ -244,7 +243,7 @@ pub trait SessionStore: Send + Sync {
     async fn fail_background_delivery(
         &self,
         delivery_id: &str,
-        owner_id: &str,
+        claimant: &str,
         error: Value,
     ) -> Result<BackgroundDelivery, StoreError>;
 
@@ -267,7 +266,6 @@ pub trait SessionStore: Send + Sync {
     async fn submit_user_run(
         &self,
         session_id: i64,
-        owner_id: &str,
         parts: Vec<NewPart>,
         idempotency_key: Option<String>,
     ) -> Result<SubmitOutcome, StoreError>;
@@ -278,7 +276,6 @@ pub trait SessionStore: Send + Sync {
     async fn submit_user_run_for_execution(
         &self,
         session_id: i64,
-        owner_id: &str,
         parts: Vec<NewPart>,
         idempotency_key: Option<String>,
         execution_id: &str,
@@ -291,7 +288,6 @@ pub trait SessionStore: Send + Sync {
     async fn settle_background_run(
         &self,
         session_id: i64,
-        owner_id: &str,
         run_id: i64,
         tool_part: Option<(i64, PartState, Value)>,
         parts: Vec<NewPart>,
@@ -302,7 +298,6 @@ pub trait SessionStore: Send + Sync {
     async fn append_parts(
         &self,
         session_id: i64,
-        owner_id: &str,
         run_id: i64,
         parts: Vec<NewPart>,
     ) -> Result<Vec<Part>, StoreError>;
@@ -313,7 +308,6 @@ pub trait SessionStore: Send + Sync {
     async fn update_part(
         &self,
         session_id: i64,
-        owner_id: &str,
         part_id: i64,
         delta: PartDelta,
     ) -> Result<Part, StoreError>;
@@ -323,19 +317,9 @@ pub trait SessionStore: Send + Sync {
     async fn complete_run(
         &self,
         session_id: i64,
-        owner_id: &str,
         run_id: i64,
         outcome: RunOutcome,
     ) -> Result<Part, StoreError>;
-
-    /// Extend the session lease without mutating any part. Long stable runs
-    /// (a slow reasoning stream, a multi-second tool execution) can exceed
-    /// `LEASE_STALENESS_MS` between commits; a background heartbeat keeps the
-    /// run's ownership fresh so the next write is not treated as a stale
-    /// steal. Returns `false` when no lease row for this owner exists (already
-    /// stolen, released, or never held) — the caller lets the next commit
-    /// surface that authoritatively rather than raising mid-stream.
-    async fn heartbeat_lease(&self, session_id: i64, owner_id: &str) -> Result<bool, StoreError>;
 
     /// Start a fresh run without user input (`continue`, `compaction`,
     /// `background`, `steer`). Creates a run marker with the given `run_kind`
@@ -343,7 +327,6 @@ pub trait SessionStore: Send + Sync {
     async fn start_run(
         &self,
         session_id: i64,
-        owner_id: &str,
         run_kind: &str,
         content: Value,
         idempotency_key: Option<String>,
@@ -398,26 +381,31 @@ pub trait SessionStore: Send + Sync {
 
     /// Cancel a run marker and its non-terminal children (17.5 user cancel).
     /// Returns every changed row (marker and cancelled children).
-    async fn cancel_run(
-        &self,
-        session_id: i64,
-        owner_id: &str,
-        run_id: i64,
-    ) -> Result<Vec<Part>, StoreError>;
+    async fn cancel_run(&self, session_id: i64, run_id: i64) -> Result<Vec<Part>, StoreError>;
 
     /// Withdraw a newly submitted user run from this session projection while
     /// preserving the underlying part rows for orphan GC and shared forks.
     async fn withdraw_user_run(
         &self,
         session_id: i64,
-        owner_id: &str,
         run_id: i64,
     ) -> Result<Vec<Part>, StoreError>;
 
-    /// Reconcile a session whose in-flight run lost its lease (17.4 step 2c):
-    /// mark in-flight run markers `failed` (`process_restart`) and their
-    /// non-terminal children `cancelled`. Idempotent.
-    async fn reconcile(&self, session_id: i64) -> Result<(), StoreError>;
+    /// Every session that owns at least one run marker still in flight, in id
+    /// order. Read-only and claim-free: startup recovery scans the durable
+    /// markers themselves instead of enumerating workspaces (17.4).
+    async fn in_flight_session_ids(&self) -> Result<Vec<i64>, StoreError>;
+
+    /// The ids of a session's in-flight run markers, newest first. Read-only
+    /// and claim-free (17.4).
+    async fn in_flight_run_ids(&self, session_id: i64) -> Result<Vec<i64>, StoreError>;
+
+    /// Reconcile a session's abandoned in-flight runs (17.4): mark each named
+    /// run marker `failed` (`process_restart`) and its non-terminal children
+    /// `cancelled`. Only the named runs are touched, so a caller that is
+    /// executing a run right now can reconcile the rest without aborting its
+    /// own work. Idempotent.
+    async fn reconcile(&self, session_id: i64, run_ids: &[i64]) -> Result<(), StoreError>;
 
     /// Compact the session: a `compaction` run marker closes the preceding
     /// window and records the durable checkpoint (13.3 / 13.4); provider
@@ -429,7 +417,6 @@ pub trait SessionStore: Send + Sync {
     async fn compact_session(
         &self,
         session_id: i64,
-        owner_id: &str,
         summary: Option<String>,
         window: Option<String>,
         checkpoint: Option<Value>,
@@ -452,9 +439,9 @@ pub trait SessionStore: Send + Sync {
     /// Aggregated usage stats (section 16).
     async fn usage_stats(&self, query: UsageQuery) -> Result<UsageStats, StoreError>;
 
-    /// Maintenance internals (14.2): reap stale leases and GC orphan parts.
-    /// Exposed through the sealed facade so recovery/maintenance callers never
-    /// reach the engine directly. Idempotent; safe to run from any process.
+    /// Maintenance internals (14.2): GC orphan parts. Exposed through the
+    /// sealed facade so recovery/maintenance callers never reach the engine
+    /// directly. Idempotent.
     async fn maintenance(&self, now_ms: i64) -> Result<MaintenanceOutcome, StoreError>;
 
     /// Subscribe to process-local [`SessionChange`] notifications for one
@@ -487,14 +474,8 @@ struct CacheEntry {
 /// engine accepts the coalesced update.
 #[derive(Debug, Clone)]
 struct StreamingBuffer {
-    owner_id: String,
     part: Part,
     pending_deltas: usize,
-    /// Last time the session lease was heartbeated for this buffer. The
-    /// buffered path commits no rows per delta, so a long reasoning stream
-    /// would otherwise let the lease age past `LEASE_STALENESS_MS` and be
-    /// stolen by the next commit, aborting the in-flight run mid-stream.
-    last_heartbeat_at_ms: i64,
 }
 
 /// The internal memory layer (15.3): a per-session LRU cache of
@@ -774,8 +755,7 @@ pub struct SessionFacade<E> {
     engine: E,
     memory: Arc<MemoryLayer>,
     bus: Arc<NotificationBus>,
-    /// Lease owner identity for this process/caller.
-    default_owner: String,
+
     now_ms: Arc<dyn Fn() -> i64 + Send + Sync>,
     streaming_flush_delta_count: usize,
 }
@@ -784,10 +764,9 @@ impl<E> SessionFacade<E>
 where
     E: PersistenceEngine,
 {
-    pub fn new(engine: E, owner_id: impl Into<String>, max_cached_sessions: usize) -> Self {
+    pub fn new(engine: E, max_cached_sessions: usize) -> Self {
         Self::with_clock(
             engine,
-            owner_id,
             MemoryLayer::new(max_cached_sessions),
             NotificationBus::new(),
             wall_clock_ms,
@@ -797,7 +776,6 @@ where
     /// Test constructor: inject the memory layer, bus, and clock.
     pub fn with_clock(
         engine: E,
-        owner_id: impl Into<String>,
         memory: MemoryLayer,
         bus: NotificationBus,
         now_ms: impl Fn() -> i64 + Send + Sync + 'static,
@@ -806,7 +784,6 @@ where
             engine,
             memory: Arc::new(memory),
             bus: Arc::new(bus),
-            default_owner: owner_id.into(),
             now_ms: Arc::new(now_ms),
             streaming_flush_delta_count: STREAMING_FLUSH_DELTA_COUNT,
         }
@@ -821,14 +798,6 @@ where
 
     fn now(&self) -> i64 {
         (self.now_ms)()
-    }
-
-    fn owner(&self, caller: &str) -> String {
-        if caller.is_empty() {
-            self.default_owner.clone()
-        } else {
-            caller.to_owned()
-        }
     }
 
     /// Test-only access for white-box parity assertions. Production callers
@@ -866,88 +835,13 @@ where
         let meta = self.engine.session_meta(session_id).await?;
         let view = self.engine.load_session(session_id).await?;
         let inputs = StateInputs::from_view(&view);
-        let lease = self.engine.current_lease(session_id).await?;
         presentation(
             Some(&meta),
             &inputs.in_flight_runs,
             &inputs.pending_interactions,
             inputs.last_error.as_ref(),
-            lease.as_ref(),
             self.now(),
         )
-    }
-
-    /// Acquire the session lease (heartbeat on every commit). A stale-lease
-    /// acquisition atomically aborts the previous holder's residual run and
-    /// returns the committed rows for immediate live notification.
-    async fn ensure_lease(&self, session_id: i64, owner: &str) -> Result<(), StoreError> {
-        let now = self.now();
-        let fresh = match self.engine.current_lease(session_id).await? {
-            Some(lease) => now - lease.heartbeat_at_ms <= LEASE_STALENESS_MS,
-            None => false,
-        };
-        if fresh {
-            // Someone holds a fresh lease — try to heartbeat as the caller. If
-            // it is another owner, this is refused.
-            if self.engine.heartbeat_lease(session_id, owner, now).await? {
-                return Ok(());
-            }
-            // Not our lease; fall through to acquisition (which refuses if the
-            // other owner is still fresh).
-        }
-        match self
-            .engine
-            .try_acquire_lease(session_id, owner, now)
-            .await?
-        {
-            LeaseAcquire::Acquired { updated_parts, .. } => {
-                if !updated_parts.is_empty() {
-                    self.memory.clear_streaming_session(session_id);
-                    self.memory.invalidate(session_id);
-                    for part in updated_parts {
-                        self.bus
-                            .emit(SessionChange::PartUpdated { session_id, part });
-                    }
-                    let meta = self.engine.session_meta(session_id).await?;
-                    self.bus
-                        .emit(SessionChange::SessionMetaUpdated { session_id, meta });
-                }
-                Ok(())
-            }
-            LeaseAcquire::HeldBy { .. } => Err(StoreError::LeaseHeldByOther {
-                session_id,
-                owner_id: owner.to_owned(),
-                heartbeat_at_ms: now,
-            }),
-        }
-    }
-
-    /// Read-only lease validation for deltas already represented by an active
-    /// in-memory stream buffer. The first delta in each buffer heartbeats via
-    /// `ensure_lease`; later deltas avoid turning the lease heartbeat itself
-    /// into one database write per chunk. The engine validates ownership again
-    /// atomically when the buffer flushes.
-    async fn validate_buffered_lease(
-        &self,
-        session_id: i64,
-        owner_id: &str,
-    ) -> Result<(), StoreError> {
-        let lease = self
-            .engine
-            .current_lease(session_id)
-            .await?
-            .ok_or(StoreError::LeaseNotHeld { session_id })?;
-        if self.now() - lease.heartbeat_at_ms > LEASE_STALENESS_MS {
-            return Err(StoreError::LeaseNotHeld { session_id });
-        }
-        if lease.owner_id != owner_id {
-            return Err(StoreError::LeaseHeldByOther {
-                session_id,
-                owner_id: lease.owner_id,
-                heartbeat_at_ms: lease.heartbeat_at_ms,
-            });
-        }
-        Ok(())
     }
 
     /// Buffer a text-stream delta and return the committed part when the
@@ -955,7 +849,6 @@ where
     async fn update_streaming_part(
         &self,
         session_id: i64,
-        owner_id: &str,
         part_id: i64,
         delta: PartDelta,
     ) -> Result<Option<Part>, StoreError> {
@@ -991,34 +884,18 @@ where
             )));
         }
 
-        let (flush, needs_heartbeat) = {
+        let flush = {
             let mut streaming = self.memory.streaming.lock().expect("streaming lock");
             let buffer = streaming.entry(key).or_insert_with(|| StreamingBuffer {
-                owner_id: owner_id.to_owned(),
                 part: persisted_base.expect("missing stream buffer has a persisted base"),
                 pending_deltas: 0,
-                last_heartbeat_at_ms: self.now(),
             });
-            if buffer.owner_id != owner_id {
-                return Err(StoreError::InvalidState(format!(
-                    "part {part_id} has a streaming buffer owned by another lease holder"
-                )));
-            }
             if buffer.part.origin_session_id != session_id {
                 return Err(StoreError::InvalidState(format!(
                     "part {part_id} is shared; only its origin session may update it in place"
                 )));
             }
-            // The buffered path commits no row per delta, so a long reasoning
-            // stream would let the lease age past LEASE_STALENESS_MS and get
-            // stolen (aborting the in-flight run) on the next commit. Heartbeat
-            // at half the staleness window: never a database write per chunk,
-            // only every ~7.5s of uninterrupted streaming.
             let now = self.now();
-            let needs_heartbeat = now - buffer.last_heartbeat_at_ms > LEASE_STALENESS_MS / 2;
-            if needs_heartbeat {
-                buffer.last_heartbeat_at_ms = now;
-            }
             let mut next_part = buffer.part.clone();
             let state_changed = apply_buffered_delta(&mut next_part, delta, now)?;
             buffer.part = next_part;
@@ -1033,29 +910,12 @@ where
             // already overlay live content.
             let should_flush =
                 state_changed || buffer.pending_deltas >= self.streaming_flush_delta_count;
-            (
-                should_flush.then(|| {
-                    streaming
-                        .remove(&key)
-                        .expect("stream buffer exists while flushing")
-                }),
-                needs_heartbeat,
-            )
+            should_flush.then(|| {
+                streaming
+                    .remove(&key)
+                    .expect("stream buffer exists while flushing")
+            })
         };
-
-        if needs_heartbeat {
-            // Extend the lease so the stream survives a model turn longer than
-            // the staleness window. `heartbeat_lease` is a single UPDATE keyed
-            // on our owner id: if the lease was already stolen or released it
-            // reports `false`, which the next flush/commit surfaces
-            // authoritatively — no error to raise mid-stream.
-            let heartbeat = self.heartbeat_lease(session_id, owner_id).await?;
-            if heartbeat {
-                tracing::debug!(%session_id, %part_id, "streaming lease heartbeat extended");
-            } else {
-                tracing::warn!(%session_id, %part_id, "streaming heartbeat had no lease row");
-            }
-        }
 
         match flush {
             Some(buffer) => self
@@ -1075,7 +935,6 @@ where
         self.engine
             .update_part(
                 session_id,
-                &buffer.owner_id,
                 part.part_id,
                 PartDelta {
                     state: Some(part.state),
@@ -1092,12 +951,7 @@ where
 
     /// Flush every buffered member of a run before its marker becomes
     /// terminal. This is the mandatory tail flush in D10.
-    async fn flush_streaming_run(
-        &self,
-        session_id: i64,
-        owner_id: &str,
-        run_id: i64,
-    ) -> Result<(), StoreError> {
+    async fn flush_streaming_run(&self, session_id: i64, run_id: i64) -> Result<(), StoreError> {
         let buffers = {
             let mut streaming = self.memory.streaming.lock().expect("streaming lock");
             let keys = streaming
@@ -1108,15 +962,6 @@ where
                 })
                 .map(|(key, _)| *key)
                 .collect::<Vec<_>>();
-            if keys.iter().any(|key| {
-                streaming
-                    .get(key)
-                    .is_some_and(|buffer| buffer.owner_id != owner_id)
-            }) {
-                return Err(StoreError::InvalidState(format!(
-                    "run {run_id} has a streaming buffer owned by another lease holder"
-                )));
-            }
             let mut buffers = Vec::with_capacity(keys.len());
             for key in keys {
                 let buffer = streaming
@@ -1147,20 +992,26 @@ where
         Ok(())
     }
 
-    /// Reconcile a session whose in-flight run lost its lease (17.4 step 2c):
+    /// Reconcile a session left with an ownerless in-flight run (17.4):
     /// mark in-flight run markers `failed` (`process_restart`) and their
-    /// non-terminal children `cancelled`. Idempotent.
-    async fn reconcile(&self, session_id: i64) -> Result<(), StoreError> {
-        let presentation = self.derive_presentation(session_id).await?;
-        if presentation.state != SessionState::Interrupted {
-            // Running and AwaitingInteraction must be preserved; Ready/Failed have no
-            // crashed in-flight marker to reconcile. Recovery is idempotent.
-            return Ok(());
-        }
+    /// non-terminal children `cancelled`. Idempotent. The caller decides
+    /// whether the process may still own the run (see the startup pass).
+    async fn in_flight_session_ids(&self) -> Result<Vec<i64>, StoreError> {
+        self.engine.in_flight_session_ids().await
+    }
+
+    async fn in_flight_run_ids(&self, session_id: i64) -> Result<Vec<i64>, StoreError> {
+        self.engine.in_flight_run_ids(session_id).await
+    }
+
+    async fn reconcile(&self, session_id: i64, run_ids: &[i64]) -> Result<(), StoreError> {
         // A process-restart reconciliation cannot safely commit a process-local
         // stream tail. Drop it before deriving/announcing the terminal rows.
         self.memory.clear_streaming_session(session_id);
-        let outcome = self.engine.reconcile(session_id, self.now()).await?;
+        let outcome = self
+            .engine
+            .reconcile(session_id, run_ids, self.now())
+            .await?;
         if !outcome.updated_parts.is_empty() {
             self.memory.invalidate(session_id);
             for part in outcome.updated_parts {
@@ -1405,55 +1256,44 @@ where
     async fn claim_background_delivery(
         &self,
         delivery_id: &str,
-        owner_id: &str,
+        claimant: &str,
         claim_until_ms: i64,
     ) -> Result<Option<BackgroundDelivery>, StoreError> {
         self.engine
-            .claim_background_delivery(
-                delivery_id,
-                &self.owner(owner_id),
-                claim_until_ms,
-                self.now(),
-            )
+            .claim_background_delivery(delivery_id, claimant, claim_until_ms, self.now())
             .await
     }
 
     async fn consume_background_delivery(
         &self,
         delivery_id: &str,
-        owner_id: &str,
+        claimant: &str,
     ) -> Result<BackgroundDelivery, StoreError> {
         self.engine
-            .consume_background_delivery(delivery_id, &self.owner(owner_id), self.now())
+            .consume_background_delivery(delivery_id, claimant, self.now())
             .await
     }
 
     async fn retry_background_delivery(
         &self,
         delivery_id: &str,
-        owner_id: &str,
+        claimant: &str,
         error: Value,
         next_attempt_at_ms: i64,
     ) -> Result<BackgroundDelivery, StoreError> {
         self.engine
-            .retry_background_delivery(
-                delivery_id,
-                &self.owner(owner_id),
-                error,
-                next_attempt_at_ms,
-                self.now(),
-            )
+            .retry_background_delivery(delivery_id, claimant, error, next_attempt_at_ms, self.now())
             .await
     }
 
     async fn fail_background_delivery(
         &self,
         delivery_id: &str,
-        owner_id: &str,
+        claimant: &str,
         error: Value,
     ) -> Result<BackgroundDelivery, StoreError> {
         self.engine
-            .fail_background_delivery(delivery_id, &self.owner(owner_id), error, self.now())
+            .fail_background_delivery(delivery_id, claimant, error, self.now())
             .await
     }
 
@@ -1479,15 +1319,12 @@ where
     async fn submit_user_run(
         &self,
         session_id: i64,
-        owner_id: &str,
         parts: Vec<NewPart>,
         idempotency_key: Option<String>,
     ) -> Result<SubmitOutcome, StoreError> {
-        let owner = self.owner(owner_id);
-        self.ensure_lease(session_id, &owner).await?;
         let outcome: SubmitOutcome = self
             .engine
-            .submit_user_run(session_id, &owner, parts, idempotency_key, self.now())
+            .submit_user_run(session_id, parts, idempotency_key, self.now())
             .await?;
         if outcome.created {
             let meta = self.engine.session_meta(session_id).await?;
@@ -1508,18 +1345,14 @@ where
     async fn submit_user_run_for_execution(
         &self,
         session_id: i64,
-        owner_id: &str,
         parts: Vec<NewPart>,
         idempotency_key: Option<String>,
         execution_id: &str,
     ) -> Result<SubmitOutcome, StoreError> {
-        let owner = self.owner(owner_id);
-        self.ensure_lease(session_id, &owner).await?;
         let outcome: SubmitOutcome = self
             .engine
             .submit_user_run_for_execution(
                 session_id,
-                &owner,
                 parts,
                 idempotency_key,
                 execution_id,
@@ -1545,27 +1378,24 @@ where
     async fn settle_background_run(
         &self,
         session_id: i64,
-        owner_id: &str,
         run_id: i64,
         tool_part: Option<(i64, PartState, Value)>,
         parts: Vec<NewPart>,
     ) -> Result<Vec<Part>, StoreError> {
-        let owner = self.owner(owner_id);
         // The launching tool part may still be buffered as a streaming
         // InProgress overlay. Drop that one part's buffer so the engine's
         // atomic launch/settle transaction is authoritative — otherwise a
         // background marker can remain memory-only forever because its run
         // deliberately stays in-flight until that same background operation
         // settles. Only the tool part's buffer is cleared: another execution
-        // may still be streaming unrelated parts. The engine itself performs
-        // the lease refresh, so no `ensure_lease` here.
+        // may still be streaming unrelated parts.
         let tool_part_id = tool_part.as_ref().map(|(part_id, _, _)| *part_id);
         if let Some(tool_part_id) = tool_part_id {
             self.memory.clear_streaming_part(session_id, tool_part_id);
         }
         let created = self
             .engine
-            .settle_background_run(session_id, &owner, run_id, tool_part, parts, self.now())
+            .settle_background_run(session_id, run_id, tool_part, parts, self.now())
             .await?;
         // The engine also transitioned the tool part and may have terminalized
         // the run marker, neither of which it returns. Invalidate the cache
@@ -1601,15 +1431,12 @@ where
     async fn append_parts(
         &self,
         session_id: i64,
-        owner_id: &str,
         run_id: i64,
         parts: Vec<NewPart>,
     ) -> Result<Vec<Part>, StoreError> {
-        let owner = self.owner(owner_id);
-        self.ensure_lease(session_id, &owner).await?;
         let created = self
             .engine
-            .append_parts(session_id, &owner, run_id, parts, self.now())
+            .append_parts(session_id, run_id, parts, self.now())
             .await?;
         let meta = self.engine.session_meta(session_id).await?;
         self.memory
@@ -1626,22 +1453,19 @@ where
     async fn update_part(
         &self,
         session_id: i64,
-        owner_id: &str,
         part_id: i64,
         delta: PartDelta,
     ) -> Result<Part, StoreError> {
-        let owner = self.owner(owner_id);
+        // A part with a live stream buffer must stay on the buffered path for
+        // every subsequent update: the buffer holds the in-memory truth and
+        // the committed row may still lag it (a state the engine would read as
+        // a backwards transition).
         let has_buffer = self
             .memory
             .streaming
             .lock()
             .expect("streaming lock")
             .contains_key(&(session_id, part_id));
-        if has_buffer {
-            self.validate_buffered_lease(session_id, &owner).await?;
-        } else {
-            self.ensure_lease(session_id, &owner).await?;
-        }
         let is_text_delta = delta.content.is_none() && delta.content_text_delta.is_some();
         // Route an in-progress content update (think/tool-call whole-document
         // deltas are `content`-shaped, not `content_text_delta`-shaped)
@@ -1656,7 +1480,7 @@ where
             delta.content.is_some() && delta.state == Some(PartState::InProgress);
         if has_buffer || is_text_delta || streaming_content_update {
             if let Some(updated) = self
-                .update_streaming_part(session_id, &owner, part_id, delta)
+                .update_streaming_part(session_id, part_id, delta)
                 .await?
             {
                 // The delta was flushed: merge the committed row into the
@@ -1690,7 +1514,7 @@ where
         }
         let updated = self
             .engine
-            .update_part(session_id, &owner, part_id, delta, self.now())
+            .update_part(session_id, part_id, delta, self.now())
             .await?;
         let meta = self.engine.session_meta(session_id).await?;
         self.memory.apply_committed(
@@ -1708,16 +1532,13 @@ where
     async fn complete_run(
         &self,
         session_id: i64,
-        owner_id: &str,
         run_id: i64,
         outcome: RunOutcome,
     ) -> Result<Part, StoreError> {
-        let owner = self.owner(owner_id);
-        self.ensure_lease(session_id, &owner).await?;
-        self.flush_streaming_run(session_id, &owner, run_id).await?;
+        self.flush_streaming_run(session_id, run_id).await?;
         let marker = self
             .engine
-            .complete_run(session_id, &owner, run_id, outcome, self.now())
+            .complete_run(session_id, run_id, outcome, self.now())
             .await?;
         let meta = self.engine.session_meta(session_id).await?;
         self.memory.apply_committed(
@@ -1734,33 +1555,16 @@ where
         Ok(marker)
     }
 
-    async fn heartbeat_lease(&self, session_id: i64, owner_id: &str) -> Result<bool, StoreError> {
-        let owner = self.owner(owner_id);
-        self.engine
-            .heartbeat_lease(session_id, &owner, self.now())
-            .await
-    }
-
     async fn start_run(
         &self,
         session_id: i64,
-        owner_id: &str,
         run_kind: &str,
         content: Value,
         idempotency_key: Option<String>,
     ) -> Result<SubmitOutcome, StoreError> {
-        let owner = self.owner(owner_id);
-        self.ensure_lease(session_id, &owner).await?;
         let outcome = self
             .engine
-            .start_run(
-                session_id,
-                &owner,
-                run_kind,
-                content,
-                idempotency_key,
-                self.now(),
-            )
+            .start_run(session_id, run_kind, content, idempotency_key, self.now())
             .await?;
         if outcome.created {
             let meta = self.engine.session_meta(session_id).await?;
@@ -1880,18 +1684,11 @@ where
         Ok(meta)
     }
 
-    async fn cancel_run(
-        &self,
-        session_id: i64,
-        owner_id: &str,
-        run_id: i64,
-    ) -> Result<Vec<Part>, StoreError> {
-        let owner = self.owner(owner_id);
-        self.ensure_lease(session_id, &owner).await?;
-        self.flush_streaming_run(session_id, &owner, run_id).await?;
+    async fn cancel_run(&self, session_id: i64, run_id: i64) -> Result<Vec<Part>, StoreError> {
+        self.flush_streaming_run(session_id, run_id).await?;
         let updated_parts = self
             .engine
-            .cancel_run(session_id, &owner, run_id, self.now())
+            .cancel_run(session_id, run_id, self.now())
             .await?;
         if !updated_parts.is_empty() {
             let meta = self.engine.session_meta(session_id).await?;
@@ -1912,15 +1709,12 @@ where
     async fn withdraw_user_run(
         &self,
         session_id: i64,
-        owner_id: &str,
         run_id: i64,
     ) -> Result<Vec<Part>, StoreError> {
-        let owner = self.owner(owner_id);
-        self.ensure_lease(session_id, &owner).await?;
-        self.flush_streaming_run(session_id, &owner, run_id).await?;
+        self.flush_streaming_run(session_id, run_id).await?;
         let removed_parts = self
             .engine
-            .withdraw_user_run(session_id, &owner, run_id, self.now())
+            .withdraw_user_run(session_id, run_id, self.now())
             .await?;
         if removed_parts.is_empty() {
             return Ok(Vec::new());
@@ -1939,20 +1733,25 @@ where
         Ok(removed_parts)
     }
 
-    async fn reconcile(&self, session_id: i64) -> Result<(), StoreError> {
-        SessionFacade::reconcile(self, session_id).await
+    async fn in_flight_session_ids(&self) -> Result<Vec<i64>, StoreError> {
+        SessionFacade::in_flight_session_ids(self).await
+    }
+
+    async fn in_flight_run_ids(&self, session_id: i64) -> Result<Vec<i64>, StoreError> {
+        SessionFacade::in_flight_run_ids(self, session_id).await
+    }
+
+    async fn reconcile(&self, session_id: i64, run_ids: &[i64]) -> Result<(), StoreError> {
+        SessionFacade::reconcile(self, session_id, run_ids).await
     }
 
     async fn compact_session(
         &self,
         session_id: i64,
-        owner_id: &str,
         summary: Option<String>,
         window: Option<String>,
         checkpoint: Option<Value>,
     ) -> Result<i64, StoreError> {
-        let owner = self.owner(owner_id);
-        self.ensure_lease(session_id, &owner).await?;
         // A compaction run marker closes the preceding window and records the
         // durable checkpoint as its content (4.1.1 `CompactionContent`,
         // 13.4); provider anchors are cleared because compaction changes the
@@ -1961,7 +1760,6 @@ where
             .engine
             .start_run(
                 session_id,
-                &owner,
                 "compaction",
                 json!({ "summary": summary, "window": window, "checkpoint": checkpoint }),
                 None,
@@ -1976,7 +1774,6 @@ where
             .engine
             .complete_run(
                 session_id,
-                &owner,
                 outcome.run_id,
                 RunOutcome {
                     status: PartState::Completed,
@@ -2076,17 +1873,7 @@ where
     }
 
     async fn maintenance(&self, now_ms: i64) -> Result<MaintenanceOutcome, StoreError> {
-        let outcome = self.engine.maintenance(now_ms).await?;
-        for session_id in &outcome.reaped_sessions {
-            self.memory.clear_streaming_session(*session_id);
-            self.memory.invalidate(*session_id);
-            let meta = self.engine.session_meta(*session_id).await?;
-            self.bus.emit(SessionChange::SessionMetaUpdated {
-                session_id: *session_id,
-                meta,
-            });
-        }
-        Ok(outcome)
+        self.engine.maintenance(now_ms).await
     }
 
     fn subscribe(&self, session_id: i64, observer: SessionObserver) -> Subscription {
@@ -2176,8 +1963,8 @@ fn append_buffered_text_delta(content: &mut Value, delta: &str) -> Result<(), St
 mod tests {
     use super::*;
     use crate::store::{
-        InMemoryEngine, LeaseState, NewSession, PartRole, PartState, ReconcileOutcome,
-        SessionChange, SessionListQuery, SessionState,
+        InMemoryEngine, NewSession, PartRole, PartState, ReconcileOutcome, SessionChange,
+        SessionListQuery, SessionState,
     };
     use agena_domain::SessionRelationKind;
     use portable_atomic::AtomicI64;
@@ -2198,8 +1985,8 @@ mod tests {
         }
     }
 
-    /// A ready root session with a fresh lease held by `owner-a`. Generic over
-    /// the engine so tests can drive `SessionFacade<CountingEngine>` too.
+    /// A ready root session. Generic over the engine so tests can drive
+    /// `SessionFacade<CountingEngine>` too.
     async fn ready_session<E: PersistenceEngine>(
         facade: &SessionFacade<E>,
         workspace_id: i64,
@@ -2219,12 +2006,6 @@ mod tests {
             })
             .await
             .expect("create session");
-        let acquire = facade
-            .engine()
-            .try_acquire_lease(meta.id, "owner-a", facade.now())
-            .await
-            .expect("acquire lease");
-        assert!(matches!(acquire, LeaseAcquire::Acquired { .. }));
         meta.id
     }
 
@@ -2262,7 +2043,6 @@ mod tests {
         let clock = Clock::new(1_000_000);
         let facade = SessionFacade::with_clock(
             InMemoryEngine::default(),
-            "owner-a",
             MemoryLayer::new(16),
             NotificationBus::new(),
             {
@@ -2287,7 +2067,6 @@ mod tests {
         let outcome = facade
             .submit_user_run(
                 session_id,
-                "owner-a",
                 vec![NewPart::pending(
                     "text",
                     PartRole::User,
@@ -2323,7 +2102,6 @@ mod tests {
         let engine = InMemoryEngine::default();
         let facade = SessionFacade::with_clock(
             engine.clone(),
-            "owner-a",
             MemoryLayer::new(16),
             NotificationBus::new(),
             {
@@ -2336,7 +2114,6 @@ mod tests {
         let outcome = facade
             .submit_user_run(
                 session_id,
-                "owner-a",
                 vec![NewPart {
                     kind: "text".to_owned(),
                     role: PartRole::Assistant,
@@ -2368,7 +2145,6 @@ mod tests {
             facade
                 .update_part(
                     session_id,
-                    "owner-a",
                     part_id,
                     PartDelta {
                         content_text_delta: Some(delta.to_owned()),
@@ -2393,7 +2169,6 @@ mod tests {
         facade
             .update_part(
                 session_id,
-                "owner-a",
                 part_id,
                 PartDelta {
                     content_text_delta: Some("c".to_owned()),
@@ -2413,7 +2188,6 @@ mod tests {
             facade
                 .update_part(
                     session_id,
-                    "owner-a",
                     part_id,
                     PartDelta {
                         content_text_delta: Some(delta.to_owned()),
@@ -2436,7 +2210,6 @@ mod tests {
         facade
             .complete_run(
                 session_id,
-                "owner-a",
                 run_id,
                 RunOutcome {
                     status: PartState::Completed,
@@ -2477,7 +2250,6 @@ mod tests {
         let _outcome = facade
             .submit_user_run(
                 session_id,
-                "owner-a",
                 vec![NewPart {
                     kind: "think".to_owned(),
                     role: PartRole::Assistant,
@@ -2513,7 +2285,6 @@ mod tests {
             facade
                 .update_part(
                     session_id,
-                    "owner-a",
                     part_id,
                     PartDelta {
                         state: Some(PartState::InProgress),
@@ -2571,7 +2342,6 @@ mod tests {
         facade
             .update_part(
                 session_id,
-                "owner-a",
                 part_id,
                 PartDelta {
                     state: Some(PartState::Completed),
@@ -2614,46 +2384,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn duplicate_owner_writes_are_refused_and_resume_heals() {
-        let (facade, clock) = harness();
-        let session_id = ready_session(&facade, 1, "t").await;
-
-        // A second owner cannot write while owner-a's lease is fresh.
-        let err = facade
-            .submit_user_run(
-                session_id,
-                "owner-b",
-                vec![NewPart::pending(
-                    "text",
-                    PartRole::User,
-                    json!({"text": "x"}),
-                )],
-                None,
-            )
-            .await
-            .expect_err("owner-b refused");
-        assert!(matches!(err, StoreError::LeaseHeldByOther { .. }));
-
-        // owner-a's lease goes stale; owner-b acquires, which reconciles the
-        // (now stale) owner-a state and lets owner-b write.
-        clock.advance(60_000);
-        let outcome = facade
-            .submit_user_run(
-                session_id,
-                "owner-b",
-                vec![NewPart::pending(
-                    "text",
-                    PartRole::User,
-                    json!({"text": "y"}),
-                )],
-                None,
-            )
-            .await
-            .expect("owner-b acquires after staleness");
-        assert!(outcome.run_id > 0);
-    }
-
-    #[tokio::test]
     async fn session_state_derives_running_awaiting_and_ready() {
         let (facade, _clock) = harness();
         let session_id = ready_session(&facade, 1, "t").await;
@@ -2664,7 +2394,6 @@ mod tests {
         let outcome = facade
             .submit_user_run(
                 session_id,
-                "owner-a",
                 vec![NewPart::pending(
                     "text",
                     PartRole::User,
@@ -2683,7 +2412,6 @@ mod tests {
         facade
             .complete_run(
                 session_id,
-                "owner-a",
                 run_id,
                 RunOutcome {
                     status: PartState::Completed,
@@ -2705,7 +2433,6 @@ mod tests {
         let outcome = facade
             .submit_user_run(
                 session_id,
-                "owner-a",
                 vec![NewPart::pending(
                     "text",
                     PartRole::User,
@@ -2718,7 +2445,6 @@ mod tests {
         facade
             .append_parts(
                 session_id,
-                "owner-a",
                 outcome.run_id,
                 vec![pending_tool_call("which?", "ask_user")],
             )
@@ -2739,7 +2465,6 @@ mod tests {
         let outcome = facade
             .submit_user_run(
                 session_id,
-                "owner-a",
                 vec![NewPart::pending(
                     "text",
                     PartRole::User,
@@ -2753,7 +2478,6 @@ mod tests {
         facade
             .complete_run(
                 session_id,
-                "owner-a",
                 run_id,
                 RunOutcome {
                     status: PartState::Completed,
@@ -2799,13 +2523,7 @@ mod tests {
             .await
             .expect("set anchors");
         let compaction_id = facade
-            .compact_session(
-                session_id,
-                "owner-a",
-                Some("checkpoint".to_owned()),
-                None,
-                None,
-            )
+            .compact_session(session_id, Some("checkpoint".to_owned()), None, None)
             .await
             .expect("compact");
         assert!(compaction_id > 0);
@@ -2833,7 +2551,6 @@ mod tests {
         facade
             .compact_session(
                 session_id,
-                "owner-a",
                 Some(summary.to_owned()),
                 Some("through:42".to_owned()),
                 None,
@@ -2868,11 +2585,11 @@ mod tests {
             json!({"text": "once"}),
         )];
         let first = facade
-            .submit_user_run(session_id, "owner-a", parts.clone(), Some("k1".to_owned()))
+            .submit_user_run(session_id, parts.clone(), Some("k1".to_owned()))
             .await
             .expect("first");
         let second = facade
-            .submit_user_run(session_id, "owner-a", parts.clone(), Some("k1".to_owned()))
+            .submit_user_run(session_id, parts.clone(), Some("k1".to_owned()))
             .await
             .expect("replay");
         // The replay resolves to the same run but is not a re-creation: the
@@ -2894,7 +2611,6 @@ mod tests {
         facade
             .submit_user_run(
                 session_id,
-                "owner-a",
                 vec![NewPart::pending(
                     "text",
                     PartRole::User,
@@ -2942,7 +2658,6 @@ mod tests {
         let outcome = facade
             .submit_user_run(
                 root_id,
-                "owner-a",
                 vec![NewPart::pending(
                     "text",
                     PartRole::User,
@@ -3077,7 +2792,6 @@ mod tests {
         facade
             .submit_user_run(
                 session_id,
-                "owner-a",
                 vec![NewPart::pending(
                     "text",
                     PartRole::User,
@@ -3159,7 +2873,6 @@ mod tests {
         let outcome = facade
             .start_run(
                 session_id,
-                "owner-a",
                 "background",
                 json!({"kind": "background", "prompt": "do a thing"}),
                 None,
@@ -3343,7 +3056,6 @@ mod tests {
         let outcome = facade
             .submit_user_run(
                 session_id,
-                "owner-a",
                 vec![
                     NewPart {
                         kind: "text".to_owned(),
@@ -3377,7 +3089,7 @@ mod tests {
         });
 
         facade
-            .cancel_run(session_id, "owner-a", run_id)
+            .cancel_run(session_id, run_id)
             .await
             .expect("cancel run");
 
@@ -3400,13 +3112,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reconcile_emits_committed_part_updates_and_preserves_live_or_paused_runs() {
+    async fn reconcile_terminalizes_the_in_flight_run_and_emits_committed_part_updates() {
         let (facade, _clock) = harness();
         let session_id = ready_session(&facade, 1, "reconcile patches").await;
         let outcome = facade
             .submit_user_run(
                 session_id,
-                "owner-a",
                 vec![NewPart {
                     kind: "text".to_owned(),
                     role: PartRole::Assistant,
@@ -3428,20 +3139,14 @@ mod tests {
             Arc::new(move |change| seen.lock().expect("seen lock").push(change))
         });
 
-        facade
-            .reconcile(session_id)
+        let run_ids = facade
+            .in_flight_run_ids(session_id)
             .await
-            .expect("fresh run is preserved");
-        assert!(seen.lock().expect("seen lock").is_empty());
+            .expect("read orphaned runs");
         facade
-            .engine()
-            .release_lease(session_id, "owner-a")
+            .reconcile(session_id, &run_ids)
             .await
-            .expect("release lease");
-        facade
-            .reconcile(session_id)
-            .await
-            .expect("reconcile interrupted run");
+            .expect("reconcile orphaned run");
 
         {
             let changes = seen.lock().expect("seen lock");
@@ -3467,26 +3172,23 @@ mod tests {
         facade
             .submit_user_run(
                 session_id,
-                "owner-a",
                 vec![pending_tool_call("paused?", "ask_user")],
                 None,
             )
             .await
             .expect("start paused run");
-        facade
-            .engine()
-            .release_lease(session_id, "owner-a")
-            .await
-            .expect("release paused lease");
         seen.lock().expect("seen lock").clear();
-        facade
-            .reconcile(session_id)
+        let run_ids = facade
+            .in_flight_run_ids(session_id)
             .await
-            .expect("paused run is preserved");
-        assert!(seen.lock().expect("seen lock").is_empty());
+            .expect("read paused runs");
+        facade
+            .reconcile(session_id, &run_ids)
+            .await
+            .expect("paused run is reconciled too");
         assert_eq!(
             facade.session_state(session_id).await.expect("state").state,
-            SessionState::AwaitingInteraction
+            SessionState::Ready
         );
     }
 
@@ -3497,7 +3199,6 @@ mod tests {
         facade
             .submit_user_run(
                 session_id,
-                "owner-a",
                 vec![NewPart::pending(
                     "text",
                     PartRole::User,
@@ -3553,13 +3254,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn maintenance_notifies_reaped_sessions_to_refresh_derived_state() {
+    async fn maintenance_only_collects_orphan_parts() {
         let (facade, clock) = harness();
         let session_id = ready_session(&facade, 1, "maintenance patch").await;
         facade
             .submit_user_run(
                 session_id,
-                "owner-a",
                 vec![NewPart::pending(
                     "text",
                     PartRole::Assistant,
@@ -3575,16 +3275,15 @@ mod tests {
             Arc::new(move |change| seen.lock().expect("seen lock").push(change))
         });
 
-        clock.advance(LEASE_STALENESS_MS + 1);
+        clock.advance(600_000);
         let outcome = facade.maintenance(clock.get()).await.expect("maintenance");
-        assert_eq!(outcome.reaped_sessions, vec![session_id]);
-        assert!(matches!(
-            seen.lock().expect("seen lock").as_slice(),
-            [SessionChange::SessionMetaUpdated { session_id: changed, .. }] if *changed == session_id
-        ));
+        assert_eq!(outcome.gc_deleted_parts, 0);
+        // An in-flight run is this process's own work; time passing never
+        // changes it. Only reconcile (a restart/failure path) terminalizes it.
+        assert!(seen.lock().expect("seen lock").is_empty());
         assert_eq!(
             facade.session_state(session_id).await.expect("state").state,
-            SessionState::Interrupted
+            SessionState::Running
         );
     }
 
@@ -3759,40 +3458,6 @@ mod tests {
             self.inner.delete_session(session_id).await
         }
 
-        async fn try_acquire_lease(
-            &self,
-            session_id: i64,
-            owner_id: &str,
-            now_ms: i64,
-        ) -> Result<LeaseAcquire, StoreError> {
-            self.inner
-                .try_acquire_lease(session_id, owner_id, now_ms)
-                .await
-        }
-
-        async fn heartbeat_lease(
-            &self,
-            session_id: i64,
-            owner_id: &str,
-            now_ms: i64,
-        ) -> Result<bool, StoreError> {
-            self.inner
-                .heartbeat_lease(session_id, owner_id, now_ms)
-                .await
-        }
-
-        async fn release_lease(&self, session_id: i64, owner_id: &str) -> Result<bool, StoreError> {
-            self.inner.release_lease(session_id, owner_id).await
-        }
-
-        async fn current_lease(&self, session_id: i64) -> Result<Option<LeaseState>, StoreError> {
-            self.inner.current_lease(session_id).await
-        }
-
-        async fn reap_stale_leases(&self, stale_before_ms: i64) -> Result<Vec<i64>, StoreError> {
-            self.inner.reap_stale_leases(stale_before_ms).await
-        }
-
         async fn create_background_operation(
             &self,
             operation: NewBackgroundOperation,
@@ -3918,20 +3583,18 @@ mod tests {
         async fn submit_user_run(
             &self,
             session_id: i64,
-            owner_id: &str,
             parts: Vec<NewPart>,
             idempotency_key: Option<String>,
             now_ms: i64,
         ) -> Result<SubmitOutcome, StoreError> {
             self.inner
-                .submit_user_run(session_id, owner_id, parts, idempotency_key, now_ms)
+                .submit_user_run(session_id, parts, idempotency_key, now_ms)
                 .await
         }
 
         async fn submit_user_run_for_execution(
             &self,
             session_id: i64,
-            owner_id: &str,
             parts: Vec<NewPart>,
             idempotency_key: Option<String>,
             execution_id: &str,
@@ -3940,7 +3603,6 @@ mod tests {
             self.inner
                 .submit_user_run_for_execution(
                     session_id,
-                    owner_id,
                     parts,
                     idempotency_key,
                     execution_id,
@@ -3952,98 +3614,82 @@ mod tests {
         async fn settle_background_run(
             &self,
             session_id: i64,
-            owner_id: &str,
             run_id: i64,
             tool_part: Option<(i64, PartState, Value)>,
             parts: Vec<NewPart>,
             now_ms: i64,
         ) -> Result<Vec<Part>, StoreError> {
             self.inner
-                .settle_background_run(session_id, owner_id, run_id, tool_part, parts, now_ms)
+                .settle_background_run(session_id, run_id, tool_part, parts, now_ms)
                 .await
         }
 
         async fn append_parts(
             &self,
             session_id: i64,
-            owner_id: &str,
             run_id: i64,
             parts: Vec<NewPart>,
             now_ms: i64,
         ) -> Result<Vec<Part>, StoreError> {
             self.inner
-                .append_parts(session_id, owner_id, run_id, parts, now_ms)
+                .append_parts(session_id, run_id, parts, now_ms)
                 .await
         }
 
         async fn update_part(
             &self,
             session_id: i64,
-            owner_id: &str,
             part_id: i64,
             delta: PartDelta,
             now_ms: i64,
         ) -> Result<Part, StoreError> {
             self.inner
-                .update_part(session_id, owner_id, part_id, delta, now_ms)
+                .update_part(session_id, part_id, delta, now_ms)
                 .await
         }
 
         async fn complete_run(
             &self,
             session_id: i64,
-            owner_id: &str,
             run_id: i64,
             outcome: RunOutcome,
             now_ms: i64,
         ) -> Result<Part, StoreError> {
             self.inner
-                .complete_run(session_id, owner_id, run_id, outcome, now_ms)
+                .complete_run(session_id, run_id, outcome, now_ms)
                 .await
         }
 
         async fn start_run(
             &self,
             session_id: i64,
-            owner_id: &str,
             run_kind: &str,
             content: Value,
             idempotency_key: Option<String>,
             now_ms: i64,
         ) -> Result<SubmitOutcome, StoreError> {
             self.inner
-                .start_run(
-                    session_id,
-                    owner_id,
-                    run_kind,
-                    content,
-                    idempotency_key,
-                    now_ms,
-                )
+                .start_run(session_id, run_kind, content, idempotency_key, now_ms)
                 .await
         }
 
         async fn cancel_run(
             &self,
             session_id: i64,
-            owner_id: &str,
             run_id: i64,
             now_ms: i64,
         ) -> Result<Vec<Part>, StoreError> {
-            self.inner
-                .cancel_run(session_id, owner_id, run_id, now_ms)
-                .await
+            self.inner.cancel_run(session_id, run_id, now_ms).await
         }
 
         async fn withdraw_user_run(
             &self,
             session_id: i64,
-            owner_id: &str,
             run_id: i64,
             now_ms: i64,
         ) -> Result<Vec<Part>, StoreError> {
             self.inner
-                .withdraw_user_run(session_id, owner_id, run_id, now_ms)
+                .withdraw_user_run(session_id, run_id, now_ms)
                 .await
         }
 
@@ -4060,12 +3706,21 @@ mod tests {
                 .await
         }
 
+        async fn in_flight_session_ids(&self) -> Result<Vec<i64>, StoreError> {
+            self.inner.in_flight_session_ids().await
+        }
+
+        async fn in_flight_run_ids(&self, session_id: i64) -> Result<Vec<i64>, StoreError> {
+            self.inner.in_flight_run_ids(session_id).await
+        }
+
         async fn reconcile(
             &self,
             session_id: i64,
+            run_ids: &[i64],
             now_ms: i64,
         ) -> Result<ReconcileOutcome, StoreError> {
-            self.inner.reconcile(session_id, now_ms).await
+            self.inner.reconcile(session_id, run_ids, now_ms).await
         }
 
         async fn maintenance(&self, now_ms: i64) -> Result<MaintenanceOutcome, StoreError> {
@@ -4100,16 +3755,11 @@ mod tests {
     async fn writes_seed_cache_without_engine_reload() {
         let clock = Clock::new(1_000_000);
         let engine = CountingEngine::new();
-        let facade = SessionFacade::with_clock(
-            engine,
-            "owner-a",
-            MemoryLayer::new(16),
-            NotificationBus::new(),
-            {
+        let facade =
+            SessionFacade::with_clock(engine, MemoryLayer::new(16), NotificationBus::new(), {
                 let clock = clock.clone();
                 move || clock.get()
-            },
-        );
+            });
         let session_id = ready_session(&facade, 1, "t").await;
 
         // Warm the cache: the first `load` must hit the engine exactly once.
@@ -4130,7 +3780,6 @@ mod tests {
         let outcome = facade
             .submit_user_run(
                 session_id,
-                "owner-a",
                 vec![NewPart::pending(
                     "text",
                     PartRole::User,
@@ -4153,7 +3802,6 @@ mod tests {
         let appended = facade
             .append_parts(
                 session_id,
-                "owner-a",
                 run_id,
                 vec![NewPart::pending(
                     "text",
@@ -4175,7 +3823,6 @@ mod tests {
         facade
             .update_part(
                 session_id,
-                "owner-a",
                 part_id,
                 PartDelta {
                     content: Some(json!({"text": "edited"})),
@@ -4203,7 +3850,6 @@ mod tests {
         facade
             .complete_run(
                 session_id,
-                "owner-a",
                 run_id,
                 RunOutcome {
                     status: PartState::Completed,

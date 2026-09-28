@@ -24,7 +24,7 @@ pub use in_memory::{InMemoryEngine, InMemoryEngineConfig};
 pub use jsonl::{ExportRecord, ParsedBundle, parse, serialize};
 pub use part_update::{prepare_part_update, prepare_run_completion, validate_run_content};
 pub use state::{
-    InFlightRun, LEASE_STALENESS_MS, PendingInteraction, StateInputs, apply_part_transition,
-    derive_session_state, lease_is_fresh, presentation,
+    InFlightRun, PendingInteraction, StateInputs, apply_part_transition, derive_session_state,
+    presentation,
 };
 pub use types::*;

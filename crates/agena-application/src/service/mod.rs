@@ -29,12 +29,12 @@ use crate::{
         PendingInteractiveRequestResource, PermissionRuleResource, PermissionRuleWriteRequest,
         ScheduledJobResource, ScheduledJobRunResource, SearchPaginationQuery,
         SessionAutomationResource, SessionCreateRequest, SessionExecutionContextResource,
-        SessionExecutionResource, SessionLifecycleState, SessionRelationKind, SessionResource,
-        SessionRunOptionsRequest, SessionState, SessionUpdateRequest, SessionUsageResource,
-        SnapshotBackendSupportResource, SnapshotStatusResource, SubtaskStatus,
-        WorkspaceFileDownloadQuery, WorkspaceFileKind, WorkspaceFileNode, WorkspaceFileTreeQuery,
-        WorkspaceFileTreeResource, WorkspaceFileUploadRequest, WorkspaceFileUploadResource,
-        WorkspaceListQuery, WorkspacePathRequest, WorkspaceResolveRequest, WorkspaceResource,
+        SessionExecutionResource, SessionResource, SessionRunOptionsRequest, SessionState,
+        SessionUpdateRequest, SessionUsageResource, SnapshotBackendSupportResource,
+        SnapshotStatusResource, SubtaskStatus, WorkspaceFileDownloadQuery, WorkspaceFileKind,
+        WorkspaceFileNode, WorkspaceFileTreeQuery, WorkspaceFileTreeResource,
+        WorkspaceFileUploadRequest, WorkspaceFileUploadResource, WorkspaceListQuery,
+        WorkspacePathRequest, WorkspaceResolveRequest, WorkspaceResource,
     },
     pagination::{
         PageInfo, PageOrder, PaginatedResponse, decode_cursor, encode_cursor, normalize_limit,
@@ -52,7 +52,6 @@ mod permissions;
 pub(crate) mod sessions;
 mod workspaces;
 
-pub(crate) use execution::execution_access_from_domain;
 pub use execution::{
     list_scheduled_jobs, permission_config_domain_from_resource,
     permission_config_resource_from_domain, scheduled_job_resource, sort_jobs_for_display,

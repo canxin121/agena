@@ -58,6 +58,8 @@ Server state 使用唯一当前目录和 `agena.db`，没有旧目录候选选�
 - cloud-media handle records；
 - memory frontmatter。
 
+client 不持有自己的 session 状态：session / execution / background-activity 的权威状态只在服务端，TUI、Web、CLI、IDE 都是纯展示客户端，不落盘自己的副本，也不写入共享数据库。每个数据目录同时只有一个服务端进程；服务端启动、打开会话和每次执行结束时收敛该目录里所有被遗留的 in-flight run（`process_restart`），客户端不参与这一过程。
+
 共同规则：
 
 - 未知字段拒绝；
@@ -79,6 +81,17 @@ Web 使用当前 Agena key：
 - 当前 URL/query 只认当前 canonical key。
 
 浏览器里遗留的旧 key 会自然被忽略；Agena 不扫描并搬运它们。
+
+## 状态类型单一来源
+
+session / execution / background-activity / notification 的状态类型只有一份 Rust 定义（`crates/agena-domain`、`crates/agena-api`、`crates/agena-notification`）：
+
+- storage、API、TUI、CLI 与 RPC 直接使用或重导出同一类型，不做逐层字符串二次映射；
+- 不保留层内的平行 enum、字符串常量表或别名映射；
+- Web 端消费生成的 TypeScript 镜像 `packages/agena-web/src/generated/agenaState.ts`（`cargo run -p agena-web-types > …` 生成，`cargo test -p agena-web-types` 校验），不在前端维护第二份 union；
+- 未知状态值在 API 边界一次性降级为文档化的 fallback（`ready`），不新增“兼容旧状态”的分支。
+
+`awaiting_interaction` 这类 wire 字符串与 active / attention / recovery / terminal 分类都从该单一来源派生；前端帮助函数与 Rust 谓词由同一份定义校验一致。
 
 ## 配置
 

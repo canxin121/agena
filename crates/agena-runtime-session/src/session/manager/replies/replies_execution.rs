@@ -16,8 +16,8 @@ use super::{
 use crate::session::Session;
 use crate::session::prompt_window;
 use crate::session::store::{
-    new_part_from_content, run_marker_content, text_content, tool_call_from_operation,
-    typed_content_from_value, typed_content_to_value,
+    StoreAdapter, new_part_from_content, run_marker_content, text_content,
+    tool_call_from_operation, typed_content_from_value, typed_content_to_value,
 };
 use crate::tool::ToolExecutor;
 use agena_domain::{
@@ -367,54 +367,6 @@ impl SessionManager {
         // next assistant run. This is execution-local coordination over the
         // durable run/part state, not a second persisted lifecycle.
         let mut external_input_boundary_pending = false;
-
-        // Turn-scoped lease heartbeat. A stable run can spend many seconds
-        // between database commits — a slow reasoning stream, a multi-second
-        // tool execution, a long permission wait — far past
-        // `LEASE_STALENESS_MS`. Without a heartbeat the next commit treats the
-        // run as stale, steals the lease, and aborts the in-flight run
-        // mid-stream (`lease_stolen`). The heartbeat extends the run's
-        // ownership every half-window and is aborted on every exit path via
-        // its Drop guard. If the lease was already stolen by another owner the
-        // heartbeat stops and the next commit surfaces the conflict
-        // authoritatively.
-        struct LeaseHeartbeatGuard {
-            task: tokio::task::JoinHandle<()>,
-        }
-        impl Drop for LeaseHeartbeatGuard {
-            fn drop(&mut self) {
-                self.task.abort();
-            }
-        }
-        let heartbeat_store = Arc::clone(&self.store);
-        let heartbeat_session_id = session.id;
-        let heartbeat_task = tokio::spawn(async move {
-            let mut tick = tokio::time::interval(std::time::Duration::from_millis(
-                agena_storage::store::LEASE_STALENESS_MS as u64 / 2,
-            ));
-            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-            // Skip the immediate first tick: the run just committed and the
-            // lease is fresh.
-            tick.tick().await;
-            loop {
-                tick.tick().await;
-                if !heartbeat_store.heartbeat_lease(heartbeat_session_id).await {
-                    tracing::warn!(
-                        session_id = heartbeat_session_id,
-                        "stable-run lease heartbeat stopped: no lease held by this owner"
-                    );
-                    break;
-                }
-                tracing::debug!(
-                    target: "agena::session::lease",
-                    session_id = heartbeat_session_id,
-                    "stable-run lease heartbeat extended"
-                );
-            }
-        });
-        let _heartbeat_guard = LeaseHeartbeatGuard {
-            task: heartbeat_task,
-        };
         loop {
             let current_options = self
                 .apply_execution_context_to_run_options_async(&session, options.clone())
@@ -632,7 +584,7 @@ impl SessionManager {
                     // operation or install a blocking interaction. Returning
                     // to the top with the identical pending set creates a
                     // ready-future busy loop that can pin a Tokio worker at
-                    // 100% CPU while the lease heartbeat makes the run look
+                    // 100% CPU while a healthy heartbeat makes the run look
                     // healthy forever. Fail closed instead of spinning even
                     // if a future lifecycle regression misclassifies a part.
                     return Err(AppError::Internal(format!(
@@ -850,11 +802,9 @@ impl SessionManager {
             let marker_run_id = match turn_run_id {
                 Some(run_id) => run_id,
                 None => {
-                    let run_id = self
-                        .store
+                    self.store
                         .start_run(session.id, "continue", initial_marker_content.clone())
-                        .await?;
-                    run_id
+                        .await?
                 }
             };
             // The marker's current content (accumulated round records, usage)
@@ -2554,7 +2504,7 @@ impl SessionManager {
         // the tool can spawn a process or child session. A crash from this
         // point forward leaves a recoverable aggregate instead of an unowned
         // external side effect. Running means the identity is durably bound
-        // and the adapter now owns the short launch lease; the lease is
+        // and the adapter now holds the short launch claim; the claim is
         // cleared only after its launch receipt returns.
         let background_intent = if let Some(kind) = background_kind {
             let launch_run_id = assistant_message_id(&session, &resolved.pending.part)?;
@@ -2583,7 +2533,7 @@ impl SessionManager {
                         external_id: Some(external_id.clone()),
                         outcome: None,
                         failure: None,
-                        owner_id: Some(self.store.background_owner_id().to_owned()),
+                        owner_id: Some(StoreAdapter::CLAIMANT.to_owned()),
                         lease_until_ms: Some(Utc::now().timestamp_millis() + 30_000),
                     })
                     .await?
@@ -2599,7 +2549,7 @@ impl SessionManager {
                         external_id: Some(external_id),
                         outcome: None,
                         failure: None,
-                        owner_id: Some(self.store.background_owner_id().to_owned()),
+                        owner_id: Some(StoreAdapter::CLAIMANT.to_owned()),
                         lease_until_ms: Some(Utc::now().timestamp_millis() + 120_000),
                     })
                     .await?

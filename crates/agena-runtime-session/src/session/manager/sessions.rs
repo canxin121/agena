@@ -11,34 +11,41 @@ use agena_storage::store::{PartRole, PartState};
 use std::{collections::HashMap, sync::Arc};
 
 impl SessionManager {
+    /// Startup recovery: this process owns the data directory, so every run
+    /// marker left in flight by a previous process is abandoned work that must
+    /// be terminalized before the first read is served (17.4). Runs this
+    /// process is already executing — impossible during startup, but the guard
+    /// keeps the function safe to call again — are left alone.
     pub async fn reconcile_interrupted_executions(&self) -> Result<(), AppError> {
-        for session_id in self.workspace_session_ids().await? {
-            self.reconcile_interrupted_session(session_id).await?;
+        // Unconditional: the durable scan does not depend on which workspace
+        // the process has bound, so recovery cannot be skipped by a workspace
+        // resolution order or failure (17.4).
+        for session_id in self.store.in_flight_session_ids().await? {
+            self.reconcile_session_on_open(session_id).await?;
         }
         Ok(())
     }
 
-    /// Reconcile one session's interrupted lifecycles and subagent subtask
-    /// state without scanning unrelated sessions. Skips sessions with a live
-    /// execution lease: another process is actively running them, so their
-    /// RunStarted entries are not interrupted and must not be aborted.
+    /// Reconcile one session's abandoned in-flight runs and subagent subtask
+    /// state without scanning unrelated sessions.
+    ///
+    /// A run this process is executing right now is not abandoned: the
+    /// execution registry holds its slot until the run settles. Everything
+    /// else — including a run paused on a pending interaction — was left
+    /// behind by a process that is no longer running the session and is
+    /// terminalized here (17.4).
     pub(super) async fn reconcile_interrupted_session(
         &self,
         session_id: i64,
     ) -> Result<(), AppError> {
-        // A live cross-process run means another process is actively running
-        // this session; its interrupted work is not ours to abort (17.4 2b).
-        let presentation = self.store.session_state(session_id).await?;
-        if matches!(
-            presentation.state,
-            agena_storage::store::SessionState::Running
-                | agena_storage::store::SessionState::AwaitingInteraction
-        ) {
+        if self.execution_registry.is_active(session_id).await {
             return Ok(());
         }
-        // Abort the session's in-flight run markers (17.4 2c). The engine
-        // owns lease freshness; an interrupted (stale-lease) run is failed.
-        self.store.reconcile(session_id).await?;
+        // Abort the session's in-flight run markers. The engine commits them
+        // in one transaction; a marker still in flight at this point is by
+        // definition abandoned.
+        let run_ids = self.store.in_flight_run_ids(session_id).await?;
+        self.store.reconcile(session_id, &run_ids).await?;
         let mut session = self.store.load_session(session_id).await?;
         if session.is_subagent()
             && session.runtime.subtask.status == agena_domain::SubtaskStatus::Running
@@ -76,29 +83,24 @@ impl SessionManager {
         Ok(())
     }
 
-    /// Lazy interrupted-run reconciliation for the session the user is about
-    /// to open, plus its subagent children (whose state is displayed under the
-    /// parent in the session tree). Runs at most once per session per process,
-    /// replacing the startup full-workspace scan that delayed `tui` on large
-    /// databases. Stale execution leases are still stolen atomically on demand
-    /// by `register`, and per-run/per-load cleanup keeps sessions current
-    /// after the first open.
+    /// Lazy recovery for the session the user is about to open, plus its
+    /// subagent children (whose state is displayed under the parent in the
+    /// session tree).
+    ///
+    /// The latch is only claimed once recovery succeeded and the session is
+    /// genuinely settled. A session this process is actively running has no
+    /// abandoned work, so it is skipped entirely rather than latched — the
+    /// registry already answers the question, and latching it would suppress
+    /// recovery after a crash inside the same process. Errors leave the latch
+    /// unclaimed so the next open retries.
     async fn reconcile_session_on_open(&self, session_id: i64) -> Result<(), AppError> {
         {
-            let mut reconciled = self.reconciled_sessions.lock().await;
-            if !reconciled.insert(session_id) {
+            let reconciled = self.reconciled_sessions.lock().await;
+            if reconciled.contains(&session_id) {
                 return Ok(());
             }
         }
-        // A live cross-process run belongs to another process, and a pending
-        // interaction means the run is deliberately paused for the user.
-        // Neither condition is an interrupted execution (17.4 steps 2a-2b).
-        let presentation = self.store.session_state(session_id).await?;
-        if matches!(
-            presentation.state,
-            agena_storage::store::SessionState::Running
-                | agena_storage::store::SessionState::AwaitingInteraction
-        ) {
+        if self.execution_registry.is_active(session_id).await {
             return Ok(());
         }
         self.reconcile_interrupted_session(session_id).await?;
@@ -109,28 +111,25 @@ impl SessionManager {
                 self.reconcile_interrupted_session(summary.id).await?;
             }
         }
+        self.reconciled_sessions.lock().await.insert(session_id);
         Ok(())
     }
 
-    /// Reclaim stale execution leases (from crashed processes) and reconcile
-    /// the interrupted runs of the reclaimed sessions. Called periodically by
-    /// a maintenance loop so a running process can recover another process's
-    /// crashed run without waiting for a restart.
-    pub async fn reap_stale_leases(&self) -> Result<(), AppError> {
-        // Engine-owned maintenance: reap stale leases and GC orphan parts
-        // (14.2). Reconcile-on-open handles the interrupted-run recovery for
-        // each reclaimed session the next time it is loaded.
+    /// Periodic maintenance: GC orphan parts (7.6). Recovery of abandoned
+    /// runs is not time-driven — the process that owns the data directory
+    /// reconciles on startup, on open, and when a run settles — so this loop
+    /// carries no lease reaping.
+    pub async fn maintenance_tick(&self) -> Result<(), AppError> {
         let outcome = self
             .store
             .maintenance()
             .await
             .map_err(|error| AppError::internal_error(&error))?;
-        if !outcome.reaped_sessions.is_empty() || outcome.gc_deleted_parts > 0 {
+        if outcome.gc_deleted_parts > 0 {
             tracing::info!(
                 target: "agena_session::maintenance",
-                reaped_sessions = ?outcome.reaped_sessions,
                 gc_deleted_parts = outcome.gc_deleted_parts,
-                "maintenance reaped stale leases and GC'd orphan parts"
+                "maintenance GC'd orphan parts"
             );
         }
         Ok(())
@@ -647,23 +646,6 @@ impl SessionManager {
 
     pub async fn is_run_active(&self, session_id: i64) -> bool {
         self.execution_registry.is_active(session_id).await
-    }
-
-    pub async fn workspace_session_ids(&self) -> Result<Vec<i64>, AppError> {
-        let workspace_id = self.current_workspace_id().await?;
-        let summaries = self
-            .store
-            .list_session_summaries(
-                workspace_id,
-                agena_domain::SessionListRequest {
-                    offset: 0,
-                    limit: None,
-                    include_subagents: true,
-                    ..Default::default()
-                },
-            )
-            .await?;
-        Ok(summaries.into_iter().map(|summary| summary.id).collect())
     }
 
     pub async fn list_projected_runs(

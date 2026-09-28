@@ -1,15 +1,18 @@
 //! The single derived session state (design section 17).
 //!
-//! `derive_session_state` is the ONE function that maps parts + leases to the
+//! `derive_session_state` is the ONE function that maps durable parts to the
 //! `SessionState` enum. It lives in the backend-neutral crate so every engine
 //! and the facade derive identical state from identical rows — any process,
 //! any backend, the same answer (17.1 principle 1).
+//!
+//! No ownership dimension participates. Exactly one server process owns a data
+//! directory, and the recovering process resolves every leftover in-flight run
+//! marker before it serves a read (17.4), so an in-flight marker is always a
+//! run this process is executing (17.3).
 
 use agena_domain::SessionLifecycleState;
 
-use super::{
-    InteractionRef, LeaseState, Part, SessionMeta, SessionPresentation, SessionState, StoreError,
-};
+use super::{InteractionRef, Part, SessionMeta, SessionPresentation, SessionState, StoreError};
 
 /// A run marker that is still in flight (`pending` | `in_progress`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -110,29 +113,17 @@ impl StateInputs {
     }
 }
 
-/// Whether a lease counts as "fresh" for state derivation (17.3).
-pub fn lease_is_fresh(lease: Option<&LeaseState>, now_ms: i64) -> bool {
-    match lease {
-        Some(lease) => now_ms - lease.heartbeat_at_ms <= super::LEASE_STALENESS_MS,
-        None => false,
-    }
-}
-
-/// Stable staleness threshold shared by engines, facade, and state derivation.
-/// Mirrors the storage-layer lease staleness (15s).
-pub const LEASE_STALENESS_MS: i64 = 15_000;
-
-/// Derive the single `SessionState` from parts + leases (17.3).
+/// Derive the single `SessionState` from durable parts (17.3).
 ///
-/// Precedence: Creating → Failed → AwaitingInteraction (pending interaction wins over
-/// an in-flight run) → Running (fresh lease) / Interrupted (stale or none).
+/// Precedence: Creating → Failed → AwaitingInteraction (a pending interaction
+/// wins over an in-flight run) → Running (an in-flight run marker) → Ready.
 pub fn derive_session_state(
     meta: Option<&SessionMeta>,
     in_flight_runs: &[InFlightRun],
     pending_interactions: &[PendingInteraction],
-    lease: Option<&LeaseState>,
     now_ms: i64,
 ) -> SessionState {
+    let _ = now_ms;
     let Some(meta) = meta else {
         return SessionState::Ready;
     };
@@ -145,12 +136,8 @@ pub fn derive_session_state(
     if !pending_interactions.is_empty() {
         return SessionState::AwaitingInteraction;
     }
-    if let Some(_marker) = in_flight_runs.first() {
-        return if lease_is_fresh(lease, now_ms) {
-            SessionState::Running
-        } else {
-            SessionState::Interrupted
-        };
+    if !in_flight_runs.is_empty() {
+        return SessionState::Running;
     }
     SessionState::Ready
 }
@@ -161,10 +148,9 @@ pub fn presentation(
     in_flight_runs: &[InFlightRun],
     pending_interactions: &[PendingInteraction],
     last_error: Option<&serde_json::Value>,
-    lease: Option<&LeaseState>,
     now_ms: i64,
 ) -> Result<SessionPresentation, StoreError> {
-    let state = derive_session_state(meta, in_flight_runs, pending_interactions, lease, now_ms);
+    let state = derive_session_state(meta, in_flight_runs, pending_interactions, now_ms);
     let mut presentation = SessionPresentation {
         state,
         pending_interaction: None,
@@ -257,8 +243,8 @@ mod tests {
             }),
         };
 
-        let projected = presentation(None, &[], &[pending], None, None, 1)
-            .expect("project pending interaction");
+        let projected =
+            presentation(None, &[], &[pending], None, 1).expect("project pending interaction");
         let interaction = projected
             .pending_interaction
             .expect("flat tool call should surface its ask");

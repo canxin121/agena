@@ -189,7 +189,7 @@ pub(crate) use agena_runtime_session::{
     MAX_RECENT_CONTEXT_CHARS, MAX_RECENT_USER_TURNS,
 };
 pub(crate) use agena_runtime_session::{
-    ExecutionControl, ExecutionControlError, ExecutionRegistry,
+    ExecutionControl, ExecutionControlError, ExecutionPermit, ExecutionRegistry,
 };
 pub use agena_runtime_session::{
     RuntimeActiveSnapshot, RuntimeManagedSnapshot, RuntimeSnapshotStatus, SessionExecutionControl,

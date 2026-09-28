@@ -23,10 +23,6 @@ async fn engine(memory: bool) -> (Box<dyn PersistenceEngine>, i64) {
         })
         .await
         .unwrap();
-    engine
-        .try_acquire_lease(session.id, "owner-a", 1_000_000)
-        .await
-        .unwrap();
     (Box::new(engine), session.id)
 }
 
@@ -42,20 +38,13 @@ async fn both_backends_reject_invalid_run_content_without_advancing_versions() {
         ] {
             let (engine, session) = engine(memory).await;
             let submitted = engine
-                .submit_user_run(
-                    session,
-                    "owner-a",
-                    vec![super::text_part("hello")],
-                    None,
-                    1_000_000,
-                )
+                .submit_user_run(session, vec![super::text_part("hello")], None, 1_000_000)
                 .await
                 .unwrap();
             let before = engine.load_session(session).await.unwrap();
             let result = engine
                 .update_part(
                     session,
-                    "owner-a",
                     submitted.run_id,
                     PartDelta {
                         content: Some(invalid.clone()),
@@ -86,7 +75,6 @@ async fn rejected_streaming_delta_preserves_part_state_and_session_version_in_bo
         let submitted = engine
             .submit_user_run(
                 session,
-                "owner-a",
                 vec![NewPart::pending(
                     "extension",
                     PartRole::Assistant,
@@ -107,7 +95,6 @@ async fn rejected_streaming_delta_preserves_part_state_and_session_version_in_bo
         engine
             .update_part(
                 session,
-                "owner-a",
                 part_id,
                 PartDelta {
                     state: Some(PartState::InProgress),
@@ -141,14 +128,7 @@ async fn both_backends_validate_run_creation_and_completion_and_return_committed
         ] {
             let before = engine.load_session(session).await.unwrap();
             engine
-                .start_run(
-                    session,
-                    "owner-a",
-                    "future_extension",
-                    invalid,
-                    None,
-                    1_000_000,
-                )
+                .start_run(session, "future_extension", invalid, None, 1_000_000)
                 .await
                 .expect_err("run creation requires object content and typed controls");
             let after = engine.load_session(session).await.unwrap();
@@ -158,7 +138,6 @@ async fn both_backends_validate_run_creation_and_completion_and_return_committed
         let run = engine
             .start_run(
                 session,
-                "owner-a",
                 "future_extension",
                 json!({"extra": 7}),
                 None,
@@ -171,7 +150,6 @@ async fn both_backends_validate_run_creation_and_completion_and_return_committed
             engine
                 .complete_run(
                     session,
-                    "owner-a",
                     run.run_id,
                     RunOutcome {
                         status: PartState::Completed,
@@ -191,7 +169,6 @@ async fn both_backends_validate_run_creation_and_completion_and_return_committed
         let completed = engine
             .complete_run(
                 session,
-                "owner-a",
                 run.run_id,
                 RunOutcome {
                     status: PartState::Completed,
@@ -223,13 +200,7 @@ async fn both_backends_reject_invalid_finish_times_and_backwards_updates_without
     for memory in [false, true] {
         let (engine, session) = engine(memory).await;
         let submitted = engine
-            .submit_user_run(
-                session,
-                "owner-a",
-                vec![super::text_part("hello")],
-                None,
-                1_000_000,
-            )
+            .submit_user_run(session, vec![super::text_part("hello")], None, 1_000_000)
             .await
             .unwrap();
         let id = submitted
@@ -242,7 +213,6 @@ async fn both_backends_reject_invalid_finish_times_and_backwards_updates_without
         engine
             .update_part(
                 session,
-                "owner-a",
                 id,
                 PartDelta {
                     finished_at_ms: Some(1_000_001),
@@ -259,7 +229,6 @@ async fn both_backends_reject_invalid_finish_times_and_backwards_updates_without
         engine
             .update_part(
                 session,
-                "owner-a",
                 id,
                 PartDelta {
                     state: Some(PartState::InProgress),
@@ -288,7 +257,7 @@ async fn both_backends_reject_invalid_finish_times_and_backwards_updates_without
         ] {
             let before = engine.load_session(session).await.unwrap();
             engine
-                .update_part(session, "owner-a", id, delta, now)
+                .update_part(session, id, delta, now)
                 .await
                 .expect_err("invalid timestamps");
             let after = engine.load_session(session).await.unwrap();
@@ -314,7 +283,7 @@ async fn exhausted_part_revision_returns_an_error_without_panicking_or_wrapping(
     .unwrap();
     let before = engine.load_session(session).await.unwrap();
     let error = engine
-        .update_part(session, "owner-a", run, PartDelta::default(), 1_000_001)
+        .update_part(session, run, PartDelta::default(), 1_000_001)
         .await
         .expect_err("revision exhaustion is an explicit error");
     assert!(error.to_string().contains("revision is exhausted"));

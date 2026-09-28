@@ -194,7 +194,9 @@ pub use provider_retry::{ProviderRetryEvent, ProviderRetryResolvedEvent};
 pub use reasoning::AssistantReasoningField;
 pub use role::Role;
 pub use session_cost::{ModelCostBreakdown, SessionCostSummary};
-pub use session_state::{SessionLifecycleState, SessionRelationKind, SubtaskStatus, WorkflowState};
+pub use session_state::{
+    SessionLifecycleState, SessionRelationKind, SessionStateKind, SubtaskStatus, WorkflowState,
+};
 pub use session_summary::{SessionListRequest, SessionSummary};
 pub use session_usage::{SessionUsage, SessionUsageLimitBasis};
 pub use stream_error::StreamErrorEvent;

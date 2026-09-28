@@ -179,7 +179,7 @@ function overviewFromSessions(sessions: UnknownRecord[]): AgenaOverviewWire {
     if (session.favorite === true) overview.favorites.push(session)
     const state = normalizeSessionState(session.state)
     const kind = sessionStateKind(state)
-    if (kind === 'awaiting_interaction' || kind === 'interrupted' || kind === 'failed') {
+    if (kind === 'awaiting_interaction' || kind === 'failed') {
       overview.attention.push(session)
     } else if (kind === 'running' || kind === 'creating') {
       overview.running.push(session)
@@ -2268,7 +2268,10 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
     const kind = sessionStateKind(state)
     if (state?.kind === 'awaiting_interaction') {
       const request = state.data.requests?.[0]
-      const requestKind = request && typeof request === 'object' && !Array.isArray(request) ? request.kind : undefined
+      const requestKind =
+        request && typeof request === 'object' && !Array.isArray(request)
+          ? (request as Record<string, unknown>).kind
+          : undefined
       if (requestKind === 'permission') {
         return {
           label: String(i18n.global.t('chat.sidebar.sessionRow.status.needsPermission')),
@@ -2280,7 +2283,7 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
         dotClass: 'bg-sky-500',
       }
     }
-    if (kind === 'interrupted' || kind === 'failed') {
+    if (kind === 'failed') {
       return {
         label: String(i18n.global.t('chat.sidebar.sessionRow.status.needsRecovery')),
         dotClass: 'bg-destructive',

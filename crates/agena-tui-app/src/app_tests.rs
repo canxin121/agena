@@ -2256,16 +2256,7 @@ mod session_activity_state_machine_tests {
     }
 
     #[test]
-    fn interrupted_and_failed_surface_as_recovery_attention() {
-        assert_eq!(
-            app_with_execution(SessionState::Interrupted {
-                run_id: None,
-                reason: Some("lease_lost".to_owned()),
-                last_failure: None,
-            })
-            .session_activity(SESSION_ID),
-            SessionActivity::NeedsRecovery
-        );
+    fn failed_surfaces_as_recovery_attention() {
         assert_eq!(
             app_with_execution(SessionState::Failed { failure: None }).session_activity(SESSION_ID),
             SessionActivity::NeedsRecovery

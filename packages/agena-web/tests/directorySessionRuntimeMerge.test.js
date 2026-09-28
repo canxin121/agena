@@ -9,18 +9,18 @@ import {
 
 const ready = { kind: 'ready', data: {} }
 const running = { kind: 'running', data: { workflow: 'quiescent' } }
-const interrupted = { kind: 'interrupted', data: { reason: 'lease_lost' } }
+const failed = { kind: 'failed', data: { failure: { code: 'boom' } } }
 
 test('state snapshots replace the canonical state when newer', () => {
-  const next = mergeSessionStateSnapshot({ state: running, updatedAt: 100 }, { state: interrupted, updatedAt: 110 })
+  const next = mergeSessionStateSnapshot({ state: running, updatedAt: 100 }, { state: failed, updatedAt: 110 })
 
-  assert.equal(next.state.kind, 'interrupted')
+  assert.equal(next.state.kind, 'failed')
   assert.equal(sessionStateHasAttention(next), true)
   assert.equal(sessionStateIsActive(next), false)
 })
 
 test('a stale state snapshot cannot regress the canonical state', () => {
-  const current = { state: interrupted, updatedAt: 200 }
+  const current = { state: failed, updatedAt: 200 }
   const next = mergeSessionStateSnapshot(current, { state: running, updatedAt: 120 })
 
   assert.deepEqual(next, current)

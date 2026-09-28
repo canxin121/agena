@@ -13,8 +13,8 @@ use async_trait::async_trait;
 
 use super::{
     BackgroundDelivery, BackgroundEventRequest, BackgroundOperation, BackgroundOperationTransition,
-    BackgroundSettleOutcome, LeaseAcquire, NewBackgroundOperation, NewPart, NewSession, Part,
-    PartCursor, PartDelta, PartState, ReconcileOutcome, RunOutcome, SessionListQuery, SessionMeta,
+    BackgroundSettleOutcome, NewBackgroundOperation, NewPart, NewSession, Part, PartCursor,
+    PartDelta, PartState, ReconcileOutcome, RunOutcome, SessionListQuery, SessionMeta,
     SessionMetadataPatch, SessionPartPage, SessionState, SessionSummary, SessionView, StoreError,
     SubmitOutcome, UsageQuery, UsageRecord, UsageStats,
 };
@@ -44,11 +44,9 @@ pub enum SessionChange {
     },
 }
 
-/// Outcome of the maintenance loop: leases reaped and orphan parts GC'd.
+/// Outcome of the maintenance loop: orphan parts GC'd.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct MaintenanceOutcome {
-    /// Session ids whose leases were stale and were reaped.
-    pub reaped_sessions: Vec<i64>,
     /// Orphan parts deleted (refcount-guarded, 7.6).
     pub gc_deleted_parts: usize,
 }
@@ -205,36 +203,6 @@ pub trait PersistenceEngine: Send + Sync {
     /// are GC'd by reference count, 7.6).
     async fn delete_session(&self, session_id: i64) -> Result<(), StoreError>;
 
-    // --- leases (cross-process single writer) ---
-
-    /// Try to acquire the session lease. Acquiring a stale lease aborts the
-    /// session's stale in-flight run markers atomically in the same
-    /// transaction (invariants 1-2, 7.2).
-    async fn try_acquire_lease(
-        &self,
-        session_id: i64,
-        owner_id: &str,
-        now_ms: i64,
-    ) -> Result<LeaseAcquire, StoreError>;
-
-    /// Refresh the lease heartbeat; `false` when this caller no longer owns it.
-    async fn heartbeat_lease(
-        &self,
-        session_id: i64,
-        owner_id: &str,
-        now_ms: i64,
-    ) -> Result<bool, StoreError>;
-
-    /// Release the lease when this caller owns it.
-    async fn release_lease(&self, session_id: i64, owner_id: &str) -> Result<bool, StoreError>;
-
-    /// Current lease row, if any.
-    async fn current_lease(&self, session_id: i64)
-    -> Result<Option<super::LeaseState>, StoreError>;
-
-    /// Delete leases whose heartbeat is stale and return their session ids.
-    async fn reap_stale_leases(&self, stale_before_ms: i64) -> Result<Vec<i64>, StoreError>;
-
     // --- durable background-operation aggregate ---
 
     /// Create the idempotent launch intent before starting the external side
@@ -348,7 +316,7 @@ pub trait PersistenceEngine: Send + Sync {
         now_ms: i64,
     ) -> Result<Vec<BackgroundDelivery>, StoreError>;
 
-    // --- writes (all require the session lease) ---
+    // --- writes ---
 
     /// User send (7.1): create the run marker + content parts + membership
     /// edges + optional idempotency row in one transaction. The marker's
@@ -358,7 +326,6 @@ pub trait PersistenceEngine: Send + Sync {
     async fn submit_user_run(
         &self,
         session_id: i64,
-        owner_id: &str,
         parts: Vec<NewPart>,
         idempotency_key: Option<String>,
         now_ms: i64,
@@ -372,7 +339,6 @@ pub trait PersistenceEngine: Send + Sync {
     async fn submit_user_run_for_execution(
         &self,
         session_id: i64,
-        owner_id: &str,
         parts: Vec<NewPart>,
         idempotency_key: Option<String>,
         execution_id: &str,
@@ -383,17 +349,11 @@ pub trait PersistenceEngine: Send + Sync {
     /// it (the agena analog of Claude Code's `<task-notification>` arriving on
     /// the launching turn). In one transaction the method:
     ///
-    /// 1. refreshes the lease — a stale lease (any owner) is re-heartbeated so
-    ///    the transaction may write. Other in-flight runs are deliberately
-    ///    **not** aborted: the settle targets one specific launching run and
-    ///    must never destroy a *different* run that a live execution is still
-    ///    driving (aborting unrelated in-flight runs is `try_acquire_lease`'s
-    ///    job when a new execution genuinely takes over);
-    /// 2. transitions the launching tool part (InProgress for the atomic
+    /// 1. transitions the launching tool part (InProgress for the atomic
     ///    launch checkpoint, terminal when the operation settles);
-    /// 3. appends the companion parts (`new_parts`, preserving their supplied
+    /// 2. appends the companion parts (`new_parts`, preserving their supplied
     ///    roles) under the launching run — **no new run marker**;
-    /// 4. terminalizes the launching run marker (Completed) once no in-flight
+    /// 3. terminalizes the launching run marker (Completed) once no in-flight
     ///    child remains, so the session returns to Ready instead of lingering
     ///    in Interrupted.
     ///
@@ -403,7 +363,6 @@ pub trait PersistenceEngine: Send + Sync {
     async fn settle_background_run(
         &self,
         session_id: i64,
-        owner_id: &str,
         run_id: i64,
         tool_part: Option<(i64, PartState, serde_json::Value)>,
         new_parts: Vec<NewPart>,
@@ -414,7 +373,6 @@ pub trait PersistenceEngine: Send + Sync {
     async fn append_parts(
         &self,
         session_id: i64,
-        owner_id: &str,
         run_id: i64,
         parts: Vec<NewPart>,
         now_ms: i64,
@@ -424,7 +382,6 @@ pub trait PersistenceEngine: Send + Sync {
     async fn update_part(
         &self,
         session_id: i64,
-        owner_id: &str,
         part_id: i64,
         delta: PartDelta,
         now_ms: i64,
@@ -434,7 +391,6 @@ pub trait PersistenceEngine: Send + Sync {
     async fn complete_run(
         &self,
         session_id: i64,
-        owner_id: &str,
         run_id: i64,
         outcome: RunOutcome,
         now_ms: i64,
@@ -445,7 +401,6 @@ pub trait PersistenceEngine: Send + Sync {
     async fn start_run(
         &self,
         session_id: i64,
-        owner_id: &str,
         run_kind: &str,
         content: serde_json::Value,
         idempotency_key: Option<String>,
@@ -457,7 +412,6 @@ pub trait PersistenceEngine: Send + Sync {
     async fn cancel_run(
         &self,
         session_id: i64,
-        owner_id: &str,
         run_id: i64,
         now_ms: i64,
     ) -> Result<Vec<Part>, StoreError>;
@@ -469,7 +423,6 @@ pub trait PersistenceEngine: Send + Sync {
     async fn withdraw_user_run(
         &self,
         session_id: i64,
-        owner_id: &str,
         run_id: i64,
         now_ms: i64,
     ) -> Result<Vec<Part>, StoreError>;
@@ -487,15 +440,30 @@ pub trait PersistenceEngine: Send + Sync {
 
     // --- recovery / maintenance ---
 
-    /// Reconcile a session whose in-flight run has no fresh lease (17.4 step
-    /// 2c): mark in-flight run markers failed (`process_restart`) and their
-    /// non-terminal children cancelled. Idempotent.
-    async fn reconcile(&self, session_id: i64, now_ms: i64)
-    -> Result<ReconcileOutcome, StoreError>;
+    /// The ids of a session's in-flight run markers, newest first. Read-only
+    /// and claim-free, so a caller can decide *which* of them it is executing
+    /// before committing any state change.
+    async fn in_flight_run_ids(&self, session_id: i64) -> Result<Vec<i64>, StoreError>;
 
-    /// Reap stale leases and GC orphan parts (7.6). Refcount-guarded: a part
-    /// is deleted only when it has zero membership AND (no run reference OR its
-    /// run is terminal).
+    /// Every session that owns at least one run marker still in flight
+    /// (`pending` | `in_progress`), in id order. Read-only and claim-free:
+    /// startup recovery needs the abandoned runs themselves, not a guess about
+    /// which workspace they belong to.
+    async fn in_flight_session_ids(&self) -> Result<Vec<i64>, StoreError>;
+
+    /// Reconcile a session's abandoned in-flight runs (17.4): mark each named
+    /// run marker `failed` (`process_restart`) and its non-terminal children
+    /// `cancelled`. Only the named runs are touched; an empty list commits
+    /// nothing. Idempotent.
+    async fn reconcile(
+        &self,
+        session_id: i64,
+        run_ids: &[i64],
+        now_ms: i64,
+    ) -> Result<ReconcileOutcome, StoreError>;
+
+    /// GC orphan parts (7.6). Refcount-guarded: a part is deleted only when it
+    /// has zero membership AND (no run reference OR its run is terminal).
     async fn maintenance(&self, now_ms: i64) -> Result<MaintenanceOutcome, StoreError>;
 
     // --- usage ---

@@ -8,11 +8,10 @@
 //! invariants, and state derivation, so callers cannot distinguish the two.
 //!
 //! Write operations run in a transaction that acquires the SQLite write lock
-//! up front (the `__agena_write_lock__` fence), so the lease check and the
-//! mutation are atomic with respect to every other process: a lease cannot be
-//! stolen between check and write, and a steal aborts stale runs atomically
-//! (invariants 1-2, section 7.2). Part ids come from the `agena_sequences`
-//! row, matching the in-memory allocator (first part id = 1).
+//! up front (the `__agena_write_lock__` fence), so each mutation is atomic
+//! with respect to every other writer. Part ids come from the
+//! `agena_sequences` row, matching the in-memory allocator (first part
+//! id = 1).
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -23,9 +22,9 @@ use agena_domain::{SessionLifecycleState, SessionRelationKind};
 use agena_storage::store::{
     BackgroundDelivery, BackgroundDeliveryPhase, BackgroundEventRequest, BackgroundOperation,
     BackgroundOperationKind, BackgroundOperationPhase, BackgroundOperationTransition,
-    BackgroundSettleOutcome, InFlightRun, LeaseAcquire, LeaseState, MaintenanceOutcome,
-    NewBackgroundOperation, NewPart, NewSession, Part, PartCursor, PartDelta, PartRole, PartState,
-    PartVisibility, PersistenceEngine, ReconcileOutcome, RunOutcome, SessionListQuery, SessionMeta,
+    BackgroundSettleOutcome, InFlightRun, MaintenanceOutcome, NewBackgroundOperation, NewPart,
+    NewSession, Part, PartCursor, PartDelta, PartRole, PartState, PartVisibility,
+    PersistenceEngine, ReconcileOutcome, RunOutcome, SessionListQuery, SessionMeta,
     SessionMetadataPatch, SessionPartPage, SessionState, SessionSummary, SessionView, StoreError,
     SubmitOutcome, UsageGroup, UsageQuery, UsageRecord, UsageStats, prepare_part_update,
     prepare_run_completion, validate_run_content,
@@ -142,47 +141,6 @@ async fn next_part_id_tx(txn: &DatabaseTransaction) -> Result<i64, DbErr> {
         .await?
         .ok_or_else(|| DbErr::Custom("agena_sequences.part_id row is missing".to_owned()))?;
     row.try_get("", "next_id")
-}
-
-/// Check the lease inside a write transaction (see module docs for why the
-/// check and the mutation share one transaction).
-async fn ensure_lease_tx(
-    txn: &DatabaseTransaction,
-    session_id: i64,
-    owner_id: &str,
-    now_ms: i64,
-) -> Result<(), StoreError> {
-    let Some(lease) = lease_tx(txn, session_id).await? else {
-        return Err(StoreError::LeaseNotHeld { session_id });
-    };
-    if lease.owner_id != owner_id {
-        return Err(StoreError::LeaseHeldByOther {
-            session_id,
-            owner_id: lease.owner_id,
-            heartbeat_at_ms: lease.heartbeat_at_ms,
-        });
-    }
-    if now_ms - lease.heartbeat_at_ms > agena_storage::store::LEASE_STALENESS_MS {
-        return Err(StoreError::LeaseNotHeld { session_id });
-    }
-    Ok(())
-}
-
-async fn lease_tx(
-    txn: &DatabaseTransaction,
-    session_id: i64,
-) -> Result<Option<LeaseState>, StoreError> {
-    txn.query_one(Statement::from_sql_and_values(
-        DatabaseBackend::Sqlite,
-        "SELECT session_id, owner_id, run_id, lease_started_at_ms, heartbeat_at_ms \
-         FROM agena_execution_leases WHERE session_id = ?",
-        [session_id.into()],
-    ))
-    .await
-    .map_err(map_db_err)?
-    .map(lease_from_row)
-    .transpose()
-    .map_err(map_db_err)
 }
 
 /// Insert one part row.
@@ -326,7 +284,7 @@ async fn in_flight_runs_tx(
 /// Terminalize a set of run markers (`cancelled` for user cancel, otherwise
 /// `failed`; `abort_reason` always set) and cancel their non-terminal children
 /// in one transaction. Returns every changed row so the facade can emit
-/// commit-derived patches. Used by lease steals, user cancel, and reconcile.
+/// commit-derived patches. Used by user cancel and reconcile.
 async fn abort_runs_tx(
     txn: &DatabaseTransaction,
     session_id: i64,
@@ -504,16 +462,6 @@ fn meta_from_row(row: sea_orm::QueryResult) -> Result<SessionMeta, DbErr> {
     })
 }
 
-fn lease_from_row(row: sea_orm::QueryResult) -> Result<LeaseState, DbErr> {
-    Ok(LeaseState {
-        session_id: row.try_get("", "session_id")?,
-        owner_id: row.try_get("", "owner_id")?,
-        run_id: row.try_get("", "run_id")?,
-        lease_started_at_ms: row.try_get("", "lease_started_at_ms")?,
-        heartbeat_at_ms: row.try_get("", "heartbeat_at_ms")?,
-    })
-}
-
 fn background_operation_from_row(row: sea_orm::QueryResult) -> Result<BackgroundOperation, DbErr> {
     let kind_raw: String = row.try_get("", "kind")?;
     let phase_raw: String = row.try_get("", "phase")?;
@@ -619,9 +567,8 @@ fn summary_from_row(row: sea_orm::QueryResult) -> Result<SessionSummary, DbErr> 
 /// `agena_storage::store::derive_session_state`, scoped to the outer
 /// `agena_sessions s` row. Keeping this as one correlated batch query avoids
 /// loading every transcript separately for a session overview.
-fn session_state_projection_sql(now_ms: i64) -> String {
-    let stale_ms = agena_storage::store::LEASE_STALENESS_MS;
-    format!(
+fn session_state_projection_sql() -> String {
+    String::from(
         "CASE \
          WHEN s.lifecycle_state = 'creating' THEN 'creating' \
          WHEN s.lifecycle_state = 'failed' THEN 'failed' \
@@ -642,12 +589,8 @@ fn session_state_projection_sql(now_ms: i64) -> String {
            WHERE spr.session_id = s.id \
              AND pr.kind = 'run' \
              AND pr.state IN ('pending', 'in_progress') \
-         ) THEN CASE WHEN EXISTS ( \
-           SELECT 1 FROM agena_execution_leases lease \
-           WHERE lease.session_id = s.id \
-             AND {now_ms} - lease.heartbeat_at_ms <= {stale_ms} \
-         ) THEN 'running' ELSE 'interrupted' END \
-         ELSE 'ready' END"
+         ) THEN 'running' \
+         ELSE 'ready' END",
     )
 }
 
@@ -1273,7 +1216,7 @@ impl PersistenceEngine for SqliteEngine {
     async fn session_states(
         &self,
         session_ids: &[i64],
-        now_ms: i64,
+        _now_ms: i64,
     ) -> Result<HashMap<i64, SessionState>, StoreError> {
         if session_ids.is_empty() {
             return Ok(HashMap::new());
@@ -1284,7 +1227,7 @@ impl PersistenceEngine for SqliteEngine {
             .copied()
             .map(Value::from)
             .collect::<Vec<_>>();
-        let state_projection = session_state_projection_sql(now_ms);
+        let state_projection = session_state_projection_sql();
         let rows = self
             .db()
             .query_all(Statement::from_sql_and_values(
@@ -1417,110 +1360,6 @@ impl PersistenceEngine for SqliteEngine {
             })
         })
         .await
-    }
-
-    async fn try_acquire_lease(
-        &self,
-        session_id: i64,
-        owner_id: &str,
-        now_ms: i64,
-    ) -> Result<LeaseAcquire, StoreError> {
-        let db = self.db();
-        let owner_id = owner_id.to_owned();
-        run_write(db, move |txn| {
-            Box::pin(async move {
-                session_exists_tx(txn, session_id).await?;
-                let existing = lease_tx(txn, session_id).await?;
-                if let Some(lease) = existing {
-                    if now_ms - lease.heartbeat_at_ms <= agena_storage::store::LEASE_STALENESS_MS {
-                        return Ok(LeaseAcquire::HeldBy {
-                            owner_id: lease.owner_id,
-                            heartbeat_at_ms: lease.heartbeat_at_ms,
-                        });
-                    }
-                    // Stale: steal atomically — take the lease and abort the
-                    // residual in-flight runs in the same transaction
-                    // (invariant 2, section 7.2).
-                    let runs = in_flight_runs_tx(txn, session_id).await?;
-                    let run_ids: Vec<i64> = runs.iter().map(|run| run.part_id).collect();
-                    let outcome =
-                        abort_runs_tx(txn, session_id, &run_ids, "lease_stolen", now_ms).await?;
-                    upsert_lease_tx(txn, session_id, &owner_id, now_ms).await?;
-                    return Ok(LeaseAcquire::Acquired {
-                        reconciled_runs: outcome.aborted_runs,
-                        updated_parts: outcome.updated_parts,
-                    });
-                }
-                upsert_lease_tx(txn, session_id, &owner_id, now_ms).await?;
-                Ok(LeaseAcquire::Acquired {
-                    reconciled_runs: Vec::new(),
-                    updated_parts: Vec::new(),
-                })
-            })
-        })
-        .await
-    }
-
-    async fn heartbeat_lease(
-        &self,
-        session_id: i64,
-        owner_id: &str,
-        now_ms: i64,
-    ) -> Result<bool, StoreError> {
-        let result = self
-            .db()
-            .execute(Statement::from_sql_and_values(
-                DatabaseBackend::Sqlite,
-                "UPDATE agena_execution_leases \
-                 SET heartbeat_at_ms = ? WHERE session_id = ? AND owner_id = ?",
-                [now_ms.into(), session_id.into(), owner_id.into()],
-            ))
-            .await
-            .map_err(map_db_err)?;
-        Ok(result.rows_affected() > 0)
-    }
-
-    async fn release_lease(&self, session_id: i64, owner_id: &str) -> Result<bool, StoreError> {
-        let result = self
-            .db()
-            .execute(Statement::from_sql_and_values(
-                DatabaseBackend::Sqlite,
-                "DELETE FROM agena_execution_leases WHERE session_id = ? AND owner_id = ?",
-                [session_id.into(), owner_id.into()],
-            ))
-            .await
-            .map_err(map_db_err)?;
-        Ok(result.rows_affected() > 0)
-    }
-
-    async fn current_lease(&self, session_id: i64) -> Result<Option<LeaseState>, StoreError> {
-        self.db()
-            .query_one(Statement::from_sql_and_values(
-                DatabaseBackend::Sqlite,
-                "SELECT session_id, owner_id, run_id, lease_started_at_ms, heartbeat_at_ms \
-                 FROM agena_execution_leases WHERE session_id = ?",
-                [session_id.into()],
-            ))
-            .await
-            .map_err(map_db_err)?
-            .map(lease_from_row)
-            .transpose()
-            .map_err(map_db_err)
-    }
-
-    async fn reap_stale_leases(&self, stale_before_ms: i64) -> Result<Vec<i64>, StoreError> {
-        self.db()
-            .query_all(Statement::from_sql_and_values(
-                DatabaseBackend::Sqlite,
-                "DELETE FROM agena_execution_leases \
-                 WHERE heartbeat_at_ms < ? RETURNING session_id",
-                [stale_before_ms.into()],
-            ))
-            .await
-            .map_err(map_db_err)?
-            .into_iter()
-            .map(|row| row.try_get("", "session_id").map_err(map_db_err))
-            .collect()
     }
 
     async fn create_background_operation(
@@ -2042,9 +1881,9 @@ impl PersistenceEngine for SqliteEngine {
         claim_until_ms: i64,
         now_ms: i64,
     ) -> Result<Option<BackgroundDelivery>, StoreError> {
+        let owner_id = owner_id.to_owned();
         let db = self.db();
         let delivery_id = delivery_id.to_owned();
-        let owner_id = owner_id.to_owned();
         run_write(db, move |txn| {
             Box::pin(async move {
                 let result = txn
@@ -2081,9 +1920,9 @@ impl PersistenceEngine for SqliteEngine {
         owner_id: &str,
         now_ms: i64,
     ) -> Result<BackgroundDelivery, StoreError> {
+        let owner_id = owner_id.to_owned();
         let db = self.db();
         let delivery_id = delivery_id.to_owned();
-        let owner_id = owner_id.to_owned();
         run_write(db, move |txn| {
             Box::pin(async move {
                 if let Some(existing) = load_background_delivery(txn, &delivery_id).await?
@@ -2134,9 +1973,9 @@ impl PersistenceEngine for SqliteEngine {
         next_attempt_at_ms: i64,
         now_ms: i64,
     ) -> Result<BackgroundDelivery, StoreError> {
+        let owner_id = owner_id.to_owned();
         let db = self.db();
         let delivery_id = delivery_id.to_owned();
-        let owner_id = owner_id.to_owned();
         run_write(db, move |txn| {
             Box::pin(async move {
                 let error = serde_json::to_string(&error).map_err(|encode_error| {
@@ -2183,9 +2022,9 @@ impl PersistenceEngine for SqliteEngine {
         error: serde_json::Value,
         now_ms: i64,
     ) -> Result<BackgroundDelivery, StoreError> {
+        let owner_id = owner_id.to_owned();
         let db = self.db();
         let delivery_id = delivery_id.to_owned();
-        let owner_id = owner_id.to_owned();
         run_write(db, move |txn| {
             Box::pin(async move {
                 if let Some(existing) = load_background_delivery(txn, &delivery_id).await?
@@ -2292,13 +2131,11 @@ impl PersistenceEngine for SqliteEngine {
     async fn submit_user_run(
         &self,
         session_id: i64,
-        owner_id: &str,
         parts: Vec<NewPart>,
         idempotency_key: Option<String>,
         now_ms: i64,
     ) -> Result<SubmitOutcome, StoreError> {
         let db = self.db();
-        let owner_id = owner_id.to_owned();
         let marker_state = if parts.iter().all(|part| part.state.is_terminal()) {
             PartState::Completed
         } else {
@@ -2306,7 +2143,6 @@ impl PersistenceEngine for SqliteEngine {
         };
         run_write(db, move |txn| {
             Box::pin(async move {
-                ensure_lease_tx(txn, session_id, &owner_id, now_ms).await?;
                 submit_batch_tx(
                     txn,
                     session_id,
@@ -2326,14 +2162,12 @@ impl PersistenceEngine for SqliteEngine {
     async fn submit_user_run_for_execution(
         &self,
         session_id: i64,
-        owner_id: &str,
         parts: Vec<NewPart>,
         idempotency_key: Option<String>,
         execution_id: &str,
         now_ms: i64,
     ) -> Result<SubmitOutcome, StoreError> {
         let db = self.db();
-        let owner_id = owner_id.to_owned();
         let execution_id = execution_id.to_owned();
         let marker_state = if parts.iter().all(|part| part.state.is_terminal()) {
             PartState::Completed
@@ -2342,7 +2176,6 @@ impl PersistenceEngine for SqliteEngine {
         };
         run_write(db, move |txn| {
             Box::pin(async move {
-                ensure_lease_tx(txn, session_id, &owner_id, now_ms).await?;
                 submit_batch_tx(
                     txn,
                     session_id,
@@ -2362,43 +2195,14 @@ impl PersistenceEngine for SqliteEngine {
     async fn settle_background_run(
         &self,
         session_id: i64,
-        owner_id: &str,
         run_id: i64,
         tool_part: Option<(i64, PartState, serde_json::Value)>,
         new_parts: Vec<NewPart>,
         now_ms: i64,
     ) -> Result<Vec<Part>, StoreError> {
         let db = self.db();
-        let owner_id = owner_id.to_owned();
         run_write(db, move |txn| {
             Box::pin(async move {
-                // Lease refresh (see the trait doc): a stale lease (held by
-                // this owner or another) is re-heartbeated so the transaction
-                // may write; a fresh lease held by another owner is a live
-                // conflict. Other in-flight runs are deliberately NOT aborted —
-                // the settle targets one specific launching run and must never
-                // destroy a different run a live execution is still driving.
-                let lease = lease_tx(txn, session_id).await?;
-                match lease {
-                    Some(lease)
-                        if lease.owner_id != owner_id
-                            && now_ms - lease.heartbeat_at_ms
-                                <= agena_storage::store::LEASE_STALENESS_MS =>
-                    {
-                        return Err(StoreError::LeaseHeldByOther {
-                            session_id,
-                            owner_id: lease.owner_id,
-                            heartbeat_at_ms: lease.heartbeat_at_ms,
-                        });
-                    }
-                    Some(_) => {
-                        upsert_lease_tx(txn, session_id, &owner_id, now_ms).await?;
-                    }
-                    None => {
-                        upsert_lease_tx(txn, session_id, &owner_id, now_ms).await?;
-                    }
-                }
-
                 // The launching run marker must exist; it may already be
                 // terminal (e.g. aborted before the operation settled), in
                 // which case the result parts are still appended onto it.
@@ -2534,16 +2338,13 @@ impl PersistenceEngine for SqliteEngine {
     async fn append_parts(
         &self,
         session_id: i64,
-        owner_id: &str,
         run_id: i64,
         parts: Vec<NewPart>,
         now_ms: i64,
     ) -> Result<Vec<Part>, StoreError> {
         let db = self.db();
-        let owner_id = owner_id.to_owned();
         run_write(db, move |txn| {
             Box::pin(async move {
-                ensure_lease_tx(txn, session_id, &owner_id, now_ms).await?;
                 let run = load_part_by_id(txn, run_id)
                     .await?
                     .ok_or_else(|| StoreError::not_found(format!("run marker {run_id}")))?;
@@ -2574,16 +2375,13 @@ impl PersistenceEngine for SqliteEngine {
     async fn update_part(
         &self,
         session_id: i64,
-        owner_id: &str,
         part_id: i64,
         delta: PartDelta,
         now_ms: i64,
     ) -> Result<Part, StoreError> {
         let db = self.db();
-        let owner_id = owner_id.to_owned();
         run_write(db, move |txn| {
             Box::pin(async move {
-                ensure_lease_tx(txn, session_id, &owner_id, now_ms).await?;
                 let mut part = load_part_by_id(txn, part_id)
                     .await?
                     .ok_or_else(|| StoreError::not_found(format!("part {part_id}")))?;
@@ -2638,16 +2436,13 @@ impl PersistenceEngine for SqliteEngine {
     async fn complete_run(
         &self,
         session_id: i64,
-        owner_id: &str,
         run_id: i64,
         outcome: RunOutcome,
         now_ms: i64,
     ) -> Result<Part, StoreError> {
         let db = self.db();
-        let owner_id = owner_id.to_owned();
         run_write(db, move |txn| {
             Box::pin(async move {
-                ensure_lease_tx(txn, session_id, &owner_id, now_ms).await?;
                 let mut part = load_part_by_id(txn, run_id)
                     .await?
                     .ok_or_else(|| StoreError::not_found(format!("run marker {run_id}")))?;
@@ -2703,18 +2498,15 @@ impl PersistenceEngine for SqliteEngine {
     async fn start_run(
         &self,
         session_id: i64,
-        owner_id: &str,
         run_kind: &str,
         content: serde_json::Value,
         idempotency_key: Option<String>,
         now_ms: i64,
     ) -> Result<SubmitOutcome, StoreError> {
         let db = self.db();
-        let owner_id = owner_id.to_owned();
         let run_kind = run_kind.to_owned();
         run_write(db, move |txn| {
             Box::pin(async move {
-                ensure_lease_tx(txn, session_id, &owner_id, now_ms).await?;
                 let role = match run_kind.as_str() {
                     "user_send" => PartRole::User,
                     "continue" | "compaction" | "steer" | "execution" => PartRole::Assistant,
@@ -2746,15 +2538,12 @@ impl PersistenceEngine for SqliteEngine {
     async fn cancel_run(
         &self,
         session_id: i64,
-        owner_id: &str,
         run_id: i64,
         now_ms: i64,
     ) -> Result<Vec<Part>, StoreError> {
         let db = self.db();
-        let owner_id = owner_id.to_owned();
         run_write(db, move |txn| {
             Box::pin(async move {
-                ensure_lease_tx(txn, session_id, &owner_id, now_ms).await?;
                 Ok(
                     abort_runs_tx(txn, session_id, &[run_id], "user_cancelled", now_ms)
                         .await?
@@ -2768,15 +2557,12 @@ impl PersistenceEngine for SqliteEngine {
     async fn withdraw_user_run(
         &self,
         session_id: i64,
-        owner_id: &str,
         run_id: i64,
         now_ms: i64,
     ) -> Result<Vec<Part>, StoreError> {
         let db = self.db();
-        let owner_id = owner_id.to_owned();
         run_write(db, move |txn| {
             Box::pin(async move {
-                ensure_lease_tx(txn, session_id, &owner_id, now_ms).await?;
 
                 let Some(marker) = load_part_by_id(txn, run_id).await? else {
                     return Ok(Vec::new());
@@ -2914,37 +2700,69 @@ impl PersistenceEngine for SqliteEngine {
         .await
     }
 
-    async fn reconcile(
-        &self,
-        session_id: i64,
-        now_ms: i64,
-    ) -> Result<ReconcileOutcome, StoreError> {
+    async fn in_flight_session_ids(&self) -> Result<Vec<i64>, StoreError> {
+        let db = self.db();
+        run_write(db, move |txn| {
+            Box::pin(async move {
+                let rows = txn
+                    .query_all(Statement::from_sql_and_values(
+                        DatabaseBackend::Sqlite,
+                        "SELECT DISTINCT origin_session_id FROM agena_parts \
+                         WHERE kind = 'run' AND state IN ('pending', 'in_progress') \
+                         ORDER BY origin_session_id",
+                        [],
+                    ))
+                    .await
+                    .map_err(map_db_err)?;
+                let mut ids = Vec::with_capacity(rows.len());
+                for row in rows {
+                    ids.push(
+                        row.try_get::<i64>("", "origin_session_id")
+                            .map_err(map_db_err)?,
+                    );
+                }
+                Ok(ids)
+            })
+        })
+        .await
+    }
+
+    async fn in_flight_run_ids(&self, session_id: i64) -> Result<Vec<i64>, StoreError> {
         let db = self.db();
         run_write(db, move |txn| {
             Box::pin(async move {
                 let runs = in_flight_runs_tx(txn, session_id).await?;
-                let run_ids: Vec<i64> = runs.iter().map(|run| run.part_id).collect();
-                if run_ids.is_empty() {
-                    return Ok(ReconcileOutcome::default());
-                }
+                Ok(runs.into_iter().map(|run| run.part_id).collect())
+            })
+        })
+        .await
+    }
+
+    async fn reconcile(
+        &self,
+        session_id: i64,
+        run_ids: &[i64],
+        now_ms: i64,
+    ) -> Result<ReconcileOutcome, StoreError> {
+        if run_ids.is_empty() {
+            return Ok(ReconcileOutcome::default());
+        }
+        let run_ids = run_ids.to_vec();
+        let db = self.db();
+        run_write(db, move |txn| {
+            Box::pin(async move {
                 abort_runs_tx(txn, session_id, &run_ids, "process_restart", now_ms).await
             })
         })
         .await
     }
 
-    async fn maintenance(&self, now_ms: i64) -> Result<MaintenanceOutcome, StoreError> {
+    async fn maintenance(&self, _now_ms: i64) -> Result<MaintenanceOutcome, StoreError> {
         let db = self.db();
         run_write(db, move |txn| {
             Box::pin(async move {
-                let reaped =
-                    reap_stale_leases_tx(txn, now_ms - agena_storage::store::LEASE_STALENESS_MS)
-                        .await?;
                 let gc_deleted_parts = gc_orphan_parts_tx(txn).await?;
-                Ok(MaintenanceOutcome {
-                    reaped_sessions: reaped,
-                    gc_deleted_parts,
-                })
+                Ok(MaintenanceOutcome { gc_deleted_parts })
             })
         })
         .await
@@ -3279,38 +3097,6 @@ async fn session_meta_tx<C: ConnectionTrait>(
         .ok_or_else(|| StoreError::not_found(format!("session {session_id}")))
 }
 
-async fn session_exists_tx(txn: &DatabaseTransaction, session_id: i64) -> Result<(), StoreError> {
-    session_meta_tx(txn, session_id).await.map(|_| ())
-}
-
-/// Insert (or replace) the session lease row.
-async fn upsert_lease_tx(
-    txn: &DatabaseTransaction,
-    session_id: i64,
-    owner_id: &str,
-    now_ms: i64,
-) -> Result<(), StoreError> {
-    txn.execute(Statement::from_sql_and_values(
-        DatabaseBackend::Sqlite,
-        "INSERT INTO agena_execution_leases \
-         (session_id, owner_id, run_id, lease_started_at_ms, heartbeat_at_ms) \
-         VALUES (?, ?, NULL, ?, ?) \
-         ON CONFLICT(session_id) DO UPDATE SET \
-           owner_id = excluded.owner_id, run_id = excluded.run_id, \
-           lease_started_at_ms = excluded.lease_started_at_ms, \
-           heartbeat_at_ms = excluded.heartbeat_at_ms",
-        [
-            session_id.into(),
-            owner_id.into(),
-            now_ms.into(),
-            now_ms.into(),
-        ],
-    ))
-    .await
-    .map_err(map_db_err)?;
-    Ok(())
-}
-
 /// The shared batch creator for user send and start_run: marker + content
 /// parts + membership + optional idempotency row, one transaction.
 async fn submit_batch_tx(
@@ -3413,23 +3199,6 @@ async fn run_parts_tx(txn: &DatabaseTransaction, run_id: i64) -> Result<Vec<Part
     .map(part_from_row)
     .collect::<Result<Vec<_>, _>>()
     .map_err(map_db_err)
-}
-
-async fn reap_stale_leases_tx(
-    txn: &DatabaseTransaction,
-    stale_before_ms: i64,
-) -> Result<Vec<i64>, StoreError> {
-    txn.query_all(Statement::from_sql_and_values(
-        DatabaseBackend::Sqlite,
-        "DELETE FROM agena_execution_leases \
-         WHERE heartbeat_at_ms < ? RETURNING session_id",
-        [stale_before_ms.into()],
-    ))
-    .await
-    .map_err(map_db_err)?
-    .into_iter()
-    .map(|row| row.try_get("", "session_id").map_err(map_db_err))
-    .collect()
 }
 
 /// Refcount-guarded orphan GC (7.6 + invariant 4): delete parts with zero

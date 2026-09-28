@@ -23,4 +23,6 @@ pub(crate) type ExecutionControl =
     agena_runtime::ExecutionControl<agena_runtime_contracts::part_content::TypedContent>;
 pub(crate) type ExecutionRegistry =
     agena_runtime::ExecutionRegistry<agena_runtime_contracts::part_content::TypedContent>;
+pub(crate) type ExecutionPermit =
+    agena_runtime::ExecutionPermit<agena_runtime_contracts::part_content::TypedContent>;
 pub(crate) use agena_runtime::ExecutionControlError;

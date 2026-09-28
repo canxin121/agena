@@ -289,7 +289,7 @@ impl jsonrpc::AppServerBackend for AgenaAppServerBackend {
                 .map(|session| SessionListItem {
                     session_id: session.id,
                     title: session.title,
-                    status: session_state_name(&session.state).to_owned(),
+                    status: session.state.as_str().to_owned(),
                     updated_at: session.updated_at,
                 })
                 .collect(),
@@ -348,17 +348,6 @@ fn latest_run_parts(parts: &[SessionTranscriptPart]) -> (Option<i64>, Vec<Sessio
         })
         .unwrap_or_default();
     (run_id, selected)
-}
-
-fn session_state_name(state: &SessionState) -> &'static str {
-    match state {
-        SessionState::Creating => "creating",
-        SessionState::Ready { .. } => "ready",
-        SessionState::Running { .. } => "running",
-        SessionState::AwaitingInteraction { .. } => "awaiting_interaction",
-        SessionState::Interrupted { .. } => "interrupted",
-        SessionState::Failed { .. } => "failed",
-    }
 }
 
 fn app_permission_reply_kind(

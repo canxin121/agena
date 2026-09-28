@@ -1,8 +1,8 @@
 //! Thin one-shot session commands backed by the long-lived server.
 //!
 //! This module deliberately depends only on the public API/client contracts.
-//! It never opens the session database, creates an Application, starts a
-//! scheduler/plugin host, or acquires an execution lease.
+//! It never opens the session database, creates an Application, or starts a
+//! scheduler/plugin host.
 
 use std::{collections::BTreeMap, fs, io::Read as _, path::Path, time::Duration};
 
@@ -25,8 +25,8 @@ use super::{
     ProviderSummary, ResumeArgs, ReviewArgs, SessionDetail, SessionForkOutput, SessionImportOutput,
     SessionListArgs, SessionListOutput, SessionListView, SessionOutput, SessionSummary,
     SessionsCommand, SessionsSubcommand, SnapshotArgs, SnapshotBackendSupportOutput,
-    SnapshotCapabilitiesOutput, SnapshotOutput, ToolDescriptor, UsageArgs, WorkflowState,
-    async_trait, browser_login_redirect_uri, filter_session_summaries_by_view, format_apply_output,
+    SnapshotCapabilitiesOutput, SnapshotOutput, ToolDescriptor, UsageArgs, async_trait,
+    browser_login_redirect_uri, filter_session_summaries_by_view, format_apply_output,
     format_debug_session_output, format_plugin_logs_output, memory_type_label,
     normalize_login_provider, paginate_session_summaries, permission_rule_output,
     prompt_browser_login, prompt_device_login, render_serialized, review_prompt, title_from_prompt,
@@ -2426,7 +2426,7 @@ fn session_detail(execution: &SessionExecutionResource) -> SessionDetail {
         created_at: execution.session.created_at,
         updated_at: execution.session.updated_at,
         message_count: usize::try_from(execution.session.message_count).unwrap_or(usize::MAX),
-        status: workflow_state_from_wire(execution.session.state.workflow_state()),
+        status: execution.session.state.workflow_state(),
         latest_event_seq: execution.latest_event_seq,
     }
 }
@@ -2441,16 +2441,6 @@ fn expect_execution(
         )));
     };
     Ok(execution)
-}
-
-const fn workflow_state_from_wire(state: agena_api::resource::WorkflowState) -> WorkflowState {
-    match state {
-        agena_api::resource::WorkflowState::Quiescent => WorkflowState::Quiescent,
-        agena_api::resource::WorkflowState::ToolPending => WorkflowState::ToolPending,
-        agena_api::resource::WorkflowState::AwaitingInteraction => {
-            WorkflowState::AwaitingInteraction
-        }
-    }
 }
 
 fn last_assistant_text(parts: &[SessionTranscriptPart]) -> Option<String> {

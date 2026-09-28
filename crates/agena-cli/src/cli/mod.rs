@@ -1,6 +1,6 @@
 //! CLI argument schema, command definitions, and dispatch.
 
-use agena_domain::{Role, SessionCostSummary, SessionSummary, UsageStatsQuery, WorkflowState};
+use agena_domain::{Role, SessionCostSummary, SessionSummary, UsageStatsQuery};
 use std::{
     collections::{BTreeMap, HashSet},
     fs,

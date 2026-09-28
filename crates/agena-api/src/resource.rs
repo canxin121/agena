@@ -2,6 +2,7 @@
 //! domain so external clients can `use agena_api::resource::*`.
 
 use chrono::{DateTime, Utc};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -15,6 +16,14 @@ pub use activity::*;
 pub use auth::*;
 pub use interaction::*;
 pub use notification::*;
+
+// Session-state enums are defined once in `agena-domain`; the API re-exports
+// them so every server layer, client, and generated TypeScript mirror shares
+// one definition instead of keeping local copies of the same variants.
+pub use agena_domain::{
+    ExecutionAccess, ExecutionPhase, SessionLifecycleState, SessionRelationKind, SessionStateKind,
+    SubtaskStatus, WorkflowState,
+};
 
 fn is_false(value: &bool) -> bool {
     !*value
@@ -928,10 +937,10 @@ pub struct SessionResource {
     pub version: i64,
     pub relation_kind: SessionRelationKind,
     pub lifecycle_state: SessionLifecycleState,
-    /// Authoritative processing state derived from persisted run markers,
-    /// pending interactions, and the execution lease. Unlike a client's
-    /// request/loading flag, this survives disconnects and can therefore be
-    /// used by every client to identify work still owned by the server.
+    /// Authoritative processing state derived from persisted run markers and
+    /// pending interactions. Unlike a client's request/loading flag, this
+    /// survives disconnects and can therefore be used by every client to
+    /// identify work still owned by the server.
     #[serde(default)]
     pub state: SessionState,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -954,34 +963,12 @@ pub struct SessionResource {
     pub last_message_at: Option<DateTime<Utc>>,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(rename_all = "snake_case")]
-/// Relation of a session to its parent session.
-pub enum SessionRelationKind {
-    #[default]
-    Root,
-    Child,
-    Fork,
-    Rewind,
-    Subagent,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(rename_all = "snake_case")]
-/// Lifecycle state of a session.
-pub enum SessionLifecycleState {
-    Creating,
-    #[default]
-    Ready,
-    Failed,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(tag = "kind", content = "data", rename_all = "snake_case")]
 /// Current processing state of a session.
 ///
 /// This is the single client-facing execution state. Durable session facts are
-/// derived from parts and leases; the optional live execution and workflow
+/// derived from durable parts; the optional live execution and workflow
 /// payloads are attached by the application service when it has a full
 /// execution snapshot.
 pub enum SessionState {
@@ -995,6 +982,7 @@ pub enum SessionState {
         execution: Option<ActiveExecutionResource>,
         workflow: WorkflowState,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        #[schemars(with = "Vec<serde_json::Value>")]
         requests: Vec<PendingInteractiveRequestResource>,
     },
     AwaitingInteraction {
@@ -1003,15 +991,8 @@ pub enum SessionState {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         execution: Option<ActiveExecutionResource>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        #[schemars(with = "Vec<serde_json::Value>")]
         requests: Vec<PendingInteractiveRequestResource>,
-    },
-    Interrupted {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        run_id: Option<i64>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        reason: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        last_failure: Option<serde_json::Value>,
     },
     Failed {
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1027,66 +1008,45 @@ impl Default for SessionState {
 
 impl SessionState {
     pub const fn as_str(&self) -> &'static str {
+        self.kind().as_str()
+    }
+
+    /// The canonical state kind shared with storage, TUI, CLI, RPC, and the
+    /// generated TypeScript mirror.
+    pub const fn kind(&self) -> SessionStateKind {
         match self {
-            Self::Creating => "creating",
-            Self::Ready { .. } => "ready",
-            Self::Running { .. } => "running",
-            Self::AwaitingInteraction { .. } => "awaiting_interaction",
-            Self::Interrupted { .. } => "interrupted",
-            Self::Failed { .. } => "failed",
+            Self::Creating => SessionStateKind::Creating,
+            Self::Ready { .. } => SessionStateKind::Ready,
+            Self::Running { .. } => SessionStateKind::Running,
+            Self::AwaitingInteraction { .. } => SessionStateKind::AwaitingInteraction,
+            Self::Failed { .. } => SessionStateKind::Failed,
         }
     }
 
     pub fn parse(value: &str) -> Option<Self> {
-        match value {
-            "creating" => Some(Self::Creating),
-            "ready" => Some(Self::Ready { last_failure: None }),
-            "running" => Some(Self::Running {
-                execution: None,
-                workflow: WorkflowState::Quiescent,
-                requests: Vec::new(),
-            }),
-            "awaiting_interaction" => Some(Self::AwaitingInteraction {
-                run_id: None,
-                execution: None,
-                requests: Vec::new(),
-            }),
-            "interrupted" => Some(Self::Interrupted {
-                run_id: None,
-                reason: None,
-                last_failure: None,
-            }),
-            "failed" => Some(Self::Failed { failure: None }),
-            _ => None,
-        }
+        SessionStateKind::parse(value).map(Self::from)
     }
 
     pub const fn is_running(&self) -> bool {
-        matches!(self, Self::Running { .. })
+        self.kind().is_busy()
     }
 
     pub const fn is_awaiting_interaction(&self) -> bool {
-        matches!(self, Self::AwaitingInteraction { .. })
-    }
-
-    pub const fn needs_recovery(&self) -> bool {
-        matches!(self, Self::Interrupted { .. })
+        matches!(self.kind(), SessionStateKind::AwaitingInteraction)
     }
 
     pub const fn is_failed(&self) -> bool {
-        matches!(self, Self::Failed { .. })
+        self.kind().is_failed()
     }
 
     /// True only while a durable run is still executing. Waiting for a user
-    /// or recovery is attention, not active model work.
+    /// is attention, not active model work.
     pub const fn is_busy(&self) -> bool {
         self.is_running()
     }
 
     pub const fn is_attention(&self) -> bool {
-        self.is_awaiting_interaction()
-            || self.needs_recovery()
-            || self.is_failed()
+        self.kind().is_attention()
             || matches!(self, Self::Running { requests, .. } if !requests.is_empty())
     }
 
@@ -1138,6 +1098,27 @@ impl SessionState {
     }
 }
 
+impl From<SessionStateKind> for SessionState {
+    /// The payload-free projection of a derived state kind.
+    fn from(kind: SessionStateKind) -> Self {
+        match kind {
+            SessionStateKind::Creating => Self::Creating,
+            SessionStateKind::Ready => Self::Ready { last_failure: None },
+            SessionStateKind::Running => Self::Running {
+                execution: None,
+                workflow: WorkflowState::Quiescent,
+                requests: Vec::new(),
+            },
+            SessionStateKind::AwaitingInteraction => Self::AwaitingInteraction {
+                run_id: None,
+                execution: None,
+                requests: Vec::new(),
+            },
+            SessionStateKind::Failed => Self::Failed { failure: None },
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 /// Server-owned session home view.
 ///
@@ -1148,9 +1129,9 @@ pub struct SessionOverviewResource {
     /// User-favorited sessions, newest first.
     #[serde(default)]
     pub favorites: Vec<SessionResource>,
-    /// Sessions paused on user input or left interrupted after owner loss.
+    /// Sessions paused on user input, plus sessions that terminally failed.
     pub attention: Vec<SessionResource>,
-    /// Sessions whose execution lease is fresh, plus sessions still creating.
+    /// Sessions with an in-flight run, plus sessions still creating.
     pub running: Vec<SessionResource>,
     /// Most recently changed terminal/quiescent sessions.
     pub recent: Vec<SessionResource>,
@@ -1182,14 +1163,6 @@ mod session_state_contract_tests {
                 },
                 "awaiting_interaction",
             ),
-            (
-                SessionState::Interrupted {
-                    run_id: None,
-                    reason: None,
-                    last_failure: None,
-                },
-                "interrupted",
-            ),
             (SessionState::Failed { failure: None }, "failed"),
         ];
         for (state, expected) in cases {
@@ -1203,56 +1176,12 @@ mod session_state_contract_tests {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(rename_all = "snake_case")]
-/// Status of a subtask.
-pub enum SubtaskStatus {
-    #[default]
-    Created,
-    Running,
-    Completed,
-    Failed,
-    Cancelled,
-    TimedOut,
-    Interrupted,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 /// An active execution inside a session.
 pub struct ActiveExecutionResource {
+    #[schemars(with = "String")]
     pub execution_id: Uuid,
     pub phase: ExecutionPhase,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-/// Phase of an active execution.
-pub enum ExecutionPhase {
-    Starting,
-    PreparingModel,
-    StreamingModel,
-    ExecutingTools,
-    AwaitingInteraction,
-    Cancelling,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(rename_all = "snake_case")]
-/// Workflow state of a session.
-pub enum WorkflowState {
-    #[default]
-    Quiescent,
-    ToolPending,
-    AwaitingInteraction,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(rename_all = "snake_case")]
-/// Execution access mode of a session.
-pub enum ExecutionAccess {
-    #[default]
-    Inherit,
-    ReadOnly,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1498,22 +1427,12 @@ pub enum RunRole {
     Tool,
 }
 
-/// Public execution state of a message. This is a wire value, deliberately
-/// separate from the persistence-enabled runtime state enum.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq, Hash)]
-#[serde(rename_all = "snake_case")]
-pub enum RunStatus {
-    #[default]
-    Pending,
-    InProgress,
-    Completed,
-    PolicyDenied,
-    UserDeclined,
-    CapabilityUnavailable,
-    ToolUnavailable,
-    Failed,
-    Cancelled,
-}
+/// Public execution state of a message.
+///
+/// The canonical definition is [`agena_domain::ExecutionStatus`]; the API
+/// re-exports it under the message-projection name so a message's status and
+/// an operation part's [`PartExecutionStatusResource`] cannot drift apart.
+pub use agena_domain::ExecutionStatus as RunStatus;
 
 /// Token and cost accounting for one public message projection.
 ///

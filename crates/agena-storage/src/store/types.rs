@@ -257,7 +257,14 @@ pub struct BackgroundOperation {
     pub outcome: Option<Value>,
     pub failure: Option<Value>,
     pub last_event_seq: u64,
+    /// The constant server claimant that owns the short launch window. Not an
+    /// identity and not a session owner: exactly one process owns the data
+    /// directory, so this only records that a launch handoff is in progress.
     pub owner_id: Option<String>,
+    /// Liveness hint for the launch window: while it is in the future the
+    /// launch handoff may still be mid-flight, so reconciliation leaves the
+    /// operation alone. It is never lifecycle truth — a process restart
+    /// terminalizes the operation regardless of this value.
     pub lease_until_ms: Option<i64>,
     pub revision: i64,
     pub created_at_ms: i64,
@@ -496,7 +503,7 @@ pub struct PartDelta {
 pub struct RunOutcome {
     /// `completed` | `failed` | `cancelled` (never a non-terminal state).
     pub status: PartState,
-    /// Required for `failed`/`cancelled` (`lease_stolen`, `process_restart`,
+    /// Required for `failed`/`cancelled` (`process_restart`,
     /// `user_cancelled`, ...). For `completed` the marker records JSON null.
     pub abort_reason: Option<String>,
     /// Optional replacement for the run marker content (e.g. model metadata).
@@ -516,7 +523,7 @@ pub struct SubmitOutcome {
 }
 
 /// The session-level metadata row. `sessions` stores only identity/lineage,
-/// config, and provider anchors — session state is derived from parts + leases.
+/// config, and provider anchors — session state is derived from durable parts.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SessionMeta {
@@ -667,36 +674,7 @@ pub struct SessionListQuery {
     pub before: Option<SessionCursor>,
 }
 
-/// A single lease row.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LeaseState {
-    pub session_id: i64,
-    pub owner_id: String,
-    pub run_id: Option<i64>,
-    pub lease_started_at_ms: i64,
-    pub heartbeat_at_ms: i64,
-}
-
-/// Result of [`crate::store::PersistenceEngine::try_acquire_lease`].
-#[derive(Debug, Clone, PartialEq)]
-pub enum LeaseAcquire {
-    /// This caller now owns the lease. Any stale in-flight run markers were
-    /// aborted atomically in the same transaction (invariant 2).
-    Acquired {
-        /// Run markers aborted by the steal (abort_reason = `lease_stolen`).
-        reconciled_runs: Vec<i64>,
-        /// Every marker/child part changed by the atomic stale-lease abort.
-        /// The facade turns these committed rows directly into live patches.
-        updated_parts: Vec<Part>,
-    },
-    /// Another owner holds a fresh lease; acquisition refused.
-    HeldBy {
-        owner_id: String,
-        heartbeat_at_ms: i64,
-    },
-}
-
-/// Result of [`crate::store::PersistenceEngine::reconcile`] (17.4 step 2c).
+/// Result of [`crate::store::PersistenceEngine::reconcile`] (17.4).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ReconcileOutcome {
     /// Run markers marked `failed` (abort_reason = `process_restart`).
@@ -767,49 +745,13 @@ pub struct UsageStats {
     pub total_cost_micros: i64,
 }
 
-/// The single derived session state (17.3). One derivation function over
-/// parts + leases produces the same state in every process.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SessionState {
-    /// `sessions.lifecycle_state = creating` — not yet usable.
-    Creating,
-    /// No in-flight run, no pending interaction.
-    Ready,
-    /// An in-flight run marker with a fresh lease.
-    Running,
-    /// An in-flight `tool_call` with unanswered `user_input` gates the session.
-    AwaitingInteraction,
-    /// An in-flight run marker with a stale/no lease (crash) — reconciling.
-    Interrupted,
-    /// Lifecycle failed, or the last run terminally failed and is not resumable.
-    Failed,
-}
-
-impl SessionState {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Creating => "creating",
-            Self::Ready => "ready",
-            Self::Running => "running",
-            Self::AwaitingInteraction => "awaiting_interaction",
-            Self::Interrupted => "interrupted",
-            Self::Failed => "failed",
-        }
-    }
-
-    pub fn parse(value: &str) -> Option<Self> {
-        match value {
-            "creating" => Some(Self::Creating),
-            "ready" => Some(Self::Ready),
-            "running" => Some(Self::Running),
-            "awaiting_interaction" => Some(Self::AwaitingInteraction),
-            "interrupted" => Some(Self::Interrupted),
-            "failed" => Some(Self::Failed),
-            _ => None,
-        }
-    }
-}
+/// The single derived session state (17.3). One derivation function over the
+/// durable parts produces the same state in every process.
+///
+/// The canonical definition is [`agena_domain::SessionStateKind`]; storage
+/// re-exports it so both engines, the facade, and every consumer share the
+/// exact same type instead of keeping a second copy of the variants.
+pub use agena_domain::SessionStateKind as SessionState;
 
 /// A pending interaction the UI must surface when `SessionState::AwaitingInteraction`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -911,5 +853,59 @@ mod visibility_tests {
         let error = serde_json::from_value::<BackgroundDelivery>(value)
             .expect_err("current delivery retry timestamp must be required");
         assert!(error.to_string().contains("next_attempt_at_ms"), "{error}");
+    }
+}
+
+#[cfg(test)]
+mod session_state_vocabulary_tests {
+    use super::SessionState;
+    use agena_domain::{SessionLifecycleState, SessionStateKind, SubtaskStatus};
+
+    #[test]
+    fn storage_session_state_is_the_domain_kind() {
+        // Type identity, not a conversion: storage must never keep a second
+        // copy of the session-state variants.
+        let kind: SessionStateKind = SessionState::AwaitingInteraction;
+        assert_eq!(kind, agena_domain::SessionStateKind::AwaitingInteraction);
+        assert_eq!(SessionState::ALL.len(), 5);
+        assert_eq!(SessionState::default(), SessionState::Ready);
+        assert_eq!(SessionState::parse("succeeded"), None);
+        for kind in SessionState::ALL {
+            assert_eq!(SessionState::parse(kind.as_str()), Some(kind));
+            assert_eq!(
+                serde_json::to_value(kind).expect("serialize session state"),
+                serde_json::json!(kind.as_str())
+            );
+        }
+        assert!(SessionStateKind::Running.is_busy());
+        assert!(SessionStateKind::AwaitingInteraction.is_attention());
+        assert!(SessionStateKind::Failed.is_failed());
+    }
+
+    #[test]
+    fn persisted_state_strings_are_the_domain_wire_names() {
+        // Session meta and the interaction log persist the domain spelling; a
+        // hand-written mapping table would be a second vocabulary.
+        for lifecycle in [
+            SessionLifecycleState::Creating,
+            SessionLifecycleState::Ready,
+            SessionLifecycleState::Failed,
+        ] {
+            let wire = lifecycle.as_str();
+            assert_eq!(
+                serde_json::to_value(lifecycle).expect("serialize lifecycle"),
+                serde_json::json!(wire)
+            );
+            assert_eq!(SessionLifecycleState::parse(wire), Some(lifecycle));
+        }
+
+        for status in [SubtaskStatus::Created, SubtaskStatus::Running] {
+            let wire: &str = status.as_ref();
+            assert_eq!(
+                serde_json::to_value(status).expect("serialize subtask"),
+                serde_json::json!(wire)
+            );
+            assert_eq!(SubtaskStatus::parse(wire), Some(status));
+        }
     }
 }

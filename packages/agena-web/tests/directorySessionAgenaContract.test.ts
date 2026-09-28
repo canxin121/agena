@@ -22,9 +22,9 @@ test('Agena session lifecycle states stay canonical tagged SessionState values',
   )
   assert.equal(
     stateSnapshotFromAgenaSession({
-      state: { kind: 'interrupted', data: { reason: 'lease_lost' } },
+      state: { kind: 'failed', data: { failure: { code: 'boom' } } },
     }).state.kind,
-    'interrupted',
+    'failed',
   )
   assert.equal(stateSnapshotFromAgenaSession({ state: { kind: 'ready', data: {} } }).state.kind, 'ready')
 })

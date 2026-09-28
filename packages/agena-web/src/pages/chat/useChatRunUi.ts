@@ -417,7 +417,7 @@ export function useChatRunUi(opts: {
   const sessionEnded = computed(() => {
     return (
       !canonicalRunActive.value &&
-      (stateKind.value === 'ready' || stateKind.value === 'interrupted' || stateKind.value === 'failed')
+      (stateKind.value === 'ready' || stateKind.value === 'failed')
     )
   })
 

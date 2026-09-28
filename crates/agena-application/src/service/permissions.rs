@@ -492,7 +492,6 @@ mod tests {
             .expect("initialize test schema");
         let facade: Arc<dyn SessionStore> = Arc::new(SessionFacade::new(
             SqliteEngine::new(Arc::clone(&database)),
-            "permissions-test",
             64,
         ));
         ApplicationService::new(

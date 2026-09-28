@@ -1,7 +1,7 @@
 //! Concrete SQLite table, index, and trigger definitions for the Agena store.
 //!
 //! Chat-data tables (`parts`, `session_parts`, `sessions`,
-//! `execution_leases`, `sequences`, `workspaces`, `permission_rules`,
+//! `sequences`, `workspaces`, `permission_rules`,
 //! `usage`, `idempotency`, `background_operations`,
 //! `background_deliveries`) plus the unchanged model-catalog infrastructure
 //! tables. Parts remain the transcript entity; normalized background rows are
@@ -149,7 +149,6 @@ const TABLES: &[&str] = &[
     "CREATE TABLE IF NOT EXISTS agena_sessions (id INTEGER PRIMARY KEY AUTOINCREMENT, parent_id INTEGER NULL REFERENCES agena_sessions(id) ON UPDATE CASCADE ON DELETE CASCADE, depth INTEGER NOT NULL DEFAULT 0, root_id INTEGER NOT NULL DEFAULT 0, workspace_id INTEGER NOT NULL REFERENCES agena_workspaces(id) ON UPDATE CASCADE ON DELETE CASCADE, relation_kind TEXT NOT NULL DEFAULT 'root' CHECK (relation_kind IN ('root','child','fork','rewind','subagent')), is_subagent INTEGER NOT NULL GENERATED ALWAYS AS (relation_kind = 'subagent') STORED, cutoff_part_id INTEGER NULL, title TEXT NOT NULL, favorite INTEGER NOT NULL DEFAULT 0 CHECK (favorite IN (0, 1)), pinned INTEGER NOT NULL DEFAULT 0 CHECK (pinned IN (0, 1)), version INTEGER NOT NULL, lifecycle_state TEXT NOT NULL DEFAULT 'creating' CHECK (lifecycle_state IN ('creating','ready','failed')), creation_failure_json JSON NULL, task_id TEXT NULL, subtask_status TEXT NULL, subtask_started_at_ms INTEGER NULL, subtask_finished_at_ms INTEGER NULL, subtask_failure_json JSON NULL, config_json JSON NULL, provider_anchors_json JSON NULL, created_at_ms INTEGER NOT NULL, updated_at_ms INTEGER NOT NULL)",
     "CREATE TABLE IF NOT EXISTS agena_parts (part_id INTEGER PRIMARY KEY, kind TEXT NOT NULL, role TEXT NOT NULL CHECK (role IN ('user','assistant','system','tool','runtime')), state TEXT NOT NULL DEFAULT 'pending' CHECK (state IN ('pending','in_progress','completed','failed','cancelled')), content JSON NOT NULL, summary TEXT NULL, visibility TEXT NOT NULL DEFAULT 'both' CHECK (visibility IN ('both','user','ai')), parent_part_id INTEGER NULL REFERENCES agena_parts(part_id), run_id INTEGER NULL REFERENCES agena_parts(part_id), origin_session_id INTEGER NULL, revision INTEGER NOT NULL DEFAULT 1, started_at_ms INTEGER NOT NULL, finished_at_ms INTEGER NULL, created_at_ms INTEGER NOT NULL, updated_at_ms INTEGER NOT NULL, provider_state JSON NULL, CHECK (finished_at_ms IS NULL OR finished_at_ms >= started_at_ms), CHECK ((state IN ('pending','in_progress') AND finished_at_ms IS NULL) OR (state IN ('completed','failed','cancelled') AND finished_at_ms IS NOT NULL)))",
     "CREATE TABLE IF NOT EXISTS agena_session_parts (session_id INTEGER NOT NULL REFERENCES agena_sessions(id) ON UPDATE CASCADE ON DELETE CASCADE, part_id INTEGER NOT NULL REFERENCES agena_parts(part_id), added_at_ms INTEGER NOT NULL, PRIMARY KEY (session_id, part_id))",
-    "CREATE TABLE IF NOT EXISTS agena_execution_leases (session_id INTEGER PRIMARY KEY REFERENCES agena_sessions(id) ON UPDATE CASCADE ON DELETE CASCADE, owner_id TEXT NOT NULL, run_id INTEGER NULL, lease_started_at_ms INTEGER NOT NULL, heartbeat_at_ms INTEGER NOT NULL)",
     "CREATE TABLE IF NOT EXISTS agena_sequences (seq_name TEXT PRIMARY KEY, next_val INTEGER NOT NULL)",
     "CREATE TABLE IF NOT EXISTS agena_permission_rules (id INTEGER PRIMARY KEY AUTOINCREMENT, action_key TEXT NOT NULL, mode TEXT NOT NULL, scope TEXT NOT NULL, session_id INTEGER NULL, workspace_id INTEGER NULL, source TEXT NOT NULL, reason TEXT NULL, operator TEXT NULL, revoked_at_ms INTEGER NULL, revoked_reason TEXT NULL, revoked_by TEXT NULL, created_at_ms INTEGER NOT NULL, updated_at_ms INTEGER NOT NULL)",
     "CREATE TABLE IF NOT EXISTS agena_usage (usage_id INTEGER PRIMARY KEY AUTOINCREMENT, workspace_id INTEGER NOT NULL, session_id INTEGER NOT NULL REFERENCES agena_sessions(id) ON UPDATE CASCADE ON DELETE CASCADE, run_id INTEGER NULL, provider_id TEXT NOT NULL, model_id TEXT NOT NULL, created_at_ms INTEGER NOT NULL, input_tokens INTEGER NOT NULL, output_tokens INTEGER NOT NULL, reasoning_tokens INTEGER NOT NULL DEFAULT 0, cache_write_tokens INTEGER NOT NULL DEFAULT 0, cache_read_tokens INTEGER NOT NULL DEFAULT 0, tool_use_tokens INTEGER NOT NULL DEFAULT 0, other_tokens INTEGER NOT NULL DEFAULT 0, total_cost_micros INTEGER NOT NULL DEFAULT 0, recorded_cost_micros INTEGER NULL, cost_estimate_incomplete INTEGER NOT NULL DEFAULT 0, detail_json JSON NULL)",
@@ -184,8 +183,6 @@ const INDEXES: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS idx_agena_usage_ws_time ON agena_usage(workspace_id, created_at_ms)",
     "CREATE INDEX IF NOT EXISTS idx_agena_usage_session ON agena_usage(session_id, created_at_ms)",
     "CREATE INDEX IF NOT EXISTS idx_agena_usage_provider_model ON agena_usage(provider_id, model_id, created_at_ms)",
-    "CREATE INDEX IF NOT EXISTS idx_agena_execution_leases_heartbeat ON agena_execution_leases(heartbeat_at_ms)",
-    "CREATE INDEX IF NOT EXISTS idx_agena_execution_leases_owner ON agena_execution_leases(owner_id)",
     "CREATE UNIQUE INDEX IF NOT EXISTS uq_agena_model_catalog_kind_model ON agena_model_catalog_entries(kind, model_id)",
     "CREATE INDEX IF NOT EXISTS idx_agena_model_catalog_model_id ON agena_model_catalog_entries(model_id)",
     "CREATE INDEX IF NOT EXISTS idx_agena_model_catalog_kind ON agena_model_catalog_entries(kind)",
@@ -282,7 +279,6 @@ mod tests {
                 "agena_parts",
                 "agena_session_parts",
                 "agena_sessions",
-                "agena_execution_leases",
                 "agena_sequences",
                 "agena_workspaces",
                 "agena_permission_rules",
@@ -374,7 +370,7 @@ mod tests {
             &db,
             "UPDATE agena_parts \
              SET state = 'failed', finished_at_ms = 5, \
-                 content = json_set(content, '$.abort_reason', 'lease_stolen') \
+                 content = json_set(content, '$.abort_reason', 'process_restart') \
              WHERE part_id = 1",
         )
         .await

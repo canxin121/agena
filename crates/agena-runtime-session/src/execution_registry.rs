@@ -1,11 +1,18 @@
 //! Generic per-owner execution registry: exclusive ownership, cancel, and
 //! steer. Concrete session code supplies its own steer payload type.
 //!
-//! The registry is purely in-memory execution coordination. Cross-process
-//! session exclusivity is no longer its job: the data facade owns
-//! `execution_leases` and validates them on every write (design 14.2, 15.6),
-//! so the manager never holds a lease outside a facade call. `register` here
-//! only guarantees that one process does not run the same session twice.
+//! The registry is purely in-memory execution coordination, and it is also
+//! the authority on which in-flight runs are *live*: exactly one server
+//! process owns a data directory, so a run marker whose session has no slot
+//! here is abandoned work that recovery terminalizes.
+//!
+//! A slot is owned by a [`ExecutionPermit`], not by a bare `register`/`forget`
+//! pair. The permit releases the slot when it drops, so a task that panics past
+//! its join — or that is aborted mid-flight — cannot leave a permanent
+//! occupant behind. A leaked slot would be read as "this process is still
+//! running that session", which is the one answer recovery must never get
+//! wrong: it would both suppress reconciliation of dead work and let a later
+//! `register` fail forever with [`ExecutionControlError::AlreadyActive`].
 
 use portable_atomic::{AtomicI64, AtomicU64};
 use std::{
@@ -197,7 +204,9 @@ impl<T> ExecutionControl<T> {
 #[derive(Debug)]
 /// Registry of active executions.
 pub struct ExecutionRegistry<T> {
-    inner: Mutex<HashMap<i64, Arc<ExecutionControl<T>>>>,
+    /// Shared with every [`ExecutionPermit`] so a permit released from a
+    /// detached task (or a normal `Drop`) still resolves the right slot.
+    inner: Arc<Mutex<HashMap<i64, Arc<ExecutionControl<T>>>>>,
     /// Delivery handshake for steered background notifications: `(session_id,
     /// notification part_id)` → the settle's one-shot. The stable-run loop
     /// fires it the moment its notification cursor observes the appended part
@@ -205,6 +214,75 @@ pub struct ExecutionRegistry<T> {
     /// release) before concluding the wake landed, so a steer dropped at the
     /// end of a turn cannot leave the session silent.
     notification_acks: StdMutex<HashMap<(i64, i64), oneshot::Sender<()>>>,
+}
+
+#[derive(Debug)]
+/// A live execution's ownership of its session's registry slot.
+///
+/// Holding the permit *is* being the live execution: `is_active(session_id)`
+/// answers "does a permit exist", and recovery therefore never reconciles work
+/// its holder is still running. Dropping it releases the slot, so the slot
+/// cannot outlive the work that owns it — including when the owning task
+/// panics or is aborted.
+pub struct ExecutionPermit<T: Send + 'static> {
+    session_id: i64,
+    control: Arc<ExecutionControl<T>>,
+    registry: Arc<Mutex<HashMap<i64, Arc<ExecutionControl<T>>>>>,
+}
+
+impl<T: Send + 'static> ExecutionPermit<T> {
+    pub fn session_id(&self) -> i64 {
+        self.session_id
+    }
+
+    pub fn control(&self) -> &Arc<ExecutionControl<T>> {
+        &self.control
+    }
+}
+
+impl<T: Send + 'static> Drop for ExecutionPermit<T> {
+    fn drop(&mut self) {
+        // `Drop` cannot await, so the release takes whichever path is
+        // available without blocking a runtime thread: the synchronous fast
+        // path when the lock is free, otherwise a detached task that takes the
+        // async lock. Neither path can be skipped, so a permit dropped while a
+        // read holds the guard still resolves its slot.
+        let registry = Arc::clone(&self.registry);
+        let control = Arc::clone(&self.control);
+        let session_id = self.session_id;
+        // The slot is keyed by an `Arc` pointer identity and the map's critical
+        // sections are short, so a contended release is a same-tick race.
+        if let Ok(mut slots) = registry.try_lock() {
+            Self::remove_if_matches(&mut slots, session_id, &control);
+            return;
+        }
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn(async move {
+                let mut slots = registry.lock().await;
+                Self::remove_if_matches(&mut slots, session_id, &control);
+            });
+            return;
+        }
+        // No runtime at all (a registry used from a plain test): wait for the
+        // async lock, which is free the moment the brief synchronous critical
+        // section ends.
+        let mut slots = registry.blocking_lock();
+        Self::remove_if_matches(&mut slots, session_id, &control);
+    }
+}
+
+impl<T: Send + 'static> ExecutionPermit<T> {
+    fn remove_if_matches(
+        slots: &mut HashMap<i64, Arc<ExecutionControl<T>>>,
+        session_id: i64,
+        control: &Arc<ExecutionControl<T>>,
+    ) {
+        if let Some(current) = slots.get(&session_id)
+            && Arc::ptr_eq(current, control)
+        {
+            slots.remove(&session_id);
+        }
+    }
 }
 
 impl<T: Send + 'static> Default for ExecutionRegistry<T> {
@@ -215,11 +293,11 @@ impl<T: Send + 'static> Default for ExecutionRegistry<T> {
 
 impl<T: Send + 'static> ExecutionRegistry<T> {
     /// A registry with no database binding: in-process execution coordination
-    /// only. Cross-process session exclusivity is enforced by the facade's
-    /// lease validation on every write, not here.
+    /// only. Cross-process session exclusivity comes from the data directory
+    /// itself — exactly one server process owns it (17.2) — not from here.
     pub fn new() -> Self {
         Self {
-            inner: Mutex::new(HashMap::new()),
+            inner: Arc::new(Mutex::new(HashMap::new())),
             notification_acks: StdMutex::new(HashMap::new()),
         }
     }
@@ -229,24 +307,9 @@ impl<T: Send + 'static> ExecutionRegistry<T> {
         session_id: i64,
         turn_id: agena_domain::TurnId,
         reply_id: agena_domain::AssistantReplyId,
-    ) -> Result<(Arc<ExecutionControl<T>>, mpsc::Receiver<Vec<T>>), ExecutionControlError> {
-        let (tx, rx) = mpsc::channel(STEER_QUEUE_CAPACITY);
-        let control = Arc::new(ExecutionControl::new(turn_id, reply_id, tx));
-
-        // Check and insert while holding one guard. Splitting these into two
-        // critical sections lets concurrent starters both observe the slot as
-        // empty and then overwrite each other, leaving two live executions
-        // for one session while only the newer control remains cancellable.
-        // The cross-process lease is still taken atomically by the facade on
-        // the first write of the run (design 15.6 step 1).
-        let mut guard = self.inner.lock().await;
-        if guard.contains_key(&session_id) {
-            return Err(ExecutionControlError::AlreadyActive(session_id));
-        }
-        guard.insert(session_id, Arc::clone(&control));
-        drop(guard);
-
-        Ok((control, rx))
+    ) -> Result<(ExecutionPermit<T>, mpsc::Receiver<Vec<T>>), ExecutionControlError> {
+        self.register_with_restore(session_id, turn_id, reply_id, None, None)
+            .await
     }
 
     /// Register an execution while retaining the original composer document
@@ -258,7 +321,7 @@ impl<T: Send + 'static> ExecutionRegistry<T> {
         reply_id: agena_domain::AssistantReplyId,
         restore_document: Option<ComposerDocument>,
         user_idempotency_key: Option<String>,
-    ) -> Result<(Arc<ExecutionControl<T>>, mpsc::Receiver<Vec<T>>), ExecutionControlError> {
+    ) -> Result<(ExecutionPermit<T>, mpsc::Receiver<Vec<T>>), ExecutionControlError> {
         let (tx, rx) = mpsc::channel(STEER_QUEUE_CAPACITY);
         let control = Arc::new(ExecutionControl::new_with_restore(
             turn_id,
@@ -267,28 +330,26 @@ impl<T: Send + 'static> ExecutionRegistry<T> {
             restore_document,
             user_idempotency_key,
         ));
+
+        // Check and insert while holding one guard. Splitting these into two
+        // critical sections lets concurrent starters both observe the slot as
+        // empty and then overwrite each other, leaving two live executions
+        // for one session while only the newer control remains cancellable.
+        // Cross-process exclusivity is structural (one process per data
+        // directory), so this guard only needs to settle same-process races.
         let mut guard = self.inner.lock().await;
         if guard.contains_key(&session_id) {
             return Err(ExecutionControlError::AlreadyActive(session_id));
         }
         guard.insert(session_id, Arc::clone(&control));
         drop(guard);
-        Ok((control, rx))
-    }
 
-    pub async fn unregister_if_matches(
-        &self,
-        session_id: i64,
-        expected: &Arc<ExecutionControl<T>>,
-    ) {
-        {
-            let mut guard = self.inner.lock().await;
-            if let Some(current) = guard.get(&session_id)
-                && Arc::ptr_eq(current, expected)
-            {
-                guard.remove(&session_id);
-            }
-        }
+        let permit = ExecutionPermit {
+            session_id,
+            control,
+            registry: Arc::clone(&self.inner),
+        };
+        Ok((permit, rx))
     }
 
     /// If `session_id` is occupied by an execution whose cancel token has
@@ -505,7 +566,7 @@ mod tests {
     use agena_domain::{CancellationResult, ExecutionLifecycle, ExecutionPhase};
     use tokio::sync::{Barrier, mpsc};
 
-    use super::{ExecutionControl, ExecutionControlError, ExecutionRegistry};
+    use super::{ExecutionControl, ExecutionControlError, ExecutionPermit, ExecutionRegistry};
 
     #[tokio::test]
     async fn a_owner_has_exactly_one_execution_writer() {
@@ -528,7 +589,7 @@ mod tests {
                 .await,
             Err(ExecutionControlError::AlreadyActive(7))
         ));
-        registry.unregister_if_matches(7, &first).await;
+        drop(first);
         assert!(
             registry
                 .register(
@@ -578,7 +639,7 @@ mod tests {
     #[tokio::test]
     async fn cancellation_moves_to_cancelling_before_signalling_worker() {
         let registry = ExecutionRegistry::<()>::new();
-        let (control, _) = registry
+        let (permit, _) = registry
             .register(
                 9,
                 agena_domain::TurnId::new(),
@@ -587,9 +648,9 @@ mod tests {
             .await
             .expect("execution");
         registry.cancel_current(9).await.expect("cancel");
-        assert!(control.cancel.is_cancelled());
+        assert!(permit.control().cancel.is_cancelled());
         assert!(matches!(
-            control.lifecycle().await,
+            permit.control().lifecycle().await,
             ExecutionLifecycle::Active {
                 phase: ExecutionPhase::Cancelling,
                 ..
@@ -606,8 +667,8 @@ mod tests {
             .register(12, turn_id, reply_id)
             .await
             .expect("first execution");
-        let old_id = first.execution_id();
-        registry.unregister_if_matches(12, &first).await;
+        let old_id = first.control().execution_id();
+        drop(first);
 
         let (second, _) = registry
             .register(12, turn_id, reply_id)
@@ -620,21 +681,21 @@ mod tests {
                 .expect("typed result"),
             CancellationResult::ExecutionMismatch
         );
-        assert!(!second.cancel.is_cancelled());
+        assert!(!second.control().cancel.is_cancelled());
         assert_eq!(
             registry
-                .cancel_exact(12, second.execution_id())
+                .cancel_exact(12, second.control().execution_id())
                 .await
                 .expect("typed result"),
             CancellationResult::CancellationRequested
         );
-        assert!(second.cancel.is_cancelled());
+        assert!(second.control().cancel.is_cancelled());
     }
 
     #[tokio::test]
-    async fn unregister_never_removes_a_different_execution() {
+    async fn a_dropped_permit_never_removes_a_different_execution() {
         let registry = ExecutionRegistry::<()>::new();
-        let (control, _) = registry
+        let (permit, _) = registry
             .register(
                 11,
                 agena_domain::TurnId::new(),
@@ -642,15 +703,60 @@ mod tests {
             )
             .await
             .expect("execution");
-        let unrelated = Arc::new(ExecutionControl::new(
-            agena_domain::TurnId::new(),
-            agena_domain::AssistantReplyId::new(),
-            mpsc::channel(1).0,
-        ));
-        registry.unregister_if_matches(11, &unrelated).await;
+        let control = Arc::clone(permit.control());
+        // A stale permit for the same session — the shape a task that lost its
+        // slot to a replacement would hold — must not evict the current one.
+        let stale = ExecutionPermit {
+            session_id: 11,
+            control: Arc::new(ExecutionControl::new(
+                agena_domain::TurnId::new(),
+                agena_domain::AssistantReplyId::new(),
+                mpsc::channel(1).0,
+            )),
+            registry: Arc::clone(&registry.inner),
+        };
+        drop(stale);
         assert!(registry.is_active(11).await);
-        registry.unregister_if_matches(11, &control).await;
+        assert!(
+            registry
+                .execution_control(11, None)
+                .await
+                .is_some_and(|current| Arc::ptr_eq(&current, &control))
+        );
+        drop(permit);
         assert!(!registry.is_active(11).await);
+    }
+
+    #[tokio::test]
+    async fn a_dropped_permit_releases_the_slot_for_a_replacement() {
+        let registry = ExecutionRegistry::<()>::new();
+        let (permit, _) = registry
+            .register(
+                5,
+                agena_domain::TurnId::new(),
+                agena_domain::AssistantReplyId::new(),
+            )
+            .await
+            .expect("execution");
+        let execution_id = permit.control().execution_id();
+        assert!(registry.is_active(5).await);
+        // Dropping the permit is the whole release protocol: no explicit
+        // unregister call exists, so a task that panics past its join (or is
+        // aborted) cannot leave the slot occupied and make recovery read dead
+        // work as live.
+        drop(permit);
+        assert!(!registry.is_active(5).await);
+        assert!(registry.execution_control(5, None).await.is_none());
+        assert!(registry.cancellation_token(5).await.is_none());
+        let (replacement, _) = registry
+            .register(
+                5,
+                agena_domain::TurnId::new(),
+                agena_domain::AssistantReplyId::new(),
+            )
+            .await
+            .expect("the released slot accepts a replacement");
+        assert_ne!(replacement.control().execution_id(), execution_id);
     }
 
     #[tokio::test]
@@ -665,7 +771,7 @@ mod tests {
     #[tokio::test]
     async fn wait_until_cancelled_released_fails_while_execution_active() {
         let registry = ExecutionRegistry::<()>::new();
-        let (control, _) = registry
+        let (permit, _) = registry
             .register(
                 7,
                 agena_domain::TurnId::new(),
@@ -679,13 +785,13 @@ mod tests {
                 .await,
             Err(ExecutionControlError::AlreadyActive(7))
         ));
-        registry.unregister_if_matches(7, &control).await;
+        drop(permit);
     }
 
     #[tokio::test]
     async fn wait_until_cancelled_released_waits_for_cancelling_execution_to_unregister() {
         let registry = Arc::new(ExecutionRegistry::<()>::new());
-        let (control, _) = registry
+        let (permit, _) = registry
             .register(
                 9,
                 agena_domain::TurnId::new(),
@@ -694,15 +800,11 @@ mod tests {
             .await
             .expect("execution");
         registry.cancel_current(9).await.expect("cancel");
-        assert!(control.cancel.is_cancelled());
+        assert!(permit.control().cancel.is_cancelled());
 
-        let worker_registry = Arc::clone(&registry);
-        let worker_control = Arc::clone(&control);
         tokio::spawn(async move {
             tokio::time::sleep(Duration::from_millis(30)).await;
-            worker_registry
-                .unregister_if_matches(9, &worker_control)
-                .await;
+            drop(permit);
         });
 
         registry

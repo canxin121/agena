@@ -1,5 +1,5 @@
 //! Tests for the SQLite persistence engine: the same invariants the in-memory
-//! engine enforces (lease write-ownership, steal-abort atomicity, shared-part
+//! engine enforces (reconcile restart-recovery, shared-part
 //! read/append-only, retry, idempotency, GC refcount guard, JSONL round-trip,
 //! usage grouping) exercised against the real database, plus cross-process
 //! concurrency tests (gate 5): two connection pools over one file model the
@@ -12,10 +12,9 @@ use agena_storage::{
     WorkspaceRepository,
     store::{
         BackgroundDeliveryPhase, BackgroundEventRequest, BackgroundOperationKind,
-        BackgroundOperationPhase, BackgroundOperationTransition, LeaseAcquire,
-        NewBackgroundOperation, NewPart, NewSession, PartDelta, PartRole, PartState,
-        PartVisibility, PersistenceEngine, RunOutcome, SessionFacade, SessionListQuery,
-        SessionMetadataPatch, SessionStore, SessionView,
+        BackgroundOperationPhase, BackgroundOperationTransition, NewBackgroundOperation, NewPart,
+        NewSession, PartDelta, PartRole, PartState, PartVisibility, PersistenceEngine, RunOutcome,
+        SessionFacade, SessionListQuery, SessionMetadataPatch, SessionStore, SessionView,
     },
 };
 use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
@@ -25,8 +24,7 @@ use crate::{SeaWorkspaceRepository, SqliteEngine, initialize_schema};
 
 mod part_integrity;
 
-/// A workspace-scoped engine with a ready session that already holds a fresh
-/// lease under `owner-a` at `now_ms = 1_000_000`.
+/// A workspace-scoped engine with a ready session at `now_ms = 1_000_000`.
 async fn setup(db: Arc<sea_orm::DatabaseConnection>) -> (SqliteEngine, i64) {
     initialize_schema(&db).await.expect("schema");
     let workspace_id = SeaWorkspaceRepository::new(db.clone())
@@ -47,15 +45,7 @@ async fn setup(db: Arc<sea_orm::DatabaseConnection>) -> (SqliteEngine, i64) {
         })
         .await
         .expect("create session");
-    let session_id = meta.id;
-    let acquire = engine
-        .try_acquire_lease(session_id, "owner-a", 1_000_000)
-        .await
-        .expect("acquire lease");
-    assert!(
-        matches!(acquire, LeaseAcquire::Acquired { reconciled_runs, .. } if reconciled_runs.is_empty())
-    );
-    (engine, session_id)
+    (engine, meta.id)
 }
 
 async fn in_memory_db() -> Arc<sea_orm::DatabaseConnection> {
@@ -105,13 +95,7 @@ fn completed_text_part(text: &str) -> NewPart {
 
 async fn submit_hello(engine: &SqliteEngine, session_id: i64) -> (i64, SessionView) {
     let outcome = engine
-        .submit_user_run(
-            session_id,
-            "owner-a",
-            vec![text_part("hello")],
-            None,
-            1_000_000,
-        )
+        .submit_user_run(session_id, vec![text_part("hello")], None, 1_000_000)
         .await
         .expect("submit");
     let view = engine.load_session(session_id).await.expect("load");
@@ -139,13 +123,12 @@ async fn user_send_creates_marker_and_parts_with_membership() {
 }
 
 #[tokio::test]
-async fn execution_aware_user_send_is_withdrawable_and_replay_keeps_original_owner() {
+async fn execution_aware_user_send_is_withdrawable_and_replay_keeps_original_execution() {
     let db = in_memory_db().await;
     let (engine, session_id) = setup(db).await;
     let first = engine
         .submit_user_run_for_execution(
             session_id,
-            "owner-a",
             vec![text_part("first")],
             Some("key-execution".to_owned()),
             "execution-a",
@@ -162,7 +145,6 @@ async fn execution_aware_user_send_is_withdrawable_and_replay_keeps_original_own
     let replay = engine
         .submit_user_run_for_execution(
             session_id,
-            "owner-a",
             vec![text_part("replay")],
             Some("key-execution".to_owned()),
             "execution-b",
@@ -183,7 +165,7 @@ async fn execution_aware_user_send_is_withdrawable_and_replay_keeps_original_own
     );
 
     let removed = engine
-        .withdraw_user_run(session_id, "owner-a", first.run_id, 1_000_000)
+        .withdraw_user_run(session_id, first.run_id, 1_000_000)
         .await
         .expect("withdraw");
     assert_eq!(removed.len(), 2);
@@ -197,7 +179,7 @@ async fn execution_aware_user_send_is_withdrawable_and_replay_keeps_original_own
     );
     assert!(
         engine
-            .withdraw_user_run(session_id, "owner-a", first.run_id, 1_000_000)
+            .withdraw_user_run(session_id, first.run_id, 1_000_000)
             .await
             .expect("repeat withdraw")
             .is_empty()
@@ -243,7 +225,6 @@ async fn completed_user_send_is_a_terminal_input_receipt_not_a_liveness_guard() 
     let outcome = engine
         .submit_user_run(
             session_id,
-            "owner-a",
             vec![completed_text_part("already committed")],
             None,
             1_000_000,
@@ -270,7 +251,7 @@ async fn semantic_checkpoint_flushes_a_buffered_part_before_companion_append() {
     let db = in_memory_db().await;
     let (engine, session_id) = setup(db).await;
     let durable_probe = engine.clone();
-    let facade = SessionFacade::new(engine, "owner-a", 16)
+    let facade = SessionFacade::new(engine, 16)
         // Keep the synthetic InProgress content update buffered until the
         // background transaction explicitly checkpoints it.
         .with_streaming_flush_delta_count(64);
@@ -282,7 +263,7 @@ async fn semantic_checkpoint_flushes_a_buffered_part_before_companion_append() {
     );
     tool.state = PartState::InProgress;
     let launched = facade
-        .submit_user_run(session_id, "owner-a", vec![tool], None)
+        .submit_user_run(session_id, vec![tool], None)
         .await
         .expect("submit launching run");
     let run_id = launched.run_id;
@@ -302,7 +283,6 @@ async fn semantic_checkpoint_flushes_a_buffered_part_before_companion_append() {
     facade
         .update_part(
             session_id,
-            "owner-a",
             tool_part_id,
             PartDelta {
                 state: Some(PartState::InProgress),
@@ -337,7 +317,6 @@ async fn semantic_checkpoint_flushes_a_buffered_part_before_companion_append() {
     facade
         .settle_background_run(
             session_id,
-            "owner-a",
             run_id,
             Some((tool_part_id, PartState::InProgress, marker_content.clone())),
             vec![guard],
@@ -383,7 +362,6 @@ async fn background_events_are_atomic_idempotent_and_safe_under_out_of_order_con
     let launched = engine
         .start_run(
             session_id,
-            "owner-a",
             "continue",
             json!({"run_kind": "continue", "abort_reason": null}),
             None,
@@ -394,7 +372,6 @@ async fn background_events_are_atomic_idempotent_and_safe_under_out_of_order_con
     let launched_parts = engine
         .append_parts(
             session_id,
-            "owner-a",
             launched.run_id,
             vec![NewPart::pending(
                 "tool_call",
@@ -672,65 +649,36 @@ async fn background_delivery_claim_is_exclusive_expirable_and_retryable() {
 }
 
 #[tokio::test]
-async fn writes_without_a_fresh_lease_are_refused() {
+async fn writes_land_on_the_named_session_only() {
     let db = in_memory_db().await;
     let (engine, session_id) = setup(db).await;
-
-    // A different owner is refused outright.
-    let held = engine
-        .submit_user_run(
-            session_id,
-            "owner-b",
-            vec![text_part("nope")],
-            None,
-            1_000_000,
-        )
+    let outcome = engine
+        .submit_user_run(session_id, vec![text_part("hello")], None, 1_000_000)
         .await
-        .expect_err("other owner cannot write");
-    assert!(matches!(
-        held,
-        agena_storage::store::StoreError::LeaseHeldByOther { .. }
-    ));
-
-    // Releasing the lease makes the original owner a non-holder too.
-    assert!(
-        engine
-            .release_lease(session_id, "owner-a")
-            .await
-            .expect("release")
-    );
-    let missing = engine
-        .submit_user_run(
-            session_id,
-            "owner-a",
-            vec![text_part("nope")],
-            None,
-            1_000_000,
-        )
-        .await
-        .expect_err("no lease");
-    assert!(matches!(
-        missing,
-        agena_storage::store::StoreError::LeaseNotHeld { .. }
-    ));
+        .expect("submit");
+    assert!(outcome.created);
+    let view = engine.load_session(session_id).await.expect("load");
+    assert_eq!(view.parts.len(), 2);
+    assert!(view.parts[0].is_run_marker());
 }
 
 #[tokio::test]
-async fn lease_steal_aborts_stale_run_atomically() {
+async fn reconcile_aborts_the_orphaned_run_atomically() {
     let db = in_memory_db().await;
     let (engine, session_id) = setup(db).await;
     let (run_id, _view) = submit_hello(&engine, session_id).await;
 
-    // The original owner goes quiet past the staleness threshold; a new owner
-    // steals the lease and the residual run is aborted in the same transaction.
-    let acquire = engine
-        .try_acquire_lease(session_id, "owner-b", 1_000_000 + 60_000)
+    // A restart leaves an ownerless in-flight run: the recovering process
+    // terminalizes it (17.4) before it serves a read.
+    let run_ids = engine
+        .in_flight_run_ids(session_id)
         .await
-        .expect("steal stale lease");
-    assert!(matches!(
-        acquire,
-        LeaseAcquire::Acquired { reconciled_runs, .. } if reconciled_runs == vec![run_id]
-    ));
+        .expect("read in-flight runs");
+    let outcome = engine
+        .reconcile(session_id, &run_ids, 1_000_000 + 60_000)
+        .await
+        .expect("reconcile");
+    assert_eq!(outcome.aborted_runs, vec![run_id]);
 
     let view = engine.load_session(session_id).await.expect("load");
     let marker = view
@@ -739,7 +687,7 @@ async fn lease_steal_aborts_stale_run_atomically() {
         .find(|part| part.is_run_marker())
         .expect("marker");
     assert_eq!(marker.state, PartState::Failed);
-    assert_eq!(marker.content["abort_reason"], "lease_stolen");
+    assert_eq!(marker.content["abort_reason"], "process_restart");
     // The child of the aborted run is cancelled.
     let text = view
         .parts
@@ -776,15 +724,10 @@ async fn fork_copies_edges_up_to_cutoff_and_child_reads_shared_prefix() {
     assert_eq!(early_view.parts[0].part_id, marker_id);
 
     // Shared parts are read/append-only: the child cannot update a part its
-    // parent created (8.4). The child holds a fresh lease before it tries.
-    engine
-        .try_acquire_lease(child.id, "owner-a", 1_000_000)
-        .await
-        .expect("child acquires lease");
+    // parent created (8.4).
     let error = engine
         .update_part(
             child.id,
-            "owner-a",
             text_id,
             agena_storage::store::PartDelta {
                 state: Some(PartState::Completed),
@@ -807,7 +750,6 @@ async fn fork_during_streaming_shares_parent_updates_and_child_diverges_by_appen
     let outcome = engine
         .submit_user_run(
             session_id,
-            "owner-a",
             vec![NewPart {
                 kind: "text".to_owned(),
                 role: PartRole::Assistant,
@@ -835,15 +777,10 @@ async fn fork_during_streaming_shares_parent_updates_and_child_diverges_by_appen
         )
         .await
         .expect("fork while parent part is in progress");
-    engine
-        .try_acquire_lease(child.id, "owner-child", 1_000_000)
-        .await
-        .expect("child acquires independent lease");
 
     engine
         .update_part(
             session_id,
-            "owner-a",
             streamed_id,
             agena_storage::store::PartDelta {
                 state: Some(PartState::Completed),
@@ -866,7 +803,6 @@ async fn fork_during_streaming_shares_parent_updates_and_child_diverges_by_appen
     let mutation_error = engine
         .update_part(
             child.id,
-            "owner-child",
             streamed_id,
             agena_storage::store::PartDelta {
                 content: Some(json!({"text": "child overwrite"})),
@@ -884,7 +820,6 @@ async fn fork_during_streaming_shares_parent_updates_and_child_diverges_by_appen
     let divergence = engine
         .append_parts(
             child.id,
-            "owner-child",
             run_id,
             vec![NewPart::pending(
                 "text",
@@ -918,7 +853,6 @@ async fn retry_transitions_failed_to_in_progress_with_revision_bump_but_not_for_
     let outcome = engine
         .submit_user_run(
             session_id,
-            "owner-a",
             vec![NewPart {
                 kind: "tool_call".to_owned(),
                 role: PartRole::Assistant,
@@ -941,7 +875,6 @@ async fn retry_transitions_failed_to_in_progress_with_revision_bump_but_not_for_
     let failed = engine
         .update_part(
             session_id,
-            "owner-a",
             text_id,
             agena_storage::store::PartDelta {
                 state: Some(PartState::Failed),
@@ -955,7 +888,6 @@ async fn retry_transitions_failed_to_in_progress_with_revision_bump_but_not_for_
     let retried = engine
         .update_part(
             session_id,
-            "owner-a",
             text_id,
             agena_storage::store::PartDelta {
                 state: Some(PartState::InProgress),
@@ -975,7 +907,6 @@ async fn retry_transitions_failed_to_in_progress_with_revision_bump_but_not_for_
     engine
         .complete_run(
             session_id,
-            "owner-a",
             run_id,
             RunOutcome {
                 status: PartState::Failed,
@@ -990,7 +921,6 @@ async fn retry_transitions_failed_to_in_progress_with_revision_bump_but_not_for_
     let error = engine
         .update_part(
             session_id,
-            "owner-a",
             run_id,
             agena_storage::store::PartDelta {
                 state: Some(PartState::InProgress),
@@ -1013,7 +943,6 @@ async fn retry_history_keeps_the_error_beside_the_updated_tool_call_result() {
     let outcome = engine
         .submit_user_run(
             session_id,
-            "owner-a",
             vec![NewPart {
                 kind: "tool_call".to_owned(),
                 role: PartRole::Assistant,
@@ -1034,7 +963,6 @@ async fn retry_history_keeps_the_error_beside_the_updated_tool_call_result() {
     engine
         .update_part(
             session_id,
-            "owner-a",
             tool_id,
             agena_storage::store::PartDelta {
                 state: Some(PartState::Failed),
@@ -1047,7 +975,6 @@ async fn retry_history_keeps_the_error_beside_the_updated_tool_call_result() {
     engine
         .append_parts(
             session_id,
-            "owner-a",
             run_id,
             vec![NewPart {
                 kind: "error".to_owned(),
@@ -1070,7 +997,6 @@ async fn retry_history_keeps_the_error_beside_the_updated_tool_call_result() {
     let retried = engine
         .update_part(
             session_id,
-            "owner-a",
             tool_id,
             agena_storage::store::PartDelta {
                 state: Some(PartState::InProgress),
@@ -1085,7 +1011,6 @@ async fn retry_history_keeps_the_error_beside_the_updated_tool_call_result() {
     engine
         .update_part(
             session_id,
-            "owner-a",
             tool_id,
             agena_storage::store::PartDelta {
                 state: Some(PartState::Completed),
@@ -1104,7 +1029,6 @@ async fn retry_history_keeps_the_error_beside_the_updated_tool_call_result() {
     engine
         .complete_run(
             session_id,
-            "owner-a",
             run_id,
             RunOutcome {
                 status: PartState::Completed,
@@ -1155,7 +1079,6 @@ async fn idempotency_key_deduplicates_user_send() {
     let first = engine
         .submit_user_run(
             session_id,
-            "owner-a",
             vec![text_part("once")],
             Some("key-1".to_owned()),
             1_000_000,
@@ -1167,7 +1090,6 @@ async fn idempotency_key_deduplicates_user_send() {
     let replay = engine
         .submit_user_run(
             session_id,
-            "owner-a",
             vec![text_part("once")],
             Some("key-1".to_owned()),
             1_000_000,
@@ -1195,7 +1117,6 @@ async fn gc_deletes_only_refcount_orphans() {
     engine
         .complete_run(
             session_id,
-            "owner-a",
             run_id,
             RunOutcome {
                 status: PartState::Completed,
@@ -1211,7 +1132,6 @@ async fn gc_deletes_only_refcount_orphans() {
     // Delete the session: membership edges cascade, parts become orphans.
     engine.delete_session(session_id).await.expect("delete");
     let outcome = engine.maintenance(1_000_002).await.expect("maintenance");
-    assert!(outcome.reaped_sessions.is_empty());
     assert_eq!(outcome.gc_deleted_parts, 2, "marker + text both GC'd");
 
     let view = engine.load_session(session_id).await;
@@ -1222,12 +1142,11 @@ async fn gc_deletes_only_refcount_orphans() {
 }
 
 #[tokio::test]
-async fn resume_mid_stream_without_a_lease_reconciles_to_ready() {
+async fn resume_mid_stream_reconciles_to_ready() {
     let db = in_memory_db().await;
     let (engine, session_id) = setup(db).await;
     let facade = SessionFacade::with_clock(
         engine.clone(),
-        "owner-a",
         agena_storage::store::MemoryLayer::new(8),
         agena_storage::store::NotificationBus::new(),
         || 1_000_000,
@@ -1235,7 +1154,6 @@ async fn resume_mid_stream_without_a_lease_reconciles_to_ready() {
     let run_id = engine
         .submit_user_run(
             session_id,
-            "owner-a",
             vec![NewPart {
                 kind: "text".to_owned(),
                 role: PartRole::Assistant,
@@ -1251,33 +1169,30 @@ async fn resume_mid_stream_without_a_lease_reconciles_to_ready() {
         .await
         .expect("start stream")
         .run_id;
-    assert!(
-        engine
-            .release_lease(session_id, "owner-a")
-            .await
-            .expect("release lease")
-    );
 
-    let interrupted = facade
+    // A leftover in-flight run is durable work, not a stale lock: time alone
+    // never changes it.
+    let running = facade
         .session_state(session_id)
         .await
-        .expect("derive interrupted");
-    assert_eq!(
-        interrupted.state,
-        agena_storage::store::SessionState::Interrupted
-    );
+        .expect("derive running");
+    assert_eq!(running.state, agena_storage::store::SessionState::Running);
     assert_eq!(
         facade
             .session_states(&[session_id])
             .await
-            .expect("derive interrupted overview state")
+            .expect("derive running overview state")
             .get(&session_id),
-        Some(&agena_storage::store::SessionState::Interrupted)
+        Some(&agena_storage::store::SessionState::Running)
     );
-    facade
-        .reconcile(session_id)
+    let run_ids = facade
+        .in_flight_run_ids(session_id)
         .await
-        .expect("reconcile interrupted stream");
+        .expect("read orphaned stream runs");
+    facade
+        .reconcile(session_id, &run_ids)
+        .await
+        .expect("reconcile orphaned stream");
     let ready = facade
         .session_state(session_id)
         .await
@@ -1313,12 +1228,11 @@ async fn resume_mid_stream_without_a_lease_reconciles_to_ready() {
 }
 
 #[tokio::test]
-async fn resume_mid_ask_without_a_lease_remains_awaiting_interaction() {
+async fn resume_mid_ask_remains_awaiting_interaction() {
     let db = in_memory_db().await;
     let (engine, session_id) = setup(db).await;
     let facade = SessionFacade::with_clock(
         engine.clone(),
-        "owner-a",
         agena_storage::store::MemoryLayer::new(8),
         agena_storage::store::NotificationBus::new(),
         || 1_000_000,
@@ -1326,19 +1240,12 @@ async fn resume_mid_ask_without_a_lease_remains_awaiting_interaction() {
     let outcome = engine
         .submit_user_run(
             session_id,
-            "owner-a",
             vec![pending_tool_call("Continue?", "ask_user")],
             None,
             1_000_000,
         )
         .await
         .expect("pause run on interaction");
-    assert!(
-        engine
-            .release_lease(session_id, "owner-a")
-            .await
-            .expect("release lease")
-    );
 
     let awaiting = facade
         .session_state(session_id)
@@ -1385,7 +1292,6 @@ async fn resume_mid_tool_preserves_error_context_and_cancels_the_tool() {
     let (engine, session_id) = setup(db).await;
     let facade = SessionFacade::with_clock(
         engine.clone(),
-        "owner-a",
         agena_storage::store::MemoryLayer::new(8),
         agena_storage::store::NotificationBus::new(),
         || 1_000_000,
@@ -1393,7 +1299,6 @@ async fn resume_mid_tool_preserves_error_context_and_cancels_the_tool() {
     let outcome = engine
         .submit_user_run(
             session_id,
-            "owner-a",
             vec![NewPart {
                 kind: "tool_call".to_owned(),
                 role: PartRole::Assistant,
@@ -1412,7 +1317,6 @@ async fn resume_mid_tool_preserves_error_context_and_cancels_the_tool() {
     engine
         .append_parts(
             session_id,
-            "owner-a",
             outcome.run_id,
             vec![NewPart {
                 kind: "error".to_owned(),
@@ -1430,22 +1334,20 @@ async fn resume_mid_tool_preserves_error_context_and_cancels_the_tool() {
         )
         .await
         .expect("append durable diagnostic");
-    assert!(
-        engine
-            .release_lease(session_id, "owner-a")
-            .await
-            .expect("release lease")
-    );
     assert_eq!(
         facade
             .session_state(session_id)
             .await
-            .expect("derive interrupted tool")
+            .expect("derive running tool")
             .state,
-        agena_storage::store::SessionState::Interrupted
+        agena_storage::store::SessionState::Running
     );
+    let run_ids = facade
+        .in_flight_run_ids(session_id)
+        .await
+        .expect("read tool run ids");
     facade
-        .reconcile(session_id)
+        .reconcile(session_id, &run_ids)
         .await
         .expect("reconcile tool run");
     let view = facade
@@ -1483,7 +1385,6 @@ async fn jsonl_round_trip_preserves_single_source_tool_output_and_ordering() {
     let outcome = engine
         .submit_user_run(
             session_id,
-            "owner-a",
             vec![NewPart {
                 kind: "tool_call".to_owned(),
                 role: PartRole::Assistant,
@@ -1502,7 +1403,6 @@ async fn jsonl_round_trip_preserves_single_source_tool_output_and_ordering() {
     engine
         .update_part(
             session_id,
-            "owner-a",
             tool_id,
             agena_storage::store::PartDelta {
                 state: Some(PartState::Completed),
@@ -1522,7 +1422,6 @@ async fn jsonl_round_trip_preserves_single_source_tool_output_and_ordering() {
     engine
         .complete_run(
             session_id,
-            "owner-a",
             outcome.run_id,
             RunOutcome {
                 status: PartState::Completed,
@@ -1761,13 +1660,13 @@ async fn connect_file(tempdir: &tempfile::TempDir, name: &str) -> Arc<sea_orm::D
     )
 }
 
-/// Two independent connection pools over one file model the multi-process
-/// deployment: process A holds the lease, goes silent past staleness, and
-/// process B steals it — the residual run is aborted atomically (gate 5).
+/// Two independent connection pools over one file model the successor of a
+/// crashed process: A dies mid-run, B owns the directory and terminalizes the
+/// orphan it inherited before serving a read (gate 5).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn lease_steal_aborts_stale_run_across_processes() {
+async fn restart_recovery_terminalizes_the_orphaned_run_across_processes() {
     let directory = tempfile::tempdir().expect("temp directory");
-    let db_a = connect_file(&directory, "steal.db").await;
+    let db_a = connect_file(&directory, "restart.db").await;
     initialize_schema(&db_a).await.expect("schema");
     let engine_a = SqliteEngine::new(db_a.clone());
 
@@ -1790,40 +1689,30 @@ async fn lease_steal_aborts_stale_run_across_processes() {
         .expect("create session");
     let session_id = meta.id;
 
-    let acquire = engine_a
-        .try_acquire_lease(session_id, "proc-a", 1_000_000)
-        .await
-        .expect("proc-a acquires");
-    assert!(matches!(
-        acquire,
-        LeaseAcquire::Acquired { reconciled_runs, .. } if reconciled_runs.is_empty()
-    ));
+    // Process A dies mid-run, leaving an ownerless in-flight run behind.
     let run_id = engine_a
-        .submit_user_run(
-            session_id,
-            "proc-a",
-            vec![text_part("hello")],
-            None,
-            1_000_000,
-        )
+        .submit_user_run(session_id, vec![text_part("hello")], None, 1_000_000)
         .await
         .expect("proc-a submits")
         .run_id;
 
-    // Process B (a separate connection pool) steals after proc-a's lease
-    // goes stale.
-    let db_b = connect_file(&directory, "steal.db").await;
+    // Process B (a separate connection pool) owns the data directory now; its
+    // startup recovery terminalizes the orphan before it serves a read.
+    let db_b = connect_file(&directory, "restart.db").await;
     let engine_b = SqliteEngine::new(db_b);
-    let acquire = engine_b
-        .try_acquire_lease(session_id, "proc-b", 1_000_000 + 60_000)
+    let run_ids = engine_b
+        .in_flight_run_ids(session_id)
         .await
-        .expect("proc-b steals");
-    assert!(matches!(
-        acquire,
-        LeaseAcquire::Acquired { reconciled_runs, .. } if reconciled_runs == vec![run_id]
-    ));
+        .expect("proc-b discovers the orphaned run");
+    // Process B holds an empty execution registry, so it claims nothing and
+    // every in-flight marker it can see is abandoned work (17.4).
+    let outcome = engine_b
+        .reconcile(session_id, &run_ids, 1_000_000 + 60_000)
+        .await
+        .expect("proc-b recovers");
+    assert_eq!(outcome.aborted_runs, vec![run_id]);
 
-    // Process A (now a reader) sees the aborted run.
+    // Process A (now a reader) sees the terminal row.
     let view = engine_a.load_session(session_id).await.expect("load via A");
     let marker = view
         .parts
@@ -1831,7 +1720,7 @@ async fn lease_steal_aborts_stale_run_across_processes() {
         .find(|part| part.is_run_marker())
         .expect("marker");
     assert_eq!(marker.state, PartState::Failed);
-    assert_eq!(marker.content["abort_reason"], "lease_stolen");
+    assert_eq!(marker.content["abort_reason"], "process_restart");
     let text = view
         .parts
         .iter()
@@ -1851,7 +1740,7 @@ async fn facade_cross_process_cache_invalidation() {
     let db_a = connect_file(&directory, "facade.db").await;
     initialize_schema(&db_a).await.expect("schema");
     let engine_a = SqliteEngine::new(db_a.clone());
-    let facade_a = SessionFacade::new(engine_a, "owner-a", 16);
+    let facade_a = SessionFacade::new(engine_a, 16);
 
     let workspace_id = SeaWorkspaceRepository::new(db_a.clone())
         .ensure_id("/f/ws")
@@ -1874,7 +1763,6 @@ async fn facade_cross_process_cache_invalidation() {
     facade_a
         .submit_user_run(
             session_id,
-            "owner-a",
             vec![NewPart::pending(
                 "text",
                 PartRole::User,
@@ -1891,12 +1779,11 @@ async fn facade_cross_process_cache_invalidation() {
 
     // Process B (fresh connection) appends a part through its own facade.
     let db_b = connect_file(&directory, "facade.db").await;
-    let facade_b = SessionFacade::new(SqliteEngine::new(db_b), "owner-a", 16);
+    let facade_b = SessionFacade::new(SqliteEngine::new(db_b), 16);
     let run_id = cached.parts[0].part_id;
     facade_b
         .append_parts(
             session_id,
-            "owner-a",
             run_id,
             vec![NewPart::pending(
                 "text",
@@ -1930,7 +1817,6 @@ async fn facade_cross_process_cache_invalidation() {
     facade_b
         .update_part(
             session_id,
-            "owner-a",
             updated_part_id,
             agena_storage::store::PartDelta {
                 state: Some(PartState::InProgress),
@@ -1964,7 +1850,6 @@ async fn facade_cross_process_cache_invalidation() {
     facade_b
         .complete_run(
             session_id,
-            "owner-a",
             run_id,
             RunOutcome {
                 status: PartState::Completed,
@@ -1989,7 +1874,6 @@ async fn every_sqlite_part_mutation_bumps_version_but_idempotency_replay_does_no
     let submitted = engine
         .submit_user_run(
             session_id,
-            "owner-a",
             vec![text_part("hello")],
             Some("send-1".to_owned()),
             1_000_000,
@@ -2000,7 +1884,6 @@ async fn every_sqlite_part_mutation_bumps_version_but_idempotency_replay_does_no
     let replay = engine
         .submit_user_run(
             session_id,
-            "owner-a",
             vec![text_part("ignored")],
             Some("send-1".to_owned()),
             1_000_001,
@@ -2013,7 +1896,6 @@ async fn every_sqlite_part_mutation_bumps_version_but_idempotency_replay_does_no
     let appended = engine
         .append_parts(
             session_id,
-            "owner-a",
             submitted.run_id,
             vec![NewPart::pending(
                 "text",
@@ -2029,7 +1911,6 @@ async fn every_sqlite_part_mutation_bumps_version_but_idempotency_replay_does_no
     engine
         .update_part(
             session_id,
-            "owner-a",
             appended[0].part_id,
             PartDelta {
                 state: Some(PartState::InProgress),
@@ -2044,7 +1925,6 @@ async fn every_sqlite_part_mutation_bumps_version_but_idempotency_replay_does_no
     engine
         .update_part(
             session_id,
-            "owner-a",
             appended[0].part_id,
             PartDelta {
                 summary: Some("updated".to_owned()),
@@ -2059,7 +1939,6 @@ async fn every_sqlite_part_mutation_bumps_version_but_idempotency_replay_does_no
     engine
         .complete_run(
             session_id,
-            "owner-a",
             submitted.run_id,
             RunOutcome {
                 status: PartState::Completed,
@@ -2074,41 +1953,27 @@ async fn every_sqlite_part_mutation_bumps_version_but_idempotency_replay_does_no
     assert_eq!(engine.session_meta(session_id).await.unwrap().version, 6);
 
     let cancelled = engine
-        .start_run(
-            session_id,
-            "owner-a",
-            "continue",
-            json!({}),
-            None,
-            1_000_006,
-        )
+        .start_run(session_id, "continue", json!({}), None, 1_000_006)
         .await
         .expect("start cancel run");
     assert_eq!(engine.session_meta(session_id).await.unwrap().version, 7);
     engine
-        .cancel_run(session_id, "owner-a", cancelled.run_id, 1_000_007)
+        .cancel_run(session_id, cancelled.run_id, 1_000_007)
         .await
         .expect("cancel");
     assert_eq!(engine.session_meta(session_id).await.unwrap().version, 8);
 
     engine
-        .start_run(
-            session_id,
-            "owner-a",
-            "continue",
-            json!({}),
-            None,
-            1_000_008,
-        )
+        .start_run(session_id, "continue", json!({}), None, 1_000_008)
         .await
         .expect("start interrupted run");
     assert_eq!(engine.session_meta(session_id).await.unwrap().version, 9);
-    engine
-        .release_lease(session_id, "owner-a")
+    let run_ids = engine
+        .in_flight_run_ids(session_id)
         .await
-        .expect("release");
+        .expect("read in-flight runs");
     engine
-        .reconcile(session_id, 1_000_009)
+        .reconcile(session_id, &run_ids, 1_000_009)
         .await
         .expect("reconcile");
     assert_eq!(engine.session_meta(session_id).await.unwrap().version, 10);
@@ -2156,18 +2021,8 @@ async fn second_process_reads_committed_parts() {
         .await
         .expect("create session");
     let session_id = meta.id;
-    engine_a
-        .try_acquire_lease(session_id, "proc-a", 1_000_000)
-        .await
-        .expect("acquire");
     let run_id = engine_a
-        .submit_user_run(
-            session_id,
-            "proc-a",
-            vec![text_part("hello")],
-            None,
-            1_000_000,
-        )
+        .submit_user_run(session_id, vec![text_part("hello")], None, 1_000_000)
         .await
         .expect("submit")
         .run_id;

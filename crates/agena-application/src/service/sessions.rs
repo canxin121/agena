@@ -1,8 +1,8 @@
 use super::{
     ApplicationError, ApplicationResult, ApplicationService, PageOrder, PaginatedResponse,
-    SessionCreateRequest, SessionCursor, SessionLifecycleState, SessionRelationKind,
-    SessionResource, SessionState, SessionUpdateRequest, SubtaskStatus, build_page, decode_cursor,
-    execution_access_from_domain, non_empty, normalize_limit, timestamp_millis_to_utc, trim_page,
+    SessionCreateRequest, SessionCursor, SessionResource, SessionState, SessionUpdateRequest,
+    SubtaskStatus, build_page, decode_cursor, non_empty, normalize_limit, timestamp_millis_to_utc,
+    trim_page,
 };
 use agena_storage::store::SessionListQuery;
 
@@ -194,15 +194,15 @@ pub(crate) fn session_resource_from_summary(
         favorite: summary.favorite,
         pinned: summary.pinned,
         version: summary.version,
-        relation_kind: session_relation_kind_from_domain(summary.relation_kind),
-        lifecycle_state: session_lifecycle_state_from_domain(summary.lifecycle_state),
+        relation_kind: summary.relation_kind,
+        lifecycle_state: summary.lifecycle_state,
         state: session_state_from_lifecycle(summary.lifecycle_state),
         source_cutoff_seq_global: summary.source_cutoff_seq_global,
         source_message_id: summary.source_message_id,
         is_subagent: summary.relation_kind.is_subagent(),
         task_id: summary.task_id,
-        subtask_access: summary.subtask_access.map(execution_access_from_domain),
-        subtask_status: summary.subtask_status.map(subtask_status_from_domain),
+        subtask_access: summary.subtask_access,
+        subtask_status: summary.subtask_status,
         created_at: summary.created_at,
         updated_at: summary.updated_at,
         message_count: summary.message_count,
@@ -220,7 +220,6 @@ fn session_resource_from_storage_summary(
             .subtask_status
             .as_deref()
             .and_then(agena_domain::SubtaskStatus::parse)
-            .map(subtask_status_from_domain)
             .or(Some(SubtaskStatus::default()))
     } else {
         None
@@ -235,8 +234,8 @@ fn session_resource_from_storage_summary(
         favorite: summary.favorite,
         pinned: summary.pinned,
         version: summary.version,
-        relation_kind: session_relation_kind_from_domain(summary.relation_kind),
-        lifecycle_state: session_lifecycle_state_from_domain(summary.lifecycle_state),
+        relation_kind: summary.relation_kind,
+        lifecycle_state: summary.lifecycle_state,
         state: session_state_from_storage(state),
         source_cutoff_seq_global: None,
         source_message_id: None,
@@ -277,7 +276,6 @@ fn session_resource_from_storage_meta(
         meta.subtask_status
             .as_deref()
             .and_then(agena_domain::SubtaskStatus::parse)
-            .map(subtask_status_from_domain)
             .or(Some(SubtaskStatus::default()))
     } else {
         None
@@ -292,8 +290,8 @@ fn session_resource_from_storage_meta(
         favorite: meta.favorite,
         pinned: meta.pinned,
         version: meta.version,
-        relation_kind: session_relation_kind_from_domain(meta.relation_kind),
-        lifecycle_state: session_lifecycle_state_from_domain(meta.lifecycle_state),
+        relation_kind: meta.relation_kind,
+        lifecycle_state: meta.lifecycle_state,
         state: session_state_from_storage(state),
         source_cutoff_seq_global: None,
         source_message_id: None,
@@ -335,48 +333,7 @@ pub(crate) fn session_state_from_storage(
                 requests: Vec::new(),
             }
         }
-        agena_storage::store::SessionState::Interrupted => SessionState::Interrupted {
-            run_id: None,
-            reason: Some("lease_lost".to_owned()),
-            last_failure: None,
-        },
         agena_storage::store::SessionState::Failed => SessionState::Failed { failure: None },
-    }
-}
-
-pub(crate) const fn session_relation_kind_from_domain(
-    value: agena_domain::SessionRelationKind,
-) -> SessionRelationKind {
-    match value {
-        agena_domain::SessionRelationKind::Root => SessionRelationKind::Root,
-        agena_domain::SessionRelationKind::Child => SessionRelationKind::Child,
-        agena_domain::SessionRelationKind::Fork => SessionRelationKind::Fork,
-        agena_domain::SessionRelationKind::Rewind => SessionRelationKind::Rewind,
-        agena_domain::SessionRelationKind::Subagent => SessionRelationKind::Subagent,
-    }
-}
-
-pub(crate) const fn session_lifecycle_state_from_domain(
-    value: agena_domain::SessionLifecycleState,
-) -> SessionLifecycleState {
-    match value {
-        agena_domain::SessionLifecycleState::Creating => SessionLifecycleState::Creating,
-        agena_domain::SessionLifecycleState::Ready => SessionLifecycleState::Ready,
-        agena_domain::SessionLifecycleState::Failed => SessionLifecycleState::Failed,
-    }
-}
-
-pub(crate) const fn subtask_status_from_domain(
-    value: agena_domain::SubtaskStatus,
-) -> SubtaskStatus {
-    match value {
-        agena_domain::SubtaskStatus::Created => SubtaskStatus::Created,
-        agena_domain::SubtaskStatus::Running => SubtaskStatus::Running,
-        agena_domain::SubtaskStatus::Completed => SubtaskStatus::Completed,
-        agena_domain::SubtaskStatus::Failed => SubtaskStatus::Failed,
-        agena_domain::SubtaskStatus::Cancelled => SubtaskStatus::Cancelled,
-        agena_domain::SubtaskStatus::TimedOut => SubtaskStatus::TimedOut,
-        agena_domain::SubtaskStatus::Interrupted => SubtaskStatus::Interrupted,
     }
 }
 
@@ -406,8 +363,7 @@ mod tests {
             .await
             .expect("create test workspace");
         let engine = agena_storage_sqlite::SqliteEngine::new(Arc::clone(&db));
-        let facade: Arc<dyn SessionStore> =
-            Arc::new(SessionFacade::new(engine.clone(), "application-test", 64));
+        let facade: Arc<dyn SessionStore> = Arc::new(SessionFacade::new(engine.clone(), 64));
         let service = ApplicationService::new(
             "/test/workspace",
             Arc::new(agena_storage::MemoryStore::for_workspace(
@@ -461,7 +417,7 @@ mod tests {
         // Two runs over the parent session → message_count 2, last message at
         // the second run's timestamp.
         facade
-            .submit_user_run(session.id, "application-test", vec![marker_part()], None)
+            .submit_user_run(session.id, vec![marker_part()], None)
             .await
             .expect("first run");
         let first_run = facade
@@ -476,7 +432,6 @@ mod tests {
         facade
             .complete_run(
                 session.id,
-                "application-test",
                 first_run,
                 agena_storage::store::RunOutcome {
                     status: agena_storage::store::PartState::Completed,
@@ -488,7 +443,7 @@ mod tests {
             .await
             .expect("complete first run");
         facade
-            .submit_user_run(session.id, "application-test", vec![marker_part()], None)
+            .submit_user_run(session.id, vec![marker_part()], None)
             .await
             .expect("second run");
 
@@ -575,7 +530,10 @@ mod tests {
             .await
             .expect("create session");
         assert_eq!(created.title, "New session");
-        assert_eq!(created.lifecycle_state, SessionLifecycleState::Ready);
+        assert_eq!(
+            created.lifecycle_state,
+            agena_domain::SessionLifecycleState::Ready
+        );
 
         let renamed = service
             .replace_session(

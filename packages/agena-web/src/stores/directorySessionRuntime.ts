@@ -4,7 +4,6 @@ import {
   sessionStateIsBusy,
   sessionStateKind,
   sessionStateNeedsAttention,
-  sessionStateNeedsRecovery,
 } from '../types/chat'
 
 /**
@@ -68,10 +67,6 @@ export function sessionStateIsActive(snapshot?: SessionStateSnapshot | null): bo
 
 export function sessionStateHasAttention(snapshot?: SessionStateSnapshot | null): boolean {
   return sessionStateNeedsAttention(snapshot?.state)
-}
-
-export function sessionStateNeedsRecoveryOf(snapshot?: SessionStateSnapshot | null): boolean {
-  return sessionStateNeedsRecovery(snapshot?.state)
 }
 
 export function mergeSessionStateSnapshot(

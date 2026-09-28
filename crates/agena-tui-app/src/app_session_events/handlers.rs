@@ -876,8 +876,7 @@ fn session_state_priority(state: &agena_api::resource::SessionState) -> u8 {
     match state {
         agena_api::resource::SessionState::AwaitingInteraction { .. } => 5,
         agena_api::resource::SessionState::Running { .. } => 4,
-        agena_api::resource::SessionState::Interrupted { .. } => 3,
-        agena_api::resource::SessionState::Failed { .. } => 2,
+        agena_api::resource::SessionState::Failed { .. } => 3,
         agena_api::resource::SessionState::Creating => 1,
         agena_api::resource::SessionState::Ready { .. } => 0,
     }

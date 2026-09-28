@@ -278,8 +278,9 @@ impl App {
         {
             // The server's session state machine (`SessionResource.state`) is
             // the single authoritative source: it is derived from persisted
-            // run markers, pending interactions, and the execution lease, so
-            // it survives disconnects and needs no client-side tracking.
+            // run markers and pending interactions by the process that owns
+            // the data directory, so it survives disconnects and needs no
+            // client-side tracking.
             // Pending interactive asks refine *what* the awaiting is for — a
             // permission ask stays under SessionState::Running (permissions
             // are not user-input interactions), so it is surfaced here rather
@@ -298,11 +299,10 @@ impl App {
                 agena_api::resource::SessionState::AwaitingInteraction { .. } => {
                     return SessionActivity::AwaitingInteraction;
                 }
-                // Interrupted and failed are recovery/attention states, not
-                // active execution. They must never park a composer message
-                // behind a completion event that can no longer arrive.
-                agena_api::resource::SessionState::Interrupted { .. }
-                | agena_api::resource::SessionState::Failed { .. } => {
+                // A failed session is a recovery/attention state, not active
+                // execution. It must never park a composer message behind a
+                // completion event that can no longer arrive.
+                agena_api::resource::SessionState::Failed { .. } => {
                     return SessionActivity::NeedsRecovery;
                 }
                 agena_api::resource::SessionState::Ready { .. } => {}

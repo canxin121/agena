@@ -11,7 +11,7 @@
 //! * `session_parts` edges only reference real sessions and parts;
 //! * sessions keep their hierarchy, lifecycle, and version invariants;
 //! * subagent sessions carry the delegated-task lifecycle;
-//! * leases, usage, and idempotency rows are shape-valid and reference real
+//! * usage and idempotency rows are shape-valid and reference real
 //!   sessions/runs.
 
 use sea_orm::{ConnectionTrait, DbErr, Statement};
@@ -255,21 +255,6 @@ pub(crate) const INVARIANT_TRIGGERS: &[&str] = &[
            OR (NEW.subtask_started_at_ms IS NOT NULL AND NEW.subtask_started_at_ms < 0) \
            OR (NEW.subtask_finished_at_ms IS NOT NULL AND NEW.subtask_finished_at_ms < NEW.subtask_started_at_ms) \
          BEGIN SELECT RAISE(ABORT, 'invalid delegated-task lifecycle'); END",
-    // --- execution leases reference a real run and are shape-valid ---
-    "CREATE TRIGGER IF NOT EXISTS agena_execution_leases_shape_valid \
-         BEFORE INSERT ON agena_execution_leases \
-         WHEN NEW.lease_started_at_ms < 0 OR NEW.heartbeat_at_ms < NEW.lease_started_at_ms \
-           OR length(trim(NEW.owner_id)) = 0 \
-           OR (NEW.run_id IS NOT NULL AND NOT EXISTS ( \
-             SELECT 1 FROM agena_parts WHERE part_id = NEW.run_id AND kind = 'run' \
-           )) \
-         BEGIN SELECT RAISE(ABORT, 'invalid execution lease'); END",
-    "CREATE TRIGGER IF NOT EXISTS agena_execution_leases_run_reference_update \
-         BEFORE UPDATE OF run_id ON agena_execution_leases \
-         WHEN NEW.run_id IS NOT NULL AND NOT EXISTS ( \
-             SELECT 1 FROM agena_parts WHERE part_id = NEW.run_id AND kind = 'run' \
-         ) \
-         BEGIN SELECT RAISE(ABORT, 'execution lease run_id must reference a run marker'); END",
     // --- usage rows reference a real session (and workspace) plus an
     // optional run; token/cost scalars are normalized and non-negative ---
     "CREATE TRIGGER IF NOT EXISTS agena_usage_shape_valid \

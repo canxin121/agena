@@ -277,10 +277,10 @@ impl ApplicationService {
         include_parts: bool,
     ) -> ApplicationResult<SessionExecutionResource> {
         // Runtime execution_context is the public reconcile-on-open boundary:
-        // after a server restart it terminalizes a stale in-flight run before
-        // projecting workflow and transcript state. Run it before the direct
-        // storage resource read so one response cannot combine a reconciled
-        // transcript with the pre-reconcile `Interrupted` session row.
+        // after a server restart it terminalizes an abandoned in-flight run
+        // before projecting workflow and transcript state. Run it before the
+        // direct storage resource read so one response cannot combine a
+        // reconciled transcript with a pre-reconcile session row.
         let context = session_queries
             .execution_context(session_id)
             .await
@@ -309,7 +309,7 @@ impl ApplicationService {
                     phase,
                 } => Some(ActiveExecutionResource {
                     execution_id: execution_id.0,
-                    phase: execution_phase_from_domain(phase),
+                    phase,
                 }),
                 agena_domain::ExecutionLifecycle::Terminal { .. } => None,
             });
@@ -317,7 +317,7 @@ impl ApplicationService {
         let mut session_resource = session_resource;
         session_resource.state = session_resource.state.with_execution_snapshot(
             active_execution,
-            workflow_state_from_domain(context.workflow_state),
+            context.workflow_state,
             pending_interactive_requests,
         );
 
@@ -331,7 +331,7 @@ impl ApplicationService {
             background_activities: Vec::new(),
             execution: SessionExecutionContextResource {
                 agent_id: context.agent_id,
-                execution_access: execution_access_from_domain(context.execution_access),
+                execution_access: context.execution_access,
                 selected_permission: permission_config_resource_from_domain(
                     &context.selected_permission,
                 ),
@@ -350,7 +350,7 @@ impl ApplicationService {
                 model_parallel_tool_calls: context.model_parallel_tool_calls,
                 effective_workspace_root: context.effective_workspace_root,
                 task_id: context.task_id,
-                subtask_status: context.subtask_status.map(subtask_status_from_domain),
+                subtask_status: context.subtask_status,
                 subtask_started_at: context.subtask_started_at,
                 subtask_finished_at: context.subtask_finished_at,
                 subtask_failure: context.subtask_failure.map(Into::into),
@@ -398,39 +398,6 @@ async fn session_usage_resource(
         model_max_input_tokens: usage.model_max_input_tokens,
         model_max_output_tokens: usage.model_max_output_tokens,
     })
-}
-
-const fn execution_phase_from_domain(
-    value: agena_domain::ExecutionPhase,
-) -> agena_api::resource::ExecutionPhase {
-    match value {
-        agena_domain::ExecutionPhase::Starting => agena_api::resource::ExecutionPhase::Starting,
-        agena_domain::ExecutionPhase::PreparingModel => {
-            agena_api::resource::ExecutionPhase::PreparingModel
-        }
-        agena_domain::ExecutionPhase::StreamingModel => {
-            agena_api::resource::ExecutionPhase::StreamingModel
-        }
-        agena_domain::ExecutionPhase::ExecutingTools => {
-            agena_api::resource::ExecutionPhase::ExecutingTools
-        }
-        agena_domain::ExecutionPhase::AwaitingInteraction => {
-            agena_api::resource::ExecutionPhase::AwaitingInteraction
-        }
-        agena_domain::ExecutionPhase::Cancelling => agena_api::resource::ExecutionPhase::Cancelling,
-    }
-}
-
-const fn workflow_state_from_domain(
-    value: agena_domain::WorkflowState,
-) -> agena_api::resource::WorkflowState {
-    match value {
-        agena_domain::WorkflowState::Quiescent => agena_api::resource::WorkflowState::Quiescent,
-        agena_domain::WorkflowState::ToolPending => agena_api::resource::WorkflowState::ToolPending,
-        agena_domain::WorkflowState::AwaitingInteraction => {
-            agena_api::resource::WorkflowState::AwaitingInteraction
-        }
-    }
 }
 
 fn resolve_mode_request_override(
@@ -604,15 +571,6 @@ async fn session_transcript_parts(
 
 fn execution_control_error(error: agena_runtime::SessionExecutionControlError) -> ApplicationError {
     ApplicationError::from_failure(error.failure)
-}
-
-pub(crate) const fn execution_access_from_domain(
-    value: agena_domain::ExecutionAccess,
-) -> agena_api::resource::ExecutionAccess {
-    match value {
-        agena_domain::ExecutionAccess::Inherit => agena_api::resource::ExecutionAccess::Inherit,
-        agena_domain::ExecutionAccess::ReadOnly => agena_api::resource::ExecutionAccess::ReadOnly,
-    }
 }
 
 /// Shared runtime-to-wire projection for interactive requests. Both the
@@ -893,7 +851,7 @@ use super::{
     ModelRef, ModelSpeedModeRequestOverride, PendingInteractiveRequestResource,
     ScheduledJobResource, ScheduledJobRunResource, SessionAutomationResource,
     SessionExecutionContextResource, SessionExecutionResource, SessionRunOptionsRequest,
-    SessionUsageResource, non_empty, sessions::subtask_status_from_domain,
+    SessionUsageResource, non_empty,
 };
 use agena_provider::{ProviderCatalog, ProviderCatalogError};
 

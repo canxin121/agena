@@ -1,3 +1,4 @@
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use strum::{AsRefStr, Display, EnumString};
 
@@ -9,6 +10,7 @@ use strum::{AsRefStr, Display, EnumString};
     Copy,
     Serialize,
     Deserialize,
+    JsonSchema,
     Default,
     PartialEq,
     Eq,

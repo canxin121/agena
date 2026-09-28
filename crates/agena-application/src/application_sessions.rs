@@ -694,9 +694,8 @@ fn session_state_resource(
 
 fn session_attention_priority(state: &agena_api::resource::SessionState) -> u8 {
     match state {
-        agena_api::resource::SessionState::AwaitingInteraction { .. } => 2,
-        agena_api::resource::SessionState::Interrupted { .. } => 1,
         agena_api::resource::SessionState::Running { requests, .. } if !requests.is_empty() => 3,
+        agena_api::resource::SessionState::AwaitingInteraction { .. } => 2,
         _ => 0,
     }
 }

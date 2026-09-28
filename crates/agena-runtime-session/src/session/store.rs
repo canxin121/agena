@@ -1,6 +1,6 @@
 //! The parts-first data boundary for the session manager.
 //!
-//! The sealed [`agena_storage::SessionStore`] facade owns ids, leases, and
+//! The sealed [`agena_storage::SessionStore`] facade owns ids and
 //! transactions; parts are the only chat entity; there is no event log and no
 //! live `EventKind` plumbing.
 //!
@@ -44,9 +44,8 @@ use crate::session::Session;
 
 /// The facade-backed store adapter used by [`crate::SessionManager`].
 ///
-/// `owner_id` is the same process-wide execution identity passed to
-/// [`agena_storage::SessionFacade::new`]; every write routes through the
-/// facade's lease validation so the manager never touches leases itself.
+/// The facade is the only writer: this process owns the data directory, so a
+/// manager write needs no ownership handshake at all.
 ///
 /// The engine is the only id source, so freshly built in-memory parts carry a
 /// negative placeholder until the facade returns the real id. The adapter
@@ -55,29 +54,24 @@ use crate::session::Session;
 #[derive(Clone)]
 pub(crate) struct StoreAdapter {
     pub(crate) facade: Arc<dyn SessionStore>,
-    pub(crate) owner_id: String,
     now_ms: Arc<dyn Fn() -> i64 + Send + Sync>,
 }
 
 impl StoreAdapter {
     pub(crate) fn new(
         facade: Arc<dyn SessionStore>,
-        owner_id: String,
         now_ms: Arc<dyn Fn() -> i64 + Send + Sync>,
     ) -> Self {
-        Self {
-            facade,
-            owner_id,
-            now_ms,
-        }
+        Self { facade, now_ms }
     }
+
+    /// The claimant token stamped on background-operation claims. Exactly one
+    /// process owns a data directory, so this is a constant marker, not a
+    /// process identity.
+    pub(crate) const CLAIMANT: &'static str = "server";
 
     pub(crate) fn now_ms(&self) -> i64 {
         (self.now_ms)()
-    }
-
-    pub(crate) fn background_owner_id(&self) -> &str {
-        &self.owner_id
     }
 
     /// Load a session's transcript and metadata and rebuild the in-memory
@@ -218,7 +212,7 @@ impl StoreAdapter {
         idempotency_key: Option<String>,
     ) -> Result<SubmitOutcome, AppError> {
         self.facade
-            .submit_user_run(session_id, &self.owner_id, parts, idempotency_key)
+            .submit_user_run(session_id, parts, idempotency_key)
             .await
             .map_err(store_error)
     }
@@ -231,13 +225,7 @@ impl StoreAdapter {
         execution_id: &str,
     ) -> Result<SubmitOutcome, AppError> {
         self.facade
-            .submit_user_run_for_execution(
-                session_id,
-                &self.owner_id,
-                parts,
-                idempotency_key,
-                execution_id,
-            )
+            .submit_user_run_for_execution(session_id, parts, idempotency_key, execution_id)
             .await
             .map_err(store_error)
     }
@@ -304,13 +292,17 @@ impl StoreAdapter {
             .map_err(store_error)
     }
 
+    /// A delivery claimant is a lease-shaped token, not an identity: exactly
+    /// one server process serves a delivery, and the claim window bounds a
+    /// crashed wake. The facade only needs a stable non-empty claimant, so the
+    /// delivery id itself carries it — no process identity is involved.
     pub(crate) async fn claim_background_delivery(
         &self,
         delivery_id: &str,
         claim_until_ms: i64,
     ) -> Result<Option<BackgroundDelivery>, AppError> {
         self.facade
-            .claim_background_delivery(delivery_id, &self.owner_id, claim_until_ms)
+            .claim_background_delivery(delivery_id, delivery_id, claim_until_ms)
             .await
             .map_err(store_error)
     }
@@ -320,7 +312,7 @@ impl StoreAdapter {
         delivery_id: &str,
     ) -> Result<BackgroundDelivery, AppError> {
         self.facade
-            .consume_background_delivery(delivery_id, &self.owner_id)
+            .consume_background_delivery(delivery_id, delivery_id)
             .await
             .map_err(store_error)
     }
@@ -332,7 +324,7 @@ impl StoreAdapter {
         next_attempt_at_ms: i64,
     ) -> Result<BackgroundDelivery, AppError> {
         self.facade
-            .retry_background_delivery(delivery_id, &self.owner_id, error, next_attempt_at_ms)
+            .retry_background_delivery(delivery_id, delivery_id, error, next_attempt_at_ms)
             .await
             .map_err(store_error)
     }
@@ -343,7 +335,7 @@ impl StoreAdapter {
         error: Value,
     ) -> Result<BackgroundDelivery, AppError> {
         self.facade
-            .fail_background_delivery(delivery_id, &self.owner_id, error)
+            .fail_background_delivery(delivery_id, delivery_id, error)
             .await
             .map_err(store_error)
     }
@@ -382,7 +374,7 @@ impl StoreAdapter {
         parts: Vec<NewPart>,
     ) -> Result<Vec<Part>, AppError> {
         self.facade
-            .settle_background_run(session_id, &self.owner_id, run_id, tool_part, parts)
+            .settle_background_run(session_id, run_id, tool_part, parts)
             .await
             .map_err(store_error)
     }
@@ -397,7 +389,7 @@ impl StoreAdapter {
     ) -> Result<i64, AppError> {
         let outcome = self
             .facade
-            .start_run(session_id, &self.owner_id, run_kind, content, None)
+            .start_run(session_id, run_kind, content, None)
             .await
             .map_err(store_error)?;
         Ok(outcome.run_id)
@@ -412,7 +404,7 @@ impl StoreAdapter {
         parts: Vec<NewPart>,
     ) -> Result<Vec<Part>, AppError> {
         self.facade
-            .append_parts(session_id, &self.owner_id, run_id, parts)
+            .append_parts(session_id, run_id, parts)
             .await
             .map_err(store_error)
     }
@@ -465,7 +457,7 @@ impl StoreAdapter {
         delta: PartDelta,
     ) -> Result<Part, AppError> {
         self.facade
-            .update_part(session_id, &self.owner_id, part_id, delta)
+            .update_part(session_id, part_id, delta)
             .await
             .map_err(store_error)
     }
@@ -477,7 +469,7 @@ impl StoreAdapter {
         outcome: agena_storage::store::RunOutcome,
     ) -> Result<(), AppError> {
         self.facade
-            .complete_run(session_id, &self.owner_id, run_id, outcome)
+            .complete_run(session_id, run_id, outcome)
             .await
             .map(|_| ())
             .map_err(store_error)
@@ -485,7 +477,7 @@ impl StoreAdapter {
 
     pub(crate) async fn cancel_run(&self, session_id: i64, run_id: i64) -> Result<(), AppError> {
         self.facade
-            .cancel_run(session_id, &self.owner_id, run_id)
+            .cancel_run(session_id, run_id)
             .await
             .map(|_| ())
             .map_err(store_error)
@@ -497,28 +489,35 @@ impl StoreAdapter {
         run_id: i64,
     ) -> Result<Vec<agena_storage::store::Part>, AppError> {
         self.facade
-            .withdraw_user_run(session_id, &self.owner_id, run_id)
+            .withdraw_user_run(session_id, run_id)
             .await
             .map_err(store_error)
     }
 
-    /// Reconcile a session whose in-flight run lost its lease: mark stale run
-    /// markers failed and their non-terminal children cancelled (17.4).
-    pub(crate) async fn reconcile(&self, session_id: i64) -> Result<(), AppError> {
-        self.facade.reconcile(session_id).await.map_err(store_error)
+    /// Every session that owns at least one in-flight run marker, in id order
+    /// (17.4). Startup recovery scans these instead of enumerating workspaces.
+    pub(crate) async fn in_flight_session_ids(&self) -> Result<Vec<i64>, AppError> {
+        self.facade
+            .in_flight_session_ids()
+            .await
+            .map_err(store_error)
     }
 
-    /// Extend the session lease without touching any part. Long stable runs
-    /// (a slow reasoning stream, a multi-second tool execution) can exceed the
-    /// lease staleness window between commits; the stable-run loop's heartbeat
-    /// task calls this so the run's ownership stays fresh. A `false` return
-    /// means the lease is gone (stolen/released) — the next commit surfaces it
-    /// authoritatively, so this is best-effort.
-    pub(crate) async fn heartbeat_lease(&self, session_id: i64) -> bool {
+    /// The ids of a session's in-flight run markers, newest first (17.4).
+    pub(crate) async fn in_flight_run_ids(&self, session_id: i64) -> Result<Vec<i64>, AppError> {
         self.facade
-            .heartbeat_lease(session_id, &self.owner_id)
+            .in_flight_run_ids(session_id)
             .await
-            .unwrap_or(false)
+            .map_err(store_error)
+    }
+
+    /// Reconcile a session's abandoned in-flight runs: mark those run markers
+    /// failed and their non-terminal children cancelled (17.4).
+    pub(crate) async fn reconcile(&self, session_id: i64, run_ids: &[i64]) -> Result<(), AppError> {
+        self.facade
+            .reconcile(session_id, run_ids)
+            .await
+            .map_err(store_error)
     }
 
     pub(crate) async fn fork(
@@ -556,13 +555,7 @@ impl StoreAdapter {
         checkpoint: Value,
     ) -> Result<i64, AppError> {
         self.facade
-            .compact_session(
-                session_id,
-                &self.owner_id,
-                summary,
-                window,
-                Some(checkpoint),
-            )
+            .compact_session(session_id, summary, window, Some(checkpoint))
             .await
             .map_err(store_error)
     }
@@ -609,8 +602,8 @@ impl StoreAdapter {
         Ok(domain_usage_stats_from_storage(stats, &query, generated_at))
     }
 
-    /// Engine-owned maintenance through the sealed facade (14.2): reap stale
-    /// leases and GC orphan parts. Idempotent, safe from any process.
+    /// Engine-owned maintenance through the sealed facade (14.2): GC orphan
+    /// parts. Idempotent, safe from any process.
     pub(crate) async fn maintenance(
         &self,
     ) -> Result<agena_storage::store::MaintenanceOutcome, AppError> {
@@ -687,16 +680,6 @@ impl StoreAdapter {
             .map_err(store_error)
     }
 
-    pub(crate) async fn session_state(
-        &self,
-        session_id: i64,
-    ) -> Result<agena_storage::store::SessionPresentation, AppError> {
-        self.facade
-            .session_state(session_id)
-            .await
-            .map_err(store_error)
-    }
-
     fn session_from_meta(&self, meta: SessionMeta) -> Result<Session, AppError> {
         let view = SessionView {
             meta,
@@ -729,16 +712,6 @@ impl ProcessorPartIdAllocator {
 fn store_error(error: StoreError) -> AppError {
     match error {
         StoreError::NotFound(message) => AppError::Internal(message),
-        StoreError::LeaseNotHeld { session_id } => {
-            AppError::Internal(format!("lease not held for session {session_id}"))
-        }
-        StoreError::LeaseHeldByOther {
-            session_id,
-            owner_id,
-            ..
-        } => AppError::Internal(format!(
-            "session {session_id} lease held by another owner {owner_id}"
-        )),
         StoreError::InvalidState(message)
         | StoreError::Constraint(message)
         | StoreError::Conflict(message)

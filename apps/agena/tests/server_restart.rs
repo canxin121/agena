@@ -618,7 +618,7 @@ fn unused_loopback_port() -> u16 {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn killed_server_restarts_with_interrupted_then_reconciled_session() {
+async fn killed_server_restart_reconciles_the_abandoned_run_before_first_read() {
     let fixture = tempfile::tempdir().expect("create server restart fixture");
     let workspace = fixture.path().join("workspace");
     let server_data = fixture.path().join("server-data");
@@ -686,18 +686,26 @@ async fn killed_server_restarts_with_interrupted_then_reconciled_session() {
     first_server.crash();
     drop(client_a);
 
-    // Advance only the durable lease clock. This is equivalent to waiting
-    // past LEASE_STALENESS_MS but keeps the process-level regression fast.
+    // The crash left the run marker in flight with nobody executing it. That
+    // durable fact is the entire recovery input: the process that opens this
+    // data directory next terminalizes it (17.4). No clock is consulted, so
+    // the regression is deterministic rather than time-dependent.
     let database_url = format!("sqlite://{}?mode=rwc", database_path.display());
     let pool = sqlx::SqlitePool::connect(database_url.as_str())
         .await
         .expect("open killed server database");
-    let aged =
-        sqlx::query("UPDATE agena_execution_leases SET heartbeat_at_ms = heartbeat_at_ms - 60000")
-            .execute(&pool)
-            .await
-            .expect("age killed server lease");
-    assert_eq!(aged.rows_affected(), 1, "one hanging lease must be durable");
+    let orphaned = sqlx::query_scalar::<_, i64>(
+        "SELECT part_id FROM agena_parts \
+         WHERE kind = 'run' AND state IN ('pending', 'in_progress')",
+    )
+    .fetch_all(&pool)
+    .await
+    .expect("read the crashed server's in-flight run markers");
+    assert_eq!(
+        orphaned.len(),
+        1,
+        "the crashed server must leave exactly one ownerless in-flight run"
+    );
     pool.close().await;
 
     let mut second_server = spawn_server(
@@ -719,20 +727,13 @@ async fn killed_server_restarts_with_interrupted_then_reconciled_session() {
         .expect("read restarted server overview");
     assert!(
         overview.running.iter().all(|item| item.id != session.id),
-        "a stale lease must never remain visible as running after restart"
-    );
-    assert!(
-        overview
-            .attention
-            .iter()
-            .any(|item| item.id == session.id && item.state.needs_recovery()),
-        "the restarted server must publish the stale run as interrupted before opening it"
+        "an abandoned run must never remain visible as running after restart"
     );
 
     let mut reconciled = client_b
         .get_session_state(session.id)
         .await
-        .expect("open and reconcile interrupted session");
+        .expect("open the reconciled session");
     reconciled.parts = client_b
         .session_all_parts(session.id)
         .await
@@ -1003,29 +1004,28 @@ async fn simultaneous_web_tui_cli_ide_clients_leave_runtime_ownership_in_server(
     let pool = sqlx::SqlitePool::connect(database_url.as_str())
         .await
         .expect("open live server database for ownership assertion");
-    let lease_owners = sqlx::query_scalar::<_, String>(
-        "SELECT DISTINCT owner_id FROM agena_execution_leases ORDER BY owner_id",
+    // Ownership is observable as the durable in-flight run itself: exactly one
+    // marker exists, it belongs to the one session under execution, and it is
+    // owned by the single server Runtime that is holding the provider request
+    // open. No client can add a second one (17.3).
+    let in_flight_runs = sqlx::query_scalar::<_, i64>(
+        "SELECT part_id FROM agena_parts \
+         WHERE kind = 'run' AND state IN ('pending', 'in_progress') \
+           AND origin_session_id = ?",
     )
+    .bind(session.id)
     .fetch_all(&pool)
     .await
-    .expect("read active execution lease owners");
+    .expect("read the server-owned in-flight run markers");
     assert_eq!(
-        lease_owners.len(),
+        in_flight_runs.len(),
         1,
         "all active session execution must belong to one server Runtime"
     );
-    let session_lease_owner = sqlx::query_scalar::<_, String>(
-        "SELECT owner_id FROM agena_execution_leases WHERE session_id = ?",
-    )
-    .bind(session.id)
-    .fetch_one(&pool)
-    .await
-    .expect("read ownership-test session lease");
-    assert_eq!(session_lease_owner, lease_owners[0]);
     pool.close().await;
 
     // Every client disconnects without sending cancel. The provider remains
-    // blocked and the same server execution/lease must still be observable.
+    // blocked and the same server execution must still be observable.
     drop(web_connection);
     drop(tui);
     rpc.close("IDE rpc-server");

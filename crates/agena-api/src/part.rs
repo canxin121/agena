@@ -53,22 +53,10 @@ pub enum PartKindResource {
 }
 
 /// Execution state for a message part, operation, or interactive request.
-/// This is intentionally distinct from the containing message's state even
-/// though their current wire values overlap.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum PartExecutionStatusResource {
-    #[default]
-    Pending,
-    InProgress,
-    Completed,
-    PolicyDenied,
-    UserDeclined,
-    CapabilityUnavailable,
-    ToolUnavailable,
-    Failed,
-    Cancelled,
-}
+///
+/// The canonical definition is [`agena_domain::ExecutionStatus`]; the API
+/// re-exports it so wire clients and every server layer share one enum.
+pub use agena_domain::ExecutionStatus as PartExecutionStatusResource;
 
 /// Detail variants that are safe to expose independently of a runtime
 /// implementation. Additional variants are added alongside their complete,

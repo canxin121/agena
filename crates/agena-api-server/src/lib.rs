@@ -894,7 +894,6 @@ mod router_contract_tests {
         session_store
             .submit_user_run(
                 running_session.id,
-                "overview-contract-test",
                 vec![agena_storage::store::NewPart::pending(
                     "text",
                     agena_storage::store::PartRole::User,

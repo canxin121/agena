@@ -929,6 +929,24 @@ Compare the files with `crates/agena-bundled-plugins/generated/` before replacin
 them. A passing snapshot test proves agreement with the implementation; review
 is still necessary to determine whether the schema change is intended.
 
+## Generated state types
+
+Session, execution, background-activity, and notification state types are
+defined once in Rust (`crates/agena-domain`, `crates/agena-api`,
+`crates/agena-notification`). Every layer re-exports those definitions, and the
+Web client consumes a generated mirror instead of a hand-written copy:
+
+```sh
+cargo run -p agena-web-types > packages/agena-web/src/generated/agenaState.ts
+```
+
+`cargo test -p agena-web-types` fails when the committed mirror and the backend
+definitions disagree, so a state change cannot land without regenerating the
+file. `cargo test -p agena-api` pins the spelling every state reaches a client
+with, and `bun test tests/sessionStateContract.test.ts` in `packages/agena-web`
+checks that the shipped parser accepts exactly the generated kinds and that no
+module outside the mirror declares a second vocabulary.
+
 ## Dependency maintenance
 
 `bash scripts/dependencies/check.sh check` runs the strict dependency gate;

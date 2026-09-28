@@ -57,7 +57,7 @@ fn notifications_operational(app: &App) -> bool {
 /// (`SessionResource.state`), with pending-interactive requests refining what
 /// an awaiting state is for. The bundled `agena.terminal` plugin also publishes
 /// a hook-driven `agena.terminal.activity` display segment, but hooks only
-/// observe idle/running and can lag the server lease, so it is *not*
+/// observe idle/running and can lag the server's derived state, so it is *not*
 /// consulted here — the state machine is the source of truth.
 fn current_title_text(app: &App) -> String {
     let session_title = app.current_or_selected_session_title();

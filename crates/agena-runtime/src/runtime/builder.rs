@@ -256,6 +256,21 @@ impl AgenaRuntime {
         }
 
         runtime.apply_tracing_filter(initial_snapshot.tracing_config());
+        // Startup recovery of abandoned runs is a precondition, not a
+        // background nicety: this process owns the data directory, so a run
+        // marker still in flight can only belong to a process that is gone,
+        // and every reader — overview, session list, session open — must
+        // observe settled state. Await it before the runtime is published
+        // (17.4).
+        if let Some(manager) = initial_snapshot.session_manager()
+            && let Err(error) = manager.reconcile_interrupted_executions().await
+        {
+            tracing::warn!(
+                target: "agena_session",
+                %error,
+                "startup session-run reconciliation failed"
+            );
+        }
         if automatic_maintenance {
             runtime.spawn_background_tasks();
         }
@@ -265,9 +280,12 @@ impl AgenaRuntime {
         Ok(runtime)
     }
 
-    /// Recover notification handoffs committed before a prior process exited.
-    /// The durable delivery table is authoritative; this startup task merely
-    /// drives pending rows without delaying runtime bootstrap.
+    /// Background recovery for everything a prior process left in flight.
+    ///
+    /// Abandoned session runs are already reconciled in-line before
+    /// publication; what is left is the notification handoffs — the durable
+    /// delivery table is authoritative there — which may proceed without
+    /// delaying runtime bootstrap.
     fn spawn_background_delivery_recovery(&self) {
         let Some(manager) = self.current_snapshot().session_manager() else {
             return;
@@ -2737,10 +2755,10 @@ impl AgenaRuntime {
                         let runtime = tick_runtime.clone();
                         async move {
                             if let Some(manager) = runtime.current_snapshot().session_manager() {
-                                if let Err(error) = manager.reap_stale_leases().await {
+                                if let Err(error) = manager.maintenance_tick().await {
                                     tracing::warn!(
                                         error = %error,
-                                        "session lease reaping failed"
+                                        "session maintenance failed"
                                     );
                                 }
                                 let delivery_manager = Arc::clone(&manager);

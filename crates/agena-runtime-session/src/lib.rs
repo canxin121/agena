@@ -63,7 +63,9 @@ pub use compaction_policy::*;
 pub use context_budget::*;
 pub use context_governor::ContextGovernor;
 pub use error::AppError;
-pub use execution_registry::{ExecutionControl, ExecutionControlError, ExecutionRegistry};
+pub use execution_registry::{
+    ExecutionControl, ExecutionControlError, ExecutionPermit, ExecutionRegistry,
+};
 pub use guards::{AbortOnDrop, spawn_abortable, spawn_detached};
 pub use installation_id::resolve_installation_id;
 pub use metrics::{

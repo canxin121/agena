@@ -919,6 +919,9 @@ const renderBlocksApi = useChatRenderBlocks({
   settings,
   showThinking,
   formatTime,
+  // Row vocabulary follows the UI language; a runtime presentation title on
+  // the part itself still wins over this fallback.
+  labels: () => ({ attachment: String(t('chat.attachments.rowTitle')) }),
 })
 
 const {
@@ -2041,6 +2044,7 @@ async function sendReady(sid: string | null) {
     sessionId: sid,
     text,
     fileFallbackLabel: String(t('chat.messageItem.fileFallback')).trim(),
+    attachmentTitle: String(t('chat.attachments.rowTitle')).trim(),
     files: filesSnapshot.map((f) => ({
       id: f.id,
       filename: f.filename,

@@ -1,7 +1,12 @@
 import { computed, ref, type ComputedRef } from 'vue'
 
 import type { MessageLike, MessagePartLike, RenderBlock } from '@/components/chat/messageList.types'
-import { durablePartKind, projectTranscriptBlocks, transcriptPartText } from './transcriptProjection'
+import {
+  durablePartKind,
+  projectTranscriptBlocks,
+  transcriptPartText,
+  type TranscriptProjectionLabels,
+} from './transcriptProjection'
 
 type ChatLike = { messages: MessageLike[] }
 type SettingsLike = { data?: unknown }
@@ -11,6 +16,7 @@ export function useChatRenderBlocks(opts: {
   settings: SettingsLike
   showThinking: ComputedRef<boolean>
   formatTime: (ms?: number) => string
+  labels?: () => TranscriptProjectionLabels
 }) {
   const { chat, showThinking } = opts
   // Deliberately reference settings/formatTime so the composable's public
@@ -21,6 +27,7 @@ export function useChatRenderBlocks(opts: {
   const renderBlocks = computed<RenderBlock[]>(() =>
     projectTranscriptBlocks(chat.messages || [], {
       showReasoning: showThinking.value,
+      ...(opts.labels ? { labels: opts.labels() } : {}),
     }),
   )
 

@@ -1354,6 +1354,7 @@ export default {
       deliveryNotice: 'On Send, contents go to {provider}. Previewing alone does not send them.',
       referenceNotice: 'Reference only. File contents are not automatically included.',
       title: 'Attachments',
+      rowTitle: 'Attachment',
       attaching: 'Attaching…',
       countLabelOne: '1 file',
       countLabelMany: '{count} files',

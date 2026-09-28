@@ -113,6 +113,7 @@ const optimisticDisplayParts = computed<TranscriptDisplayPart[]>(() => {
     files: message.files,
     status: message.status,
     fileFallbackLabel: String(t('chat.messageItem.fileFallback')).trim(),
+    attachmentTitle: String(t('chat.attachments.rowTitle')).trim(),
   })
 })
 

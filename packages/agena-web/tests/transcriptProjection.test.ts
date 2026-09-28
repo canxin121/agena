@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 
 import type { MessageLike, MessagePartLike } from '../src/components/chat/messageList.types'
-import { durablePartKind, projectTranscriptBlocks } from '../src/pages/chat/transcriptProjection'
+import { durablePartKind, optimisticUserParts, projectTranscriptBlocks } from '../src/pages/chat/transcriptProjection'
 
 function part(id: string, kind: string, content: Record<string, unknown>, state = 'completed'): MessagePartLike {
   return {
@@ -49,6 +49,113 @@ describe('TUI-parity transcript projection', () => {
     const resource = displayParts.find((entry) => entry.kind === 'resource')
     expect(resource).toBeDefined()
     expect(`${resource?.title} ${resource?.summary}`).toContain('report.pdf')
+  })
+
+  test('a user attachment row is expanded by default', () => {
+    const filePart: MessagePartLike = {
+      id: '2',
+      type: 'file',
+      partState: 'completed',
+      agenaKind: 'file_ref',
+      agenaRole: 'user',
+      filename: 'photo.png',
+      serverPath: 'uploads/photo.png',
+      agenaContent: { path: 'uploads/photo.png', name: 'photo.png', mime: 'image/png' },
+    }
+    const blocks = projectTranscriptBlocks([message('1', 'user', [filePart])], { showReasoning: true })
+    const resource = (blocks[0]?.kind === 'message' ? blocks[0].displayParts : []).find(
+      (entry) => entry.kind === 'resource',
+    )
+    expect(resource?.defaultExpanded).toBe(true)
+    expect(resource?.toggleable).toBe(true)
+  })
+
+  test('an assistant resource part keeps the collapsed default', () => {
+    const filePart: MessagePartLike = {
+      id: '3',
+      type: 'file',
+      partState: 'completed',
+      agenaKind: 'file_ref',
+      agenaRole: 'assistant',
+      filename: 'report.pdf',
+      agenaContent: { path: 'out/report.pdf', name: 'report.pdf', mime: 'application/pdf' },
+    }
+    const blocks = projectTranscriptBlocks([message('2', 'assistant', [filePart])], { showReasoning: true })
+    const resource = (blocks[0]?.kind === 'message' ? blocks[0].displayParts : []).find(
+      (entry) => entry.kind === 'resource',
+    )
+    expect(resource?.defaultExpanded).toBe(false)
+  })
+
+  test('attachment rows use the injected UI vocabulary while runtime titles win', () => {
+    const filePart: MessagePartLike = {
+      id: '4',
+      type: 'file',
+      partState: 'completed',
+      agenaKind: 'file_ref',
+      agenaRole: 'user',
+      filename: 'photo.png',
+      agenaContent: { path: 'uploads/photo.png', name: 'photo.png', mime: 'image/png' },
+    }
+    const localized = projectTranscriptBlocks([message('3', 'user', [filePart])], {
+      showReasoning: true,
+      labels: { attachment: '附件' },
+    })
+    const switched = (localized[0]?.kind === 'message' ? localized[0].displayParts : []).find(
+      (entry) => entry.kind === 'resource',
+    )
+    expect(switched?.title).toBe('附件')
+
+    const runtime = projectTranscriptBlocks(
+      [message('4', 'user', [{ ...filePart, agenaPresentation: { title: 'Shared file' } }])],
+      {
+        showReasoning: true,
+        labels: { attachment: '附件' },
+      },
+    )
+    const runtimeTitled = (runtime[0]?.kind === 'message' ? runtime[0].displayParts : []).find(
+      (entry) => entry.kind === 'resource',
+    )
+    expect(runtimeTitled?.title).toBe('Shared file')
+  })
+
+  test('the optimistic attachment row keeps its shape when the send is acknowledged', () => {
+    const optimistic = optimisticUserParts({
+      key: 'optimistic-user-1',
+      text: 'see attached',
+      files: [{ filename: 'photo.png', mime: 'image/png', serverPath: 'uploads/photo.png' }],
+      status: 'sending',
+      fileFallbackLabel: 'file',
+      attachmentTitle: '附件',
+    })
+    const optimisticFile = optimistic.find((entry) => entry.kind === 'resource')
+    expect(optimisticFile?.title).toBe('附件')
+    expect(optimisticFile?.defaultExpanded).toBe(true)
+
+    const durable = projectTranscriptBlocks(
+      [
+        message('9', 'user', [
+          {
+            id: '10',
+            type: 'file',
+            partState: 'completed',
+            agenaKind: 'file_ref',
+            agenaRole: 'user',
+            filename: 'photo.png',
+            serverPath: 'uploads/photo.png',
+            agenaContent: { path: 'uploads/photo.png', name: 'photo.png', mime: 'image/png' },
+          },
+        ]),
+      ],
+      { showReasoning: true, labels: { attachment: '附件' } },
+    )
+    const durableFile = (durable[0]?.kind === 'message' ? durable[0].displayParts : []).find(
+      (entry) => entry.kind === 'resource',
+    )
+    expect([durableFile?.title, durableFile?.defaultExpanded]).toEqual([
+      optimisticFile?.title,
+      optimisticFile?.defaultExpanded,
+    ])
   })
 
   test('keeps parts inside their run and promotes only the final assistant text to Answer', () => {

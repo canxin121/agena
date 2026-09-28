@@ -18,8 +18,19 @@ import type { JsonValue } from '@/types/json'
 
 type JsonRecord = Record<string, JsonValue>
 
+export type TranscriptProjectionLabels = {
+  /**
+   * Title for an attachment row whose part carries no runtime presentation
+   * title. The TUI localizes the same row from its own catalogue
+   * (`message-input-activity-attachment`), so the transcript must never keep
+   * a hardcoded English label for something the user just attached.
+   */
+  attachment?: string
+}
+
 export type TranscriptProjectionOptions = {
   showReasoning: boolean
+  labels?: TranscriptProjectionLabels
 }
 
 function isRecord(value: unknown): value is JsonRecord {
@@ -190,6 +201,7 @@ export function optimisticUserParts(args: {
   }>
   status: 'sending' | 'sent'
   fileFallbackLabel: string
+  attachmentTitle?: string
 }): TranscriptDisplayPart[] {
   const status = args.status === 'sending' ? 'in_progress' : 'completed'
   const parts: TranscriptDisplayPart[] = []
@@ -245,7 +257,7 @@ export function optimisticUserParts(args: {
           ...(file.serverPath ? { path: file.serverPath } : {}),
         },
       },
-      title: 'Attachment',
+      title: text(args.attachmentTitle) || 'Attachment',
       summary: label,
       copyText: label,
       toggleable: false,
@@ -328,6 +340,7 @@ function shownSummary(_part: MessagePartLike, presented: string, derived: string
 function displayFields(
   part: MessagePartLike,
   kind: TranscriptPartKind,
+  presentationLabels?: TranscriptProjectionLabels,
 ): Pick<TranscriptDisplayPart, 'title' | 'summary' | 'copyText'> {
   // Presentation is part metadata: when the runtime already projects a
   // human title/summary for this part, that wins over the client default.
@@ -354,7 +367,7 @@ function displayFields(
   if (kind === 'resource') {
     const labels = attachmentLabels(part)
     return {
-      title: presentedTitle || 'Attachment',
+      title: presentedTitle || text(presentationLabels?.attachment) || 'Attachment',
       summary: presentedSummary || labels.join(', '),
       copyText: labels.join('\n'),
     }
@@ -401,14 +414,23 @@ function displayFields(
 /// Project a client-local element (optimistic row, in-flight placeholder)
 /// through the same part projection the durable transcript uses, so a local
 /// element can never drift from the server-rendered one.
-export function projectLocalPart(source: MessagePartLike, role: string): TranscriptDisplayPart {
-  return projectPart(source, role, null)
+export function projectLocalPart(
+  source: MessagePartLike,
+  role: string,
+  labels?: TranscriptProjectionLabels,
+): TranscriptDisplayPart {
+  return projectPart(source, role, null, labels)
 }
 
-function projectPart(part: MessagePartLike, role: string, answerPartId: string | null): TranscriptDisplayPart {
+function projectPart(
+  part: MessagePartLike,
+  role: string,
+  answerPartId: string | null,
+  labels?: TranscriptProjectionLabels,
+): TranscriptDisplayPart {
   const id = String(part.id || '')
   const kind = classifyPart(part, answerPartId, role === 'assistant')
-  const fields = displayFields(part, kind)
+  const fields = displayFields(part, kind, labels)
   const toggleable = !['text', 'lifecycle'].includes(kind)
   const pendingInteraction = kind === 'operation' && partHasPendingInteraction(part)
   return {
@@ -420,7 +442,11 @@ function projectPart(part: MessagePartLike, role: string, answerPartId: string |
     source: part,
     ...fields,
     toggleable,
-    defaultExpanded: kind === 'answer' || kind === 'text' || pendingInteraction,
+    // A user attachment is part of the message itself. Keep its preview open
+    // like the assistant's attachment rows instead of collapsing it into a
+    // label the moment the server acknowledges the send.
+    defaultExpanded:
+      kind === 'answer' || kind === 'text' || pendingInteraction || (role === 'user' && kind === 'resource'),
   }
 }
 
@@ -514,7 +540,10 @@ function finalAnswerPartId(role: string, parts: MessagePartLike[]): string | nul
   return null
 }
 
-export function projectTranscriptBlocks(messages: MessageLike[], options: TranscriptProjectionOptions): RenderBlock[] {
+export function projectTranscriptBlocks(
+  messages: MessageLike[],
+  options: TranscriptProjectionOptions = { showReasoning: true },
+): RenderBlock[] {
   return foldAssistantMessages(messages || []).map(({ message, runIds }, messageIndex): MessageRenderBlock => {
     const role = text(message.info.role) || 'assistant'
     const ordered = [...(message.parts || [])].sort((a, b) =>
@@ -522,7 +551,7 @@ export function projectTranscriptBlocks(messages: MessageLike[], options: Transc
     )
     const answerId = finalAnswerPartId(role, ordered)
     const displayParts = ordered
-      .map((part) => projectPart(part, role, answerId))
+      .map((part) => projectPart(part, role, answerId, options.labels))
       .filter((part) => {
         if (part.kind === 'reasoning') return options.showReasoning
         return true

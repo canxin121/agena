@@ -1348,6 +1348,7 @@ export default {
       deliveryNotice: '点击发送后，内容交给 {provider}；仅预览不会发送。',
       referenceNotice: '仅引用路径，不自动附带文件内容。',
       title: '附件',
+      rowTitle: '附件',
       attaching: '正在附加…',
       countLabelOne: '1 个文件',
       countLabelMany: '{count} 个文件',

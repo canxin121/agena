@@ -199,6 +199,7 @@ export function useMessageStreaming(opts: {
     sessionId: string
     text: string
     fileFallbackLabel: string
+    attachmentTitle?: string
     files: Array<{
       id?: string
       filename: string
@@ -239,6 +240,7 @@ export function useMessageStreaming(opts: {
         files: args.files,
         status: 'sending',
         fileFallbackLabel: args.fileFallbackLabel,
+        ...(args.attachmentTitle ? { attachmentTitle: args.attachmentTitle } : {}),
       }),
       runId: null,
       replyId: null,

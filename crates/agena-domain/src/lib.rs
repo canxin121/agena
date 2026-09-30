@@ -32,7 +32,6 @@ mod command_events;
 mod context_policy;
 mod doom_loop;
 mod execution;
-mod execution_access;
 mod execution_events;
 mod execution_lifecycle;
 mod execution_selection;
@@ -86,7 +85,6 @@ mod tool_invocation;
 mod tool_output;
 mod tool_permission;
 mod tool_permission_config;
-mod tool_permission_contract;
 mod tool_result;
 mod usage_period;
 mod usage_query;
@@ -95,7 +93,7 @@ mod user_input;
 mod user_input_events;
 
 pub mod activity_view;
-pub use access::{AccessKind, AccessSelector};
+pub use access::{AccessKind, AccessSelector, PathKind};
 pub use activity::{
     ActivityPayload, ActivityProvenance, ActivityState, CancellationOutcome, CancellationResult,
     ComposerActivity, ComposerDocument, ComposerNode, ErrorActivity, ExecutionTarget,
@@ -121,7 +119,6 @@ pub use command_events::CommandOutputStream;
 pub use context_policy::ContextPolicy;
 pub use doom_loop::{DoomLoopHit, DoomLoopPolicy};
 pub use execution::{ExecutionFailureKind, ExecutionOutcome, ExecutionPhase, ExecutionSource};
-pub use execution_access::ExecutionAccess;
 pub use execution_events::{
     ExecutionFinishedEvent, ExecutionStartedEvent, SubtaskStatusChangedEvent,
 };
@@ -162,13 +159,16 @@ pub use network_permission::NetworkPermissionConfig;
 pub use network_target::{NetworkTarget, NetworkTargetParseError};
 pub use operation_error::OperationError;
 pub use part_kind::PartKind;
-pub use path_access::{PathAccessModes, PathAccessRuleConfig};
+pub use path_access::PathAccessModes;
 pub use path_permission::PathPermissionConfig;
 pub use pending_interactive_request::{
     PendingInteractiveRequest, PendingInteractiveRequestContext,
 };
 pub use permission::{PermissionMode, PermissionReplyKind, PermissionScope};
-pub use permission_config::PermissionConfig;
+pub use permission_config::{
+    COMMAND_CLASS_DANGEROUS, COMMAND_CLASS_NO_OP, COMMAND_CLASS_ROUTINE, PathClassPromptFlags,
+    PermissionConfig, RUNTIME_STATE_PATH, RUNTIME_STATE_PATH_GLOB, TOOL_CLASS_READ_ONLY,
+};
 pub use permission_events::{
     PermissionRepliedEvent, PermissionRequestedEvent, PermissionRuleEvent, ToolPolicyDeniedEvent,
     ToolUserDeclinedEvent,
@@ -212,10 +212,6 @@ pub use tool_invocation::{ToolApiCall, ToolInvocation};
 pub use tool_output::{ToolManagedOutput, ToolOutput};
 pub use tool_permission::ToolPermissionRules;
 pub use tool_permission_config::ToolPermissionConfig;
-pub use tool_permission_contract::{
-    InputNetworkSpec, InputPathSpec, NetworkAccessSpec, PathAccessSpec, PathKind,
-    ToolPermissionContract,
-};
 pub use tool_result::ToolResultState;
 pub use usage_period::UsagePeriod;
 pub use usage_query::UsageStatsQuery;

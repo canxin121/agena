@@ -189,30 +189,6 @@ pub trait Plugin: Send + Sync + 'static {
         )))
     }
 
-    /// Dynamic per-invocation path-permission requests. Returned alongside
-    /// any declarative `InputPathSpec`s in the manifest, the host audits all
-    /// of them via the permission system before the tool body executes.
-    /// Default: no extra paths.
-    async fn permission_paths(
-        &self,
-        _tool: &str,
-        _input: &serde_json::Value,
-    ) -> Result<Vec<crate::hooks::PathRequest>> {
-        Ok(Vec::new())
-    }
-
-    /// Dynamic per-invocation network-permission requests. Returned alongside
-    /// any declarative `InputNetworkSpec`s in the manifest, the host audits all
-    /// of them via the permission system before the tool body executes.
-    /// Default: no extra network targets.
-    async fn permission_networks(
-        &self,
-        _tool: &str,
-        _input: &serde_json::Value,
-    ) -> Result<Vec<crate::hooks::NetworkRequest>> {
-        Ok(Vec::new())
-    }
-
     /// Streaming variant of [`Plugin::tool_invoke`]. Default implementation
     /// falls back to `tool_invoke` and wraps the result as a single-chunk
     /// stream so plugins that don't care about streaming still work.

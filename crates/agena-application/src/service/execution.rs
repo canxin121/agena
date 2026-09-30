@@ -331,7 +331,6 @@ impl ApplicationService {
             background_activities: Vec::new(),
             execution: SessionExecutionContextResource {
                 agent_id: context.agent_id,
-                execution_access: context.execution_access,
                 selected_permission: permission_config_resource_from_domain(
                     &context.selected_permission,
                 ),
@@ -705,8 +704,8 @@ pub fn permission_config_resource_from_domain(
     value: &agena_domain::PermissionConfig,
 ) -> agena_api::resource::PermissionConfigResource {
     use agena_api::resource::{
-        NetworkPermissionConfigResource, PathAccessRuleResource, PathPermissionConfigResource,
-        PermissionConfigResource, ToolPermissionConfigResource, ToolPermissionRulesResource,
+        NetworkPermissionConfigResource, PathPermissionConfigResource, PermissionConfigResource,
+        ToolPermissionConfigResource, ToolPermissionRulesResource,
     };
 
     PermissionConfigResource {
@@ -725,18 +724,11 @@ pub fn permission_config_resource_from_domain(
                 rules: path
                     .rules
                     .iter()
-                    .map(|(pattern, rule)| {
-                        let rule = match rule {
-                            agena_domain::PathAccessRuleConfig::Modes(modes) => {
-                                PathAccessRuleResource::Modes(
-                                    path_access_modes_resource_from_domain(modes),
-                                )
-                            }
-                            agena_domain::PathAccessRuleConfig::Shorthand(value) => {
-                                PathAccessRuleResource::Shorthand(value.clone())
-                            }
-                        };
-                        (pattern.clone(), rule)
+                    .map(|(pattern, modes)| {
+                        (
+                            pattern.clone(),
+                            path_access_modes_resource_from_domain(modes),
+                        )
                     })
                     .collect(),
             }),

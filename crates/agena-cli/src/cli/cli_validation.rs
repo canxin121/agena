@@ -530,21 +530,6 @@ pub(super) fn validate_tool_manifest_value(
             output,
         );
     }
-    if let Some(permissions) = value.get("permissions") {
-        check_object_keys(
-            permissions,
-            &format!("{path}.permissions"),
-            &[
-                "input_paths",
-                "input_networks",
-                "path_access",
-                "network_access",
-                "tags",
-            ],
-            "tool.permissions.unknown_field",
-            output,
-        );
-    }
     if let Some(tool) = parsed_tool.as_ref() {
         validate_tool_segment(
             plugin_namespace,
@@ -553,13 +538,6 @@ pub(super) fn validate_tool_manifest_value(
             &format!("{path}.name"),
             output,
         );
-        for (idx, spec) in tool.permissions.path_access.iter().enumerate() {
-            validate_no_parent_path(
-                spec.path.as_str(),
-                &format!("{path}.path_access[{idx}].path"),
-                output,
-            );
-        }
     }
 }
 

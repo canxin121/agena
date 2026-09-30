@@ -1,5 +1,4 @@
 mod downloads;
-use agena_plugin_host::sdk::PathRequest;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::future::Future;
 use std::net::IpAddr;
@@ -1662,18 +1661,6 @@ impl WebPlugin {
         Ok(())
     }
 
-    fn screenshot_permission_paths(
-        &self,
-        input: &BrowserScreenshotInput,
-    ) -> SdkResult<Vec<PathRequest>> {
-        let path = match input.path.as_deref() {
-            Some(value) if Path::new(value).is_absolute() => PathBuf::from(value),
-            Some(value) => self.workspace_root()?.join(value),
-            None => self.workspace_root()?.join(".agena/artifacts/browser"),
-        };
-        Ok(vec![PathRequest::write(path.display().to_string())])
-    }
-
     async fn browser_snapshot_value(&self, target_id: &str) -> SdkResult<serde_json::Value> {
         let client = self.browser_client(Some(target_id)).await?;
         client
@@ -1728,19 +1715,10 @@ impl WebPlugin {
             .await
     }
 
-    #[tool(
-        summary = "Fetch one web page and inspect its actual content.",
-        help = "Use this tool after search when you need evidence from the actual page rather than search snippets. If you already know what facts you need, set `prompt` so Agena prioritizes the most relevant excerpts from the page in the returned text output.",
-        read_only,
-
-
-        examples(
+    #[tool(summary = "Fetch one web page and inspect its actual content.", help = "Use this tool after search when you need evidence from the actual page rather than search snippets. If you already know what facts you need, set `prompt` so Agena prioritizes the most relevant excerpts from the page in the returned text output.", read_only, examples(
             r#"{"url":"https://openai.com"}"#,
             r#"{"url":"https://example.com/docs","prompt":"extract the release date and breaking changes"}"#
-        ),
-        network(connect = prepare_fetch_url(input.url.as_str()).map_err(crawl_error_to_plugin)?.to_string()),
-        concurrency_safe
-    )]
+        ), concurrency_safe)]
     async fn invoke_fetch(&self, input: &CrawlFetchInput) -> SdkResult<ToolInvokeOutput> {
         let url = prepare_fetch_url(input.url.as_str()).map_err(crawl_error_to_plugin)?;
         let config = self.config()?;
@@ -1767,11 +1745,7 @@ impl WebPlugin {
     #[tool(
         summary = "Crawl a site and cache indexed pages locally.",
         mutating,
-
-
-        discovery,
-        path(write = self.store_write_permission_path()?),
-        network(connect = prepare_fetch_url(input.start_url.as_str()).map_err(crawl_error_to_plugin)?.to_string())
+        discovery
     )]
     async fn invoke_crawl(&self, input: &CrawlRunInput) -> SdkResult<ToolInvokeOutput> {
         let start_url =
@@ -1823,20 +1797,10 @@ impl WebPlugin {
         ))
     }
 
-    #[tool(
-        summary = "Find candidate public-web pages to fetch.",
-        help = "Use this tool to discover candidate pages, not to answer from result snippets alone. After searching, fetch 1-3 relevant result URLs before answering when the user needs facts, summaries, comparisons, or latest information. Use allowed_domains and blocked_domains to steer source quality.",
-        read_only,
-
-
-        discovery,
-        examples(
+    #[tool(summary = "Find candidate public-web pages to fetch.", help = "Use this tool to discover candidate pages, not to answer from result snippets alone. After searching, fetch 1-3 relevant result URLs before answering when the user needs facts, summaries, comparisons, or latest information. Use allowed_domains and blocked_domains to steer source quality.", read_only, discovery, examples(
             r#"{"query":"Agena plugin architecture","max_results":5}"#,
             r#"{"query":"Rust schemars derive examples","allowed_domains":["docs.rs","github.com"]}"#
-        ),
-        network(connects = search_network_targets(input.engine)),
-        concurrency_safe
-    )]
+        ), concurrency_safe)]
     async fn invoke_search(&self, input: &CrawlWebSearchInput) -> SdkResult<ToolInvokeOutput> {
         let query = input.query.as_str();
         let config = self.config()?;
@@ -1905,7 +1869,6 @@ impl WebPlugin {
         tags(network, interactive, mutate),
         name = "browser_open",
         summary = "Open a page in a managed interactive browser session.",
-        network(connect = input.url.clone()),
         read_only
     )]
     async fn browser_open(
@@ -2409,7 +2372,6 @@ impl WebPlugin {
         tags(network, interactive, mutate, filesystem),
         name = "browser_screenshot",
         summary = "Capture a browser screenshot and return it as an image attachment.",
-        path(requests = self.screenshot_permission_paths(input)?),
         mutating
     )]
     async fn browser_screenshot(
@@ -2490,8 +2452,6 @@ impl WebPlugin {
         tags(network, interactive, mutate, filesystem),
         name = "browser_download",
         summary = "Download one HTTP(S) URL through a managed browser session and return a local artifact.",
-        network(connect = input.url.clone()),
-        path(write = self.workspace_root()?.join(".agena/artifacts/browser/downloads").display().to_string()),
         mutating
     )]
     async fn browser_download(
@@ -2640,11 +2600,6 @@ impl WebPlugin {
             })
             .take(limit)
             .collect())
-    }
-
-    fn store_write_permission_path(&self) -> SdkResult<String> {
-        let store = self.store()?;
-        Ok(store.dir().display().to_string())
     }
 }
 
@@ -3618,13 +3573,6 @@ fn resolve_browser_redirect(base: &url::Url, location: &str) -> SdkResult<url::U
 
 fn crawl_error_to_plugin(err: agena_web::CrawlError) -> PluginError {
     PluginError::internal_error(&err)
-}
-
-fn search_network_targets(engine: Option<WebSearchEngineSelection>) -> Vec<String> {
-    search_engines(engine)
-        .into_iter()
-        .map(|engine| engine.permission_url().to_string())
-        .collect()
 }
 
 struct PluginPageFetcher<'a> {

@@ -90,6 +90,22 @@ impl HostClient for HostClientProxy {
         self.run(self.current().read_config(path)).await
     }
 
+    async fn check_path_permission(
+        &self,
+        request: crate::host_api::PathPermissionQuery,
+    ) -> Result<crate::host_api::PermissionQuery> {
+        self.run(self.current().check_path_permission(request))
+            .await
+    }
+
+    async fn check_network_permission(
+        &self,
+        target: String,
+    ) -> Result<crate::host_api::PermissionQuery> {
+        self.run(self.current().check_network_permission(target))
+            .await
+    }
+
     async fn request_config_reload(&self) -> Result<HostConfigReloadRequestResponse> {
         self.run(self.current().request_config_reload()).await
     }

@@ -77,19 +77,18 @@ pub use host_api::{
 pub use identity::{PluginKey, PluginKeyParseError, ToolKey, ToolKeyParseError};
 pub use macro_support::{schema_example_texts, schema_usage_text, service_method_for};
 pub use manifest::{
-    ContributionKind, EmptyPluginSettings, HookSubscription, InputNetworkSpec, InputPathSpec,
-    MAX_JSON_ESCAPE_BYTES, MAX_JSON_ESCAPE_DEPTH, NetworkAccessSpec, OperationDiscoverability,
-    PathAccessSpec, PathKind, PluginDisplayContent, PluginDisplayContribution, PluginHostEffect,
-    PluginManifest, PluginOperationDefinition, PluginOperationDiagnostic,
-    PluginOperationInvokeInput, PluginOperationResult, PluginOperationStatus,
-    PluginOperationTarget, PluginServiceDeclarations, PluginServiceExport, PluginServiceImport,
-    PluginServiceInvokeInput, PluginServiceInvokeOutput, PluginServiceMethod,
+    ContributionKind, EmptyPluginSettings, HookSubscription, MAX_JSON_ESCAPE_BYTES,
+    MAX_JSON_ESCAPE_DEPTH, OperationDiscoverability, PathKind, PluginDisplayContent,
+    PluginDisplayContribution, PluginHostEffect, PluginManifest, PluginOperationDefinition,
+    PluginOperationDiagnostic, PluginOperationInvokeInput, PluginOperationResult,
+    PluginOperationStatus, PluginOperationTarget, PluginServiceDeclarations, PluginServiceExport,
+    PluginServiceImport, PluginServiceInvokeInput, PluginServiceInvokeOutput, PluginServiceMethod,
     PluginSkillDefinition, PluginSurfaceContributions, PluginTerminalColor,
     PluginTerminalContributions, PluginTerminalThemeColors, PluginTerminalThemePalette,
     SettingsConstraints, SettingsContract, SettingsNode, SettingsNodeKind, SettingsOption,
-    SettingsVariant, ToolContract, ToolDefinition, ToolDocs, ToolInput, ToolModelSurface,
-    ToolPermissionContract, ToolResultPolicy, ToolResultRenderKind, ToolRuntimePolicy,
-    ToolStreamingMode, ToolTag, TransportKind, normalize_tool_tag_name,
+    SettingsVariant, ToolBehavior, ToolContract, ToolDefinition, ToolDocs, ToolInput,
+    ToolModelSurface, ToolResultPolicy, ToolResultRenderKind, ToolRuntimePolicy, ToolStreamingMode,
+    ToolTag, TransportKind, normalize_tool_tag_name,
 };
 pub use plugin::{InitContext, InitOutcome, Plugin, PluginSettings, ToolStreamSink};
 pub use schemars::JsonSchema;

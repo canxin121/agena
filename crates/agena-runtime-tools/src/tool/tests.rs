@@ -30,9 +30,6 @@ struct ChokePointPlugin;
 #[derive(Default)]
 struct ToolApiFixture;
 
-#[derive(Default)]
-struct ExecutionAccessFixture;
-
 #[derive(Debug, Clone, Copy)]
 enum RenderBehavior {
     Project,
@@ -134,7 +131,7 @@ fn scoped_dynamic_tool_definition(name: &str) -> agena_plugin_host::sdk::ToolDef
             ..Default::default()
         },
         runtime: Default::default(),
-        permissions: agena_plugin_host::sdk::ToolPermissionContract {
+        behavior: agena_plugin_host::sdk::ToolBehavior {
             read_only: true,
             ..Default::default()
         },
@@ -408,27 +405,8 @@ impl ExecutorBackedFsAdapter {
     }
 }
 
-#[agena_plugin_host::sdk::agena_plugin(
-    namespace = "test",
-    name = "access",
-    version = "0.1.0",
-    summary = "Execution access regression fixture."
-)]
-impl ExecutionAccessFixture {
-    #[tool(name = "inspect", summary = "Inspect state.", read_only)]
-    async fn inspect(&self) -> String {
-        "inspected".to_owned()
-    }
-
-    #[tool(name = "mutate", summary = "Mutate state.", mutating)]
-    async fn mutate(&self) -> String {
-        "mutated".to_owned()
-    }
-}
-
 struct TestSessionContext {
     session_id: Option<i64>,
-    access: agena_domain::ExecutionAccess,
 }
 
 impl crate::ToolSessionContext for TestSessionContext {
@@ -454,10 +432,6 @@ impl crate::ToolSessionContext for TestSessionContext {
         static EMPTY: std::sync::OnceLock<std::collections::BTreeSet<String>> =
             std::sync::OnceLock::new();
         EMPTY.get_or_init(Default::default)
-    }
-
-    fn execution_access(&self) -> agena_domain::ExecutionAccess {
-        self.access
     }
 
     fn selected_model(&self) -> Option<&str> {
@@ -1054,82 +1028,6 @@ async fn only_five_gateway_functions_are_provider_visible() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn read_only_access_filters_live_tools_and_preserves_gateway_discovery() {
-    let workspace_root = std::env::current_dir().expect("resolve test workspace");
-    let mut plugins_config = PluginsConfig::default();
-    plugins_config
-        .list
-        .insert("agena.tools".to_owned(), ConfiguredPlugin::static_default());
-    plugins_config
-        .list
-        .insert("test.access".to_owned(), ConfiguredPlugin::static_default());
-    let plugins = PluginHost::new(PluginHostBuildConfig {
-        static_plugins: vec![
-            StaticPluginRegistration::new(
-                "agena.tools".parse().expect("valid Tool API plugin key"),
-                ToolApiFixture,
-            ),
-            StaticPluginRegistration::new(
-                "test.access".parse().expect("valid access plugin key"),
-                ExecutionAccessFixture,
-            ),
-        ],
-        config: plugins_config,
-        workspace_root: workspace_root.clone(),
-        agena_version: "test".to_owned(),
-        callback_base_url: None,
-        host_client: None,
-        previous: None,
-        previous_plugins: HashMap::new(),
-    })
-    .await
-    .expect("build access test plugin host");
-    let executor = ToolExecutor::new(
-        workspace_root,
-        ExecutionPrincipal::new(
-            PermissionPolicy::allow_all(),
-            ToolPermissionPolicy::allow_all(),
-        ),
-        plugins,
-        None,
-        None,
-        None,
-    )
-    .for_session_context_async(&TestSessionContext {
-        session_id: Some(1),
-        access: agena_domain::ExecutionAccess::ReadOnly,
-    })
-    .await;
-
-    let execution_tools = executor
-        .available_execution_tools()
-        .into_iter()
-        .map(|tool| tool.canonical_name())
-        .collect::<Vec<_>>();
-    assert_eq!(execution_tools, ["test.access.inspect"]);
-    assert_eq!(executor.available_tool_api_bindings().len(), 5);
-    assert_eq!(
-        executor
-            .principal()
-            .authorize_tool_name("test.access.mutate"),
-        agena_domain::PermissionDecision::Allow,
-        "capability filtering must not rewrite the independent permission policy"
-    );
-
-    let error = executor
-        .collect_permission_checks_for_invocation_in_session(
-            &ToolInvocation::new("test.access.mutate", StructuredObject::default()),
-            Some(1),
-        )
-        .await
-        .expect_err("read-only access must reject a mutating live tool");
-    assert!(
-        matches!(&error, ToolError::CapabilityUnavailable(_)),
-        "out-of-capability tools must be hidden at invocation time, got {error:?}"
-    );
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn session_scoped_dynamic_tools_are_stable_per_turn_and_isolated_across_sessions() {
     let workspace_root = std::env::current_dir().expect("resolve test workspace");
     let plugin_id = "test.scoped";
@@ -1165,11 +1063,9 @@ async fn session_scoped_dynamic_tools_are_stable_per_turn_and_isolated_across_se
     );
     let session_a = TestSessionContext {
         session_id: Some(101),
-        access: agena_domain::ExecutionAccess::Inherit,
     };
     let session_b = TestSessionContext {
         session_id: Some(202),
-        access: agena_domain::ExecutionAccess::Inherit,
     };
 
     let executor_a_turn_1 = base.for_session_context_async(&session_a).await;

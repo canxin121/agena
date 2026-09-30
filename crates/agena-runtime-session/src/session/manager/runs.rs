@@ -620,12 +620,6 @@ impl SessionManager {
                     }
                 };
 
-                child.runtime.execution.access =
-                    if parent.runtime.execution.access == agena_domain::ExecutionAccess::ReadOnly {
-                        agena_domain::ExecutionAccess::ReadOnly
-                    } else {
-                        request.access
-                    };
                 let child_permission = self.resolve_effective_session_permission(&child, &state);
                 let parent_permission = if parent.runtime.execution.effective_permission.is_empty()
                 {

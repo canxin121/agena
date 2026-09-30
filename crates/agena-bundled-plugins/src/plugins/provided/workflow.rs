@@ -4,18 +4,18 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock, RwLock};
 
-use crate::part::{AskUserToolInput, TaskAccess, TaskToolInput};
+use crate::part::{AskUserToolInput, TaskToolInput};
 use agena_plugin_host::PluginError;
 use agena_plugin_host::sdk::host_api::{
     AskUserOption as HostAskUserOption, AskUserQuestion as HostAskUserQuestion, AskUserRequest,
     HostClient, HostDisplayContributeRequest, HostDisplayRemoveRequest, HostEnterSnapshotRequest,
     HostExitSnapshotRequest, HostGetSessionRequest, HostRegisteredToolDescriptor,
     HostRenameSessionRequest, HostSession, HostStorageDeleteRequest, HostStorageGetRequest,
-    HostStorageScope, HostStorageSetRequest, HostStorageVisibility, RunSubtaskAccess,
-    RunSubtaskModelSelection, RunSubtaskRequest, RunSubtaskStatus, ToolDescriptor,
+    HostStorageScope, HostStorageSetRequest, HostStorageVisibility, RunSubtaskModelSelection,
+    RunSubtaskRequest, RunSubtaskStatus, ToolDescriptor,
 };
 use agena_plugin_host::sdk::{
-    CommandBeforeInput, CommandBeforeResponse, ContributionKind, PathRequest, PluginDisplayContent,
+    CommandBeforeInput, CommandBeforeResponse, ContributionKind, PluginDisplayContent,
     PluginDisplayContribution, Result as SdkResult, ToolBeforeInput, ToolBeforePatch,
     ToolInvokeOutput, ToolTag,
 };
@@ -119,9 +119,7 @@ pub(crate) use planning_tools::{
     WorkflowPlan, WorkflowPlanCheckpoint, WorkflowPlanExecutor, WorkflowPlanPhase,
     WorkflowPlanStep, WorkflowPlanStepInput, WorkflowPlanStepStatus,
 };
-pub(crate) use repo_tools::{
-    EnterSnapshotCommandInput, ExitSnapshotCommandInput, snapshot_enter_permission_paths,
-};
+pub(crate) use repo_tools::{EnterSnapshotCommandInput, ExitSnapshotCommandInput};
 pub(crate) use runtime_tools::{SessionRenameToolInput, SessionToolResponse};
 pub(crate) use tool_api_inputs::{
     ToolApiHelpInput, ToolApiListInput, ToolApiSearchInput, ToolApiStringBatch, ToolApiTagsInput,

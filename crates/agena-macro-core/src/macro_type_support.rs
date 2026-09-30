@@ -3,7 +3,7 @@
 use quote::quote;
 use syn::{LitStr, PathArguments, Result, Type};
 
-use super::{PluginNetworkSemantic, PluginPathPermissionKind, PluginPickerKind};
+use super::PluginPickerKind;
 
 #[derive(Default)]
 /// Semantic shape of a macro input type.
@@ -93,23 +93,6 @@ pub fn type_first_generic_arg(ty: &Type) -> Option<&Type> {
         syn::GenericArgument::Type(ty) => Some(ty),
         _ => None,
     })
-}
-
-pub fn path_permission_kind_label(kind: PluginPathPermissionKind) -> &'static str {
-    match kind {
-        PluginPathPermissionKind::Read => "read",
-        PluginPathPermissionKind::Write => "write",
-    }
-}
-
-pub fn network_semantic_label(semantic: PluginNetworkSemantic) -> &'static str {
-    match semantic {
-        PluginNetworkSemantic::Network => "network",
-        PluginNetworkSemantic::Url => "url",
-        PluginNetworkSemantic::Host => "host",
-        PluginNetworkSemantic::Internet => "internet",
-        PluginNetworkSemantic::Private => "private",
-    }
 }
 
 pub fn picker_kind_label(picker: PluginPickerKind) -> &'static str {

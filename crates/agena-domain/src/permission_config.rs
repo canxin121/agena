@@ -2,11 +2,12 @@
 
 use std::collections::BTreeMap;
 
+use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
 use crate::{
     ApprovalModelSelection, NetworkPermissionConfig, PathAccessModes, PathPermissionConfig,
-    PermissionMode, ToolPermissionConfig,
+    PermissionMode, ToolPermissionConfig, ToolPermissionRules,
 };
 
 /// Stable, serializable permission configuration independent of policy
@@ -38,20 +39,94 @@ where
     Option::<ToolPermissionConfig>::deserialize(deserializer)
 }
 
+/// The path patterns of the runtime's own per-workspace state directory
+/// (`~/.agena/projects/<workspace-key>/`), shared with `agena-runtime-tools`'
+/// `project_state_dir`. The `<home>` alias resolves to the same `HOME` /
+/// `USERPROFILE` the runtime's `agena_home_dir()` reads.
+pub const RUNTIME_STATE_PATH: &str = "<home>/agena/projects";
+/// The same directory and everything under it. The alias itself matches only
+/// the root, so the contents need their own entry.
+pub const RUNTIME_STATE_PATH_GLOB: &str = "<home>/agena/projects/**";
+
+/// The command-class keywords a `tools.rules.<tool>` entry may use instead of a
+/// command pattern.
+pub const COMMAND_CLASS_NO_OP: &str = "no-op";
+pub const COMMAND_CLASS_ROUTINE: &str = "routine";
+pub const COMMAND_CLASS_DANGEROUS: &str = "dangerous";
+/// The keyword for the read-only tool class. It is written under the wildcard
+/// tool name, `tools.rules."*"`, because the class is derived from a tool's
+/// declared behavior rather than from its name.
+pub const TOOL_CLASS_READ_ONLY: &str = "read-only";
+
+fn allow_rw() -> PathAccessModes {
+    PathAccessModes {
+        read: Some(PermissionMode::Allow),
+        write: Some(PermissionMode::Allow),
+    }
+}
+
+/// Which of the approval prompt's conditional path promises are in effect.
+///
+/// Each flag is true when the sandbox's compiled path policy approves that
+/// class of action outright, i.e. the approval model is free to stop worrying
+/// about it. The prompt is assembled from these because telling the model that
+/// temp-directory writes need no thought would silently defeat a user who
+/// narrowed the rule covering them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PathClassPromptFlags {
+    /// Paths inside the runtime's own per-workspace state directory.
+    pub internal_paths_allowed: bool,
+    /// Paths inside the system temporary directory.
+    pub temp_paths_allowed: bool,
+}
+
+impl PathClassPromptFlags {
+    /// The flags for a sandbox whose path policy approves both classes
+    /// outright - the shipped configuration.
+    pub fn all_allowed() -> Self {
+        Self {
+            internal_paths_allowed: true,
+            temp_paths_allowed: true,
+        }
+    }
+
+    /// Whether every conditional promise is in effect, i.e. the prompt renders
+    /// its full class-default bullet.
+    pub fn every_class_allowed(&self) -> bool {
+        self.internal_paths_allowed && self.temp_paths_allowed
+    }
+}
+
 impl PermissionConfig {
+    /// The shipped configuration: what a user gets when their file says nothing
+    /// about permissions.
+    ///
+    /// The class defaults live here as ordinary entries of the sections they
+    /// belong to, not as keys of their own — the temp and runtime-state paths
+    /// are `path.rules` entries, the interaction tool is a `tools.names` entry,
+    /// and the read-only and command classes are `tools.rules` entries. That is
+    /// what makes them editable and restorable (a user writes the same key, or
+    /// deletes it) without the schema growing a parallel set of keys.
     pub fn global_default() -> Self {
         let auto = PermissionMode::Auto;
+        let allow = PermissionMode::Allow;
+        let deny = PermissionMode::Deny;
         Self {
             path: Some(PathPermissionConfig {
                 workspace: Some(PathAccessModes {
-                    read: Some(PermissionMode::Allow),
+                    read: Some(allow),
                     write: Some(auto),
                 }),
                 external: Some(PathAccessModes {
                     read: Some(auto),
                     write: Some(auto),
                 }),
-                ..Default::default()
+                rules: IndexMap::from([
+                    ("<tmp>".to_string(), allow_rw()),
+                    ("<tmp>/**".to_string(), allow_rw()),
+                    (RUNTIME_STATE_PATH.to_string(), allow_rw()),
+                    (RUNTIME_STATE_PATH_GLOB.to_string(), allow_rw()),
+                ]),
             }),
             network: Some(NetworkPermissionConfig {
                 internet: Some(auto),
@@ -63,12 +138,40 @@ impl PermissionConfig {
                 // Ordinary execution tools default to Allow: their effects are
                 // already constrained by the path, network, and shell-command
                 // policies. Ask/Deny are opt-in per tool name or via the shell
-                // command pattern table. Web fetch/search are allowlisted
-                // because network policy already governs their targets.
-                default: Some(PermissionMode::Allow),
+                // command pattern table.
+                default: Some(allow),
                 names: BTreeMap::from([
-                    ("agena.web.search".to_string(), PermissionMode::Allow),
-                    ("agena.web.fetch".to_string(), PermissionMode::Allow),
+                    // `agena.interaction.ask` *is* the prompt: a permission
+                    // `Ask` here would confirm the question instead of asking
+                    // it, so the tool is allowed and raises its own
+                    // `UserInputRequired`. Both spellings are listed because
+                    // the executor answers to the canonical and the compact
+                    // tool name.
+                    ("agena.interaction.ask".to_string(), allow),
+                    ("interaction.ask".to_string(), allow),
+                    // Web fetch/search are allowlisted because network policy
+                    // already governs their targets.
+                    ("agena.web.search".to_string(), allow),
+                    ("agena.web.fetch".to_string(), allow),
+                ]),
+                rules: BTreeMap::from([
+                    (
+                        "agena.shell.run".to_string(),
+                        ToolPermissionRules::Ordered(IndexMap::from([
+                            (COMMAND_CLASS_NO_OP.to_string(), allow),
+                            (COMMAND_CLASS_ROUTINE.to_string(), allow),
+                            (COMMAND_CLASS_DANGEROUS.to_string(), deny),
+                        ])),
+                    ),
+                    // Tools whose contract is read-only, and neither shell nor
+                    // interactive. Reading cannot change anything.
+                    (
+                        "*".to_string(),
+                        ToolPermissionRules::Ordered(IndexMap::from([(
+                            TOOL_CLASS_READ_ONLY.to_string(),
+                            allow,
+                        )])),
+                    ),
                 ]),
                 ..Default::default()
             }),

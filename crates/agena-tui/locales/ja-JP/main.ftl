@@ -1739,3 +1739,5 @@ overlay-provider-delete-adapter-body = 設定済みアダプター {$provider}/{
 overlay-provider-delete-adapter-last-body = これは最後の設定済みアダプターです。確定するとプロバイダーも削除されます。
 
 overlay-provider-delete-model-body = 設定済みモデル {$provider}/{$adapter}/{$model} を削除しますか？
+
+permission-studio-page-tool-defaults = ツールアクセス / 既定値

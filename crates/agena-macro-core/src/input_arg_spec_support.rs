@@ -4,15 +4,13 @@ use std::collections::BTreeMap;
 
 use syn::{LitStr, Type};
 
-use super::input_arg_output_support::{
-    apply_arg_metadata_to_spec, input_jsonpath_for_arg, input_jsonpath_for_field,
-};
+use super::input_arg_output_support::apply_arg_metadata_to_spec;
 use super::input_arg_parse_support::inline_arg_has_default;
 use super::{
     PathPairConstraint, PathStringConstraint, PathStringsConstraint, PathUsizeConstraint,
-    PathValueConstraint, PathValuesConstraint, PluginArgConfig, PluginInputNetworkSpec,
-    PluginInputPathSpec, ToolSpecConfig, append_constraint_path_suffix, input_type_semantic_shape,
-    prefixed_constraint_group, resolve_known_constraint_path,
+    PathValueConstraint, PathValuesConstraint, PluginArgConfig, ToolSpecConfig,
+    append_constraint_path_suffix, input_type_semantic_shape, prefixed_constraint_group,
+    resolve_known_constraint_path,
 };
 
 pub fn apply_arg_config_to_spec(
@@ -263,53 +261,16 @@ pub fn apply_arg_config_to_spec(
                     right: resolve_known_constraint_path(right, field_path_lookup),
                 }),
         );
-    let optional = config.optional
+    let _optional = config.optional
         || inline_arg_has_default(config)
         || type_shape.optional
         || !aliases.is_empty();
-    let jsonpath = input_jsonpath_for_arg(field_name, ty, config.jsonpath.as_ref());
-    if let Some(kind) = config.path {
-        spec.input_paths.push(PluginInputPathSpec {
-            jsonpath: jsonpath.clone(),
-            kind,
-            fallback: config.fallback.clone(),
-            optional,
-        });
-        if config.jsonpath.is_none() {
-            spec.input_paths
-                .extend(aliases.iter().map(|alias| PluginInputPathSpec {
-                    jsonpath: input_jsonpath_for_field(alias, ty),
-                    kind,
-                    fallback: config.fallback.clone(),
-                    optional,
-                }));
-        }
-    }
-    if let Some(semantic) = config.network {
-        spec.input_networks.push(PluginInputNetworkSpec {
-            jsonpath,
-            fallback: config.fallback.clone(),
-            optional,
-            semantic,
-        });
-        if config.jsonpath.is_none() {
-            spec.input_networks
-                .extend(aliases.iter().map(|alias| PluginInputNetworkSpec {
-                    jsonpath: input_jsonpath_for_field(alias, ty),
-                    fallback: config.fallback.clone(),
-                    optional,
-                    semantic,
-                }));
-        }
-    }
     apply_arg_metadata_to_spec(
         &mut spec.input_field_metadata,
         field_name,
         field_name,
         aliases,
         config.description.clone(),
-        config.path,
-        config.network,
         config.non_empty || config.non_empty_if_present,
         config.item_non_empty,
         config.item_non_empty_if_present,

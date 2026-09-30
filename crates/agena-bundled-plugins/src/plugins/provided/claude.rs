@@ -9,9 +9,7 @@ use std::{
 use agena_macros::ToolInput;
 use agena_plugin_host::PluginError;
 use agena_plugin_host::sdk::host_api::HostClient;
-use agena_plugin_host::sdk::{
-    InitContext, InitOutcome, PathRequest, Result as SdkResult, ToolInvokeOutput,
-};
+use agena_plugin_host::sdk::{InitContext, InitOutcome, Result as SdkResult, ToolInvokeOutput};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -298,10 +296,13 @@ impl ClaudeToolsPlugin {
         )))
     }
 
-    #[tool(name="cloud_image_understanding",tags(query,network),
-        summary="Send explicit images to Anthropic cloud for understanding; not local file viewing.",
-        help="Runs in Anthropic cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Sends only the specified, permission-checked inputs and prompt to Anthropic. Accepts local paths with expected_sha256 or owned cloud_file_upload handles. Local preparation is bounded; no automatic whole-workspace or conversation upload. Cloud inference may be billed. Input sent inline is not a separate remote file. Results return input hashes, provider/model and usage. No local execution fallback.",
-        mutating,network(connect=self.config()?.base_url.clone()),path(requests=input.paths(self.workspace_root()?)))]
+    #[tool(
+        name = "cloud_image_understanding",
+        tags(query, network),
+        summary = "Send explicit images to Anthropic cloud for understanding; not local file viewing.",
+        help = "Runs in Anthropic cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Sends only the specified, permission-checked inputs and prompt to Anthropic. Accepts local paths with expected_sha256 or owned cloud_file_upload handles. Local preparation is bounded; no automatic whole-workspace or conversation upload. Cloud inference may be billed. Input sent inline is not a separate remote file. Results return input hashes, provider/model and usage. No local execution fallback.",
+        mutating
+    )]
     async fn image_understanding(
         &self,
         context: &ToolInvokeContext<'_>,
@@ -313,10 +314,13 @@ impl ClaudeToolsPlugin {
             .await
     }
 
-    #[tool(name="cloud_document_understanding",tags(query,network),
-        summary="Send explicit PDF/text documents to Anthropic cloud for understanding; not local file viewing.",
-        help="Runs in Anthropic cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Sends only the specified, permission-checked inputs and prompt to Anthropic. Accepts local paths with expected_sha256 or owned cloud_file_upload handles. Local preparation is bounded; no automatic whole-workspace or conversation upload. Cloud inference may be billed. Input sent inline is not a separate remote file. Results return input hashes, provider/model and usage. No local execution fallback.",
-        mutating,network(connect=self.config()?.base_url.clone()),path(requests=input.paths(self.workspace_root()?)))]
+    #[tool(
+        name = "cloud_document_understanding",
+        tags(query, network),
+        summary = "Send explicit PDF/text documents to Anthropic cloud for understanding; not local file viewing.",
+        help = "Runs in Anthropic cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Sends only the specified, permission-checked inputs and prompt to Anthropic. Accepts local paths with expected_sha256 or owned cloud_file_upload handles. Local preparation is bounded; no automatic whole-workspace or conversation upload. Cloud inference may be billed. Input sent inline is not a separate remote file. Results return input hashes, provider/model and usage. No local execution fallback.",
+        mutating
+    )]
     async fn document_understanding(
         &self,
         context: &ToolInvokeContext<'_>,
@@ -328,10 +332,13 @@ impl ClaudeToolsPlugin {
             .await
     }
 
-    #[tool(name="cloud_file_upload",tags(mutate,network),
-        summary="Upload one permitted local file to Anthropic cloud and return a session-owned handle.",
-        help="Runs in Anthropic cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Creates a remote file; does not analyze it. Inputs up to 20 MiB are content-checked and optionally revision-checked. The handle is bound to this workspace/session/provider connection; arbitrary vendor file IDs cannot be substituted. Local files remain unchanged. A timeout may leave remote acceptance unknown: inspect the returned handle, do not automatically repeat. Query status before using processing files and delete unneeded files explicitly.",
-        mutating,network(connect=self.config()?.base_url.clone()),path(requests=vec![PathRequest::read(input.path.clone()),PathRequest::write(self.workspace_root()?.join(".agena/artifacts/provider-tools").display().to_string())]))]
+    #[tool(
+        name = "cloud_file_upload",
+        tags(mutate, network),
+        summary = "Upload one permitted local file to Anthropic cloud and return a session-owned handle.",
+        help = "Runs in Anthropic cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Creates a remote file; does not analyze it. Inputs up to 20 MiB are content-checked and optionally revision-checked. The handle is bound to this workspace/session/provider connection; arbitrary vendor file IDs cannot be substituted. Local files remain unchanged. A timeout may leave remote acceptance unknown: inspect the returned handle, do not automatically repeat. Query status before using processing files and delete unneeded files explicitly.",
+        mutating
+    )]
     async fn file_upload(
         &self,
         context: &ToolInvokeContext<'_>,
@@ -340,10 +347,13 @@ impl ClaudeToolsPlugin {
         self.media_service()?.upload(context, input).await
     }
 
-    #[tool(name="cloud_file_status",tags(query,network),
-        summary="Query the remote status of an owned Anthropic cloud file, not a local path.",
-        help="Runs in Anthropic cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Accepts only cloud_file_upload handles from the same workspace, session and provider connection. Reports provider readiness/expiry and refreshes the signed local receipt. Does not download file contents or resubmit an unknown upload.",
-        mutating,network(connect=self.config()?.base_url.clone()),path(requests=vec![PathRequest::read(self.workspace_root()?.join(".agena/artifacts/provider-tools/media").display().to_string()),PathRequest::write(self.workspace_root()?.join(".agena/artifacts/provider-tools/media").display().to_string())]))]
+    #[tool(
+        name = "cloud_file_status",
+        tags(query, network),
+        summary = "Query the remote status of an owned Anthropic cloud file, not a local path.",
+        help = "Runs in Anthropic cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Accepts only cloud_file_upload handles from the same workspace, session and provider connection. Reports provider readiness/expiry and refreshes the signed local receipt. Does not download file contents or resubmit an unknown upload.",
+        mutating
+    )]
     async fn file_status(
         &self,
         context: &ToolInvokeContext<'_>,
@@ -354,10 +364,13 @@ impl ClaudeToolsPlugin {
             .await
     }
 
-    #[tool(name="cloud_file_delete",tags(mutate,network),
-        summary="Request deletion of an owned file from Anthropic cloud; preserve the local original.",
-        help="Runs in Anthropic cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Accepts only session-owned cloud file handles. Deletes the remote resource and records the provider acknowledgement; it does not promise erasure of provider logs/backups. No arbitrary remote IDs or cross-provider deletion. A failed request is not reported as successful cleanup.",
-        mutating,network(connect=self.config()?.base_url.clone()),path(requests=vec![PathRequest::read(self.workspace_root()?.join(".agena/artifacts/provider-tools/media").display().to_string()),PathRequest::write(self.workspace_root()?.join(".agena/artifacts/provider-tools/media").display().to_string())]))]
+    #[tool(
+        name = "cloud_file_delete",
+        tags(mutate, network),
+        summary = "Request deletion of an owned file from Anthropic cloud; preserve the local original.",
+        help = "Runs in Anthropic cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Accepts only session-owned cloud file handles. Deletes the remote resource and records the provider acknowledgement; it does not promise erasure of provider logs/backups. No arbitrary remote IDs or cross-provider deletion. A failed request is not reported as successful cleanup.",
+        mutating
+    )]
     async fn file_delete(
         &self,
         context: &ToolInvokeContext<'_>,
@@ -369,8 +382,6 @@ impl ClaudeToolsPlugin {
     }
     #[tool(
         name = "cloud_code_execution",
-        network(connect = self.config()?.base_url.clone()),
-        path(write = self.workspace_root()?.join(".agena/artifacts/provider-tools").display().to_string()),
         tags(network, interactive),
         summary = "Execute code in Anthropic cloud infrastructure, not on this computer.",
         help = "Runs in Anthropic cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Cloud filesystem and runtime are separate from the Agena workspace; provide needed input files explicitly. Uses code_execution_20260521 with persistent REPL state. Official allowed_callers, cache_control, defer_loading, and strict fields may be supplied in tool_options.",
@@ -389,8 +400,6 @@ impl ClaudeToolsPlugin {
 
     #[tool(
         name = "cloud_web_search",
-        network(connect = self.config()?.base_url.clone()),
-        path(write = self.workspace_root()?.join(".agena/artifacts/provider-tools").display().to_string()),
         tags(network, interactive),
         summary = "Search the web in Anthropic cloud and return sources; not a local browser operation.",
         help = "Runs in Anthropic cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Uses web_search_20260318. tool_options supports allowed_callers, allowed_domains, blocked_domains, cache_control, defer_loading, max_uses, response_inclusion, strict, and user_location.",
@@ -410,8 +419,6 @@ impl ClaudeToolsPlugin {
 
     #[tool(
         name = "cloud_web_fetch",
-        network(connect = self.config()?.base_url.clone()),
-        path(write = self.workspace_root()?.join(".agena/artifacts/provider-tools").display().to_string()),
         tags(network, interactive),
         summary = "Fetch and process web content in Anthropic cloud, not through the local browser.",
         help = "Runs in Anthropic cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Uses web_fetch_20260318. tool_options supports allowed/blocked domains, citations, max_content_tokens, max_uses, response_inclusion, strict, and use_cache.",
@@ -431,8 +438,6 @@ impl ClaudeToolsPlugin {
 
     #[tool(
         name = "cloud_advisor",
-        network(connect = self.config()?.base_url.clone()),
-        path(write = self.workspace_root()?.join(".agena/artifacts/provider-tools").display().to_string()),
         tags(network, interactive),
         summary = "Consult an advisor model in Anthropic cloud using the supplied context.",
         help = "Runs in Anthropic cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Only supplied context is available; the local repository and session transcript are not automatically uploaded. Uses advisor_20260301. Set tool_options.model and optional caching, max_tokens, max_uses, allowed_callers, cache_control, defer_loading, and strict.",

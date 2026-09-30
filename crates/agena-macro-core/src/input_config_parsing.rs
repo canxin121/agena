@@ -24,8 +24,6 @@ pub fn parse_input_config(attrs: &[Attribute]) -> Result<ToolInputConfig> {
     let mut handle_with_context = None;
     let mut stream_handle = None;
     let mut stream_handle_with_context = None;
-    let mut permission_paths_handle = None;
-    let mut permission_networks_handle = None;
     let mut handle_field = None;
     let mut handle_by_value = false;
     let mut trim = Vec::new();
@@ -53,8 +51,6 @@ pub fn parse_input_config(attrs: &[Attribute]) -> Result<ToolInputConfig> {
     let mut formats = Vec::new();
     let mut patterns = Vec::new();
     let mut choices = Vec::new();
-    let input_paths = Vec::new();
-    let input_networks = Vec::new();
     let input_aliases = Vec::new();
     let input_defaults = Vec::new();
     let input_field_metadata = Vec::new();
@@ -102,14 +98,6 @@ pub fn parse_input_config(attrs: &[Attribute]) -> Result<ToolInputConfig> {
                         "stream_handle_with_context" => {
                             stream_handle_with_context =
                                 Some(expr_path(&value.value, "stream_handle_with_context")?)
-                        }
-                        "permission_paths_handle" => {
-                            permission_paths_handle =
-                                Some(expr_path(&value.value, "permission_paths_handle")?)
-                        }
-                        "permission_networks_handle" => {
-                            permission_networks_handle =
-                                Some(expr_path(&value.value, "permission_networks_handle")?)
                         }
                         "handle_field" => {
                             handle_field = Some(expr_path(&value.value, "handle_field")?)
@@ -277,8 +265,6 @@ pub fn parse_input_config(attrs: &[Attribute]) -> Result<ToolInputConfig> {
         handle_with_context,
         stream_handle,
         stream_handle_with_context,
-        permission_paths_handle,
-        permission_networks_handle,
         handle_field,
         handle_by_value,
         trim,
@@ -306,8 +292,6 @@ pub fn parse_input_config(attrs: &[Attribute]) -> Result<ToolInputConfig> {
         formats,
         patterns,
         choices,
-        input_paths,
-        input_networks,
         input_aliases,
         input_defaults,
         input_field_metadata,
@@ -321,8 +305,6 @@ pub fn parse_input_variant_config(variant: &Variant) -> Result<ToolInputVariantC
     let mut handle_with_context = None;
     let mut stream_handle = None;
     let mut stream_handle_with_context = None;
-    let mut permission_paths_handle = None;
-    let mut permission_networks_handle = None;
     let mut handle_by_value = false;
     let mut trim = Vec::new();
     let mut trim_suffix = Vec::new();
@@ -383,14 +365,6 @@ pub fn parse_input_variant_config(variant: &Variant) -> Result<ToolInputVariantC
                         "stream_handle_with_context" => {
                             stream_handle_with_context =
                                 Some(expr_path(&value.value, "stream_handle_with_context")?)
-                        }
-                        "permission_paths_handle" => {
-                            permission_paths_handle =
-                                Some(expr_path(&value.value, "permission_paths_handle")?)
-                        }
-                        "permission_networks_handle" => {
-                            permission_networks_handle =
-                                Some(expr_path(&value.value, "permission_networks_handle")?)
                         }
                         "handle_by_value" => {
                             handle_by_value = expr_lit_bool(&value.value, "handle_by_value")?
@@ -557,8 +531,6 @@ pub fn parse_input_variant_config(variant: &Variant) -> Result<ToolInputVariantC
         handle_with_context,
         stream_handle,
         stream_handle_with_context,
-        permission_paths_handle,
-        permission_networks_handle,
         handle_by_value,
         trim,
         trim_suffix,
@@ -585,8 +557,6 @@ pub fn parse_input_variant_config(variant: &Variant) -> Result<ToolInputVariantC
         formats,
         patterns,
         choices,
-        input_paths: Vec::new(),
-        input_networks: Vec::new(),
         input_aliases: Vec::new(),
         input_defaults: Vec::new(),
         input_field_metadata: Vec::new(),

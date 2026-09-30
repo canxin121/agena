@@ -103,8 +103,7 @@ pub use sdk::{
     SessionEndInput, SessionEndReason, SessionStartInput, SessionStartPatch, SessionStartSource,
     ShellEnvInput, ShellEnvPatch, ToolAfterInput, ToolAfterPatch, ToolBeforeInput, ToolBeforePatch,
     ToolDefinition, ToolDefinitionInput, ToolDefinitionPatch, ToolFailureInput, ToolInvokeInput,
-    ToolInvokeOutput, ToolKey, ToolKeyParseError, ToolPermissionNetworksInput,
-    ToolPermissionPathsInput, UserPromptSubmitInput, UserPromptSubmitPatch,
+    ToolInvokeOutput, ToolKey, ToolKeyParseError, UserPromptSubmitInput, UserPromptSubmitPatch,
 };
 pub use services::{
     PluginServiceBinding, PluginServiceBindingKey, PluginServiceResolutionBlock,

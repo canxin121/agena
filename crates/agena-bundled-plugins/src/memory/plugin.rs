@@ -214,10 +214,6 @@ impl MemoryPlugin {
             .ok_or_else(|| PluginError::internal("memory plugin invoked before init"))
     }
 
-    fn store(&self) -> SdkResult<MemoryStore> {
-        Ok(MemoryStore::for_workspace(self.workspace_root()?))
-    }
-
     async fn sync_and_search_documents(
         &self,
         query: &str,
@@ -282,8 +278,7 @@ impl MemoryPlugin {
     #[tool(
         tags(query, filesystem, discovery),
         summary = "Search durable memory records.",
-        read_only,
-        path(write = self.store_dir_permission_path()?)
+        read_only
     )]
     async fn invoke_search(&self, input: &MemorySearchInput) -> SdkResult<ToolInvokeOutput> {
         let query = input.query.as_str();
@@ -323,8 +318,7 @@ impl MemoryPlugin {
     #[tool(
         tags(query, filesystem),
         summary = "Read one durable memory record.",
-        read_only,
-        path(read = self.store_dir_permission_path()?)
+        read_only
     )]
     async fn invoke_get(&self, input: &MemoryGetInput) -> SdkResult<ToolInvokeOutput> {
         let workspace_root = self.workspace_root()?.to_path_buf();
@@ -352,8 +346,7 @@ impl MemoryPlugin {
     #[tool(
         tags(query, filesystem, discovery),
         summary = "List durable memory records.",
-        read_only,
-        path(read = self.store_dir_permission_path()?)
+        read_only
     )]
     async fn invoke_list(&self, input: &MemoryListInput) -> SdkResult<ToolInvokeOutput> {
         let workspace_root = self.workspace_root()?.to_path_buf();
@@ -407,8 +400,7 @@ impl MemoryPlugin {
     #[tool(
         tags(mutate, filesystem),
         summary = "Write one durable memory record.",
-        mutating,
-        path(write = self.store_dir_permission_path()?)
+        mutating
     )]
     async fn invoke_write(&self, input: &MemoryWriteInput) -> SdkResult<ToolInvokeOutput> {
         let workspace_root = self.workspace_root()?.to_path_buf();
@@ -456,8 +448,7 @@ impl MemoryPlugin {
     #[tool(
         tags(mutate, filesystem),
         summary = "Delete one durable memory record.",
-        mutating,
-        path(write = self.store_dir_permission_path()?)
+        mutating
     )]
     async fn invoke_delete(&self, input: &MemoryDeleteInput) -> SdkResult<ToolInvokeOutput> {
         let workspace_root = self.workspace_root()?.to_path_buf();
@@ -478,11 +469,6 @@ impl MemoryPlugin {
             ))
         })
         .await
-    }
-
-    fn store_dir_permission_path(&self) -> SdkResult<String> {
-        let store = self.store()?;
-        Ok(store.dir().display().to_string())
     }
 
     fn memory_retrieval_query(

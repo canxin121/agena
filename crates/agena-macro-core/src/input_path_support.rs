@@ -5,11 +5,9 @@ use std::collections::BTreeSet;
 use quote::quote;
 use syn::{Attribute, Data, LitStr, Result, Type};
 
-use crate::plugin_tooling::{expand_input_network_specs, expand_input_path_specs};
-
 use super::{
-    NestedInputShapeField, PluginInputNetworkSpec, PluginInputPathSpec, flatten_shape_type,
-    nested_input_shape_field, serde_rename_all_fields_rule, serde_rename_all_rule,
+    NestedInputShapeField, flatten_shape_type, nested_input_shape_field,
+    serde_rename_all_fields_rule, serde_rename_all_rule,
 };
 
 pub fn struct_flatten_shape_types(data: &Data) -> Result<Vec<Type>> {
@@ -74,98 +72,11 @@ pub fn enum_nested_shape_fields(
     Ok(fields)
 }
 
-pub fn expand_input_paths_expr(
-    attrs: &[Attribute],
-    data: &Data,
-    paths: &[PluginInputPathSpec],
-) -> Result<proc_macro2::TokenStream> {
-    let own = expand_input_path_specs(paths);
-    let struct_flatten_shapes = struct_flatten_shape_types(data)?;
-    let enum_flatten_shapes = enum_flatten_shape_types(data)?;
-    let struct_nested_shapes = struct_nested_shape_fields(attrs, data)?;
-    let enum_nested_shapes = enum_nested_shape_fields(attrs, data)?;
-    if struct_flatten_shapes.is_empty()
-        && enum_flatten_shapes.is_empty()
-        && struct_nested_shapes.is_empty()
-        && enum_nested_shapes.is_empty()
-    {
-        return Ok(own);
-    }
-    let struct_nested_path_expr = expand_nested_shape_path_specs_expr(&struct_nested_shapes, false);
-    let enum_nested_path_expr = expand_nested_shape_path_specs_expr(&enum_nested_shapes, true);
-    Ok(quote! {{
-        let mut __items = #own;
-        #(
-            __items.extend(<#struct_flatten_shapes as ::agena_plugin_sdk::ToolInput>::input_paths());
-        )*
-        #(
-            __items.extend(
-                <#enum_flatten_shapes as ::agena_plugin_sdk::ToolInput>::input_paths()
-                    .into_iter()
-                    .map(|mut __spec| {
-                        __spec.optional = true;
-                        __spec
-                    })
-            );
-        )*
-        #struct_nested_path_expr
-        #enum_nested_path_expr
-        __items
-    }})
-}
-
-pub fn expand_input_networks_expr(
-    attrs: &[Attribute],
-    data: &Data,
-    networks: &[PluginInputNetworkSpec],
-) -> Result<proc_macro2::TokenStream> {
-    let own = expand_input_network_specs(networks);
-    let struct_flatten_shapes = struct_flatten_shape_types(data)?;
-    let enum_flatten_shapes = enum_flatten_shape_types(data)?;
-    let struct_nested_shapes = struct_nested_shape_fields(attrs, data)?;
-    let enum_nested_shapes = enum_nested_shape_fields(attrs, data)?;
-    if struct_flatten_shapes.is_empty()
-        && enum_flatten_shapes.is_empty()
-        && struct_nested_shapes.is_empty()
-        && enum_nested_shapes.is_empty()
-    {
-        return Ok(own);
-    }
-    let struct_nested_network_expr =
-        expand_nested_shape_network_specs_expr(&struct_nested_shapes, false);
-    let enum_nested_network_expr =
-        expand_nested_shape_network_specs_expr(&enum_nested_shapes, true);
-    Ok(quote! {{
-        let mut __items = #own;
-        #(
-            __items.extend(<#struct_flatten_shapes as ::agena_plugin_sdk::ToolInput>::input_networks());
-        )*
-        #(
-            __items.extend(
-                <#enum_flatten_shapes as ::agena_plugin_sdk::ToolInput>::input_networks()
-                    .into_iter()
-                    .map(|mut __spec| {
-                        __spec.optional = true;
-                        __spec
-                    })
-            );
-        )*
-        #struct_nested_network_expr
-        #enum_nested_network_expr
-        __items
-    }})
-}
-
-pub fn expand_input_tags_expr(
-    attrs: &[Attribute],
-    data: &Data,
-    paths: &[PluginInputPathSpec],
-    networks: &[PluginInputNetworkSpec],
-) -> Result<proc_macro2::TokenStream> {
-    // Tags are declaration-only. Nothing is derived from path/network specs
-    // or nested input shapes; `input_tags()` always returns empty.
-    let _ = (attrs, data, paths, networks);
-    Ok(quote! { ::std::vec::Vec::new() })
+/// Tool-input tag derivation. Input shapes declare no tags, so this is
+/// always the empty list; the function survives as the single place the
+/// derive's tag surface is produced.
+pub fn expand_input_tags_expr() -> proc_macro2::TokenStream {
+    quote! { ::std::vec::Vec::new() }
 }
 
 pub fn expand_nested_shape_schema_normalize_expr(
@@ -186,106 +97,6 @@ pub fn expand_nested_shape_schema_normalize_expr(
         }
     });
     quote! { #(#exprs)* }
-}
-
-pub fn expand_nested_shape_path_specs_expr(
-    nested_shapes: &[NestedInputShapeField],
-    variant_optional: bool,
-) -> proc_macro2::TokenStream {
-    if nested_shapes.is_empty() {
-        return quote! {};
-    }
-    let field_exprs = nested_shapes.iter().map(|field| {
-        let ty = &field.spec.inner_ty;
-        let force_optional = field.spec.optional || variant_optional;
-        let mut seen = BTreeSet::new();
-        let prefixes = std::iter::once(&field.schema_path)
-            .chain(field.schema_aliases.iter())
-            .filter_map(|candidate| {
-                let prefix = if field.spec.array {
-                    format!("$.{}[*]", candidate.value())
-                } else {
-                    format!("$.{}", candidate.value())
-                };
-                if seen.insert(prefix.clone()) {
-                    Some(LitStr::new(prefix.as_str(), candidate.span()))
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<_>>();
-        quote! {
-            #(
-                __items.extend(
-                    <#ty as ::agena_plugin_sdk::ToolInput>::input_paths()
-                        .into_iter()
-                        .map(|mut __spec| {
-                            if let Some(__jsonpath) = ::agena_plugin_sdk::macro_support::prefix_input_jsonpath(
-                                #prefixes,
-                                __spec.jsonpath.as_str(),
-                            ) {
-                                __spec.jsonpath = __jsonpath;
-                            }
-                            if #force_optional {
-                                __spec.optional = true;
-                            }
-                            __spec
-                        })
-                );
-            )*
-        }
-    });
-    quote! { #(#field_exprs)* }
-}
-
-pub fn expand_nested_shape_network_specs_expr(
-    nested_shapes: &[NestedInputShapeField],
-    variant_optional: bool,
-) -> proc_macro2::TokenStream {
-    if nested_shapes.is_empty() {
-        return quote! {};
-    }
-    let field_exprs = nested_shapes.iter().map(|field| {
-        let ty = &field.spec.inner_ty;
-        let force_optional = field.spec.optional || variant_optional;
-        let mut seen = BTreeSet::new();
-        let prefixes = std::iter::once(&field.schema_path)
-            .chain(field.schema_aliases.iter())
-            .filter_map(|candidate| {
-                let prefix = if field.spec.array {
-                    format!("$.{}[*]", candidate.value())
-                } else {
-                    format!("$.{}", candidate.value())
-                };
-                if seen.insert(prefix.clone()) {
-                    Some(LitStr::new(prefix.as_str(), candidate.span()))
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<_>>();
-        quote! {
-            #(
-                __items.extend(
-                    <#ty as ::agena_plugin_sdk::ToolInput>::input_networks()
-                        .into_iter()
-                        .map(|mut __spec| {
-                            if let Some(__jsonpath) = ::agena_plugin_sdk::macro_support::prefix_input_jsonpath(
-                                #prefixes,
-                                __spec.jsonpath.as_str(),
-                            ) {
-                                __spec.jsonpath = __jsonpath;
-                            }
-                            if #force_optional {
-                                __spec.optional = true;
-                            }
-                            __spec
-                        })
-                );
-            )*
-        }
-    });
-    quote! { #(#field_exprs)* }
 }
 
 pub fn expand_nested_shape_input_keys_expr(

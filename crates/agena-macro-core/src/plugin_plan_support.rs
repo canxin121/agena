@@ -7,8 +7,7 @@ use crate::{
     PluginGeneratedToolInput, PluginInherentMethodAttrs, PluginMethodInfo, PluginOperationAttrArgs,
     PluginOperationHandlerPlan, PluginOperationInputPlan, PluginOperationPlan,
     PluginServiceAttrArgs, PluginServiceAttrTarget, PluginServiceInputPlan, PluginServicePlan,
-    PluginServiceTargetPlan, PluginToolAttrConfig, PluginToolInvokeHandler,
-    PluginToolPermissionHandlers, PluginToolPlan, PluginToolStreamHandler,
+    PluginServiceTargetPlan, PluginToolInvokeHandler, PluginToolPlan, PluginToolStreamHandler,
     PluginToolStreamSignature, build_plugin_hook_plan, build_plugin_operation_input_plan,
     build_plugin_tool_method_shape, default_operation_id, doc_summary, doc_text,
     ensure_plugin_method_shared_receiver, expand_plugin_tool_input_schema, expr_lit_str,
@@ -329,7 +328,6 @@ pub fn build_plugin_tool_plan(
     let mut spec = parse_plugin_tool_method_attr(attr, method_ident)?;
     let shape = build_plugin_tool_method_shape(method, method_ident, self_label, &mut spec, docs)?;
     let stream = build_plugin_tool_stream_handler(method_infos, &shape)?;
-    let permissions = build_plugin_tool_permission_handlers(&spec);
     let mut input_model = shape.input_model;
     let output = plugin_method_tool_output(method, input_model.spec.output_ty.clone());
     input_model.spec.output_ty = output.ty.clone();
@@ -353,7 +351,6 @@ pub fn build_plugin_tool_plan(
             input: shape.call_input.clone(),
         },
         stream,
-        permissions,
         operation: spec.operation,
     })
 }
@@ -593,13 +590,4 @@ fn build_plugin_tool_stream_handler(
         context: shape.context,
         input: shape.call_input.clone(),
     }))
-}
-
-fn build_plugin_tool_permission_handlers(
-    config: &PluginToolAttrConfig,
-) -> PluginToolPermissionHandlers {
-    PluginToolPermissionHandlers {
-        path_rules: config.permission_path_rules.clone(),
-        network_rules: config.permission_network_rules.clone(),
-    }
 }

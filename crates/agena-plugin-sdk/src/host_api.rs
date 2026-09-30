@@ -15,7 +15,9 @@ use crate::attachment::AttachmentItem;
 use crate::error::{PluginError, Result};
 use crate::hooks::{EventEnvelope, EventFilter, ToolInvokeOutput};
 use crate::identity::{PluginKey, ToolKey};
-use crate::manifest::{PluginDisplayContribution, PluginTerminalThemeColors, ToolDefinition};
+use crate::manifest::{
+    PathKind, PluginDisplayContribution, PluginTerminalThemeColors, ToolDefinition,
+};
 pub use agena_domain::{BackgroundActivity, BackgroundActivityKind};
 
 #[async_trait]
@@ -55,6 +57,50 @@ pub trait HostClient: Send + Sync + 'static {
     }
 
     async fn read_config(&self, path: Option<String>) -> Result<serde_json::Value>;
+
+    // ---------------- permission queries ----------------
+    //
+    // These are read-only policy lookups. They answer what the effective
+    // permission configuration says about a target; they do not gate anything
+    // and they do not change policy state. A plugin that performs its own I/O
+    // is expected to ask before touching something outside the workspace, and
+    // to honour the answer — but the host cannot enforce that for a plugin
+    // that runs its own process or syscalls.
+
+    /// Ask what the effective policy says about one path access.
+    async fn check_path_permission(
+        &self,
+        _request: PathPermissionQuery,
+    ) -> Result<PermissionQuery> {
+        Err(unavailable())
+    }
+
+    /// Ask what the effective policy says about one outbound network target.
+    async fn check_network_permission(&self, _target: String) -> Result<PermissionQuery> {
+        Err(unavailable())
+    }
+
+    /// Convenience wrapper over [`HostClient::check_path_permission`]:
+    /// `Allow` passes, anything else is a [`PluginErrorKind::PolicyDenied`]
+    /// carrying the policy's own reason.
+    async fn require_path_permission(&self, request: PathPermissionQuery) -> Result<()> {
+        match self.check_path_permission(request.clone()).await? {
+            PermissionQuery::Allow {} => Ok(()),
+            PermissionQuery::Deny { reason } | PermissionQuery::Ask { reason } => {
+                Err(policy_denied_path(&request, &reason))
+            }
+        }
+    }
+
+    /// Convenience wrapper over [`HostClient::check_network_permission`].
+    async fn require_network_permission(&self, target: String) -> Result<()> {
+        match self.check_network_permission(target.clone()).await? {
+            PermissionQuery::Allow {} => Ok(()),
+            PermissionQuery::Deny { reason } | PermissionQuery::Ask { reason } => {
+                Err(policy_denied_network(&target, &reason))
+            }
+        }
+    }
 
     /// Queue a reload after the originating plugin call (including its nested
     /// calls or stream) finishes. Return acceptance, never a completed report.
@@ -522,7 +568,98 @@ pub fn current_host_callback_context() -> Option<HostCallbackContext> {
     HOST_CALLBACK_CONTEXT.try_with(Clone::clone).ok()
 }
 
-// ---------------- permission checks ----------------
+// ---------------- permission queries ----------------
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// One path-access question to the host's effective policy.
+pub struct PathPermissionQuery {
+    /// Read or write.
+    pub kind: PathKind,
+    /// The path as the plugin will use it. A relative path resolves against
+    /// the session workspace root, exactly as a host tool would resolve it.
+    pub path: String,
+}
+
+impl PathPermissionQuery {
+    pub fn read(path: impl Into<String>) -> Self {
+        Self {
+            kind: PathKind::Read,
+            path: path.into(),
+        }
+    }
+
+    pub fn write(path: impl Into<String>) -> Self {
+        Self {
+            kind: PathKind::Write,
+            path: path.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "verdict", rename_all = "snake_case")]
+/// The effective policy's answer to one permission query.
+///
+/// A query never waits for a human, so `Ask` cannot mean "a prompt is
+/// pending". It means the policy did not approve on its own: the user would
+/// have to be asked, and a query cannot ask. Treat it as not approved, or
+/// reach the same target through a host tool, whose call runs the full
+/// approval flow.
+pub enum PermissionQuery {
+    /// The effective policy approves this outright.
+    Allow {},
+    /// The effective policy refuses this, and will refuse a host tool call to
+    /// the same target too. `reason` is the policy's own explanation.
+    Deny { reason: String },
+    /// The effective policy would ask the user. Not an approval.
+    Ask { reason: String },
+}
+
+impl PermissionQuery {
+    pub fn is_allowed(&self) -> bool {
+        matches!(self, Self::Allow {})
+    }
+
+    /// The policy's explanation, for either non-approval verdict.
+    pub fn reason(&self) -> Option<&str> {
+        match self {
+            Self::Allow {} => None,
+            Self::Deny { reason } | Self::Ask { reason } => Some(reason.as_str()),
+        }
+    }
+}
+
+fn policy_denied_path(request: &PathPermissionQuery, reason: &str) -> PluginError {
+    let kind = match request.kind {
+        PathKind::Read => "read",
+        PathKind::Write => "write",
+    };
+    let mut error = PluginError::from_kind(
+        crate::error::PluginErrorKind::PolicyDenied,
+        format!(
+            "path {kind} is not permitted for `{}`: {reason}",
+            request.path
+        ),
+    );
+    error.diagnostic.data = Some(serde_json::json!({
+        "kind": "path",
+        "access": kind,
+        "path": request.path,
+    }));
+    error
+}
+
+fn policy_denied_network(target: &str, reason: &str) -> PluginError {
+    let mut error = PluginError::from_kind(
+        crate::error::PluginErrorKind::PolicyDenied,
+        format!("network access is not permitted for `{target}`: {reason}"),
+    );
+    error.diagnostic.data = Some(serde_json::json!({
+        "kind": "network",
+        "target": target,
+    }));
+    error
+}
 
 // ---------------- ask_user ----------------
 
@@ -588,15 +725,6 @@ pub struct AskUserResponse {
 
 // ---------------- run_subtask ----------------
 
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-/// Access mode of a subtask.
-pub enum RunSubtaskAccess {
-    #[default]
-    Inherit,
-    ReadOnly,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 /// Request to run a subtask.
@@ -605,8 +733,6 @@ pub struct RunSubtaskRequest {
     /// callback scope has ended. When absent, the current callback session is used.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_session_id: Option<i64>,
-    #[serde(default)]
-    pub access: RunSubtaskAccess,
     pub description: String,
     pub prompt: String,
     /// Optional Skill names or aliases attached to the child session's first

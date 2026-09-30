@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::attachment::AttachmentItem;
 use crate::identity::{PluginKey, ToolKey};
-use crate::manifest::ToolTag;
+use crate::manifest::{ToolBehavior, ToolTag};
 
 // ── tool.execute.before ────────────────────────────────────────────────────
 
@@ -17,10 +17,11 @@ pub struct ToolBeforeInput {
     pub workspace_root: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<ToolTag>,
-    /// The tool's full permission contract, so a hook can make authority
-    /// decisions without ever treating a tag as a permission.
+    /// How the tool declares it behaves. Self-description, not authority; it
+    /// lets hooks reason about shape (a shell tool, an interactive tool)
+    /// without a separate declaration surface.
     #[serde(default)]
-    pub contract: crate::manifest::ToolPermissionContract,
+    pub behavior: ToolBehavior,
     pub input: serde_json::Value,
     /// Carry-through: accumulated title override from prior plugins in the chain.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -225,22 +226,6 @@ impl ToolInvokeInput {
             workspace_root: self.workspace_root.as_str(),
         }
     }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-/// Input of the tool permission paths hook.
-pub struct ToolPermissionPathsInput {
-    pub tool_name: String,
-    pub workspace_root: String,
-    pub input: serde_json::Value,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-/// Input of the tool permission networks hook.
-pub struct ToolPermissionNetworksInput {
-    pub tool_name: String,
-    pub workspace_root: String,
-    pub input: serde_json::Value,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

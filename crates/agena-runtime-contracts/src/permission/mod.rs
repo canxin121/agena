@@ -4,12 +4,41 @@ use agena_domain::{
     AccessKind, AccessSelector, NetworkTarget, PermissionAction, PermissionDecision,
     PermissionMode, decide_from_mode,
 };
-use agena_plugin_host::sdk::ToolPermissionContract;
+use agena_plugin_host::sdk::ToolBehavior;
 use path_clean::PathClean;
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::path::{Path, PathBuf};
 use thiserror::Error;
+
+use crate::command_class::{self, CommandClass};
+
+/// The built-in mode of each shell command class, applied when the
+/// configuration carries no `tools.rules.<shell tool>` entry for that class.
+/// These reproduce the rules the automatic-approval fast path and the shell
+/// heuristics applied before they became configuration.
+pub(crate) const DEFAULT_NO_OP_COMMANDS: PermissionMode = PermissionMode::Allow;
+pub(crate) const DEFAULT_ROUTINE_COMMANDS: PermissionMode = PermissionMode::Allow;
+pub(crate) const DEFAULT_DANGEROUS_COMMANDS: PermissionMode = PermissionMode::Deny;
+
+/// The built-in mode of the read-only tool class.
+pub(crate) const DEFAULT_READ_ONLY_TOOLS: PermissionMode = PermissionMode::Allow;
+
+pub(crate) fn built_in_command_class_mode(class: CommandClass) -> PermissionMode {
+    match class {
+        CommandClass::NoOp => DEFAULT_NO_OP_COMMANDS,
+        CommandClass::Routine => DEFAULT_ROUTINE_COMMANDS,
+        CommandClass::Dangerous => DEFAULT_DANGEROUS_COMMANDS,
+    }
+}
+
+pub(crate) fn command_class_label(class: CommandClass) -> &'static str {
+    match class {
+        CommandClass::NoOp => "no-op",
+        CommandClass::Routine => "routine",
+        CommandClass::Dangerous => "dangerous shell",
+    }
+}
 
 #[derive(Debug, Clone)]
 /// Permission policy for tool execution.
@@ -19,6 +48,9 @@ pub struct ToolPermissionPolicy {
     pub(crate) bash_pattern_rules: Vec<BashPatternRule>,
     pub(crate) bash_deny_rules: Vec<BashPatternRule>,
     pub(crate) bash_overlay_rules: Vec<BashPatternRule>,
+    /// The read-only tool class, written as `tools.rules."*".read-only`.
+    /// `None` keeps the built-in class default.
+    pub(crate) read_only_mode: Option<PermissionMode>,
 }
 
 #[derive(Debug, Clone)]
@@ -39,6 +71,21 @@ impl BashPatternRule {
         }
     }
 
+    /// A rule matching a whole command class rather than a command text. The
+    /// keyword is kept as the rule's `pattern` so a decision reads the same
+    /// way a pattern rule's does.
+    pub fn new_class(
+        class: CommandClass,
+        keyword: impl Into<String>,
+        mode: PermissionMode,
+    ) -> Self {
+        Self {
+            matcher: CommandPatternMatcher::Class(class),
+            pattern: keyword.into(),
+            mode,
+        }
+    }
+
     fn matches(&self, input: &str) -> bool {
         self.matcher.matches(input)
     }
@@ -47,12 +94,14 @@ impl BashPatternRule {
 #[derive(Debug, Clone)]
 enum CommandPatternMatcher {
     Wildcard(WildcardPattern),
+    Class(CommandClass),
 }
 
 impl CommandPatternMatcher {
     fn matches(&self, input: &str) -> bool {
         match self {
             Self::Wildcard(pattern) => pattern.matches(input),
+            Self::Class(class) => command_class::command_classes(input) == Some(*class),
         }
     }
 }
@@ -181,10 +230,10 @@ fn is_terminal_write(names: &[&str]) -> bool {
 pub fn tool_action(
     tool_name: &str,
     command: Option<&str>,
-    contract: &ToolPermissionContract,
+    behavior: ToolBehavior,
     policy: Option<&ToolPermissionPolicy>,
 ) -> PermissionAction {
-    let qualifier = if is_shell_tool(&[tool_name], contract) && !is_terminal_write(&[tool_name]) {
+    let qualifier = if is_shell_tool(&[tool_name], behavior) && !is_terminal_write(&[tool_name]) {
         command.and_then(|command| bash_permission_qualifier(command, policy))
     } else {
         None
@@ -203,6 +252,7 @@ impl ToolPermissionPolicy {
             bash_pattern_rules: Vec::new(),
             bash_deny_rules: Vec::new(),
             bash_overlay_rules: Vec::new(),
+            read_only_mode: None,
         }
     }
 
@@ -217,6 +267,25 @@ impl ToolPermissionPolicy {
     pub fn add_bash_overlay_rule(&mut self, pattern: impl Into<String>, mode: PermissionMode) {
         self.bash_overlay_rules
             .push(BashPatternRule::new_wildcard(pattern, mode));
+    }
+
+    /// Append a command-class rule. It is stored among the overlay rules so it
+    /// keeps the ranking a `tools.rules.<tool>` entry has always had — after
+    /// the unconditional deny patterns and the user's command patterns, and
+    /// before the tool's own default.
+    pub fn add_bash_class_rule(
+        &mut self,
+        class: CommandClass,
+        keyword: impl Into<String>,
+        mode: PermissionMode,
+    ) {
+        self.bash_overlay_rules
+            .push(BashPatternRule::new_class(class, keyword, mode));
+    }
+
+    /// Install the read-only tool class, written as `tools.rules."*".read-only`.
+    pub fn set_read_only_mode(&mut self, mode: Option<PermissionMode>) {
+        self.read_only_mode = mode;
     }
 
     pub fn bash_pattern_rules(&self) -> &[BashPatternRule] {
@@ -235,14 +304,14 @@ impl ToolPermissionPolicy {
         &self,
         names: &[&str],
         command: Option<&str>,
-        contract: &ToolPermissionContract,
+        behavior: ToolBehavior,
     ) -> PermissionDecision {
         // Input to a persistent CLI is not an independent shell command: it
         // may complete an earlier input or execute inside a REPL. Keep explicit
         // tool restrictions and recognizable command denials, but never let a
         // shell prefix allow/auto rule approve arbitrary terminal input.
         if is_terminal_write(names) {
-            let decision = self.check_tool_mode_with_names(names, contract);
+            let decision = self.check_tool_mode_with_names(names, behavior);
             if matches!(decision, PermissionDecision::Deny { .. }) {
                 return decision;
             }
@@ -262,7 +331,12 @@ impl ToolPermissionPolicy {
             }
             return decision;
         }
-        if is_shell_tool(names, contract)
+        if let Some((matched_name, mode)) = self.tool_name_mode(names) {
+            // A rule the user wrote for this tool names an action, so it
+            // outranks the command-class defaults below.
+            return self.decision_for_mode(matched_name, mode);
+        }
+        if is_shell_tool(names, behavior)
             && let Some(command) = command
         {
             if let Some(decision) = self.evaluate_bash_deny(command) {
@@ -274,38 +348,79 @@ impl ToolPermissionPolicy {
             if let Some(decision) = self.evaluate_bash_pattern(command) {
                 return decision;
             }
+            // The command classes are defaults: a command the user named under
+            // `tools.rules` was answered above, and a command no rule names
+            // lands on its class default.
+            if let Some(decision) = self.evaluate_command_class(command) {
+                return decision;
+            }
         }
-        self.check_tool_mode_with_names(names, contract)
+        // The read-only class default. Like the interaction default it is
+        // ranked above `tools.default`, and below a rule naming the tool.
+        if let Some(decision) = self.evaluate_read_only_class(names, behavior) {
+            return decision;
+        }
+        let name = names.first().copied().unwrap_or("tool");
+        self.decision_for_mode(name, self.default_mode)
+    }
+
+    /// The configured mode for one of `names`, if the user named the tool or a
+    /// default did. This is the map `tools.names` writes into.
+    fn tool_name_mode<'a>(&self, names: &[&'a str]) -> Option<(&'a str, PermissionMode)> {
+        names.iter().find_map(|name| {
+            self.tool_modes
+                .get(*name)
+                .copied()
+                .map(|mode| (*name, mode))
+        })
+    }
+
+    /// The default for tools that declare themselves read-only and neither
+    /// shell nor interactive, on the plugin's own word. `None` means no default
+    /// applies, so the tool falls through to `tools.default`.
+    ///
+    /// The mode comes from `tools.rules."*".read-only` when the configuration
+    /// sets one, and from the built-in `allow` otherwise. A tool the user named
+    /// under `tools.names` was already answered by [`Self::tool_name_mode`],
+    /// so this class default ranks below a name and above `tools.default`.
+    fn evaluate_read_only_class(
+        &self,
+        names: &[&str],
+        behavior: ToolBehavior,
+    ) -> Option<PermissionDecision> {
+        if !behavior.read_only || behavior.shell || behavior.interactive {
+            return None;
+        }
+        let mode = self.read_only_mode.unwrap_or(DEFAULT_READ_ONLY_TOOLS);
+        if mode == PermissionMode::Auto {
+            return None;
+        }
+        let name = names.first().copied().unwrap_or("tool");
+        Some(self.decision_for_mode(name, mode))
     }
 
     pub fn check_tool(
         &self,
         name: &str,
         command: Option<&str>,
-        contract: &ToolPermissionContract,
+        behavior: ToolBehavior,
     ) -> PermissionDecision {
-        self.check_tool_with_names(&[name], command, contract)
+        self.check_tool_with_names(&[name], command, behavior)
     }
 
     fn check_tool_mode_with_names(
         &self,
         names: &[&str],
-        _contract: &ToolPermissionContract,
+        _behavior: ToolBehavior,
     ) -> PermissionDecision {
         // A precise tool-name rule wins; otherwise the default applies. The
         // default for ordinary execution tools is Allow: most tools are safe
         // because their effects are already constrained by the path, network,
         // and shell-command policies. Ask/Deny remain for the cases that need
-        // them (interactive tools, destructive shell commands, users who opt
-        // into stricter tool gating). The `shell` and `interactive` contract
+        // them (users who opt into stricter tool gating). The declared behavior
         // flags are never used as a proxy for the default — only configured
         // rules and `tools.default` decide.
-        if let Some((matched_name, mode)) = names.iter().find_map(|name| {
-            self.tool_modes
-                .get(*name)
-                .copied()
-                .map(|mode| (*name, mode))
-        }) {
+        if let Some((matched_name, mode)) = self.tool_name_mode(names) {
             return self.decision_for_mode(matched_name, mode);
         }
         let name = names.first().copied().unwrap_or("tool");
@@ -325,6 +440,45 @@ impl ToolPermissionPolicy {
                 reason: format!("tool '{name}' denied by policy"),
             },
         }
+    }
+
+    /// Answer a shell command by its built-in class default.
+    ///
+    /// The class rules live among the overlay rules (they are
+    /// `tools.rules.<shell tool>` entries like any other), so a command no
+    /// pattern names falls to its class's rule — the built-in
+    /// `allow` / `allow` / `deny` when the configuration carries none.
+    /// A class left at `Auto` is not decided statically and reaches the
+    /// approval model.
+    fn evaluate_command_class(&self, command: &str) -> Option<PermissionDecision> {
+        let normalized = command.trim();
+        if normalized.is_empty() {
+            return None;
+        }
+        let class = crate::command_class::command_classes(normalized)?;
+        let configured = self
+            .bash_overlay_rules
+            .iter()
+            .rev()
+            .find(|rule| matches!(rule.matcher, CommandPatternMatcher::Class(rule_class) if rule_class == class))
+            .map(|rule| rule.mode);
+        let mode = configured.unwrap_or_else(|| built_in_command_class_mode(class));
+        if mode == PermissionMode::Auto {
+            return None;
+        }
+        let label = command_class_label(class);
+        Some(match mode {
+            PermissionMode::Allow => PermissionDecision::Allow,
+            PermissionMode::Ask => PermissionDecision::Ask {
+                reason: format!(
+                    "automatic approval class default requires confirmation for this {label} command"
+                ),
+            },
+            PermissionMode::Deny => PermissionDecision::Deny {
+                reason: format!("automatic approval class default blocked this {label} command"),
+            },
+            PermissionMode::Auto => unreachable!("handled above"),
+        })
     }
 
     fn evaluate_bash_pattern(&self, command: &str) -> Option<PermissionDecision> {
@@ -414,8 +568,8 @@ impl ToolPermissionPolicy {
     }
 }
 
-fn is_shell_tool(_names: &[&str], contract: &ToolPermissionContract) -> bool {
-    contract.shell
+fn is_shell_tool(_names: &[&str], behavior: ToolBehavior) -> bool {
+    behavior.shell
 }
 
 pub fn combine_permission_modes(left: PermissionMode, right: PermissionMode) -> PermissionMode {
@@ -434,8 +588,6 @@ pub enum PermissionConfigError {
     UnknownPathAlias { pattern: String, alias: String },
     #[error("permission path marker `{alias}` cannot be resolved for pattern `{pattern}`")]
     UnresolvedPathAlias { pattern: String, alias: String },
-    #[error("invalid permission path access shorthand `{value}`")]
-    InvalidPathAccessShorthand { value: String },
     #[error("invalid permission network rule `{pattern}`: {reason}")]
     InvalidNetworkRule { pattern: String, reason: String },
 }
@@ -754,12 +906,12 @@ mod tests {
 
     use super::{PermissionMode, ToolPermissionPolicy, tool_action};
     use agena_domain::PermissionDecision;
-    use agena_plugin_host::sdk::ToolPermissionContract;
+    use agena_plugin_host::sdk::ToolBehavior;
 
-    fn shell_contract() -> ToolPermissionContract {
-        ToolPermissionContract {
+    fn shell_behavior() -> ToolBehavior {
+        ToolBehavior {
             shell: true,
-            ..ToolPermissionContract::default()
+            ..ToolBehavior::default()
         }
     }
 
@@ -770,14 +922,14 @@ mod tests {
         policy.add_bash_overlay_rule("git push *", PermissionMode::Deny);
 
         assert!(matches!(
-            policy.check_tool("agena.shell.run", Some("git status"), &shell_contract()),
+            policy.check_tool("agena.shell.run", Some("git status"), shell_behavior()),
             PermissionDecision::Allow
         ));
         assert!(matches!(
             policy.check_tool(
                 "agena.shell.run",
                 Some("git push origin main"),
-                &shell_contract(),
+                shell_behavior(),
             ),
             PermissionDecision::Deny { .. }
         ));
@@ -785,7 +937,7 @@ mod tests {
             tool_action(
                 "agena.shell.run",
                 Some("git status"),
-                &shell_contract(),
+                shell_behavior(),
                 Some(&policy),
             ),
             PermissionAction::Tool {

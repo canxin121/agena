@@ -2,8 +2,7 @@
 
 mod budget;
 mod classifier;
-mod fast_path;
-mod heuristic;
+mod prompt;
 
 pub use budget::DenialBudget;
 pub use classifier::{
@@ -15,5 +14,4 @@ pub use classifier::{
     build_classifier_user_prompt, cited_block_rule, deny_reason, parse_classifier_reason,
     parse_classifier_verdict,
 };
-pub use fast_path::{AUTO_APPROVAL_SYSTEM_PROMPT, AutoFastPath, auto_fast_path};
-pub use heuristic::heuristic_decision;
+pub use prompt::{PathClassPromptFlags, auto_approval_system_prompt};

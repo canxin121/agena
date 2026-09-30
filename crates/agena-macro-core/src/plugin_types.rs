@@ -10,7 +10,6 @@ pub struct PluginToolPlan {
     pub input_model: PluginGeneratedToolInput,
     pub invoke: PluginToolInvokeHandler,
     pub stream: Option<PluginToolStreamHandler>,
-    pub permissions: PluginToolPermissionHandlers,
     pub operation: Option<PluginToolOperationConfig>,
 }
 
@@ -47,41 +46,6 @@ pub struct PluginToolStreamSignature {
     pub method: Ident,
     pub is_async: bool,
     pub sink_first: bool,
-}
-
-#[derive(Clone, Default)]
-/// Permission handlers of a plugin tool.
-pub struct PluginToolPermissionHandlers {
-    pub path_rules: Vec<PluginToolPathPermissionRule>,
-    pub network_rules: Vec<PluginToolNetworkPermissionRule>,
-}
-
-impl PluginToolPermissionHandlers {
-    pub fn has_path_permissions(&self) -> bool {
-        !self.path_rules.is_empty()
-    }
-
-    pub fn has_network_permissions(&self) -> bool {
-        !self.network_rules.is_empty()
-    }
-}
-
-#[derive(Clone)]
-/// Path permission rule of a plugin tool.
-pub enum PluginToolPathPermissionRule {
-    Read(Expr),
-    Reads(Expr),
-    Write(Expr),
-    Writes(Expr),
-    Requests(Expr),
-}
-
-#[derive(Clone)]
-/// Network permission rule of a plugin tool.
-pub enum PluginToolNetworkPermissionRule {
-    Connect(Expr),
-    Connects(Expr),
-    Requests(Expr),
 }
 
 #[derive(Clone, Copy)]
@@ -306,8 +270,6 @@ pub fn plugin_attr_has_explicit_args(attr: &Attribute) -> bool {
 pub struct PluginToolAttrConfig {
     pub spec: crate::tool_spec_support::ToolSpecConfig,
     pub stream_method: Option<Ident>,
-    pub permission_path_rules: Vec<PluginToolPathPermissionRule>,
-    pub permission_network_rules: Vec<PluginToolNetworkPermissionRule>,
     pub operation: Option<PluginToolOperationConfig>,
 }
 
@@ -374,13 +336,9 @@ pub struct PluginArgConfig {
     pub required_unless_present: Vec<LitStr>,
     pub forbid_substrings: Vec<LitStr>,
     pub distinct_trimmed_within: Vec<LitStr>,
-    pub path: Option<PluginPathPermissionKind>,
-    pub network: Option<PluginNetworkSemantic>,
     pub optional: bool,
     pub flatten_shape: bool,
     pub nested_shape: bool,
-    pub jsonpath: Option<LitStr>,
-    pub fallback: Option<LitStr>,
     pub name: Option<LitStr>,
     pub aliases: Vec<LitStr>,
     pub example: Option<Expr>,
@@ -389,43 +347,8 @@ pub struct PluginArgConfig {
 }
 
 #[derive(Clone, Copy)]
-/// Kind of a plugin path permission.
-pub enum PluginPathPermissionKind {
-    Read,
-    Write,
-}
-
-#[derive(Clone, Copy)]
-/// Network semantic of a plugin argument.
-pub enum PluginNetworkSemantic {
-    Network,
-    Url,
-    Host,
-    Internet,
-    Private,
-}
-
-#[derive(Clone, Copy)]
 /// Kind of a plugin input picker.
 pub enum PluginPickerKind {
     File,
     Dir,
-}
-
-#[derive(Clone)]
-/// Path specification of a plugin input.
-pub struct PluginInputPathSpec {
-    pub jsonpath: LitStr,
-    pub kind: PluginPathPermissionKind,
-    pub fallback: Option<LitStr>,
-    pub optional: bool,
-}
-
-#[derive(Clone)]
-/// Network specification of a plugin input.
-pub struct PluginInputNetworkSpec {
-    pub jsonpath: LitStr,
-    pub fallback: Option<LitStr>,
-    pub optional: bool,
-    pub semantic: PluginNetworkSemantic,
 }

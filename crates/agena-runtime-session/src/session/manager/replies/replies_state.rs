@@ -2,8 +2,7 @@ use super::super::recover_read;
 use super::{
     AppError, Arc, ModelRef, PathBuf, PersistedPermissionRule, SessionManager, SessionManagerState,
     SessionRunOptions, ToolInvocationExecution, custom_payload_value,
-    managed_project_state_permission, mode_request_override_for_adapter, mpsc,
-    payload_tool_name_for_invocation,
+    mode_request_override_for_adapter, mpsc, payload_tool_name_for_invocation,
 };
 use crate::session::Session;
 use crate::session::store::new_part_from_content;
@@ -270,9 +269,6 @@ impl SessionManager {
             "resolve shared session permission",
         )
         .clone();
-        effective.merge_from(managed_project_state_permission(
-            state.tool_executor.workspace_root(),
-        ));
         let session_permission = recover_read(
             state.shared_session_permissions.as_ref(),
             "resolve session-specific permission",

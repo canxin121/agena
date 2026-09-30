@@ -31,6 +31,10 @@ impl App {
             return;
         }
         let action = match &dialog.page {
+            // Pages whose entries are a fixed set of built-in mode keys rather
+            // than a named collection: there is nothing to add. Every key
+            // already exists - an entry with no stored value is showing its
+            // built-in default.
             PermissionStudioPage::PathDefaults | PermissionStudioPage::NetworkZones => {
                 self.flash_warning(ui_text::t(&self.i18n, "flash-permission-studio-no-add"));
                 return;
@@ -132,6 +136,9 @@ impl App {
         }
         let selected_action = dialog.state.selected_item().map(|item| item.action.clone());
         let (title, body, action) = match &dialog.page {
+            // Class-default entries are cleared by emptying their mode in the
+            // editor (which restores the built-in default), not by deleting the
+            // entry, so the delete action does not apply here either.
             PermissionStudioPage::PathDefaults | PermissionStudioPage::NetworkZones => {
                 self.flash_warning(ui_text::t(&self.i18n, "flash-permission-studio-no-delete"));
                 return;

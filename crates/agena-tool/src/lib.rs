@@ -23,8 +23,7 @@ use std::time::Duration;
 
 pub mod tool_activity;
 use agena_domain::{
-    PermissionAction, PermissionDecision, RawOutput, ToolInvocation, ToolPermissionContract,
-    ToolResultState,
+    PermissionAction, PermissionDecision, RawOutput, ToolInvocation, ToolResultState,
 };
 pub use agena_plugin_contracts::{
     TOOL_SUMMARY_MAX_DISPLAY_WIDTH, TOOL_TITLE_MAX_DISPLAY_WIDTH, normalize_tool_summary,
@@ -4345,17 +4344,6 @@ pub struct CronRunSummary {
 pub struct ToolPermissionCheck {
     pub action: PermissionAction,
     pub decision: PermissionDecision,
-    /// The tool's full permission contract: shell/interactive/read_only/task
-    /// flags plus declared path/network specs. The decision pipeline reads
-    /// these directly; never tool tags (tags are metadata for discovery/UI).
-    pub contract: ToolPermissionContract,
-}
-
-impl ToolPermissionCheck {
-    /// Whether the contract is path-scoped (declares concrete path specs).
-    pub fn is_path_scoped(&self) -> bool {
-        !self.contract.input_paths.is_empty() || !self.contract.path_access.is_empty()
-    }
 }
 
 /// Invocation after tool lookup/presentation has prepared it for execution.

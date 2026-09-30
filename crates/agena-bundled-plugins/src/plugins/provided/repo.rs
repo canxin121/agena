@@ -77,10 +77,7 @@ impl SnapshotPlugin {
         tags(mutate, snapshot),
         summary = "Enter a managed repository snapshot.",
         mutating,
-
-        snapshot,
-
-        path(requests = self.inner.permission_snapshot_enter(input).await?)
+        snapshot
     )]
     async fn enter(&self, input: &EnterSnapshotCommandInput) -> SdkResult<ToolInvokeOutput> {
         self.inner.invoke_snapshot_enter(input).await
@@ -90,10 +87,7 @@ impl SnapshotPlugin {
         tags(mutate, snapshot),
         summary = "Exit a managed repository snapshot.",
         mutating,
-
-        snapshot,
-
-        path(requests = self.inner.permission_snapshot_exit(input).await?)
+        snapshot
     )]
     async fn exit(&self, input: &ExitSnapshotCommandInput) -> SdkResult<ToolInvokeOutput> {
         self.inner.invoke_snapshot_exit(input).await
@@ -120,8 +114,8 @@ mod tests {
             "snapshot remains a discovery/UI metadata tag"
         );
         assert!(
-            manifest.tools[0].permissions.read_only,
-            "read_only must remain an authority-bearing contract flag"
+            manifest.tools[0].behavior.read_only,
+            "read_only must be declared on the tool behavior"
         );
     }
 }

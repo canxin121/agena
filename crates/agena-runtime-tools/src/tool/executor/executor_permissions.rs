@@ -4,7 +4,7 @@ impl ToolExecutor {
             return false;
         };
         entry.definition.runtime.concurrency_safe
-            && !entry.definition.permissions.interactive
+            && !entry.definition.behavior.interactive
             && is_concurrency_safe_tool_invocation(
                 &entry,
                 &PluginInvocation::from_tool_invocation(invocation),
@@ -109,9 +109,9 @@ impl ToolExecutor {
                     capability: "tool_execution".to_string(),
                     tool_name: Some(tool_name.clone()),
                     reason: format!(
-                        "tool '{tool_name}' is outside the current session execution-access profile"
+                        "tool '{tool_name}' is outside the current session tool capability set"
                     ),
-                    source: agena_domain::CapabilitySourceKind::ExecutionAccess,
+                    source: agena_domain::CapabilitySourceKind::AgentProfile,
                     retryable: false,
                 },
             )));
@@ -141,7 +141,7 @@ impl ToolExecutor {
             self.principal.authorize_tool_names(
                 &tool_name_aliases,
                 command.as_deref(),
-                &definition.definition.permissions,
+                definition.definition.behavior,
             ),
         ))
     }
@@ -185,180 +185,153 @@ impl ToolExecutor {
             })
     }
 
-    pub(crate) fn collect_declared_path_checks(
+    /// Record the path and network effects of the host's *own* builtin tools.
+    ///
+    /// This is not the deleted declaration surface coming back: nothing here is
+    /// read from a plugin manifest. `ToolPayloadInput` is the host's own typed
+    /// payload for the tools the executor itself dispatches (see
+    /// `ToolPayloadInput::from_executor_backed_invocation`), so resolving its
+    /// path arguments is the host reading its own arguments — which is exactly
+    /// the ownership boundary the inversion kept. A tool with a real plugin
+    /// handler has no payload and therefore contributes nothing here.
+    pub(crate) fn collect_builtin_effect_checks(
         &self,
         checks: &mut Vec<ToolPermissionCheck>,
-        input: &serde_json::Value,
-        specs: &[SdkInputPathSpec],
-        static_specs: &[SdkPathAccessSpec],
+        resolution: &agena_plugin_host::registry::RegisteredTool,
+        invocation: &ToolInvocation,
     ) -> Result<(), ToolError> {
-        for spec in static_specs {
-            self.push_requested_path_checks(checks, spec.path.as_str(), spec.kind);
-        }
-        for path_request in extract_input_path_requests(input, specs)? {
-            self.push_requested_path_checks(checks, &path_request.path, path_request.kind);
-        }
-        Ok(())
-    }
-
-    pub(crate) async fn collect_dynamic_path_checks_async(
-        &self,
-        checks: &mut Vec<ToolPermissionCheck>,
-        registered_tool: &agena_plugin_host::registry::RegisteredTool,
-        input: &serde_json::Value,
-    ) -> Result<(), ToolError> {
-        let result = self
-            .plugins
-            .dispatch_tool_permission_paths(
-                registered_tool,
-                PluginToolPermissionPathsInput {
-                    tool_name: registered_tool.tool_name().to_string(),
-                    workspace_root: self.workspace_root.to_string_lossy().to_string(),
-                    input: input.clone(),
-                },
-                self.cancellation_token.clone(),
-            )
-            .await;
-
-        let path_requests = match result {
-            Ok(path_requests) => path_requests,
-            Err(_)
-                if self
-                    .cancellation_token()
-                    .is_some_and(tokio_util::sync::CancellationToken::is_cancelled) =>
-            {
-                return Err(ToolError::Cancelled);
-            }
-            Err(err) if err.kind == agena_plugin_host::sdk::PluginErrorKind::NotImplemented => {
-                return Ok(());
-            }
-            Err(err) => return Err(ToolError::from_plugin_error(err)),
+        let Some(payload) =
+            ToolPayloadInput::from_executor_backed_invocation(resolution, invocation)
+        else {
+            return Ok(());
         };
-
-        for path_request in path_requests {
-            self.push_requested_path_checks(checks, &path_request.path, path_request.kind);
+        match payload.map_err(|error| ToolError::invalid_input_error(&error))? {
+            ToolPayloadInput::Read(input) => {
+                self.push_resolved_path_check(checks, AccessKind::Read, input.file_path.as_str());
+            }
+            ToolPayloadInput::Glob(input) => {
+                self.push_optional_read_path_check(checks, input.path.as_deref());
+            }
+            ToolPayloadInput::Grep(input) => {
+                self.push_optional_read_path_check(checks, input.path.as_deref());
+            }
+            ToolPayloadInput::ApplyPatch(input) => {
+                for path in crate::tool::apply_patch::planned_paths(input.patch.as_str())? {
+                    self.push_resolved_path_check(checks, AccessKind::Write, path.as_str());
+                }
+            }
+            ToolPayloadInput::LspDefinition(input) => {
+                self.push_resolved_path_check(
+                    checks,
+                    AccessKind::Read,
+                    input.position.file_path.as_str(),
+                );
+            }
+            ToolPayloadInput::LspReferences(input) => {
+                self.push_resolved_path_check(
+                    checks,
+                    AccessKind::Read,
+                    input.position.file_path.as_str(),
+                );
+            }
+            ToolPayloadInput::LspHover(input) => {
+                self.push_resolved_path_check(
+                    checks,
+                    AccessKind::Read,
+                    input.position.file_path.as_str(),
+                );
+            }
+            ToolPayloadInput::LspDiagnostics(input) => {
+                self.push_resolved_path_check(checks, AccessKind::Read, input.file_path.as_str());
+            }
+            ToolPayloadInput::Shell(input) => {
+                self.collect_shell_effect_checks(checks, &input)?;
+            }
+            ToolPayloadInput::Monitor(crate::part::MonitorToolInput::Start {
+                ws: Some(ws),
+                ..
+            }) => {
+                self.push_network_check(checks, ws.url.as_str())?;
+            }
+            _ => {}
         }
         Ok(())
     }
 
-    pub(crate) fn collect_declared_network_checks(
+    fn push_optional_read_path_check(
         &self,
         checks: &mut Vec<ToolPermissionCheck>,
-        input: &serde_json::Value,
-        input_specs: &[SdkInputNetworkSpec],
-        static_specs: &[SdkNetworkAccessSpec],
-    ) -> Result<(), ToolError> {
-        for spec in static_specs {
-            self.push_network_check(checks, spec.target.as_str())?;
+        path: Option<&str>,
+    ) {
+        if let Some(path) = path {
+            self.push_resolved_path_check(checks, AccessKind::Read, path);
         }
-        for request in extract_input_network_requests(input, input_specs)? {
-            self.push_network_check(checks, request.target.as_str())?;
-        }
-        Ok(())
     }
 
-    pub(crate) async fn collect_dynamic_network_checks_async(
+    fn collect_shell_effect_checks(
         &self,
         checks: &mut Vec<ToolPermissionCheck>,
-        registered_tool: &agena_plugin_host::registry::RegisteredTool,
-        input: &serde_json::Value,
+        input: &crate::part::ShellToolInput,
     ) -> Result<(), ToolError> {
-        let result = self
-            .plugins
-            .dispatch_tool_permission_networks(
-                registered_tool,
-                PluginToolPermissionNetworksInput {
-                    tool_name: registered_tool.tool_name().to_string(),
-                    workspace_root: self.workspace_root.to_string_lossy().to_string(),
-                    input: input.clone(),
+        let (command, effects, network, workdir) = match input {
+            crate::part::ShellToolInput::Run { command, .. } => (
+                command.command.as_str(),
+                command.filesystem_effects(),
+                command.network.as_slice(),
+                command.workdir.as_deref(),
+            ),
+            crate::part::ShellToolInput::Write { input } => (
+                input.chars.as_str(),
+                agena_domain::FilesystemEffects {
+                    read: input.reads.clone(),
+                    write: input.writes.clone(),
                 },
-                self.cancellation_token.clone(),
-            )
-            .await;
-
-        let network_requests = match result {
-            Ok(network_requests) => network_requests,
-            Err(_)
-                if self
-                    .cancellation_token()
-                    .is_some_and(tokio_util::sync::CancellationToken::is_cancelled) =>
-            {
-                return Err(ToolError::Cancelled);
-            }
-            Err(err) if err.kind == agena_plugin_host::sdk::PluginErrorKind::NotImplemented => {
-                return Ok(());
-            }
-            Err(err) => return Err(ToolError::from_plugin_error(err)),
+                input.network.as_slice(),
+                None,
+            ),
+            crate::part::ShellToolInput::List {}
+            | crate::part::ShellToolInput::Logs { .. }
+            | crate::part::ShellToolInput::Stop { .. }
+            | crate::part::ShellToolInput::Resize { .. }
+            | crate::part::ShellToolInput::Signal { .. } => return Ok(()),
         };
-
-        for request in network_requests {
-            self.push_network_check(checks, request.target.as_str())?;
+        if !command.is_empty() {
+            crate::tool::shell_tools::validate_declared_filesystem_effects(
+                "shell", command, &effects,
+            )?;
+            self.push_declared_network_checks(checks, command, network)?;
         }
+        let base = self.shell_effect_base_path(workdir);
+        self.push_filesystem_effect_checks(checks, &effects, base.as_path());
         Ok(())
     }
 
-    pub(crate) fn collect_declared_filesystem_effect_checks(
+    /// Declared outbound targets for a shell command. The declaration is still
+    /// required of the model — a command that provably uses the network must
+    /// name its targets — and each named target is then checked.
+    fn push_declared_network_checks(
         &self,
         checks: &mut Vec<ToolPermissionCheck>,
-        tool_name: &str,
-        input: &serde_json::Value,
+        command: &str,
+        targets: &[String],
     ) -> Result<(), ToolError> {
-        if let Some(effects) = filesystem_effects_from_input(input)? {
-            let command = input
-                .pointer("/args/command")
-                .or_else(|| input.get("command"))
-                .or_else(|| input.get("chars"))
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or_default();
-            if !command.is_empty() {
-                validate_shell_filesystem_effects(tool_name, command, &effects)?;
-            }
-            let workdir = input
-                .get("workdir")
-                .or_else(|| input.pointer("/args/workdir"))
-                .and_then(serde_json::Value::as_str);
-            let base = self.shell_effect_base_path(workdir);
-            self.push_filesystem_effect_checks(checks, &effects, base.as_path());
+        if targets.is_empty()
+            && let Some(reason) = agena_tool::shell_analysis::network_command_reason(command)
+        {
+            return Err(ToolError::invalid_input(format!(
+                "shell network must declare at least one target because the command appears to use the network: {reason}"
+            )));
+        }
+        for target in targets {
+            self.push_network_check(checks, target.as_str())?;
         }
         Ok(())
-    }
-
-    pub(crate) fn push_requested_path_checks(
-        &self,
-        checks: &mut Vec<ToolPermissionCheck>,
-        path: &str,
-        kind: SdkPathKind,
-    ) {
-        let target = self.resolve_target_path(path);
-        self.push_path_checks(checks, sdk_path_kind_to_access_kind(kind), &target);
-    }
-
-    pub(crate) fn push_filesystem_effect_checks(
-        &self,
-        checks: &mut Vec<ToolPermissionCheck>,
-        effects: &FilesystemEffects,
-        base_path: &Path,
-    ) {
-        for effect in effects.to_effects() {
-            let target = self.resolve_filesystem_effect_path(effect.path.as_str(), base_path);
-            if effect.access.includes_read() {
-                self.push_path_checks(checks, AccessKind::Read, &target);
-            }
-            if effect.access.includes_write() {
-                self.push_path_checks(checks, AccessKind::Write, &target);
-            }
-        }
     }
 }
-use agena_domain::PluginInvocation;
-
 use super::{
-    AccessKind, Path, PermissionDecision, PluginToolPermissionNetworksInput,
-    PluginToolPermissionPathsInput, RegisteredTool, SdkInputNetworkSpec, SdkInputPathSpec,
-    SdkNetworkAccessSpec, SdkPathAccessSpec, SdkPathKind, SdkToolStreamingMode, ToolError,
-    ToolExecutor, ToolInvocation, ToolPermissionCheck, extract_input_network_requests,
-    extract_input_path_requests, filesystem_effects_from_input, invocation_name,
-    is_concurrency_safe_tool_invocation, sdk_path_kind_to_access_kind,
-    shell_command_from_invocation, unique_registered_tool_match, validate_shell_filesystem_effects,
+    AccessKind, PermissionDecision, RegisteredTool, SdkToolStreamingMode, ToolError, ToolExecutor,
+    ToolInvocation, ToolPayloadInput, ToolPermissionCheck, invocation_name,
+    is_concurrency_safe_tool_invocation, shell_command_from_invocation,
+    unique_registered_tool_match,
 };
-use agena_domain::FilesystemEffects;
+use agena_domain::PluginInvocation;

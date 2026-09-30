@@ -860,7 +860,6 @@ impl agena_runtime::SessionQueryService for SessionManager {
         Ok(agena_runtime::SessionExecutionContext {
             workflow_state: session.workflow_state(),
             agent_id: crate::identity::AGENA_AGENT_ID.to_string(),
-            execution_access: runtime.execution.access,
             selected_permission: runtime.execution.selection.permission.clone(),
             effective_permission: runtime.execution.effective_permission.clone(),
             permission_ceiling: runtime.execution.permission_ceiling.clone(),
@@ -1266,7 +1265,6 @@ mod tests {
             source_cutoff_seq_global: None,
             source_message_id: None,
             task_id: None,
-            subtask_access: None,
             subtask_status: parent_id.map(|_| SubtaskStatus::Running),
             created_at: now,
             updated_at: now,

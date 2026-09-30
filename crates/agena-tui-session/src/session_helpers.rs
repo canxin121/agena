@@ -187,7 +187,6 @@ mod tests {
     fn execution_status_uses_provider_adapter_and_model() {
         let execution = SessionExecutionContextResource {
             agent_id: "agena".to_owned(),
-            execution_access: agena_api::resource::ExecutionAccess::Inherit,
             selected_permission: Default::default(),
             effective_permission: Default::default(),
             permission_ceiling: Default::default(),

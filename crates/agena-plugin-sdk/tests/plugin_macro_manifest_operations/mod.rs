@@ -1,18 +1,4 @@
 #[test]
-fn tool_macro_permission_dispatch_parses_tool_input() {
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .build()
-        .expect("test runtime should build");
-    let plugin = ManifestPlugin;
-    let input = json!({ "text": "/tmp/render.txt" });
-    let requests = runtime
-        .block_on(Plugin::permission_paths(&plugin, "render", &input))
-        .expect("permission dispatch should succeed");
-
-    assert_eq!(requests, vec![PathRequest::read("/tmp/render.txt")]);
-}
-
-#[test]
 fn plugin_macro_declares_service_exports_and_imports_without_ambient_lookup() {
     let manifest = Plugin::manifest(&ManifestPlugin);
     assert_eq!(manifest.services.exports.len(), 1);
@@ -25,57 +11,6 @@ fn plugin_macro_declares_service_exports_and_imports_without_ambient_lookup() {
         .services
         .validate()
         .expect("macro-generated service declarations are valid");
-}
-
-#[test]
-fn tool_macro_permission_dsl_generates_dynamic_permissions() {
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .build()
-        .expect("test runtime should build");
-    let plugin = ManifestPlugin;
-    let input = json!({
-        "path": "/tmp/dynamic",
-        "host": "example.com",
-        "optional_path": "/tmp/dynamic/optional",
-        "optional_host": "optional.example.com"
-    });
-    let paths = runtime
-        .block_on(Plugin::permission_paths(
-            &plugin,
-            "dynamic_permission",
-            &input,
-        ))
-        .expect("path permission DSL should succeed");
-    let networks = runtime
-        .block_on(Plugin::permission_networks(
-            &plugin,
-            "dynamic_permission",
-            &input,
-        ))
-        .expect("network permission DSL should succeed");
-
-    assert_eq!(
-        paths,
-        vec![
-            PathRequest::read("/tmp/dynamic/resolved"),
-            PathRequest::read("/tmp/dynamic/optional"),
-            PathRequest::write("/tmp/dynamic/extra"),
-            PathRequest::read("/tmp/dynamic/related-read"),
-            PathRequest::write("/tmp/dynamic/related-write")
-        ]
-    );
-    assert_eq!(
-        networks,
-        vec![
-            NetworkRequest::connect("example.com"),
-            NetworkRequest::connect("optional.example.com"),
-            NetworkRequest::connect("static.example.com"),
-            NetworkRequest::connect("api.example.com")
-        ]
-    );
-
-    let manifest = Plugin::manifest(&plugin);
-    assert!(tool_by_name(&manifest, "dynamic_permission").name == "dynamic_permission");
 }
 
 #[test]

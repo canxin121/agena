@@ -2209,3 +2209,4 @@ plugin-workbench-kind-object = object
 plugin-workbench-kind-one-of = oneOf
 plugin-workbench-kind-string = string
 plugin-workbench-kind-value = value
+permission-studio-page-tool-defaults = Tool Access / Defaults

@@ -18,7 +18,7 @@ pub(crate) struct CodePlugin;
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInput)]
 #[serde(deny_unknown_fields)]
 struct CodeSearchAstInput {
-    #[arg(trim, non_empty, path.read)]
+    #[arg(trim, non_empty)]
     path: String,
     #[arg(trim, non_empty)]
     pattern: String,
@@ -31,7 +31,7 @@ struct CodeSearchAstInput {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInput)]
 #[serde(deny_unknown_fields)]
 struct CodeSyntaxTreeInput {
-    #[arg(trim, non_empty, path.read)]
+    #[arg(trim, non_empty)]
     path: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     language: Option<CodeLanguage>,

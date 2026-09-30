@@ -7,22 +7,20 @@ use syn::{Attribute, Data, Expr, Field, Fields, LitStr, Result, Type, Variant};
 
 use super::{
     PathPairConstraint, PathStringConstraint, PathStringsConstraint, PathUsizeConstraint,
-    PathValueConstraint, PathValuesConstraint, PluginInputNetworkSpec, PluginInputPathSpec,
-    PluginNetworkSemantic, PluginPathPermissionKind, PluginPickerKind, SerdeRenameRule,
-    ToolInputConfig, ToolInputVariantConfig, append_constraint_path_suffix,
-    field_has_serde_default, field_schema_aliases, field_schema_property_name_with_rule,
-    input_type_semantic_shape, normalize_array_value_constraints, normalize_array_value_lit_paths,
+    PathValueConstraint, PathValuesConstraint, PluginPickerKind, SerdeRenameRule, ToolInputConfig,
+    ToolInputVariantConfig, append_constraint_path_suffix, field_has_serde_default,
+    field_schema_aliases, field_schema_property_name_with_rule, input_type_semantic_shape,
+    normalize_array_value_constraints, normalize_array_value_lit_paths,
     normalize_array_value_nested_path_constraints, parse_input_variant_config,
     prefixed_constraint_group, resolve_constraint_expr_paths, resolve_constraint_group_paths,
     resolve_constraint_lit_paths, resolve_constraint_pair_paths, resolve_constraint_string_paths,
     resolve_constraint_strings_paths, resolve_constraint_usize_paths,
     resolve_constraint_values_paths, resolve_known_constraint_path, serde_rename_all_rule,
-    validate_input_jsonpath,
 };
 
 use super::input_arg_output_support::{
     apply_arg_aliases_to_spec, apply_arg_default_to_spec, apply_arg_metadata_to_spec,
-    ensure_unique_field_arg_names, input_jsonpath_for_arg, input_jsonpath_for_field,
+    ensure_unique_field_arg_names,
 };
 use super::input_arg_parse_support::{
     apply_input_variant_field_arg_attrs, arg_config_has_constraints, field_arg_has_default,
@@ -77,11 +75,7 @@ pub struct FieldArgConfig {
     pub required_unless_present: Vec<LitStr>,
     pub forbid_substrings: Vec<LitStr>,
     pub distinct_trimmed_within: Vec<LitStr>,
-    pub path: Option<PluginPathPermissionKind>,
-    pub network: Option<PluginNetworkSemantic>,
     pub optional: bool,
-    pub jsonpath: Option<LitStr>,
-    pub fallback: Option<LitStr>,
     pub example: Option<Expr>,
     pub secret: bool,
     pub picker: Option<PluginPickerKind>,
@@ -94,8 +88,6 @@ pub struct PluginInputFieldMetadata {
     pub parse_path: LitStr,
     pub aliases: Vec<LitStr>,
     pub description: Option<LitStr>,
-    pub path_kind: Option<PluginPathPermissionKind>,
-    pub network: Option<PluginNetworkSemantic>,
     pub non_empty: bool,
     pub item_non_empty: bool,
     pub item_non_empty_if_present: bool,
@@ -235,11 +227,6 @@ pub fn input_constraint_field_lookup(
     }
 
     Ok((field_path_lookup, array_field_paths))
-}
-
-pub fn validate_input_jsonpath_lit(jsonpath: &LitStr) -> Result<()> {
-    validate_input_jsonpath(jsonpath.value().as_str())
-        .map_err(|message| syn::Error::new_spanned(jsonpath, message))
 }
 
 pub fn apply_input_field_arg_attrs(
@@ -711,56 +698,17 @@ fn apply_field_arg_config_to_input(
                     right: resolve_known_constraint_path(right, Some(field_path_lookup)),
                 }),
         );
-    let optional = config.optional
+    let _optional = config.optional
         || serde_default
         || field_arg_has_default(config)
         || type_shape.optional
         || !schema_aliases.is_empty();
-    let jsonpath = input_jsonpath_for_arg(schema_path, ty, config.jsonpath.as_ref());
-    if let Some(kind) = config.path {
-        target.input_paths.push(PluginInputPathSpec {
-            jsonpath: jsonpath.clone(),
-            kind,
-            fallback: config.fallback.clone(),
-            optional,
-        });
-        if config.jsonpath.is_none() {
-            target
-                .input_paths
-                .extend(schema_aliases.iter().map(|alias| PluginInputPathSpec {
-                    jsonpath: input_jsonpath_for_field(alias, ty),
-                    kind,
-                    fallback: config.fallback.clone(),
-                    optional,
-                }));
-        }
-    }
-    if let Some(semantic) = config.network {
-        target.input_networks.push(PluginInputNetworkSpec {
-            jsonpath,
-            fallback: config.fallback.clone(),
-            optional,
-            semantic,
-        });
-        if config.jsonpath.is_none() {
-            target
-                .input_networks
-                .extend(schema_aliases.iter().map(|alias| PluginInputNetworkSpec {
-                    jsonpath: input_jsonpath_for_field(alias, ty),
-                    fallback: config.fallback.clone(),
-                    optional,
-                    semantic,
-                }));
-        }
-    }
     apply_arg_metadata_to_spec(
         &mut target.input_field_metadata,
         schema_path,
         parse_path,
         schema_aliases,
         config.description.clone(),
-        config.path,
-        config.network,
         config.non_empty || config.non_empty_if_present,
         config.item_non_empty,
         config.item_non_empty_if_present,
@@ -1062,56 +1010,17 @@ pub fn apply_field_arg_config_to_input_variant(
                     right: resolve_known_constraint_path(right, Some(field_path_lookup)),
                 }),
         );
-    let optional = config.optional
+    let _optional = config.optional
         || serde_default
         || field_arg_has_default(config)
         || type_shape.optional
         || !schema_aliases.is_empty();
-    let jsonpath = input_jsonpath_for_arg(schema_path, ty, config.jsonpath.as_ref());
-    if let Some(kind) = config.path {
-        target.input_paths.push(PluginInputPathSpec {
-            jsonpath: jsonpath.clone(),
-            kind,
-            fallback: config.fallback.clone(),
-            optional,
-        });
-        if config.jsonpath.is_none() {
-            target
-                .input_paths
-                .extend(schema_aliases.iter().map(|alias| PluginInputPathSpec {
-                    jsonpath: input_jsonpath_for_field(alias, ty),
-                    kind,
-                    fallback: config.fallback.clone(),
-                    optional,
-                }));
-        }
-    }
-    if let Some(semantic) = config.network {
-        target.input_networks.push(PluginInputNetworkSpec {
-            jsonpath,
-            fallback: config.fallback.clone(),
-            optional,
-            semantic,
-        });
-        if config.jsonpath.is_none() {
-            target
-                .input_networks
-                .extend(schema_aliases.iter().map(|alias| PluginInputNetworkSpec {
-                    jsonpath: input_jsonpath_for_field(alias, ty),
-                    fallback: config.fallback.clone(),
-                    optional,
-                    semantic,
-                }));
-        }
-    }
     apply_arg_metadata_to_spec(
         &mut target.input_field_metadata,
         schema_path,
         parse_path,
         schema_aliases,
         config.description.clone(),
-        config.path,
-        config.network,
         config.non_empty || config.non_empty_if_present,
         config.item_non_empty,
         config.item_non_empty_if_present,

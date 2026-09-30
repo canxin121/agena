@@ -1261,6 +1261,59 @@ mod openai_protocol_adapter_tests {
             .expect("config.example.json should remain a valid canonical configuration");
     }
 
+    #[test]
+    fn retired_permission_class_keys_are_rejected() {
+        // The class defaults used to be keys of their own (`path.temp_paths`,
+        // `tools.dangerous_commands`, ...). They are entries of the existing
+        // `path.rules` / `tools.names` / `tools.rules` collections now, so a
+        // file that still carries the old keys must fail loudly instead of
+        // being silently ignored - a user who narrowed `tools.read_only_tools`
+        // would otherwise believe the setting took effect.
+        for (section, key) in [
+            ("path", "temp_paths"),
+            ("path", "internal_paths"),
+            ("tools", "interaction_ask"),
+            ("tools", "read_only_tools"),
+            ("tools", "no_op_commands"),
+            ("tools", "routine_commands"),
+            ("tools", "dangerous_commands"),
+        ] {
+            let config = config_with_adapter("openai_chat_completions", "").replace(
+                r#""providers""#,
+                &format!(
+                    r#""permission": {{ "{section}": {{ "{key}": "auto" }} }},
+                "providers""#
+                ),
+            );
+            let error = validate_config_text(Path::new("agena.json"), config.as_str()).unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains(&format!("unknown field `{key}`")),
+                "`{section}.{key}` must be rejected as a retired key: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn path_rule_shorthand_strings_are_rejected() {
+        // A path rule is always the explicit read/write object form. The old
+        // `"rw"` / `"ro"` / `"none"` shorthands are not another way to spell a
+        // rule any more - a file that still carries one must fail loudly.
+        let config = config_with_adapter("openai_chat_completions", "").replace(
+            r#""providers""#,
+            r#""permission": { "path": { "rules": { "/x": "rw" } } },
+                "providers""#,
+        );
+        let error = validate_config_text(Path::new("agena.json"), config.as_str()).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("expected struct PathAccessModes"),
+            "a shorthand path rule must be rejected: {error}"
+        );
+    }
+
     fn workspace_fixture(name: &str) -> String {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../..")

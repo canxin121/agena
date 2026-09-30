@@ -160,34 +160,6 @@ impl<P: Plugin> PluginDispatcher<P> {
                     .map_err(|error| PluginError::invalid_params_error(&error))?;
                 ok_json(&plugin.service_invoke(input).await?)
             }
-            method::HOOK_TOOL_PERMISSION_PATHS => {
-                let i: ToolPermissionPathsInput = serde_json::from_value(params)?;
-                let ctx = crate::host_api::HostCallbackContext {
-                    tool_name: Some(i.tool_name.clone()),
-                    ..crate::host_api::HostCallbackContext::default()
-                };
-                ok_json(
-                    &crate::host_api::run_in_host_callback_context(
-                        ctx,
-                        plugin.permission_paths(&i.tool_name, &i.input),
-                    )
-                    .await?,
-                )
-            }
-            method::HOOK_TOOL_PERMISSION_NETWORKS => {
-                let i: ToolPermissionNetworksInput = serde_json::from_value(params)?;
-                let ctx = crate::host_api::HostCallbackContext {
-                    tool_name: Some(i.tool_name.clone()),
-                    ..crate::host_api::HostCallbackContext::default()
-                };
-                ok_json(
-                    &crate::host_api::run_in_host_callback_context(
-                        ctx,
-                        plugin.permission_networks(&i.tool_name, &i.input),
-                    )
-                    .await?,
-                )
-            }
             method::HOOK_TOOL_INVOKE_STREAM => Err(PluginError::internal(
                 "tool.invoke.stream cannot be dispatched without a stream sink; \
                      transports should call PluginDispatcher::dispatch_stream",

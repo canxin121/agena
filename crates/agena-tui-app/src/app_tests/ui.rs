@@ -31,7 +31,7 @@ mod permission_studio_tests {
         ConfigJsonSources, I18n, JsonValue, PermissionConfig, PermissionMode,
         PermissionStudioCatalogKind, PermissionStudioModeTarget, SettingsPickerAction,
         ToolPermissionRules, apply_permission_studio_entries_mode,
-        apply_permission_studio_mode_input, path_rule_modes, settings_studio_permission_items,
+        apply_permission_studio_mode_input, settings_studio_permission_items,
     };
 
     #[test]
@@ -90,7 +90,7 @@ mod permission_studio_tests {
             .path
             .as_ref()
             .and_then(|path| path.rules.get("<workspace>/generated/**"))
-            .and_then(|rule| path_rule_modes(Some(rule)))
+            .cloned()
             .expect("path rule modes");
         assert_eq!(modes.write, Some(PermissionMode::Deny));
     }

@@ -143,7 +143,6 @@ pub enum SessionProjectedPartDetail {
 pub struct SessionExecutionContext {
     pub workflow_state: WorkflowState,
     pub agent_id: String,
-    pub execution_access: agena_domain::ExecutionAccess,
     pub selected_permission: PermissionConfig,
     pub effective_permission: PermissionConfig,
     pub permission_ceiling: PermissionConfig,
@@ -370,7 +369,6 @@ mod tests {
             Ok(super::SessionExecutionContext {
                 workflow_state: agena_domain::WorkflowState::Quiescent,
                 agent_id: agena_runtime_contracts::identity::AGENA_AGENT_ID.to_owned(),
-                execution_access: agena_domain::ExecutionAccess::Inherit,
                 selected_permission: agena_domain::PermissionConfig::default(),
                 effective_permission: agena_domain::PermissionConfig::default(),
                 permission_ceiling: agena_domain::PermissionConfig::default(),

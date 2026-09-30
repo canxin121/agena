@@ -1,15 +1,13 @@
 //! Tool configuration parsing for `#[tool(...)]`.
 
 use quote::quote;
-use syn::parse::Parser;
 use syn::punctuated::Punctuated;
 use syn::{Attribute, Expr, Ident, LitStr, Meta, Result, Token, parse_quote};
 
 use crate::{
-    PluginToolAttrConfig, PluginToolNetworkPermissionRule, PluginToolOperationConfig,
-    PluginToolPathPermissionRule, default_tool_name, empty_tool_spec_config, expr_lit_bool,
-    expr_lit_str, expr_path, expr_path_ident, parse_expr_list, parse_item_lit_str_list,
-    parse_item_path_expr_constraint, parse_item_path_expr_list_constraint,
+    PluginToolAttrConfig, PluginToolOperationConfig, default_tool_name, empty_tool_spec_config,
+    expr_lit_bool, expr_lit_str, expr_path, expr_path_ident, parse_expr_list,
+    parse_item_lit_str_list, parse_item_path_expr_constraint, parse_item_path_expr_list_constraint,
     parse_item_path_format_constraint, parse_item_path_lit_str_constraint,
     parse_item_path_pattern_constraint, parse_item_path_usize_constraint, parse_lit_str_list,
     parse_path_expr_constraint, parse_path_expr_list_constraint, parse_path_format_constraint,
@@ -39,8 +37,6 @@ fn parse_plugin_inline_tool_config(
         method_ident.span(),
     ));
     let mut stream_method = None;
-    let mut permission_path_rules = Vec::new();
-    let mut permission_network_rules = Vec::new();
     let mut operation = None;
 
     for meta in metas {
@@ -256,20 +252,6 @@ fn parse_plugin_inline_tool_config(
                     }
                     "capabilities" => spec.capabilities = parse_expr_list(list.tokens)?,
                     "output" => spec.output_ty = Some(parse_type_list(list.tokens, "output")?),
-                    "permission" => {
-                        return Err(syn::Error::new_spanned(
-                            ident,
-                            "permission(...) has been removed; use path(...) or network(...)",
-                        ));
-                    }
-                    "path" => {
-                        let rules = parse_inline_path_permission_rules(list.tokens)?;
-                        permission_path_rules.extend(rules);
-                    }
-                    "network" => {
-                        let rules = parse_inline_network_permission_rules(list.tokens)?;
-                        permission_network_rules.extend(rules);
-                    }
                     "operation" => {
                         if operation
                             .replace(parse_inline_tool_operation_config(list.tokens)?)
@@ -307,8 +289,9 @@ fn parse_plugin_inline_tool_config(
                             ));
                         }
                     }
-                    // Authority-bearing capability flags. These live on the
-                    // permission contract, never as tags: tags are metadata.
+                    // Behavior flags. They select host behavior (executor,
+                    // concurrency, builtin profile) and are surfaced as tags;
+                    // they are never a permission.
                     "mutating" => spec.mutating = true,
                     "read_only" => spec.read_only = true,
                     "shell" => spec.shell = true,
@@ -334,8 +317,6 @@ fn parse_plugin_inline_tool_config(
     Ok(PluginToolAttrConfig {
         spec,
         stream_method,
-        permission_path_rules,
-        permission_network_rules,
         operation,
     })
 }
@@ -417,75 +398,14 @@ fn parse_inline_tool_operation_config(
     Ok(config)
 }
 
-fn parse_inline_path_permission_rules(
-    tokens: proc_macro2::TokenStream,
-) -> Result<Vec<PluginToolPathPermissionRule>> {
-    let metas = Punctuated::<Meta, Token![,]>::parse_terminated.parse2(tokens)?;
-    let mut rules = Vec::new();
-    for meta in metas {
-        let Meta::NameValue(value) = meta else {
-            return Err(syn::Error::new_spanned(
-                meta,
-                "path(...) expects read = expr, reads = expr, write = expr, writes = expr, or requests = expr",
-            ));
-        };
-        let Some(ident) = value.path.get_ident() else {
-            return Err(syn::Error::new_spanned(value.path, "expected identifier"));
-        };
-        let rule = match ident.to_string().as_str() {
-            "read" => PluginToolPathPermissionRule::Read(value.value),
-            "reads" => PluginToolPathPermissionRule::Reads(value.value),
-            "write" => PluginToolPathPermissionRule::Write(value.value),
-            "writes" => PluginToolPathPermissionRule::Writes(value.value),
-            "requests" => PluginToolPathPermissionRule::Requests(value.value),
-            other => {
-                return Err(syn::Error::new_spanned(
-                    ident,
-                    format!("unsupported path permission rule '{other}'"),
-                ));
-            }
-        };
-        rules.push(rule);
-    }
-    Ok(rules)
-}
-
-fn parse_inline_network_permission_rules(
-    tokens: proc_macro2::TokenStream,
-) -> Result<Vec<PluginToolNetworkPermissionRule>> {
-    let metas = Punctuated::<Meta, Token![,]>::parse_terminated.parse2(tokens)?;
-    let mut rules = Vec::new();
-    for meta in metas {
-        let Meta::NameValue(value) = meta else {
-            return Err(syn::Error::new_spanned(
-                meta,
-                "network(...) expects connect = expr, connects = expr, or requests = expr",
-            ));
-        };
-        let Some(ident) = value.path.get_ident() else {
-            return Err(syn::Error::new_spanned(value.path, "expected identifier"));
-        };
-        match ident.to_string().as_str() {
-            "connect" => rules.push(PluginToolNetworkPermissionRule::Connect(value.value)),
-            "connects" => rules.push(PluginToolNetworkPermissionRule::Connects(value.value)),
-            "requests" => rules.push(PluginToolNetworkPermissionRule::Requests(value.value)),
-            other => {
-                return Err(syn::Error::new_spanned(
-                    ident,
-                    format!("unsupported network permission rule '{other}'"),
-                ));
-            }
-        }
-    }
-    Ok(rules)
-}
-
 fn inline_tool_tag_expr(tag: &str) -> Option<Expr> {
     let variant = match tag {
-        // Function/category metadata only. Tags describe what a tool does for
-        // discovery/UI/workflow hints and carry no authority: permission
-        // declarations live on the tool contract, never on a tag.
+        // Metadata and behavior tags. Behavior flags have a tag spelling so
+        // one collection answers both; none of them is a permission.
         "query" => quote! { ::agena_plugin_sdk::ToolTag::Query },
+        "shell" => quote! { ::agena_plugin_sdk::ToolTag::Shell },
+        "task" => quote! { ::agena_plugin_sdk::ToolTag::Task },
+        "read_only" => quote! { ::agena_plugin_sdk::ToolTag::ReadOnly },
         "mutate" => quote! { ::agena_plugin_sdk::ToolTag::Mutate },
         "execute" => quote! { ::agena_plugin_sdk::ToolTag::Execute },
         "filesystem" => quote! { ::agena_plugin_sdk::ToolTag::Filesystem },

@@ -965,6 +965,24 @@ impl HostHandle {
                         )
                         .await
                     }
+                    method::HOST_PERMISSION_CHECK_PATH => {
+                        let p: HostPermissionCheckPathParams = parse(params)?;
+                        let out = host_api::run_in_host_callback_context(
+                            scoped_context(plugin_id, None),
+                            inner.check_path_permission(p.request),
+                        )
+                        .await?;
+                        serde_json::to_value(out).map_err(|e| PluginError::invalid_params_error(&e))
+                    }
+                    method::HOST_PERMISSION_CHECK_NETWORK => {
+                        let p: HostPermissionCheckNetworkParams = parse(params)?;
+                        let out = host_api::run_in_host_callback_context(
+                            scoped_context(plugin_id, None),
+                            inner.check_network_permission(p.target),
+                        )
+                        .await?;
+                        serde_json::to_value(out).map_err(|e| PluginError::invalid_params_error(&e))
+                    }
                     method::HOST_CONFIG_RELOAD_REQUEST => {
                         let _p: HostConfigReloadParams = parse(params)?;
                         let out = inner.request_config_reload().await?;
@@ -1864,7 +1882,8 @@ use super::{
     HostLogParams, HostLspListDiagnosticsParams, HostLspListServersParams, HostMcpAddServerParams,
     HostMcpListServersParams, HostMcpRemoveServerParams, HostMessageSubtaskParams,
     HostMonitorListParams, HostMonitorReadParams, HostMonitorStartParams, HostMonitorStopParams,
-    HostNotification, HostNotifyParams, HostPluginStatusGetParams, HostPluginStatusGetResponse,
+    HostNotification, HostNotifyParams, HostPermissionCheckNetworkParams,
+    HostPermissionCheckPathParams, HostPluginStatusGetParams, HostPluginStatusGetResponse,
     HostPluginStatusListResponse, HostReadSubtaskOutputParams, HostRegisteredToolDescriptor,
     HostRegisteredToolListResponse, HostRunSubtaskParams, HostSchedulerCreateParams,
     HostSchedulerDeleteParams, HostSchedulerListParams, HostSecretDeleteParams,
@@ -1932,7 +1951,7 @@ mod effect_ownership_tests {
                 ..Default::default()
             },
             runtime: Default::default(),
-            permissions: Default::default(),
+            behavior: Default::default(),
             tags: Vec::new(),
         }
     }

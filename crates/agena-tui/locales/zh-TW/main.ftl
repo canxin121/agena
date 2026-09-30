@@ -1786,3 +1786,5 @@ plugin-workbench-kind-object = 物件
 plugin-workbench-kind-one-of = oneOf
 plugin-workbench-kind-string = 字串
 plugin-workbench-kind-value = 值
+
+permission-studio-page-tool-defaults = 工具權限 / 預設值

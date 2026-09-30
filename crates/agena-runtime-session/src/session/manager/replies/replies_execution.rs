@@ -164,20 +164,6 @@ fn newest_notification_part_id(parts: &[Part]) -> Option<i64> {
         .map(|part| part.part_id)
 }
 
-/// True for tools whose operation is scoped to concrete paths (filesystem
-/// read/write tools such as `fs.write` / `fs.apply_patch`). Arbitrary
-/// execution tools (shell/process) are never path-scoped even when they
-/// declare filesystem effects, because their declared paths are derived
-/// from free-form input, not authoritative: a user who allows writes inside
-/// the workspace has not authorized arbitrary command execution.
-///
-/// Driven by the tool's permission contract, never by tags: tags are
-/// metadata and carry no authority.
-fn is_path_scoped_tool(contract: &agena_domain::ToolPermissionContract) -> bool {
-    let path_scoped = !contract.input_paths.is_empty() || !contract.path_access.is_empty();
-    path_scoped && !contract.shell
-}
-
 /// One member of a provider-emitted tool batch after preflight.
 ///
 /// Preflight deliberately separates permission discovery from execution. A
@@ -2759,54 +2745,12 @@ impl SessionManager {
         let session_id = session.map(|session| session.id);
         let state = self.execution_state();
         let snapshot = self.rule_snapshot(&state, session_id).await?;
-        let managed_project_root =
-            agena_runtime::project_state_dir(state.tool_executor.workspace_root())
-                .to_string_lossy()
-                .into_owned();
-        let context = agena_permission::DecisionContext {
-            managed_project_root: Some(managed_project_root.as_str()),
-        };
         let budget = self.auto_budget(session_id);
 
-        // Phase 0: path-granted tool-ask override. A path-scoped tool whose
-        // *every* concrete path check is allowed by the path policy performs
-        // exactly the operation the user authorized (for example
-        // `path.workspace.write = allow`). Its tool-level default `ask`
-        // (e.g. `tools.default = ask` without a `filesystem_write` tag
-        // allowlist) must not re-ask for that same concrete operation,
-        // otherwise the "workspace write: allow" setting never takes effect.
-        // Tool-level `Deny` stays authoritative, and a single non-allowed
-        // path check disables the override so external or unlisted paths
-        // still go through their own policy.
-        let mut tool_ask_overridden_by_paths = false;
-        if let Some(tool_check) = checks
-            .iter()
-            .find(|check| matches!(check.action, PermissionAction::Tool { .. }))
-            && matches!(tool_check.decision, PermissionDecision::Ask { .. })
-            && is_path_scoped_tool(&tool_check.contract)
-        {
-            let mut path_check_count = 0usize;
-            let mut all_paths_allowed = true;
-            for check in checks
-                .iter()
-                .filter(|check| matches!(check.action, PermissionAction::PathAccess { .. }))
-            {
-                path_check_count += 1;
-                let key = permission_action_key(&check.action)?;
-                let path_resolution = agena_permission::rules::apply_rules(
-                    &check.decision,
-                    snapshot.rules_for(key.as_str()),
-                );
-                if !matches!(path_resolution.decision, PermissionDecision::Allow) {
-                    all_paths_allowed = false;
-                }
-            }
-            tool_ask_overridden_by_paths = path_check_count > 0 && all_paths_allowed;
-        }
-
-        // Phase 1: synchronous pipeline (static policy + rule snapshot +
-        // fast path + heuristics + denial budget) for every check. Checks
-        // that still need the classifier are deferred to phase 2.
+        // Phase 1: the static policy layer plus the rule snapshot decide every
+        // check. `allow`/`ask`/`deny` are terminal; only `auto` is handed to
+        // `decide_sync`, which applies the denial budget and otherwise defers
+        // the check to the classifier in phase 2.
         let mut decisions: Vec<(PermissionAction, agena_domain::PermissionResolution, bool)> =
             Vec::with_capacity(checks.len());
         let mut candidates = Vec::new();
@@ -2818,25 +2762,10 @@ impl SessionManager {
                 &check.decision,
                 snapshot.rules_for(key.as_str()),
             );
-            if tool_ask_overridden_by_paths
-                && matches!(check.action, PermissionAction::Tool { .. })
-                && matches!(resolution.decision, PermissionDecision::Ask { .. })
-            {
-                tracing::debug!(
-                    target: "agena::permission",
-                    action = key.as_str(),
-                    "path-granted override lifted the tool-level ask because every path check is allowed"
-                );
-                resolution.decision = PermissionDecision::Allow;
-            }
             let was_auto = matches!(&resolution.decision, PermissionDecision::Auto { .. });
             if was_auto {
-                let mut spec = agena_domain::ActionSpec::from_action(&check.action);
-                if let agena_domain::ActionSpec::Tool { contract, .. } = &mut spec {
-                    *contract = check.contract.clone();
-                }
-                match agena_permission::decide_sync(&resolution.decision, &spec, &context, &budget)
-                {
+                let spec = agena_domain::ActionSpec::from_action(&check.action);
+                match agena_permission::decide_sync(&resolution.decision, &spec, &budget) {
                     agena_permission::SyncOutcome::Final(decision) => {
                         resolution.decision = decision;
                     }

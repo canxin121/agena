@@ -22,22 +22,19 @@ impl BuiltinToolSet {
         if crate::tool::is_tool_api_handler(tool) {
             return true;
         }
-        self.is_contract_enabled(&tool.definition.permissions)
+        self.is_tool_behavior_enabled(tool.definition.behavior)
     }
 
-    /// Model-profile gating reads the permission contract directly: the
-    /// declared `read_only` and `task` flags are authority-bearing and never
-    /// come from tags.
-    pub fn is_contract_enabled(
-        &self,
-        contract: &agena_plugin_host::sdk::ToolPermissionContract,
-    ) -> bool {
+    /// Model-profile gating reads the tool's declared behavior flags. They are
+    /// self-description — the authority to act is decided by the policy layer —
+    /// and decide only which builtin profile offers the tool.
+    pub fn is_tool_behavior_enabled(&self, behavior: agena_plugin_host::sdk::ToolBehavior) -> bool {
         match self.profile {
             BuiltinToolProfile::Full => true,
             BuiltinToolProfile::ReadOnly => {
-                contract.read_only && !contract.shell && !contract.interactive
+                behavior.read_only && !behavior.shell && !behavior.interactive
             }
-            BuiltinToolProfile::NoTask => !contract.task,
+            BuiltinToolProfile::NoTask => !behavior.task,
         }
     }
 }

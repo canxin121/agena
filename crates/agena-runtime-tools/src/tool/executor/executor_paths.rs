@@ -3,6 +3,22 @@ impl ToolExecutor {
         self.resolve_target_path_with_context(raw_path, None)
     }
 
+    pub(crate) fn resolve_target_path_with_context(
+        &self,
+        raw_path: &str,
+        session_context: Option<&dyn crate::ToolSessionContext>,
+    ) -> PathBuf {
+        let workspace_root = self.effective_workspace_root(session_context);
+        if let Some(path) = resolve_managed_project_path_alias(raw_path, workspace_root) {
+            return canonicalize_path_for_execution(&path);
+        }
+        let candidate = PathBuf::from(raw_path);
+        if candidate.is_absolute() {
+            return canonicalize_path_for_execution(&candidate);
+        }
+        canonicalize_path_for_execution(&workspace_root.join(candidate))
+    }
+
     pub(crate) fn shell_effect_base_path(&self, workdir: Option<&str>) -> PathBuf {
         workdir
             .map(|workdir| self.resolve_target_path(workdir))
@@ -21,22 +37,6 @@ impl ToolExecutor {
             base_path.join(candidate)
         };
         canonicalize_path_for_execution(&resolved)
-    }
-
-    pub(crate) fn resolve_target_path_with_context(
-        &self,
-        raw_path: &str,
-        session_context: Option<&dyn crate::ToolSessionContext>,
-    ) -> PathBuf {
-        let workspace_root = self.effective_workspace_root(session_context);
-        if let Some(path) = resolve_managed_project_path_alias(raw_path, workspace_root) {
-            return canonicalize_path_for_execution(&path);
-        }
-        let candidate = PathBuf::from(raw_path);
-        if candidate.is_absolute() {
-            return canonicalize_path_for_execution(&candidate);
-        }
-        canonicalize_path_for_execution(&workspace_root.join(candidate))
     }
 
     pub(crate) async fn execute_shell_command(
@@ -78,7 +78,16 @@ impl ToolExecutor {
         normalize_path_for_display(path)
     }
 
-    pub(crate) fn push_path_checks(
+    /// Record one path decision for the host's own tool.
+    ///
+    /// The declaration surface is gone: the host no longer asks a plugin which
+    /// paths its tool will touch. What survives is the host resolving the path
+    /// arguments of the tools *it* owns (the executor-backed builtins), so an
+    /// `ask` rule under `permission.path` still reaches the approval flow for
+    /// `read`, `glob`, `apply_patch`, `shell.run` and friends. A plugin that
+    /// performs its own I/O is not described here and is not preflighted; it
+    /// asks the host itself through `HostClient::check_path_permission`.
+    pub(super) fn push_path_checks(
         &self,
         checks: &mut Vec<ToolPermissionCheck>,
         access: AccessKind,
@@ -100,11 +109,22 @@ impl ToolExecutor {
                 &canonical_workspace_root,
                 &canonical_target_path,
             ),
-            contract: agena_domain::ToolPermissionContract::default(),
         });
     }
 
-    pub(crate) fn push_network_check(
+    /// Record one resolved path argument of a host-owned tool.
+    pub(super) fn push_resolved_path_check(
+        &self,
+        checks: &mut Vec<ToolPermissionCheck>,
+        access: AccessKind,
+        raw_path: &str,
+    ) {
+        let target = self.resolve_target_path(raw_path);
+        self.push_path_checks(checks, access, target.as_path());
+    }
+
+    /// Record one outbound target of a host-owned tool.
+    pub(super) fn push_network_check(
         &self,
         checks: &mut Vec<ToolPermissionCheck>,
         target: &str,
@@ -121,14 +141,32 @@ impl ToolExecutor {
                 port: target.port(),
             },
             decision: self.principal.authorize_network_connect(&target),
-            contract: agena_domain::ToolPermissionContract::default(),
         });
         Ok(())
     }
+
+    /// Record every declared `reads`/`writes` path of a shell command.
+    pub(super) fn push_filesystem_effect_checks(
+        &self,
+        checks: &mut Vec<ToolPermissionCheck>,
+        effects: &FilesystemEffects,
+        base_path: &Path,
+    ) {
+        for effect in effects.to_effects() {
+            let target = self.resolve_filesystem_effect_path(effect.path.as_str(), base_path);
+            if effect.access.includes_read() {
+                self.push_path_checks(checks, AccessKind::Read, target.as_path());
+            }
+            if effect.access.includes_write() {
+                self.push_path_checks(checks, AccessKind::Write, target.as_path());
+            }
+        }
+    }
 }
 use super::{
-    AccessKind, NetworkTarget, Path, PathBuf, ShellOutput, ShellRequest, ToolError, ToolExecutor,
-    ToolPermissionCheck, access_kind_name, canonicalize_path_for_execution,
-    normalize_path_for_display, resolve_managed_project_path_alias, shell,
+    AccessKind, FilesystemEffects, NetworkTarget, Path, PathBuf, ShellOutput, ShellRequest,
+    ToolError, ToolExecutor, ToolPermissionCheck, access_kind_name,
+    canonicalize_path_for_execution, normalize_path_for_display,
+    resolve_managed_project_path_alias, shell,
 };
 use agena_domain::PermissionAction;

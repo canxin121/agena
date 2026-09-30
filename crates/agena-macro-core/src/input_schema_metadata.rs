@@ -10,9 +10,8 @@ use super::input_schema_path_support::{
     schema_pointer_from_logical_path, schema_relation_display_path,
 };
 use super::{
-    SchemaConstraintSource, SchemaRelationSource, ToolSpecConfig, doc_text, network_semantic_label,
-    path_permission_kind_label, picker_kind_label, serde_rename_all_fields_rule,
-    serde_rename_all_rule,
+    SchemaConstraintSource, SchemaRelationSource, ToolSpecConfig, doc_text, picker_kind_label,
+    serde_rename_all_fields_rule, serde_rename_all_rule,
 };
 
 pub fn expand_schema_metadata_fn<C, F>(
@@ -402,28 +401,6 @@ pub fn constraint_schema_metadata_calls<C: SchemaConstraintSource>(
                             #pointer,
                             None,
                             Some(#description),
-                        );
-                    });
-                }
-                if let Some(kind) = metadata.path_kind {
-                    let label = LitStr::new(path_permission_kind_label(kind), metadata.path.span());
-                    calls.push(quote! {
-                        ::agena_plugin_sdk::macro_support::set_schema_string_metadata(
-                            schema,
-                            #pointer,
-                            "x-agena-path",
-                            #label,
-                        );
-                    });
-                }
-                if let Some(network) = metadata.network {
-                    let label = LitStr::new(network_semantic_label(network), metadata.path.span());
-                    calls.push(quote! {
-                        ::agena_plugin_sdk::macro_support::set_schema_string_metadata(
-                            schema,
-                            #pointer,
-                            "x-agena-network",
-                            #label,
                         );
                     });
                 }

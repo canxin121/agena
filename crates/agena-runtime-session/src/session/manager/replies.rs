@@ -1,5 +1,3 @@
-use std::path::Path;
-
 use super::{ConversationIdentity, ExecutionConversationTarget, StableRunContext};
 use crate::session::Session;
 use crate::session::model::{
@@ -1661,29 +1659,6 @@ async fn responses_api_request_metadata(
     }
 }
 
-pub(super) fn managed_project_state_permission(
-    workspace_root: &Path,
-) -> crate::authorization::PermissionConfig {
-    let managed_root = agena_runtime::project_state_dir(workspace_root)
-        .to_string_lossy()
-        .replace('\\', "/");
-    let read_write =
-        crate::authorization::PathAccessRuleConfig::Modes(crate::authorization::PathAccessModes {
-            read: Some(PermissionMode::Allow),
-            write: Some(PermissionMode::Allow),
-        });
-    let mut rules = indexmap::IndexMap::new();
-    rules.insert(managed_root.clone(), read_write.clone());
-    rules.insert(format!("{managed_root}/**"), read_write);
-    crate::authorization::PermissionConfig {
-        path: Some(crate::authorization::PathPermissionConfig {
-            rules,
-            ..Default::default()
-        }),
-        ..Default::default()
-    }
-}
-
 #[cfg(test)]
 #[allow(clippy::items_after_test_module)]
 mod tests {
@@ -1790,14 +1765,14 @@ mod tests {
 }
 use super::{
     AppError, Arc, DecisionTraceStep, ExecutionControl, ExecutionSource, ExecutionStatus, ModelRef,
-    ModelSpeedModeRequestOverride, OperationPart, PathBuf, PermissionAction, PermissionMode,
-    PermissionReplyKind, PermissionScope, PersistedPermissionRule, PromptRequestOptions,
-    PromptTurnBudget, ProviderPromptAnchor, ResolvedPendingTool, SessionExecutionReplyRequest,
-    SessionManager, SessionManagerState, SessionPermissionReplyRequest, SessionRunOptions,
-    SessionRunRequest, SessionRunTermination, StreamingToolExecution, TimeRange, ToolError,
-    ToolInvocation, ToolInvocationExecution, UserInputReplyKind, Utc,
-    background_operation_from_execution, background_operation_id, completed_lifecycle,
-    custom_payload_value, execution_control_to_app_error, host_user_input_response, mpsc,
+    ModelSpeedModeRequestOverride, OperationPart, PathBuf, PermissionAction, PermissionReplyKind,
+    PermissionScope, PersistedPermissionRule, PromptRequestOptions, PromptTurnBudget,
+    ProviderPromptAnchor, ResolvedPendingTool, SessionExecutionReplyRequest, SessionManager,
+    SessionManagerState, SessionPermissionReplyRequest, SessionRunOptions, SessionRunRequest,
+    SessionRunTermination, StreamingToolExecution, TimeRange, ToolError, ToolInvocation,
+    ToolInvocationExecution, UserInputReplyKind, Utc, background_operation_from_execution,
+    background_operation_id, completed_lifecycle, custom_payload_value,
+    execution_control_to_app_error, host_user_input_response, mpsc,
     payload_tool_name_for_invocation, permission_action_key, persisted_rules_for_reply,
     requested_background_kind, reserve_background_external_id, resolve_pending_tool,
     run_abort_reason, user_input_execution,

@@ -6,7 +6,7 @@ use syn::{Expr, LitStr, Result, Type};
 
 use super::{
     PluginInputFieldAliasSpec, PluginInputFieldDefaultSpec, PluginInputFieldMetadata,
-    PluginNetworkSemantic, PluginPathPermissionKind, PluginPickerKind,
+    PluginPickerKind,
 };
 
 pub fn apply_arg_default_to_spec(
@@ -51,8 +51,6 @@ pub fn apply_arg_metadata_to_spec(
     parse_path: &LitStr,
     aliases: &[LitStr],
     description: Option<LitStr>,
-    path_kind: Option<PluginPathPermissionKind>,
-    network: Option<PluginNetworkSemantic>,
     non_empty: bool,
     item_non_empty: bool,
     item_non_empty_if_present: bool,
@@ -85,8 +83,6 @@ pub fn apply_arg_metadata_to_spec(
     picker: Option<PluginPickerKind>,
 ) {
     if description.is_none()
-        && path_kind.is_none()
-        && network.is_none()
         && !non_empty
         && !item_non_empty
         && !item_non_empty_if_present
@@ -126,8 +122,6 @@ pub fn apply_arg_metadata_to_spec(
         parse_path: parse_path.clone(),
         aliases: aliases.to_vec(),
         description,
-        path_kind,
-        network,
         non_empty,
         item_non_empty,
         item_non_empty_if_present,
@@ -161,34 +155,6 @@ pub fn apply_arg_metadata_to_spec(
     });
 }
 
-pub fn set_field_arg_path_kind(
-    config: &mut super::input_arg_support::FieldArgConfig,
-    kind: PluginPathPermissionKind,
-    span: impl quote::ToTokens,
-) -> Result<()> {
-    if config.path.replace(kind).is_some() {
-        return Err(syn::Error::new_spanned(
-            span,
-            "#[arg] accepts only one path permission semantic",
-        ));
-    }
-    Ok(())
-}
-
-pub fn set_field_arg_network(
-    config: &mut super::input_arg_support::FieldArgConfig,
-    semantic: PluginNetworkSemantic,
-    span: impl quote::ToTokens,
-) -> Result<()> {
-    if config.network.replace(semantic).is_some() {
-        return Err(syn::Error::new_spanned(
-            span,
-            "#[arg] accepts only one network semantic",
-        ));
-    }
-    Ok(())
-}
-
 pub fn set_field_arg_picker(
     config: &mut super::input_arg_support::FieldArgConfig,
     picker: PluginPickerKind,
@@ -201,25 +167,6 @@ pub fn set_field_arg_picker(
         ));
     }
     Ok(())
-}
-
-pub fn input_jsonpath_for_field(field_name: &LitStr, ty: &Type) -> LitStr {
-    let shape = super::input_type_semantic_shape(ty);
-    let suffix = if shape.array { "[*]" } else { "" };
-    LitStr::new(
-        &format!("$.{}{}", field_name.value(), suffix),
-        field_name.span(),
-    )
-}
-
-pub fn input_jsonpath_for_arg(
-    field_name: &LitStr,
-    ty: &Type,
-    override_path: Option<&LitStr>,
-) -> LitStr {
-    override_path
-        .cloned()
-        .unwrap_or_else(|| input_jsonpath_for_field(field_name, ty))
 }
 
 pub fn ensure_unique_field_arg_names(

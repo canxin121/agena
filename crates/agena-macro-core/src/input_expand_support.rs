@@ -10,8 +10,8 @@ use crate::{
     expand_flatten_shape_post_parse_tokens, expand_flatten_shape_schema_normalize_expr,
     expand_input_alias_normalize_tokens, expand_input_default_insert_tokens,
     expand_input_default_schema_metadata_tokens, expand_input_dispatch_fn,
-    expand_input_example_expr, expand_input_networks_expr, expand_input_paths_expr,
-    expand_input_root_default_insert_tokens, expand_input_root_default_schema_metadata_tokens,
+    expand_input_example_expr, expand_input_root_default_insert_tokens,
+    expand_input_root_default_schema_metadata_tokens,
     expand_input_root_example_schema_metadata_tokens, expand_input_shape_enum_normalize_fn,
     expand_input_shape_enum_parse_error_remap_expr,
     expand_input_shape_enum_post_parse_normalize_expr,
@@ -96,15 +96,7 @@ pub fn expand_input(input: DeriveInput) -> Result<proc_macro2::TokenStream> {
     let enum_field_rule = serde_rename_all_fields_rule(&input.attrs)?;
     if let Data::Enum(data_enum) = &input.data {
         for variant in &data_enum.variants {
-            let mut variant_config = normalized_input_variant_config(variant, enum_field_rule)?;
-            for spec in &mut variant_config.input_paths {
-                spec.optional = true;
-            }
-            for spec in &mut variant_config.input_networks {
-                spec.optional = true;
-            }
-            config.input_paths.extend(variant_config.input_paths);
-            config.input_networks.extend(variant_config.input_networks);
+            let _variant_config = normalized_input_variant_config(variant, enum_field_rule)?;
         }
     }
     let schema_metadata_fn =
@@ -221,15 +213,7 @@ pub fn expand_input(input: DeriveInput) -> Result<proc_macro2::TokenStream> {
         &struct_nested_shapes,
     );
     let dispatch_tool_invoke_fn = expand_input_dispatch_fn(&input.data, &config)?;
-    let input_paths_expr = expand_input_paths_expr(&input.attrs, &input.data, &config.input_paths)?;
-    let input_networks_expr =
-        expand_input_networks_expr(&input.attrs, &input.data, &config.input_networks)?;
-    let input_tags_expr = expand_input_tags_expr(
-        &input.attrs,
-        &input.data,
-        &config.input_paths,
-        &config.input_networks,
-    )?;
+    let input_tags_expr = expand_input_tags_expr();
     let input_example_expr =
         expand_input_example_expr(config.example.as_ref(), &config.input_field_metadata);
     let input_root_default_insert_expr =
@@ -278,14 +262,6 @@ pub fn expand_input(input: DeriveInput) -> Result<proc_macro2::TokenStream> {
                     }
                     schema
                 }).clone()
-            }
-
-            pub fn input_paths() -> Vec<::agena_plugin_sdk::InputPathSpec> {
-                #input_paths_expr
-            }
-
-            pub fn input_networks() -> Vec<::agena_plugin_sdk::InputNetworkSpec> {
-                #input_networks_expr
             }
 
             pub fn input_tags() -> Vec<::agena_plugin_sdk::ToolTag> {
@@ -348,14 +324,6 @@ pub fn expand_input(input: DeriveInput) -> Result<proc_macro2::TokenStream> {
 
             fn parse_input(input: serde_json::Value) -> ::agena_plugin_sdk::Result<Self> {
                 Self::parse_input(input)
-            }
-
-            fn input_paths() -> Vec<::agena_plugin_sdk::InputPathSpec> {
-                Self::input_paths()
-            }
-
-            fn input_networks() -> Vec<::agena_plugin_sdk::InputNetworkSpec> {
-                Self::input_networks()
             }
 
             fn input_tags() -> Vec<::agena_plugin_sdk::ToolTag> {

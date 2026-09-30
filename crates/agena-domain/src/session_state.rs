@@ -204,7 +204,7 @@ mod tests {
     use super::{
         SessionLifecycleState, SessionRelationKind, SessionStateKind, SubtaskStatus, WorkflowState,
     };
-    use crate::{ExecutionAccess, ExecutionPhase};
+    use crate::ExecutionPhase;
 
     #[test]
     fn session_state_values_have_stable_wire_spellings_and_semantics() {
@@ -384,14 +384,6 @@ mod tests {
             assert_eq!(
                 serde_json::from_value::<ExecutionPhase>(value).expect("decode phase"),
                 phase
-            );
-        }
-
-        for access in [ExecutionAccess::Inherit, ExecutionAccess::ReadOnly] {
-            let value = serde_json::to_value(access).expect("serialize access");
-            assert_eq!(
-                serde_json::from_value::<ExecutionAccess>(value).expect("decode access"),
-                access
             );
         }
 

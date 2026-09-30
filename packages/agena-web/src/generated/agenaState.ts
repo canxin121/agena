@@ -37,10 +37,6 @@ export type WorkflowState = (typeof WORKFLOW_STATES)[number]
 export const EXECUTION_PHASES = ['starting', 'preparing_model', 'streaming_model', 'executing_tools', 'awaiting_interaction', 'cancelling'] as const
 export type ExecutionPhase = (typeof EXECUTION_PHASES)[number]
 
-/** Execution access mode of a session. */
-export const EXECUTION_ACCESSES = ['inherit', 'read_only'] as const
-export type ExecutionAccess = (typeof EXECUTION_ACCESSES)[number]
-
 /** Lifecycle status of a delegated subtask. */
 export const SUBTASK_STATUSES = ['created', 'running', 'completed', 'failed', 'cancelled', 'timed_out', 'interrupted'] as const
 export type SubtaskStatus = (typeof SUBTASK_STATUSES)[number]

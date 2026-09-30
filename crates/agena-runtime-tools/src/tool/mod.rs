@@ -39,6 +39,7 @@ use thiserror::Error;
 use crate::authorization::ExecutionPrincipal;
 use crate::part::AskUserToolInput;
 use agena_domain::AccessKind;
+use agena_domain::FilesystemEffects;
 use agena_domain::NetworkTarget;
 use agena_domain::PermissionDecision;
 use agena_domain::StructuredObject;
@@ -48,14 +49,10 @@ use agena_plugin_host::{
     PluginHost, ToolAfterInput as PluginToolAfterInput, ToolBeforeInput as PluginToolBeforeInput,
     ToolDefinitionInput as PluginToolDefinitionInput, ToolFailureInput as PluginToolFailureInput,
     ToolInvokeInput as PluginToolInvokeInput,
-    ToolPermissionNetworksInput as PluginToolPermissionNetworksInput,
-    ToolPermissionPathsInput as PluginToolPermissionPathsInput,
     registry::RegisteredTool,
     sdk::{
-        InputNetworkSpec as SdkInputNetworkSpec, InputPathSpec as SdkInputPathSpec,
-        NetworkAccessSpec as SdkNetworkAccessSpec, PathAccessSpec as SdkPathAccessSpec,
-        PathKind as SdkPathKind, ShellEnvInput as PluginShellEnvInput,
-        ToolResultPolicy as SdkToolResultPolicy, ToolStreamingMode as SdkToolStreamingMode,
+        ShellEnvInput as PluginShellEnvInput, ToolResultPolicy as SdkToolResultPolicy,
+        ToolStreamingMode as SdkToolStreamingMode,
     },
 };
 use agena_tool::{

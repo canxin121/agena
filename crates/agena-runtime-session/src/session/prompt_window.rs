@@ -1430,7 +1430,7 @@ mod tool_result_render_tests {
                     ..Default::default()
                 },
                 runtime: Default::default(),
-                permissions: agena_plugin_host::sdk::ToolPermissionContract {
+                behavior: agena_plugin_host::sdk::ToolBehavior {
                     read_only: true,
                     ..Default::default()
                 },

@@ -25,15 +25,6 @@ impl PathAccessModes {
     }
 }
 
-/// Declarative path-rule shape. Interpretation of shorthand strings belongs
-/// to the policy adapter rather than this value crate.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum PathAccessRuleConfig {
-    Modes(PathAccessModes),
-    Shorthand(String),
-}
-
 #[cfg(test)]
 mod tests {
     use super::PathAccessModes;

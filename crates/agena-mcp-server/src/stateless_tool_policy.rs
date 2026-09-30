@@ -59,7 +59,7 @@ pub struct StatelessMcpToolMetadata<'a> {
 ///
 /// This is a surface policy, not a read-only sandbox. Direct
 /// workspace tools such as shell and filesystem writes remain eligible; OAuth
-/// and Agena's permission contracts govern their authority separately.
+/// and Agena's permission policy governs their authority separately.
 pub fn is_stateless_mcp_tool_exposed(tool: StatelessMcpToolMetadata<'_>) -> bool {
     !tool.plugin_id.trim().is_empty()
         && !tool.interactive

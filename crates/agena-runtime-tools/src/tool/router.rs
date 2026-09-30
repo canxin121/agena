@@ -1,4 +1,4 @@
-//! Schema and permission-hook helpers shared by bundled tool definitions.
+//! Schema helpers shared by bundled tool definitions.
 //!
 //! Bundled executor-backed tools are dispatched explicitly by `ToolExecutor`.
 //! Their plugin handlers remain definition-only adapters and must never depend
@@ -6,11 +6,10 @@
 
 use serde_json::Value as JsonValue;
 
-use crate::part::{ApplyPatchToolInput, ShellToolInput};
 use crate::tool::ToolPayloadOutput;
 use crate::tool::result::ToolPayloadExecution;
 use agena_plugin_host::PluginError;
-use agena_plugin_host::sdk::{Result as SdkResult, ToolInput, ToolInvokeOutput};
+use agena_plugin_host::sdk::{Result as SdkResult, ToolInvokeOutput};
 
 pub fn invoke_tool(
     tool_name: &str,
@@ -22,70 +21,6 @@ pub fn invoke_tool(
     Err(PluginError::internal(format!(
         "bundled execution handler `{tool_name}` must be dispatched by ToolExecutor"
     )))
-}
-
-pub fn permission_paths_for(
-    tool: &str,
-    input: &serde_json::Value,
-) -> SdkResult<Vec<agena_plugin_host::sdk::PathRequest>> {
-    match tool {
-        "apply_patch" => {
-            let payload = ApplyPatchToolInput::parse_input(input.clone())?;
-            let paths = crate::tool::apply_patch::planned_paths(&payload.patch)
-                .map_err(|error| PluginError::internal_error(&error))?;
-            Ok(paths
-                .into_iter()
-                .map(agena_plugin_host::sdk::PathRequest::write)
-                .collect())
-        }
-        _ => Ok(Vec::new()),
-    }
-}
-
-pub fn permission_network_targets_for(
-    tool: &str,
-    input: &serde_json::Value,
-) -> SdkResult<Vec<String>> {
-    match tool {
-        "shell" => {
-            let payload: ShellToolInput = parse_shape_input(input)?;
-            match payload {
-                ShellToolInput::Run { command, .. } => declared_shell_network_targets(
-                    "shell",
-                    command.command.as_str(),
-                    &command.network,
-                ),
-                ShellToolInput::Write { input } => {
-                    declared_shell_network_targets("shell.write", &input.chars, &input.network)
-                }
-                ShellToolInput::List {}
-                | ShellToolInput::Logs { .. }
-                | ShellToolInput::Stop { .. }
-                | ShellToolInput::Resize { .. }
-                | ShellToolInput::Signal { .. } => Ok(Vec::new()),
-            }
-        }
-        _ => Ok(Vec::new()),
-    }
-}
-
-fn parse_shape_input<T: ToolInput>(input: &serde_json::Value) -> SdkResult<T> {
-    T::parse_input(input.clone())
-}
-
-fn declared_shell_network_targets(
-    tool: &str,
-    command: &str,
-    effects: &[String],
-) -> SdkResult<Vec<String>> {
-    if effects.is_empty()
-        && let Some(reason) = agena_tool::shell_analysis::network_command_reason(command)
-    {
-        return Err(PluginError::invalid_params(format!(
-            "{tool} network must declare at least one target because the command appears to use the network: {reason}"
-        )));
-    }
-    Ok(effects.to_vec())
 }
 
 pub fn tool_execution_to_invoke_output(execution: ToolPayloadExecution) -> ToolInvokeOutput {

@@ -38,12 +38,11 @@ pub struct RuntimeToolDescriptor {
     pub input_schema: serde_json::Value,
     pub output_schema: Option<serde_json::Value>,
     /// Whether this tool is marked as interactive by either its permission
-    /// contract or its discovery metadata. Non-interactive hosts, such as MCP
+    /// behavior or its discovery metadata. Non-interactive hosts, such as MCP
     /// clients, must not expose it.
     pub interactive: bool,
-    /// True only when the authority-bearing permission contract qualifies the
-    /// tool for Agena's read-only fast path (no shell, writes, mutation, or
-    /// network access).
+    /// True only when the tool's declared behavior qualifies it for Agena's
+    /// read-only fast path (no shell, writes, mutation, or network access).
     pub read_only: bool,
     /// The tool may mutate state, write paths, or execute arbitrary shell
     /// commands. This is exposed to MCP clients as a safety hint and is also

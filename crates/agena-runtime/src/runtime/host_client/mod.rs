@@ -5,6 +5,7 @@
 
 use std::{
     future::Future,
+    path::PathBuf,
     sync::{Arc, OnceLock},
 };
 
@@ -18,7 +19,9 @@ use crate::plugins::storage::{
 use crate::runtime::AgenaRuntime;
 use crate::tool::{MonitorError, MonitorReadParams, MonitorStartParams};
 use agena_domain::ToolInvocation;
-use agena_domain::{StructuredObject, UserInputOption, UserInputQuestion};
+use agena_domain::{
+    AccessKind, PathKind, PermissionDecision, StructuredObject, UserInputOption, UserInputQuestion,
+};
 use agena_plugin_host::sdk::host_api::{
     AskUserRequest, AskUserResponse, CancelSubtaskRequest, EventSubscription, HostCallbackContext,
     HostClient, HostConfigReloadRequestResponse, HostConfigReloadStatusRequest,
@@ -37,10 +40,10 @@ use agena_plugin_host::sdk::host_api::{
     HostSnapshotSummary, HostStorageDeleteRequest, HostStorageGetRequest, HostStorageGetResponse,
     HostStorageListRequest, HostStorageListResponse, HostStorageRecord, HostStorageSetRequest,
     LogLevel, MessageSubtaskRequest, MonitorEvent, MonitorHandle, MonitorReadRequest,
-    MonitorReadResponse, MonitorStartRequest, MonitorStopRequest, ReadSubtaskOutputRequest,
-    ReadSubtaskOutputResponse, RunSubtaskRequest, RunSubtaskResponse, RunSubtaskStatus,
-    RunSubtaskUsage, SubtaskControlResponse, SubtaskOutputChunk, ToolDescriptor,
-    current_host_callback_context,
+    MonitorReadResponse, MonitorStartRequest, MonitorStopRequest, PathPermissionQuery,
+    PermissionQuery, ReadSubtaskOutputRequest, ReadSubtaskOutputResponse, RunSubtaskRequest,
+    RunSubtaskResponse, RunSubtaskStatus, RunSubtaskUsage, SubtaskControlResponse,
+    SubtaskOutputChunk, ToolDescriptor, current_host_callback_context,
 };
 use agena_plugin_host::{
     EventEnvelope, EventFilter as PluginEventFilter, PluginError, ToolInvokeOutput,
@@ -421,6 +424,53 @@ impl HostClient for RuntimeHostClient {
             .map_err(|e| PluginError::invalid_params_error(&e))
     }
 
+    // ---------------- permission queries ----------------
+
+    /// Answer one path-access question from the effective policy.
+    ///
+    /// The policy is the session's compiled execution principal when the call
+    /// carries a session context, and the process-wide principal otherwise.
+    /// Both are the same policies the host enforces, so the answer matches
+    /// what a host tool would get — including a `Deny` that a host tool call
+    /// would also hit. It never waits for a human: an approval that is not
+    /// already granted reads as `Ask`.
+    async fn check_path_permission(
+        &self,
+        request: PathPermissionQuery,
+    ) -> Result<PermissionQuery, PluginError> {
+        let executor = self.callback_scoped_tool_executor().await?.0;
+        let workspace_root = self
+            .callback_context()?
+            .workspace_root
+            .filter(|root| !root.trim().is_empty())
+            .map(PathBuf::from)
+            .unwrap_or_else(|| executor.workspace_root().to_path_buf());
+        let access = match request.kind {
+            PathKind::Read => AccessKind::Read,
+            PathKind::Write => AccessKind::Write,
+        };
+        let target = executor.resolve_target_path(request.path.as_str());
+        let decision = executor.principal().authorize_path_access(
+            access,
+            workspace_root.as_path(),
+            target.as_path(),
+        );
+        Ok(permission_query(decision))
+    }
+
+    /// Answer one outbound-network question from the effective policy.
+    async fn check_network_permission(
+        &self,
+        target: String,
+    ) -> Result<PermissionQuery, PluginError> {
+        let executor = self.callback_scoped_tool_executor().await?.0;
+        let target: agena_domain::NetworkTarget = target
+            .parse()
+            .map_err(|err| PluginError::invalid_params(format!("invalid network target: {err}")))?;
+        let decision = executor.principal().authorize_network_connect(&target);
+        Ok(permission_query(decision))
+    }
+
     async fn request_config_reload(&self) -> Result<HostConfigReloadRequestResponse, PluginError> {
         let runtime = self.runtime()?;
         let completion = agena_plugin_host::current_plugin_call_completion()
@@ -573,14 +623,6 @@ impl HostClient for RuntimeHostClient {
                         parent_session_id,
                         description: req.description,
                         prompt: req.prompt,
-                        access: match req.access {
-                            agena_plugin_host::sdk::host_api::RunSubtaskAccess::Inherit => {
-                                agena_domain::ExecutionAccess::Inherit
-                            }
-                            agena_plugin_host::sdk::host_api::RunSubtaskAccess::ReadOnly => {
-                                agena_domain::ExecutionAccess::ReadOnly
-                            }
-                        },
                         skills: req.skills,
                         task_id: req.task_id,
                         requested_model_selection: agena_domain::ModelSelectionConfig {

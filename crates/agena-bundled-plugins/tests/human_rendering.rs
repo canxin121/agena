@@ -52,7 +52,6 @@ fn sample_payload(tool: &str) -> Value {
         "task_id": "task-1",
         "description": "Example delegated task",
         "status": "completed",
-        "access": "read",
         "session_id": 42,
         "model_id": "gpt-5",
         "started_at_ms": 1,
@@ -348,7 +347,7 @@ fn sample_payload(tool: &str) -> Value {
             json!({"snapshots": [{"session_id": 42, "path": "/tmp/snapshot", "branch": "snapshot/main", "created_here": true}]})
         }
         "tasks.run" => json!({
-            "task_id": "task-1", "session_id": 42, "parent_session_id": 0, "access": "read", "status": "completed",
+            "task_id": "task-1", "session_id": 42, "parent_session_id": 0, "status": "completed",
             "resumed": false, "final_text": "Task completed.", "model_provider_id": "openai", "model_id": "gpt-5",
             "input_tokens": 10, "output_tokens": 20, "reasoning_tokens": 5, "cache_write_tokens": 0, "cache_read_tokens": 0,
             "total_cost_microusd": 12
@@ -1317,14 +1316,14 @@ fn representative_plugin_payloads_render_complete_readable_facts() {
                 text: "2 delegated tasks: t-1 completed, t-2 running".into(),
                 payload: Some(json!({
                     "tasks": [
-                        {"task_id": "t-1", "parent_session_id": 42, "status": "completed", "description": "Inspect files", "access": "read_only", "model_id": "gpt-5"},
-                        {"task_id": "t-2", "parent_session_id": 42, "status": "running", "description": "Run tests", "access": "read_write", "model_id": "gpt-5"}
+                        {"task_id": "t-1", "parent_session_id": 42, "status": "completed", "description": "Inspect files", "model_id": "gpt-5"},
+                        {"task_id": "t-2", "parent_session_id": 42, "status": "running", "description": "Run tests", "model_id": "gpt-5"}
                     ],
                     "timed_out": false
                 })),
                 ..RawOutput::default()
             },
-            vec!["t-1", "t-2", "read_only"],
+            vec!["t-1", "t-2", "Inspect files"],
             true,
         ),
         (

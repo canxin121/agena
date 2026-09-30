@@ -194,7 +194,7 @@ pub(crate) enum McpAnonymousAccess {
     /// remain public, which is the safe default for private workspace data.
     #[default]
     None,
-    /// Allow tools proven read-only by Agena's permission contract to execute
+    /// Allow tools whose declared behavior marks them read-only to execute
     /// anonymously. This is an explicit opt-in because read-only does not mean
     /// non-sensitive: filesystem and workspace reads can still expose data.
     ReadOnly,

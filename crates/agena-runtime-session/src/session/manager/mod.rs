@@ -183,7 +183,6 @@ pub struct SessionSubtaskRequest {
     pub parent_session_id: i64,
     pub description: String,
     pub prompt: String,
-    pub access: agena_domain::ExecutionAccess,
     /// Optional Skill names or aliases to resolve and attach to the child
     /// session's first user message as lazy Skill references.
     pub skills: Option<Vec<String>>,

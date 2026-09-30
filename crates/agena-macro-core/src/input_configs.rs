@@ -5,8 +5,8 @@ use syn::{Expr, LitStr, Path, Result, Variant};
 use super::{
     PathPairConstraint, PathStringConstraint, PathStringsConstraint, PathUsizeConstraint,
     PathValueConstraint, PathValuesConstraint, PluginInputFieldAliasSpec,
-    PluginInputFieldDefaultSpec, PluginInputFieldMetadata, PluginInputNetworkSpec,
-    PluginInputPathSpec, SchemaConstraintSource, SchemaRelationSource, ident_to_snake_case,
+    PluginInputFieldDefaultSpec, PluginInputFieldMetadata, SchemaConstraintSource,
+    SchemaRelationSource, ident_to_snake_case,
 };
 
 /// Configuration of one tool input variant.
@@ -17,8 +17,6 @@ pub struct ToolInputVariantConfig {
     pub handle_with_context: Option<Path>,
     pub stream_handle: Option<Path>,
     pub stream_handle_with_context: Option<Path>,
-    pub permission_paths_handle: Option<Path>,
-    pub permission_networks_handle: Option<Path>,
     pub handle_by_value: bool,
     pub trim: Vec<LitStr>,
     pub trim_suffix: Vec<PathStringConstraint>,
@@ -45,8 +43,6 @@ pub struct ToolInputVariantConfig {
     pub formats: Vec<PathStringConstraint>,
     pub patterns: Vec<PathStringConstraint>,
     pub choices: Vec<PathValuesConstraint>,
-    pub input_paths: Vec<PluginInputPathSpec>,
-    pub input_networks: Vec<PluginInputNetworkSpec>,
     pub input_aliases: Vec<PluginInputFieldAliasSpec>,
     pub input_defaults: Vec<PluginInputFieldDefaultSpec>,
     pub input_field_metadata: Vec<PluginInputFieldMetadata>,
@@ -67,8 +63,6 @@ pub struct ToolInputConfig {
     pub handle_with_context: Option<Path>,
     pub stream_handle: Option<Path>,
     pub stream_handle_with_context: Option<Path>,
-    pub permission_paths_handle: Option<Path>,
-    pub permission_networks_handle: Option<Path>,
     pub handle_field: Option<Path>,
     pub handle_by_value: bool,
     pub trim: Vec<LitStr>,
@@ -96,8 +90,6 @@ pub struct ToolInputConfig {
     pub formats: Vec<PathStringConstraint>,
     pub patterns: Vec<PathStringConstraint>,
     pub choices: Vec<PathValuesConstraint>,
-    pub input_paths: Vec<PluginInputPathSpec>,
-    pub input_networks: Vec<PluginInputNetworkSpec>,
     pub input_aliases: Vec<PluginInputFieldAliasSpec>,
     pub input_defaults: Vec<PluginInputFieldDefaultSpec>,
     pub input_field_metadata: Vec<PluginInputFieldMetadata>,

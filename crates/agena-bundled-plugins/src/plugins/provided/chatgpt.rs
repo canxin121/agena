@@ -9,9 +9,7 @@ use std::{
 use agena_macros::ToolInput;
 use agena_plugin_host::PluginError;
 use agena_plugin_host::sdk::host_api::HostClient;
-use agena_plugin_host::sdk::{
-    InitContext, InitOutcome, PathRequest, Result as SdkResult, ToolInvokeOutput,
-};
+use agena_plugin_host::sdk::{InitContext, InitOutcome, Result as SdkResult, ToolInvokeOutput};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -365,10 +363,13 @@ impl ChatGptToolsPlugin {
         )))
     }
 
-    #[tool(name="cloud_image_understanding",tags(query,network),
-        summary="Send explicit images to OpenAI cloud for understanding; not local file viewing.",
-        help="Runs in OpenAI cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Sends only the specified, permission-checked inputs and prompt to OpenAI. Accepts local paths with expected_sha256 or owned cloud_file_upload handles. Local preparation is bounded; no automatic whole-workspace or conversation upload. Cloud inference may be billed. Input sent inline is not a separate remote file. Results return input hashes, provider/model and usage. No local execution fallback.",
-        mutating,network(connect=self.config()?.base_url.clone()),path(requests=input.paths(self.workspace_root()?)))]
+    #[tool(
+        name = "cloud_image_understanding",
+        tags(query, network),
+        summary = "Send explicit images to OpenAI cloud for understanding; not local file viewing.",
+        help = "Runs in OpenAI cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Sends only the specified, permission-checked inputs and prompt to OpenAI. Accepts local paths with expected_sha256 or owned cloud_file_upload handles. Local preparation is bounded; no automatic whole-workspace or conversation upload. Cloud inference may be billed. Input sent inline is not a separate remote file. Results return input hashes, provider/model and usage. No local execution fallback.",
+        mutating
+    )]
     async fn image_understanding(
         &self,
         context: &ToolInvokeContext<'_>,
@@ -380,10 +381,13 @@ impl ChatGptToolsPlugin {
             .await
     }
 
-    #[tool(name="cloud_document_understanding",tags(query,network),
-        summary="Send explicit PDF/text documents to OpenAI cloud for understanding; not local file viewing.",
-        help="Runs in OpenAI cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Sends only the specified, permission-checked inputs and prompt to OpenAI. Accepts local paths with expected_sha256 or owned cloud_file_upload handles. Local preparation is bounded; no automatic whole-workspace or conversation upload. Cloud inference may be billed. Input sent inline is not a separate remote file. Results return input hashes, provider/model and usage. No local execution fallback.",
-        mutating,network(connect=self.config()?.base_url.clone()),path(requests=input.paths(self.workspace_root()?)))]
+    #[tool(
+        name = "cloud_document_understanding",
+        tags(query, network),
+        summary = "Send explicit PDF/text documents to OpenAI cloud for understanding; not local file viewing.",
+        help = "Runs in OpenAI cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Sends only the specified, permission-checked inputs and prompt to OpenAI. Accepts local paths with expected_sha256 or owned cloud_file_upload handles. Local preparation is bounded; no automatic whole-workspace or conversation upload. Cloud inference may be billed. Input sent inline is not a separate remote file. Results return input hashes, provider/model and usage. No local execution fallback.",
+        mutating
+    )]
     async fn document_understanding(
         &self,
         context: &ToolInvokeContext<'_>,
@@ -395,10 +399,13 @@ impl ChatGptToolsPlugin {
             .await
     }
 
-    #[tool(name="cloud_file_upload",tags(mutate,network),
-        summary="Upload one permitted local file to OpenAI cloud and return a session-owned handle.",
-        help="Runs in OpenAI cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Creates a remote file; does not analyze it. Inputs up to 20 MiB are content-checked and optionally revision-checked. The handle is bound to this workspace/session/provider connection; arbitrary vendor file IDs cannot be substituted. Local files remain unchanged. A timeout may leave remote acceptance unknown: inspect the returned handle, do not automatically repeat. Query status before using processing files and delete unneeded files explicitly.",
-        mutating,network(connect=self.config()?.base_url.clone()),path(requests=vec![PathRequest::read(input.path.clone()),PathRequest::write(self.workspace_root()?.join(".agena/artifacts/provider-tools").display().to_string())]))]
+    #[tool(
+        name = "cloud_file_upload",
+        tags(mutate, network),
+        summary = "Upload one permitted local file to OpenAI cloud and return a session-owned handle.",
+        help = "Runs in OpenAI cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Creates a remote file; does not analyze it. Inputs up to 20 MiB are content-checked and optionally revision-checked. The handle is bound to this workspace/session/provider connection; arbitrary vendor file IDs cannot be substituted. Local files remain unchanged. A timeout may leave remote acceptance unknown: inspect the returned handle, do not automatically repeat. Query status before using processing files and delete unneeded files explicitly.",
+        mutating
+    )]
     async fn file_upload(
         &self,
         context: &ToolInvokeContext<'_>,
@@ -407,10 +414,13 @@ impl ChatGptToolsPlugin {
         self.media_service()?.upload(context, input).await
     }
 
-    #[tool(name="cloud_file_status",tags(query,network),
-        summary="Query the remote status of an owned OpenAI cloud file, not a local path.",
-        help="Runs in OpenAI cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Accepts only cloud_file_upload handles from the same workspace, session and provider connection. Reports provider readiness/expiry and refreshes the signed local receipt. Does not download file contents or resubmit an unknown upload.",
-        mutating,network(connect=self.config()?.base_url.clone()),path(requests=vec![PathRequest::read(self.workspace_root()?.join(".agena/artifacts/provider-tools/media").display().to_string()),PathRequest::write(self.workspace_root()?.join(".agena/artifacts/provider-tools/media").display().to_string())]))]
+    #[tool(
+        name = "cloud_file_status",
+        tags(query, network),
+        summary = "Query the remote status of an owned OpenAI cloud file, not a local path.",
+        help = "Runs in OpenAI cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Accepts only cloud_file_upload handles from the same workspace, session and provider connection. Reports provider readiness/expiry and refreshes the signed local receipt. Does not download file contents or resubmit an unknown upload.",
+        mutating
+    )]
     async fn file_status(
         &self,
         context: &ToolInvokeContext<'_>,
@@ -421,10 +431,13 @@ impl ChatGptToolsPlugin {
             .await
     }
 
-    #[tool(name="cloud_file_delete",tags(mutate,network),
-        summary="Request deletion of an owned file from OpenAI cloud; preserve the local original.",
-        help="Runs in OpenAI cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Accepts only session-owned cloud file handles. Deletes the remote resource and records the provider acknowledgement; it does not promise erasure of provider logs/backups. No arbitrary remote IDs or cross-provider deletion. A failed request is not reported as successful cleanup.",
-        mutating,network(connect=self.config()?.base_url.clone()),path(requests=vec![PathRequest::read(self.workspace_root()?.join(".agena/artifacts/provider-tools/media").display().to_string()),PathRequest::write(self.workspace_root()?.join(".agena/artifacts/provider-tools/media").display().to_string())]))]
+    #[tool(
+        name = "cloud_file_delete",
+        tags(mutate, network),
+        summary = "Request deletion of an owned file from OpenAI cloud; preserve the local original.",
+        help = "Runs in OpenAI cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Accepts only session-owned cloud file handles. Deletes the remote resource and records the provider acknowledgement; it does not promise erasure of provider logs/backups. No arbitrary remote IDs or cross-provider deletion. A failed request is not reported as successful cleanup.",
+        mutating
+    )]
     async fn file_delete(
         &self,
         context: &ToolInvokeContext<'_>,
@@ -436,8 +449,6 @@ impl ChatGptToolsPlugin {
     }
     #[tool(
         name = "cloud_web_search",
-        network(connect = self.config()?.base_url.clone()),
-        path(write = self.workspace_root()?.join(".agena/artifacts/provider-tools").display().to_string()),
         tags(network, interactive),
         summary = "Search the web in OpenAI cloud and return sources; not a local browser operation.",
         help = "Runs in OpenAI cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. tool_options accepts the official WebSearchToolParam fields: filters.allowed_domains, search_context_size, user_location, and versioned type-compatible options. Hosted results and response_id are returned for follow-up; this plugin never executes client tool callbacks.",
@@ -456,8 +467,6 @@ impl ChatGptToolsPlugin {
 
     #[tool(
         name = "cloud_file_search",
-        network(connect = self.config()?.base_url.clone()),
-        path(write = self.workspace_root()?.join(".agena/artifacts/provider-tools").display().to_string()),
         tags(network, interactive),
         summary = "Search configured OpenAI cloud file stores, not files on this computer.",
         help = "Runs in OpenAI cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Provider file-store identifiers refer to remote resources, not local filesystem paths. Set tool_options.vector_store_ids and optional filters, max_num_results, and ranking_options exactly as documented by OpenAI.",
@@ -476,8 +485,6 @@ impl ChatGptToolsPlugin {
 
     #[tool(
         name = "cloud_code_interpreter",
-        network(connect = self.config()?.base_url.clone()),
-        path(write = self.workspace_root()?.join(".agena/artifacts/provider-tools").display().to_string()),
         tags(network, interactive),
         summary = "Run Python in an OpenAI cloud container, not the Agena local workspace.",
         help = "Runs in OpenAI cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Cloud filesystem and runtime are separate from the Agena workspace; provide needed input files explicitly. tool_options.container may be a container id or an auto container object with file_ids, memory_limit, and network_policy.",
@@ -495,8 +502,6 @@ impl ChatGptToolsPlugin {
 
     #[tool(
         name = "cloud_image_generation",
-        network(connect = self.config()?.base_url.clone()),
-        path(write = self.workspace_root()?.join(".agena/artifacts/provider-tools").display().to_string()),
         tags(network, interactive),
         summary = "Generate images in OpenAI cloud; save returned images as local attachments.",
         help = "Runs in OpenAI cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. tool_options supports action, model, background, input_fidelity, input_image_mask, moderation, output_compression, output_format, partial_images, quality, and size. Returned base64 images are persisted as managed attachments.",
@@ -514,8 +519,6 @@ impl ChatGptToolsPlugin {
 
     #[tool(
         name = "cloud_shell",
-        network(connect = self.config()?.base_url.clone()),
-        path(write = self.workspace_root()?.join(".agena/artifacts/provider-tools").display().to_string()),
         tags(network, interactive),
         summary = "Run shell commands in an OpenAI cloud container, never in the local terminal.",
         help = "Runs in OpenAI cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Cloud filesystem and runtime are separate from the Agena workspace; provide needed input files explicitly. Defaults to container_auto. Only container_auto or container_reference with container_id is accepted. Local/custom environments and client callbacks are rejected. Uploaded provider files are separate from Agena local files; there is no local execution fallback.",
@@ -533,7 +536,10 @@ impl ChatGptToolsPlugin {
 
     #[tool(
         name = "cloud_image_edit",
-        network(connect = self.config()?.base_url.clone()),summary = "Upload permitted images for editing in OpenAI cloud; save the returned image separately.", help = "Runs in OpenAI cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Permission-checked local images are uploaded to OpenAI; returned images are saved as separate local artifacts. This convenience entry preserves the official image edit endpoint alongside the Responses image_generation tool. Every input and output path is permission checked.", mutating, path(requests = input.images.iter().cloned().map(PathRequest::read).chain(std::iter::once(PathRequest::write(self.workspace_root()?.join(".agena/artifacts/provider-tools").display().to_string()))).collect::<Vec<_>>()))]
+        summary = "Upload permitted images for editing in OpenAI cloud; save the returned image separately.",
+        help = "Runs in OpenAI cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Permission-checked local images are uploaded to OpenAI; returned images are saved as separate local artifacts. This convenience entry preserves the official image edit endpoint alongside the Responses image_generation tool. Every input and output path is permission checked.",
+        mutating
+    )]
     async fn image_edit(&self, input: ChatGptImageEditInput) -> SdkResult<ToolInvokeOutput> {
         super::official_service::hosted::validate_options(&input.options, "options")?;
         let model = self.image_model(input.model, "chatgpt.cloud_image_edit")?;

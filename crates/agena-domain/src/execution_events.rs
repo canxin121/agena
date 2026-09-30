@@ -1,8 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AssistantReplyId, ExecutionAccess, ExecutionId, ExecutionOutcome, ExecutionSource,
-    SubtaskStatus, TurnId,
+    AssistantReplyId, ExecutionId, ExecutionOutcome, ExecutionSource, SubtaskStatus, TurnId,
 };
 
 fn is_false(value: &bool) -> bool {
@@ -36,8 +35,6 @@ pub struct SubtaskStatusChangedEvent {
     pub session_id: i64,
     pub parent_session_id: i64,
     pub task_id: String,
-    #[serde(default, skip_serializing_if = "ExecutionAccess::is_inherit")]
-    pub access: ExecutionAccess,
     pub status: SubtaskStatus,
     #[serde(default, skip_serializing_if = "is_false")]
     pub resumed: bool,
@@ -53,7 +50,7 @@ pub struct SubtaskStatusChangedEvent {
 #[cfg(test)]
 mod tests {
     use super::SubtaskStatusChangedEvent;
-    use crate::{ExecutionAccess, SubtaskStatus};
+    use crate::SubtaskStatus;
 
     #[test]
     fn subtask_event_omits_absent_lifecycle_fields() {
@@ -61,7 +58,6 @@ mod tests {
             session_id: 2,
             parent_session_id: 1,
             task_id: "task".into(),
-            access: ExecutionAccess::Inherit,
             status: SubtaskStatus::Created,
             resumed: false,
             started_at_ms: None,

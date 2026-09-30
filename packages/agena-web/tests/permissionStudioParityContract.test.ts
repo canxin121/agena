@@ -14,11 +14,14 @@ test('Permission Studio covers every TUI policy layer and editable rule family',
   for (const capability of [
     'setPathDefault',
     'renamePathRule',
+    'setPathRuleMode',
     'setNetworkMode',
     'renameNetworkRule',
     'setToolDefault',
     'renameToolName',
     'renameCommandRule',
+    'setCommandMode',
+    'writeRule',
     'Raw PermissionConfig',
   ]) {
     assert.ok(source.includes(capability), `missing Permission Studio capability ${capability}`)

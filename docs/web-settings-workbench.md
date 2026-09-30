@@ -22,7 +22,7 @@ The Web Settings Workbench is the browser counterpart of the TUI Settings Studio
 
 ### Permissions
 
-- **Permission Studio** — edit Global, Workspace, current Session, or read-only Effective permission documents. The editor covers filesystem defaults and rules, network zones and domain rules, the default tool policy, tool-name rules, and shell command rules. All rule types support create, rename, mode changes, and delete. Raw `PermissionConfig` JSON remains available.
+- **Permission Studio** — edit Global, Workspace, current Session, or read-only Effective permission documents. The editor covers filesystem defaults and path rules; network zones and domain rules; and the default tool policy, tool-name rules, and shell command rules. Every built-in default is an ordinary entry inside those collections: the temporary and managed project-state directories are `path.rules` entries, the interaction and web tools are `tools.names` entries, and the command classes (`no-op`, `routine`, `dangerous`) and the read-only tool class are `tools.rules` entries. Writing an entry of the same name replaces the built-in one and deleting your entry restores it, so `auto` written over a built-in hands that class back to the approval model. All rule types support create, rename, mode changes, and delete. Raw `PermissionConfig` JSON remains available.
 - **Persistent rules** — inspect and revoke durable approval rules created by interactive permission decisions.
 
 The source selector shows a compact summary for every loaded layer so the user can see whether a decision comes from Global, Workspace, Session, or the merged Effective policy before editing.
@@ -33,7 +33,7 @@ The source selector shows a compact summary for every loaded layer so the user c
   - Plugin Config materializes JSON Schema defaults, applies localized schema overlays, renders nested objects/arrays/enums/unions, supports array reorder/copy/delete, and falls back to raw JSON for open-ended structures.
   - Saves contain the minimal plugin-owned override rather than a copy of every schema default.
   - Dry-run validation and the saved/draft override diff are available before a runtime-reloading save.
-  - Manifest tools can be invoked in the active Session with JSON input while their schemas and permission contracts remain visible.
+  - Manifest tools can be invoked in the active Session with JSON input while their schemas and declared tags remain visible.
 - **MCP Server** — listener enablement, authentication mode, mixed-auth anonymous access, OAuth client registration, public resource URL, issuer URL, OAuth password, endpoint inspection, and tool exposure.
 - **Tool harnesses** — named Browser, Shell, and Editor harnesses with explicit Global/Workspace targets, effective-value copying, rename/delete, raw JSON, browser launch options, shell environment variables, and all typed runtime fields.
 

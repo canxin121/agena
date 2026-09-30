@@ -22,8 +22,7 @@ use sha2::{Digest, Sha256};
 use crate::part::{AttachmentItem, AttachmentKind, AttachmentSource};
 use agena_plugin_host::PluginError;
 use agena_plugin_host::sdk::{
-    InitOutcome, NetworkAccessSpec, Result as SdkResult, ToolDefinitionInput, ToolDefinitionPatch,
-    ToolInvokeOutput,
+    InitOutcome, Result as SdkResult, ToolDefinitionInput, ToolDefinitionPatch, ToolInvokeOutput,
 };
 use base64::Engine as _;
 
@@ -149,7 +148,6 @@ impl McpPlugin {
         summary = "List MCP resources from one server.",
         read_only,
         mcp,
-        network(connects = self.server_network_targets(input.server.as_str()).await?),
         concurrency_safe
     )]
     async fn invoke_resources_list(&self, input: &McpServerInput) -> SdkResult<ToolInvokeOutput> {
@@ -169,7 +167,6 @@ impl McpPlugin {
         summary = "List MCP resource templates from one server.",
         read_only,
         mcp,
-        network(connects = self.server_network_targets(input.server.as_str()).await?),
         concurrency_safe
     )]
     async fn invoke_resource_templates_list(
@@ -195,7 +192,6 @@ impl McpPlugin {
         summary = "Read one MCP resource by URI.",
         read_only,
         mcp,
-        network(connects = self.server_network_targets(input.server.as_str()).await?),
         concurrency_safe
     )]
     async fn invoke_resources_read(
@@ -221,7 +217,6 @@ impl McpPlugin {
         summary = "List MCP prompt templates from one server.",
         read_only,
         mcp,
-        network(connects = self.server_network_targets(input.server.as_str()).await?),
         concurrency_safe
     )]
     async fn invoke_prompts_list(&self, input: &McpServerInput) -> SdkResult<ToolInvokeOutput> {
@@ -241,7 +236,6 @@ impl McpPlugin {
         summary = "Fetch one MCP prompt template.",
         read_only,
         mcp,
-        network(connects = self.server_network_targets(input.server.as_str()).await?),
         concurrency_safe
     )]
     async fn invoke_prompts_get(&self, input: &GetPromptInput) -> SdkResult<ToolInvokeOutput> {
@@ -263,8 +257,7 @@ impl McpPlugin {
         name = "tools.call",
         summary = "Call one discovered MCP tool.",
         mutating,
-        mcp,
-        network(connects = self.server_network_targets(input.server.as_str()).await?)
+        mcp
     )]
     async fn invoke_tools_call(&self, input: &CallToolInput) -> SdkResult<ToolInvokeOutput> {
         let result = self
@@ -466,8 +459,7 @@ impl McpPlugin {
         name = "servers.reconnect",
         summary = "Reconnect one configured MCP server and refresh its tool cache.",
         mutating,
-        mcp,
-        network(connects = self.server_network_targets(input.server.as_str()).await?)
+        mcp
     )]
     async fn invoke_servers_reconnect(
         &self,
@@ -510,11 +502,6 @@ impl McpPlugin {
             std::collections::BTreeMap::new(),
             Vec::new(),
         ))
-    }
-
-    async fn server_network_targets(&self, server: &str) -> SdkResult<Vec<String>> {
-        let network_access = network_access_by_server(&self.manager).await;
-        Ok(network_targets_for_server(&network_access, server))
     }
 
     #[hook(tool.definition)]
@@ -707,27 +694,6 @@ struct CallToolInput {
     name: String,
     #[serde(default)]
     arguments: Option<Value>,
-}
-
-async fn network_access_by_server(
-    manager: &McpConnectionManager,
-) -> BTreeMap<String, NetworkAccessSpec> {
-    manager
-        .server_network_targets()
-        .await
-        .into_iter()
-        .map(|(server, target)| (server, NetworkAccessSpec { target }))
-        .collect()
-}
-
-fn network_targets_for_server(
-    network_access: &BTreeMap<String, NetworkAccessSpec>,
-    server: &str,
-) -> Vec<String> {
-    network_access
-        .get(server)
-        .map(|spec| vec![spec.target.clone()])
-        .unwrap_or_default()
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, ToolInput, PartialEq, Eq)]

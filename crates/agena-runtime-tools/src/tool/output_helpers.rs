@@ -115,14 +115,6 @@ pub(super) fn access_kind_name(access: AccessKind) -> &'static str {
     }
 }
 
-pub(super) fn validate_shell_filesystem_effects(
-    tool_name: &str,
-    command: &str,
-    effects: &FilesystemEffects,
-) -> Result<(), ToolError> {
-    shell_tools::validate_declared_filesystem_effects(tool_name, command, effects)
-}
-
 pub(super) fn shell_command_from_invocation(invocation: &ToolInvocation) -> Option<String> {
     if let Some(payload) = ToolPayloadInput::from_invocation(invocation) {
         let command = match payload {
@@ -149,42 +141,12 @@ pub(super) fn shell_command_from_invocation(invocation: &ToolInvocation) -> Opti
         .map(str::to_string)
 }
 
-pub(super) fn filesystem_effects_from_input(
-    input: &serde_json::Value,
-) -> Result<Option<FilesystemEffects>, ToolError> {
-    let reads = input.get("reads").or_else(|| input.pointer("/args/reads"));
-    let writes = input
-        .get("writes")
-        .or_else(|| input.pointer("/args/writes"));
-    if reads.is_some() || writes.is_some() {
-        let read = match reads {
-            Some(value) => serde_json::from_value(value.clone())
-                .map_err(|err| ToolError::invalid_input(format!("reads: {err}")))?,
-            None => Vec::new(),
-        };
-        let write = match writes {
-            Some(value) => serde_json::from_value(value.clone())
-                .map_err(|err| ToolError::invalid_input(format!("writes: {err}")))?,
-            None => Vec::new(),
-        };
-        return Ok(Some(FilesystemEffects { read, write }));
-    }
-    Ok(None)
-}
-
 pub(super) fn invocation_name(invocation: &ToolInvocation) -> String {
     plugin_invocation_name(&PluginInvocation::from_tool_invocation(invocation))
 }
 
 pub(super) fn plugin_invocation_name(invocation: &PluginInvocation) -> String {
     invocation.tool_name.clone()
-}
-
-pub(super) fn resolved_tool_input_value(
-    _registered_tool: &RegisteredTool,
-    invocation: &ToolInvocation,
-) -> serde_json::Value {
-    invocation_input_value(invocation)
 }
 
 pub(super) fn resolved_plugin_invocation_input_value(
@@ -268,170 +230,9 @@ pub(super) fn parse_invocation_from_json(
     })
 }
 
-pub(super) fn sdk_path_kind_to_access_kind(kind: SdkPathKind) -> AccessKind {
-    match kind {
-        SdkPathKind::Read => AccessKind::Read,
-        SdkPathKind::Write => AccessKind::Write,
-    }
-}
-
-pub(super) fn extract_input_path_requests(
-    input: &serde_json::Value,
-    specs: &[SdkInputPathSpec],
-) -> Result<Vec<agena_plugin_host::sdk::PathRequest>, ToolError> {
-    let mut requests = Vec::new();
-    for spec in specs {
-        let matches = extract_jsonpath_values(input, spec.jsonpath.as_str())?;
-        if matches.is_empty() {
-            if let Some(path) = spec.fallback.as_ref() {
-                requests.push(agena_plugin_host::sdk::PathRequest {
-                    path: path.clone(),
-                    kind: spec.kind,
-                });
-                continue;
-            }
-            if spec.optional {
-                continue;
-            }
-            return Err(ToolError::invalid_input(format!(
-                "missing required input path '{}'",
-                spec.jsonpath
-            )));
-        }
-        for value in matches {
-            let Some(path) = value.as_str() else {
-                return Err(ToolError::invalid_input(format!(
-                    "input path '{}' must resolve to a string",
-                    spec.jsonpath
-                )));
-            };
-            requests.push(agena_plugin_host::sdk::PathRequest {
-                path: path.to_string(),
-                kind: spec.kind,
-            });
-        }
-    }
-    Ok(requests)
-}
-
-pub(super) fn extract_input_network_requests(
-    input: &serde_json::Value,
-    specs: &[SdkInputNetworkSpec],
-) -> Result<Vec<agena_plugin_host::sdk::NetworkRequest>, ToolError> {
-    let mut requests = Vec::new();
-    for spec in specs {
-        let matches = extract_jsonpath_values(input, spec.jsonpath.as_str())?;
-        if matches.is_empty() {
-            if let Some(target) = spec.fallback.as_ref() {
-                requests.push(agena_plugin_host::sdk::NetworkRequest {
-                    target: target.clone(),
-                });
-                continue;
-            }
-            if spec.optional {
-                continue;
-            }
-            return Err(ToolError::invalid_input(format!(
-                "missing required input network '{}'",
-                spec.jsonpath
-            )));
-        }
-        for value in matches {
-            let Some(target) = value.as_str() else {
-                return Err(ToolError::invalid_input(format!(
-                    "input network '{}' must resolve to a string",
-                    spec.jsonpath
-                )));
-            };
-            requests.push(agena_plugin_host::sdk::NetworkRequest {
-                target: target.to_string(),
-            });
-        }
-    }
-    Ok(requests)
-}
-
-pub(super) fn extract_jsonpath_values<'a>(
-    input: &'a serde_json::Value,
-    jsonpath: &str,
-) -> Result<Vec<&'a serde_json::Value>, ToolError> {
-    let segments = parse_input_jsonpath(jsonpath)?;
-    let mut current = vec![input];
-    for segment in segments {
-        let mut next = Vec::new();
-        for value in current {
-            match segment {
-                InputJsonPathSegment::Key(ref key) => {
-                    if let Some(object) = value.as_object()
-                        && let Some(child) = object.get(key.as_str())
-                    {
-                        next.push(child);
-                    }
-                }
-                InputJsonPathSegment::ArrayAll => {
-                    if let Some(items) = value.as_array() {
-                        next.extend(items.iter());
-                    }
-                }
-            }
-        }
-        current = next;
-        if current.is_empty() {
-            break;
-        }
-    }
-    Ok(current)
-}
-
-pub(super) fn parse_input_jsonpath(jsonpath: &str) -> Result<Vec<InputJsonPathSegment>, ToolError> {
-    if jsonpath == "$" {
-        return Ok(Vec::new());
-    }
-    let Some(mut rest) = jsonpath.strip_prefix("$.") else {
-        return Err(ToolError::invalid_input(format!(
-            "unsupported input path jsonpath '{jsonpath}'"
-        )));
-    };
-
-    let mut segments = Vec::new();
-    while !rest.is_empty() {
-        let key_end = rest.find(['.', '[']).unwrap_or(rest.len());
-        let key = &rest[..key_end];
-        if key.is_empty() {
-            return Err(ToolError::invalid_input(format!(
-                "unsupported input path jsonpath '{jsonpath}'"
-            )));
-        }
-        segments.push(InputJsonPathSegment::Key(key.to_string()));
-        rest = &rest[key_end..];
-
-        while let Some(tail) = rest.strip_prefix("[*]") {
-            segments.push(InputJsonPathSegment::ArrayAll);
-            rest = tail;
-        }
-
-        if rest.is_empty() {
-            break;
-        }
-        let Some(tail) = rest.strip_prefix('.') else {
-            return Err(ToolError::invalid_input(format!(
-                "unsupported input path jsonpath '{jsonpath}'"
-            )));
-        };
-        rest = tail;
-    }
-
-    Ok(segments)
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) enum InputJsonPathSegment {
-    Key(String),
-    ArrayAll,
-}
 use super::{
-    AccessKind, Path, PathBuf, RegisteredTool, SdkInputNetworkSpec, SdkInputPathSpec, SdkPathKind,
-    StructuredObject, ToolError, ToolInvocation, ToolOutput, ToolPayloadInput, shell_tools,
+    AccessKind, Path, PathBuf, RegisteredTool, StructuredObject, ToolError, ToolInvocation,
+    ToolOutput, ToolPayloadInput,
 };
-use agena_domain::{FilesystemEffects, PluginInvocation};
+use agena_domain::PluginInvocation;
 use agena_tool::ApplyPatchExecution;

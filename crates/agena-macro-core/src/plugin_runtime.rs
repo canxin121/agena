@@ -10,8 +10,7 @@ use crate::plugin_tooling::expand_plugin_tool_parse_input;
 use super::{
     PluginCallInput, PluginContextArg, PluginOperationHandlerPlan, PluginOperationInputPlan,
     PluginOperationPlan, PluginServiceInputPlan, PluginServicePlan, PluginServiceTargetPlan,
-    PluginToolNetworkPermissionRule, PluginToolOutputPlan, PluginToolPathPermissionRule,
-    PluginToolPlan,
+    PluginToolOutputPlan, PluginToolPlan,
 };
 
 pub fn expand_plugin_layer_tool_invoke(
@@ -246,54 +245,6 @@ pub fn expand_plugin_layer_tool_stream(
     })
 }
 
-pub fn expand_plugin_layer_permission_paths(
-    _self_ty: &Type,
-    tools: &[PluginToolPlan],
-) -> Result<proc_macro2::TokenStream> {
-    let branches = tools
-        .iter()
-        .filter(|tool| tool.permissions.has_path_permissions())
-        .map(|tool| expand_plugin_layer_permission_branch(tool, true))
-        .collect::<Result<Vec<_>>>()?;
-
-    Ok(quote! {
-        async fn permission_paths(
-            &self,
-            tool: &str,
-            input: &::agena_plugin_sdk::serde_json::Value,
-        ) -> ::agena_plugin_sdk::Result<Vec<::agena_plugin_sdk::PathRequest>> {
-            match tool {
-                #(#branches,)*
-                _ => Ok(Vec::new()),
-            }
-        }
-    })
-}
-
-pub fn expand_plugin_layer_permission_networks(
-    _self_ty: &Type,
-    tools: &[PluginToolPlan],
-) -> Result<proc_macro2::TokenStream> {
-    let branches = tools
-        .iter()
-        .filter(|tool| tool.permissions.has_network_permissions())
-        .map(|tool| expand_plugin_layer_permission_branch(tool, false))
-        .collect::<Result<Vec<_>>>()?;
-
-    Ok(quote! {
-        async fn permission_networks(
-            &self,
-            tool: &str,
-            input: &::agena_plugin_sdk::serde_json::Value,
-        ) -> ::agena_plugin_sdk::Result<Vec<::agena_plugin_sdk::NetworkRequest>> {
-            match tool {
-                #(#branches,)*
-                _ => Ok(Vec::new()),
-            }
-        }
-    })
-}
-
 pub fn expand_plugin_layer_init_method(
     config: &PluginImplConfig,
     self_ty: &Type,
@@ -479,91 +430,6 @@ fn expand_plugin_layer_tool_stream_branch(
             return #call;
         }
     })
-}
-
-fn expand_plugin_layer_permission_branch(
-    tool: &PluginToolPlan,
-    paths: bool,
-) -> Result<proc_macro2::TokenStream> {
-    let tool_name = &tool.tool;
-    let parse = expand_plugin_tool_parse_input(
-        &tool.input_model,
-        quote! { input.clone() },
-        &tool.invoke.method,
-    )?;
-    if paths {
-        let capacity = tool.permissions.path_rules.len();
-        let pushes = tool.permissions.path_rules.iter().map(|rule| match rule {
-            PluginToolPathPermissionRule::Read(expr) => quote! {
-                if let Some(__path) = ::agena_plugin_sdk::IntoPermissionPath::into_permission_path(#expr)? {
-                    __requests.push(::agena_plugin_sdk::PathRequest::read(__path));
-                }
-            },
-            PluginToolPathPermissionRule::Reads(expr) => quote! {
-                __requests.extend(
-                    ::agena_plugin_sdk::IntoPermissionPaths::into_permission_paths(#expr)?
-                        .into_iter()
-                        .map(::agena_plugin_sdk::PathRequest::read)
-                );
-            },
-            PluginToolPathPermissionRule::Write(expr) => quote! {
-                if let Some(__path) = ::agena_plugin_sdk::IntoPermissionPath::into_permission_path(#expr)? {
-                    __requests.push(::agena_plugin_sdk::PathRequest::write(__path));
-                }
-            },
-            PluginToolPathPermissionRule::Writes(expr) => quote! {
-                __requests.extend(
-                    ::agena_plugin_sdk::IntoPermissionPaths::into_permission_paths(#expr)?
-                        .into_iter()
-                        .map(::agena_plugin_sdk::PathRequest::write)
-                );
-            },
-            PluginToolPathPermissionRule::Requests(expr) => quote! {
-                __requests.extend(
-                    ::agena_plugin_sdk::IntoPathRequests::into_path_requests(#expr)?
-                );
-            },
-        });
-        Ok(quote! {
-            #tool_name => {
-                let __parsed = #parse;
-                let input = &__parsed;
-                let mut __requests = ::std::vec::Vec::with_capacity(#capacity);
-                #(#pushes)*
-                return Ok(__requests);
-            }
-        })
-    } else {
-        let capacity = tool.permissions.network_rules.len();
-        let pushes = tool.permissions.network_rules.iter().map(|rule| match rule {
-            PluginToolNetworkPermissionRule::Connect(expr) => quote! {
-                if let Some(__target) = ::agena_plugin_sdk::IntoPermissionTarget::into_permission_target(#expr)? {
-                    __requests.push(::agena_plugin_sdk::NetworkRequest::connect(__target));
-                }
-            },
-            PluginToolNetworkPermissionRule::Connects(expr) => quote! {
-                __requests.extend(
-                    ::agena_plugin_sdk::IntoPermissionTargets::into_permission_targets(#expr)?
-                        .into_iter()
-                        .map(::agena_plugin_sdk::NetworkRequest::connect)
-                );
-            },
-            PluginToolNetworkPermissionRule::Requests(expr) => quote! {
-                __requests.extend(
-                    ::agena_plugin_sdk::IntoNetworkRequests::into_network_requests(#expr)?
-                );
-            },
-        });
-        Ok(quote! {
-            #tool_name => {
-                let __parsed = #parse;
-                let input = &__parsed;
-                let mut __requests = ::std::vec::Vec::with_capacity(#capacity);
-                #(#pushes)*
-                return Ok(__requests);
-            }
-        })
-    }
 }
 
 fn plugin_layer_tool_method_call(

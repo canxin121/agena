@@ -9,8 +9,8 @@
 
 use agena_api::part::PartExecutionStatusResource;
 use agena_api::resource::{
-    ActiveExecutionResource, ExecutionAccess, ExecutionPhase, RunStatus, SessionLifecycleState,
-    SessionRelationKind, SessionState, SessionStateKind, SubtaskStatus, WorkflowState,
+    ActiveExecutionResource, ExecutionPhase, RunStatus, SessionLifecycleState, SessionRelationKind,
+    SessionState, SessionStateKind, SubtaskStatus, WorkflowState,
 };
 
 #[test]
@@ -23,7 +23,6 @@ fn api_state_enums_are_the_domain_enums() {
     let subtask: agena_domain::SubtaskStatus = SubtaskStatus::Created;
     let workflow: agena_domain::WorkflowState = WorkflowState::Quiescent;
     let phase: agena_domain::ExecutionPhase = ExecutionPhase::Starting;
-    let access: agena_domain::ExecutionAccess = ExecutionAccess::Inherit;
     let status: agena_domain::ExecutionStatus = RunStatus::Pending;
     let part_status: agena_domain::ExecutionStatus = PartExecutionStatusResource::Completed;
 
@@ -34,7 +33,6 @@ fn api_state_enums_are_the_domain_enums() {
     assert_eq!(subtask_wire, "created");
     assert_eq!(workflow, agena_domain::WorkflowState::Quiescent);
     assert_eq!(phase, agena_domain::ExecutionPhase::Starting);
-    assert_eq!(access, agena_domain::ExecutionAccess::Inherit);
     assert_eq!(status, agena_domain::ExecutionStatus::Pending);
     assert_eq!(part_status, agena_domain::ExecutionStatus::Completed);
 }

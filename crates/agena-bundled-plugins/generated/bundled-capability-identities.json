@@ -18,25 +18,27 @@
         {
           "canonical_name": "agena.chatgpt.cloud_code_interpreter",
           "conditional": null,
-          "definition_identity": "2bf8c511694ef37a7d8b9fbb4ca0f69e621f95adc06a25d3fc123a7bb6cbdf73",
+          "definition_identity": "d1623d2f6526a47f8f20f25efac75225181d41837f68df21310d519be4720bb9",
           "gateway": false,
           "input_schema_sha256": "bd558acd9740feacfa4833c615b85f9afd3d79b38f8ae36ecf8984221da72004",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "network",
-            "interactive"
+            "interactive",
+            "read_only"
           ]
         },
         {
           "canonical_name": "agena.chatgpt.cloud_document_understanding",
           "conditional": null,
-          "definition_identity": "efe08a5d22a1ccdc57bb499ac6487fbb3c5f09e0aaff1dd81a6f40d04fce80fb",
+          "definition_identity": "9afe16d891049083562e687f30bb99a9c8fe20a823236910bebe1bdec85db612",
           "gateway": false,
           "input_schema_sha256": "7ea6aae81dfd7b1a4e44645943498d4ead0d507be175304d473b916558deee36",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
-            "network"
+            "network",
+            "mutate"
           ]
         },
         {
@@ -54,26 +56,28 @@
         {
           "canonical_name": "agena.chatgpt.cloud_file_search",
           "conditional": null,
-          "definition_identity": "52cffbaac85cc1e1246b1027258a7c4ccee90a33bd7d3bdac9b8a2cf02f170d7",
+          "definition_identity": "2672f8ee39baeffbd5d95a000a92645f6d73c137eea6b1bf026afe4decf5b024",
           "gateway": false,
           "input_schema_sha256": "bd558acd9740feacfa4833c615b85f9afd3d79b38f8ae36ecf8984221da72004",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "network",
             "interactive",
-            "discovery"
+            "discovery",
+            "read_only"
           ]
         },
         {
           "canonical_name": "agena.chatgpt.cloud_file_status",
           "conditional": null,
-          "definition_identity": "2bb1e96c04f89e1286dd6d2e131a932c643f41f6ca88049ba32b4c67ba8de611",
+          "definition_identity": "86c5fdceb8216ae65269eeb8b7a570a31689e31c6aa775043caab4213dbac210",
           "gateway": false,
           "input_schema_sha256": "80fa0ec88064bdf20a55e1aec634d6ca48c8998411fcc7ef52d7964c1b8e6d11",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
-            "network"
+            "network",
+            "mutate"
           ]
         },
         {
@@ -91,59 +95,65 @@
         {
           "canonical_name": "agena.chatgpt.cloud_image_edit",
           "conditional": null,
-          "definition_identity": "8a0edcaa23d767aca7b0ca0991886b3794a611d773bcd007d777cf9e31ea08e9",
+          "definition_identity": "78dd8df331f35987f422092dc018b165a40680c4b31811b2cdda37131d859ce2",
           "gateway": false,
           "input_schema_sha256": "8243bf48504a3ef3f425d2c04f186f154029e516fee2df15d436de2f23cc147f",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
-          "tags": []
+          "tags": [
+            "mutate"
+          ]
         },
         {
           "canonical_name": "agena.chatgpt.cloud_image_generation",
           "conditional": null,
-          "definition_identity": "bd2bc64dfcbf9a157004f02b2f7499a0401c7c94171b0c7ef9211e00fe592a9a",
-          "gateway": false,
-          "input_schema_sha256": "bd558acd9740feacfa4833c615b85f9afd3d79b38f8ae36ecf8984221da72004",
-          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
-          "tags": [
-            "network",
-            "interactive"
-          ]
-        },
-        {
-          "canonical_name": "agena.chatgpt.cloud_image_understanding",
-          "conditional": null,
-          "definition_identity": "4d64f5e3379edf19be6db5a7480b973561a2df33ded4252668c6aad4e0fe2ac3",
-          "gateway": false,
-          "input_schema_sha256": "7ea6aae81dfd7b1a4e44645943498d4ead0d507be175304d473b916558deee36",
-          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
-          "tags": [
-            "query",
-            "network"
-          ]
-        },
-        {
-          "canonical_name": "agena.chatgpt.cloud_shell",
-          "conditional": null,
-          "definition_identity": "f4497b78bc3836d1b987d32634f8e14a5a62267584077cfeda834b9b0407a2ec",
-          "gateway": false,
-          "input_schema_sha256": "bd558acd9740feacfa4833c615b85f9afd3d79b38f8ae36ecf8984221da72004",
-          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
-          "tags": [
-            "network",
-            "interactive"
-          ]
-        },
-        {
-          "canonical_name": "agena.chatgpt.cloud_web_search",
-          "conditional": null,
-          "definition_identity": "d5d8c13c051722e6fa44a6ec4cd7a584af056e51c16d4d2eb6825f858e8cd79c",
+          "definition_identity": "84f4504bca576e86766748d3ebba1503f3ad0b5c21390a6b8e254d66d667d890",
           "gateway": false,
           "input_schema_sha256": "bd558acd9740feacfa4833c615b85f9afd3d79b38f8ae36ecf8984221da72004",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "network",
             "interactive",
-            "discovery"
+            "mutate"
+          ]
+        },
+        {
+          "canonical_name": "agena.chatgpt.cloud_image_understanding",
+          "conditional": null,
+          "definition_identity": "12e53f59426bf740b8342ed62f7772294b51693c92132b9f982c793d797bb510",
+          "gateway": false,
+          "input_schema_sha256": "7ea6aae81dfd7b1a4e44645943498d4ead0d507be175304d473b916558deee36",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "query",
+            "network",
+            "mutate"
+          ]
+        },
+        {
+          "canonical_name": "agena.chatgpt.cloud_shell",
+          "conditional": null,
+          "definition_identity": "e8948f179100b453f2641283805f1af9fbbaed6e62e638830a848834866de580",
+          "gateway": false,
+          "input_schema_sha256": "bd558acd9740feacfa4833c615b85f9afd3d79b38f8ae36ecf8984221da72004",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "network",
+            "interactive",
+            "mutate"
+          ]
+        },
+        {
+          "canonical_name": "agena.chatgpt.cloud_web_search",
+          "conditional": null,
+          "definition_identity": "3482108c8d738e3e7a11816733e6978de062643792f8db3e63c05d718767f820",
+          "gateway": false,
+          "input_schema_sha256": "bd558acd9740feacfa4833c615b85f9afd3d79b38f8ae36ecf8984221da72004",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "network",
+            "interactive",
+            "discovery",
+            "read_only"
           ]
         }
       ],
@@ -160,37 +170,40 @@
         {
           "canonical_name": "agena.claude.cloud_advisor",
           "conditional": null,
-          "definition_identity": "95cb64221540e57c94ce9ce3295756a2cf505c22ffa55570ba3654ff3f595931",
+          "definition_identity": "f7dc7fb16ee48ab85d538b52c2a4dc63152c4e3e760e6431b2e953566ebbab8d",
           "gateway": false,
           "input_schema_sha256": "5b07e4498679161c556b18dd998d628de6530a88e632946e580628cde3f52348",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "network",
-            "interactive"
+            "interactive",
+            "read_only"
           ]
         },
         {
           "canonical_name": "agena.claude.cloud_code_execution",
           "conditional": null,
-          "definition_identity": "7a82d20cfff6a4f43669e150e23686557b842b1cba3ca7802ff6f076396f17ab",
+          "definition_identity": "67ec498a30aa2fe5e9be9dc4ae831a2f46156db80a49ccdd186f4debc9ecb574",
           "gateway": false,
           "input_schema_sha256": "5b07e4498679161c556b18dd998d628de6530a88e632946e580628cde3f52348",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "network",
-            "interactive"
+            "interactive",
+            "read_only"
           ]
         },
         {
           "canonical_name": "agena.claude.cloud_document_understanding",
           "conditional": null,
-          "definition_identity": "656ec4cf24c4f1cf71ce4c02c980f683e393f2e6ba38c790a5db16987326e7fe",
+          "definition_identity": "ff411ec693fbd99275ea64892821fcf62218079e15c666919fed18fa3a2e485e",
           "gateway": false,
           "input_schema_sha256": "7ea6aae81dfd7b1a4e44645943498d4ead0d507be175304d473b916558deee36",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
-            "network"
+            "network",
+            "mutate"
           ]
         },
         {
@@ -208,13 +221,14 @@
         {
           "canonical_name": "agena.claude.cloud_file_status",
           "conditional": null,
-          "definition_identity": "0e1b06d933991b7eee1dda857bf151b90f6ebfe84ef22fbebe217af124bcebb4",
+          "definition_identity": "480eff59405c7a7d9d2da90300eb66e82f9d3b91617b0f7446dde6daba63d4a1",
           "gateway": false,
           "input_schema_sha256": "80fa0ec88064bdf20a55e1aec634d6ca48c8998411fcc7ef52d7964c1b8e6d11",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
-            "network"
+            "network",
+            "mutate"
           ]
         },
         {
@@ -232,39 +246,42 @@
         {
           "canonical_name": "agena.claude.cloud_image_understanding",
           "conditional": null,
-          "definition_identity": "ffcc2507d4a4c3bd439045bdc0b36ed211a58c03ba9dfa5dc2520d0638a95f38",
+          "definition_identity": "786aa49e59e8aaa6848425196c2df68da50d77928f383b8091e73a0196b64c01",
           "gateway": false,
           "input_schema_sha256": "7ea6aae81dfd7b1a4e44645943498d4ead0d507be175304d473b916558deee36",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
-            "network"
+            "network",
+            "mutate"
           ]
         },
         {
           "canonical_name": "agena.claude.cloud_web_fetch",
           "conditional": null,
-          "definition_identity": "eff49c4aeaf6cd4884da6ccec9b96cc7f2b3989ca618e9d05398f3e4b9c35edd",
+          "definition_identity": "d5acc8164d1f89112f1f978c4cd1260e57c7ea83f2f5a65a8afd35c9f31b2d3b",
           "gateway": false,
           "input_schema_sha256": "5b07e4498679161c556b18dd998d628de6530a88e632946e580628cde3f52348",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "network",
             "interactive",
-            "discovery"
+            "discovery",
+            "read_only"
           ]
         },
         {
           "canonical_name": "agena.claude.cloud_web_search",
           "conditional": null,
-          "definition_identity": "8931f0f07438caff0ec86d2dd4c011648f0941c970e26e7bd173af3c22524ff2",
+          "definition_identity": "65a17ef11a9074ef316f9ed6dfca6cb9d27f50d3ca14d4dfd87869b748b60073",
           "gateway": false,
           "input_schema_sha256": "5b07e4498679161c556b18dd998d628de6530a88e632946e580628cde3f52348",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "network",
             "interactive",
-            "discovery"
+            "discovery",
+            "read_only"
           ]
         }
       ],
@@ -280,27 +297,29 @@
         {
           "canonical_name": "agena.code.search_ast",
           "conditional": null,
-          "definition_identity": "47c17e02a65533889a8b3879aebd06272dd6ed9c94dc524dfe7dcb0838946328",
+          "definition_identity": "1f78bb7b1bf30daa1ff553eb85324f63b21840d0c1584ed1509b26dea5642722",
           "gateway": false,
-          "input_schema_sha256": "52bf671c5de69e38f3d40ced484939658b6a7a438c538625910f6400f60fe03e",
+          "input_schema_sha256": "c491c9d400048de4b904463c27b108317e315c5d0cb7e8caf1f8a1915ab9f574",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
             "filesystem",
-            "discovery"
+            "discovery",
+            "read_only"
           ]
         },
         {
           "canonical_name": "agena.code.syntax_tree",
           "conditional": null,
-          "definition_identity": "afa6aca4d8fc080008db7ddc52b691425b96a9a5b3d0cd1c053a96ccec796ce8",
+          "definition_identity": "772f26a9cc17e01876d8d980f4042028f0a8c25c07a3a5371e8267395f824351",
           "gateway": false,
-          "input_schema_sha256": "5d9e2b8d376957122ffd186d58a6cd1d43b8c784e5cd85287e0b2ae9cd320d17",
+          "input_schema_sha256": "f2f98184c2ba880bba7daae840ff4e455ffbcf639d0f74abb959cad11c1aa7d8",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
             "filesystem",
-            "discovery"
+            "discovery",
+            "read_only"
           ]
         }
       ],
@@ -341,26 +360,28 @@
         {
           "canonical_name": "agena.cron.history",
           "conditional": null,
-          "definition_identity": "c5624ec370cb2b254aad64e6e6661d2b4d4e7e6f47857a481a6d7fa4d863cf2e",
+          "definition_identity": "8019a1a4e3e81cfc025a4081544c0d585f13b56dea851f0ce2cfde4f2f0f4c3c",
           "gateway": false,
           "input_schema_sha256": "72b6e68d40cd2e5231ef43a83c0af151eaf157574e21263486d366559b4d335f",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
-            "scheduler"
+            "scheduler",
+            "read_only"
           ]
         },
         {
           "canonical_name": "agena.cron.list",
           "conditional": null,
-          "definition_identity": "0d2ceccee126a32b5bf58b2023eb592ed9c700059dbe37b723d401683bce4b84",
+          "definition_identity": "58ed67d52ff94415b16d55f274dc7010749becad0a8bfc3adf4452416617a255",
           "gateway": false,
           "input_schema_sha256": "5a43782476e2ea2bc99d02866a0ae9fd62c620669940fbd91391785bf0b23afa",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
             "scheduler",
-            "discovery"
+            "discovery",
+            "read_only"
           ]
         },
         {
@@ -424,73 +445,79 @@
         {
           "canonical_name": "agena.fs.glob",
           "conditional": null,
-          "definition_identity": "9906b36ec794b2ce4da13ee28871908f62c495558e3418a8dace62315297e8b4",
+          "definition_identity": "7e1b6037d43f36cfaaf6989609746aa4d5a615168e6121e36e7d395ef0102f9d",
           "gateway": false,
-          "input_schema_sha256": "ba8bb0f950e4d1550897942fe0b0299203791b6f0c766c6f3b612a8ea7919b2b",
+          "input_schema_sha256": "e407acc4d53fda6c92566c4652ad7b3d45022faee8e6002c60541a59379c9a13",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
             "filesystem",
-            "discovery"
+            "discovery",
+            "read_only"
           ]
         },
         {
           "canonical_name": "agena.fs.grep",
           "conditional": null,
-          "definition_identity": "e81bddcc02bf338fe6d498e7dc1a028f83993772c88de15ac2a762976aba74f8",
+          "definition_identity": "f610fcbad5a0cb2157c1001663bd54bbbf5f16ad91b5a9ae8c3381a080f2723b",
           "gateway": false,
-          "input_schema_sha256": "c3972af509e052ebd472627f6bbea785ade13a1cab5f295474003d88f3774a3d",
+          "input_schema_sha256": "ca8f625c2298141e21b3c4c136fc8e3ce51ae731f507398272bb1488d67feddd",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
             "filesystem",
-            "discovery"
+            "discovery",
+            "read_only"
           ]
         },
         {
           "canonical_name": "agena.fs.output_read",
           "conditional": null,
-          "definition_identity": "ed918eba2342b4406336351681127e91a7d8d2bbfeadac0b16d23fc6bef2cc76",
+          "definition_identity": "8cd57893566b101dd2c026958259437f1b2d18f845c14601c412f3a2d2206c5b",
           "gateway": false,
           "input_schema_sha256": "67ff34f403e57324daa79fec42030bbc6dc3ef4531f0ec9bd2454e3480d74cfc",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "query"
+            "query",
+            "read_only"
           ]
         },
         {
           "canonical_name": "agena.fs.output_search",
           "conditional": null,
-          "definition_identity": "15c950d638fa4769dafcc064840ada68daf6bd6c16a997a2f486cffd9ef6d338",
+          "definition_identity": "70298370984387fc298ef394351c3593d5fe8f86b65018d6933b7e145ffd0e4f",
           "gateway": false,
           "input_schema_sha256": "1f94efea308c32aeb36e0f94fa75e98991aca0fd4d255f8510c5335aa6520ae2",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "query"
+            "query",
+            "read_only"
           ]
         },
         {
           "canonical_name": "agena.fs.read",
           "conditional": null,
-          "definition_identity": "f4386942036710762bd9dd3fc7b4aed33f34e8bb72c0ec0b584129991befe650",
+          "definition_identity": "505d646365f8b8471028dbd693d1046d19444535df2195d081fb078e17a2606f",
           "gateway": false,
-          "input_schema_sha256": "7740a9c238c59053c10692dd0205e4b077a3bd17872c6c4f3bc7ca1b8f7c94f8",
+          "input_schema_sha256": "464772b58d06502c18c80b73ca273c4b836f359ee57585002ac53b81ffc142a3",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
-            "filesystem"
+            "filesystem",
+            "read_only"
           ]
         },
         {
           "canonical_name": "agena.fs.read_many",
           "conditional": null,
-          "definition_identity": "0ca7003721a2987e5dd32a6f3f53ee1feee73092718e37e48cd1cb55a5fbb9c8",
+          "definition_identity": "fadf31cbe317b1aa7ec3bf4d8a802e0ed3d99b3e17c270797514c645721a14e1",
           "gateway": false,
           "input_schema_sha256": "0175a15e309568465ce137c3937620ced7ffecabe5821537fc3901b38a326b14",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
-            "filesystem"
+            "filesystem",
+            "read_only"
           ]
         },
         {
@@ -508,13 +535,14 @@
         {
           "canonical_name": "agena.fs.stat",
           "conditional": null,
-          "definition_identity": "99f5b77e76e114297832e4dd65a9faea99a30d0126166a8017f811aface4e095",
+          "definition_identity": "80e1047405e7899ad3a443c85dc82b93baa159e0be3567462d48e547fb857dcd",
           "gateway": false,
           "input_schema_sha256": "e05e14eb17bcba9f8816b7235ead177c0620c47f20cc1206cc569d263bdad52a",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
-            "filesystem"
+            "filesystem",
+            "read_only"
           ]
         },
         {
@@ -543,25 +571,27 @@
         {
           "canonical_name": "agena.gemini.cloud_code_execution",
           "conditional": null,
-          "definition_identity": "5a5f68b7a5de81b069d9d65a92bc77a049bfab866de32154b2a01d83a9c737f9",
+          "definition_identity": "aa417e0d48960d92b1f20cd8c1bebfdbd1e4a0282a850245d6723ca8d1c8684e",
           "gateway": false,
           "input_schema_sha256": "899641714805819985f6d1b96dd177dd09a8991949cea221f2299098781b45b3",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "network",
-            "interactive"
+            "interactive",
+            "read_only"
           ]
         },
         {
           "canonical_name": "agena.gemini.cloud_document_understanding",
           "conditional": null,
-          "definition_identity": "eef77aa8f117156fbd0b82ea33c1a8bed7893dfdf5f26226a9af951f78bd1141",
+          "definition_identity": "e9da9b7637d0f01be28759fd746b6d5931d0a83834645897f643500a466d75f9",
           "gateway": false,
           "input_schema_sha256": "7ea6aae81dfd7b1a4e44645943498d4ead0d507be175304d473b916558deee36",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
-            "network"
+            "network",
+            "mutate"
           ]
         },
         {
@@ -579,26 +609,28 @@
         {
           "canonical_name": "agena.gemini.cloud_file_search",
           "conditional": null,
-          "definition_identity": "807419fe6da0343bfb5801da3a74089823c6013572fcb3924957a7c404b97aca",
+          "definition_identity": "e613bf7f00d2bead2336fc592660204086b2000a885fe6a14a31fa36f27812d4",
           "gateway": false,
           "input_schema_sha256": "899641714805819985f6d1b96dd177dd09a8991949cea221f2299098781b45b3",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "network",
             "interactive",
-            "discovery"
+            "discovery",
+            "read_only"
           ]
         },
         {
           "canonical_name": "agena.gemini.cloud_file_status",
           "conditional": null,
-          "definition_identity": "ccadebcd7942f8c97c9651cdee52e694fd533b2892e44fe4783e9bea347ee89c",
+          "definition_identity": "f4e9ec74a54465619b4a38fa6a7832eb258b1c34b997f503b1e05bdd16ed1312",
           "gateway": false,
           "input_schema_sha256": "80fa0ec88064bdf20a55e1aec634d6ca48c8998411fcc7ef52d7964c1b8e6d11",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
-            "network"
+            "network",
+            "mutate"
           ]
         },
         {
@@ -616,73 +648,80 @@
         {
           "canonical_name": "agena.gemini.cloud_google_maps",
           "conditional": null,
-          "definition_identity": "f77a92402229f23b32f4ab61102d394dd16f4e58ca96de1c6f8d92df36d9abf9",
+          "definition_identity": "9f8a852b718fa236a9458ae2d2814be88b00edff2ef529aa9813187836c02330",
           "gateway": false,
           "input_schema_sha256": "899641714805819985f6d1b96dd177dd09a8991949cea221f2299098781b45b3",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "network",
             "interactive",
-            "discovery"
+            "discovery",
+            "read_only"
           ]
         },
         {
           "canonical_name": "agena.gemini.cloud_google_search",
           "conditional": null,
-          "definition_identity": "1a5e7956e02c7093198fa0dff6bea525e591a34e5627066dcba097fb3d1a1f67",
+          "definition_identity": "254e2583b45e76435bfe5d94dd577aaefd6e177494f3190c744bf77a069eaa8d",
           "gateway": false,
           "input_schema_sha256": "899641714805819985f6d1b96dd177dd09a8991949cea221f2299098781b45b3",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "network",
             "interactive",
-            "discovery"
+            "discovery",
+            "read_only"
           ]
         },
         {
           "canonical_name": "agena.gemini.cloud_image_edit",
           "conditional": null,
-          "definition_identity": "236451c1e139a448554bc27740db109f10b323eebf87ddad0f200c769d8e7a8e",
+          "definition_identity": "53166fca178ea4bdd0da49ff782788db72621309e67add226a40461943ecfb37",
           "gateway": false,
           "input_schema_sha256": "fec6470323277fd28c497dbf6162eee6e5dd9c4a2f47462b7c4323fd0f73c9bc",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
-          "tags": []
+          "tags": [
+            "mutate"
+          ]
         },
         {
           "canonical_name": "agena.gemini.cloud_image_generation",
           "conditional": null,
-          "definition_identity": "6b1efe3483e174f9d96cfbcb7f238e278d1be662a1de29978c611042762ab9a3",
+          "definition_identity": "3cd25493f7b75bc5c271eb6e9dc112b0580f2ed75e0b212dff00abdbb1229582",
           "gateway": false,
           "input_schema_sha256": "31e09ca2bc4e9357f22ead7c96fa074aeee01b81299d716e867717c7659334bb",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "network",
-            "interactive"
+            "interactive",
+            "mutate"
           ]
         },
         {
           "canonical_name": "agena.gemini.cloud_image_understanding",
           "conditional": null,
-          "definition_identity": "9e6b0b9409ff966e857b8a0b8693545eb14a1146a20ec1cbe20896496829436f",
+          "definition_identity": "6e305079a625179d47ff3bb207e1352fdd72b88b6fa8f80d8aca3accf5c5bccd",
           "gateway": false,
           "input_schema_sha256": "7ea6aae81dfd7b1a4e44645943498d4ead0d507be175304d473b916558deee36",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
-            "network"
+            "network",
+            "mutate"
           ]
         },
         {
           "canonical_name": "agena.gemini.cloud_url_context",
           "conditional": null,
-          "definition_identity": "a0c12fb5c61a87b092d2ca47b05d79acc1d5418f739064e9d9177f20ad609cec",
+          "definition_identity": "9c6847ad1a8c20cb360b111254862154a302463fed47ecf29cb98eb888629aae",
           "gateway": false,
           "input_schema_sha256": "899641714805819985f6d1b96dd177dd09a8991949cea221f2299098781b45b3",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "network",
             "interactive",
-            "discovery"
+            "discovery",
+            "read_only"
           ]
         }
       ],
@@ -732,66 +771,71 @@
         {
           "canonical_name": "agena.lsp.definition",
           "conditional": null,
-          "definition_identity": "7afb44f2f749b6364688758791b97616255b8c8abde213808e0a3870c3066d66",
+          "definition_identity": "7d1780b7ec36abe10b7455e55cd461bfc32314db738dd0d307546e226ce8e05f",
           "gateway": false,
-          "input_schema_sha256": "7adb2df4a99cbaddcc57f824c746934ee432a3290ae0f4f670d3000f698646ae",
+          "input_schema_sha256": "ac4a287658d18ca598e791d7d4f3cc30c30c2e70c1b30d433a4e369ab9a34649",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
             "lsp",
-            "filesystem"
+            "filesystem",
+            "read_only"
           ]
         },
         {
           "canonical_name": "agena.lsp.diagnostics",
           "conditional": null,
-          "definition_identity": "bf61f31272a9329ebc14748ca568cc20a94579a2a59c1b6c61d0cf60b491f048",
+          "definition_identity": "c428463570cc2ab0effa170193603be7f0f7059c28ad98d2a18560f56fe84817",
           "gateway": false,
-          "input_schema_sha256": "c294835f79800b1d016cb7bbac5fdc51e0c18d606b45d906b6ff59be9c272d49",
+          "input_schema_sha256": "b24a2e2cfbb6be0f8c031ac808fc859a1d1ff688d7905ae0fcff67a3de201ab7",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
             "lsp",
-            "filesystem"
+            "filesystem",
+            "read_only"
           ]
         },
         {
           "canonical_name": "agena.lsp.hover",
           "conditional": null,
-          "definition_identity": "8171c892cde4e965d724ed66366c78a5f9a67644ed7de5e7f09b13ddb80d76e9",
+          "definition_identity": "598d4c63ba1622884823cac91639bfdc15fc357ead2dc188ebd979416f452780",
           "gateway": false,
-          "input_schema_sha256": "f2e724332257e9daf32b699aeb90fba345f5af2cd50d94e94dd9cb744022a126",
+          "input_schema_sha256": "4cbbd3b35c7031c0564ee650624a1a4d6436683db872c52f1a216f7ae3216991",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
             "lsp",
-            "filesystem"
+            "filesystem",
+            "read_only"
           ]
         },
         {
           "canonical_name": "agena.lsp.references",
           "conditional": null,
-          "definition_identity": "441630fb05cee2f41c91d291226304e98550fae9ecbb1bf38bb5971726adf895",
+          "definition_identity": "acc941b1da223f708055816521e7a46fef5abdad298bb1fbd25ff043500011d7",
           "gateway": false,
-          "input_schema_sha256": "15265b18e572e8c7654287e28e89a8a3a86fe3f507eba984d6f2f8d8001bc836",
+          "input_schema_sha256": "8ec934ada1c4d97cd23d9712274e2ebd998a09845fe0e01d53fa908c7becadf6",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
             "lsp",
-            "filesystem"
+            "filesystem",
+            "read_only"
           ]
         },
         {
           "canonical_name": "agena.lsp.servers",
           "conditional": null,
-          "definition_identity": "52f4b734b0fd5538b05cee1ca320b5a251d1227606718c6771ad51d7c193a12b",
+          "definition_identity": "837c905d26c44fface146074e5ab10f7c962db7d3532f39ce13fda0b3bb3132a",
           "gateway": false,
           "input_schema_sha256": "99334726611ccf58a148b0814696bfa6fe08c1b2d027e946beccf5a74331c9aa",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
             "lsp",
-            "discovery"
+            "discovery",
+            "read_only"
           ]
         }
       ],
@@ -809,64 +853,69 @@
         {
           "canonical_name": "agena.mcp.prompts.get",
           "conditional": "runtime:mcp-manager",
-          "definition_identity": "8cae8d7a9c6f4eb123ea81a104327fb5b83d5d53c57e93cd44cd9a913885d8db",
+          "definition_identity": "02358411094c9fc0a670f35ffe65f39f5729af927964386c5831c1fdeaed434f",
           "gateway": false,
           "input_schema_sha256": "b86156a17e739bf3e34de4e26e0f8bc65683a106cf2766056f8f8f5e438cb63e",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
-            "mcp"
+            "mcp",
+            "read_only"
           ]
         },
         {
           "canonical_name": "agena.mcp.prompts.list",
           "conditional": "runtime:mcp-manager",
-          "definition_identity": "7afd6bb4806ea897d5aea4f8223bbdaf7dea5661d361a377db65e88d40715054",
+          "definition_identity": "72d323cc93e404425da38165da5c7fa6336b85e86a56746b5d5f802190313750",
           "gateway": false,
           "input_schema_sha256": "bf33595a71542b7502f3883bc8cfda621a850e0d89b205b590cbfbb5c5fbfc1e",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
             "mcp",
-            "discovery"
+            "discovery",
+            "read_only"
           ]
         },
         {
           "canonical_name": "agena.mcp.resources.list",
           "conditional": "runtime:mcp-manager",
-          "definition_identity": "2beb521b03664d48e1e98997ad0cd3858f26e868ffdca7448df068871a8d9e28",
+          "definition_identity": "901eec7ab3f39a0d5db0738e9451afe431b52c1d4eae5190992096adc03cdc33",
           "gateway": false,
           "input_schema_sha256": "bf33595a71542b7502f3883bc8cfda621a850e0d89b205b590cbfbb5c5fbfc1e",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
             "mcp",
-            "discovery"
+            "discovery",
+            "read_only"
           ]
         },
         {
           "canonical_name": "agena.mcp.resources.read",
           "conditional": "runtime:mcp-manager",
-          "definition_identity": "754d33755486a78694a4b8e7cfba8e98e4c3ed5e052876a5dac1b34263d922e9",
+          "definition_identity": "2683e38565447b230c83d2b7dfd6ea5191a041cc4c19610884766753bb96e554",
           "gateway": false,
           "input_schema_sha256": "a843fd3fdbe2e1fcf3ddc8eb92ef1e020980fa6a94a70a8f02957f76085c7266",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
-            "mcp"
+            "mcp",
+            "read_only"
           ]
         },
         {
           "canonical_name": "agena.mcp.resources.templates.list",
           "conditional": "runtime:mcp-manager",
-          "definition_identity": "9c56eaa8d31e7439420980064fbc260d48c725c27e6cd06b24473bf607881306",
+          "definition_identity": "1b3495f80187efb52fb24468224b7c11d8e108365eb9e23820c9d2288fe3268d",
           "gateway": false,
           "input_schema_sha256": "bf33595a71542b7502f3883bc8cfda621a850e0d89b205b590cbfbb5c5fbfc1e",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
             "mcp",
-            "discovery"
+            "discovery",
+            "read_only"
           ]
         },
         {
@@ -884,39 +933,42 @@
         {
           "canonical_name": "agena.mcp.servers.status",
           "conditional": "runtime:mcp-manager",
-          "definition_identity": "f3846bceaaf379522618c4b430bd5ae209ae278bafea7454a913d10812ea22fd",
+          "definition_identity": "2732a52f7e64564a0775b8414ffef538989858005ca151ab0ea53eb46d8e9d2a",
           "gateway": false,
           "input_schema_sha256": "99334726611ccf58a148b0814696bfa6fe08c1b2d027e946beccf5a74331c9aa",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
             "mcp",
-            "discovery"
+            "discovery",
+            "read_only"
           ]
         },
         {
           "canonical_name": "agena.mcp.tools.call",
           "conditional": "runtime:mcp-manager",
-          "definition_identity": "1380a9708e71ee0e3004038272da9a77b0275f1e655c0cfba3750a7e69f914ed",
+          "definition_identity": "2ee9d6a0470b146d3f7bcfa15eb273a580edd099a8b42b3fa323087e1b3e5c35",
           "gateway": false,
           "input_schema_sha256": "357f3d68484ffe42a59022a7a47c749847fc27810bd719a58483f44290d57701",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "execute",
-            "mcp"
+            "mcp",
+            "mutate"
           ]
         },
         {
           "canonical_name": "agena.mcp.tools.search",
           "conditional": "runtime:mcp-manager",
-          "definition_identity": "71a2f579c46120871f9867680359b1505dcc1c534fed729773a39398ec2cdce1",
+          "definition_identity": "ed90ba3326b4f66682c4239362c7639ec0f01000d789caa221ed92cb94de64b0",
           "gateway": false,
           "input_schema_sha256": "f8f0bc4489e6744fa924327f64502984e1c463eb88146473da3db70292463f98",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
             "mcp",
-            "discovery"
+            "discovery",
+            "read_only"
           ]
         }
       ],
@@ -946,39 +998,42 @@
         {
           "canonical_name": "agena.memory.get",
           "conditional": null,
-          "definition_identity": "f82605c91019d22de526303975b17d1d3fa358bd62a904a3534fb7f04d1aab81",
+          "definition_identity": "9f39496c4d1f1c37b4419fb343899d96f349599abbe049bc5fec9f265392211c",
           "gateway": false,
           "input_schema_sha256": "4f023e49026389b25306cfb9661862030f771ce5c03db73de2a5b5dc5d534892",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
-            "filesystem"
+            "filesystem",
+            "read_only"
           ]
         },
         {
           "canonical_name": "agena.memory.list",
           "conditional": null,
-          "definition_identity": "f191ce8189bd1f257c403473c7720b592278c2a3149424cb7e3d3ed895174905",
+          "definition_identity": "9b449ac77202ffb64b1d2e7016248b5d9cd0a333aeb2b5ed97ea4bc52e652fbb",
           "gateway": false,
           "input_schema_sha256": "160f560c7e86c5b459174c6d5ddb5db3e37aed0e396ee5177fbf9c0991cf8eae",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
             "filesystem",
-            "discovery"
+            "discovery",
+            "read_only"
           ]
         },
         {
           "canonical_name": "agena.memory.search",
           "conditional": null,
-          "definition_identity": "a5d3a78ae81574dfe0a06b8ce7a4cb4315c42a75fe0f5031e13014ac311c38ff",
+          "definition_identity": "cc27496f71972dea4bbf2a0553fe0dc4e78cf3cf6d66a375ce0ff74fddd19297",
           "gateway": false,
           "input_schema_sha256": "cd3f345548c959a0a30a7723f97a9a9d5ce3de5c797d5fc345a2c48854a401d6",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
             "filesystem",
-            "discovery"
+            "discovery",
+            "read_only"
           ]
         },
         {
@@ -1006,24 +1061,27 @@
         {
           "canonical_name": "agena.monitor.start",
           "conditional": null,
-          "definition_identity": "91261c0b10fece5b09f233a89a471aa12f1f3c7d5cfebdd6a669151de22f1329",
+          "definition_identity": "353cf0965ecbfafacd883c11336a9159fedea8f77c29d0883b7557311de70e77",
           "gateway": false,
           "input_schema_sha256": "a48fafaa3e33c3c29ec38e89af4d2e49824bd2328b0ce48e56f2116ac5cab9c5",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "execute"
+            "execute",
+            "shell",
+            "mutate"
           ]
         },
         {
           "canonical_name": "agena.monitor.stop",
           "conditional": null,
-          "definition_identity": "d5a71763a12d172974d13b8c1394823bf086e9504cf6084cea15c0102908d21a",
+          "definition_identity": "17cf31c96950406ea299c26a9fd64ffa560df94e492583abb7205c2f8ae72399",
           "gateway": false,
           "input_schema_sha256": "45822b66ac80380fb6e2cfc3ee7b23ee250f09257564fd8094a65c66c3c1ea9b",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "mutate",
-            "execute"
+            "execute",
+            "shell"
           ]
         }
       ],
@@ -1090,13 +1148,14 @@
         {
           "canonical_name": "agena.plan.get",
           "conditional": null,
-          "definition_identity": "1e6049dd09c9011eb201dd706e5a0bf3427a31140e636a6d73cc94884390af9c",
+          "definition_identity": "f42dcfad3a4ed451b2b484e46e7d34675b9af628f50a307035d69f04755917c9",
           "gateway": false,
           "input_schema_sha256": "2ac2cbd1b28b0cc77bc1fa5b5483c0ff8c38a502f769df1499fea8717a809340",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
-            "planning"
+            "planning",
+            "read_only"
           ]
         },
         {
@@ -1150,13 +1209,14 @@
         {
           "canonical_name": "agena.report.findings",
           "conditional": null,
-          "definition_identity": "adb3947d5d4850cda1f6b99e01aa4aa66c6304e96855e07fbf60b41f4e0e9585",
+          "definition_identity": "416dd8ba7de40ee0cd798439765a1368503fa4170e6daa1475ffe96d5aa21a7a",
           "gateway": false,
           "input_schema_sha256": "f3166641f975ee521293082bc5c3f9ebdc50be5521b734b60cdadb5eb06627ad",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "mutate",
-            "discovery"
+            "discovery",
+            "read_only"
           ]
         }
       ],
@@ -1173,37 +1233,40 @@
         {
           "canonical_name": "agena.session.environment",
           "conditional": null,
-          "definition_identity": "268544d79f0849b532a2fc368ceb8b9cfd4a1d32b1b3deb43c38ba8b86acdc67",
+          "definition_identity": "b9dfc1badf038db614c1c3901c91ad8796108c364456a6dbf0013d036f805593",
           "gateway": false,
           "input_schema_sha256": "99334726611ccf58a148b0814696bfa6fe08c1b2d027e946beccf5a74331c9aa",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
-            "discovery"
+            "discovery",
+            "read_only"
           ]
         },
         {
           "canonical_name": "agena.session.get",
           "conditional": null,
-          "definition_identity": "664ff96a70d830149288aab6d7c8ea9ac31a35212e7917a0181c92f63204eaac",
+          "definition_identity": "943a9f9c0ed0a1c7e009b5e6bc4c2308691a623485e37d4e7d6619bab9e53914",
           "gateway": false,
           "input_schema_sha256": "99334726611ccf58a148b0814696bfa6fe08c1b2d027e946beccf5a74331c9aa",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
-            "discovery"
+            "discovery",
+            "read_only"
           ]
         },
         {
           "canonical_name": "agena.session.model",
           "conditional": null,
-          "definition_identity": "50cc3f496426a25a703964df4df10fa5d46a1ae05e923d95700e6a03acead9fe",
+          "definition_identity": "b91e7937ab2e1f145ceea68278f0ee69f41a2bf394c4a5b1ac148f129ca497c2",
           "gateway": false,
           "input_schema_sha256": "99334726611ccf58a148b0814696bfa6fe08c1b2d027e946beccf5a74331c9aa",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
-            "discovery"
+            "discovery",
+            "read_only"
           ]
         },
         {
@@ -1220,13 +1283,14 @@
         {
           "canonical_name": "agena.session.tokens",
           "conditional": null,
-          "definition_identity": "695f4ebc3dcad6d77d154e1e5a6bd69848054eda2982cda96d5908666a821ea8",
+          "definition_identity": "ed6b7d5642c4d81c395eb89daf954fc2807ebc084dae46c3d5b4421dd11182bc",
           "gateway": false,
           "input_schema_sha256": "99334726611ccf58a148b0814696bfa6fe08c1b2d027e946beccf5a74331c9aa",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
-            "discovery"
+            "discovery",
+            "read_only"
           ]
         }
       ],
@@ -1354,82 +1418,92 @@
         {
           "canonical_name": "agena.shell.list",
           "conditional": null,
-          "definition_identity": "573ba2398e575c3392a0417428830b187eab1c041b29c11339043273b4a4a7ea",
+          "definition_identity": "2ccdb2494a528bdeee8b6f5b05ccf7a6fe8cbf8b576351417719a2850a3f9492",
           "gateway": false,
           "input_schema_sha256": "99334726611ccf58a148b0814696bfa6fe08c1b2d027e946beccf5a74331c9aa",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
-            "discovery"
+            "discovery",
+            "shell",
+            "read_only"
           ]
         },
         {
           "canonical_name": "agena.shell.logs",
           "conditional": null,
-          "definition_identity": "0bb61df186e9afb3176849918fe3c752b5ae2c3a9c1e5ccad227e86118378013",
+          "definition_identity": "9af222c3a55046824cc12559ca3928ac6badaceb8efbcd81f4f999351b8f95ef",
           "gateway": false,
           "input_schema_sha256": "9c38213613cd17a4e0182e19dd3665e984734960958ec6d86f99c81bfbceba75",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "query"
+            "query",
+            "shell",
+            "read_only"
           ]
         },
         {
           "canonical_name": "agena.shell.resize",
           "conditional": null,
-          "definition_identity": "5c4019b4734d52da0c024bbf9981186a678daaa8f928af26e7ecb5e7775bcb5f",
+          "definition_identity": "b715538ea2423e8261bc70bbdd9ce1fa1f0d58d1f30aa460343021d757f56a84",
           "gateway": false,
           "input_schema_sha256": "c554d95e29c8f350dfd6004d55329da410dcbd7be7343285b6ceb54f45545559",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "mutate"
+            "mutate",
+            "shell"
           ]
         },
         {
           "canonical_name": "agena.shell.run",
           "conditional": null,
-          "definition_identity": "111870ce9a0ac86e4c7574769d00c0d925c0389b0e2bc653348ecb2e8103d52d",
+          "definition_identity": "225f067cb9816f1bf79452f526680c375b1ad58f44d16045b7b66bbd8587013f",
           "gateway": false,
-          "input_schema_sha256": "b8667e8a3b22e82fb8335a011d36b891511ef4a37d29a764e0bc761720a8a341",
+          "input_schema_sha256": "14cf514a05234697f9cd9765a98929ee6a6ef74ce7db1082966e5c8c24697011",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "execute"
+            "execute",
+            "shell",
+            "mutate"
           ]
         },
         {
           "canonical_name": "agena.shell.signal",
           "conditional": null,
-          "definition_identity": "8eca533958bf703d2486b2889c51e89e09d9f6d7ff8343fe32c2c190c84fd5e7",
+          "definition_identity": "1d0c0c52421d2bba169ff1338249079bf2e9871ad697e94899bb33bc9cfaebb6",
           "gateway": false,
           "input_schema_sha256": "bf0e663439569b839e0156899a7e5378ad56ff47f72870474c04c7fd7fdfde8f",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "mutate",
-            "execute"
+            "execute",
+            "shell"
           ]
         },
         {
           "canonical_name": "agena.shell.stop",
           "conditional": null,
-          "definition_identity": "2fd8fa4b056432eb6c917b379a57848a52aebac0b1c7a0be3a8ab8ae043ad785",
+          "definition_identity": "d8d1f8c30d7266500ce5ff16e0a51b2e02e97a0f1f28d48c08a447c98de79381",
           "gateway": false,
           "input_schema_sha256": "0b746767db7a0e15810a548b448efe51100c66972c397740ed4f45568831d06e",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "mutate",
-            "execute"
+            "execute",
+            "shell"
           ]
         },
         {
           "canonical_name": "agena.shell.write",
           "conditional": null,
-          "definition_identity": "5045334fda79bb7e24bd2f5ea51ce0f8d717ebba5a1f1e22927f8fcb9d0c9f68",
+          "definition_identity": "769cd604f5e863a1bcc71988a612bbdd39cf6ae3ccfc4e6a3de31362a22a32f3",
           "gateway": false,
           "input_schema_sha256": "2948fb5e5185e166dc0723854cd2bcb1573866ac67508bae9d9688592a1b7a13",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "mutate",
-            "execute"
+            "execute",
+            "shell"
           ]
         }
       ],
@@ -1471,49 +1545,53 @@
         {
           "canonical_name": "agena.skills.get",
           "conditional": null,
-          "definition_identity": "5e24cc61eb1a6fcc934b8807bb054c0aa5fba58e05c889ae7dddb1d4de0f8087",
+          "definition_identity": "3905e5c68a30ed459b5347ee78cfaa9ca72e4aa06b6a5f78b325642b56b54078",
           "gateway": false,
           "input_schema_sha256": "8c3a43fa516b0cc8116b145c135e031bdcb19ee7444a7cd7ddf2035854187064",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
-            "discovery"
+            "discovery",
+            "read_only"
           ]
         },
         {
           "canonical_name": "agena.skills.list",
           "conditional": null,
-          "definition_identity": "bb4d63da1bd59dd857f4ab32ffe2c135812d4b17ecc41f566bbff6a555296f8d",
+          "definition_identity": "75a2b697bfea6ce6356040428d2f69f68c20e59717a3e317b3d1a2cb961f10a0",
           "gateway": false,
           "input_schema_sha256": "7a35355d9e7d5898b7f1cc6a6448f61f914e08af8dbf6846281f5554f3b067af",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
-            "discovery"
+            "discovery",
+            "read_only"
           ]
         },
         {
           "canonical_name": "agena.skills.read_resource",
           "conditional": null,
-          "definition_identity": "bcb9353b66e59c7d9cbabb86731cb054c70e63ddb68a8dc83e239eb17b086131",
+          "definition_identity": "15ed359fabcddd5145e7b215c16232644c22a09197a5ea2e57f675ee7e5e1018",
           "gateway": false,
           "input_schema_sha256": "01438ab91287dcfe1fe646a624ec01d29cc40fa4b788a0426f0e4b826740a262",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
-            "filesystem"
+            "filesystem",
+            "read_only"
           ]
         },
         {
           "canonical_name": "agena.skills.refresh",
           "conditional": null,
-          "definition_identity": "b6ac7ba621a0e8bb2fcf1ca5e6f63b9ed020497998b2122de0e0ccb99c4ed295",
+          "definition_identity": "3635c1e324a531c6fe7b4197a5086c18f327d4ceb0f5e52e71bf2d58717bdb7d",
           "gateway": false,
           "input_schema_sha256": "1814e2e835d6ff7acd1fcf09c13b783f9c5726b818f42d242813caeb164dd4a7",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "mutate",
-            "discovery"
+            "discovery",
+            "read_only"
           ]
         },
         {
@@ -1566,13 +1644,14 @@
         {
           "canonical_name": "agena.snapshot.status",
           "conditional": null,
-          "definition_identity": "c42505874b05f42a9be9988b68513c1753a322a8110df101028361f419ccddcd",
+          "definition_identity": "f5e79832aa7bac089a5bfd2775d263518d29079f1a85bedacb0c4402eb2d7e14",
           "gateway": false,
           "input_schema_sha256": "99334726611ccf58a148b0814696bfa6fe08c1b2d027e946beccf5a74331c9aa",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
-            "snapshot"
+            "snapshot",
+            "read_only"
           ]
         }
       ],
@@ -1590,86 +1669,96 @@
         {
           "canonical_name": "agena.tasks.cancel",
           "conditional": null,
-          "definition_identity": "7ecd6b8ecde2bf2095259efcb07f3df3900485d1f7088b58df50f554812b0de1",
+          "definition_identity": "37a2d10be8a76f8b4833d5822f880ccef9b37c837b8434e96ee2695e326992b8",
           "gateway": false,
           "input_schema_sha256": "0cfba126d9c07ecb0fcf04c937ac5f7971c2a10ad8716b2070555f17e1c85b62",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "subtask",
-            "mutate"
+            "mutate",
+            "task"
           ]
         },
         {
           "canonical_name": "agena.tasks.followup",
           "conditional": null,
-          "definition_identity": "f1cecea5ca3777c59537b836099d428f6db6b5701eec165336f4f44e74d1b678",
+          "definition_identity": "9d1bc026840d712a33d7f264663408bbe85f5725355fb148af02950b239bea02",
           "gateway": false,
           "input_schema_sha256": "517332e4fe23c700629ee24f46598105e4e40c40fd5bb8a236b69a45856a2a59",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "subtask",
-            "mutate"
+            "mutate",
+            "task"
           ]
         },
         {
           "canonical_name": "agena.tasks.get",
           "conditional": null,
-          "definition_identity": "2e56396fab506ffa133b9f0d1079b69c6c51886c4e7cb7156c949b10ec2e579f",
+          "definition_identity": "101547db405d5a873c1638bb8ef2db397108b90eed6883a32ac4a58d1e0386f1",
           "gateway": false,
           "input_schema_sha256": "0cfba126d9c07ecb0fcf04c937ac5f7971c2a10ad8716b2070555f17e1c85b62",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "subtask",
-            "query"
+            "query",
+            "read_only",
+            "task"
           ]
         },
         {
           "canonical_name": "agena.tasks.list",
           "conditional": null,
-          "definition_identity": "1d1fc7db952586a91d25570e2b3f339ab401a48f57b7b816bfc3f5f046e159a3",
+          "definition_identity": "be5d301259e0286874a8e4f86be44386ad9510965c723b2f65f4588b24e41c48",
           "gateway": false,
           "input_schema_sha256": "6a7af1b86b1dd945d0b003eb61ba513e87666af36362201ae03501fc6e4c714f",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "subtask",
             "query",
-            "discovery"
+            "discovery",
+            "read_only",
+            "task"
           ]
         },
         {
           "canonical_name": "agena.tasks.message",
           "conditional": null,
-          "definition_identity": "17f829f8cfeecfe2221b9da9d86d8e422558f99ed42c0cb242d30d8a7bcfad83",
+          "definition_identity": "2b2effad0bd345b3415e19d5e29bcc79882ea3433c226a4f77e2568451456457",
           "gateway": false,
           "input_schema_sha256": "3b7d2cecfa5269f529c60ca41973d18ce44348bc8922b50e8051c62e52b259a6",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "subtask",
-            "mutate"
+            "mutate",
+            "task"
           ]
         },
         {
           "canonical_name": "agena.tasks.output",
           "conditional": null,
-          "definition_identity": "c91f8cbe93110bdf92fb5246da11f883ea5399433cda8cb31c3097d97ee02e8c",
+          "definition_identity": "fc33dcd2dc81e41c095bd48446570ef92df223bafe59421512f1b885f6e43c37",
           "gateway": false,
           "input_schema_sha256": "cbdc8ef8fe8839d6ce02a65f7e4a0bc25307cfb7e228b4efc052cee708e4b55b",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "subtask",
-            "query"
+            "query",
+            "read_only",
+            "task"
           ]
         },
         {
           "canonical_name": "agena.tasks.run",
           "conditional": null,
-          "definition_identity": "7a72c126116c677a9bbe904d84db11e98060f60d6f3e16965672b868bd7de2f7",
+          "definition_identity": "3ca1d79c0b544ad1689bdc207f667479273d7fae50d1c946b965032d25dc26b4",
           "gateway": false,
-          "input_schema_sha256": "6b2ff4c589248323f3f44c5ab3cb2805c1b769894aa1c77546f160bb3a034904",
+          "input_schema_sha256": "c87f9fb4972d103bbedde74d52b3247aa1020dc318fb0684ab4bd9975614fad4",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "subtask",
-            "execute"
+            "execute",
+            "task"
           ]
         }
       ],
@@ -1686,85 +1775,92 @@
         {
           "canonical_name": "agena.tools.help",
           "conditional": null,
-          "definition_identity": "64e829a3231e83f9dccc7d1e8cf0015a3c9c2ac834e883d0487c50bc35dab7d3",
+          "definition_identity": "1329a53d41ede35b31ee3cbafeaa369075052c71884164a635e521daf59a0911",
           "gateway": true,
           "input_schema_sha256": "c2350a87b363fce42e7f2a1689410ad75afe998a800fd4a1dbf1cc3c64a41d3d",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
-            "discovery"
+            "discovery",
+            "read_only"
           ]
         },
         {
           "canonical_name": "agena.tools.list",
           "conditional": null,
-          "definition_identity": "507dc7a5ba8950912feab9719716de68f6efef17807bc81d42805a45e8fd7c31",
+          "definition_identity": "5f8b524e0f7a9901fdc80423e1c99dc5397ee1bbda8e4ce8796841fbd1b5cd8e",
           "gateway": true,
           "input_schema_sha256": "bbc51f324fc615e89d5f73ea7158e68ec1970b9cff990addf2c1c179641789bd",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
-            "discovery"
+            "discovery",
+            "read_only"
           ]
         },
         {
           "canonical_name": "agena.tools.plugins_list",
           "conditional": null,
-          "definition_identity": "44df1fbe63ec58017ed5e09615dc8233ab6bc2fce285b0e0d76d77fe82866039",
+          "definition_identity": "0357aa711f57cd85ce16d9a90e4cb22b6f61b46107f94ab78f09bf9ae24b872d",
           "gateway": false,
           "input_schema_sha256": "bbc51f324fc615e89d5f73ea7158e68ec1970b9cff990addf2c1c179641789bd",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
-            "discovery"
+            "discovery",
+            "read_only"
           ]
         },
         {
           "canonical_name": "agena.tools.plugins_search",
           "conditional": null,
-          "definition_identity": "78839ea875728149f2715f15d4010c9fab6d0160562ba80a911efd2ebac17ca2",
+          "definition_identity": "2e26872ccff7c843244f5303c9d97150fbcc4b6bae55c363cd1890a2b3bcd1e5",
           "gateway": false,
           "input_schema_sha256": "581a43961a2f556fa3f2f20f5906abbff1793f17321875b7fc17f7b3f42e9a1e",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
-            "discovery"
+            "discovery",
+            "read_only"
           ]
         },
         {
           "canonical_name": "agena.tools.plugins_tags",
           "conditional": null,
-          "definition_identity": "dfdddc270395dcd0883cd1e02dc304dd533ccec3d54d8b6582139a56cd4179df",
+          "definition_identity": "d8d51364a0cbf0d5b8340e90d1243e1c7f22abaa839f49a2cf269e3931fa9f41",
           "gateway": false,
           "input_schema_sha256": "3a6b06ee77f83d09d4bc954571e1a7facabd2e12220d3355a6a9d027b8a9b318",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
-            "discovery"
+            "discovery",
+            "read_only"
           ]
         },
         {
           "canonical_name": "agena.tools.search",
           "conditional": null,
-          "definition_identity": "276ee3a7d396cd2932fbe8311e90185c4ffb8077237352eeac32e68b6fc5781f",
+          "definition_identity": "a0b04b50bf58d372a0ba695ece5f9f35ab3f95a7c37ca88784c0619a1835610d",
           "gateway": true,
           "input_schema_sha256": "581a43961a2f556fa3f2f20f5906abbff1793f17321875b7fc17f7b3f42e9a1e",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
-            "discovery"
+            "discovery",
+            "read_only"
           ]
         },
         {
           "canonical_name": "agena.tools.tags",
           "conditional": null,
-          "definition_identity": "f95834746eec8cbf07341998d509137ca4ed5c2206217a5070fd87b0b3555d1d",
+          "definition_identity": "455569a65afae1638d46384a9f93625d0958e2d4a9b7359a97567d09dcfd389d",
           "gateway": true,
           "input_schema_sha256": "3a6b06ee77f83d09d4bc954571e1a7facabd2e12220d3355a6a9d027b8a9b318",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
-            "discovery"
+            "discovery",
+            "read_only"
           ]
         }
       ],
@@ -1822,7 +1918,7 @@
         {
           "canonical_name": "agena.web.browser_list",
           "conditional": null,
-          "definition_identity": "285f043a8ba1ac561a5770d3a24cf6c146d15b8a4431580a15a7ee51ce8d050a",
+          "definition_identity": "1827101a2bdb987ebc7059a3cb684cc05cd805fc9ad50ff66adbbba08c7f5b83",
           "gateway": false,
           "input_schema_sha256": "99334726611ccf58a148b0814696bfa6fe08c1b2d027e946beccf5a74331c9aa",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
@@ -1830,20 +1926,22 @@
             "network",
             "interactive",
             "query",
-            "discovery"
+            "discovery",
+            "read_only"
           ]
         },
         {
           "canonical_name": "agena.web.browser_open",
           "conditional": null,
-          "definition_identity": "2daeee00de9af1eec534614475a4b40b2307ab3ffaae10a3b2ac613255e430b3",
+          "definition_identity": "44d7c2eb2f56dedf0989039ad0e6ff3285dfb37a98f30dbf0924490a1581936d",
           "gateway": false,
           "input_schema_sha256": "64aaf0fa25b1764c4cb942c952256cd0e6e3cd4a090576acb8759806c7fe03a1",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "network",
             "interactive",
-            "mutate"
+            "mutate",
+            "read_only"
           ]
         },
         {
@@ -1876,14 +1974,15 @@
         {
           "canonical_name": "agena.web.browser_snapshot",
           "conditional": null,
-          "definition_identity": "948f8a6a5911e7bbe0d5cff3068afab36097c4da1b573020dee0a13b9f27d33c",
+          "definition_identity": "23ee9a6a9e23801c0df26f238ee70beab7a239db635a5bd2be5dc77dea31f5ad",
           "gateway": false,
           "input_schema_sha256": "7ef5208cec320ec5e221d0a0d9504588157925f5f9fe1206453c8f14322fd981",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "network",
             "interactive",
-            "query"
+            "query",
+            "read_only"
           ]
         },
         {
@@ -1902,45 +2001,50 @@
         {
           "canonical_name": "agena.web.browser_wait",
           "conditional": null,
-          "definition_identity": "95ce330a93cd02fc4d969e1893826bb51ad73deb866cebd4d669e1817a48157a",
+          "definition_identity": "87a83217048d9ab16abd856be5181256a6fbd8621ebc15ed99a0dd266df6bb8a",
           "gateway": false,
           "input_schema_sha256": "c67b4acf17953cf1e724c19c89fd5e5ac9126d86e96a537e94746df44710c66e",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "network",
             "interactive",
-            "query"
+            "query",
+            "read_only"
           ]
         },
         {
           "canonical_name": "agena.web.crawl",
           "conditional": null,
-          "definition_identity": "da56066be604283c1f263b053e15ad0c62ba958b161bf8630fc4c31e3749215d",
+          "definition_identity": "00d58d3d229808c134d9f8d1fa1d9fb97be7f0d4fb4ccaa1c7003880147f6a3e",
           "gateway": false,
           "input_schema_sha256": "fc17dc394ff452db1897d80f4618c7b72b1b2740154ec0e7e08e383e69cdb962",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "discovery"
+            "discovery",
+            "mutate"
           ]
         },
         {
           "canonical_name": "agena.web.fetch",
           "conditional": null,
-          "definition_identity": "954b2382ac238a18618899a7397f533e25130d5e2df111e834df0b16fb4659a4",
+          "definition_identity": "0c118e374b7be962d0e128cf0a120db7485ece6116ee145ef95678cbdb3c0d88",
           "gateway": false,
           "input_schema_sha256": "e19bfb678a04be4168bc223831c2f9ef60bef1a7c4cef2726ab7849c7893dd05",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
-          "tags": []
+          "tags": [
+            "read_only"
+          ]
         },
         {
           "canonical_name": "agena.web.search",
           "conditional": null,
-          "definition_identity": "03b5dedc737c3e8cee35a649ebea9c0e44dc712700fb1e05341f778489d9fd75",
+          "definition_identity": "8a8685ddc0e0a03761fb825f8f92a0b6823461052400ed626043548a531cffe7",
           "gateway": false,
           "input_schema_sha256": "d60d475beec4cce3c67abc483081393611f33043c3675d4af5c078aa7069f4ac",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "discovery"
+            "discovery",
+            "read_only"
           ]
         }
       ],

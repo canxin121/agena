@@ -70,20 +70,6 @@ impl ToolExecutor {
             .registered_tools_with_definition_overrides_async()
             .await;
         scoped.definition_catalog = Some(Arc::new(definition_catalog.clone()));
-        if session_context.execution_access() == agena_domain::ExecutionAccess::ReadOnly {
-            let allowed_tools = definition_catalog
-                .iter()
-                .filter(|entry| {
-                    let permissions = &entry.definition.permissions;
-                    permissions.read_only
-                        && !permissions.shell
-                        && !permissions.interactive
-                        && !crate::tool::is_tool_api_handler(entry)
-                })
-                .map(|entry| entry.canonical_name())
-                .collect::<Vec<_>>();
-            scoped.allowed_tool_names = Some(allowed_tools.into_iter().collect());
-        }
         if !session_context.capability_denied_tool_names().is_empty() {
             let denied = session_context.capability_denied_tool_names();
             let allowed_tools = definition_catalog
@@ -200,6 +186,46 @@ impl ToolExecutor {
 
     pub fn principal(&self) -> &ExecutionPrincipal {
         &self.principal
+    }
+
+    /// Whether the compiled static policy already approves a whole path class
+    /// outright.
+    ///
+    /// This is what the automatic-approval prompt needs: two of its bullets
+    /// promise the model that writes into the system temporary directory or the
+    /// managed project-state directory need no thought, and that promise is
+    /// only true while the policy really does approve that class. The classes
+    /// are ordinary `path.rules` entries now, so the question "is this class a
+    /// free pass?" is answered by asking the policy itself - the same policy
+    /// the executor enforces - rather than by re-reading the config, which is
+    /// what keeps the prompt from drifting out of step with what actually
+    /// happens.
+    pub fn path_class_prompt_flags(&self) -> agena_domain::PathClassPromptFlags {
+        let policy = &self.principal.permission_policy;
+        let workspace_root = self.workspace_root();
+        let allowed = |target: &Path| {
+            matches!(
+                policy.check_access(agena_domain::AccessKind::Write, workspace_root, target),
+                PermissionDecision::Allow
+            )
+        };
+        agena_domain::PathClassPromptFlags {
+            temp_paths_allowed: allowed(&std::env::temp_dir()),
+            internal_paths_allowed: allowed(&crate::project_state_dir(workspace_root)),
+        }
+    }
+
+    /// Compile `config`'s permission policy into this executor's principal.
+    ///
+    /// This mirrors the permission compilation that
+    /// `for_session_context_async` performs for a session's effective config,
+    /// and exists so a test can install defaults the same way production does.
+    pub fn with_permission_config(mut self, config: &agena_domain::PermissionConfig) -> Self {
+        self.principal = self
+            .principal
+            .clone()
+            .apply_permission_config_or_self(config);
+        self
     }
 
     pub fn monitor_registry(&self) -> Option<&Arc<dyn MonitorService>> {
@@ -433,9 +459,9 @@ impl ToolExecutor {
 }
 
 use super::{
-    Arc, BuiltinToolSet, ExecutionPrincipal, MonitorService, Path, PathBuf, PluginHost,
-    PluginToolDefinitionInput, RegisteredTool, ToolError, ToolExecutor, suggest_tool_names,
-    tool_summary, unknown_tool_hint,
+    Arc, BuiltinToolSet, ExecutionPrincipal, MonitorService, Path, PathBuf, PermissionDecision,
+    PluginHost, PluginToolDefinitionInput, RegisteredTool, ToolError, ToolExecutor,
+    suggest_tool_names, tool_summary, unknown_tool_hint,
 };
 use crate::tool::ToolApiBinding;
 use agena_plugin_host::PluginError;

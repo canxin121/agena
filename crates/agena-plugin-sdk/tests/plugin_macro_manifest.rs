@@ -59,53 +59,27 @@ struct ManifestCommandInput {
 #[serde(deny_unknown_fields)]
 struct SemanticInput {
     /// Original path doc.
-    #[arg(
-        path.write,
-        file,
-        example = "out.txt",
-        description = "Destination path."
-    )]
+    #[arg(file, example = "out.txt", description = "Destination path.")]
     path: String,
-    #[arg(network.internet, example = "https://example.com")]
+    #[arg(example = "https://example.com")]
     endpoint: String,
-    #[arg(path.read, optional)]
+    #[arg(optional)]
     config: Option<String>,
-    #[arg(path.read)]
     sources: Vec<String>,
     #[arg(secret)]
     token: String,
     #[serde(default)]
-    #[arg(path.read)]
     defaulted_path: String,
     #[serde(default)]
-    #[arg(path.read, fallback = "")]
     workspace_path: Option<String>,
     #[serde(default)]
-    #[arg(path.read, jsonpath = "$.nested.paths[*]")]
     nested_paths: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInput)]
-#[serde(deny_unknown_fields)]
-struct FlattenSemanticInner {
-    #[arg(path.read)]
-    file_path: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInput)]
-#[serde(deny_unknown_fields)]
-struct FlattenSemanticOuter {
-    #[serde(flatten)]
-    #[input(flatten_shape)]
-    inner: FlattenSemanticInner,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, ToolInput)]
 #[serde(deny_unknown_fields)]
 struct FlattenVariantSemanticInner {
-    #[arg(path.read)]
     file_path: String,
-    #[arg(network.internet)]
     endpoint: String,
 }
 
@@ -136,14 +110,7 @@ struct FlattenArgInner {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, ToolInput)]
 #[serde(deny_unknown_fields)]
 struct InlineNestedArgInner {
-    #[arg(
-        name = "filePath",
-        alias = "path",
-        path.read,
-        trim,
-        non_empty,
-        default = String::from("README.md")
-    )]
+    #[arg(name = "filePath", alias = "path", trim, non_empty, default = String::from("README.md"))]
     file_path: String,
 }
 
@@ -153,14 +120,7 @@ struct InlineNestedArgInner {
     "filePath": "Cargo.toml"
 }))]
 struct InlineFlattenArgInner {
-    #[arg(
-        name = "filePath",
-        alias = "path",
-        path.read,
-        trim,
-        non_empty,
-        default = String::from("README.md")
-    )]
+    #[arg(name = "filePath", alias = "path", trim, non_empty, default = String::from("README.md"))]
     file_path: String,
 }
 
@@ -199,25 +159,6 @@ enum FlattenVariantInferenceInput {
         inner: FlattenArgInner,
         query_text: String,
     },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, ToolInput)]
-#[serde(deny_unknown_fields)]
-struct NestedSemanticOuter {
-    #[arg(alias = "body")]
-    #[input(nested_shape)]
-    payload: FlattenVariantSemanticInner,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, ToolInput)]
-#[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
-enum NestedVariantSemanticInput {
-    Query {
-        #[arg(alias = "body")]
-        #[input(nested_shape)]
-        payload: FlattenVariantSemanticInner,
-    },
-    List {},
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, ToolInput)]
@@ -348,56 +289,6 @@ enum FlattenVariantConstraintInput {
         #[input(flatten_shape)]
         inner: FlattenConstraintInner,
     },
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInput)]
-#[serde(deny_unknown_fields)]
-struct AliasSemanticInput {
-    #[serde(alias = "path")]
-    #[arg(path.read)]
-    file_path: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInput)]
-#[serde(deny_unknown_fields)]
-struct ArgAliasSemanticInput {
-    #[arg(path.read, alias = "path", trim)]
-    file_path: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInput)]
-#[serde(deny_unknown_fields)]
-struct ArgNameSemanticInput {
-    #[arg(name = "filePath", alias = "path", path.read, trim)]
-    file_path: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInput)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct RenameAllSemanticInput {
-    #[arg(path.read)]
-    file_path: String,
-    #[arg(network.internet)]
-    api_url: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInput)]
-#[serde(deny_unknown_fields)]
-struct RenameListSemanticInput {
-    #[serde(rename(deserialize = "inputPath", serialize = "outputPath"))]
-    #[arg(path.read)]
-    file_path: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInput)]
-#[serde(deny_unknown_fields)]
-struct FieldDefaultInput {
-    #[arg(default = 3)]
-    count: usize,
-    #[arg(default)]
-    enabled: bool,
-    #[arg(path.read, alias = "path", default = String::from("README.md"))]
-    file_path: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInput)]
@@ -975,14 +866,8 @@ enum FlattenVariantNestedInferenceInput {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, ToolInput)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 enum VariantSemanticInput {
-    File {
-        #[arg(path.read)]
-        file_path: String,
-    },
-    Remote {
-        #[arg(network.internet)]
-        endpoint: String,
-    },
+    File { file_path: String },
+    Remote { endpoint: String },
 }
 
 fn tool_by_name<'a>(manifest: &'a PluginManifest, name: &str) -> &'a ToolDefinition {
@@ -1049,7 +934,7 @@ fn tool_before_input_with_tags(tool: &str, tags: Vec<ToolTag>, input: Value) -> 
         call_id: 2,
         workspace_root: "/workspace".to_string(),
         tags,
-        contract: Default::default(),
+        behavior: Default::default(),
         input,
         title_override: None,
         metadata: Default::default(),

@@ -476,6 +476,9 @@ fn rollback_operation(op: &PreparedPatchOp) -> std::io::Result<()> {
     }
 }
 
+/// Every path a patch will touch, in patch order. Used by the host's own
+/// permission preflight for `apply_patch`, which resolves the paths of the
+/// patch text it is about to apply.
 pub(crate) fn planned_paths(text: &str) -> Result<Vec<String>, ToolError> {
     let ops = parse_patch(text)?;
     if ops.len() > MAX_PATCH_OPERATIONS {

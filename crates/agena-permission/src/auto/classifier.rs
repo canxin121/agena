@@ -25,7 +25,7 @@ pub const AUTO_APPROVAL_TRANSCRIPT_FALLBACK_CHARS: usize = 32_000;
 /// so here keeps the agent from treating one classifier verdict as permanent.
 pub const AUTO_DENY_GUIDANCE: &str = "Do not retry this exact action or attempt to work around the denial by an indirect route. If the user explicitly asks for it again after seeing this denial, or a materially safer alternative exists, proceed with that; otherwise stop and report the denial to the user.";
 
-/// The BLOCK rule taxonomy carried by [`AUTO_APPROVAL_SYSTEM_PROMPT`]. A block
+/// The BLOCK rule taxonomy carried by [`auto_approval_system_prompt`]. A block
 /// verdict must cite one of these by name; a verdict that blocks without
 /// naming a rule did not match the taxonomy and is not honored as a denial.
 ///
@@ -33,6 +33,8 @@ pub const AUTO_DENY_GUIDANCE: &str = "Do not retry this exact action or attempt 
 /// name a specific BLOCK rule, the action does not match any rule — output
 /// `<block>no</block>`") and of codex's enumerated policy sections, each of
 /// which ends in an explicit outcome rule.
+///
+/// [`auto_approval_system_prompt`]: crate::auto_approval_system_prompt
 pub const AUTO_APPROVAL_BLOCK_RULES: &[&str] = &[
     "Exfiltration",
     "Credential access",

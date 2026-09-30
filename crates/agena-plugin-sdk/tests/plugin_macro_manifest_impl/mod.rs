@@ -32,7 +32,6 @@ impl ManifestPlugin {
         summary = "Render text.",
         read_only,
         stream = render_stream,
-        path(requests = self.render_paths(input)),
         operation(
             "/manifest-render",
             id = "manifest.render",
@@ -53,10 +52,6 @@ impl ManifestPlugin {
             sink.stream_id().to_string(),
             input.text.clone(),
         ))
-    }
-
-    fn render_paths(&self, input: &ManifestInput) -> Vec<PathRequest> {
-        vec![PathRequest::read(input.text.clone())]
     }
 
     /// Render docs summary.
@@ -91,8 +86,8 @@ impl ManifestPlugin {
     )]
     fn inline_semantic(
         &self,
-        #[arg(path.read, example = "README.md", description = "Path to inspect.")] path: String,
-        #[arg(network.private, example = "localhost")] host: String,
+        #[arg(example = "README.md", description = "Path to inspect.")] path: String,
+        #[arg(example = "localhost")] host: String,
     ) -> String {
         format!("{path} @ {host}")
     }
@@ -114,7 +109,7 @@ impl ManifestPlugin {
     )]
     fn inline_rename(
         &self,
-        #[arg(name = "filePath", alias = "path", path.read, trim)] file_path: String,
+        #[arg(name = "filePath", alias = "path", trim)] file_path: String,
     ) -> String {
         file_path
     }
@@ -159,45 +154,9 @@ impl ManifestPlugin {
         text
     }
 
-    #[tool(
-        summary = "Dynamic permission DSL.",
-        read_only,
-        path(read = self.dynamic_path(input.path.as_str()).await?),
-        path(read = input.optional_path.as_deref()),
-        path(requests = self.extra_paths(input.path.as_str())),
-        path(reads = Some(self.related_read_paths(input.path.as_str()))),
-        path(writes = Some(self.related_write_paths(input.path.as_str()))),
-        network(connect = input.host.clone()),
-        network(connect = input.optional_host.as_deref()),
-        network(connects = Some(self.related_hosts(input.host.as_str()))),
-        network(requests = self.extra_network(input.host.as_str()))
-    )]
+    #[tool(summary = "Dynamic permission DSL.", read_only)]
     async fn dynamic_permission(&self, input: &DynamicPermissionInput) -> String {
         format!("{} @ {}", input.path, input.host)
-    }
-
-    async fn dynamic_path(&self, path: &str) -> Result<String> {
-        Ok(format!("{path}/resolved"))
-    }
-
-    fn extra_paths(&self, path: &str) -> PathRequest {
-        PathRequest::write(format!("{path}/extra"))
-    }
-
-    fn related_read_paths(&self, path: &str) -> Vec<String> {
-        vec![format!("{path}/related-read")]
-    }
-
-    fn related_write_paths(&self, path: &str) -> [String; 1] {
-        [format!("{path}/related-write")]
-    }
-
-    fn related_hosts(&self, host: &str) -> [String; 1] {
-        [format!("static.{host}")]
-    }
-
-    fn extra_network(&self, host: &str) -> Vec<NetworkRequest> {
-        vec![NetworkRequest::connect(format!("api.{host}"))]
     }
 
     #[operation(

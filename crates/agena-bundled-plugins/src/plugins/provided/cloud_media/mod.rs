@@ -6,9 +6,7 @@ use super::official_service::{self, ProviderHttpResponse, ProviderUsageKind};
 use agena_macros::ToolInput;
 use agena_plugin_host::{
     PluginError,
-    sdk::{
-        PathRequest, Result as SdkResult, ToolInvokeContext, ToolInvokeOutput, host_api::HostClient,
-    },
+    sdk::{Result as SdkResult, ToolInvokeContext, ToolInvokeOutput, host_api::HostClient},
 };
 use agena_runtime_tools::media_input::{self, PreparedMedia};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
@@ -55,29 +53,6 @@ pub enum ImageDetail {
 }
 const fn default_tokens() -> u32 {
     4096
-}
-impl AnalyzeInput {
-    pub fn paths(&self, root: &Path) -> Vec<PathRequest> {
-        self.inputs
-            .iter()
-            .filter_map(|source| match source {
-                MediaSource::Local { path, .. } => Some(PathRequest::read(path)),
-                _ => None,
-            })
-            .chain([
-                PathRequest::read(
-                    root.join(".agena/artifacts/provider-tools/media")
-                        .display()
-                        .to_string(),
-                ),
-                PathRequest::write(
-                    root.join(".agena/artifacts/provider-tools")
-                        .display()
-                        .to_string(),
-                ),
-            ])
-            .collect()
-    }
 }
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInput)]
 #[serde(deny_unknown_fields)]

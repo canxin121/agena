@@ -331,45 +331,6 @@ fn tool_input_enum_variant_inference_resolves_renamed_paths() {
 }
 
 #[test]
-fn tool_input_enum_variant_permissions_are_optional_at_root() {
-    let paths = VariantSemanticInput::input_paths();
-    assert_eq!(paths.len(), 1);
-    assert_eq!(paths[0].jsonpath, "$.file_path");
-    assert_eq!(paths[0].kind, PathKind::Read);
-    assert!(
-        paths[0].optional,
-        "variant-derived enum path permissions should be optional on the root shape"
-    );
-
-    let networks = VariantSemanticInput::input_networks();
-    assert_eq!(networks.len(), 1);
-    assert_eq!(networks[0].jsonpath, "$.endpoint");
-    assert!(
-        networks[0].optional,
-        "variant-derived enum network permissions should be optional on the root shape"
-    );
-
-    let schema = VariantSemanticInput::input_schema();
-    let file_schema = enum_variant_schema_by_action(&schema, "file")
-        .expect("enum schema should include the file branch");
-    assert_eq!(
-        file_schema.pointer("/properties/file_path/x-agena-path"),
-        Some(&json!("read"))
-    );
-    let remote_schema = enum_variant_schema_by_action(&schema, "remote")
-        .expect("enum schema should include the remote branch");
-    assert_eq!(
-        remote_schema.pointer("/properties/endpoint/x-agena-network"),
-        Some(&json!("internet"))
-    );
-
-    let manifest = Plugin::manifest(&ManifestPlugin);
-    let tool = tool_by_name(&manifest, "variant_semantic");
-    assert_eq!(tool.permissions.input_paths, paths);
-    assert_eq!(tool.permissions.input_networks, networks);
-}
-
-#[test]
 fn tool_input_field_relation_constraints_apply_to_parse_and_schema() {
     let path_value = PathRelationInput::parse_input(json!({
         "path": "README.md",
@@ -685,12 +646,10 @@ fn tool_input_root_default_attr_applies_to_null_input_and_schema() {
         "root input default should not silently merge partial object payloads",
     );
 }
-use super::ManifestPlugin;
 use super::{
     PathAutoItemChoiceInput, PathGroupInput, PathRelationInput, RenamedAutoItemChoiceInput,
     RenamedGroupInput, RenamedRelationInput, RootDefaultInput, RootExampleInput,
     RootPartialExampleInput, VariantFieldArgInput, VariantInferenceInput, VariantNormalizeInput,
-    VariantRenamedFieldInput, VariantSemanticInput, enum_variant_schema_by_action,
-    schema_relation_labels, tool_by_name,
+    VariantRenamedFieldInput, enum_variant_schema_by_action, schema_relation_labels,
 };
 use agena_plugin_sdk::prelude::*;

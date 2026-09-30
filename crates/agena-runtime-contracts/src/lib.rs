@@ -14,6 +14,7 @@
 use serde::{Deserialize, Serialize};
 
 pub mod authorization;
+pub mod command_class;
 pub mod identity;
 pub mod part;
 pub mod part_content;
@@ -36,7 +37,6 @@ pub trait ToolSessionContext {
     fn effective_permission(&self) -> &authorization::PermissionConfig;
     fn permission_ceiling(&self) -> &authorization::PermissionConfig;
     fn capability_denied_tool_names(&self) -> &std::collections::BTreeSet<String>;
-    fn execution_access(&self) -> agena_domain::ExecutionAccess;
     fn selected_model(&self) -> Option<&str>;
 }
 

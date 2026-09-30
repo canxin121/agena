@@ -6,16 +6,14 @@ use syn::{Ident, LitStr, Result};
 use crate::plugin_impl_config::sanitize_generated_ident_label;
 
 use super::{
-    PluginGeneratedToolInput, PluginInputNetworkSpec, PluginInputPathSpec,
-    PluginOperationHandlerPlan, PluginOperationInputPlan, PluginOperationPlan,
-    PluginPathPermissionKind, built_in_normalization_tokens,
-    built_in_post_parse_normalization_tokens, built_in_validation_tokens, doc_summary,
-    expand_flatten_shape_schema_normalize_expr, expand_generated_input_post_parse_tokens,
-    expand_input_alias_normalize_tokens, expand_nested_shape_network_specs_expr,
-    expand_nested_shape_path_specs_expr, expand_nested_shape_schema_normalize_expr,
-    expand_plugin_operation_usage_expr, generated_input_alias_specs,
-    generated_input_flatten_shape_types, generated_input_nested_shape_fields, lit_str_from_text,
-    nested_input_shape_spec_from_type, tool_spec_schema_metadata_calls,
+    PluginGeneratedToolInput, PluginOperationHandlerPlan, PluginOperationInputPlan,
+    PluginOperationPlan, built_in_normalization_tokens, built_in_post_parse_normalization_tokens,
+    built_in_validation_tokens, doc_summary, expand_flatten_shape_schema_normalize_expr,
+    expand_generated_input_post_parse_tokens, expand_input_alias_normalize_tokens,
+    expand_nested_shape_schema_normalize_expr, expand_plugin_operation_usage_expr,
+    generated_input_alias_specs, generated_input_flatten_shape_types,
+    generated_input_nested_shape_fields, lit_str_from_text, nested_input_shape_spec_from_type,
+    tool_spec_schema_metadata_calls,
 };
 
 pub fn expand_plugin_operation_definition(
@@ -96,52 +94,10 @@ pub fn expand_plugin_operation_definition(
     })
 }
 
-pub fn expand_input_path_specs(specs: &[PluginInputPathSpec]) -> proc_macro2::TokenStream {
-    if specs.is_empty() {
-        return quote! { ::std::vec::Vec::new() };
-    }
-    let items = specs.iter().map(|spec| {
-        let jsonpath = &spec.jsonpath;
-        let kind = path_permission_kind_expr(spec.kind);
-        let fallback = option_lit_str_expr(spec.fallback.as_ref());
-        let optional = spec.optional;
-        quote! {
-            ::agena_plugin_sdk::InputPathSpec {
-                jsonpath: #jsonpath.to_string(),
-                kind: #kind,
-                fallback: #fallback,
-                optional: #optional,
-            }
-        }
-    });
-    quote! { vec![#(#items),*] }
-}
-
-pub fn expand_input_network_specs(specs: &[PluginInputNetworkSpec]) -> proc_macro2::TokenStream {
-    if specs.is_empty() {
-        return quote! { ::std::vec::Vec::new() };
-    }
-    let items = specs.iter().map(|spec| {
-        let jsonpath = &spec.jsonpath;
-        let fallback = option_lit_str_expr(spec.fallback.as_ref());
-        let optional = spec.optional;
-        quote! {
-            ::agena_plugin_sdk::InputNetworkSpec {
-                jsonpath: #jsonpath.to_string(),
-                fallback: #fallback,
-                optional: #optional,
-            }
-        }
-    });
-    quote! { vec![#(#items),*] }
-}
-
 pub fn expand_plugin_tool_definition(
     model: &PluginGeneratedToolInput,
 ) -> Result<proc_macro2::TokenStream> {
     let spec = &model.spec;
-    let flatten_shapes = generated_input_flatten_shape_types(&model.input_fields)?;
-    let nested_shapes = generated_input_nested_shape_fields(&model.input_fields);
     let docs = model.docs.as_deref();
     let tool = spec.tool.as_ref().ok_or_else(|| {
         syn::Error::new(
@@ -190,49 +146,8 @@ pub fn expand_plugin_tool_definition(
         let examples = &spec.examples;
         quote! { vec![#(#examples.to_string()),*] }
     };
-    let spec_input_paths_expr = expand_input_path_specs(&spec.input_paths);
-    let spec_input_networks_expr = expand_input_network_specs(&spec.input_networks);
-    let nested_paths_expr = expand_nested_shape_path_specs_expr(&nested_shapes, false);
-    let nested_networks_expr = expand_nested_shape_network_specs_expr(&nested_shapes, false);
-    let input_paths_expr = if let Some(input_shape_ty) = spec.input_shape.as_ref() {
-        quote! {{
-            let mut __items = <#input_shape_ty as ::agena_plugin_sdk::ToolInput>::input_paths();
-            __items.extend(#spec_input_paths_expr);
-            __items
-        }}
-    } else if flatten_shapes.is_empty() && nested_shapes.is_empty() {
-        spec_input_paths_expr
-    } else {
-        quote! {{
-            let mut __items = #spec_input_paths_expr;
-            #(
-                __items.extend(<#flatten_shapes as ::agena_plugin_sdk::ToolInput>::input_paths());
-            )*
-            #nested_paths_expr
-            __items
-        }}
-    };
-    let input_networks_expr = if let Some(input_shape_ty) = spec.input_shape.as_ref() {
-        quote! {{
-            let mut __items = <#input_shape_ty as ::agena_plugin_sdk::ToolInput>::input_networks();
-            __items.extend(#spec_input_networks_expr);
-            __items
-        }}
-    } else if flatten_shapes.is_empty() && nested_shapes.is_empty() {
-        spec_input_networks_expr
-    } else {
-        quote! {{
-            let mut __items = #spec_input_networks_expr;
-            #(
-                __items.extend(<#flatten_shapes as ::agena_plugin_sdk::ToolInput>::input_networks());
-            )*
-            #nested_networks_expr
-            __items
-        }}
-    };
     // Tags are declaration-only: only the tags(...) explicitly declared on
-    // the tool attribute are used. Nothing is derived from path/network
-    // specs or from the permission contract.
+    // the tool attribute are used. Nothing is inferred from an input spec.
     let tags_expr = if spec.tags.is_empty() {
         quote! { ::std::vec::Vec::new() }
     } else {
@@ -273,11 +188,7 @@ pub fn expand_plugin_tool_definition(
                 streaming: #streaming_expr,
                 result_policy: ::agena_plugin_sdk::ToolResultPolicy::default(),
             },
-            permissions: ::agena_plugin_sdk::manifest::ToolPermissionContract {
-                input_paths: #input_paths_expr,
-                input_networks: #input_networks_expr,
-                path_access: ::std::vec::Vec::new(),
-                network_access: ::std::vec::Vec::new(),
+            behavior: ::agena_plugin_sdk::manifest::ToolBehavior {
                 shell: #shell_flag,
                 interactive: #interactive_flag,
                 read_only: #read_only_flag,
@@ -562,11 +473,4 @@ fn option_lit_str_expr(value: Option<&LitStr>) -> proc_macro2::TokenStream {
     value
         .map(|value| quote! { Some(#value.to_string()) })
         .unwrap_or_else(|| quote! { None })
-}
-
-fn path_permission_kind_expr(kind: PluginPathPermissionKind) -> proc_macro2::TokenStream {
-    match kind {
-        PluginPathPermissionKind::Read => quote! { ::agena_plugin_sdk::PathKind::Read },
-        PluginPathPermissionKind::Write => quote! { ::agena_plugin_sdk::PathKind::Write },
-    }
 }

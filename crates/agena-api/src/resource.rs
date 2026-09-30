@@ -21,8 +21,8 @@ pub use notification::*;
 // them so every server layer, client, and generated TypeScript mirror shares
 // one definition instead of keeping local copies of the same variants.
 pub use agena_domain::{
-    ExecutionAccess, ExecutionPhase, SessionLifecycleState, SessionRelationKind, SessionStateKind,
-    SubtaskStatus, WorkflowState,
+    ExecutionPhase, SessionLifecycleState, SessionRelationKind, SessionStateKind, SubtaskStatus,
+    WorkflowState,
 };
 
 fn is_false(value: &bool) -> bool {
@@ -952,8 +952,6 @@ pub struct SessionResource {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub task_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub subtask_access: Option<ExecutionAccess>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub subtask_status: Option<SubtaskStatus>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -1188,7 +1186,6 @@ pub struct ActiveExecutionResource {
 /// Execution context of a session: agent, access, and permission configuration.
 pub struct SessionExecutionContextResource {
     pub agent_id: String,
-    pub execution_access: ExecutionAccess,
     #[serde(default, skip_serializing_if = "PermissionConfigResource::is_empty")]
     pub selected_permission: PermissionConfigResource,
     #[serde(default, skip_serializing_if = "PermissionConfigResource::is_empty")]
@@ -1708,16 +1705,22 @@ pub struct ApprovalModelSelectionResource {
     pub parallel_tool_calls: Option<bool>,
 }
 
+/// Path permission configuration of a session.
+///
+/// Every key is optional: an omitted key keeps the built-in default, so
+/// deleting a key restores it. The built-ins are ordinary entries in `rules`,
+/// which a user's same-pattern entry replaces; deleting the user's entry brings
+/// the built-in back. A rule always takes the explicit read/write object form —
+/// there is no shorthand string form.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(default, deny_unknown_fields)]
-/// Path permission configuration of a session.
 pub struct PathPermissionConfigResource {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace: Option<PathAccessModesResource>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub external: Option<PathAccessModesResource>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub rules: BTreeMap<String, PathAccessRuleResource>,
+    pub rules: BTreeMap<String, PathAccessModesResource>,
 }
 
 impl PathPermissionConfigResource {
@@ -1734,15 +1737,6 @@ pub struct PathAccessModesResource {
     pub read: Option<PermissionMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub write: Option<PermissionMode>,
-}
-
-/// A path rule preserves the two accepted configuration forms: explicit
-/// read/write modes or a concise policy shorthand.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(untagged)]
-pub enum PathAccessRuleResource {
-    Modes(PathAccessModesResource),
-    Shorthand(String),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -1768,9 +1762,14 @@ impl NetworkPermissionConfigResource {
     }
 }
 
+/// Tool permission configuration of a session.
+///
+/// The built-in classes are ordinary entries: the interaction tool by name in
+/// `names`, the command classes as keywords inside a shell tool's `rules`, and
+/// the read-only class as the `read-only` keyword under the `*` tool. A user
+/// entry of the same key replaces the built-in one.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(default, deny_unknown_fields)]
-/// Tool permission configuration of a session.
 pub struct ToolPermissionConfigResource {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default: Option<PermissionMode>,
@@ -1799,8 +1798,8 @@ mod permission_config_resource_contract_tests {
     use std::collections::BTreeMap;
 
     use super::{
-        PathAccessModesResource, PathAccessRuleResource, PathPermissionConfigResource,
-        PermissionConfigResource, PermissionMode,
+        PathAccessModesResource, PathPermissionConfigResource, PermissionConfigResource,
+        PermissionMode, ToolPermissionConfigResource,
     };
 
     #[test]
@@ -1814,11 +1813,17 @@ mod permission_config_resource_contract_tests {
                 external: None,
                 rules: BTreeMap::from([(
                     "/tmp/**".to_owned(),
-                    PathAccessRuleResource::Shorthand("deny".to_owned()),
+                    PathAccessModesResource {
+                        read: Some(PermissionMode::Deny),
+                        write: Some(PermissionMode::Deny),
+                    },
                 )]),
             }),
             network: None,
-            tools: None,
+            tools: Some(ToolPermissionConfigResource {
+                default: Some(PermissionMode::Ask),
+                ..Default::default()
+            }),
             approval_model: None,
         };
 
@@ -1827,9 +1832,30 @@ mod permission_config_resource_contract_tests {
             serde_json::json!({
                 "path": {
                     "workspace": {"read": "allow", "write": "ask"},
-                    "rules": {"/tmp/**": "deny"}
-                }
+                    "rules": {"/tmp/**": {"read": "deny", "write": "deny"}}
+                },
+                "tools": {"default": "ask"}
             })
+        );
+    }
+
+    #[test]
+    fn empty_sections_do_not_count_as_configuration() {
+        // The settings surfaces send the whole `permission` object, so a
+        // section with no entries must not count as configuration: `is_empty`
+        // is what tells a caller to clear the setting instead of writing
+        // explicit keys that would pin the built-in defaults forever.
+        // Section-level serialization matches the other sections, which
+        // likewise emit an empty object rather than omitting it.
+        let config = PermissionConfigResource {
+            path: Some(PathPermissionConfigResource::default()),
+            tools: Some(ToolPermissionConfigResource::default()),
+            ..Default::default()
+        };
+        assert!(config.is_empty());
+        assert_eq!(
+            serde_json::to_value(config).expect("serialize permission config"),
+            serde_json::json!({ "path": {}, "tools": {} })
         );
     }
 }

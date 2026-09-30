@@ -18,5 +18,5 @@ pub use tool::{
     LspDefinitionToolInput, LspDiagnosticsToolInput, LspHoverToolInput, LspReferencesToolInput,
     MonitorToolInput, MonitorWsInput, OperationPart, ReadToolInput, ShellCommandInput,
     ShellMonitorInput, ShellMonitorPatternKind, ShellSignal, ShellToolInput, ShellWriteInput,
-    TaskAccess, TaskToolInput, ToolSearchToolInput, WebFetchToolInput, WebSearchToolInput,
+    TaskToolInput, ToolSearchToolInput, WebFetchToolInput, WebSearchToolInput,
 };

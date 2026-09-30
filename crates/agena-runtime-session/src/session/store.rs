@@ -25,7 +25,7 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 
-use agena_domain::{ExecutionAccess, ExecutionSelection, ExecutionStatus, ReasoningPart, Role};
+use agena_domain::{ExecutionSelection, ExecutionStatus, ReasoningPart, Role};
 use agena_plugin_sdk::attachment::{AttachmentPart, AttachmentSource};
 use agena_runtime_contracts::part_content;
 use agena_runtime_contracts::part_content::TypedContent;
@@ -1382,7 +1382,6 @@ fn apply_meta_runtime(
                 ))
             })?;
         runtime.execution.selection = config.selection;
-        runtime.execution.access = config.access;
         runtime.execution.permission_ceiling = config.permission_ceiling;
         runtime.execution.capability_denied_tool_names = config.capability_denied_tool_names;
         runtime.execution.effective_workspace_root = config.effective_workspace_root;
@@ -1398,8 +1397,6 @@ fn apply_meta_runtime(
 pub(crate) struct PersistedExecutionConfig {
     #[serde(default, skip_serializing_if = "ExecutionSelection::is_empty")]
     pub selection: ExecutionSelection,
-    #[serde(default, skip_serializing_if = "ExecutionAccess::is_inherit")]
-    pub access: ExecutionAccess,
     #[serde(
         default,
         skip_serializing_if = "crate::authorization::PermissionConfig::is_empty"
@@ -1414,7 +1411,6 @@ pub(crate) struct PersistedExecutionConfig {
 impl PersistedExecutionConfig {
     pub fn is_empty(&self) -> bool {
         self.selection.is_empty()
-            && self.access.is_inherit()
             && self.permission_ceiling.is_empty()
             && self.capability_denied_tool_names.is_empty()
             && self.effective_workspace_root.is_none()
@@ -1425,7 +1421,6 @@ impl From<&crate::session::model::SessionExecutionContext> for PersistedExecutio
     fn from(execution: &crate::session::model::SessionExecutionContext) -> Self {
         Self {
             selection: execution.selection.clone(),
-            access: execution.access,
             permission_ceiling: execution.permission_ceiling.clone(),
             capability_denied_tool_names: execution.capability_denied_tool_names.clone(),
             effective_workspace_root: execution.effective_workspace_root.clone(),
@@ -1465,7 +1460,6 @@ pub(crate) fn domain_summary_from_storage(
         source_cutoff_seq_global: None,
         source_message_id: None,
         task_id: summary.task_id,
-        subtask_access: None,
         subtask_status: summary
             .subtask_status
             .as_deref()

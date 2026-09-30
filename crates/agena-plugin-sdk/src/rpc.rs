@@ -144,8 +144,6 @@ pub mod method {
     pub const HOOK_TOOL_AFTER: &str = "hooks/tool.execute.after";
     pub const HOOK_TOOL_RENDER: &str = "hooks/tool.render";
     pub const HOOK_TOOL_INVOKE: &str = "hooks/tool.invoke";
-    pub const HOOK_TOOL_PERMISSION_PATHS: &str = "hooks/tool.permission_paths";
-    pub const HOOK_TOOL_PERMISSION_NETWORKS: &str = "hooks/tool.permission_networks";
     pub const HOOK_TOOL_INVOKE_STREAM: &str = "hooks/tool.invoke.stream";
     pub const OPERATION_INVOKE: &str = "operation/invoke";
     pub const SERVICE_INVOKE: &str = "service/invoke";
@@ -183,6 +181,8 @@ pub mod method {
     pub const HOST_EVENT_SUBSCRIBE: &str = "host/event.subscribe";
     pub const HOST_EVENT_UNSUBSCRIBE: &str = "host/event.unsubscribe";
     pub const HOST_CONFIG_READ: &str = "host/config.read";
+    pub const HOST_PERMISSION_CHECK_PATH: &str = "host/permission.check_path";
+    pub const HOST_PERMISSION_CHECK_NETWORK: &str = "host/permission.check_network";
     pub const HOST_CONFIG_RELOAD_REQUEST: &str = "host/config.reload.request";
     pub const HOST_CONFIG_RELOAD_STATUS: &str = "host/config.reload.status";
     pub const HOST_TOOL_INVOKE: &str = "host/tool.invoke";

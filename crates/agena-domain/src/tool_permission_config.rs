@@ -32,6 +32,9 @@ impl ToolPermissionConfig {
         if overlay.default.is_some() {
             self.default = overlay.default;
         }
+        // `extend` on all three maps is what makes the user's own entry win
+        // over the built-in entry of the same key, and what makes deleting a
+        // key fall back to the built-in one instead of switching it off.
         self.names.extend(overlay.names);
         self.plugin.extend(overlay.plugin);
         self.rules.extend(overlay.rules);

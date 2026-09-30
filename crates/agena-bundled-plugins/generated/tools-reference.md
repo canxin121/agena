@@ -47,7 +47,7 @@ OpenAI cloud search, computation and image capabilities. Inputs leave this compu
 
 `agena.chatgpt.cloud_code_interpreter` · **Summary**: Run Python in an OpenAI cloud container, not the Agena local workspace.
 
-**Tags**: `network` `interactive`
+**Tags**: `network` `interactive` `read_only`
 
 **Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
 
@@ -142,7 +142,7 @@ OpenAI cloud search, computation and image capabilities. Inputs leave this compu
 
 `agena.chatgpt.cloud_document_understanding` · **Summary**: Send explicit PDF/text documents to OpenAI cloud for understanding; not local file viewing.
 
-**Tags**: `query` `network`
+**Tags**: `query` `network` `mutate`
 
 **Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
 
@@ -300,7 +300,7 @@ OpenAI cloud search, computation and image capabilities. Inputs leave this compu
 
 `agena.chatgpt.cloud_file_search` · **Summary**: Search configured OpenAI cloud file stores, not files on this computer.
 
-**Tags**: `network` `interactive` `discovery`
+**Tags**: `network` `interactive` `discovery` `read_only`
 
 **Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
 
@@ -395,7 +395,7 @@ OpenAI cloud search, computation and image capabilities. Inputs leave this compu
 
 `agena.chatgpt.cloud_file_status` · **Summary**: Query the remote status of an owned OpenAI cloud file, not a local path.
 
-**Tags**: `query` `network`
+**Tags**: `query` `network` `mutate`
 
 **Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
 
@@ -484,6 +484,8 @@ OpenAI cloud search, computation and image capabilities. Inputs leave this compu
 
 `agena.chatgpt.cloud_image_edit` · **Summary**: Upload permitted images for editing in OpenAI cloud; save the returned image separately.
 
+**Tags**: `mutate`
+
 **Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
 
 **Help**:
@@ -543,7 +545,7 @@ OpenAI cloud search, computation and image capabilities. Inputs leave this compu
 
 `agena.chatgpt.cloud_image_generation` · **Summary**: Generate images in OpenAI cloud; save returned images as local attachments.
 
-**Tags**: `network` `interactive`
+**Tags**: `network` `interactive` `mutate`
 
 **Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
 
@@ -638,7 +640,7 @@ OpenAI cloud search, computation and image capabilities. Inputs leave this compu
 
 `agena.chatgpt.cloud_image_understanding` · **Summary**: Send explicit images to OpenAI cloud for understanding; not local file viewing.
 
-**Tags**: `query` `network`
+**Tags**: `query` `network` `mutate`
 
 **Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
 
@@ -762,7 +764,7 @@ OpenAI cloud search, computation and image capabilities. Inputs leave this compu
 
 `agena.chatgpt.cloud_shell` · **Summary**: Run shell commands in an OpenAI cloud container, never in the local terminal.
 
-**Tags**: `network` `interactive`
+**Tags**: `network` `interactive` `mutate`
 
 **Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
 
@@ -857,7 +859,7 @@ OpenAI cloud search, computation and image capabilities. Inputs leave this compu
 
 `agena.chatgpt.cloud_web_search` · **Summary**: Search the web in OpenAI cloud and return sources; not a local browser operation.
 
-**Tags**: `network` `interactive` `discovery`
+**Tags**: `network` `interactive` `discovery` `read_only`
 
 **Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
 
@@ -958,7 +960,7 @@ Anthropic cloud search, fetch, computation and advisor capabilities. Inputs leav
 
 `agena.claude.cloud_advisor` · **Summary**: Consult an advisor model in Anthropic cloud using the supplied context.
 
-**Tags**: `network` `interactive`
+**Tags**: `network` `interactive` `read_only`
 
 **Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
 
@@ -1073,7 +1075,7 @@ Anthropic cloud search, fetch, computation and advisor capabilities. Inputs leav
 
 `agena.claude.cloud_code_execution` · **Summary**: Execute code in Anthropic cloud infrastructure, not on this computer.
 
-**Tags**: `network` `interactive`
+**Tags**: `network` `interactive` `read_only`
 
 **Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
 
@@ -1188,7 +1190,7 @@ Anthropic cloud search, fetch, computation and advisor capabilities. Inputs leav
 
 `agena.claude.cloud_document_understanding` · **Summary**: Send explicit PDF/text documents to Anthropic cloud for understanding; not local file viewing.
 
-**Tags**: `query` `network`
+**Tags**: `query` `network` `mutate`
 
 **Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
 
@@ -1346,7 +1348,7 @@ Anthropic cloud search, fetch, computation and advisor capabilities. Inputs leav
 
 `agena.claude.cloud_file_status` · **Summary**: Query the remote status of an owned Anthropic cloud file, not a local path.
 
-**Tags**: `query` `network`
+**Tags**: `query` `network` `mutate`
 
 **Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
 
@@ -1435,7 +1437,7 @@ Anthropic cloud search, fetch, computation and advisor capabilities. Inputs leav
 
 `agena.claude.cloud_image_understanding` · **Summary**: Send explicit images to Anthropic cloud for understanding; not local file viewing.
 
-**Tags**: `query` `network`
+**Tags**: `query` `network` `mutate`
 
 **Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
 
@@ -1559,7 +1561,7 @@ Anthropic cloud search, fetch, computation and advisor capabilities. Inputs leav
 
 `agena.claude.cloud_web_fetch` · **Summary**: Fetch and process web content in Anthropic cloud, not through the local browser.
 
-**Tags**: `network` `interactive` `discovery`
+**Tags**: `network` `interactive` `discovery` `read_only`
 
 **Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
 
@@ -1674,7 +1676,7 @@ Anthropic cloud search, fetch, computation and advisor capabilities. Inputs leav
 
 `agena.claude.cloud_web_search` · **Summary**: Search the web in Anthropic cloud and return sources; not a local browser operation.
 
-**Tags**: `network` `interactive` `discovery`
+**Tags**: `network` `interactive` `discovery` `read_only`
 
 **Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
 
@@ -1795,7 +1797,7 @@ Structured code search and syntax inspection tools.
 
 `agena.code.search_ast` · **Summary**: Search code structurally with ast-grep.
 
-**Tags**: `query` `filesystem` `discovery`
+**Tags**: `query` `filesystem` `discovery` `read_only`
 
 **Runtime**: ✓ concurrency-safe · streaming `buffered` · non-strict
 
@@ -1873,8 +1875,7 @@ Structured code search and syntax inspection tools.
     "path": {
       "minLength": 1,
       "type": "string",
-      "x-agena-order": "000000",
-      "x-agena-path": "read"
+      "x-agena-order": "000000"
     },
     "pattern": {
       "minLength": 1,
@@ -1894,7 +1895,7 @@ Structured code search and syntax inspection tools.
 
 `agena.code.syntax_tree` · **Summary**: Inspect a parsed syntax tree.
 
-**Tags**: `query` `filesystem` `discovery`
+**Tags**: `query` `filesystem` `discovery` `read_only`
 
 **Runtime**: ✓ concurrency-safe · streaming `buffered` · non-strict
 
@@ -1972,8 +1973,7 @@ Structured code search and syntax inspection tools.
     "path": {
       "minLength": 1,
       "type": "string",
-      "x-agena-order": "000000",
-      "x-agena-path": "read"
+      "x-agena-order": "000000"
     }
   },
   "required": [
@@ -2150,7 +2150,7 @@ Cron-style and one-shot wakeup scheduling tools.
 
 `agena.cron.history` · **Summary**: Inspect bounded persisted delivery history for scheduled jobs.
 
-**Tags**: `query` `scheduler`
+**Tags**: `query` `scheduler` `read_only`
 
 **Runtime**: ✓ concurrency-safe · streaming `buffered` · non-strict
 
@@ -2194,7 +2194,7 @@ Cron-style and one-shot wakeup scheduling tools.
 
 `agena.cron.list` · **Summary**: List registered cron jobs and wakeups.
 
-**Tags**: `query` `scheduler` `discovery`
+**Tags**: `query` `scheduler` `discovery` `read_only`
 
 **Runtime**: ✓ concurrency-safe · streaming `buffered` · non-strict
 
@@ -2465,7 +2465,7 @@ Filesystem command tools for read/search and explicit edits.
 
 `agena.fs.glob` · **Summary**: Find paths with glob patterns.
 
-**Tags**: `query` `filesystem` `discovery`
+**Tags**: `query` `filesystem` `discovery` `read_only`
 
 **Runtime**: ✓ concurrency-safe · streaming `buffered` · non-strict
 
@@ -2527,8 +2527,7 @@ Filesystem command tools for read/search and explicit edits.
         "string",
         "null"
       ],
-      "x-agena-order": "000001",
-      "x-agena-path": "read"
+      "x-agena-order": "000001"
     },
     "pattern": {
       "description": "Glob pattern to match.",
@@ -2548,7 +2547,7 @@ Filesystem command tools for read/search and explicit edits.
 
 `agena.fs.grep` · **Summary**: Search file contents with regex.
 
-**Tags**: `query` `filesystem` `discovery`
+**Tags**: `query` `filesystem` `discovery` `read_only`
 
 **Runtime**: ✓ concurrency-safe · streaming `buffered` · non-strict
 
@@ -2598,8 +2597,7 @@ Filesystem command tools for read/search and explicit edits.
         "string",
         "null"
       ],
-      "x-agena-order": "000001",
-      "x-agena-path": "read"
+      "x-agena-order": "000001"
     },
     "pattern": {
       "description": "Regex pattern to search for.",
@@ -2619,7 +2617,7 @@ Filesystem command tools for read/search and explicit edits.
 
 `agena.fs.output_read` · **Summary**: Read a byte range of captured tool output owned by this session.
 
-**Tags**: `query`
+**Tags**: `query` `read_only`
 
 **Runtime**: ✓ concurrency-safe · streaming `buffered` · non-strict
 
@@ -2670,7 +2668,7 @@ Filesystem command tools for read/search and explicit edits.
 
 `agena.fs.output_search` · **Summary**: Find literal text within captured tool output owned by this session.
 
-**Tags**: `query`
+**Tags**: `query` `read_only`
 
 **Runtime**: ✓ concurrency-safe · streaming `buffered` · non-strict
 
@@ -2729,7 +2727,7 @@ Filesystem command tools for read/search and explicit edits.
 
 `agena.fs.read` · **Summary**: Read workspace files.
 
-**Tags**: `query` `filesystem`
+**Tags**: `query` `filesystem` `read_only`
 
 **Runtime**: ✓ concurrency-safe · streaming `buffered` · non-strict
 
@@ -2772,8 +2770,7 @@ Filesystem command tools for read/search and explicit edits.
       "description": "File or directory path to read. Relative paths are resolved from the\nworkspace root.",
       "minLength": 1,
       "type": "string",
-      "x-agena-order": "000000",
-      "x-agena-path": "read"
+      "x-agena-order": "000000"
     },
     "limit": {
       "description": "Maximum number of lines or directory entries to return.",
@@ -2812,7 +2809,7 @@ Filesystem command tools for read/search and explicit edits.
 
 `agena.fs.read_many` · **Summary**: Read multiple UTF-8 files within one bounded byte budget.
 
-**Tags**: `query` `filesystem`
+**Tags**: `query` `filesystem` `read_only`
 
 **Runtime**: ✓ concurrency-safe · streaming `buffered` · non-strict
 
@@ -2926,7 +2923,7 @@ Filesystem command tools for read/search and explicit edits.
 
 `agena.fs.stat` · **Summary**: Inspect file metadata and an optional SHA-256 revision.
 
-**Tags**: `query` `filesystem`
+**Tags**: `query` `filesystem` `read_only`
 
 **Runtime**: ✓ concurrency-safe · streaming `buffered` · non-strict
 
@@ -3026,7 +3023,7 @@ Google cloud search, computation and image capabilities. Inputs leave this compu
 
 `agena.gemini.cloud_code_execution` · **Summary**: Execute code in Google cloud infrastructure, not on this computer.
 
-**Tags**: `network` `interactive`
+**Tags**: `network` `interactive` `read_only`
 
 **Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
 
@@ -3107,7 +3104,7 @@ Google cloud search, computation and image capabilities. Inputs leave this compu
 
 `agena.gemini.cloud_document_understanding` · **Summary**: Send explicit PDF/text documents to Google cloud for understanding; not local file viewing.
 
-**Tags**: `query` `network`
+**Tags**: `query` `network` `mutate`
 
 **Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
 
@@ -3265,7 +3262,7 @@ Google cloud search, computation and image capabilities. Inputs leave this compu
 
 `agena.gemini.cloud_file_search` · **Summary**: Search configured Google cloud file stores, not files on this computer.
 
-**Tags**: `network` `interactive` `discovery`
+**Tags**: `network` `interactive` `discovery` `read_only`
 
 **Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
 
@@ -3346,7 +3343,7 @@ Google cloud search, computation and image capabilities. Inputs leave this compu
 
 `agena.gemini.cloud_file_status` · **Summary**: Query the remote status of an owned Google cloud file, not a local path.
 
-**Tags**: `query` `network`
+**Tags**: `query` `network` `mutate`
 
 **Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
 
@@ -3435,7 +3432,7 @@ Google cloud search, computation and image capabilities. Inputs leave this compu
 
 `agena.gemini.cloud_google_maps` · **Summary**: Query Google Maps data in Google cloud and return grounding sources.
 
-**Tags**: `network` `interactive` `discovery`
+**Tags**: `network` `interactive` `discovery` `read_only`
 
 **Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
 
@@ -3516,7 +3513,7 @@ Google cloud search, computation and image capabilities. Inputs leave this compu
 
 `agena.gemini.cloud_google_search` · **Summary**: Search Google and ground answers in Google cloud, not the local browser.
 
-**Tags**: `network` `interactive` `discovery`
+**Tags**: `network` `interactive` `discovery` `read_only`
 
 **Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
 
@@ -3597,6 +3594,8 @@ Google cloud search, computation and image capabilities. Inputs leave this compu
 
 `agena.gemini.cloud_image_edit` · **Summary**: Upload permitted images for editing in Google cloud; save the returned image separately.
 
+**Tags**: `mutate`
+
 **Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
 
 **Help**:
@@ -3671,7 +3670,7 @@ Google cloud search, computation and image capabilities. Inputs leave this compu
 
 `agena.gemini.cloud_image_generation` · **Summary**: Generate images in Google cloud; save returned images as local attachments.
 
-**Tags**: `network` `interactive`
+**Tags**: `network` `interactive` `mutate`
 
 **Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
 
@@ -3737,7 +3736,7 @@ Google cloud search, computation and image capabilities. Inputs leave this compu
 
 `agena.gemini.cloud_image_understanding` · **Summary**: Send explicit images to Google cloud for understanding; not local file viewing.
 
-**Tags**: `query` `network`
+**Tags**: `query` `network` `mutate`
 
 **Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
 
@@ -3861,7 +3860,7 @@ Google cloud search, computation and image capabilities. Inputs leave this compu
 
 `agena.gemini.cloud_url_context` · **Summary**: Retrieve and ground URL content in Google cloud; no local-file access.
 
-**Tags**: `network` `interactive` `discovery`
+**Tags**: `network` `interactive` `discovery` `read_only`
 
 **Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
 
@@ -4129,7 +4128,7 @@ LSP read-only observability and navigation tools.
 
 `agena.lsp.definition` · **Summary**: Resolve symbol definitions.
 
-**Tags**: `query` `lsp` `filesystem`
+**Tags**: `query` `lsp` `filesystem` `read_only`
 
 **Runtime**: ✓ concurrency-safe · streaming `buffered` · non-strict
 
@@ -4154,8 +4153,7 @@ LSP read-only observability and navigation tools.
     "file_path": {
       "minLength": 1,
       "type": "string",
-      "x-agena-order": "000000.000000",
-      "x-agena-path": "read"
+      "x-agena-order": "000000.000000"
     },
     "line": {
       "format": "uint32",
@@ -4177,7 +4175,7 @@ LSP read-only observability and navigation tools.
 
 `agena.lsp.diagnostics` · **Summary**: Fetch file diagnostics.
 
-**Tags**: `query` `lsp` `filesystem`
+**Tags**: `query` `lsp` `filesystem` `read_only`
 
 **Runtime**: ✓ concurrency-safe · streaming `buffered` · non-strict
 
@@ -4194,8 +4192,7 @@ LSP read-only observability and navigation tools.
     "file_path": {
       "minLength": 1,
       "type": "string",
-      "x-agena-order": "000000",
-      "x-agena-path": "read"
+      "x-agena-order": "000000"
     }
   },
   "required": [
@@ -4209,7 +4206,7 @@ LSP read-only observability and navigation tools.
 
 `agena.lsp.hover` · **Summary**: Fetch hover text.
 
-**Tags**: `query` `lsp` `filesystem`
+**Tags**: `query` `lsp` `filesystem` `read_only`
 
 **Runtime**: ✓ concurrency-safe · streaming `buffered` · non-strict
 
@@ -4234,8 +4231,7 @@ LSP read-only observability and navigation tools.
     "file_path": {
       "minLength": 1,
       "type": "string",
-      "x-agena-order": "000000.000000",
-      "x-agena-path": "read"
+      "x-agena-order": "000000.000000"
     },
     "line": {
       "format": "uint32",
@@ -4257,7 +4253,7 @@ LSP read-only observability and navigation tools.
 
 `agena.lsp.references` · **Summary**: Find symbol references.
 
-**Tags**: `query` `lsp` `filesystem`
+**Tags**: `query` `lsp` `filesystem` `read_only`
 
 **Runtime**: ✓ concurrency-safe · streaming `buffered` · non-strict
 
@@ -4283,8 +4279,7 @@ LSP read-only observability and navigation tools.
     "file_path": {
       "minLength": 1,
       "type": "string",
-      "x-agena-order": "000000.000000",
-      "x-agena-path": "read"
+      "x-agena-order": "000000.000000"
     },
     "include_declaration": {
       "default": true,
@@ -4311,7 +4306,7 @@ LSP read-only observability and navigation tools.
 
 `agena.lsp.servers` · **Summary**: List configured language servers.
 
-**Tags**: `query` `lsp` `discovery`
+**Tags**: `query` `lsp` `discovery` `read_only`
 
 **Runtime**: ✓ concurrency-safe · streaming `buffered` · non-strict
 
@@ -4334,7 +4329,7 @@ MCP discovery and bridge tools.
 
 `agena.mcp.prompts.get` · **Summary**: Fetch one MCP prompt template.
 
-**Tags**: `query` `mcp`
+**Tags**: `query` `mcp` `read_only`
 
 **Runtime**: ✓ concurrency-safe · streaming `buffered` · non-strict
 
@@ -4384,7 +4379,7 @@ MCP discovery and bridge tools.
 
 `agena.mcp.prompts.list` · **Summary**: List MCP prompt templates from one server.
 
-**Tags**: `query` `mcp` `discovery`
+**Tags**: `query` `mcp` `discovery` `read_only`
 
 **Runtime**: ✓ concurrency-safe · streaming `buffered` · non-strict
 
@@ -4423,7 +4418,7 @@ MCP discovery and bridge tools.
 
 `agena.mcp.resources.list` · **Summary**: List MCP resources from one server.
 
-**Tags**: `query` `mcp` `discovery`
+**Tags**: `query` `mcp` `discovery` `read_only`
 
 **Runtime**: ✓ concurrency-safe · streaming `buffered` · non-strict
 
@@ -4462,7 +4457,7 @@ MCP discovery and bridge tools.
 
 `agena.mcp.resources.read` · **Summary**: Read one MCP resource by URI.
 
-**Tags**: `query` `mcp`
+**Tags**: `query` `mcp` `read_only`
 
 **Runtime**: ✓ concurrency-safe · streaming `buffered` · non-strict
 
@@ -4500,7 +4495,7 @@ MCP discovery and bridge tools.
 
 `agena.mcp.resources.templates.list` · **Summary**: List MCP resource templates from one server.
 
-**Tags**: `query` `mcp` `discovery`
+**Tags**: `query` `mcp` `discovery` `read_only`
 
 **Runtime**: ✓ concurrency-safe · streaming `buffered` · non-strict
 
@@ -4570,7 +4565,7 @@ MCP discovery and bridge tools.
 
 `agena.mcp.servers.status` · **Summary**: Inspect configured MCP connection health and discovered tool counts.
 
-**Tags**: `query` `mcp` `discovery`
+**Tags**: `query` `mcp` `discovery` `read_only`
 
 **Runtime**: ✓ concurrency-safe · streaming `buffered` · non-strict
 
@@ -4587,7 +4582,7 @@ MCP discovery and bridge tools.
 
 `agena.mcp.tools.call` · **Summary**: Call one discovered MCP tool.
 
-**Tags**: `execute` `mcp`
+**Tags**: `execute` `mcp` `mutate`
 
 **Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
 
@@ -4630,7 +4625,7 @@ MCP discovery and bridge tools.
 
 `agena.mcp.tools.search` · **Summary**: Search the current MCP tool index without expanding all schemas.
 
-**Tags**: `query` `mcp` `discovery`
+**Tags**: `query` `mcp` `discovery` `read_only`
 
 **Runtime**: ✓ concurrency-safe · streaming `buffered` · non-strict
 
@@ -4707,7 +4702,7 @@ Persistent memory with searchable retrieval and write tools.
 
 `agena.memory.get` · **Summary**: Read one durable memory record.
 
-**Tags**: `query` `filesystem`
+**Tags**: `query` `filesystem` `read_only`
 
 **Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
 
@@ -4741,7 +4736,7 @@ Persistent memory with searchable retrieval and write tools.
 
 `agena.memory.list` · **Summary**: List durable memory records.
 
-**Tags**: `query` `filesystem` `discovery`
+**Tags**: `query` `filesystem` `discovery` `read_only`
 
 **Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
 
@@ -4773,7 +4768,7 @@ Persistent memory with searchable retrieval and write tools.
 
 `agena.memory.search` · **Summary**: Search durable memory records.
 
-**Tags**: `query` `filesystem` `discovery`
+**Tags**: `query` `filesystem` `discovery` `read_only`
 
 **Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
 
@@ -4904,7 +4899,7 @@ Continuous-stream background monitoring tools.
 
 `agena.monitor.start` · **Summary**: Start a continuous background monitor.
 
-**Tags**: `execute`
+**Tags**: `execute` `shell` `mutate`
 
 **Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
 
@@ -4991,7 +4986,7 @@ Continuous-stream background monitoring tools.
 
 `agena.monitor.stop` · **Summary**: Stop one background monitor.
 
-**Tags**: `mutate` `execute`
+**Tags**: `mutate` `execute` `shell`
 
 **Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
 
@@ -5237,7 +5232,7 @@ Plan orchestration and plan-autorun tools.
 
 `agena.plan.get` · **Summary**: Inspect the current plan state.
 
-**Tags**: `query` `planning`
+**Tags**: `query` `planning` `read_only`
 
 **Runtime**: ✓ concurrency-safe · streaming `buffered` · non-strict
 
@@ -5560,7 +5555,7 @@ Structured review and verification findings.
 
 `agena.report.findings` · **Summary**: Publish structured file-and-line findings for UI and integrations.
 
-**Tags**: `mutate` `discovery`
+**Tags**: `mutate` `discovery` `read_only`
 
 **Runtime**: ✓ concurrency-safe · streaming `buffered` · non-strict
 
@@ -5667,7 +5662,7 @@ Inspect and manage the current runtime session and its environment, model, and t
 
 `agena.session.environment` · **Summary**: Inspect the current runtime environment: working directory, git state, shell, OS, and architecture.
 
-**Tags**: `query` `discovery`
+**Tags**: `query` `discovery` `read_only`
 
 **Runtime**: ✓ concurrency-safe · streaming `buffered` · non-strict
 
@@ -5684,7 +5679,7 @@ Inspect and manage the current runtime session and its environment, model, and t
 
 `agena.session.get` · **Summary**: Inspect the current session metadata.
 
-**Tags**: `query` `discovery`
+**Tags**: `query` `discovery` `read_only`
 
 **Runtime**: ✓ concurrency-safe · streaming `buffered` · non-strict
 
@@ -5701,7 +5696,7 @@ Inspect and manage the current runtime session and its environment, model, and t
 
 `agena.session.model` · **Summary**: Inspect the current session model identity, runtime modes, and model token limits.
 
-**Tags**: `query` `discovery`
+**Tags**: `query` `discovery` `read_only`
 
 **Runtime**: ✓ concurrency-safe · streaming `buffered` · non-strict
 
@@ -5749,7 +5744,7 @@ Inspect and manage the current runtime session and its environment, model, and t
 
 `agena.session.tokens` · **Summary**: Inspect current and projected token use, effective limits, and remaining session budget.
 
-**Tags**: `query` `discovery`
+**Tags**: `query` `discovery` `read_only`
 
 **Runtime**: ✓ concurrency-safe · streaming `buffered` · non-strict
 
@@ -6332,7 +6327,7 @@ Shell command execution and background process tools.
 
 `agena.shell.list` · **Summary**: List active background processes.
 
-**Tags**: `query` `discovery`
+**Tags**: `query` `discovery` `shell` `read_only`
 
 **Runtime**: ✓ concurrency-safe · streaming `buffered` · non-strict
 
@@ -6349,7 +6344,7 @@ Shell command execution and background process tools.
 
 `agena.shell.logs` · **Summary**: Read background process logs.
 
-**Tags**: `query`
+**Tags**: `query` `shell` `read_only`
 
 **Runtime**: ✓ concurrency-safe · streaming `buffered` · non-strict
 
@@ -6406,7 +6401,7 @@ Shell command execution and background process tools.
 
 `agena.shell.resize` · **Summary**: Resize an interactive terminal.
 
-**Tags**: `mutate`
+**Tags**: `mutate` `shell`
 
 **Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
 
@@ -6455,7 +6450,7 @@ Shell command execution and background process tools.
 
 `agena.shell.run` · **Summary**: Run one shell process.
 
-**Tags**: `execute`
+**Tags**: `execute` `shell` `mutate`
 
 **Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
 
@@ -6661,12 +6656,12 @@ Shell command execution and background process tools.
       "x-agena-order": "000001.000001"
     },
     "workdir": {
+      "minLength": 1,
       "type": [
         "string",
         "null"
       ],
-      "x-agena-order": "000001.000000",
-      "x-agena-path": "read"
+      "x-agena-order": "000001.000000"
     },
     "writes": {
       "default": [],
@@ -6703,7 +6698,7 @@ Shell command execution and background process tools.
 
 `agena.shell.signal` · **Summary**: Interrupt or terminate an interactive terminal.
 
-**Tags**: `mutate` `execute`
+**Tags**: `mutate` `execute` `shell`
 
 **Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
 
@@ -6754,7 +6749,7 @@ Shell command execution and background process tools.
 
 `agena.shell.stop` · **Summary**: Stop one background process.
 
-**Tags**: `mutate` `execute`
+**Tags**: `mutate` `execute` `shell`
 
 **Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
 
@@ -6785,7 +6780,7 @@ Shell command execution and background process tools.
 
 `agena.shell.write` · **Summary**: Write to an interactive terminal and read its response.
 
-**Tags**: `mutate` `execute`
+**Tags**: `mutate` `execute` `shell`
 
 **Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
 
@@ -6963,7 +6958,7 @@ Discover and read plain-text skills and slash commands.
 
 `agena.skills.get` · **Summary**: Read one discovered skill or slash command.
 
-**Tags**: `query` `discovery`
+**Tags**: `query` `discovery` `read_only`
 
 **Runtime**: ✓ concurrency-safe · streaming `buffered` · non-strict
 
@@ -6994,7 +6989,7 @@ Discover and read plain-text skills and slash commands.
 
 `agena.skills.list` · **Summary**: List discovered skills and slash commands.
 
-**Tags**: `query` `discovery`
+**Tags**: `query` `discovery` `read_only`
 
 **Runtime**: ✓ concurrency-safe · streaming `buffered` · non-strict
 
@@ -7050,7 +7045,7 @@ Discover and read plain-text skills and slash commands.
 
 `agena.skills.read_resource` · **Summary**: Read a bounded UTF-8 resource contained by one skill package.
 
-**Tags**: `query` `filesystem`
+**Tags**: `query` `filesystem` `read_only`
 
 **Runtime**: ✓ concurrency-safe · streaming `buffered` · non-strict
 
@@ -7097,7 +7092,7 @@ Discover and read plain-text skills and slash commands.
 
 `agena.skills.refresh` · **Summary**: Rescan filesystem-backed Skills and report the catalog generation.
 
-**Tags**: `mutate` `discovery`
+**Tags**: `mutate` `discovery` `read_only`
 
 **Runtime**: ✓ concurrency-safe · streaming `buffered` · non-strict
 
@@ -7287,7 +7282,7 @@ Managed snapshot tools backed by Rift or git worktree.
 
 `agena.snapshot.status` · **Summary**: List active managed repository snapshots.
 
-**Tags**: `query` `snapshot`
+**Tags**: `query` `snapshot` `read_only`
 
 **Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
 
@@ -7310,7 +7305,7 @@ Delegated subtask orchestration tools.
 
 `agena.tasks.cancel` · **Summary**: Cancel a running delegated task and its child execution.
 
-**Tags**: `subtask` `mutate`
+**Tags**: `subtask` `mutate` `task`
 
 **Runtime**: ✓ concurrency-safe · streaming `buffered` · non-strict
 
@@ -7341,7 +7336,7 @@ Delegated subtask orchestration tools.
 
 `agena.tasks.followup` · **Summary**: Resume a terminal delegated task with a follow-up prompt.
 
-**Tags**: `subtask` `mutate`
+**Tags**: `subtask` `mutate` `task`
 
 **Runtime**: ✓ concurrency-safe · streaming `buffered` · non-strict
 
@@ -7409,7 +7404,7 @@ Delegated subtask orchestration tools.
 
 `agena.tasks.get` · **Summary**: Get delegated task metadata and terminal result.
 
-**Tags**: `subtask` `query`
+**Tags**: `subtask` `query` `read_only` `task`
 
 **Runtime**: ✓ concurrency-safe · streaming `buffered` · non-strict
 
@@ -7440,7 +7435,7 @@ Delegated subtask orchestration tools.
 
 `agena.tasks.list` · **Summary**: List delegated background tasks.
 
-**Tags**: `subtask` `query` `discovery`
+**Tags**: `subtask` `query` `discovery` `read_only` `task`
 
 **Runtime**: ✓ concurrency-safe · streaming `buffered` · non-strict
 
@@ -7470,7 +7465,7 @@ Delegated subtask orchestration tools.
 
 `agena.tasks.message` · **Summary**: Send additional guidance to a running delegated task.
 
-**Tags**: `subtask` `mutate`
+**Tags**: `subtask` `mutate` `task`
 
 **Runtime**: ✓ concurrency-safe · streaming `buffered` · non-strict
 
@@ -7508,7 +7503,7 @@ Delegated subtask orchestration tools.
 
 `agena.tasks.output` · **Summary**: Read incremental delegated-task transcript output after a cursor.
 
-**Tags**: `subtask` `query`
+**Tags**: `subtask` `query` `read_only` `task`
 
 **Runtime**: ✓ concurrency-safe · streaming `buffered` · non-strict
 
@@ -7556,7 +7551,7 @@ Delegated subtask orchestration tools.
 
 `agena.tasks.run` · **Summary**: Delegate a bounded task to a subagent session. Set `run_in_background` to run it in the background and be notified when it settles. Attach Skill names in `skills` so the child session applies them as task guidance.
 
-**Tags**: `subtask` `execute`
+**Tags**: `subtask` `execute` `task`
 
 **Runtime**: ✓ concurrency-safe · streaming `buffered` · non-strict
 
@@ -7566,7 +7561,6 @@ Delegated subtask orchestration tools.
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
-| `access` | `TaskAccess` | — | `inherit` | Hard capability boundary for this delegated Agena instance. |
 | `description` | `string` | ✓ | — | Short label for the subtask session. |
 | `max_cost_microusd` | `integer / null` | — | — | Cumulative child-completion cost ceiling in USD micro-units (one<br>millionth of a USD). Integer micro-units avoid a floating-point value<br>becoming a durable budget boundary; for example, 250000 means $0.25. |
 | `max_tokens` | `integer / null` | — | — | Cumulative child-completion token budget. This includes prompt,<br>output, reasoning and cache token accounting reported by the route. |
@@ -7581,15 +7575,6 @@ Delegated subtask orchestration tools.
 ```json
 {
   "$defs": {
-    "TaskAccess": {
-      "description": "Hard capability boundary for this delegated Agena instance.",
-      "enum": [
-        "inherit",
-        "read_only"
-      ],
-      "type": "string",
-      "x-agena-order": "000002"
-    },
     "TaskModelSelection": {
       "additionalProperties": false,
       "description": "Optional provider/model selection overrides for a delegated task.",
@@ -7643,11 +7628,6 @@ Delegated subtask orchestration tools.
   "additionalProperties": false,
   "description": "Input of the task tool.",
   "properties": {
-    "access": {
-      "$ref": "#/$defs/TaskAccess",
-      "default": "inherit",
-      "description": "Hard capability boundary for this delegated Agena instance."
-    },
     "description": {
       "description": "Short label for the subtask session.",
       "minLength": 1,
@@ -7662,7 +7642,7 @@ Delegated subtask orchestration tools.
         "integer",
         "null"
       ],
-      "x-agena-order": "000009"
+      "x-agena-order": "000008"
     },
     "max_tokens": {
       "description": "Cumulative child-completion token budget. This includes prompt,\noutput, reasoning and cache token accounting reported by the route.",
@@ -7672,7 +7652,7 @@ Delegated subtask orchestration tools.
         "integer",
         "null"
       ],
-      "x-agena-order": "000008"
+      "x-agena-order": "000007"
     },
     "prompt": {
       "description": "Full instruction payload for the delegated subtask.",
@@ -7684,7 +7664,7 @@ Delegated subtask orchestration tools.
       "default": false,
       "description": "Run the subtask in the background (default false). When false (default)\nthe subtask runs inline and this call returns its final result before\nthe tool call returns. When true, the tool returns immediately with a\ntask id and the result is delivered as a `system_notification` when the\nsubtask settles — do not poll tasks.get/tasks.output waiting for it.",
       "type": "boolean",
-      "x-agena-order": "000003"
+      "x-agena-order": "000002"
     },
     "selection": {
       "anyOf": [
@@ -7696,7 +7676,7 @@ Delegated subtask orchestration tools.
         }
       ],
       "description": "Optional model and mode overrides. Explicit values take precedence over\nthe parent session.",
-      "x-agena-order": "000006"
+      "x-agena-order": "000005"
     },
     "skills": {
       "description": "Optional Skill names or aliases to attach to the delegated subtask's\nfirst user message as lazy Skill references. The child model receives\ncatalog metadata and can call `agena.skills.get` when it needs the Skill\nbody. Use skills appropriate to the task: for example a read-only review\ntask can attach a review/read-only skill, an exploration task can attach\nan explore skill. Unknown names or aliases are rejected before the\nsubtask starts.",
@@ -7707,7 +7687,7 @@ Delegated subtask orchestration tools.
         "array",
         "null"
       ],
-      "x-agena-order": "000004"
+      "x-agena-order": "000003"
     },
     "task_id": {
       "description": "Resume an existing subtask session instead of creating a new one.",
@@ -7716,7 +7696,7 @@ Delegated subtask orchestration tools.
         "string",
         "null"
       ],
-      "x-agena-order": "000005"
+      "x-agena-order": "000004"
     },
     "timeout_ms": {
       "description": "Overall task timeout. A timeout cancels the child execution and returns\na structured `timed_out` task result.",
@@ -7726,7 +7706,7 @@ Delegated subtask orchestration tools.
         "integer",
         "null"
       ],
-      "x-agena-order": "000007"
+      "x-agena-order": "000006"
     }
   },
   "required": [
@@ -7747,7 +7727,7 @@ Tool API discovery functions. The runtime resolves tools_call directly to its ex
 
 `agena.tools.help` · **Tool API gateway handler** · **Summary**: Get reusable schemas, examples, and usage notes for one Agena execution tool or a batch of tools.
 
-**Tags**: `query` `discovery`
+**Tags**: `query` `discovery` `read_only`
 
 **Runtime**: ✓ concurrency-safe · streaming `buffered` · non-strict
 
@@ -7796,7 +7776,7 @@ Tool API discovery functions. The runtime resolves tools_call directly to its ex
 
 `agena.tools.list` · **Tool API gateway handler** · **Summary**: Enumerate current tools across one plugin or a batch of plugin targets.
 
-**Tags**: `query` `discovery`
+**Tags**: `query` `discovery` `read_only`
 
 **Runtime**: ✓ concurrency-safe · streaming `buffered` · non-strict
 
@@ -7891,7 +7871,7 @@ Tool API discovery functions. The runtime resolves tools_call directly to its ex
 
 `agena.tools.plugins_list` · **Summary**: Enumerate one or many selected plugins with version, summary, tags, and tool count.
 
-**Tags**: `query` `discovery`
+**Tags**: `query` `discovery` `read_only`
 
 **Runtime**: ✓ concurrency-safe · streaming `buffered` · non-strict
 
@@ -7986,7 +7966,7 @@ Tool API discovery functions. The runtime resolves tools_call directly to its ex
 
 `agena.tools.plugins_search` · **Summary**: Search loaded plugins with one or many queries and optional multi-plugin scope.
 
-**Tags**: `query` `discovery`
+**Tags**: `query` `discovery` `read_only`
 
 **Runtime**: ✓ concurrency-safe · streaming `buffered` · non-strict
 
@@ -8091,7 +8071,7 @@ Tool API discovery functions. The runtime resolves tools_call directly to its ex
 
 `agena.tools.plugins_tags` · **Summary**: List plugin tags across one plugin or a batch of plugin targets.
 
-**Tags**: `query` `discovery`
+**Tags**: `query` `discovery` `read_only`
 
 **Runtime**: ✓ concurrency-safe · streaming `buffered` · non-strict
 
@@ -8165,7 +8145,7 @@ Tool API discovery functions. The runtime resolves tools_call directly to its ex
 
 `agena.tools.search` · **Tool API gateway handler** · **Summary**: Search execution tools with one or many queries across one or many plugin targets.
 
-**Tags**: `query` `discovery`
+**Tags**: `query` `discovery` `read_only`
 
 **Runtime**: ✓ concurrency-safe · streaming `buffered` · non-strict
 
@@ -8270,7 +8250,7 @@ Tool API discovery functions. The runtime resolves tools_call directly to its ex
 
 `agena.tools.tags` · **Tool API gateway handler** · **Summary**: List tool tags across one plugin or a batch of plugin targets.
 
-**Tags**: `query` `discovery`
+**Tags**: `query` `discovery` `read_only`
 
 **Runtime**: ✓ concurrency-safe · streaming `buffered` · non-strict
 
@@ -8491,7 +8471,7 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
 
 `agena.web.browser_list` · **Summary**: List open page targets in the managed interactive browser.
 
-**Tags**: `network` `interactive` `query` `discovery`
+**Tags**: `network` `interactive` `query` `discovery` `read_only`
 
 **Runtime**: ✓ concurrency-safe · streaming `buffered` · non-strict
 
@@ -8508,7 +8488,7 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
 
 `agena.web.browser_open` · **Summary**: Open a page in a managed interactive browser session.
 
-**Tags**: `network` `interactive` `mutate`
+**Tags**: `network` `interactive` `mutate` `read_only`
 
 **Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
 
@@ -8613,7 +8593,7 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
 
 `agena.web.browser_snapshot` · **Summary**: Inspect visible text and interactive elements in a browser session.
 
-**Tags**: `network` `interactive` `query`
+**Tags**: `network` `interactive` `query` `read_only`
 
 **Runtime**: ✓ concurrency-safe · streaming `buffered` · non-strict
 
@@ -8716,7 +8696,7 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
 
 `agena.web.browser_wait` · **Summary**: Wait for page readiness, a CSS selector, or visible text.
 
-**Tags**: `network` `interactive` `query`
+**Tags**: `network` `interactive` `query` `read_only`
 
 **Runtime**: ✓ concurrency-safe · streaming `buffered` · non-strict
 
@@ -8774,7 +8754,7 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
 
 `agena.web.crawl` · **Summary**: Crawl a site and cache indexed pages locally.
 
-**Tags**: `discovery`
+**Tags**: `discovery` `mutate`
 
 **Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
 
@@ -8846,6 +8826,8 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
 
 `agena.web.fetch` · **Summary**: Fetch one web page and inspect its actual content.
 
+**Tags**: `read_only`
+
 **Runtime**: ✓ concurrency-safe · streaming `buffered` · non-strict
 
 **Help**:
@@ -8913,7 +8895,7 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
 
 `agena.web.search` · **Summary**: Find candidate public-web pages to fetch.
 
-**Tags**: `discovery`
+**Tags**: `discovery` `read_only`
 
 **Runtime**: ✓ concurrency-safe · streaming `buffered` · non-strict
 

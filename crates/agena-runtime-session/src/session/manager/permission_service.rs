@@ -161,17 +161,12 @@ impl SessionManager {
                 .effective_permission
                 .approval_model
                 .clone(),
-            None => {
-                let mut permission = recover_read(
-                    state.shared_permission.as_ref(),
-                    "read shared automatic-approval permission",
-                )
-                .clone();
-                permission.merge_from(super::replies::managed_project_state_permission(
-                    state.tool_executor.workspace_root(),
-                ));
-                permission.approval_model
-            }
+            None => recover_read(
+                state.shared_permission.as_ref(),
+                "read shared automatic-approval permission",
+            )
+            .approval_model
+            .clone(),
         };
         match approval_model {
             Some(selection) => self
@@ -352,6 +347,14 @@ impl SessionManager {
         }
 
         let decision_tools = auto_approval_decision_tools();
+        // The prompt's path promises are conditional on the compiled policy: a
+        // class the sandbox does not approve outright must be judged by the
+        // model itself, so the prompt stops telling it not to. The probe asks
+        // the same policy the executor enforces, which is what keeps the two
+        // from drifting apart.
+        let system_prompt = agena_permission::auto_approval_system_prompt(
+            &state.tool_executor.path_class_prompt_flags(),
+        );
         let mut futures = Vec::with_capacity(candidates.len());
         for candidate in candidates {
             let model_ref = model.clone();
@@ -360,6 +363,7 @@ impl SessionManager {
             let verbosity = options.verbosity.clone();
             let request_override = options.request_override.clone();
             let decision_tools = decision_tools.clone();
+            let system_prompt = system_prompt.clone();
             futures.push(async move {
                 let requested = candidate.clone();
                 let action = serde_json::to_string(&candidate.action)
@@ -397,7 +401,7 @@ impl SessionManager {
                     }
                     agena_provider::CompletionRequest {
                         model: model_ref.model_id.clone(),
-                        system: Some(agena_permission::AUTO_APPROVAL_SYSTEM_PROMPT.to_owned()),
+                        system: Some(system_prompt.clone()),
                         turns,
                         tool_api_functions: decision_tools.clone(),
                         provider_native_tools: Default::default(),

@@ -40,7 +40,7 @@ struct FormatNoteInput {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInput)]
 #[serde(deny_unknown_fields)]
 struct WriteNoteInput {
-    #[arg(trim, non_empty, path.write)]
+    #[arg(trim, non_empty)]
     path: String,
     #[arg(trim, non_empty)]
     text: String,

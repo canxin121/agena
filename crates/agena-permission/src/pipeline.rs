@@ -1,22 +1,16 @@
 //! The synchronous permission decision pipeline.
 //!
-//! The host composes the static policy decision with the rule snapshot and
-//! hands the result to [`decide_sync`] together with the action. The pipeline
-//! walks the automatic-approval layers that do not need a model call and
-//! returns either a final verdict or a classifier candidate for the host to
-//! evaluate asynchronously.
+//! The static policy layer runs first: it is the compiled permission policy
+//! composed with the persisted rule snapshot, and it already contains every
+//! static rule (read-only tools, temp paths, routine shell commands, …), so
+//! its `Allow` / `Ask` / `Deny` verdicts are terminal. Only `Auto` reaches
+//! [`decide_sync`], which is the boundary between the static layer and the
+//! approval model: it checks the denial budget and hands everything else to
+//! the classifier. There is no automatic-approval fast path.
 
 use agena_domain::{ActionSpec, PermissionDecision};
 
-use crate::auto::{DenialBudget, auto_fast_path, heuristic_decision};
-
-/// Static context for one synchronous decision.
-#[derive(Debug, Clone, Default)]
-/// Context of a permission decision.
-pub struct DecisionContext<'a> {
-    /// Runtime-owned project-state directory; writes inside it are safe.
-    pub managed_project_root: Option<&'a str>,
-}
+use crate::auto::DenialBudget;
 
 /// One classifier evaluation unit. The host groups candidates from the same
 /// tool invocation so a single transcript/model setup serves them all.
@@ -115,12 +109,16 @@ pub enum SyncOutcome {
     Classifier(ClassifierCandidate),
 }
 
-/// Walk every synchronous layer. `base` must already be the static-policy
-/// decision composed with the persisted rule snapshot.
+/// Decide what happens after the static policy layer returned `Auto`.
+///
+/// `base` must already be the static-policy decision composed with the
+/// persisted rule snapshot; anything other than `Auto` is returned untouched.
+/// An `Auto` decision goes to the approval model, unless the denial budget has
+/// been exhausted, in which case automatic approval is switched off and the
+/// user is asked instead.
 pub fn decide_sync(
     base: &PermissionDecision,
     action: &ActionSpec,
-    context: &DecisionContext,
     budget: &DenialBudget,
 ) -> SyncOutcome {
     match base {
@@ -128,20 +126,6 @@ pub fn decide_sync(
         | PermissionDecision::Ask { .. }
         | PermissionDecision::Deny { .. } => SyncOutcome::Final(base.clone()),
         PermissionDecision::Auto { reason } => {
-            // Fast path.
-            match auto_fast_path(action, context.managed_project_root) {
-                crate::auto::AutoFastPath::Allow => {
-                    return SyncOutcome::Final(PermissionDecision::Allow);
-                }
-                crate::auto::AutoFastPath::Ask { reason } => {
-                    return SyncOutcome::Final(PermissionDecision::Ask { reason });
-                }
-                crate::auto::AutoFastPath::Defer => {}
-            }
-            // Heuristics.
-            if let Some(decision) = heuristic_decision(action) {
-                return SyncOutcome::Final(decision);
-            }
             // Denial budget: stop burning model calls after repeated denials.
             if budget.exceeded() {
                 return SyncOutcome::Final(PermissionDecision::Ask {
@@ -161,30 +145,9 @@ mod tests {
     use super::*;
     use agena_domain::ActionSpec;
 
-    fn tool(name: &str, tags: &[&str], command: Option<&str>) -> ActionSpec {
-        let mut contract = agena_domain::ToolPermissionContract::default();
-        for tag in tags {
-            match *tag {
-                "read_only" => contract.read_only = true,
-                "filesystem_read" | "filesystem_write" => {
-                    contract.input_paths.push(agena_domain::InputPathSpec {
-                        jsonpath: "$.path".to_owned(),
-                        kind: if *tag == "filesystem_write" {
-                            agena_domain::PathKind::Write
-                        } else {
-                            agena_domain::PathKind::Read
-                        },
-                        fallback: None,
-                        optional: false,
-                    });
-                }
-                "shell" => contract.shell = true,
-                _ => {}
-            }
-        }
+    fn tool(name: &str, command: Option<&str>) -> ActionSpec {
         ActionSpec::Tool {
             tool_name: name.to_owned(),
-            contract,
             command: command.map(ToOwned::to_owned),
         }
     }
@@ -197,7 +160,6 @@ mod tests {
 
     #[test]
     fn final_decisions_do_not_reenter_the_pipeline() {
-        let context = DecisionContext::default();
         let budget = DenialBudget::default();
         for base in [
             PermissionDecision::Allow,
@@ -209,48 +171,42 @@ mod tests {
             },
         ] {
             assert_eq!(
-                decide_sync(&base, &tool("fs.write", &[], None), &context, &budget),
+                decide_sync(&base, &tool("fs.write", None), &budget),
                 SyncOutcome::Final(base)
             );
         }
     }
 
     #[test]
-    fn fast_path_and_heuristics_terminate_auto() {
-        let context = DecisionContext::default();
+    fn auto_always_reaches_the_classifier() {
+        // Every action whose static policy verdict is `Auto` goes to the model.
+        // The class defaults that used to resolve these in-process are now static
+        // policy rules, so they are decided before `decide_sync` is reached.
         let budget = DenialBudget::default();
-        assert_eq!(
-            decide_sync(
-                &auto("auto"),
-                &tool("mcp.read", &["read_only", "filesystem_read"], None),
-                &context,
-                &budget
-            ),
-            SyncOutcome::Final(PermissionDecision::Allow)
-        );
-        let outcome = decide_sync(
-            &auto("auto"),
-            &tool("shell.run", &["shell"], Some("rm -rf /")),
-            &context,
-            &budget,
-        );
-        assert!(matches!(
-            outcome,
-            SyncOutcome::Final(PermissionDecision::Deny { reason })
-                if reason.starts_with(
-                    "automatic approval heuristic blocked a dangerous shell command"
-                )
-        ));
+        for action in [
+            tool("mcp.read", None),
+            tool("shell.run", Some("rm -rf /")),
+            tool("shell.run", Some("cargo test")),
+            tool("fs.write", None),
+        ] {
+            let outcome = decide_sync(&auto("auto"), &action, &budget);
+            assert!(
+                matches!(
+                    outcome,
+                    SyncOutcome::Classifier(ClassifierCandidate { ref policy_reason, .. })
+                        if policy_reason == "auto"
+                ),
+                "{action:?} should reach the classifier, got {outcome:?}"
+            );
+        }
     }
 
     #[test]
     fn ambiguous_actions_become_classifier_candidates() {
-        let context = DecisionContext::default();
         let budget = DenialBudget::default();
         let outcome = decide_sync(
             &auto("tool is eligible for automatic approval"),
-            &tool("fs.write", &["filesystem_write"], None),
-            &context,
+            &tool("fs.write", None),
             &budget,
         );
         assert!(matches!(
@@ -264,17 +220,11 @@ mod tests {
 
     #[test]
     fn exhausted_budget_asks_instead_of_classifying() {
-        let context = DecisionContext::default();
         let mut budget = DenialBudget::default();
         budget.record_decision(false);
         budget.record_decision(false);
         budget.record_decision(false);
-        let outcome = decide_sync(
-            &auto("auto"),
-            &tool("fs.write", &["filesystem_write"], None),
-            &context,
-            &budget,
-        );
+        let outcome = decide_sync(&auto("auto"), &tool("fs.write", None), &budget);
         assert!(matches!(
             outcome,
             SyncOutcome::Final(PermissionDecision::Ask { .. })
@@ -283,7 +233,7 @@ mod tests {
 
     fn candidate(policy_reason: &str) -> ClassifierCandidate {
         ClassifierCandidate {
-            action: tool("fs.write", &["filesystem_write"], None),
+            action: tool("fs.write", None),
             policy_reason: policy_reason.to_owned(),
         }
     }

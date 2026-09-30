@@ -4,12 +4,13 @@ use std::path::Path;
 
 use agena_domain::{AccessKind, AccessSelector, NetworkTarget, PermissionDecision, PermissionMode};
 pub use agena_domain::{
-    NetworkPermissionConfig, PathAccessModes, PathAccessRuleConfig, PathPermissionConfig,
-    PermissionConfig, ToolPermissionConfig, ToolPermissionRules,
+    NetworkPermissionConfig, PathAccessModes, PathPermissionConfig, PermissionConfig,
+    ToolPermissionConfig, ToolPermissionRules,
 };
-use agena_plugin_host::sdk::ToolPermissionContract;
+use agena_plugin_host::sdk::ToolBehavior;
 use indexmap::IndexMap;
 
+use crate::command_class::CommandClass;
 use crate::permission::{
     NetworkPermissionPolicy, PermissionConfigError, PermissionPolicy, ToolPermissionPolicy,
 };
@@ -74,8 +75,7 @@ fn apply_path_permission_config(
             base.external_write_default = mode;
         }
     }
-    for (pattern, access) in &value.rules {
-        let modes = path_access_rule_to_modes(access)?;
+    for (pattern, modes) in &value.rules {
         let trimmed = pattern.trim();
         if trimmed.is_empty() {
             continue;
@@ -88,41 +88,6 @@ fn apply_path_permission_config(
         }
     }
     Ok(base)
-}
-
-fn path_access_rule_to_modes(
-    value: &PathAccessRuleConfig,
-) -> Result<PathAccessModes, PermissionConfigError> {
-    match value {
-        PathAccessRuleConfig::Modes(modes) => Ok(modes.clone()),
-        PathAccessRuleConfig::Shorthand(value) => path_access_shorthand(value),
-    }
-}
-
-fn path_access_shorthand(value: &str) -> Result<PathAccessModes, PermissionConfigError> {
-    let normalized = value.trim().to_ascii_lowercase().replace('-', "_");
-    let both = |mode| PathAccessModes {
-        read: Some(mode),
-        write: Some(mode),
-    };
-    match normalized.as_str() {
-        "allow" => Ok(both(PermissionMode::Allow)),
-        "auto" => Ok(both(PermissionMode::Auto)),
-        "ask" => Ok(both(PermissionMode::Ask)),
-        "deny" | "none" => Ok(both(PermissionMode::Deny)),
-        "read" | "read_only" | "ro" => Ok(PathAccessModes {
-            read: Some(PermissionMode::Allow),
-            write: Some(PermissionMode::Deny),
-        }),
-        "write" | "write_only" | "wo" => Ok(PathAccessModes {
-            read: Some(PermissionMode::Deny),
-            write: Some(PermissionMode::Allow),
-        }),
-        "read_write" | "rw" => Ok(both(PermissionMode::Allow)),
-        _ => Err(PermissionConfigError::InvalidPathAccessShorthand {
-            value: value.to_string(),
-        }),
-    }
 }
 
 fn apply_network_permission_config(
@@ -189,7 +154,9 @@ fn apply_tool_permission_rules(
                     if trimmed.is_empty() {
                         continue;
                     }
-                    if trimmed == "*" {
+                    if let Some(class) = command_class_keyword(trimmed) {
+                        base.add_bash_class_rule(class, trimmed, mode);
+                    } else if trimmed == "*" {
                         base.tool_modes.insert(tool_name.to_string(), mode);
                     } else {
                         base.add_bash_overlay_rule(trimmed, mode);
@@ -203,7 +170,9 @@ fn apply_tool_permission_rules(
                     if trimmed.is_empty() {
                         continue;
                     }
-                    if trimmed == "*" {
+                    if tool_name == "*" && tool_class_keyword(trimmed).is_some() {
+                        base.set_read_only_mode(Some(mode));
+                    } else if trimmed == "*" {
                         fallback = Some(mode);
                     }
                 }
@@ -214,6 +183,32 @@ fn apply_tool_permission_rules(
             }
         }
     }
+}
+
+/// Recognize a `tools.rules.<shell tool>` entry that names a command class
+/// instead of a command pattern. The keywords are the ones the configuration
+/// schema documents under `tools.rules`.
+fn command_class_keyword(value: &str) -> Option<CommandClass> {
+    match normalized_keyword(value).as_str() {
+        "no-op" | "no_op" | "noop" => Some(CommandClass::NoOp),
+        "routine" => Some(CommandClass::Routine),
+        "dangerous" => Some(CommandClass::Dangerous),
+        _ => None,
+    }
+}
+
+/// Recognize the read-only tool class keyword. It is written under the
+/// wildcard tool name, `tools.rules."*"`, because the class is a property of
+/// the tool's declared behavior rather than of its name.
+fn tool_class_keyword(value: &str) -> Option<()> {
+    match normalized_keyword(value).as_str() {
+        "read-only" | "read_only" | "readonly" => Some(()),
+        _ => None,
+    }
+}
+
+fn normalized_keyword(value: &str) -> String {
+    value.trim().to_ascii_lowercase().replace('_', "-")
 }
 
 fn sorted_rule_entries(entries: &IndexMap<String, PermissionMode>) -> Vec<(&str, PermissionMode)> {
@@ -332,27 +327,16 @@ impl ExecutionPrincipal {
         &self,
         tool_name: &str,
         command: Option<&str>,
-        contract: &ToolPermissionContract,
+        behavior: ToolBehavior,
     ) -> PermissionDecision {
-        if self.blocked {
-            return PermissionDecision::Deny {
-                reason: "execution principal is blocked".to_owned(),
-            };
-        }
-        let decision = self.tool_policy.check_tool(tool_name, command, contract);
-        match self.tool_ceiling_policy.as_ref() {
-            Some(ceiling) => {
-                restrictive_decision(decision, ceiling.check_tool(tool_name, command, contract))
-            }
-            None => decision,
-        }
+        self.authorize_tool_names(&[tool_name], command, behavior)
     }
 
     pub fn authorize_tool_names(
         &self,
         tool_names: &[&str],
         command: Option<&str>,
-        contract: &ToolPermissionContract,
+        behavior: ToolBehavior,
     ) -> PermissionDecision {
         if self.blocked {
             return PermissionDecision::Deny {
@@ -361,31 +345,18 @@ impl ExecutionPrincipal {
         }
         let decision = self
             .tool_policy
-            .check_tool_with_names(tool_names, command, contract);
+            .check_tool_with_names(tool_names, command, behavior);
         match self.tool_ceiling_policy.as_ref() {
             Some(ceiling) => restrictive_decision(
                 decision,
-                ceiling.check_tool_with_names(tool_names, command, contract),
+                ceiling.check_tool_with_names(tool_names, command, behavior),
             ),
             None => decision,
         }
     }
 
     pub fn authorize_tool_name(&self, tool_name: &str) -> PermissionDecision {
-        self.authorize_tool(tool_name, None, &ToolPermissionContract::default())
-    }
-
-    pub fn authorize_tool_contract(
-        &self,
-        tool_name: &str,
-        contract: &ToolPermissionContract,
-    ) -> PermissionDecision {
-        if self.blocked {
-            return PermissionDecision::Deny {
-                reason: "execution principal is blocked".to_owned(),
-            };
-        }
-        self.authorize_tool(tool_name, None, contract)
+        self.authorize_tool(tool_name, None, ToolBehavior::default())
     }
 
     pub fn authorize_network_connect(&self, target: &NetworkTarget) -> PermissionDecision {
@@ -457,11 +428,12 @@ mod permission_ceiling_tests {
 
         for tool in ["agena.web.search", "agena.web.fetch"] {
             assert_eq!(
-                principal.authorize_tool_contract(
+                principal.authorize_tool(
                     tool,
-                    &ToolPermissionContract {
+                    None,
+                    ToolBehavior {
                         read_only: true,
-                        ..ToolPermissionContract::default()
+                        ..ToolBehavior::default()
                     },
                 ),
                 PermissionDecision::Allow,
@@ -514,11 +486,12 @@ mod permission_ceiling_tests {
         );
         assert!(
             matches!(
-                principal.authorize_tool_contract(
+                principal.authorize_tool(
                     "agena.fs.read",
-                    &ToolPermissionContract {
+                    None,
+                    ToolBehavior {
                         read_only: true,
-                        ..ToolPermissionContract::default()
+                        ..ToolBehavior::default()
                     },
                 ),
                 PermissionDecision::Allow
@@ -568,10 +541,10 @@ mod permission_ceiling_tests {
             path: Some(PathPermissionConfig {
                 rules: IndexMap::from([(
                     "<unknown>/secret".to_string(),
-                    PathAccessRuleConfig::Modes(PathAccessModes {
+                    PathAccessModes {
                         read: Some(PermissionMode::Allow),
                         write: Some(PermissionMode::Allow),
-                    }),
+                    },
                 )]),
                 ..Default::default()
             }),
@@ -601,10 +574,10 @@ mod permission_ceiling_tests {
                 }),
                 rules: IndexMap::from([(
                     "secret/file.txt".to_string(),
-                    PathAccessRuleConfig::Modes(PathAccessModes {
+                    PathAccessModes {
                         read: Some(allow),
                         write: Some(allow),
-                    }),
+                    },
                 )]),
                 ..Default::default()
             }),
@@ -618,10 +591,10 @@ mod permission_ceiling_tests {
                 }),
                 rules: IndexMap::from([(
                     "secret/**".to_string(),
-                    PathAccessRuleConfig::Modes(PathAccessModes {
+                    PathAccessModes {
                         read: Some(deny),
                         write: Some(deny),
-                    }),
+                    },
                 )]),
                 ..Default::default()
             }),

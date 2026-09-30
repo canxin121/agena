@@ -3,7 +3,7 @@
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
-use crate::{PathAccessModes, PathAccessRuleConfig};
+use crate::PathAccessModes;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(default, deny_unknown_fields)]
@@ -14,7 +14,7 @@ pub struct PathPermissionConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub external: Option<PathAccessModes>,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
-    pub rules: IndexMap<String, PathAccessRuleConfig>,
+    pub rules: IndexMap<String, PathAccessModes>,
 }
 
 impl PathPermissionConfig {
@@ -35,6 +35,8 @@ impl PathPermissionConfig {
                 None => self.external = Some(external),
             }
         }
+        // `extend` is what makes a rule the user writes win over the built-in
+        // entry of the same pattern: both live in this one map.
         self.rules.extend(overlay.rules);
     }
 }

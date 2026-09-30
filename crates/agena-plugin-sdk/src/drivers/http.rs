@@ -330,6 +330,28 @@ impl HostClient for HttpCallbackHostClient {
         .await
     }
 
+    async fn check_path_permission(
+        &self,
+        request: crate::host_api::PathPermissionQuery,
+    ) -> crate::error::Result<crate::host_api::PermissionQuery> {
+        self.call(
+            method::HOST_PERMISSION_CHECK_PATH,
+            params_with_current_context(serde_json::json!({ "request": request })),
+        )
+        .await
+    }
+
+    async fn check_network_permission(
+        &self,
+        target: String,
+    ) -> crate::error::Result<crate::host_api::PermissionQuery> {
+        self.call(
+            method::HOST_PERMISSION_CHECK_NETWORK,
+            params_with_current_context(serde_json::json!({ "target": target })),
+        )
+        .await
+    }
+
     async fn request_config_reload(&self) -> crate::Result<HostConfigReloadRequestResponse> {
         self.call(
             method::HOST_CONFIG_RELOAD_REQUEST,

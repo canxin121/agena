@@ -233,27 +233,10 @@ fn plugin_capability(
         .map(|definition| {
             let registered =
                 RegisteredTool::new(key.clone(), definition).expect("bundled tool definition");
-            // Effects are derived from the permission contract (authority) and
-            // declared metadata tags; tags alone never carry authority.
-            let permissions = &registered.definition.permissions;
-            let read_specs = permissions
-                .input_paths
-                .iter()
-                .any(|spec| spec.kind == agena_plugin_host::sdk::PathKind::Read)
-                || permissions
-                    .path_access
-                    .iter()
-                    .any(|spec| spec.kind == agena_plugin_host::sdk::PathKind::Read);
-            let write_specs = permissions
-                .input_paths
-                .iter()
-                .any(|spec| spec.kind == agena_plugin_host::sdk::PathKind::Write)
-                || permissions
-                    .path_access
-                    .iter()
-                    .any(|spec| spec.kind == agena_plugin_host::sdk::PathKind::Write);
-            let network_specs =
-                !permissions.input_networks.is_empty() || !permissions.network_access.is_empty();
+            // Effects are derived from the tool's declared behavior and its
+            // tags. Both are self-description: they describe what a tool does
+            // for audit and UI purposes, not what the host will authorize.
+            let behavior = registered.definition.behavior;
             let declared = registered
                 .definition
                 .tags
@@ -261,28 +244,28 @@ fn plugin_capability(
                 .map(ToString::to_string)
                 .collect::<Vec<_>>();
             let mut effects = Vec::new();
-            if permissions.read_only {
+            if behavior.read_only {
                 effects.push("read_only".to_string());
             }
             if declared.iter().any(|tag| tag == "mutating") {
                 effects.push("mutating".to_string());
             }
-            if read_specs || declared.iter().any(|tag| tag == "filesystem_read") {
+            if declared.iter().any(|tag| tag == "filesystem_read") {
                 effects.push("filesystem_read".to_string());
             }
-            if write_specs || declared.iter().any(|tag| tag == "filesystem_write") {
+            if declared.iter().any(|tag| tag == "filesystem_write") {
                 effects.push("filesystem_write".to_string());
             }
-            if network_specs || declared.iter().any(|tag| tag == "network") {
+            if declared.iter().any(|tag| tag == "network") {
                 effects.push("network".to_string());
             }
             if declared.iter().any(|tag| tag == "internet") {
                 effects.push("internet".to_string());
             }
-            if permissions.shell {
+            if behavior.shell {
                 effects.push("shell".to_string());
             }
-            if permissions.interactive {
+            if behavior.interactive {
                 effects.push("interactive".to_string());
             }
             for metadata in ["snapshot", "scheduler", "subtask"] {

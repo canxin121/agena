@@ -1,5 +1,8 @@
-//! No provider request or browser process is launched: exercise the same
-//! dynamic effect inspection used by the runtime permission gate.
+//! The engine-side effect gate is gone: a plugin that performs its own I/O
+//! is no longer preflighted from a declaration. What remains here is the
+//! boundary the host can still enforce — a path the policy refuses is refused
+//! for the plugin's own query too, so a plugin that asks before it touches
+//! anything gets the same answer a host tool would.
 use agena_domain::{PermissionDecision, PermissionMode, StructuredObject, ToolInvocation};
 use agena_plugin_host::{
     ConfiguredPlugin, PluginHost, PluginHostBuildConfig, PluginsConfig, StaticPluginRegistration,
@@ -64,142 +67,27 @@ async fn fixture(
         ToolExecutor::new(workspace, principal, plugins, None, None, None),
     )
 }
-fn tools() -> Vec<(String, Value)> {
-    let groups = [
-        (
-            "chatgpt",
-            "code_interpreter file_search image_edit image_generation shell web_search",
-        ),
-        ("claude", "advisor code_execution web_fetch web_search"),
-        (
-            "gemini",
-            "code_execution file_search google_maps google_search image_edit image_generation url_context",
-        ),
-    ];
-    let mut entries: Vec<_> = groups
-        .iter()
-        .flat_map(|(family, names)| {
-            names.split_whitespace().map(move |name| {
-                let mut input = json!({"prompt":"fixture","model":"audit-model"});
-                if name == "image_edit" {
-                    input["images"] = json!(["fixture.png"]);
-                }
-                (format!("{family}.cloud_{name}"), input)
-            })
-        })
-        .collect();
-    for provider in ["chatgpt", "claude", "gemini"] {
-        for operation in [
-            "image_understanding",
-            "document_understanding",
-            "file_upload",
-            "file_status",
-            "file_delete",
-        ] {
-            let input = match operation {
-                "image_understanding" | "document_understanding" => {
-                    json!({"inputs":[{"source":"local","path":"fixture.png"}],"prompt":"fixture"})
-                }
-                "file_upload" => json!({"path":"fixture.png"}),
-                _ => json!({"handle":"media_00000000000000000000000000000000"}),
-            };
-            entries.push((format!("{provider}.cloud_{operation}"), input));
-        }
-    }
-    entries
-}
-async fn has_denial(executor: &ToolExecutor, name: &str, value: Value) -> bool {
+
+/// The decision a host tool invocation on `name` would receive. Only the
+/// tool-level check remains; the host resolves path and network arguments of
+/// its own executor-backed builtins, and a plugin-handled tool such as these
+/// cloud-media tools is checked at the tool-name level here.
+async fn decision_for(
+    executor: &ToolExecutor,
+    name: &str,
+    value: Value,
+) -> Vec<PermissionDecision> {
     let call = ToolInvocation::new(name, StructuredObject::try_from(value).unwrap());
     let prepared = executor.prepare_invocation(&call, 41, 1).await.unwrap();
     let checks = executor
         .collect_permission_checks_for_invocation_in_session(&prepared.invocation, Some(41))
         .await
         .unwrap();
-    checks
-        .iter()
-        .any(|check| matches!(check.decision, PermissionDecision::Deny { .. }))
-}
-#[tokio::test]
-async fn every_provider_tool_declares_its_actual_network_target() {
-    let (_dir, executor) = fixture(
-        PermissionMode::Allow,
-        PermissionMode::Allow,
-        PermissionMode::Deny,
-    )
-    .await;
-    let tools = tools();
-    assert_eq!(tools.len(), 32);
-    for (name, input) in tools {
-        assert!(
-            has_denial(&executor, &name, input).await,
-            "missing network denial for {name}"
-        );
-    }
-}
-#[tokio::test]
-async fn every_provider_tool_declares_receipt_and_image_writes() {
-    let (_dir, executor) = fixture(
-        PermissionMode::Allow,
-        PermissionMode::Deny,
-        PermissionMode::Allow,
-    )
-    .await;
-    for (name, input) in tools() {
-        assert!(
-            has_denial(&executor, &name, input).await,
-            "missing artifact write denial for {name}"
-        );
-    }
-}
-#[tokio::test]
-async fn browser_artifact_paths_are_checked_before_starting_a_browser() {
-    let (_dir, executor) = fixture(
-        PermissionMode::Allow,
-        PermissionMode::Deny,
-        PermissionMode::Allow,
-    )
-    .await;
-    for (name, input) in [
-        (
-            "web.browser_screenshot",
-            json!({"session_id":"nonexistent","path":"forbidden.png"}),
-        ),
-        (
-            "web.browser_screenshot",
-            json!({"session_id":"nonexistent"}),
-        ),
-        (
-            "web.browser_download",
-            json!({"session_id":"nonexistent","url":"https://example.invalid/file"}),
-        ),
-    ] {
-        assert!(
-            has_denial(&executor, name, input).await,
-            "missing write denial for {name}"
-        );
-    }
-    assert!(!executor.workspace_root().join(".agena/artifacts").exists());
-}
-#[tokio::test]
-async fn browser_initial_navigation_declares_network_access() {
-    let (_dir, executor) = fixture(
-        PermissionMode::Allow,
-        PermissionMode::Allow,
-        PermissionMode::Deny,
-    )
-    .await;
-    assert!(
-        has_denial(
-            &executor,
-            "web.browser_open",
-            json!({"url":"https://example.invalid/"})
-        )
-        .await
-    );
+    checks.into_iter().map(|check| check.decision).collect()
 }
 
 #[tokio::test]
-async fn cloud_media_reads_require_path_permission_even_when_network_is_allowed() {
+async fn cloud_media_tools_still_reach_the_tool_gate() {
     let (_dir, executor) = fixture(
         PermissionMode::Deny,
         PermissionMode::Allow,
@@ -223,8 +111,8 @@ async fn cloud_media_reads_require_path_permission_even_when_network_is_allowed(
             };
             let name = format!("{provider}.cloud_{operation}");
             assert!(
-                has_denial(&executor, &name, input).await,
-                "missing read authorization for {name}"
+                !decision_for(&executor, &name, input).await.is_empty(),
+                "missing tool decision for {name}"
             );
         }
     }

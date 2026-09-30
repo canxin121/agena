@@ -47,22 +47,4 @@ pub(crate) struct ExitSnapshotCommandInput {
     pub(crate) discard_changes: bool,
 }
 
-pub(crate) fn snapshot_enter_permission_paths(
-    workspace_root: &Path,
-    input: &EnterSnapshotCommandInput,
-) -> SdkResult<Vec<PathRequest>> {
-    match input {
-        EnterSnapshotCommandInput::Existing { path } if !path.trim().is_empty() => Ok(vec![
-            PathRequest::read(path.clone()),
-            PathRequest::write(path.clone()),
-        ]),
-        EnterSnapshotCommandInput::Existing { .. } | EnterSnapshotCommandInput::New { .. } => {
-            let snapshots_dir =
-                agena_runtime_tools::project_state_dir(workspace_root).join("snapshots");
-            Ok(vec![PathRequest::write(
-                snapshots_dir.to_string_lossy().to_string(),
-            )])
-        }
-    }
-}
-use super::{Deserialize, JsonSchema, Path, PathRequest, SdkResult, Serialize};
+use super::{Deserialize, JsonSchema, Serialize};

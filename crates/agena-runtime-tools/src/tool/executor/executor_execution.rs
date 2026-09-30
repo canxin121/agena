@@ -116,11 +116,10 @@ impl ToolExecutor {
             .as_ref()
             .map(|definition| invocation_effective_tags(definition, invocation))
             .unwrap_or_default();
-        let contract = definition
+        let behavior = definition
             .as_ref()
-            .map(|definition| definition.definition.permissions.clone())
+            .map(|definition| definition.definition.behavior)
             .unwrap_or_default();
-
         let hooked = self
             .plugins
             .dispatch_tool_before(
@@ -130,7 +129,7 @@ impl ToolExecutor {
                     call_id,
                     workspace_root: self.workspace_root.to_string_lossy().to_string(),
                     tags: effective_tags,
-                    contract: contract.clone(),
+                    behavior,
                     input: input_value,
                     title_override: None,
                     metadata: Default::default(),
@@ -158,9 +157,13 @@ impl ToolExecutor {
         })
     }
 
-    /// Async permission preflight, including plugin-provided dynamic path and
-    /// network requests. It never blocks a Tokio worker waiting on transport
-    /// I/O.
+    /// Permission preflight for one invocation.
+    ///
+    /// The host's own tools are authorized here, including their path and
+    /// network arguments. A plugin that performs its own I/O is responsible for
+    /// asking the host before it touches anything (see
+    /// `HostClient::check_path_permission`); the host no longer extracts path
+    /// or network effects from plugin declarations, because there are none.
     pub async fn collect_permission_checks_for_invocation_in_session(
         &self,
         invocation: &ToolInvocation,
@@ -176,52 +179,26 @@ impl ToolExecutor {
         }
         let (tool_name, decision) = self.authorize_invocation(invocation)?;
         let command = shell_command_from_invocation(invocation);
-        let contract = self
+        let behavior = self
             .invocation_definition(invocation)
-            .map(|definition| definition.definition.permissions.clone())
+            .map(|definition| definition.definition.behavior)
             .unwrap_or_default();
         let action = crate::permission::tool_action(
             tool_name.as_str(),
             command.as_deref(),
-            &contract,
+            behavior,
             Some(&self.principal.tool_policy),
         );
-        let mut checks = vec![ToolPermissionCheck {
-            action,
-            decision,
-            contract: contract.clone(),
-        }];
+        let mut checks = vec![ToolPermissionCheck { action, decision }];
 
         if let Some(inspector) = self.permission_inspector.as_ref() {
             checks.extend(inspector.additional_checks(invocation, &self.principal)?);
         }
 
         if let Some(resolution) = self.plugin_resolution_for_invocation(invocation) {
-            let input_value = resolved_tool_input_value(&resolution, invocation);
-            if resolution.definition.permissions.shell {
-                self.collect_declared_filesystem_effect_checks(
-                    &mut checks,
-                    tool_name.as_str(),
-                    &input_value,
-                )?;
-            }
-            self.collect_declared_path_checks(
-                &mut checks,
-                &input_value,
-                &resolution.definition.permissions.input_paths,
-                &resolution.definition.permissions.path_access,
-            )?;
-            self.collect_dynamic_path_checks_async(&mut checks, &resolution, &input_value)
-                .await?;
-            self.collect_declared_network_checks(
-                &mut checks,
-                &input_value,
-                &resolution.definition.permissions.input_networks,
-                &resolution.definition.permissions.network_access,
-            )?;
-            self.collect_dynamic_network_checks_async(&mut checks, &resolution, &input_value)
-                .await?;
+            self.collect_builtin_effect_checks(&mut checks, &resolution, invocation)?;
         }
+
         Ok(checks)
     }
 
@@ -545,6 +522,5 @@ use super::{
     ToolInvocation, ToolInvocationExecution, ToolOutput, ToolPayloadInput, ToolPermissionCheck,
     apply_patch_execution_from_tool_output, bash, invocation_effective_tags, invocation_input_json,
     invocation_name, parse_invocation_from_json, plugin_invocation_name,
-    resolved_plugin_invocation_input_value, resolved_tool_input_value,
-    shell_command_from_invocation,
+    resolved_plugin_invocation_input_value, shell_command_from_invocation,
 };

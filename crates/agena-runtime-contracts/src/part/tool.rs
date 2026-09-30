@@ -51,7 +51,7 @@ pub struct ShellCommandInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[arg(path.read, fallback = "")]
+    #[arg(trim, non_empty_if_present)]
     pub workdir: Option<String>,
     /// Files and directories the command may read. Declare only the actual
     /// files/directories affected - never the executables, interpreters, or
@@ -212,7 +212,7 @@ pub struct ShellMonitorInput {
 pub struct ReadToolInput {
     /// File or directory path to read. Relative paths are resolved from the
     /// workspace root.
-    #[arg(trim, non_empty, path.read)]
+    #[arg(trim, non_empty)]
     pub file_path: String,
     /// 1-based offset for file lines or directory entries.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -233,7 +233,7 @@ pub struct GlobToolInput {
     pub pattern: String,
     /// Optional base path. Defaults to the workspace root.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[arg(trim, non_empty_if_present, path.read, fallback = "")]
+    #[arg(trim, non_empty_if_present)]
     pub path: Option<String>,
     /// Number of matching paths to skip before returning results.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -256,7 +256,7 @@ pub struct GrepToolInput {
     /// Optional target: a directory to search recursively, or a single file.
     /// Defaults to the workspace root.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[arg(trim, non_empty_if_present, path.read, fallback = "")]
+    #[arg(trim, non_empty_if_present)]
     pub path: Option<String>,
     /// Optional glob filter applied before matching lines.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -266,15 +266,6 @@ pub struct GrepToolInput {
     /// to ripgrep-compatible ignore rules.
     #[serde(default)]
     pub include_ignored: bool,
-}
-
-/// Input for the delegated `task` subagent command.
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum TaskAccess {
-    #[default]
-    Inherit,
-    ReadOnly,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
@@ -293,9 +284,6 @@ pub struct TaskToolInput {
     pub description: String,
     /// Full instruction payload for the delegated subtask.
     pub prompt: String,
-    /// Hard capability boundary for this delegated Agena instance.
-    #[serde(default)]
-    pub access: TaskAccess,
     /// Run the subtask in the background (default false). When false (default)
     /// the subtask runs inline and this call returns its final result before
     /// the tool call returns. When true, the tool returns immediately with a
@@ -726,7 +714,7 @@ impl Default for CronHistoryToolInput {
 #[input(trim("file_path"), non_empty("file_path"))]
 /// Input of an LSP position query.
 pub struct LspPositionToolInput {
-    #[arg(path.read)]
+    #[arg(trim, non_empty)]
     pub file_path: String,
     pub line: u32,
     pub character: u32,
@@ -769,7 +757,7 @@ pub struct LspHoverToolInput {
 #[input(trim("file_path"), non_empty("file_path"))]
 /// Input of the LSP diagnostics tool.
 pub struct LspDiagnosticsToolInput {
-    #[arg(path.read)]
+    #[arg(trim, non_empty)]
     pub file_path: String,
 }
 

@@ -31,24 +31,24 @@ pub use crate::host_api::{
     HostStorageSetRequest, HostStorageVisibility, HostThemeListResponse, HostThemePalette,
     HostThemeRegisterRequest, HostThemeRemoveRequest, HostThemeRemoveResponse,
     HostToolMutationResponse, HostToolRegisterRequest, HostToolRemoveRequest,
-    HostToolUpdateRequest, LogLevel, NoopHostClient, PluginNotifyAction, PluginNotifyActionTarget,
-    PluginNotifyRequest, ToolRegistryChangeKind, ToolRegistryChangedEvent,
+    HostToolUpdateRequest, LogLevel, NoopHostClient, PathPermissionQuery, PermissionQuery,
+    PluginNotifyAction, PluginNotifyActionTarget, PluginNotifyRequest, ToolRegistryChangeKind,
+    ToolRegistryChangedEvent,
 };
 pub use crate::macro_support::{schema_example_texts, schema_usage_text, service_method_for};
 pub use crate::manifest::{
-    ContributionKind, EmptyPluginSettings, HookSubscription, InputNetworkSpec, InputPathSpec,
-    MAX_JSON_ESCAPE_BYTES, MAX_JSON_ESCAPE_DEPTH, NetworkAccessSpec, OperationDiscoverability,
-    PathAccessSpec, PathInputKind, PathKind, PluginDisplayContent, PluginDisplayContribution,
-    PluginHostEffect, PluginManifest, PluginOperationDefinition, PluginOperationDiagnostic,
-    PluginOperationInvokeInput, PluginOperationResult, PluginOperationStatus,
-    PluginOperationTarget, PluginServiceDeclarations, PluginServiceExport, PluginServiceImport,
-    PluginServiceInvokeInput, PluginServiceInvokeOutput, PluginServiceMethod,
+    ContributionKind, EmptyPluginSettings, HookSubscription, MAX_JSON_ESCAPE_BYTES,
+    MAX_JSON_ESCAPE_DEPTH, OperationDiscoverability, PathInputKind, PathKind, PluginDisplayContent,
+    PluginDisplayContribution, PluginHostEffect, PluginManifest, PluginOperationDefinition,
+    PluginOperationDiagnostic, PluginOperationInvokeInput, PluginOperationResult,
+    PluginOperationStatus, PluginOperationTarget, PluginServiceDeclarations, PluginServiceExport,
+    PluginServiceImport, PluginServiceInvokeInput, PluginServiceInvokeOutput, PluginServiceMethod,
     PluginSkillDefinition, PluginSurfaceContributions, PluginTerminalColor,
     PluginTerminalContributions, PluginTerminalThemeColors, PluginTerminalThemePalette,
     SettingsConstraints, SettingsContract, SettingsNode, SettingsNodeKind, SettingsOption,
-    SettingsVariant, ToolContract, ToolDefinition, ToolDocs, ToolInput, ToolModelSurface,
-    ToolResultPolicy, ToolResultRenderKind, ToolRuntimePolicy, ToolStreamingMode, ToolTag,
-    TransportKind, normalize_tool_tag_name,
+    SettingsVariant, ToolBehavior, ToolContract, ToolDefinition, ToolDocs, ToolInput,
+    ToolModelSurface, ToolResultPolicy, ToolResultRenderKind, ToolRuntimePolicy, ToolStreamingMode,
+    ToolTag, TransportKind, normalize_tool_tag_name,
 };
 pub use crate::plugin::{InitContext, InitOutcome, Plugin, PluginSettings, ToolStreamSink};
 pub use crate::service_client::{

@@ -42,21 +42,19 @@ impl WorkflowPlugin {
                     "list" | "search" | "tags" | "help" | "call"
                 );
             }
-            "agena.tasks" if input.tool_name() == "run" => {
-                return TaskToolInput::parse_input(input.input.clone())
-                    .is_ok_and(|task| task.access == TaskAccess::ReadOnly);
-            }
             _ => {}
         }
-        // Planning eligibility reads the permission contract, never tags:
-        // tags are metadata for discovery/UI and carry no authority.
-        if input.contract.shell {
+        // Planning eligibility reads the tool's declared behavior and tags.
+        // Both are self-description: they decide what planning may run, not
+        // what the host will authorize.
+        let behavior = input.behavior;
+        if behavior.shell {
             return true;
         }
-        if input.contract.read_only && !input.contract.shell && !input.contract.interactive {
+        if behavior.read_only && !behavior.shell && !behavior.interactive {
             return true;
         }
-        if input.contract.interactive {
+        if behavior.interactive {
             return true;
         }
         input.tags.iter().any(|tag| {
@@ -482,20 +480,6 @@ impl WorkflowPlugin {
             .await
     }
 
-    pub(crate) async fn permission_snapshot_enter(
-        &self,
-        args: &EnterSnapshotCommandInput,
-    ) -> SdkResult<Vec<PathRequest>> {
-        snapshot_enter_permission_paths(self.workspace_root()?, args)
-    }
-
-    pub(crate) async fn permission_snapshot_exit(
-        &self,
-        _args: &ExitSnapshotCommandInput,
-    ) -> SdkResult<Vec<PathRequest>> {
-        Ok(Vec::new())
-    }
-
     pub(crate) async fn invoke_ask_user(
         &self,
         input: &AskUserToolInput,
@@ -546,10 +530,6 @@ impl WorkflowPlugin {
         let response = host
             .run_subtask(RunSubtaskRequest {
                 parent_session_id: None,
-                access: match input.access {
-                    TaskAccess::Inherit => RunSubtaskAccess::Inherit,
-                    TaskAccess::ReadOnly => RunSubtaskAccess::ReadOnly,
-                },
                 description: input.description.clone(),
                 prompt: input.prompt.clone(),
                 skills: input.skills.clone(),
@@ -599,16 +579,10 @@ impl WorkflowPlugin {
                 response.task_id
             ),
         };
-        let access = match input.access {
-            TaskAccess::Inherit => "inherit",
-            TaskAccess::ReadOnly => "read_only",
-        };
         let mut view =
             ToolExecutionView::simple(format!("Task {}", input.description), status, output_text);
         view.metadata
             .insert("description".to_string(), input.description.clone());
-        view.metadata
-            .insert("access".to_string(), access.to_string());
         view.metadata
             .insert("task_id".to_string(), response.task_id.clone());
         view.metadata
@@ -633,7 +607,6 @@ impl WorkflowPlugin {
             task_id: response.task_id,
             session_id: response.session_id,
             parent_session_id: response.parent_session_id,
-            access: access.to_string(),
             status: status.to_string(),
             resumed: response.resumed,
             final_text: response.final_text,
@@ -1252,14 +1225,14 @@ impl WorkflowPlugin {
 use super::{
     AskUserRequest, AskUserToolInput, AvailablePluginRecord, AvailableToolRecord, BTreeMap,
     CommandBeforeInput, EnterSnapshotCommandInput, ExitSnapshotCommandInput, HashMap, HashSet,
-    HostEnterSnapshotRequest, HostExitSnapshotRequest, PathRequest, PlanEditInput, PlanEditTarget,
-    PlanGetInput, PlanPhaseInput, PlanReviewInput, PlanReviewKind, PlanSetInput, PluginError,
-    RunSubtaskAccess, RunSubtaskModelSelection, RunSubtaskRequest, RunSubtaskStatus, SdkResult,
-    TaskAccess, TaskToolInput, ToolApiHelpInput, ToolApiListInput, ToolApiSearchInput,
-    ToolApiTagsInput, ToolBeforeInput, ToolDescriptor, ToolExecutionView, ToolInvokeOutput,
-    ToolPayloadExecution, ToolPayloadOutput, ToolTag, ToolTagRecord, WorkflowPlan,
-    WorkflowPlanPhase, WorkflowPlanStep, WorkflowPlanStepStatus, WorkflowPlugin, ask_user,
-    compact_tool_summary, search_tools, snapshot_enter_permission_paths, tags_summary,
+    HostEnterSnapshotRequest, HostExitSnapshotRequest, PlanEditInput, PlanEditTarget, PlanGetInput,
+    PlanPhaseInput, PlanReviewInput, PlanReviewKind, PlanSetInput, PluginError,
+    RunSubtaskModelSelection, RunSubtaskRequest, RunSubtaskStatus, SdkResult, TaskToolInput,
+    ToolApiHelpInput, ToolApiListInput, ToolApiSearchInput, ToolApiTagsInput, ToolBeforeInput,
+    ToolDescriptor, ToolExecutionView, ToolInvokeOutput, ToolPayloadExecution, ToolPayloadOutput,
+    ToolTag, ToolTagRecord, WorkflowPlan, WorkflowPlanPhase, WorkflowPlanStep,
+    WorkflowPlanStepStatus, WorkflowPlugin, ask_user, compact_tool_summary, search_tools,
+    tags_summary,
 };
 
 fn validated_search_queries(

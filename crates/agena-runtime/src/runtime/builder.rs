@@ -1256,26 +1256,24 @@ impl agena_runtime::RuntimeToolExecutionService for AgenaRuntime {
             .into_iter()
             .zip(names)
             .map(|(tool, name)| {
-                let permissions = &tool.definition.permissions;
-                let has_write_access = permissions
-                    .input_paths
-                    .iter()
-                    .any(|path| path.kind == agena_domain::PathKind::Write)
-                    || permissions
-                        .path_access
+                let behavior = tool.definition.behavior;
+                let tags = tool.effective_tags();
+                let interactive = behavior.interactive
+                    || tags
                         .iter()
-                        .any(|path| path.kind == agena_domain::PathKind::Write);
-                let open_world = !permissions.input_networks.is_empty()
-                    || !permissions.network_access.is_empty();
-                let interactive = permissions.interactive
-                    || tool.has_tag(agena_plugin_host::sdk::ToolTag::Interactive);
-                let read_only = permissions.read_only
-                    && !permissions.shell
-                    && !permissions.mutating
-                    && !has_write_access
-                    && !open_world
+                        .any(|tag| matches!(tag, agena_plugin_host::sdk::ToolTag::Interactive));
+                let read_only = behavior.read_only
+                    && !behavior.shell
+                    && !behavior.mutating
                     && !interactive
-                    && !permissions.task;
+                    && !behavior.task;
+                let open_world = tags.iter().any(|tag| {
+                    matches!(
+                        tag,
+                        agena_plugin_host::sdk::ToolTag::Network
+                            | agena_plugin_host::sdk::ToolTag::Fetch
+                    )
+                });
                 let output_schema = tool.output_schema();
                 let output_schema = (!output_schema.is_null()).then_some(output_schema);
                 agena_runtime::RuntimeToolDescriptor {
@@ -1287,9 +1285,17 @@ impl agena_runtime::RuntimeToolExecutionService for AgenaRuntime {
                     output_schema,
                     interactive,
                     read_only,
-                    destructive: permissions.shell || permissions.mutating || has_write_access,
+                    destructive: behavior.shell
+                        || behavior.mutating
+                        || tags.iter().any(|tag| {
+                            matches!(
+                                tag,
+                                agena_plugin_host::sdk::ToolTag::Mutate
+                                    | agena_plugin_host::sdk::ToolTag::Execute
+                            )
+                        }),
                     open_world,
-                    task: permissions.task,
+                    task: behavior.task,
                     plugin_id: tool.plugin_full_name(),
                 }
             })

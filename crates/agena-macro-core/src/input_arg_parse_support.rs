@@ -4,15 +4,11 @@ use std::collections::BTreeSet;
 
 use syn::{Attribute, Field, Fields, Meta, Result, Variant};
 
-use super::input_arg_output_support::{
-    ensure_unique_field_arg_names, set_field_arg_network, set_field_arg_path_kind,
-    set_field_arg_picker,
-};
+use super::input_arg_output_support::{ensure_unique_field_arg_names, set_field_arg_picker};
 use super::{
-    ArgAttrArgs, PluginArgConfig, PluginNetworkSemantic, PluginPathPermissionKind,
-    PluginPickerKind, SerdeRenameRule, ensure_arg_permission_locator_has_semantic,
-    expr_array_lit_strs, expr_array_values, expr_lit_str, expr_lit_usize, field_has_serde_default,
-    validate_format_lit, validate_input_jsonpath_lit, validate_pattern_lit,
+    ArgAttrArgs, PluginArgConfig, PluginPickerKind, SerdeRenameRule, expr_array_lit_strs,
+    expr_array_values, expr_lit_str, expr_lit_usize, field_has_serde_default, validate_format_lit,
+    validate_pattern_lit,
 };
 use crate::input_arg_support::FieldArgConfig;
 
@@ -77,27 +73,6 @@ fn parse_input_field_arg_config_attr(attr: &Attribute, config: &mut FieldArgConf
                 }
             }
             ("alias", Some(value)) => config.aliases.push(expr_lit_str(&value, "alias")?),
-            ("path.read", None) => {
-                set_field_arg_path_kind(config, PluginPathPermissionKind::Read, &item.first_ident)?
-            }
-            ("path.write", None) => {
-                set_field_arg_path_kind(config, PluginPathPermissionKind::Write, &item.first_ident)?
-            }
-            ("network", None) => {
-                set_field_arg_network(config, PluginNetworkSemantic::Network, &item.first_ident)?
-            }
-            ("network.url", None) => {
-                set_field_arg_network(config, PluginNetworkSemantic::Url, &item.first_ident)?
-            }
-            ("network.host", None) => {
-                set_field_arg_network(config, PluginNetworkSemantic::Host, &item.first_ident)?
-            }
-            ("network.internet", None) => {
-                set_field_arg_network(config, PluginNetworkSemantic::Internet, &item.first_ident)?
-            }
-            ("network.private", None) => {
-                set_field_arg_network(config, PluginNetworkSemantic::Private, &item.first_ident)?
-            }
             ("optional", None) => config.optional = true,
             ("secret", None) => config.secret = true,
             ("file", None) => {
@@ -106,12 +81,6 @@ fn parse_input_field_arg_config_attr(attr: &Attribute, config: &mut FieldArgConf
             ("dir", None) => {
                 set_field_arg_picker(config, PluginPickerKind::Dir, &item.first_ident)?
             }
-            ("jsonpath", Some(value)) => {
-                let jsonpath = expr_lit_str(&value, "jsonpath")?;
-                validate_input_jsonpath_lit(&jsonpath)?;
-                config.jsonpath = Some(jsonpath);
-            }
-            ("fallback", Some(value)) => config.fallback = Some(expr_lit_str(&value, "fallback")?),
             ("example", Some(value)) => config.example = Some(value),
             ("trim_suffix", Some(value)) => {
                 config.trim_suffix = Some(expr_lit_str(&value, "trim_suffix")?)
@@ -314,11 +283,6 @@ fn parse_input_field_arg_config_attr(attr: &Attribute, config: &mut FieldArgConf
             }
         }
     }
-    ensure_arg_permission_locator_has_semantic(
-        config.jsonpath.as_ref(),
-        config.fallback.as_ref(),
-        config.path.is_some() || config.network.is_some(),
-    )?;
     Ok(())
 }
 
@@ -473,11 +437,7 @@ pub fn arg_config_has_constraints(config: &FieldArgConfig) -> bool {
         || !config.exactly_one_of.is_empty()
         || !config.at_least_one_of.is_empty()
         || !config.distinct_trimmed_within.is_empty()
-        || config.path.is_some()
-        || config.network.is_some()
         || config.optional
-        || config.jsonpath.is_some()
-        || config.fallback.is_some()
         || config.example.is_some()
         || config.secret
         || config.picker.is_some()

@@ -292,7 +292,6 @@ pub enum ToolPayloadOutput {
         task_id: String,
         session_id: i64,
         parent_session_id: i64,
-        access: String,
         status: String,
         #[serde(default, skip_serializing_if = "is_false")]
         resumed: bool,

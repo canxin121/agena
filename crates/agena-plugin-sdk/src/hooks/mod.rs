@@ -9,7 +9,6 @@ pub mod event;
 pub mod notification;
 #[path = "command.rs"]
 pub mod operation;
-pub mod permission;
 pub mod prompt;
 pub mod provider;
 pub mod session;
@@ -23,7 +22,6 @@ pub use config::*;
 pub use event::*;
 pub use notification::*;
 pub use operation::*;
-pub use permission::*;
 pub use prompt::*;
 pub use provider::*;
 pub use session::*;

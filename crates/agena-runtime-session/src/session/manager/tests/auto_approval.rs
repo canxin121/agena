@@ -122,7 +122,6 @@ fn write_candidate() -> agena_permission::ClassifierCandidate {
     agena_permission::ClassifierCandidate {
         action: agena_domain::ActionSpec::Tool {
             tool_name: "fs.write".to_owned(),
-            contract: agena_domain::ToolPermissionContract::default(),
             command: None,
         },
         policy_reason: "tool is eligible for automatic approval".to_owned(),
@@ -139,8 +138,23 @@ async fn classify(
     SessionManager,
     i64,
 ) {
+    classify_with_permission_config(replies, agena_domain::PermissionConfig::default()).await
+}
+
+/// As [`classify`], but with the executor's class defaults compiled from
+/// `permission` - which is what makes the prompt's conditional path promises
+/// observable.
+async fn classify_with_permission_config(
+    replies: Vec<ApprovalReply>,
+    permission: agena_domain::PermissionConfig,
+) -> (
+    agena_permission::ClassifiedCandidate,
+    Vec<CompletionRequest>,
+    SessionManager,
+    i64,
+) {
     let provider = Arc::new(ApprovalProvider::new(replies));
-    let manager = manager_with_provider(provider.clone()).await;
+    let manager = manager_with_permission(provider.clone(), permission).await;
     let session = create_with_model(&manager, "auto approval", "approval", "approval-model").await;
     let state = manager.execution_state();
     let mut outcomes = manager
@@ -186,13 +200,63 @@ async fn the_classifier_request_declares_the_verdict_tools_and_keeps_them_enable
     assert!(request.response_format.is_none());
     assert!(request.provider_native_tools.bindings().is_empty());
     let system = request.system.as_deref().expect("system prompt");
-    assert!(system.contains(agena_permission::AUTO_APPROVAL_SYSTEM_PROMPT));
+    // The built-in defaults render the prompt with every path promise in place.
+    assert_eq!(
+        system,
+        agena_permission::auto_approval_system_prompt(
+            &agena_permission::PathClassPromptFlags::all_allowed()
+        )
+    );
+    assert!(system.contains("system temporary directory"));
+    assert!(system.contains("managed project-state directory"));
     assert!(system.contains("approve_action"));
     assert!(system.contains("block_action"));
     assert!(
         !system.contains("shouldBlock"),
         "the fixed-format JSON contract must be gone from the prompt"
     );
+}
+
+#[tokio::test]
+async fn an_unguarded_path_class_is_not_promised_to_the_approval_model() {
+    // Narrowing the rule that covers the temp directory takes temp paths away
+    // from the static layer, so the prompt must stop telling the model that
+    // writes there need no thought - otherwise the setting would be defeated by
+    // the model's own instructions.
+    let mut permission = agena_domain::PermissionConfig::global_default();
+    let path = permission
+        .path
+        .as_mut()
+        .expect("the global default keeps a path section");
+    for pattern in ["<tmp>", "<tmp>/**"] {
+        path.rules.insert(
+            pattern.to_owned(),
+            agena_domain::PathAccessModes {
+                read: None,
+                write: Some(agena_domain::PermissionMode::Ask),
+            },
+        );
+    }
+    let (_, requests, _, _) = classify_with_permission_config(
+        vec![ApprovalReply::Verdict {
+            name: "approve_action",
+            arguments_json: r#"{"reason":"routine test run"}"#,
+        }],
+        permission,
+    )
+    .await;
+    let system = requests
+        .first()
+        .expect("one classifier request")
+        .system
+        .as_deref()
+        .expect("system prompt");
+    assert!(
+        !system.contains("system temporary directory"),
+        "an unguarded path class must not be promised to the model"
+    );
+    // The other class is unchanged, so its promise stays.
+    assert!(system.contains("managed project-state directory"));
 }
 
 #[tokio::test]

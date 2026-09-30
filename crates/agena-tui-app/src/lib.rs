@@ -52,8 +52,8 @@ use agena_domain::ModelRef;
 use agena_domain::PermissionRequest;
 use agena_domain::get_json_path;
 use agena_domain::{
-    PathAccessModes, PathAccessRuleConfig, PermissionAction, PermissionConfig, PermissionMode,
-    PermissionReplyKind, PermissionScope, ToolPermissionRules, UserInputReplyKind,
+    PathAccessModes, PermissionAction, PermissionConfig, PermissionMode, PermissionReplyKind,
+    PermissionScope, ToolPermissionRules, UserInputReplyKind,
 };
 use agena_domain::{UserInputQuestion, UserInputReply, UserInputRequest};
 use agena_plugin_sdk::AttachmentKind;

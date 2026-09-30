@@ -61,8 +61,7 @@ use crate::sdk::{
     ProviderListInput, ProviderListPatch, SessionEndInput, SessionStartInput, SessionStartPatch,
     ShellEnvInput, ShellEnvPatch, ToolAfterInput, ToolAfterPatch, ToolBeforeInput, ToolBeforePatch,
     ToolDefinitionInput, ToolDefinitionPatch, ToolFailureInput, ToolInvokeInput, ToolInvokeOutput,
-    ToolKey, ToolPermissionNetworksInput, ToolPermissionPathsInput, ToolStreamChunk, ToolStreamEnd,
-    UserPromptSubmitInput, UserPromptSubmitPatch,
+    ToolKey, ToolStreamChunk, ToolStreamEnd, UserPromptSubmitInput, UserPromptSubmitPatch,
 };
 use crate::services::{PluginServiceBinding, PluginServiceBindingKey};
 use crate::transport::PluginTransport;
@@ -939,6 +938,20 @@ struct HostUnsubscribeParams {
 struct HostConfigReadParams {
     #[serde(default)]
     path: Option<String>,
+    #[serde(rename = "context", default)]
+    _context: Option<HostCallbackContext>,
+}
+
+#[derive(serde::Deserialize)]
+struct HostPermissionCheckPathParams {
+    request: crate::sdk::host_api::PathPermissionQuery,
+    #[serde(rename = "context", default)]
+    _context: Option<HostCallbackContext>,
+}
+
+#[derive(serde::Deserialize)]
+struct HostPermissionCheckNetworkParams {
+    target: String,
     #[serde(rename = "context", default)]
     _context: Option<HostCallbackContext>,
 }

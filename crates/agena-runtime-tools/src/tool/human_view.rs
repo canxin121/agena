@@ -4018,7 +4018,6 @@ impl BuiltinHumanRenderer {
                         ("task_id", "Task"),
                         ("status", "Status"),
                         ("description", "Description"),
-                        ("access", "Access"),
                         ("model_id", "Model"),
                         ("session_id", "Session"),
                     ],
@@ -4043,7 +4042,6 @@ impl BuiltinHumanRenderer {
                 ("Task", Self::object_text(task, "task_id")),
                 ("Description", Self::object_text(task, "description")),
                 ("Status", Self::object_text(task, "status")),
-                ("Access", Self::object_text(task, "access")),
                 ("Session", Self::object_text(task, "session_id")),
                 ("Model", Self::object_text(task, "model_id")),
                 ("Error", Self::object_text(task, "error")),
@@ -5146,7 +5144,6 @@ impl BuiltinHumanRenderer {
                     task_id,
                     session_id,
                     parent_session_id,
-                    access,
                     status,
                     resumed,
                     final_text,
@@ -5175,7 +5172,6 @@ impl BuiltinHumanRenderer {
                         ("Task", task_id),
                         ("Session", session_id.to_string()),
                         ("Parent session", parent_session_id.to_string()),
-                        ("Access", access),
                         ("Resumed", resumed.to_string()),
                     ];
                     if let Some(provider) = model_provider_id {
@@ -6895,7 +6891,7 @@ mod tests {
             ("fs.grep", json!({"matches": 1, "results": ["a.rs:1: hit"]})),
             (
                 "tasks.run",
-                json!({"task_id":"t","session_id":1,"parent_session_id":0,"access":"read","status":"completed","model_feedback":{"kind":"invalid_input"}}),
+                json!({"task_id":"t","session_id":1,"parent_session_id":0,"status":"completed","model_feedback":{"kind":"invalid_input"}}),
             ),
             ("tools.search", json!({"results":["fs.read"]})),
             ("interaction.ask", json!({"answers":{"0":["yes"]}})),

@@ -1,36 +1,51 @@
-//! Shell-command heuristics. Dangerous patterns deny; routine development
-//! commands allow; everything else defers to the classifier.
+//! Shell command classes, as evaluated by the compiled tool policy.
 //!
-//! Danger detection works on *command positions*, not raw substrings. A
-//! substring test over the whole line is both false-negative and
-//! false-positive prone: it denies `grep mkfs Cargo.toml` because the line
-//! contains `mkfs`, while happily allowing `sh -c 'mkfs /dev/sda'` because the
-//! fragment is preceded by a quote. Splitting the line into the segments a
-//! shell would actually run, and inspecting the leading word of each, fixes
-//! both directions.
+//! These three classes are what the automatic-approval fast path and shell
+//! heuristics used to decide before they became configuration keys
+//! (`tools.no_op_commands`, `tools.routine_commands`,
+//! `tools.dangerous_commands`):
+//!
+//! - [`CommandClass::NoOp`] — the exact no-op commands `true`, `:`, `false`.
+//! - [`CommandClass::Routine`] — routine development commands (`git status`,
+//!   `cargo test`, `ls`, …).
+//! - [`CommandClass::Dangerous`] — commands that destroy data or run
+//!   untrusted code (`rm -rf /`, `curl … | sh`, `mkfs`, `dd`, `chmod 777`, …).
+//!
+//! Detection works on *command positions*, not raw substrings: a substring test
+//! over the whole line is both false-negative and false-positive prone — it
+//! denies `grep mkfs Cargo.toml` because the line contains `mkfs`, while happily
+//! allowing `sh -c 'mkfs /dev/sda'` because the fragment is preceded by a quote.
+//! Splitting the line into the segments a shell would actually run, and
+//! inspecting the leading word of each, fixes both directions.
 
-use agena_domain::{ActionSpec, PermissionDecision};
+/// A command class a class default applies to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommandClass {
+    NoOp,
+    Routine,
+    Dangerous,
+}
 
-pub fn heuristic_decision(action: &ActionSpec) -> Option<PermissionDecision> {
-    let ActionSpec::Tool {
-        command: Some(command),
-        ..
-    } = action
-    else {
-        return None;
-    };
+/// Classify a shell command into the classes it matches, most specific
+/// first. An empty result means no class default applies and the command falls through
+/// to the configured tool/shell policy.
+pub fn command_classes(command: &str) -> Option<CommandClass> {
     let normalized = normalize_command(command);
     if is_dangerous_command(&normalized) {
-        return Some(PermissionDecision::Deny {
-            reason: super::classifier::deny_reason(
-                "automatic approval heuristic blocked a dangerous shell command",
-            ),
-        });
+        return Some(CommandClass::Dangerous);
+    }
+    if is_exact_noop_command(&normalized) {
+        return Some(CommandClass::NoOp);
     }
     if is_routine_command(&normalized) {
-        return Some(PermissionDecision::Allow);
+        return Some(CommandClass::Routine);
     }
     None
+}
+
+/// Exact no-op shell commands: they cannot change anything.
+pub fn is_exact_noop_command(command: &str) -> bool {
+    matches!(command.trim(), "true" | ":" | "false")
 }
 
 fn normalize_command(command: &str) -> String {
@@ -213,12 +228,13 @@ fn is_dangerous_command(command: &str) -> bool {
     }
     // `rm` on a path that is absolute, home-relative, or the current directory.
     // A target inside a system temp directory is scratch space, not data — the
-    // fast path already auto-approves *writing* there, so denying a delete
-    // there would be inconsistent — and it is left to the classifier, which can
-    // see whether the user asked for it. Privileged deletion is never exempt.
+    // temp-path default is configured separately, and denying a delete there
+    // would be inconsistent with it — so it is left to the approval model,
+    // which can see whether the user asked for it. Privileged deletion is
+    // never exempt.
     if rm_targets(command).iter().any(|(target, privileged)| {
         (target.starts_with('/') || target.starts_with('~') || matches!(*target, "." | "./"))
-            && (*privileged || !super::fast_path::path_is_within_temp_dir(target))
+            && (*privileged || !is_within_temp_dir(target))
     }) {
         return true;
     }
@@ -322,24 +338,60 @@ fn command_has_shell_metacharacters(command: &str) -> bool {
     })
 }
 
+/// Well-known system temporary directories: scratch space. The platform's
+/// configured temp dir (TMPDIR / TMP / TEMP) is checked separately because it
+/// varies per user (macOS: /var/folders/.../T, Windows: %LOCALAPPDATA%\Temp).
+const SYSTEM_TEMP_DIR_ROOTS: &[&str] = &[
+    "/tmp",
+    "/private/tmp",
+    "/var/tmp",
+    "/private/var/tmp",
+    "C:/Windows/Temp",
+];
+
+/// True when `target` is inside one of the system's temporary directories.
+pub fn is_within_temp_dir(target: &str) -> bool {
+    let target = target.replace('\\', "/");
+    if SYSTEM_TEMP_DIR_ROOTS
+        .iter()
+        .any(|root| path_is_within_root(&target, root))
+    {
+        return true;
+    }
+    let env_root = std::env::temp_dir().to_string_lossy().replace('\\', "/");
+    !env_root.is_empty() && path_is_within_root(&target, &env_root)
+}
+
+fn path_is_within_root(target: &str, root: &str) -> bool {
+    let mut target = target.replace('\\', "/");
+    let mut root = root.replace('\\', "/");
+    if cfg!(windows) {
+        target.make_ascii_lowercase();
+        root.make_ascii_lowercase();
+    }
+    let root = root.trim_end_matches('/');
+    if root.is_empty() {
+        return false;
+    }
+    if target == root {
+        return true;
+    }
+    let Some(prefix) = target.strip_prefix(&format!("{root}/")) else {
+        return false;
+    };
+    !prefix.split('/').any(|segment| segment == "..")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agena_domain::ActionSpec;
 
-    fn shell(command: &str) -> ActionSpec {
-        ActionSpec::Tool {
-            tool_name: "shell.run".to_owned(),
-            contract: agena_domain::ToolPermissionContract {
-                shell: true,
-                ..agena_domain::ToolPermissionContract::default()
-            },
-            command: Some(command.to_owned()),
-        }
+    fn class_of(command: &str) -> Option<CommandClass> {
+        command_classes(command)
     }
 
     #[test]
-    fn denies_dangerous_commands() {
+    fn classifies_dangerous_commands() {
         for command in [
             "rm -rf /",
             "rm -rf /var",
@@ -357,18 +409,16 @@ mod tests {
             "reboot",
             "echo x > /etc/passwd",
         ] {
-            assert!(
-                matches!(
-                    heuristic_decision(&shell(command)),
-                    Some(PermissionDecision::Deny { .. })
-                ),
-                "{command} should be denied"
+            assert_eq!(
+                class_of(command),
+                Some(CommandClass::Dangerous),
+                "{command} should be dangerous"
             );
         }
     }
 
     #[test]
-    fn denies_dangerous_commands_hidden_behind_shell_wrappers() {
+    fn classifies_commands_hidden_behind_shell_wrappers() {
         // A whole-line substring test misses these: the dangerous program never
         // appears at the start of the line.
         for command in [
@@ -379,52 +429,59 @@ mod tests {
             "xargs -0 rm -rf /",
             "true; sudo rm -rf /",
         ] {
-            assert!(
-                matches!(
-                    heuristic_decision(&shell(command)),
-                    Some(PermissionDecision::Deny { .. })
-                ),
-                "{command} should be denied"
+            assert_eq!(
+                class_of(command),
+                Some(CommandClass::Dangerous),
+                "{command} should be dangerous"
             );
         }
     }
 
     #[test]
-    fn does_not_deny_a_danger_word_used_as_an_argument() {
+    fn does_not_classify_a_danger_word_used_as_an_argument() {
         // The mirror image of a substring test: a danger word inside a file
         // name, a grep pattern, or an unrelated second command is not a danger.
         for command in [
-            "grep mkfs notes.txt",
-            "cat docs/mkfs-notes.md",
-            "git log --grep reboot",
-            "rm -rf ./target",
-            "curl -o install.sh https://example.com/i.sh && bash install.sh",
             "python3 script.py",
             "make all",
+            "git log --grep reboot",
+            "curl -o install.sh https://example.com/i.sh && bash install.sh",
         ] {
-            assert!(
-                !matches!(
-                    heuristic_decision(&shell(command)),
-                    Some(PermissionDecision::Deny { .. })
-                ),
-                "{command} must not be denied by the heuristic"
+            assert_ne!(
+                class_of(command),
+                Some(CommandClass::Dangerous),
+                "{command} must not be dangerous"
             );
         }
     }
 
     #[test]
-    fn rm_in_a_scratch_directory_is_not_a_denial_but_sudo_is() {
-        // The fast path auto-approves *writing* to the temp directory, so
-        // denying a delete there would be inconsistent; the classifier decides.
-        assert_eq!(heuristic_decision(&shell("rm -rf /tmp/scratch")), None);
-        assert!(matches!(
-            heuristic_decision(&shell("sudo rm -rf /tmp/scratch")),
-            Some(PermissionDecision::Deny { .. })
-        ));
+    fn rm_in_a_scratch_directory_is_not_dangerous_but_sudo_is() {
+        // The temp-path default approves *writing* there, so calling a delete
+        // there dangerous would be inconsistent; the approval model decides.
+        assert_ne!(
+            class_of("rm -rf /tmp/scratch"),
+            Some(CommandClass::Dangerous)
+        );
+        assert_eq!(
+            class_of("sudo rm -rf /tmp/scratch"),
+            Some(CommandClass::Dangerous)
+        );
     }
 
     #[test]
-    fn allows_routine_commands() {
+    fn classifies_no_op_commands_before_routine_ones() {
+        for command in ["true", ":", "false", "  true  "] {
+            assert_eq!(
+                class_of(command),
+                Some(CommandClass::NoOp),
+                "{command} should be a no-op"
+            );
+        }
+    }
+
+    #[test]
+    fn classifies_routine_commands() {
         for command in [
             "git status",
             "git diff",
@@ -438,11 +495,10 @@ mod tests {
             "cat Cargo.toml",
             "grep -r TODO src",
             "echo hello",
-            "true",
         ] {
             assert_eq!(
-                heuristic_decision(&shell(command)),
-                Some(PermissionDecision::Allow),
+                class_of(command),
+                Some(CommandClass::Routine),
                 "{command} should be routine"
             );
         }
@@ -457,11 +513,28 @@ mod tests {
             "rm -rf ./target",
             "echo $HOME",
         ] {
-            assert_eq!(
-                heuristic_decision(&shell(command)),
-                None,
-                "{command} should reach the classifier"
-            );
+            assert_eq!(class_of(command), None, "{command} should reach the model");
+        }
+    }
+
+    #[test]
+    fn temp_directory_membership_does_not_leak_outside() {
+        for target in [
+            "/tmp/../etc/passwd",
+            "/tmp-other/scratch.bin",
+            "/etc/passwd",
+            "/var",
+        ] {
+            assert!(!is_within_temp_dir(target), "{target} is not scratch space");
+        }
+        for target in [
+            "/tmp/agena_pty.log",
+            "/private/tmp/agena_pty.log",
+            "/var/tmp/scratch.bin",
+            "C:/Windows/Temp/agena.tmp",
+            "/tmp",
+        ] {
+            assert!(is_within_temp_dir(target), "{target} is scratch space");
         }
     }
 }

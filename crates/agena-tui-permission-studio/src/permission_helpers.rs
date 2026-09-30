@@ -1,8 +1,8 @@
 //! Helpers for projecting permission rules into presentation state.
 
 use agena_domain::{
-    NetworkPermissionConfig, PathAccessModes, PathAccessRuleConfig, PathPermissionConfig,
-    PermissionConfig, PermissionMode, ToolPermissionConfig, ToolPermissionRules,
+    NetworkPermissionConfig, PathAccessModes, PathPermissionConfig, PermissionConfig,
+    PermissionMode, ToolPermissionConfig, ToolPermissionRules,
 };
 use agena_tui::i18n::I18n;
 use agena_tui_components::join_inline_segments;
@@ -53,13 +53,11 @@ pub fn permission_studio_mode_target_value(
             .path
             .as_ref()
             .and_then(|path| path.rules.get(pattern.as_str()))
-            .and_then(|rule| path_rule_modes(Some(rule)))
             .and_then(|modes| modes.read),
         PermissionStudioModeTarget::PathRuleWrite { pattern } => permission
             .path
             .as_ref()
             .and_then(|path| path.rules.get(pattern.as_str()))
-            .and_then(|rule| path_rule_modes(Some(rule)))
             .and_then(|modes| modes.write),
         PermissionStudioModeTarget::NetworkRule { target } => permission
             .network
@@ -89,40 +87,8 @@ pub fn permission_studio_mode_target_value(
     }
 }
 
-pub fn path_rule_modes(rule: Option<&PathAccessRuleConfig>) -> Option<PathAccessModes> {
-    match rule? {
-        PathAccessRuleConfig::Modes(modes) => Some(modes.clone()),
-        PathAccessRuleConfig::Shorthand(value) => path_access_shorthand_modes(value.as_str()),
-    }
-}
-
-pub fn path_access_shorthand_modes(value: &str) -> Option<PathAccessModes> {
-    let normalized = value.trim().to_ascii_lowercase().replace('-', "_");
-    let both = |mode| PathAccessModes {
-        read: Some(mode),
-        write: Some(mode),
-    };
-    match normalized.as_str() {
-        "allow" | "read_write" | "rw" => Some(both(PermissionMode::Allow)),
-        "auto" => Some(both(PermissionMode::Auto)),
-        "ask" => Some(both(PermissionMode::Ask)),
-        "deny" | "none" => Some(both(PermissionMode::Deny)),
-        "read" | "read_only" | "ro" => Some(PathAccessModes {
-            read: Some(PermissionMode::Allow),
-            write: Some(PermissionMode::Deny),
-        }),
-        "write" | "write_only" | "wo" => Some(PathAccessModes {
-            read: Some(PermissionMode::Deny),
-            write: Some(PermissionMode::Allow),
-        }),
-        _ => None,
-    }
-}
-
-pub fn path_rule_summary(i18n: &I18n, rule: Option<&PathAccessRuleConfig>) -> String {
-    path_rule_modes(rule)
-        .map(|modes| path_access_modes_summary(i18n, Some(&modes)))
-        .unwrap_or_else(|| i18n.text("value-custom"))
+pub fn path_rule_summary(i18n: &I18n, rule: Option<&PathAccessModes>) -> String {
+    path_access_modes_summary(i18n, rule)
 }
 
 pub fn parse_permission_studio_optional_mode_input(

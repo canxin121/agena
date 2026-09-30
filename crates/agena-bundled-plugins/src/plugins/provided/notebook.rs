@@ -5,9 +5,7 @@ use std::path::{Path, PathBuf};
 
 use agena_macros::ToolInput;
 use agena_plugin_host::PluginError;
-use agena_plugin_host::sdk::{
-    PathRequest, Result as SdkResult, ToolInvokeContext, ToolInvokeOutput,
-};
+use agena_plugin_host::sdk::{Result as SdkResult, ToolInvokeContext, ToolInvokeOutput};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -82,10 +80,7 @@ impl NotebookPlugin {
         tags(mutate, filesystem),
         name = "edit_cell",
         summary = "Replace, insert, or delete one Jupyter notebook cell with a revision check.",
-        mutating,
-
-
-        path(requests = vec![PathRequest::read(input.path.clone()), PathRequest::write(input.path.clone())])
+        mutating
     )]
     async fn edit_cell(
         &self,

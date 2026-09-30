@@ -20,7 +20,7 @@ use crate::config::{
 };
 use agena_plugin_host::PluginError;
 use agena_plugin_host::sdk::host_api::{HostClient, HostConfigReloadRequestResponse};
-use agena_plugin_host::sdk::{PathRequest, Result as SdkResult, ToolInvokeOutput, ToolTag};
+use agena_plugin_host::sdk::{Result as SdkResult, ToolInvokeOutput, ToolTag};
 
 pub(crate) const SETTINGS_PLUGIN_ID: &str = "agena.settings";
 
@@ -264,54 +264,6 @@ impl SettingsConfigMeta {
             SettingsLayer::Workspace => (&self.workspace_path, self.workspace_found),
         }
     }
-
-    fn read_requests(
-        &self,
-        source: ConfigSettingsSource,
-        layer: SettingsLayer,
-    ) -> Vec<PathRequest> {
-        match source {
-            ConfigSettingsSource::File => {
-                vec![PathRequest::read(self.file(layer).0.display().to_string())]
-            }
-            // Effective settings can contain values from both persisted files.
-            // Declare both sources so the existing path policy remains the
-            // security boundary for resolved config reads as well.
-            ConfigSettingsSource::Effective => self.all_read_requests(),
-        }
-    }
-
-    fn all_read_requests(&self) -> Vec<PathRequest> {
-        let global = self.global_path.display().to_string();
-        let workspace = self.workspace_path.display().to_string();
-        if global == workspace {
-            vec![PathRequest::read(global)]
-        } else {
-            vec![PathRequest::read(global), PathRequest::read(workspace)]
-        }
-    }
-
-    fn edit_requests(&self, layer: SettingsLayer, dry_run: bool) -> Vec<PathRequest> {
-        let target = self.file(layer).0.display().to_string();
-        let other = self
-            .file(match layer {
-                SettingsLayer::Global => SettingsLayer::Workspace,
-                SettingsLayer::Workspace => SettingsLayer::Global,
-            })
-            .0
-            .display()
-            .to_string();
-        let mut requests = Vec::new();
-        if dry_run {
-            requests.push(PathRequest::read(target.clone()));
-        } else {
-            requests.push(PathRequest::write(target.clone()));
-        }
-        if other != target {
-            requests.push(PathRequest::read(other));
-        }
-        requests
-    }
 }
 
 #[derive(Debug, Serialize)]
@@ -440,36 +392,6 @@ impl SettingsPlugin {
         host.read_config(effective_host_path(path)).await
     }
 
-    async fn read_permission_paths(
-        &self,
-        source: Option<ConfigSettingsSource>,
-        layer: Option<SettingsLayer>,
-    ) -> SdkResult<Vec<PathRequest>> {
-        let source = self.read_source(source)?;
-        let layer = self.read_layer(layer)?;
-        Ok(self.config_meta().await?.read_requests(source, layer))
-    }
-
-    async fn inspect_permission_paths(&self) -> SdkResult<Vec<PathRequest>> {
-        Ok(self.config_meta().await?.all_read_requests())
-    }
-
-    async fn edit_permission_paths(
-        &self,
-        layer: Option<SettingsLayer>,
-        dry_run: bool,
-    ) -> SdkResult<Vec<PathRequest>> {
-        let layer = self.edit_layer(layer)?;
-        Ok(self.config_meta().await?.edit_requests(layer, dry_run))
-    }
-
-    async fn validate_permission_paths(
-        &self,
-        _layer: Option<SettingsLayer>,
-    ) -> SdkResult<Vec<PathRequest>> {
-        Ok(self.config_meta().await?.all_read_requests())
-    }
-
     #[tool(
         summary = "Read one settings path.",
         help = "Use `source=file` with `layer=global|workspace` for persisted values. Effective reads merge both files plus environment and CLI layers; prefer explicit `scope=config|meta` with a relative path.",
@@ -480,8 +402,6 @@ impl SettingsPlugin {
             settings_tag(),
             settings_read_tag()
         ),
-
-        path(requests = self.read_permission_paths(input.source, input.layer).await?),
         concurrency_safe
     )]
     async fn get(&self, input: SettingsGetToolInput) -> SdkResult<ToolInvokeOutput> {
@@ -542,8 +462,6 @@ impl SettingsPlugin {
             settings_tag(),
             settings_read_tag()
         ),
-
-        path(requests = self.read_permission_paths(input.source, input.layer).await?),
         concurrency_safe
     )]
     async fn list(&self, input: SettingsListToolInput) -> SdkResult<ToolInvokeOutput> {
@@ -615,8 +533,6 @@ impl SettingsPlugin {
             settings_tag(),
             settings_read_tag()
         ),
-
-        path(requests = self.inspect_permission_paths().await?),
         concurrency_safe
     )]
     async fn inspect(&self, input: SettingsInspectToolInput) -> SdkResult<ToolInvokeOutput> {
@@ -650,9 +566,7 @@ impl SettingsPlugin {
             ToolTag::Filesystem,
             settings_tag(),
             settings_write_tag()
-        ),
-
-        path(requests = self.edit_permission_paths(input.layer, input.dry_run).await?)
+        )
     )]
     async fn set(&self, input: SettingsSetToolInput) -> SdkResult<ToolInvokeOutput> {
         let layer = self.edit_layer(input.layer)?;
@@ -689,9 +603,7 @@ impl SettingsPlugin {
             ToolTag::Filesystem,
             settings_tag(),
             settings_write_tag()
-        ),
-
-        path(requests = self.edit_permission_paths(input.layer, input.dry_run).await?)
+        )
     )]
     async fn delete(&self, input: SettingsDeleteToolInput) -> SdkResult<ToolInvokeOutput> {
         let layer = self.edit_layer(input.layer)?;
@@ -727,9 +639,7 @@ impl SettingsPlugin {
             ToolTag::Filesystem,
             settings_tag(),
             settings_write_tag()
-        ),
-
-        path(requests = self.edit_permission_paths(input.layer, input.dry_run).await?)
+        )
     )]
     async fn patch(&self, input: SettingsPatchToolInput) -> SdkResult<ToolInvokeOutput> {
         let layer = self.edit_layer(input.layer)?;
@@ -766,8 +676,6 @@ impl SettingsPlugin {
             settings_tag(),
             settings_read_tag()
         ),
-
-        path(requests = self.validate_permission_paths(input.layer).await?),
         concurrency_safe
     )]
     async fn validate(&self, input: SettingsValidateToolInput) -> SdkResult<ToolInvokeOutput> {
@@ -1144,20 +1052,9 @@ mod tests {
     use crate::permission::ToolPermissionPolicy;
     use agena_domain::PermissionDecision;
     use agena_domain::PermissionMode;
-    use agena_plugin_host::sdk::{PathKind, Plugin};
+    use agena_plugin_host::sdk::Plugin;
     use serde_json::json;
     use std::collections::BTreeMap;
-
-    fn test_meta() -> SettingsConfigMeta {
-        SettingsConfigMeta::from_value(&json!({
-            "config_path": "/home/test/agena/agena.json",
-            "config_found": true,
-            "project_config_path": "/workspace/.agena/agena.json",
-            "project_config_found": false,
-            "applied_layers": [{"source": "default", "description": "built-in defaults"}]
-        }))
-        .expect("valid settings metadata")
-    }
 
     #[test]
     fn settings_parse_errors_expose_schema_detail_without_private_config_path() {
@@ -1221,40 +1118,6 @@ mod tests {
     }
 
     #[test]
-    fn layered_permission_requests_follow_source_and_dry_run() {
-        let meta = test_meta();
-        assert_eq!(
-            meta.read_requests(ConfigSettingsSource::File, SettingsLayer::Workspace),
-            vec![PathRequest::read("/workspace/.agena/agena.json")]
-        );
-        assert_eq!(
-            meta.read_requests(ConfigSettingsSource::Effective, SettingsLayer::Global),
-            vec![
-                PathRequest::read("/home/test/agena/agena.json"),
-                PathRequest::read("/workspace/.agena/agena.json")
-            ]
-        );
-        assert_eq!(
-            meta.edit_requests(SettingsLayer::Global, true),
-            vec![
-                PathRequest::read("/home/test/agena/agena.json"),
-                PathRequest::read("/workspace/.agena/agena.json")
-            ]
-        );
-        assert_eq!(
-            meta.edit_requests(SettingsLayer::Global, false),
-            vec![
-                PathRequest::write("/home/test/agena/agena.json"),
-                PathRequest::read("/workspace/.agena/agena.json")
-            ]
-        );
-        assert_eq!(
-            meta.edit_requests(SettingsLayer::Workspace, false)[0].kind,
-            PathKind::Write
-        );
-    }
-
-    #[test]
     fn settings_exact_names_use_the_existing_tool_policy() {
         let config = ToolPermissionConfig {
             default: Some(PermissionMode::Auto),
@@ -1270,18 +1133,18 @@ mod tests {
             ToolPermissionPolicy::new(PermissionMode::Auto),
         )
         .expect("valid settings policy");
-        let default_contract = agena_plugin_host::sdk::ToolPermissionContract::default();
+        let behavior = agena_plugin_host::sdk::ToolBehavior::default();
 
         assert!(matches!(
-            policy.check_tool("agena.settings.inspect", None, &default_contract),
+            policy.check_tool("agena.settings.inspect", None, behavior),
             PermissionDecision::Allow
         ));
         assert!(matches!(
-            policy.check_tool("agena.settings.patch", None, &default_contract),
+            policy.check_tool("agena.settings.patch", None, behavior),
             PermissionDecision::Deny { .. }
         ));
         assert!(matches!(
-            policy.check_tool("agena.settings.set", None, &default_contract),
+            policy.check_tool("agena.settings.set", None, behavior),
             PermissionDecision::Allow
         ));
     }

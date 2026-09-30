@@ -1823,6 +1823,13 @@ impl ModelRuntime for ProviderNativeFixtureProvider {
 
 /// Manager wired to a [`SessionProcessor`] whose registry holds `provider`.
 async fn manager_with_provider(provider: Arc<dyn ModelRuntime>) -> SessionManager {
+    manager_with_permission(provider, agena_domain::PermissionConfig::default()).await
+}
+
+async fn manager_with_permission(
+    provider: Arc<dyn ModelRuntime>,
+    permission: agena_domain::PermissionConfig,
+) -> SessionManager {
     let workspace_root = std::env::current_dir().expect("resolve test workspace");
     let plugins = PluginHost::new(PluginHostBuildConfig {
         static_plugins: Vec::new(),
@@ -1847,6 +1854,14 @@ async fn manager_with_provider(provider: Arc<dyn ModelRuntime>) -> SessionManage
         None,
         None,
     );
+    // Compile the permission config exactly as `for_session_context_async`
+    // does for a session's effective permission config, which is what installs
+    // the class defaults the session layer later reads back.
+    let executor = if permission.is_empty() {
+        executor
+    } else {
+        executor.with_permission_config(&permission)
+    };
     let mut registry = ProviderRegistry::new();
     registry.register_arc(provider);
     let provider_registry = Arc::new(registry);
@@ -1920,7 +1935,6 @@ async fn opening_a_new_subtask_at_running_publication_cannot_be_reconciled_as_ab
             parent_session_id: parent.id,
             description: "race fixture".to_owned(),
             prompt: "finish the fixture".to_owned(),
-            access: agena_domain::ExecutionAccess::Inherit,
             skills: None,
             task_id: Some("task_reconcile_race".to_owned()),
             requested_model_selection: agena_domain::ModelSelectionConfig {
@@ -1966,7 +1980,6 @@ async fn subtask_timeout_persists_a_complete_timeout_failure_even_when_cleanup_i
             parent_session_id: parent.id,
             description: "BG child timeout fixture".to_owned(),
             prompt: "wait forever".to_owned(),
-            access: agena_domain::ExecutionAccess::Inherit,
             skills: None,
             task_id: Some("task_timeout_fixture".to_owned()),
             requested_model_selection: agena_domain::ModelSelectionConfig {

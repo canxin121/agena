@@ -4,15 +4,15 @@ mod fault_tests;
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
-use crate::part::{TaskAccess, TaskToolInput};
+use crate::part::TaskToolInput;
 use crate::plugins::provided::workflow::{WorkflowPlugin, WorkflowPluginConfig};
 use agena_macros::ToolInput;
 use agena_plugin_host::sdk::host_api::HostClient;
 use agena_plugin_host::sdk::host_api::{
     CancelSubtaskRequest, HostCallbackContext, HostStorageGetRequest, HostStorageListRequest,
     HostStorageScope, HostStorageSetRequest, MessageSubtaskRequest, ReadSubtaskOutputRequest,
-    RunSubtaskAccess, RunSubtaskModelSelection, RunSubtaskRequest, RunSubtaskResponse,
-    RunSubtaskStatus, current_host_callback_context, run_in_host_callback_context,
+    RunSubtaskModelSelection, RunSubtaskRequest, RunSubtaskResponse, RunSubtaskStatus,
+    current_host_callback_context, run_in_host_callback_context,
 };
 use agena_plugin_host::sdk::{
     InitContext, InitOutcome, Result as SdkResult, SessionEndInput, ToolInvokeContext,
@@ -56,7 +56,6 @@ struct AsyncTaskState {
     /// replayed automatically, because the child session may already contain
     /// that user message when a process died before acknowledging completion.
     prompt: String,
-    access: TaskAccess,
     status: String,
     started_at_ms: i64,
     finished_at_ms: Option<i64>,
@@ -137,13 +136,6 @@ const fn default_output_limit() -> u32 {
     100
 }
 
-fn run_subtask_access(access: TaskAccess) -> RunSubtaskAccess {
-    match access {
-        TaskAccess::Inherit => RunSubtaskAccess::Inherit,
-        TaskAccess::ReadOnly => RunSubtaskAccess::ReadOnly,
-    }
-}
-
 #[agena_plugin_host::sdk::agena_plugin(
     namespace = "agena",
     name = "tasks",
@@ -209,7 +201,6 @@ impl TasksPlugin {
             parent_session_id: context.session_id,
             description: input.description.clone(),
             prompt: input.prompt.clone(),
-            access: input.access,
             status: "running".to_string(),
             started_at_ms: chrono::Utc::now().timestamp_millis(),
             finished_at_ms: None,
@@ -225,7 +216,6 @@ impl TasksPlugin {
         let host = self.inner.host()?;
         let request = RunSubtaskRequest {
             parent_session_id: Some(context.session_id),
-            access: run_subtask_access(input.access),
             description: input.description.clone(),
             prompt: input.prompt.clone(),
             skills: input.skills.clone(),
@@ -514,7 +504,6 @@ impl TasksPlugin {
         state.max_cost_microusd = input.max_cost_microusd.or(state.max_cost_microusd);
         let request = RunSubtaskRequest {
             parent_session_id: Some(state.parent_session_id),
-            access: run_subtask_access(state.access),
             description: state.description.clone(),
             prompt: state.prompt.clone(),
             skills: None,
@@ -903,18 +892,17 @@ fn task_output(
 mod tests {
     use std::sync::Arc;
 
-    use crate::part::{TaskAccess, TaskToolInput};
+    use crate::part::TaskToolInput;
     use agena_plugin_host::sdk::Plugin;
 
     use super::{AsyncTaskEntry, AsyncTaskState, TasksPlugin, lock_state};
 
     #[test]
-    fn task_contract_uses_execution_access_and_terminal_host_capability() {
+    fn task_contract_exposes_terminal_task_fields() {
         let manifest = TasksPlugin::new().manifest();
         let tool = manifest.tools.first().expect("task tool");
         assert_eq!(tool.name, "run");
         let schema = &tool.contract.input_schema;
-        assert!(schema.pointer("/properties/access").is_some());
         assert!(schema.pointer("/properties/profile").is_none());
         assert!(schema.pointer("/properties/selection").is_some());
         assert!(schema.pointer("/properties/skills").is_some());
@@ -972,7 +960,6 @@ mod tests {
         let valid = serde_json::json!({
             "description": "verify",
             "prompt": "run the checks",
-            "access": "read_only",
             "skills": ["verify", "security-review"],
             "timeout_ms": 1
         });
@@ -982,25 +969,21 @@ mod tests {
             serde_json::json!({
                 "description": "verify",
                 "prompt": "run the checks",
-                "access": "read_only",
                 "timeout_ms": 0
             }),
             serde_json::json!({
                 "description": "verify",
                 "prompt": "run the checks",
-                "access": "read_only",
                 "max_tokens": 0
             }),
             serde_json::json!({
                 "description": "verify",
                 "prompt": "run the checks",
-                "access": "read_only",
                 "max_cost_microusd": 0
             }),
             serde_json::json!({
                 "description": "verify",
                 "prompt": "run the checks",
-                "access": "read_only",
                 "task_id": "   "
             }),
             serde_json::json!({
@@ -1024,7 +1007,6 @@ mod tests {
                 parent_session_id: 7,
                 description: "wait".to_string(),
                 prompt: "wait".to_string(),
-                access: TaskAccess::ReadOnly,
                 status: "running".to_string(),
                 started_at_ms: 1,
                 finished_at_ms: None,

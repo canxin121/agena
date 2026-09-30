@@ -11,7 +11,6 @@ use crate::plugin_impl_config::{parse_plugin_impl_config, plugin_self_type_label
 use crate::plugin_manifest::{expand_plugin_layer_export, expand_plugin_layer_manifest};
 use crate::plugin_runtime::{
     expand_plugin_layer_init_method, expand_plugin_layer_operation_invoke,
-    expand_plugin_layer_permission_networks, expand_plugin_layer_permission_paths,
     expand_plugin_layer_service_invoke, expand_plugin_layer_tool_invoke,
     expand_plugin_layer_tool_stream,
 };
@@ -114,16 +113,6 @@ fn expand_plugin_inherent_impl_attr(
         .any(|tool| tool.stream.is_some())
         .then(|| expand_plugin_layer_tool_stream(&self_ty, &tool_plans))
         .transpose()?;
-    let permission_paths_method = tool_plans
-        .iter()
-        .any(|tool| tool.permissions.has_path_permissions())
-        .then(|| expand_plugin_layer_permission_paths(&self_ty, &tool_plans))
-        .transpose()?;
-    let permission_networks_method = tool_plans
-        .iter()
-        .any(|tool| tool.permissions.has_network_permissions())
-        .then(|| expand_plugin_layer_permission_networks(&self_ty, &tool_plans))
-        .transpose()?;
     let operation_invoke_method = (!operation_plans.is_empty())
         .then(|| expand_plugin_layer_operation_invoke(&self_ty, &operation_plans))
         .transpose()?;
@@ -151,8 +140,6 @@ fn expand_plugin_inherent_impl_attr(
             #manifest_method
             #tool_invoke_method
             #stream_method
-            #permission_paths_method
-            #permission_networks_method
             #operation_invoke_method
             #service_invoke_method
             #init_method

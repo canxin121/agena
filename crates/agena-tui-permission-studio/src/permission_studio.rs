@@ -43,6 +43,9 @@ pub enum PermissionStudioSectionId {
     PathRules,
     NetworkZones,
     NetworkRules,
+    /// The fallback an unnamed tool resolves to, on the Tool Access page beside
+    /// the per-name rules.
+    ToolDefaults,
     ToolNames,
     ToolCommandRules,
 }
@@ -206,7 +209,7 @@ pub fn nav_move_step(nav: &mut SelectableListState<PermissionStudioNavItem>, del
 
 #[cfg(test)]
 mod tests {
-    use super::{PermissionStudioPaneFocus, nav_items, nav_move_step};
+    use super::{PermissionStudioPaneFocus, nav_index_for_page, nav_items, nav_move_step};
     use agena_tui::i18n::I18n;
     use agena_tui_components::SelectableListState;
 
@@ -220,5 +223,26 @@ mod tests {
         let mut nav = SelectableListState::new(items, 0);
         nav_move_step(&mut nav, 1);
         assert!(nav.selected_item().is_some_and(|item| item.selectable));
+    }
+
+    #[test]
+    fn every_group_label_is_present_and_not_selectable() {
+        let items = nav_items(&I18n::english());
+        for (index, item) in items.iter().enumerate() {
+            if item.level == 0 {
+                assert!(!item.selectable, "group label {:?}", item.label);
+                assert_eq!(
+                    nav_index_for_page(&item.page),
+                    items
+                        .iter()
+                        .position(|other| other.page == item.page && other.selectable)
+                        .unwrap_or_else(|| panic!("page {:?} has no selectable entry", item.page)),
+                    "group label {:?} must select the page it heads",
+                    item.label
+                );
+                assert!(index + 1 < items.len());
+                assert_eq!(items[index + 1].level, 1);
+            }
+        }
     }
 }

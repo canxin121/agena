@@ -2,7 +2,7 @@
 
 use syn::{Expr, LitStr, Path, Type};
 
-use crate::{PluginInputFieldMetadata, PluginInputNetworkSpec, PluginInputPathSpec};
+use crate::PluginInputFieldMetadata;
 
 #[derive(Clone)]
 /// Configuration of a tool spec.
@@ -40,8 +40,6 @@ pub struct ToolSpecConfig {
     pub formats: Vec<PathStringConstraint>,
     pub patterns: Vec<PathStringConstraint>,
     pub choices: Vec<PathValuesConstraint>,
-    pub input_paths: Vec<PluginInputPathSpec>,
-    pub input_networks: Vec<PluginInputNetworkSpec>,
     pub input_field_metadata: Vec<PluginInputFieldMetadata>,
     pub tags: Vec<Expr>,
     pub capabilities: Vec<Expr>,
@@ -92,8 +90,6 @@ pub fn empty_tool_spec_config() -> ToolSpecConfig {
         formats: Vec::new(),
         patterns: Vec::new(),
         choices: Vec::new(),
-        input_paths: Vec::new(),
-        input_networks: Vec::new(),
         input_field_metadata: Vec::new(),
         tags: Vec::new(),
         capabilities: Vec::new(),

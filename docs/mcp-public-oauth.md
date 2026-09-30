@@ -259,7 +259,7 @@ refresh tokens.
 Agena's stateless MCP transports expose the direct computer/workspace-control
 surface, including shell, filesystem-write, code/LSP, notebook, and stateless
 web search/fetch/crawl tools. There is no read-only exposure mode and no MCP
-setting that filters these tools by their permission contract.
+setting that filters these tools by their declared tags.
 
 The connector intentionally hides Agena's session/runtime and control-plane
 plugins: interaction, session, plan, tasks, cron, monitor, snapshot, report,

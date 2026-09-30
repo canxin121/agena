@@ -1,3 +1,6 @@
+use agena_domain::PermissionDecision;
+use agena_plugin_host::sdk::host_api::PermissionQuery;
+
 pub(super) fn host_unavailable(message: impl Into<String>) -> PluginError {
     PluginError::from_kind(
         agena_plugin_host::sdk::PluginErrorKind::HostUnavailable,
@@ -275,3 +278,16 @@ use super::{
 };
 use agena_domain::{ProcessStatus, ProcessStream};
 use agena_plugin_sdk::ToolInput;
+
+/// Project a policy decision onto the read-only answer a permission query
+/// returns. `Auto` reads as `Ask`: automatic approval is not an approval, and
+/// a query cannot wait for the classifier or for a human.
+pub(super) fn permission_query(decision: PermissionDecision) -> PermissionQuery {
+    match decision {
+        PermissionDecision::Allow => PermissionQuery::Allow {},
+        PermissionDecision::Deny { reason } => PermissionQuery::Deny { reason },
+        PermissionDecision::Ask { reason } | PermissionDecision::Auto { reason } => {
+            PermissionQuery::Ask { reason }
+        }
+    }
+}

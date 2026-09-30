@@ -8,9 +8,7 @@ use crate::part::{ApplyPatchToolInput, GlobToolInput, GrepToolInput, ReadToolInp
 use crate::plugins::provided::router;
 use agena_macros::ToolInput;
 use agena_plugin_host::PluginError;
-use agena_plugin_host::sdk::{
-    PathRequest, Result as SdkResult, ToolInvokeContext, ToolInvokeOutput,
-};
+use agena_plugin_host::sdk::{Result as SdkResult, ToolInvokeContext, ToolInvokeOutput};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -283,15 +281,7 @@ impl FsPlugin {
         invoke_internal(context, "grep", args).await
     }
 
-    #[tool(
-        tags(mutate, filesystem),
-        summary = "Apply a text patch to workspace files.",
-        help = "Use `apply_patch` for explicit text patch operations against workspace files. The `patch` argument is a plain-text patch that MUST start with the exact marker line `*** Begin Patch` and end with the exact marker line `*** End Patch`. Inside, use only these directives: `*** Update File: <path>` followed by `@@`-separated hunks (context lines start with a space, removed lines with `-`, added lines with `+`), `*** Add File: <path>` with every content line prefixed by `+`, or `*** Delete File: <path>`. A patch that does not start with `*** Begin Patch` is rejected. Use paths relative to the workspace root.",
-        mutating,
-
-        examples(r#"{"patch":"*** Begin Patch\n*** Update File: README.md\n@@\n-old line\n+new line\n*** End Patch"}"#),
-        path(requests = permission_paths_internal("apply_patch", input)?)
-    )]
+    #[tool(tags(mutate, filesystem), summary = "Apply a text patch to workspace files.", help = "Use `apply_patch` for explicit text patch operations against workspace files. The `patch` argument is a plain-text patch that MUST start with the exact marker line `*** Begin Patch` and end with the exact marker line `*** End Patch`. Inside, use only these directives: `*** Update File: <path>` followed by `@@`-separated hunks (context lines start with a space, removed lines with `-`, added lines with `+`), `*** Add File: <path>` with every content line prefixed by `+`, or `*** Delete File: <path>`. A patch that does not start with `*** Begin Patch` is rejected. Use paths relative to the workspace root.", mutating, examples(r#"{"patch":"*** Begin Patch\n*** Update File: README.md\n@@\n-old line\n+new line\n*** End Patch"}"#))]
     async fn invoke_apply_patch(
         &self,
         context: &ToolInvokeContext<'_>,
@@ -304,9 +294,7 @@ impl FsPlugin {
         tags(mutate, filesystem),
         summary = "Create a UTF-8 text file or replace one at an expected revision.",
         help = "Creating a new file needs no hash. Replacing an existing file requires expected_sha256 from fs.stat, preventing stale or parallel overwrites.",
-        mutating,
-
-        path(requests = vec![PathRequest::write(input.path.clone())])
+        mutating
     )]
     async fn invoke_write(
         &self,
@@ -406,10 +394,7 @@ impl FsPlugin {
     #[tool(
         tags(mutate, filesystem),
         summary = "Replace exact UTF-8 text with occurrence and revision checks.",
-        mutating,
-
-
-        path(requests = vec![PathRequest::read(input.path.clone()), PathRequest::write(input.path.clone())])
+        mutating
     )]
     async fn invoke_replace(
         &self,
@@ -513,8 +498,6 @@ impl FsPlugin {
         tags(query, filesystem),
         summary = "Read multiple UTF-8 files within one bounded byte budget.",
         read_only,
-
-        path(requests = input.paths.iter().cloned().map(PathRequest::read).collect::<Vec<_>>()),
         concurrency_safe
     )]
     async fn invoke_read_many(
@@ -593,8 +576,6 @@ impl FsPlugin {
         tags(query, filesystem),
         summary = "Inspect file metadata and an optional SHA-256 revision.",
         read_only,
-
-        path(requests = vec![PathRequest::read(input.path.clone())]),
         concurrency_safe
     )]
     async fn invoke_stat(
@@ -744,14 +725,6 @@ where
             &error,
         ))
     })?
-}
-
-fn permission_paths_internal<T: Serialize + ?Sized>(
-    tool: &str,
-    input: &T,
-) -> SdkResult<Vec<PathRequest>> {
-    let input = json_input(input)?;
-    router::permission_paths_for(tool, &input)
 }
 
 fn json_input<T: Serialize>(input: T) -> SdkResult<serde_json::Value> {

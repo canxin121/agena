@@ -159,12 +159,6 @@ fn literal_enums() -> Vec<LiteralEnum> {
             lists: Vec::new(),
         },
         LiteralEnum {
-            name: "ExecutionAccess",
-            doc: "Execution access mode of a session.",
-            schema: schema_of::<agena_api::resource::ExecutionAccess>(),
-            lists: Vec::new(),
-        },
-        LiteralEnum {
             name: "SubtaskStatus",
             doc: "Lifecycle status of a delegated subtask.",
             schema: schema_of::<agena_api::resource::SubtaskStatus>(),
@@ -716,7 +710,6 @@ mod tests {
             "SessionLifecycleState",
             "WorkflowState",
             "ExecutionPhase",
-            "ExecutionAccess",
             "SubtaskStatus",
             "SessionRelationKind",
             "ExecutionStatus",

@@ -845,97 +845,12 @@ impl PluginHost {
     pub(super) fn tool_invoke_timeout(&self, registered_tool: &RegisteredTool) -> Duration {
         let base = self.timeouts.tool_invoke_or(Duration::from_secs(300));
         // Interactive and subtask tools need long-lived budgets; these are
-        // declared on the tool's permission contract, not static capabilities.
-        let contract = &registered_tool.definition.permissions;
-        if contract.interactive || contract.task {
+        // declared on the tool's behavior flags, not static capabilities.
+        let behavior = &registered_tool.definition.behavior;
+        if behavior.interactive || behavior.task {
             return base.max(Duration::from_secs(60 * 60 * 24));
         }
         base
-    }
-
-    pub async fn dispatch_tool_permission_paths(
-        &self,
-        registered_tool: &RegisteredTool,
-        input: ToolPermissionPathsInput,
-        cancellation: Option<tokio_util::sync::CancellationToken>,
-    ) -> Result<Vec<crate::sdk::PathRequest>, PluginError> {
-        let plugin = self
-            .plugins_by_id
-            .get(registered_tool.plugin_key())
-            .cloned()
-            .ok_or_else(|| {
-                PluginError::internal(format!(
-                    "plugin `{}` not loaded",
-                    registered_tool.plugin_full_name()
-                ))
-            })?;
-        let timeout = self.timeouts.tool_hook_or(Duration::from_secs(30));
-        let mut input = input;
-        input.tool_name = registered_tool.tool_name().to_string();
-        let params =
-            serde_json::to_value(&input).map_err(|e| PluginError::invalid_params_error(&e))?;
-        let tool_name = registered_tool.tool_name().to_string();
-        let workspace_root = input.workspace_root.clone();
-        let result = await_transport_with_cancellation(
-            cancellation,
-            self._host_handle.run_in_authorized_callback_context(
-                &plugin.key(),
-                HostCallbackContext {
-                    workspace_root: Some(workspace_root),
-                    tool_name: Some(tool_name),
-                    ..Default::default()
-                },
-                call_with_timeout(&plugin, method::HOOK_TOOL_PERMISSION_PATHS, params, timeout),
-            ),
-        )
-        .await;
-        let value = result.map_err(transport_to_plugin_error)?;
-        serde_json::from_value(value).map_err(|e| PluginError::invalid_params_error(&e))
-    }
-
-    pub async fn dispatch_tool_permission_networks(
-        &self,
-        registered_tool: &RegisteredTool,
-        input: ToolPermissionNetworksInput,
-        cancellation: Option<tokio_util::sync::CancellationToken>,
-    ) -> Result<Vec<crate::sdk::NetworkRequest>, PluginError> {
-        let plugin = self
-            .plugins_by_id
-            .get(registered_tool.plugin_key())
-            .cloned()
-            .ok_or_else(|| {
-                PluginError::internal(format!(
-                    "plugin `{}` not loaded",
-                    registered_tool.plugin_full_name()
-                ))
-            })?;
-        let timeout = self.timeouts.tool_hook_or(Duration::from_secs(30));
-        let mut input = input;
-        input.tool_name = registered_tool.tool_name().to_string();
-        let params =
-            serde_json::to_value(&input).map_err(|e| PluginError::invalid_params_error(&e))?;
-        let tool_name = registered_tool.tool_name().to_string();
-        let workspace_root = input.workspace_root.clone();
-        let result = await_transport_with_cancellation(
-            cancellation,
-            self._host_handle.run_in_authorized_callback_context(
-                &plugin.key(),
-                HostCallbackContext {
-                    workspace_root: Some(workspace_root),
-                    tool_name: Some(tool_name),
-                    ..Default::default()
-                },
-                call_with_timeout(
-                    &plugin,
-                    method::HOOK_TOOL_PERMISSION_NETWORKS,
-                    params,
-                    timeout,
-                ),
-            ),
-        )
-        .await;
-        let value = result.map_err(transport_to_plugin_error)?;
-        serde_json::from_value(value).map_err(|e| PluginError::invalid_params_error(&e))
     }
 
     /// Streaming variant: returns a receiver of [`ToolStreamChunk`]s plus a
@@ -2601,11 +2516,11 @@ use super::{
     SessionStartPatch, ShellEnvInput, ShellEnvPatch, TimeoutsConfig, ToolAfterDispatch,
     ToolAfterInput, ToolBeforeBail, ToolBeforeDispatch, ToolBeforeInput, ToolDefinitionInput,
     ToolDefinitionPatch, ToolFailureInput, ToolInvokeInput, ToolInvokeOutput, ToolInvokeStream,
-    ToolKey, ToolPermissionNetworksInput, ToolPermissionPathsInput, ToolRegistryChangedEvent,
-    ToolStreamChunk, ToolStreamEnd, TransportError, UserPromptSubmitInput, UserPromptSubmitPatch,
-    call_with_timeout, dispatcher, hook_registration_for_plugin, host_api, merge_json, method,
-    operation_registry_name, push_hook_runs_into, shutdown_transport, sort_operation_catalog,
-    tool_hook_context, transport_to_plugin_error,
+    ToolKey, ToolRegistryChangedEvent, ToolStreamChunk, ToolStreamEnd, TransportError,
+    UserPromptSubmitInput, UserPromptSubmitPatch, call_with_timeout, dispatcher,
+    hook_registration_for_plugin, host_api, merge_json, method, operation_registry_name,
+    push_hook_runs_into, shutdown_transport, sort_operation_catalog, tool_hook_context,
+    transport_to_plugin_error,
 };
 
 #[cfg(test)]
@@ -2620,7 +2535,7 @@ mod tests {
             model: Default::default(),
             docs: Default::default(),
             runtime: Default::default(),
-            permissions: Default::default(),
+            behavior: Default::default(),
             tags: Vec::new(),
         }
     }

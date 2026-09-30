@@ -5,10 +5,9 @@ use super::{
     PermissionStudioModeTarget, RenderedTranscriptNode, SettingsPickerAction, ToolPermissionRules,
     TranscriptMoveDirection, TranscriptNodeKey, TranscriptNodeKind, Utc,
     apply_permission_studio_entries_mode, apply_permission_studio_mode_input,
-    initial_search_match_index, path_rule_modes, permission_overlay_choice,
-    permission_rule_draft_from_request, settings_studio_permission_items,
-    transcript_message_navigation_target, transcript_node_highlight_range,
-    transcript_selection_scroll_position,
+    initial_search_match_index, permission_overlay_choice, permission_rule_draft_from_request,
+    settings_studio_permission_items, transcript_message_navigation_target,
+    transcript_node_highlight_range, transcript_selection_scroll_position,
 };
 
 mod ui;
@@ -570,7 +569,7 @@ macro_rules! api_message_part {
 #[cfg(test)]
 mod interaction_part_routing_tests {
     use agena_api::resource::{
-        ExecutionAccess, PendingInteractiveRequest, PendingInteractiveRequestResource,
+        PendingInteractiveRequest, PendingInteractiveRequestResource,
         SessionExecutionContextResource, SessionExecutionResource, SessionLifecycleState,
         SessionRelationKind, SessionResource, SessionState, SessionTranscriptPart,
         SessionUsageResource,
@@ -747,7 +746,6 @@ mod interaction_part_routing_tests {
             source_message_id: None,
             is_subagent: false,
             task_id: None,
-            subtask_access: None,
             subtask_status: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
@@ -781,7 +779,6 @@ mod interaction_part_routing_tests {
             background_activities: Vec::new(),
             execution: SessionExecutionContextResource {
                 agent_id: "test".to_owned(),
-                execution_access: ExecutionAccess::Inherit,
                 selected_permission: Default::default(),
                 effective_permission: Default::default(),
                 permission_ceiling: Default::default(),
@@ -2090,10 +2087,10 @@ mod session_activity_state_machine_tests {
     use super::super::{App, I18n, LaunchOptions, TuiBackend};
     use crate::app_types::SessionActivity;
     use agena_api::resource::{
-        ExecutionAccess, PendingInteractiveRequest, PendingInteractiveRequestResource,
-        PermissionActionResource, PermissionRequest, SessionExecutionContextResource,
-        SessionExecutionResource, SessionLifecycleState, SessionRelationKind, SessionResource,
-        SessionState, SessionTranscriptPart, SessionUsageResource,
+        PendingInteractiveRequest, PendingInteractiveRequestResource, PermissionActionResource,
+        PermissionRequest, SessionExecutionContextResource, SessionExecutionResource,
+        SessionLifecycleState, SessionRelationKind, SessionResource, SessionState,
+        SessionTranscriptPart, SessionUsageResource,
     };
 
     const SESSION_ID: i64 = 7;
@@ -2135,7 +2132,6 @@ mod session_activity_state_machine_tests {
                 source_message_id: None,
                 is_subagent: false,
                 task_id: None,
-                subtask_access: None,
                 subtask_status: None,
                 created_at: Utc::now(),
                 updated_at: Utc::now(),
@@ -2149,7 +2145,6 @@ mod session_activity_state_machine_tests {
             background_activities: Vec::new(),
             execution: SessionExecutionContextResource {
                 agent_id: "test".to_owned(),
-                execution_access: ExecutionAccess::Inherit,
                 selected_permission: Default::default(),
                 effective_permission: Default::default(),
                 permission_ceiling: Default::default(),
@@ -5987,7 +5982,6 @@ mod new_session_model_stack_tests {
             source_message_id: None,
             is_subagent: false,
             task_id: None,
-            subtask_access: None,
             subtask_status: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),

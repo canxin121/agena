@@ -18,9 +18,12 @@ type PermissionMode = 'allow' | 'auto' | 'ask' | 'deny'
 type PermissionSource = 'global' | 'workspace' | 'session' | 'effective'
 type PermissionSection = 'path' | 'network' | 'tools'
 type AccessModes = { read?: PermissionMode; write?: PermissionMode }
-type PathRule = AccessModes | string
 type PermissionConfig = {
-  path?: { workspace?: AccessModes; external?: AccessModes; rules?: Record<string, PathRule> }
+  path?: {
+    workspace?: AccessModes
+    external?: AccessModes
+    rules?: Record<string, AccessModes>
+  }
   network?: {
     internet?: PermissionMode
     private?: PermissionMode
@@ -98,6 +101,8 @@ function permissionSummary(value: PermissionConfig): string {
     if (isMode(rules)) return total + 1
     return total + (rules && typeof rules === 'object' && !Array.isArray(rules) ? Object.keys(rules).length : 0)
   }, 0)
+  // Only stored entries are counted; an omitted one is showing its built-in
+  // default rather than an override.
   const parts = [
     pathDefaults || pathRules
       ? st('filesystem {pathDefaults} defaults / {pathRules} rules', {
@@ -148,9 +153,17 @@ const sourceOptions = computed(() => [
   },
 ])
 const sectionOptions = [
-  { value: 'path', label: st('Filesystem'), description: st('Path defaults and path rules.') },
+  {
+    value: 'path',
+    label: st('Filesystem'),
+    description: st('Path defaults, path class defaults, and path rules.'),
+  },
   { value: 'network', label: st('Network'), description: st('Network zones and domain rules.') },
-  { value: 'tools', label: st('Tool Access'), description: st('Tool names and command rules.') },
+  {
+    value: 'tools',
+    label: st('Tool Access'),
+    description: st('Tool defaults, tool names, and command patterns.'),
+  },
 ]
 const modeOptions = [
   { value: 'allow', label: st('Allow'), description: st('Always permit matching access.') },
@@ -166,8 +179,12 @@ const toolNameRules = computed(() => Object.entries(config.value.tools?.names ||
 const commandRules = computed(() => {
   const rows: Array<{ tool: string; command: string; mode: PermissionMode }> = []
   for (const [tool, rawRules] of Object.entries(config.value.tools?.rules || {})) {
-    if (!isShellCapableTool(tool)) continue
+    // `agena.shell.run` carries the command classes and the patterns; `*`
+    // carries the read-only class, which applies to every tool whose
+    // permission contract is read-only. Anything else would be inert.
+    if (!isShellCapableTool(tool) && tool !== '*') continue
     if (isMode(rawRules)) {
+      if (!isShellCapableTool(tool)) continue
       rows.push({ tool, command: '*', mode: rawRules })
       continue
     }
@@ -178,6 +195,54 @@ const commandRules = computed(() => {
   }
   return rows
 })
+
+// The built-in entries, offered as one-click rows so the shipped behaviour is
+// visible and adjustable without typing the keywords by hand. Each one is an
+// ordinary rule row: writing it creates an override, clearing it restores the
+// built-in.
+const BUILT_IN_RULES: ReadonlyArray<{ tool: string; command: string }> = [
+  { tool: 'agena.shell.run', command: 'no-op' },
+  { tool: 'agena.shell.run', command: 'routine' },
+  { tool: 'agena.shell.run', command: 'dangerous' },
+  { tool: '*', command: 'read-only' },
+]
+const writtenRules = computed(() => new Set(commandRules.value.map((row) => `${row.tool}\u0000${row.command}`)))
+const builtInRuleRows = computed(() =>
+  BUILT_IN_RULES.filter((rule) => !writtenRules.value.has(`${rule.tool}\u0000${rule.command}`)).map((rule) => ({
+    ...rule,
+    mode: builtInRuleMode(rule.tool, rule.command),
+  })),
+)
+
+// The shipped mode of a built-in rule, shown while the user has not written one
+// of their own. Mirrors `PermissionConfig::global_default()`.
+function builtInRuleMode(tool: string, command: string): PermissionMode {
+  if (tool === '*' && command === 'read-only') return 'allow'
+  if (tool === 'agena.shell.run') {
+    if (command === 'dangerous') return 'deny'
+    return 'allow'
+  }
+  return 'allow'
+}
+
+function writeRule(tool: string, command: string, value: string) {
+  mutate((next) => {
+    next.tools ||= {}
+    const current = next.tools.rules?.[tool]
+    const entries: Record<string, PermissionMode> =
+      current && typeof current === 'object' && !Array.isArray(current) ? { ...current } : {}
+    if (isMode(value)) entries[command] = value
+    else delete entries[command]
+    if (Object.keys(entries).length) next.tools.rules = { ...(next.tools.rules || {}), [tool]: entries }
+    else if (next.tools.rules) {
+      const rules = { ...next.tools.rules }
+      delete rules[tool]
+      if (Object.keys(rules).length) next.tools.rules = rules
+      else delete next.tools.rules
+    }
+    if (isEmptyToolSection(next.tools)) delete next.tools
+  })
+}
 
 function isMode(value: unknown): value is PermissionMode {
   return value === 'allow' || value === 'auto' || value === 'ask' || value === 'deny'
@@ -219,39 +284,31 @@ function setPathDefault(scope: 'workspace' | 'external', access: 'read' | 'write
     if (isMode(value)) next.path[scope]![access] = value
     else delete next.path[scope]![access]
     if (!next.path[scope]?.read && !next.path[scope]?.write) delete next.path[scope]
-    if (!next.path.workspace && !next.path.external && !Object.keys(next.path.rules || {}).length) delete next.path
+    if (isEmptyPathSection(next.path)) delete next.path
   })
 }
 
-function pathRuleMode(rule: PathRule, access: 'read' | 'write'): PermissionMode | '' {
-  if (typeof rule === 'string') return pathRuleShorthandModes(rule)[access] || ''
-  return rule?.[access] || ''
+// An emptied section is dropped whole - which is exactly what "every entry is
+// showing its built-in default" looks like on disk.
+function isEmptyPathSection(path: PermissionConfig['path']): boolean {
+  return !path?.workspace && !path?.external && !Object.keys(path?.rules || {}).length
 }
 
-function pathRuleShorthandModes(value: string): AccessModes {
-  const normalized = value.trim().toLowerCase().replaceAll('-', '_')
-  if (normalized === 'allow' || normalized === 'read_write' || normalized === 'rw') {
-    return { read: 'allow', write: 'allow' }
-  }
-  if (normalized === 'auto') return { read: 'auto', write: 'auto' }
-  if (normalized === 'ask') return { read: 'ask', write: 'ask' }
-  if (normalized === 'deny' || normalized === 'none') return { read: 'deny', write: 'deny' }
-  if (normalized === 'read' || normalized === 'read_only' || normalized === 'ro') {
-    return { read: 'allow', write: 'deny' }
-  }
-  if (normalized === 'write' || normalized === 'write_only' || normalized === 'wo') {
-    return { read: 'deny', write: 'allow' }
-  }
-  return {}
+function isEmptyToolSection(tools: PermissionConfig['tools']): boolean {
+  return !tools?.default && !Object.keys(tools?.names || {}).length && !Object.keys(tools?.rules || {}).length
+}
+
+// A path rule is always the explicit read/write object form; there is no
+// shorthand string form, on the wire or in the editor.
+function pathRuleMode(rule: AccessModes, access: 'read' | 'write'): PermissionMode | '' {
+  return rule?.[access] || ''
 }
 
 function setPathRuleMode(path: string, access: 'read' | 'write', value: string) {
   mutate((next) => {
     next.path ||= {}
     next.path.rules ||= {}
-    const current = next.path.rules[path]
-    const modes: AccessModes =
-      typeof current === 'object' && current ? { ...current } : pathRuleShorthandModes(String(current || ''))
+    const modes: AccessModes = { ...(next.path.rules[path] || {}) }
     if (isMode(value)) modes[access] = value
     else delete modes[access]
     next.path.rules[path] = modes
@@ -341,6 +398,7 @@ function setToolDefault(value: string) {
     next.tools ||= {}
     if (isMode(value)) next.tools.default = value
     else delete next.tools.default
+    if (isEmptyToolSection(next.tools)) delete next.tools
   })
 }
 
@@ -742,6 +800,13 @@ onMounted(() => void load())
             </div>
             <div class="grid gap-2">
               <div class="text-sm font-medium">{{ $st('Path Rules') }}</div>
+              <p class="text-xs text-muted-foreground">
+                {{
+                  $st(
+                    'Per-pattern rules, last match wins. The temporary and managed project-state directories are built-in rules here; writing the same pattern replaces one, deleting your entry restores it.',
+                  )
+                }}
+              </p>
               <div
                 v-for="[path, rule] in pathRules"
                 :key="path"
@@ -881,16 +946,26 @@ onMounted(() => void load())
                 {{ $st('Manage the default tool policy, individual tool names, and command patterns.') }}
               </p>
             </div>
-            <label class="grid max-w-sm gap-1.5"
-              ><span class="text-xs text-muted-foreground">{{ $st('Default tool mode') }}</span
-              ><OptionPicker
-                :model-value="config.tools?.default || ''"
-                :options="modeOptions"
-                :include-empty="true"
-                :empty-label="$st('Default')"
-                :title="$st('Default tool mode')"
-                @update:model-value="setToolDefault"
-            /></label>
+            <div class="grid gap-2">
+              <div class="text-sm font-medium">{{ $st('Tool Defaults') }}</div>
+              <p class="text-xs text-muted-foreground">
+                {{
+                  $st(
+                    'The fallback for any tool the Name Rules below do not name. The interaction tool is a Name Rule; write its name there to change it.',
+                  )
+                }}
+              </p>
+              <label class="grid max-w-sm gap-1.5"
+                ><span class="text-xs text-muted-foreground">{{ $st('Default tool mode') }}</span
+                ><OptionPicker
+                  :model-value="config.tools?.default || ''"
+                  :options="modeOptions"
+                  :include-empty="true"
+                  :empty-label="$st('Default')"
+                  :title="$st('Default tool mode')"
+                  @update:model-value="setToolDefault"
+              /></label>
+            </div>
             <div class="grid gap-2">
               <div class="text-sm font-medium">{{ $st('Name Rules') }}</div>
               <div
@@ -950,6 +1025,13 @@ onMounted(() => void load())
             </div>
             <div class="grid gap-2">
               <div class="text-sm font-medium">{{ $st('Command Rules') }}</div>
+              <p class="text-xs text-muted-foreground">
+                {{
+                  $st(
+                    'Per-command rules, last match wins. A pattern is either a command pattern or one of the class keywords no-op, routine, and dangerous. The built-in rules are listed below; writing one of the same names replaces it, deleting it restores the built-in.',
+                  )
+                }}
+              </p>
               <div
                 v-for="row in commandRules"
                 :key="`${row.tool}:${row.command}`"
@@ -976,6 +1058,23 @@ onMounted(() => void load())
                   @click="removeCommandRule(row.tool, row.command)"
                   ><RiDeleteBinLine class="h-4 w-4 text-destructive"
                 /></IconButton>
+              </div>
+              <div
+                v-for="row in builtInRuleRows"
+                :key="`builtin:${row.tool}:${row.command}`"
+                class="grid gap-2 rounded-md border border-dashed border-border/60 p-3 sm:grid-cols-[minmax(8rem,0.6fr)_minmax(0,1.4fr)_minmax(8rem,0.5fr)_auto] sm:items-center"
+              >
+                <code class="break-all text-xs">{{ row.tool }}</code>
+                <code class="text-xs">{{ row.command }}</code>
+                <OptionPicker
+                  :model-value="row.mode"
+                  :options="modeOptions"
+                  :include-empty="true"
+                  :empty-label="$st('Built-in')"
+                  :title="$st('Built-in rule mode')"
+                  @update:model-value="writeRule(row.tool, row.command, $event)"
+                />
+                <span class="text-[11px] text-muted-foreground">{{ $st('Built-in') }}</span>
               </div>
               <div
                 class="grid gap-2 sm:grid-cols-[minmax(8rem,0.6fr)_minmax(0,1.4fr)_minmax(8rem,0.5fr)_auto] sm:items-end"

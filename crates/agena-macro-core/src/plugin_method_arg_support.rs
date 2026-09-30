@@ -11,13 +11,12 @@ use syn::{
 
 use crate::{
     PluginArgConfig, PluginCallInput, PluginContextArg, PluginGeneratedInputField,
-    PluginGeneratedToolInput, PluginNetworkSemantic, PluginOperationInputPlan,
-    PluginOperationMethodShape, PluginPathPermissionKind, PluginPickerKind, PluginToolAttrConfig,
-    PluginToolMethodShape, apply_arg_config_to_spec, empty_tool_spec_config, expr_array_lit_strs,
-    expr_array_values, expr_lit_str, expr_lit_usize, input_type_semantic_shape,
-    normalize_array_value_constraints, type_is_plugin_command_context, type_is_reference,
-    type_is_tool_invoke_context, type_last_segment_is, validate_format_lit,
-    validate_input_jsonpath_lit, validate_pattern_lit,
+    PluginGeneratedToolInput, PluginOperationInputPlan, PluginOperationMethodShape,
+    PluginPickerKind, PluginToolAttrConfig, PluginToolMethodShape, apply_arg_config_to_spec,
+    empty_tool_spec_config, expr_array_lit_strs, expr_array_values, expr_lit_str, expr_lit_usize,
+    input_type_semantic_shape, normalize_array_value_constraints, type_is_plugin_command_context,
+    type_is_reference, type_is_tool_invoke_context, type_last_segment_is, validate_format_lit,
+    validate_pattern_lit,
 };
 
 pub fn build_plugin_tool_method_shape(
@@ -421,29 +420,6 @@ fn parse_plugin_arg_config_attr(attr: &Attribute, config: &mut PluginArgConfig) 
             ("non_empty_if_present", None) => config.non_empty_if_present = true,
             ("item_non_empty_if_present", None) => config.item_non_empty_if_present = true,
             ("distinct_trimmed", None) => config.distinct_trimmed = true,
-            ("path.read", None) => {
-                set_plugin_arg_path_kind(config, PluginPathPermissionKind::Read, &item.first_ident)?
-            }
-            ("path.write", None) => set_plugin_arg_path_kind(
-                config,
-                PluginPathPermissionKind::Write,
-                &item.first_ident,
-            )?,
-            ("network", None) => {
-                set_plugin_arg_network(config, PluginNetworkSemantic::Network, &item.first_ident)?
-            }
-            ("network.url", None) => {
-                set_plugin_arg_network(config, PluginNetworkSemantic::Url, &item.first_ident)?
-            }
-            ("network.host", None) => {
-                set_plugin_arg_network(config, PluginNetworkSemantic::Host, &item.first_ident)?
-            }
-            ("network.internet", None) => {
-                set_plugin_arg_network(config, PluginNetworkSemantic::Internet, &item.first_ident)?
-            }
-            ("network.private", None) => {
-                set_plugin_arg_network(config, PluginNetworkSemantic::Private, &item.first_ident)?
-            }
             ("optional", None) => config.optional = true,
             ("flatten_shape", None) => config.flatten_shape = true,
             ("nested_shape", None) => config.nested_shape = true,
@@ -454,12 +430,6 @@ fn parse_plugin_arg_config_attr(attr: &Attribute, config: &mut PluginArgConfig) 
             ("dir", None) => {
                 set_plugin_arg_picker(config, PluginPickerKind::Dir, &item.first_ident)?
             }
-            ("jsonpath", Some(value)) => {
-                let jsonpath = expr_lit_str(&value, "jsonpath")?;
-                validate_input_jsonpath_lit(&jsonpath)?;
-                config.jsonpath = Some(jsonpath);
-            }
-            ("fallback", Some(value)) => config.fallback = Some(expr_lit_str(&value, "fallback")?),
             ("name", Some(value)) => {
                 if config.name.replace(expr_lit_str(&value, "name")?).is_some() {
                     return Err(syn::Error::new_spanned(
@@ -671,28 +641,6 @@ fn parse_plugin_arg_config_attr(attr: &Attribute, config: &mut PluginArgConfig) 
             }
         }
     }
-    ensure_arg_permission_locator_has_semantic(
-        config.jsonpath.as_ref(),
-        config.fallback.as_ref(),
-        config.path.is_some() || config.network.is_some(),
-    )?;
-    Ok(())
-}
-
-pub fn ensure_arg_permission_locator_has_semantic(
-    jsonpath: Option<&LitStr>,
-    fallback: Option<&LitStr>,
-    has_permission_semantic: bool,
-) -> Result<()> {
-    if has_permission_semantic {
-        return Ok(());
-    }
-    if let Some(value) = jsonpath.or(fallback) {
-        return Err(syn::Error::new_spanned(
-            value,
-            "`jsonpath` and `fallback` require a path.* or network.* semantic",
-        ));
-    }
     Ok(())
 }
 
@@ -738,34 +686,6 @@ impl Parse for ArgAttrArgs {
         }
         Ok(Self { items })
     }
-}
-
-fn set_plugin_arg_path_kind(
-    config: &mut PluginArgConfig,
-    kind: PluginPathPermissionKind,
-    span: impl quote::ToTokens,
-) -> Result<()> {
-    if config.path.replace(kind).is_some() {
-        return Err(syn::Error::new_spanned(
-            span,
-            "#[arg] accepts only one path permission semantic",
-        ));
-    }
-    Ok(())
-}
-
-fn set_plugin_arg_network(
-    config: &mut PluginArgConfig,
-    semantic: PluginNetworkSemantic,
-    span: impl quote::ToTokens,
-) -> Result<()> {
-    if config.network.replace(semantic).is_some() {
-        return Err(syn::Error::new_spanned(
-            span,
-            "#[arg] accepts only one network semantic",
-        ));
-    }
-    Ok(())
 }
 
 fn set_plugin_arg_picker(
@@ -918,12 +838,8 @@ fn inline_flatten_shape_has_extra_config(config: &PluginArgConfig) -> bool {
         || !config.required_unless_present.is_empty()
         || !config.forbid_substrings.is_empty()
         || !config.distinct_trimmed_within.is_empty()
-        || config.path.is_some()
-        || config.network.is_some()
         || config.optional
         || config.nested_shape
-        || config.jsonpath.is_some()
-        || config.fallback.is_some()
         || config.name.is_some()
         || !config.aliases.is_empty()
         || config.example.is_some()

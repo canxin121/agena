@@ -473,11 +473,6 @@ pub struct SessionExecutionContext {
     pub selection: ExecutionSelection,
     #[serde(
         default,
-        skip_serializing_if = "agena_domain::ExecutionAccess::is_inherit"
-    )]
-    pub access: agena_domain::ExecutionAccess,
-    #[serde(
-        default,
         skip_serializing_if = "crate::authorization::PermissionConfig::is_empty"
     )]
     pub effective_permission: crate::authorization::PermissionConfig,
@@ -500,7 +495,6 @@ pub struct SessionExecutionContext {
 impl SessionExecutionContext {
     pub fn is_empty(&self) -> bool {
         self.selection.is_empty()
-            && self.access.is_inherit()
             && self.effective_permission.is_empty()
             && self.permission_ceiling.is_empty()
             && self.capability_denied_tool_names.is_empty()
@@ -529,10 +523,6 @@ impl agena_runtime_contracts::ToolSessionContext for SessionExecutionContext {
 
     fn capability_denied_tool_names(&self) -> &BTreeSet<String> {
         &self.capability_denied_tool_names
-    }
-
-    fn execution_access(&self) -> agena_domain::ExecutionAccess {
-        self.access
     }
 
     fn selected_model(&self) -> Option<&str> {

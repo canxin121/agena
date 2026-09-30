@@ -281,7 +281,9 @@ impl App {
             PermissionStudioSectionId::NetworkRules => {
                 ("Domain".to_string(), "Connect".to_string())
             }
-            PermissionStudioSectionId::ToolNames => ("Name".to_string(), "Access".to_string()),
+            PermissionStudioSectionId::ToolDefaults | PermissionStudioSectionId::ToolNames => {
+                ("Name".to_string(), "Access".to_string())
+            }
             PermissionStudioSectionId::ToolCommandRules => {
                 ("Tool".to_string(), "Access".to_string())
             }

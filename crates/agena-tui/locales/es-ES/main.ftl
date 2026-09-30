@@ -1739,3 +1739,5 @@ overlay-provider-delete-adapter-body = ¿Eliminar el adaptador configurado {$pro
 overlay-provider-delete-adapter-last-body = Este es el último adaptador configurado. Al confirmar se eliminará el proveedor.
 
 overlay-provider-delete-model-body = ¿Eliminar el modelo configurado {$provider}/{$adapter}/{$model}?
+
+permission-studio-page-tool-defaults = Acceso a herramientas / Valores predeterminados

@@ -81,21 +81,17 @@ pub fn expand_input_dispatch_fn(
     let struct_handle_with_context = config.handle_with_context.as_ref();
     let struct_stream_handle = config.stream_handle.as_ref();
     let struct_stream_handle_with_context = config.stream_handle_with_context.as_ref();
-    let struct_permission_paths_handle = config.permission_paths_handle.as_ref();
-    let struct_permission_networks_handle = config.permission_networks_handle.as_ref();
     if receiver_ty.is_none()
         && (struct_handle.is_some()
             || struct_handle_with_context.is_some()
             || struct_stream_handle.is_some()
             || struct_stream_handle_with_context.is_some()
-            || struct_permission_paths_handle.is_some()
-            || struct_permission_networks_handle.is_some()
             || config.handle_field.is_some()
             || config.handle_by_value)
     {
         return Err(syn::Error::new(
             proc_macro2::Span::call_site(),
-            "handle/handle_with_context/stream_handle/stream_handle_with_context/permission_paths_handle/permission_networks_handle/handle_field/handle_by_value require handler_receiver on the shape",
+            "handle/handle_with_context/stream_handle/stream_handle_with_context/handle_field/handle_by_value require handler_receiver on the shape",
         ));
     }
 
@@ -118,13 +114,11 @@ pub fn expand_input_dispatch_fn(
                     || struct_handle_with_context.is_some()
                     || struct_stream_handle.is_some()
                     || struct_stream_handle_with_context.is_some()
-                    || struct_permission_paths_handle.is_some()
-                    || struct_permission_networks_handle.is_some()
                     || config.handle_by_value
                 {
                     return Err(syn::Error::new(
                         proc_macro2::Span::call_site(),
-                        "handle/handle_with_context/stream_handle/stream_handle_with_context/permission_paths_handle/permission_networks_handle/handle_by_value on a shape struct require handler_receiver",
+                        "handle/handle_with_context/stream_handle/stream_handle_with_context/handle_by_value on a shape struct require handler_receiver",
                     ));
                 }
                 return Ok(quote! {});
@@ -288,53 +282,11 @@ pub fn expand_input_dispatch_fn(
             } else {
                 quote! {}
             };
-            let permission_paths_fn = if let Some(handle) = struct_permission_paths_handle {
-                quote! {
-                    pub async fn dispatch_permission_paths(
-                        self,
-                        receiver: &#receiver_ty,
-                    ) -> ::agena_plugin_sdk::Result<Vec<::agena_plugin_sdk::PathRequest>> {
-                        let parsed = self;
-                        #handle(receiver, #arg_expr).await
-                    }
-                }
-            } else {
-                quote! {
-                    pub async fn dispatch_permission_paths(
-                        self,
-                        _receiver: &#receiver_ty,
-                    ) -> ::agena_plugin_sdk::Result<Vec<::agena_plugin_sdk::PathRequest>> {
-                        Ok(Vec::new())
-                    }
-                }
-            };
-            let permission_networks_fn = if let Some(handle) = struct_permission_networks_handle {
-                quote! {
-                    pub async fn dispatch_permission_networks(
-                        self,
-                        receiver: &#receiver_ty,
-                    ) -> ::agena_plugin_sdk::Result<Vec<::agena_plugin_sdk::NetworkRequest>> {
-                        let parsed = self;
-                        #handle(receiver, #arg_expr).await
-                    }
-                }
-            } else {
-                quote! {
-                    pub async fn dispatch_permission_networks(
-                        self,
-                        _receiver: &#receiver_ty,
-                    ) -> ::agena_plugin_sdk::Result<Vec<::agena_plugin_sdk::NetworkRequest>> {
-                        Ok(Vec::new())
-                    }
-                }
-            };
             Ok(quote! {
                 #plain_fn
                 #context_fn
                 #plain_stream_fn
                 #context_stream_fn
-                #permission_paths_fn
-                #permission_networks_fn
             })
         }
         Data::Enum(data_enum) => {
@@ -347,15 +299,13 @@ pub fn expand_input_dispatch_fn(
                                 || cfg.handle_with_context.is_some()
                                 || cfg.stream_handle.is_some()
                                 || cfg.stream_handle_with_context.is_some()
-                                || cfg.permission_paths_handle.is_some()
-                                || cfg.permission_networks_handle.is_some()
                         })
                         .unwrap_or(false)
                 });
                 if has_variant_handles {
                     return Err(syn::Error::new(
                         proc_macro2::Span::call_site(),
-                        "variant handle, handle_with_context, stream_handle, stream_handle_with_context, permission_paths_handle, or permission_networks_handle bindings require handler_receiver on the shape",
+                        "variant handle, handle_with_context, stream_handle, or stream_handle_with_context bindings require handler_receiver on the shape",
                     ));
                 }
                 return Ok(quote! {});
@@ -365,8 +315,6 @@ pub fn expand_input_dispatch_fn(
             let mut context_dispatch_arms = Vec::new();
             let mut plain_stream_dispatch_arms = Vec::new();
             let mut context_stream_dispatch_arms = Vec::new();
-            let mut permission_paths_dispatch_arms = Vec::new();
-            let mut permission_networks_dispatch_arms = Vec::new();
             let mut saw_any_handle = false;
             let mut saw_context_handle = false;
             let mut can_generate_plain = true;
@@ -375,10 +323,6 @@ pub fn expand_input_dispatch_fn(
             let mut saw_context_stream_handle = false;
             let mut can_generate_plain_stream = true;
             let mut can_generate_context_stream = true;
-            let mut saw_any_permission_paths_handle = false;
-            let mut saw_any_permission_networks_handle = false;
-            let mut saw_missing_permission_paths_handle = false;
-            let mut saw_missing_permission_networks_handle = false;
             for variant in &data_enum.variants {
                 let config = parse_input_variant_config(variant)?;
                 if config.handle_by_value
@@ -396,8 +340,6 @@ pub fn expand_input_dispatch_fn(
                 let context_handle = config.handle_with_context.clone();
                 let plain_stream_handle = config.stream_handle.clone();
                 let context_stream_handle = config.stream_handle_with_context.clone();
-                let permission_paths_handle = config.permission_paths_handle.clone();
-                let permission_networks_handle = config.permission_networks_handle.clone();
                 saw_any_handle |= plain_handle.is_some() || context_handle.is_some();
                 saw_context_handle |= context_handle.is_some();
                 if plain_handle.is_none() && context_handle.is_none() {
@@ -416,14 +358,6 @@ pub fn expand_input_dispatch_fn(
                 {
                     can_generate_plain_stream = false;
                     can_generate_context_stream = false;
-                }
-                saw_any_permission_paths_handle |= permission_paths_handle.is_some();
-                saw_any_permission_networks_handle |= permission_networks_handle.is_some();
-                if permission_paths_handle.is_none() {
-                    saw_missing_permission_paths_handle = true;
-                }
-                if permission_networks_handle.is_none() {
-                    saw_missing_permission_networks_handle = true;
                 }
                 let (bound_pattern, ignored_pattern, arg_exprs) =
                     dispatch_variant_pattern_and_args(variant, config.handle_by_value)?;
@@ -486,16 +420,6 @@ pub fn expand_input_dispatch_fn(
                         context_stream_dispatch_arms.push(quote! { #bound_pattern => #call_expr });
                     }
                 }
-                if let Some(handle) = permission_paths_handle.as_ref() {
-                    permission_paths_dispatch_arms.push(
-                        quote! { #bound_pattern => #handle(receiver #(, #arg_exprs )*).await },
-                    );
-                }
-                if let Some(handle) = permission_networks_handle.as_ref() {
-                    permission_networks_dispatch_arms.push(
-                        quote! { #bound_pattern => #handle(receiver #(, #arg_exprs )*).await },
-                    );
-                }
             }
             if saw_any_handle && !can_generate_plain && !saw_context_handle {
                 return Err(syn::Error::new(
@@ -519,18 +443,6 @@ pub fn expand_input_dispatch_fn(
                 return Err(syn::Error::new(
                     proc_macro2::Span::call_site(),
                     "context-aware input stream dispatch requires #[input(stream_handle = path)], #[input(stream_handle_with_context = path)], #[input(handle = path)], or #[input(handle_with_context = path)] on every variant",
-                ));
-            }
-            if saw_any_permission_paths_handle && saw_missing_permission_paths_handle {
-                return Err(syn::Error::new(
-                    proc_macro2::Span::call_site(),
-                    "input permission path dispatch requires #[input(permission_paths_handle = path)] on every variant",
-                ));
-            }
-            if saw_any_permission_networks_handle && saw_missing_permission_networks_handle {
-                return Err(syn::Error::new(
-                    proc_macro2::Span::call_site(),
-                    "input permission network dispatch requires #[input(permission_networks_handle = path)] on every variant",
                 ));
             }
             let plain_fn = if can_generate_plain && !plain_dispatch_arms.is_empty() {
@@ -595,55 +507,11 @@ pub fn expand_input_dispatch_fn(
                 } else {
                     quote! {}
                 };
-            let permission_paths_fn = if saw_any_permission_paths_handle {
-                quote! {
-                    pub async fn dispatch_permission_paths(
-                        self,
-                        receiver: &#receiver_ty,
-                    ) -> ::agena_plugin_sdk::Result<Vec<::agena_plugin_sdk::PathRequest>> {
-                        match self {
-                            #(#permission_paths_dispatch_arms),*
-                        }
-                    }
-                }
-            } else {
-                quote! {
-                    pub async fn dispatch_permission_paths(
-                        self,
-                        _receiver: &#receiver_ty,
-                    ) -> ::agena_plugin_sdk::Result<Vec<::agena_plugin_sdk::PathRequest>> {
-                        Ok(Vec::new())
-                    }
-                }
-            };
-            let permission_networks_fn = if saw_any_permission_networks_handle {
-                quote! {
-                    pub async fn dispatch_permission_networks(
-                        self,
-                        receiver: &#receiver_ty,
-                    ) -> ::agena_plugin_sdk::Result<Vec<::agena_plugin_sdk::NetworkRequest>> {
-                        match self {
-                            #(#permission_networks_dispatch_arms),*
-                        }
-                    }
-                }
-            } else {
-                quote! {
-                    pub async fn dispatch_permission_networks(
-                        self,
-                        _receiver: &#receiver_ty,
-                    ) -> ::agena_plugin_sdk::Result<Vec<::agena_plugin_sdk::NetworkRequest>> {
-                        Ok(Vec::new())
-                    }
-                }
-            };
             Ok(quote! {
                 #plain_fn
                 #context_fn
                 #plain_stream_fn
                 #context_stream_fn
-                #permission_paths_fn
-                #permission_networks_fn
             })
         }
         Data::Union(_) => Ok(quote! {}),

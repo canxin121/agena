@@ -186,6 +186,9 @@ impl App {
                     PermissionStudioPage::ToolCommandRules => {
                         Some(PermissionStudioSectionId::ToolCommandRules)
                     }
+                    // The class-default pages have no free-text field: every
+                    // entry is a mode chosen from the value list, so no section
+                    // follows.
                     PermissionStudioPage::PathDefaults | PermissionStudioPage::NetworkZones => None,
                 };
                 self.set_permission_studio_page_with_section(
@@ -203,10 +206,10 @@ impl App {
                 )
                 .map_err(crate::UiFailure::message)?;
                 let mut permission = dialog.permission.clone();
-                let rule = PathAccessRuleConfig::Modes(PathAccessModes {
+                let rule = PathAccessModes {
                     read: Some(PermissionMode::Auto),
                     write: Some(PermissionMode::Auto),
-                });
+                };
                 permission
                     .path
                     .get_or_insert_with(Default::default)
@@ -325,15 +328,15 @@ impl App {
     }
 }
 use crate::{
-    App, ChoiceOverlayAction, Editor, PathAccessModes, PathAccessRuleConfig, PermissionMode,
-    PermissionStudioAction, PermissionStudioCatalogKind, PermissionStudioEditor,
-    PermissionStudioEditorAction, PermissionStudioFocus, PermissionStudioModeTarget,
-    PermissionStudioOverlay, PermissionStudioPage, PermissionStudioPaneFocus,
-    PermissionStudioSectionId, PermissionStudioTextTarget, ToolPermissionRules, UiResult,
-    apply_permission_studio_text_input, editor_save_footer, parse_permission_studio_key_input,
-    permission_mode_choice_items, permission_studio_creator_input_text,
-    permission_studio_creator_spec, permission_studio_mode_target_input_text,
-    permission_studio_mode_target_label, permission_studio_read_only_message,
-    permission_studio_text_target_input_text, permission_studio_text_target_label,
-    set_permission_studio_pane_focus, settings_edit_title, ui_text,
+    App, ChoiceOverlayAction, Editor, PathAccessModes, PermissionMode, PermissionStudioAction,
+    PermissionStudioCatalogKind, PermissionStudioEditor, PermissionStudioEditorAction,
+    PermissionStudioFocus, PermissionStudioModeTarget, PermissionStudioOverlay,
+    PermissionStudioPage, PermissionStudioPaneFocus, PermissionStudioSectionId,
+    PermissionStudioTextTarget, ToolPermissionRules, UiResult, apply_permission_studio_text_input,
+    editor_save_footer, parse_permission_studio_key_input, permission_mode_choice_items,
+    permission_studio_creator_input_text, permission_studio_creator_spec,
+    permission_studio_mode_target_input_text, permission_studio_mode_target_label,
+    permission_studio_read_only_message, permission_studio_text_target_input_text,
+    permission_studio_text_target_label, set_permission_studio_pane_focus, settings_edit_title,
+    ui_text,
 };

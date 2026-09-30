@@ -2210,3 +2210,4 @@ plugin-workbench-kind-object = 对象
 plugin-workbench-kind-one-of = oneOf
 plugin-workbench-kind-string = 字符串
 plugin-workbench-kind-value = 值
+permission-studio-page-tool-defaults = 工具权限 / 默认值

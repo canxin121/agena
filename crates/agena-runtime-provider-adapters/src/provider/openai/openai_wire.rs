@@ -73,8 +73,6 @@ pub(super) enum OpenAiResponsesTextFormat {
     JsonSchema {
         name: String,
         schema: serde_json::Value,
-        #[serde(skip_serializing_if = "std::ops::Not::not")]
-        strict: bool,
     },
 }
 
@@ -83,14 +81,9 @@ impl OpenAiResponsesTextFormat {
         match format? {
             ResponseFormat::Text => None,
             ResponseFormat::JsonObject => Some(Self::JsonObject),
-            ResponseFormat::JsonSchema {
-                name,
-                schema,
-                strict,
-            } => Some(Self::JsonSchema {
+            ResponseFormat::JsonSchema { name, schema } => Some(Self::JsonSchema {
                 name: name.clone(),
                 schema: schema.clone(),
-                strict: *strict,
             }),
         }
     }

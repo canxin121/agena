@@ -544,7 +544,6 @@ fn auto_approval_decision_tools() -> Vec<agena_provider::ToolApiDefinition> {
                 description: description.to_owned(),
                 input_schema,
                 output_schema: serde_json::json!({}),
-                strict: true,
                 definition_identity: format!("agena-auto-approval:{name}"),
             },
         )

@@ -477,7 +477,7 @@ pub(super) fn validate_tool_manifest_value(
         check_object_keys(
             contract,
             &format!("{path}.contract"),
-            &["input_schema", "output_schema", "strict"],
+            &["input_schema", "output_schema"],
             "tool.contract.unknown_field",
             output,
         );

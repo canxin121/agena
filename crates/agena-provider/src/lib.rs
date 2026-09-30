@@ -392,7 +392,6 @@ mod tests {
             description: "Describe an execution tool.".to_owned(),
             input_schema: serde_json::json!({"type": "object"}),
             output_schema: serde_json::json!({"type": "object"}),
-            strict: true,
             definition_identity: "tools-help-v1".to_owned(),
         };
 

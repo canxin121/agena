@@ -20,23 +20,16 @@ pub enum ChatResponseFormat {
 pub struct ChatJsonSchemaSpec {
     pub name: String,
     pub schema: Value,
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
-    pub strict: bool,
 }
 
 pub fn openai_chat_response_format(fmt: Option<&ResponseFormat>) -> Option<ChatResponseFormat> {
     match fmt? {
         ResponseFormat::Text => Some(ChatResponseFormat::Text),
         ResponseFormat::JsonObject => Some(ChatResponseFormat::JsonObject),
-        ResponseFormat::JsonSchema {
-            name,
-            schema,
-            strict,
-        } => Some(ChatResponseFormat::JsonSchema {
+        ResponseFormat::JsonSchema { name, schema } => Some(ChatResponseFormat::JsonSchema {
             json_schema: ChatJsonSchemaSpec {
                 name: name.clone(),
                 schema: schema.clone(),
-                strict: *strict,
             },
         }),
     }

@@ -73,7 +73,6 @@ impl OpenAiTransport {
                         name: openai_chat_tool_name(tool.name.as_str()),
                         description: tool.description,
                         parameters: tool.input_schema,
-                        strict: tool.strict,
                     },
                 })
                 .collect()

@@ -328,8 +328,6 @@ pub struct ToolContract {
         skip_serializing_if = "crate::manifest_support::serde_json_value_is_empty_schema"
     )]
     pub output_schema: serde_json::Value,
-    #[serde(default)]
-    pub strict: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -368,7 +366,6 @@ impl Default for ToolContract {
         Self {
             input_schema: serde_json::Value::Null,
             output_schema: serde_json::Value::Null,
-            strict: false,
         }
     }
 }

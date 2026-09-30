@@ -177,7 +177,6 @@ impl RegisteredTool {
             "summary": self.summary_text(),
             "input_schema": self.input_schema(),
             "output_schema": self.output_schema(),
-            "strict": self.definition.contract.strict,
             "streaming": self.definition.runtime.streaming,
             "tags": self.effective_tags(),
         });

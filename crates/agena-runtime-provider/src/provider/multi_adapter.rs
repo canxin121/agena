@@ -980,7 +980,6 @@ mod tests {
                     "properties": {}
                 }),
                 output_schema: serde_json::Value::Null,
-                strict: true,
             },
             model: Default::default(),
             docs: Default::default(),

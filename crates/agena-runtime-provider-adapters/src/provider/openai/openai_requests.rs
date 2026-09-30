@@ -621,9 +621,6 @@ impl OpenAiTransport {
                 serde_json::Value::String(tool.description.clone()),
             );
             map.insert("parameters".to_owned(), tool.input_schema.clone());
-            if tool.strict {
-                map.insert("strict".to_owned(), serde_json::Value::Bool(true));
-            }
             tools.push(serde_json::Value::Object(map));
         }
 

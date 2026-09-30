@@ -620,7 +620,6 @@ mod tests {
             response_format: Some(agena_provider::ResponseFormat::JsonSchema {
                 name: "permission_verdict".to_owned(),
                 schema: schema.clone(),
-                strict: true,
             }),
             responses_api_metadata: None,
             request_override: Default::default(),

@@ -1344,7 +1344,6 @@ impl AmazonBedrockAdapter {
                             name: bedrock_wire_tool_name(tool.name.as_str()),
                             description: tool.description,
                             parameters: tool.input_schema,
-                            strict: tool.strict,
                         },
                     })
                     .collect()
@@ -1435,7 +1434,6 @@ impl AmazonBedrockAdapter {
                             name: bedrock_wire_tool_name(tool.name.as_str()),
                             description: tool.description,
                             parameters: tool.input_schema,
-                            strict: tool.strict,
                         },
                     })
                     .collect()

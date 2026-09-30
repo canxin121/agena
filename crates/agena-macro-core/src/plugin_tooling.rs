@@ -116,7 +116,6 @@ pub fn expand_plugin_tool_definition(
             )
         })?;
     let concurrency_safe = spec.concurrency_safe;
-    let strict = spec.strict;
     let input_schema_expr = expand_plugin_tool_input_schema(model)?;
     let output_schema_expr = spec
         .output_ty
@@ -166,7 +165,6 @@ pub fn expand_plugin_tool_definition(
             contract: ::agena_plugin_sdk::manifest::ToolContract {
                 input_schema,
                 output_schema: #output_schema_expr,
-                strict: #strict,
             },
             model: ::agena_plugin_sdk::manifest::ToolModelSurface {
                 examples: #examples_expr,

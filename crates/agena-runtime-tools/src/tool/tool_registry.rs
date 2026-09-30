@@ -132,7 +132,6 @@ impl ToolApiBinding {
             description: tool_api_description(function).to_owned(),
             input_schema: handler.input_schema(),
             output_schema: handler.output_schema(),
-            strict: handler.definition.contract.strict,
             definition_identity: handler.definition_identity(),
         };
         Some(Self {
@@ -170,7 +169,6 @@ impl ToolApiBinding {
                     }
                 }),
                 output_schema: serde_json::json!({}),
-                strict: false,
                 definition_identity: "agena-tool-api:tools_call".to_owned(),
             },
             handler: None,

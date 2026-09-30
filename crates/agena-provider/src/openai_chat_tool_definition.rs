@@ -15,6 +15,4 @@ pub struct ChatFunctionDefinition {
     pub name: String,
     pub description: String,
     pub parameters: Value,
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
-    pub strict: bool,
 }

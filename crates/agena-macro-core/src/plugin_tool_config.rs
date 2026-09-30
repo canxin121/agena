@@ -74,7 +74,6 @@ fn parse_plugin_inline_tool_config(
                     "concurrency_safe" => {
                         spec.concurrency_safe = expr_lit_bool(&value.value, "concurrency_safe")?
                     }
-                    "strict" => spec.strict = expr_lit_bool(&value.value, "strict")?,
                     "operation" => {
                         return Err(syn::Error::new_spanned(
                             ident,
@@ -277,7 +276,6 @@ fn parse_plugin_inline_tool_config(
                 };
                 match ident.to_string().as_str() {
                     "concurrency_safe" => spec.concurrency_safe = true,
-                    "strict" => spec.strict = true,
                     "operation" => {
                         if operation
                             .replace(PluginToolOperationConfig::default())

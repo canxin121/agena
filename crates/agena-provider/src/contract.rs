@@ -1173,7 +1173,6 @@ pub struct ToolApiDefinition {
     pub description: String,
     pub input_schema: serde_json::Value,
     pub output_schema: serde_json::Value,
-    pub strict: bool,
     pub definition_identity: String,
 }
 
@@ -1960,8 +1959,6 @@ pub enum ResponseFormat {
     JsonSchema {
         name: String,
         schema: serde_json::Value,
-        #[serde(default)]
-        strict: bool,
     },
 }
 

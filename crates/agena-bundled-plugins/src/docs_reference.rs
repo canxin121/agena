@@ -60,7 +60,7 @@ fn render_header(out: &mut String, plugin_count: usize, tool_count: usize) {
     )
     .unwrap();
     writeln!(out).unwrap();
-    writeln!(out, "- Each tool entry includes: name, summary, detailed help (`before_help` / `help` / `after_help`), tags, concurrency / streaming / strict runtime flags, examples, an input parameter table, and the full input / output JSON Schema.").unwrap();
+    writeln!(out, "- Each tool entry includes: name, summary, detailed help (`before_help` / `help` / `after_help`), tags, concurrency / streaming runtime flags, examples, an input parameter table, and the full input / output JSON Schema.").unwrap();
     writeln!(out, "- The `list` / `search` / `help` / `tags` / `call` tools of `agena.tools` are the stable Tool API gateway handlers; all other tools are ordinary execution tools.").unwrap();
     writeln!(out, "- Tool names (`plugin.tool`, full key `agena.<plugin>.<tool>`) appear only in `tools_help.tool` / `tools_call.tool`; they never become Provider function names.").unwrap();
     writeln!(out).unwrap();
@@ -157,16 +157,7 @@ fn render_tool(out: &mut String, plugin_id: &str, tool: &ToolDefinition) {
         .unwrap_or_else(|_| "\"buffered\"".to_string())
         .trim_matches('"')
         .to_string();
-    let strict = if tool.contract.strict {
-        "strict"
-    } else {
-        "non-strict"
-    };
-    writeln!(
-        out,
-        "**Runtime**: {concurrency} · streaming `{streaming}` · {strict}"
-    )
-    .unwrap();
+    writeln!(out, "**Runtime**: {concurrency} · streaming `{streaming}`").unwrap();
 
     if let Some(before) = nonempty(tool.before_help_text()) {
         writeln!(out).unwrap();

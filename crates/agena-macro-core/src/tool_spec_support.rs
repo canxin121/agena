@@ -46,11 +46,6 @@ pub struct ToolSpecConfig {
     pub concurrency_safe: bool,
     pub strict: bool,
     pub streaming: bool,
-    pub mutating: bool,
-    pub read_only: bool,
-    pub shell: bool,
-    pub interactive: bool,
-    pub task: bool,
     pub input_shape: Option<Type>,
     pub output_ty: Option<Type>,
 }
@@ -96,11 +91,6 @@ pub fn empty_tool_spec_config() -> ToolSpecConfig {
         concurrency_safe: false,
         strict: false,
         streaming: false,
-        mutating: false,
-        read_only: false,
-        shell: false,
-        interactive: false,
-        task: false,
         input_shape: None,
         output_ty: None,
     }

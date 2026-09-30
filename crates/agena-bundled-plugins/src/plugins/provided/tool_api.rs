@@ -48,10 +48,8 @@ impl ToolApiPlugin {
     }
 
     #[tool(
-        tags(query, discovery),
+        tags(query, discovery, read_only),
         summary = "Enumerate current tools across one plugin or a batch of plugin targets.",
-        read_only,
-        discovery,
         concurrency_safe
     )]
     async fn list(&self, input: &ToolApiListInput) -> SdkResult<ToolInvokeOutput> {
@@ -59,10 +57,8 @@ impl ToolApiPlugin {
     }
 
     #[tool(
-        tags(query, discovery),
+        tags(query, discovery, read_only),
         summary = "Search execution tools with one or many queries across one or many plugin targets.",
-        read_only,
-        discovery,
         concurrency_safe
     )]
     async fn search(&self, input: &ToolApiSearchInput) -> SdkResult<ToolInvokeOutput> {
@@ -70,10 +66,8 @@ impl ToolApiPlugin {
     }
 
     #[tool(
-        tags(query, discovery),
+        tags(query, discovery, read_only),
         summary = "Get reusable schemas, examples, and usage notes for one Agena execution tool or a batch of tools.",
-        read_only,
-        discovery,
         concurrency_safe
     )]
     async fn help(&self, input: &ToolApiHelpInput) -> SdkResult<ToolInvokeOutput> {
@@ -81,10 +75,8 @@ impl ToolApiPlugin {
     }
 
     #[tool(
-        tags(query, discovery),
+        tags(query, discovery, read_only),
         summary = "List tool tags across one plugin or a batch of plugin targets.",
-        read_only,
-        discovery,
         concurrency_safe
     )]
     async fn tags(&self, input: &ToolApiTagsInput) -> SdkResult<ToolInvokeOutput> {
@@ -92,10 +84,8 @@ impl ToolApiPlugin {
     }
 
     #[tool(
-        tags(query, discovery),
+        tags(query, discovery, read_only),
         summary = "Enumerate one or many selected plugins with version, summary, tags, and tool count.",
-        read_only,
-        discovery,
         concurrency_safe
     )]
     async fn plugins_list(&self, input: &ToolApiListInput) -> SdkResult<ToolInvokeOutput> {
@@ -103,10 +93,8 @@ impl ToolApiPlugin {
     }
 
     #[tool(
-        tags(query, discovery),
+        tags(query, discovery, read_only),
         summary = "Search loaded plugins with one or many queries and optional multi-plugin scope.",
-        read_only,
-        discovery,
         concurrency_safe
     )]
     async fn plugins_search(&self, input: &ToolApiSearchInput) -> SdkResult<ToolInvokeOutput> {
@@ -114,10 +102,8 @@ impl ToolApiPlugin {
     }
 
     #[tool(
-        tags(query, discovery),
+        tags(query, discovery, read_only),
         summary = "List plugin tags across one plugin or a batch of plugin targets.",
-        read_only,
-        discovery,
         concurrency_safe
     )]
     async fn plugins_tags(&self, input: &ToolApiTagsInput) -> SdkResult<ToolInvokeOutput> {

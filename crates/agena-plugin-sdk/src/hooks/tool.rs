@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::attachment::AttachmentItem;
 use crate::identity::{PluginKey, ToolKey};
-use crate::manifest::{ToolBehavior, ToolTag};
+use crate::manifest::ToolTag;
 
 // ── tool.execute.before ────────────────────────────────────────────────────
 
@@ -17,11 +17,6 @@ pub struct ToolBeforeInput {
     pub workspace_root: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<ToolTag>,
-    /// How the tool declares it behaves. Self-description, not authority; it
-    /// lets hooks reason about shape (a shell tool, an interactive tool)
-    /// without a separate declaration surface.
-    #[serde(default)]
-    pub behavior: ToolBehavior,
     pub input: serde_json::Value,
     /// Carry-through: accumulated title override from prior plugins in the chain.
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -289,16 +289,10 @@ fn parse_plugin_inline_tool_config(
                             ));
                         }
                     }
-                    // Behavior flags. They select host behavior (executor,
-                    // concurrency, builtin profile) and are surfaced as tags;
-                    // they are never a permission.
-                    "mutating" => spec.mutating = true,
-                    "read_only" => spec.read_only = true,
-                    "shell" => spec.shell = true,
-                    "interactive" => spec.interactive = true,
-                    "task" => spec.task = true,
-                    // Function/category metadata tags: describe what the tool
-                    // does, never what it is allowed to do.
+                    // The tool's tag vocabulary: what the tool is and does,
+                    // never what it is allowed to do. A tag may be written as a
+                    // bare flag (`shell`, `read_only`) or inside `tags(...)`;
+                    // both spellings land in the same list.
                     tag if inline_tool_tag_expr(tag).is_some() => {
                         spec.tags
                             .push(inline_tool_tag_expr(tag).expect("tag checked as present"));
@@ -400,9 +394,11 @@ fn parse_inline_tool_operation_config(
 
 fn inline_tool_tag_expr(tag: &str) -> Option<Expr> {
     let variant = match tag {
-        // Metadata and behavior tags. Behavior flags have a tag spelling so
-        // one collection answers both; none of them is a permission.
+        // The tag vocabulary, one entry per spelled tag. None of them is a
+        // permission.
         "query" => quote! { ::agena_plugin_sdk::ToolTag::Query },
+        // `mutating` is the adjective spelling of the `mutate` tag.
+        "mutating" => quote! { ::agena_plugin_sdk::ToolTag::Mutate },
         "shell" => quote! { ::agena_plugin_sdk::ToolTag::Shell },
         "task" => quote! { ::agena_plugin_sdk::ToolTag::Task },
         "read_only" => quote! { ::agena_plugin_sdk::ToolTag::ReadOnly },

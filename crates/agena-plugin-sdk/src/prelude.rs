@@ -46,9 +46,9 @@ pub use crate::manifest::{
     PluginSkillDefinition, PluginSurfaceContributions, PluginTerminalColor,
     PluginTerminalContributions, PluginTerminalThemeColors, PluginTerminalThemePalette,
     SettingsConstraints, SettingsContract, SettingsNode, SettingsNodeKind, SettingsOption,
-    SettingsVariant, ToolBehavior, ToolContract, ToolDefinition, ToolDocs, ToolInput,
-    ToolModelSurface, ToolResultPolicy, ToolResultRenderKind, ToolRuntimePolicy, ToolStreamingMode,
-    ToolTag, TransportKind, normalize_tool_tag_name,
+    SettingsVariant, ToolContract, ToolDefinition, ToolDocs, ToolInput, ToolModelSurface,
+    ToolResultPolicy, ToolResultRenderKind, ToolRuntimePolicy, ToolStreamingMode, ToolTag,
+    TransportKind, normalize_tool_tag_name,
 };
 pub use crate::plugin::{InitContext, InitOutcome, Plugin, PluginSettings, ToolStreamSink};
 pub use crate::service_client::{

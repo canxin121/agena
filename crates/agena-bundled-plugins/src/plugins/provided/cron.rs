@@ -57,11 +57,9 @@ impl CronPlugin {
     }
 
     #[tool(
-        tags(query, scheduler, discovery),
+        tags(query, scheduler, discovery, read_only),
         summary = "List registered cron jobs and wakeups.",
         help = "List every scheduled job registered in this session. Jobs are session-only — they exist for this session's lifetime and are gone when it ends — and recurring jobs auto-expire after seven days. Use this to review schedules you created; never poll it waiting for a job to fire.",
-        read_only,
-        scheduler,
         concurrency_safe
     )]
     async fn invoke_list(
@@ -81,9 +79,7 @@ impl CronPlugin {
     #[tool(
         tags(mutate, scheduler),
         summary = "Create one cron schedule.",
-        help = "Schedule a recurring wake with a 6-field cron expression (second minute hour day-of-month month day-of-week). Always pass the IANA timezone from environment_context; wall-clock fields are evaluated in that timezone and returned times are explicit RFC 3339 instants. When the job fires while the session is idle, its prompt is appended chronologically as a typed system_notification and wakes the model; never use it to poll. Jobs are session-only and auto-expire after seven days. When the exact time does not matter, avoid :00 and :30 to reduce clumping.",
-        mutating,
-        scheduler
+        help = "Schedule a recurring wake with a 6-field cron expression (second minute hour day-of-month month day-of-week). Always pass the IANA timezone from environment_context; wall-clock fields are evaluated in that timezone and returned times are explicit RFC 3339 instants. When the job fires while the session is idle, its prompt is appended chronologically as a typed system_notification and wakes the model; never use it to poll. Jobs are session-only and auto-expire after seven days. When the exact time does not matter, avoid :00 and :30 to reduce clumping."
     )]
     async fn invoke_create(
         &self,
@@ -102,9 +98,7 @@ impl CronPlugin {
     #[tool(
         tags(mutate, scheduler),
         summary = "Delete one cron schedule.",
-        help = "Permanently remove a scheduled job from this session. Deleting stops future firings immediately.",
-        mutating,
-        scheduler
+        help = "Permanently remove a scheduled job from this session. Deleting stops future firings immediately."
     )]
     async fn invoke_delete(
         &self,
@@ -123,9 +117,7 @@ impl CronPlugin {
     #[tool(
         tags(mutate, scheduler),
         summary = "Update the prompt or schedule parameters of one retained job.",
-        help = "Change the prompt or cron parameters of an existing job. The updated schedule takes effect for subsequent firings.",
-        mutating,
-        scheduler
+        help = "Change the prompt or cron parameters of an existing job. The updated schedule takes effect for subsequent firings."
     )]
     async fn invoke_update(
         &self,
@@ -144,9 +136,7 @@ impl CronPlugin {
     #[tool(
         tags(mutate, scheduler),
         summary = "Pause one scheduled job without deleting it.",
-        help = "Temporarily suspend a job's future firings while keeping its definition. Use resume to start it again.",
-        mutating,
-        scheduler
+        help = "Temporarily suspend a job's future firings while keeping its definition. Use resume to start it again."
     )]
     async fn invoke_pause(
         &self,
@@ -165,9 +155,7 @@ impl CronPlugin {
     #[tool(
         tags(mutate, scheduler),
         summary = "Resume one paused scheduled job.",
-        help = "Re-enable a job that was paused so its future firings happen again.",
-        mutating,
-        scheduler
+        help = "Re-enable a job that was paused so its future firings happen again."
     )]
     async fn invoke_resume(
         &self,
@@ -184,11 +172,9 @@ impl CronPlugin {
     }
 
     #[tool(
-        tags(query, scheduler),
+        tags(query, scheduler, read_only),
         summary = "Inspect bounded persisted delivery history for scheduled jobs.",
         help = "Read the bounded delivery history (fire times, outcome, last error) for scheduled jobs. Never poll this waiting for a job to fire — the firing itself appends its prompt to the session and wakes you.",
-        read_only,
-        scheduler,
         concurrency_safe
     )]
     async fn invoke_history(

@@ -4,7 +4,7 @@ impl ToolExecutor {
             return false;
         };
         entry.definition.runtime.concurrency_safe
-            && !entry.definition.behavior.interactive
+            && !entry.has_tag(agena_plugin_host::sdk::ToolTag::Interactive)
             && is_concurrency_safe_tool_invocation(
                 &entry,
                 &PluginInvocation::from_tool_invocation(invocation),
@@ -141,7 +141,7 @@ impl ToolExecutor {
             self.principal.authorize_tool_names(
                 &tool_name_aliases,
                 command.as_deref(),
-                definition.definition.behavior,
+                &definition.effective_tags(),
             ),
         ))
     }

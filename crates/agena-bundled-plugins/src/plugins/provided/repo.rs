@@ -39,10 +39,8 @@ impl SnapshotPlugin {
     }
 
     #[tool(
-        tags(query, snapshot),
-        summary = "List active managed repository snapshots.",
-        read_only,
-        snapshot
+        tags(query, snapshot, read_only),
+        summary = "List active managed repository snapshots."
     )]
     async fn status(&self) -> SdkResult<ToolInvokeOutput> {
         let response = self.inner.host()?.snapshot_list().await?;
@@ -75,9 +73,7 @@ impl SnapshotPlugin {
 
     #[tool(
         tags(mutate, snapshot),
-        summary = "Enter a managed repository snapshot.",
-        mutating,
-        snapshot
+        summary = "Enter a managed repository snapshot."
     )]
     async fn enter(&self, input: &EnterSnapshotCommandInput) -> SdkResult<ToolInvokeOutput> {
         self.inner.invoke_snapshot_enter(input).await
@@ -85,9 +81,7 @@ impl SnapshotPlugin {
 
     #[tool(
         tags(mutate, snapshot),
-        summary = "Exit a managed repository snapshot.",
-        mutating,
-        snapshot
+        summary = "Exit a managed repository snapshot."
     )]
     async fn exit(&self, input: &ExitSnapshotCommandInput) -> SdkResult<ToolInvokeOutput> {
         self.inner.invoke_snapshot_exit(input).await
@@ -114,8 +108,8 @@ mod tests {
             "snapshot remains a discovery/UI metadata tag"
         );
         assert!(
-            manifest.tools[0].behavior.read_only,
-            "read_only must be declared on the tool behavior"
+            manifest.tools[0].has_tag(ToolTag::ReadOnly),
+            "read_only must be declared as a tool tag"
         );
     }
 }

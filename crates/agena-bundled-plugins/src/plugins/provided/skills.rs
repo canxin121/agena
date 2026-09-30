@@ -1792,10 +1792,8 @@ impl SkillsPlugin {
     }
 
     #[tool(
-        tags(query, discovery),
+        tags(query, discovery, read_only),
         summary = "List discovered skills and slash commands.",
-        read_only,
-        discovery,
         concurrency_safe
     )]
     async fn invoke_list(&self, input: &SkillsListInput) -> SdkResult<ToolInvokeOutput> {
@@ -1874,10 +1872,8 @@ impl SkillsPlugin {
     }
 
     #[tool(
-        tags(query, discovery),
+        tags(query, discovery, read_only),
         summary = "Read one discovered skill or slash command.",
-        read_only,
-        discovery,
         concurrency_safe
     )]
     async fn invoke_get(&self, input: &SkillsGetInput) -> SdkResult<ToolInvokeOutput> {
@@ -1930,8 +1926,7 @@ impl SkillsPlugin {
     #[tool(
         tags(mutate, filesystem),
         summary = "Create a workspace-managed Skill document.",
-        help = "Creates `.agena/skills/<name>/SKILL.md` from a complete SKILL.md document. Only workspace-local Skills are mutable; built-in, plugin, and user-global Skills remain read-only.",
-        mutating
+        help = "Creates `.agena/skills/<name>/SKILL.md` from a complete SKILL.md document. Only workspace-local Skills are mutable; built-in, plugin, and user-global Skills remain read-only."
     )]
     async fn invoke_create(&self, input: &SkillsCreateInput) -> SdkResult<ToolInvokeOutput> {
         let document = input.document.clone();
@@ -1945,8 +1940,7 @@ impl SkillsPlugin {
     #[tool(
         tags(mutate, filesystem),
         summary = "Update a workspace-managed Skill document.",
-        help = "Replaces an existing `.agena/skills/<name>/SKILL.md` document. The replacement frontmatter must keep the same canonical name.",
-        mutating
+        help = "Replaces an existing `.agena/skills/<name>/SKILL.md` document. The replacement frontmatter must keep the same canonical name."
     )]
     async fn invoke_update(&self, input: &SkillsUpdateInput) -> SdkResult<ToolInvokeOutput> {
         let name = input.name.clone();
@@ -1966,8 +1960,7 @@ impl SkillsPlugin {
     #[tool(
         tags(mutate, filesystem),
         summary = "Delete a workspace-managed Skill document.",
-        help = "Deletes only `.agena/skills/<name>/SKILL.md`; bundled, plugin, and user-global Skills cannot be deleted through this tool.",
-        mutating
+        help = "Deletes only `.agena/skills/<name>/SKILL.md`; bundled, plugin, and user-global Skills cannot be deleted through this tool."
     )]
     async fn invoke_delete(&self, input: &SkillsDeleteInput) -> SdkResult<ToolInvokeOutput> {
         let name = input.name.clone();
@@ -1981,9 +1974,8 @@ impl SkillsPlugin {
     }
 
     #[tool(
-        tags(query, filesystem),
+        tags(query, filesystem, read_only),
         summary = "Read a bounded UTF-8 resource contained by one skill package.",
-        read_only,
         concurrency_safe
     )]
     async fn invoke_read_resource(
@@ -2032,10 +2024,8 @@ impl SkillsPlugin {
     }
 
     #[tool(
-        tags(mutate, discovery),
+        tags(mutate, discovery, read_only),
         summary = "Rescan filesystem-backed Skills and report the catalog generation.",
-        read_only,
-        discovery,
         concurrency_safe
     )]
     async fn invoke_refresh(&self, input: &SkillsRefreshInput) -> SdkResult<ToolInvokeOutput> {

@@ -79,8 +79,7 @@ impl NotebookPlugin {
     #[tool(
         tags(mutate, filesystem),
         name = "edit_cell",
-        summary = "Replace, insert, or delete one Jupyter notebook cell with a revision check.",
-        mutating
+        summary = "Replace, insert, or delete one Jupyter notebook cell with a revision check."
     )]
     async fn edit_cell(
         &self,

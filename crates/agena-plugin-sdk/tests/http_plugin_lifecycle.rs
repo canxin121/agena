@@ -105,7 +105,7 @@ impl SettingsPlugin {
         Ok(())
     }
 
-    #[tool(summary = "Read the current object and settings.", read_only)]
+    #[tool(summary = "Read the current object and settings.", tags(read_only))]
     fn snapshot(&self) -> ToolInvokeOutput {
         ToolInvokeOutput::text(format!(
             "{}:{}",

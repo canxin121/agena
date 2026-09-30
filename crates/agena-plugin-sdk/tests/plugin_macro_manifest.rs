@@ -934,7 +934,6 @@ fn tool_before_input_with_tags(tool: &str, tags: Vec<ToolTag>, input: Value) -> 
         call_id: 2,
         workspace_root: "/workspace".to_string(),
         tags,
-        behavior: Default::default(),
         input,
         title_override: None,
         metadata: Default::default(),

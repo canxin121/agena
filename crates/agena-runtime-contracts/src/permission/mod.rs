@@ -4,7 +4,7 @@ use agena_domain::{
     AccessKind, AccessSelector, NetworkTarget, PermissionAction, PermissionDecision,
     PermissionMode, decide_from_mode,
 };
-use agena_plugin_host::sdk::ToolBehavior;
+use agena_plugin_host::sdk::ToolTag;
 use path_clean::PathClean;
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
@@ -230,10 +230,10 @@ fn is_terminal_write(names: &[&str]) -> bool {
 pub fn tool_action(
     tool_name: &str,
     command: Option<&str>,
-    behavior: ToolBehavior,
+    tags: &[ToolTag],
     policy: Option<&ToolPermissionPolicy>,
 ) -> PermissionAction {
-    let qualifier = if is_shell_tool(&[tool_name], behavior) && !is_terminal_write(&[tool_name]) {
+    let qualifier = if ToolTag::is_shell(tags) && !is_terminal_write(&[tool_name]) {
         command.and_then(|command| bash_permission_qualifier(command, policy))
     } else {
         None
@@ -304,14 +304,14 @@ impl ToolPermissionPolicy {
         &self,
         names: &[&str],
         command: Option<&str>,
-        behavior: ToolBehavior,
+        tags: &[ToolTag],
     ) -> PermissionDecision {
         // Input to a persistent CLI is not an independent shell command: it
         // may complete an earlier input or execute inside a REPL. Keep explicit
         // tool restrictions and recognizable command denials, but never let a
         // shell prefix allow/auto rule approve arbitrary terminal input.
         if is_terminal_write(names) {
-            let decision = self.check_tool_mode_with_names(names, behavior);
+            let decision = self.check_tool_mode_with_names(names);
             if matches!(decision, PermissionDecision::Deny { .. }) {
                 return decision;
             }
@@ -336,7 +336,7 @@ impl ToolPermissionPolicy {
             // outranks the command-class defaults below.
             return self.decision_for_mode(matched_name, mode);
         }
-        if is_shell_tool(names, behavior)
+        if ToolTag::is_shell(tags)
             && let Some(command) = command
         {
             if let Some(decision) = self.evaluate_bash_deny(command) {
@@ -357,7 +357,7 @@ impl ToolPermissionPolicy {
         }
         // The read-only class default. Like the interaction default it is
         // ranked above `tools.default`, and below a rule naming the tool.
-        if let Some(decision) = self.evaluate_read_only_class(names, behavior) {
+        if let Some(decision) = self.evaluate_read_only_class(names, tags) {
             return decision;
         }
         let name = names.first().copied().unwrap_or("tool");
@@ -375,9 +375,9 @@ impl ToolPermissionPolicy {
         })
     }
 
-    /// The default for tools that declare themselves read-only and neither
-    /// shell nor interactive, on the plugin's own word. `None` means no default
-    /// applies, so the tool falls through to `tools.default`.
+    /// The default for tools whose tags put them in the read-only class, on
+    /// the plugin's own word. `None` means no default applies, so the tool
+    /// falls through to `tools.default`.
     ///
     /// The mode comes from `tools.rules."*".read-only` when the configuration
     /// sets one, and from the built-in `allow` otherwise. A tool the user named
@@ -386,9 +386,9 @@ impl ToolPermissionPolicy {
     fn evaluate_read_only_class(
         &self,
         names: &[&str],
-        behavior: ToolBehavior,
+        tags: &[ToolTag],
     ) -> Option<PermissionDecision> {
-        if !behavior.read_only || behavior.shell || behavior.interactive {
+        if !ToolTag::is_read_only(tags) {
             return None;
         }
         let mode = self.read_only_mode.unwrap_or(DEFAULT_READ_ONLY_TOOLS);
@@ -403,23 +403,19 @@ impl ToolPermissionPolicy {
         &self,
         name: &str,
         command: Option<&str>,
-        behavior: ToolBehavior,
+        tags: &[ToolTag],
     ) -> PermissionDecision {
-        self.check_tool_with_names(&[name], command, behavior)
+        self.check_tool_with_names(&[name], command, tags)
     }
 
-    fn check_tool_mode_with_names(
-        &self,
-        names: &[&str],
-        _behavior: ToolBehavior,
-    ) -> PermissionDecision {
+    fn check_tool_mode_with_names(&self, names: &[&str]) -> PermissionDecision {
         // A precise tool-name rule wins; otherwise the default applies. The
         // default for ordinary execution tools is Allow: most tools are safe
         // because their effects are already constrained by the path, network,
         // and shell-command policies. Ask/Deny remain for the cases that need
-        // them (users who opt into stricter tool gating). The declared behavior
-        // flags are never used as a proxy for the default — only configured
-        // rules and `tools.default` decide.
+        // them (users who opt into stricter tool gating). The declared tags
+        // are never used as a proxy for the default — only configured rules
+        // and `tools.default` decide.
         if let Some((matched_name, mode)) = self.tool_name_mode(names) {
             return self.decision_for_mode(matched_name, mode);
         }
@@ -566,10 +562,6 @@ impl ToolPermissionPolicy {
         }
         None
     }
-}
-
-fn is_shell_tool(_names: &[&str], behavior: ToolBehavior) -> bool {
-    behavior.shell
 }
 
 pub fn combine_permission_modes(left: PermissionMode, right: PermissionMode) -> PermissionMode {
@@ -906,13 +898,10 @@ mod tests {
 
     use super::{PermissionMode, ToolPermissionPolicy, tool_action};
     use agena_domain::PermissionDecision;
-    use agena_plugin_host::sdk::ToolBehavior;
+    use agena_plugin_host::sdk::ToolTag;
 
-    fn shell_behavior() -> ToolBehavior {
-        ToolBehavior {
-            shell: true,
-            ..ToolBehavior::default()
-        }
+    fn shell_tags() -> Vec<ToolTag> {
+        vec![ToolTag::Shell]
     }
 
     #[test]
@@ -922,14 +911,18 @@ mod tests {
         policy.add_bash_overlay_rule("git push *", PermissionMode::Deny);
 
         assert!(matches!(
-            policy.check_tool("agena.shell.run", Some("git status"), shell_behavior()),
+            policy.check_tool(
+                "agena.shell.run",
+                Some("git status"),
+                shell_tags().as_slice()
+            ),
             PermissionDecision::Allow
         ));
         assert!(matches!(
             policy.check_tool(
                 "agena.shell.run",
                 Some("git push origin main"),
-                shell_behavior(),
+                shell_tags().as_slice(),
             ),
             PermissionDecision::Deny { .. }
         ));
@@ -937,7 +930,7 @@ mod tests {
             tool_action(
                 "agena.shell.run",
                 Some("git status"),
-                shell_behavior(),
+                shell_tags().as_slice(),
                 Some(&policy),
             ),
             PermissionAction::Tool {

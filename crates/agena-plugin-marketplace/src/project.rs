@@ -1092,8 +1092,8 @@ impl ExamplePlugin {{
     #[tool(
         name = "hello",
         summary = "Return a friendly greeting.",
-        read_only,
-        concurrency_safe
+        concurrency_safe,
+        tags(read_only)
     )]
     async fn hello(&self, input: &HelloInput) -> Result<HelloOutput> {{
         Ok(HelloOutput {{

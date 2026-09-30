@@ -351,10 +351,9 @@ impl GeminiToolsPlugin {
 
     #[tool(
         name = "cloud_image_understanding",
-        tags(query, network),
+        tags(query, network, mutate),
         summary = "Send explicit images to Google cloud for understanding; not local file viewing.",
-        help = "Runs in Google cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Sends only the specified, permission-checked inputs and prompt to Google. Accepts local paths with expected_sha256 or owned cloud_file_upload handles. Local preparation is bounded; no automatic whole-workspace or conversation upload. Cloud inference may be billed. Input sent inline is not a separate remote file. Results return input hashes, provider/model and usage. No local execution fallback.",
-        mutating
+        help = "Runs in Google cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Sends only the specified, permission-checked inputs and prompt to Google. Accepts local paths with expected_sha256 or owned cloud_file_upload handles. Local preparation is bounded; no automatic whole-workspace or conversation upload. Cloud inference may be billed. Input sent inline is not a separate remote file. Results return input hashes, provider/model and usage. No local execution fallback."
     )]
     async fn image_understanding(
         &self,
@@ -369,10 +368,9 @@ impl GeminiToolsPlugin {
 
     #[tool(
         name = "cloud_document_understanding",
-        tags(query, network),
+        tags(query, network, mutate),
         summary = "Send explicit PDF/text documents to Google cloud for understanding; not local file viewing.",
-        help = "Runs in Google cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Sends only the specified, permission-checked inputs and prompt to Google. Accepts local paths with expected_sha256 or owned cloud_file_upload handles. Local preparation is bounded; no automatic whole-workspace or conversation upload. Cloud inference may be billed. Input sent inline is not a separate remote file. Results return input hashes, provider/model and usage. No local execution fallback.",
-        mutating
+        help = "Runs in Google cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Sends only the specified, permission-checked inputs and prompt to Google. Accepts local paths with expected_sha256 or owned cloud_file_upload handles. Local preparation is bounded; no automatic whole-workspace or conversation upload. Cloud inference may be billed. Input sent inline is not a separate remote file. Results return input hashes, provider/model and usage. No local execution fallback."
     )]
     async fn document_understanding(
         &self,
@@ -389,8 +387,7 @@ impl GeminiToolsPlugin {
         name = "cloud_file_upload",
         tags(mutate, network),
         summary = "Upload one permitted local file to Google cloud and return a session-owned handle.",
-        help = "Runs in Google cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Creates a remote file; does not analyze it. Inputs up to 20 MiB are content-checked and optionally revision-checked. The handle is bound to this workspace/session/provider connection; arbitrary vendor file IDs cannot be substituted. Local files remain unchanged. A timeout may leave remote acceptance unknown: inspect the returned handle, do not automatically repeat. Query status before using processing files and delete unneeded files explicitly.",
-        mutating
+        help = "Runs in Google cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Creates a remote file; does not analyze it. Inputs up to 20 MiB are content-checked and optionally revision-checked. The handle is bound to this workspace/session/provider connection; arbitrary vendor file IDs cannot be substituted. Local files remain unchanged. A timeout may leave remote acceptance unknown: inspect the returned handle, do not automatically repeat. Query status before using processing files and delete unneeded files explicitly."
     )]
     async fn file_upload(
         &self,
@@ -402,10 +399,9 @@ impl GeminiToolsPlugin {
 
     #[tool(
         name = "cloud_file_status",
-        tags(query, network),
+        tags(query, network, mutate),
         summary = "Query the remote status of an owned Google cloud file, not a local path.",
-        help = "Runs in Google cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Accepts only cloud_file_upload handles from the same workspace, session and provider connection. Reports provider readiness/expiry and refreshes the signed local receipt. Does not download file contents or resubmit an unknown upload.",
-        mutating
+        help = "Runs in Google cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Accepts only cloud_file_upload handles from the same workspace, session and provider connection. Reports provider readiness/expiry and refreshes the signed local receipt. Does not download file contents or resubmit an unknown upload."
     )]
     async fn file_status(
         &self,
@@ -421,8 +417,7 @@ impl GeminiToolsPlugin {
         name = "cloud_file_delete",
         tags(mutate, network),
         summary = "Request deletion of an owned file from Google cloud; preserve the local original.",
-        help = "Runs in Google cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Accepts only session-owned cloud file handles. Deletes the remote resource and records the provider acknowledgement; it does not promise erasure of provider logs/backups. No arbitrary remote IDs or cross-provider deletion. A failed request is not reported as successful cleanup.",
-        mutating
+        help = "Runs in Google cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Accepts only session-owned cloud file handles. Deletes the remote resource and records the provider acknowledgement; it does not promise erasure of provider logs/backups. No arbitrary remote IDs or cross-provider deletion. A failed request is not reported as successful cleanup."
     )]
     async fn file_delete(
         &self,
@@ -435,10 +430,9 @@ impl GeminiToolsPlugin {
     }
     #[tool(
         name = "cloud_code_execution",
-        tags(network, interactive),
+        tags(network, interactive, read_only),
         summary = "Execute code in Google cloud infrastructure, not on this computer.",
-        help = "Runs in Google cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Cloud filesystem and runtime are separate from the Agena workspace; provide needed input files explicitly. Uses the official Interactions code_execution declaration. Computation executes on Google infrastructure; no returned function call is executed by Agena.",
-        read_only
+        help = "Runs in Google cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Cloud filesystem and runtime are separate from the Agena workspace; provide needed input files explicitly. Uses the official Interactions code_execution declaration. Computation executes on Google infrastructure; no returned function call is executed by Agena."
     )]
     async fn code_execution(&self, input: GeminiToolInput) -> SdkResult<ToolInvokeOutput> {
         self.interactions_tool(
@@ -452,11 +446,9 @@ impl GeminiToolsPlugin {
 
     #[tool(
         name = "cloud_url_context",
-        tags(network, interactive),
+        tags(network, interactive, discovery, read_only),
         summary = "Retrieve and ground URL content in Google cloud; no local-file access.",
-        help = "Runs in Google cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Uses the official url_context tool. Put URLs in the prompt or official request fields.",
-        read_only,
-        discovery
+        help = "Runs in Google cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Uses the official url_context tool. Put URLs in the prompt or official request fields."
     )]
     async fn url_context(&self, input: GeminiToolInput) -> SdkResult<ToolInvokeOutput> {
         self.interactions_tool(
@@ -470,11 +462,9 @@ impl GeminiToolsPlugin {
 
     #[tool(
         name = "cloud_google_search",
-        tags(network, interactive),
+        tags(network, interactive, discovery, read_only),
         summary = "Search Google and ground answers in Google cloud, not the local browser.",
-        help = "Runs in Google cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. tool_options.search_types accepts web_search, image_search, and enterprise_web_search.",
-        read_only,
-        discovery
+        help = "Runs in Google cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. tool_options.search_types accepts web_search, image_search, and enterprise_web_search."
     )]
     async fn google_search(&self, input: GeminiToolInput) -> SdkResult<ToolInvokeOutput> {
         self.interactions_tool(
@@ -488,11 +478,9 @@ impl GeminiToolsPlugin {
 
     #[tool(
         name = "cloud_file_search",
-        tags(network, interactive),
+        tags(network, interactive, discovery, read_only),
         summary = "Search configured Google cloud file stores, not files on this computer.",
-        help = "Runs in Google cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Provider file-store identifiers refer to remote resources, not local filesystem paths. tool_options supports file_search_store_names, metadata_filter, and top_k.",
-        read_only,
-        discovery
+        help = "Runs in Google cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Provider file-store identifiers refer to remote resources, not local filesystem paths. tool_options supports file_search_store_names, metadata_filter, and top_k."
     )]
     async fn file_search(&self, input: GeminiToolInput) -> SdkResult<ToolInvokeOutput> {
         self.interactions_tool(
@@ -506,11 +494,9 @@ impl GeminiToolsPlugin {
 
     #[tool(
         name = "cloud_google_maps",
-        tags(network, interactive),
+        tags(network, interactive, discovery, read_only),
         summary = "Query Google Maps data in Google cloud and return grounding sources.",
-        help = "Runs in Google cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. tool_options supports enable_widget, latitude, and longitude.",
-        read_only,
-        discovery
+        help = "Runs in Google cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. tool_options supports enable_widget, latitude, and longitude."
     )]
     async fn google_maps(&self, input: GeminiToolInput) -> SdkResult<ToolInvokeOutput> {
         self.interactions_tool(
@@ -524,10 +510,9 @@ impl GeminiToolsPlugin {
 
     #[tool(
         name = "cloud_image_generation",
-        tags(network, interactive),
+        tags(network, interactive, mutate),
         summary = "Generate images in Google cloud; save returned images as local attachments.",
-        help = "Runs in Google cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Uses generateContent with responseModalities TEXT and IMAGE. Configure GEMINI_IMAGE_MODEL or input.model. Inline image data is persisted as managed attachments.",
-        mutating
+        help = "Runs in Google cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Uses generateContent with responseModalities TEXT and IMAGE. Configure GEMINI_IMAGE_MODEL or input.model. Inline image data is persisted as managed attachments."
     )]
     async fn image_generation(
         &self,
@@ -550,7 +535,7 @@ impl GeminiToolsPlugin {
         name = "cloud_image_edit",
         summary = "Upload permitted images for editing in Google cloud; save the returned image separately.",
         help = "Runs in Google cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Permission-checked local images are uploaded to Google; returned images are saved as separate local artifacts. Uploads permission-checked local images as inlineData and requests an IMAGE response. Returned images are persisted as managed attachments.",
-        mutating
+        tags(mutate)
     )]
     async fn image_edit(&self, input: GeminiImageEditInput) -> SdkResult<ToolInvokeOutput> {
         let model = self.image_model(input.model, "gemini.cloud_image_edit")?;

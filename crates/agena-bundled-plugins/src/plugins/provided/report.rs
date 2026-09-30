@@ -88,10 +88,9 @@ impl ReportPlugin {
     }
 
     #[tool(
-        tags(mutate, discovery),
+        tags(mutate, discovery, read_only),
         name = "findings",
         summary = "Publish structured file-and-line findings for UI and integrations.",
-        read_only,
         concurrency_safe
     )]
     async fn invoke_findings(&self, input: &ReportFindingsInput) -> SdkResult<ToolInvokeOutput> {

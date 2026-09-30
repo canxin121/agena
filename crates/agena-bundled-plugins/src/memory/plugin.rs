@@ -276,9 +276,8 @@ impl MemoryPlugin {
     }
 
     #[tool(
-        tags(query, filesystem, discovery),
-        summary = "Search durable memory records.",
-        read_only
+        tags(query, filesystem, discovery, read_only),
+        summary = "Search durable memory records."
     )]
     async fn invoke_search(&self, input: &MemorySearchInput) -> SdkResult<ToolInvokeOutput> {
         let query = input.query.as_str();
@@ -316,9 +315,8 @@ impl MemoryPlugin {
     }
 
     #[tool(
-        tags(query, filesystem),
-        summary = "Read one durable memory record.",
-        read_only
+        tags(query, filesystem, read_only),
+        summary = "Read one durable memory record."
     )]
     async fn invoke_get(&self, input: &MemoryGetInput) -> SdkResult<ToolInvokeOutput> {
         let workspace_root = self.workspace_root()?.to_path_buf();
@@ -344,9 +342,8 @@ impl MemoryPlugin {
     }
 
     #[tool(
-        tags(query, filesystem, discovery),
-        summary = "List durable memory records.",
-        read_only
+        tags(query, filesystem, discovery, read_only),
+        summary = "List durable memory records."
     )]
     async fn invoke_list(&self, input: &MemoryListInput) -> SdkResult<ToolInvokeOutput> {
         let workspace_root = self.workspace_root()?.to_path_buf();
@@ -397,11 +394,7 @@ impl MemoryPlugin {
         .await
     }
 
-    #[tool(
-        tags(mutate, filesystem),
-        summary = "Write one durable memory record.",
-        mutating
-    )]
+    #[tool(tags(mutate, filesystem), summary = "Write one durable memory record.")]
     async fn invoke_write(&self, input: &MemoryWriteInput) -> SdkResult<ToolInvokeOutput> {
         let workspace_root = self.workspace_root()?.to_path_buf();
         let name = input.name.clone();
@@ -447,8 +440,7 @@ impl MemoryPlugin {
 
     #[tool(
         tags(mutate, filesystem),
-        summary = "Delete one durable memory record.",
-        mutating
+        summary = "Delete one durable memory record."
     )]
     async fn invoke_delete(&self, input: &MemoryDeleteInput) -> SdkResult<ToolInvokeOutput> {
         let workspace_root = self.workspace_root()?.to_path_buf();

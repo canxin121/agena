@@ -265,8 +265,8 @@ pub(crate) fn permission_studio_sections(
             // Shell-capable tools can be restricted by command pattern
             // (including the command classes `no-op` / `routine` /
             // `dangerous`). The `*` tool name is not a shell tool: it carries
-            // the read-only class, which applies to every tool whose
-            // declared behavior is read-only.
+            // the read-only class, which applies to every tool whose declared
+            // tags say read-only.
             let mut keys = dialog
                 .permission
                 .tools

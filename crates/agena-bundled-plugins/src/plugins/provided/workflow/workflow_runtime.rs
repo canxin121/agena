@@ -44,20 +44,14 @@ impl WorkflowPlugin {
             }
             _ => {}
         }
-        // Planning eligibility reads the tool's declared behavior and tags.
-        // Both are self-description: they decide what planning may run, not
-        // what the host will authorize.
-        let behavior = input.behavior;
-        if behavior.shell {
+        // Planning eligibility reads the tool's declared tags. They are
+        // self-description: they decide what planning may run, not what the
+        // host will authorize.
+        let tags = input.tags.as_slice();
+        if ToolTag::is_shell(tags) || ToolTag::is_read_only(tags) || ToolTag::is_interactive(tags) {
             return true;
         }
-        if behavior.read_only && !behavior.shell && !behavior.interactive {
-            return true;
-        }
-        if behavior.interactive {
-            return true;
-        }
-        input.tags.iter().any(|tag| {
+        tags.iter().any(|tag| {
             matches!(
                 tag,
                 ToolTag::Discovery | ToolTag::Planning | ToolTag::Snapshot

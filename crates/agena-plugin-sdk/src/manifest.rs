@@ -106,10 +106,15 @@ pub struct PluginSkillDefinition {
     pub aliases: Vec<String>,
 }
 
-/// Metadata tags describing what a tool *does* for discovery, search, UI
-/// badges, and workflow hints. Tags are function/category metadata only and
-/// are fully decoupled from permission: a tag never carries authority, and
-/// the permission engine never reads a tag.
+/// The tag vocabulary a tool declares for discovery, search, UI badges,
+/// profile filtering, and workflow hints.
+///
+/// Tags are the tool's single self-description surface. There is no parallel
+/// set of behavior flags: everything the host reads about *what a tool is* —
+/// that it runs shell commands, opens a live session, only reads, or mutates
+/// state — is one of these tags. Tags carry no authority; the permission
+/// engine decides, and a tool that performs its own I/O is responsible for
+/// asking the host first.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ToolTag {
     /// Query/read-style tools (fetch data, inspect state).
@@ -118,14 +123,15 @@ pub enum ToolTag {
     Mutate,
     /// Execute or run something (shell commands, code execution).
     Execute,
-    /// Runs arbitrary shell commands. Selects the shell executor and makes the
-    /// tool ineligible for the read-only builtin profile.
+    /// Runs arbitrary shell commands. Selects the shell executor, routes the
+    /// tool through the shell command-class rules, and makes the tool
+    /// ineligible for the read-only builtin profile.
     Shell,
     /// Long-running autonomous task tool; excluded from no-task model
-    /// profiles.
+    /// profiles and granted a long invoke budget.
     Task,
     /// Declared read-only: the tool only reads. Used for the read-only builtin
-    /// profile and discovery; the host never treats it as permission.
+    /// profile, the `tools.rules."*".read-only` class default, and discovery.
     ReadOnly,
     /// Operates on files/paths in the workspace.
     Filesystem,
@@ -136,8 +142,8 @@ pub enum ToolTag {
     /// Discovers or lists things (search, list, index, help).
     Discovery,
     /// Declared interactive: the tool opens a live session with a process or a
-    /// human. Used for builtin profiles and discovery; the host never treats it
-    /// as permission.
+    /// human. Used for builtin profiles, discovery, the invoke timeout budget,
+    /// and planning eligibility.
     Interactive,
     /// Supports planning / plan-locked workflows.
     Planning,
@@ -157,84 +163,40 @@ pub enum ToolTag {
     Custom(String),
 }
 
-/// Behavior flags declared by a tool, on the plugin's own word.
-///
-/// These are self-description, not authority. The host reads them to select an
-/// executor, to decide whether a tool may run concurrently, and to filter the
-/// builtin profile — never to decide whether an action is permitted. Each flag
-/// also has a tag spelling (`shell`, `task`, `read_only`, `interactive`,
-/// `mutate`), so a behavior can be declared either way and read from one place.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(default, deny_unknown_fields)]
-pub struct ToolBehavior {
-    /// The tool executes arbitrary shell commands.
-    pub shell: bool,
-    /// The tool requires explicit user confirmation before every invocation.
-    pub interactive: bool,
-    /// The tool only reads.
-    pub read_only: bool,
-    /// The tool is a long-running autonomous task tool.
-    pub task: bool,
-    /// The tool mutates persistent state.
-    pub mutating: bool,
-}
-
-impl ToolBehavior {
-    /// Read one behavior flag by its tag spelling.
-    pub fn get(&self, tag: ToolTag) -> Option<bool> {
-        match tag {
-            ToolTag::Shell => Some(self.shell),
-            ToolTag::Interactive => Some(self.interactive),
-            ToolTag::ReadOnly => Some(self.read_only),
-            ToolTag::Task => Some(self.task),
-            ToolTag::Mutate => Some(self.mutating),
-            _ => None,
-        }
+impl ToolTag {
+    /// Read one tag by its spelling, for callers that match on names.
+    pub fn is_shell(tags: &[Self]) -> bool {
+        tags.contains(&Self::Shell)
     }
 
-    /// The tag spellings this behavior declares, in a stable order.
-    pub fn tags(&self) -> Vec<ToolTag> {
-        let mut tags = Vec::new();
-        if self.shell {
-            tags.push(ToolTag::Shell);
-        }
-        if self.interactive {
-            tags.push(ToolTag::Interactive);
-        }
-        if self.read_only {
-            tags.push(ToolTag::ReadOnly);
-        }
-        if self.task {
-            tags.push(ToolTag::Task);
-        }
-        if self.mutating {
-            tags.push(ToolTag::Mutate);
-        }
-        tags
+    /// Whether `tags` describes an interactive tool.
+    pub fn is_interactive(tags: &[Self]) -> bool {
+        tags.contains(&Self::Interactive)
     }
 
-    /// Fold this behavior's flags into an existing tag list without
-    /// duplicating a tag the plugin already declared.
-    pub fn merge_into(&self, tags: &mut Vec<ToolTag>) {
-        for tag in self.tags() {
-            if !tags.contains(&tag) {
-                tags.push(tag);
-            }
-        }
+    /// Whether `tags` describes a long-running task tool.
+    pub fn is_task(tags: &[Self]) -> bool {
+        tags.contains(&Self::Task)
     }
 
-    /// Behavior implied by one tag, for callers that only have a tag list.
-    pub fn from_tag(tag: ToolTag) -> Self {
-        let mut behavior = Self::default();
-        match tag {
-            ToolTag::Shell => behavior.shell = true,
-            ToolTag::Interactive => behavior.interactive = true,
-            ToolTag::ReadOnly => behavior.read_only = true,
-            ToolTag::Task => behavior.task = true,
-            ToolTag::Mutate => behavior.mutating = true,
-            _ => {}
-        }
-        behavior
+    /// Whether `tags` describes a state-changing tool.
+    pub fn is_mutating(tags: &[Self]) -> bool {
+        tags.contains(&Self::Mutate)
+    }
+
+    /// Whether `tags` declares a tool that only reads: read-only, and neither
+    /// shell, interactive, mutating, nor a task.
+    ///
+    /// This is the single definition of the read-only class. The permission
+    /// engine's `tools.rules."*".read-only` default, the read-only builtin
+    /// profile, and the runtime's tool descriptor all read it, so a tool is
+    /// read-only in exactly one sense.
+    pub fn is_read_only(tags: &[Self]) -> bool {
+        tags.contains(&Self::ReadOnly)
+            && !Self::is_shell(tags)
+            && !Self::is_interactive(tags)
+            && !Self::is_mutating(tags)
+            && !Self::is_task(tags)
     }
 }
 
@@ -343,17 +305,15 @@ pub struct ToolDefinition {
     pub docs: ToolDocs,
     #[serde(default)]
     pub runtime: ToolRuntimePolicy,
-    /// How this tool behaves, as declared by the plugin.
+    /// What this tool is, as declared by the plugin.
     ///
-    /// The flags are self-description, not authority: the host never reads
-    /// them to decide whether an action is permitted. They select host
-    /// behavior — which executor runs the tool, whether it may run
-    /// concurrently, which builtin profile offers it — exactly as the tags
-    /// below do. A tool that performs its own I/O is responsible for asking
-    /// the host (`HostClient::check_path_permission` and friends) before it
-    /// touches anything.
-    #[serde(default)]
-    pub behavior: ToolBehavior,
+    /// This is the tool's single self-description surface: the host reads
+    /// `shell`, `task`, `read_only`, `interactive`, and `mutate` here to select
+    /// an executor, decide whether the tool may run concurrently, filter the
+    /// builtin profiles, and pick the shell command-class rules. A tool that
+    /// performs its own I/O is responsible for asking the host
+    /// (`HostClient::check_path_permission` and friends) before it touches
+    /// anything.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<ToolTag>,
 }
@@ -571,15 +531,14 @@ impl ToolDefinition {
         normalize_schema_json(self.contract.output_schema.clone())
     }
 
-    /// The tool's tags, for discovery, search, UI, and profile filtering.
+    /// The tool's tags, deduplicated, for discovery, search, UI, profile
+    /// filtering, and executor selection.
     ///
-    /// This is the declared tag list with the declared behavior flags folded
-    /// in, so one collection answers both spellings. It carries no authority:
-    /// the host never derives a permission decision from a tag.
+    /// This is the declared tag list and nothing else — there is no second
+    /// declaration surface to fold in. It carries no authority: the host never
+    /// derives a permission decision from a tag.
     pub fn effective_tags(&self) -> Vec<ToolTag> {
-        let mut tags = normalize_tags(self.tags.iter().cloned());
-        self.behavior.merge_into(&mut tags);
-        tags
+        normalize_tags(self.tags.iter().cloned())
     }
 
     pub fn has_tag(&self, tag: ToolTag) -> bool {

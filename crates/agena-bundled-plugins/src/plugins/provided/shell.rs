@@ -85,11 +85,9 @@ pub(crate) struct ProcessSignalInput {
 )]
 impl ShellPlugin {
     #[tool(
-        tags(execute),
+        tags(execute, shell, mutate),
         summary = "Run one shell process.",
-        help = "Run a shell command. Declare `reads`, `writes` and outbound `network` targets; use empty arrays when none. Set `tty=true` for an interactive CLI, REPL or full-screen terminal. This retains a PTY across tool calls and returns a process_id, incremental output, last_seq, and a current terminal screen. `yield_time_ms` (default 1000, maximum 30000) only controls this call's initial output wait: it never terminates the process. `timeout_ms`, when supplied, is the terminal's overall lifetime limit. Continue with shell.write; read without input with shell.write(chars=\"\") or shell.logs; use shell.resize for dimensions, shell.signal for interrupt/terminate/kill, and shell.stop for cleanup. Never assume a quiet prompt means completion. tty is incompatible with monitor. Without tty, normal foreground behavior is unchanged. `run_in_background=true` or `monitor` starts a non-interactive managed command; completion is notified by system_notification, so do not poll merely to wait for those jobs.",
-        mutating,
-        shell
+        help = "Run a shell command. Declare `reads`, `writes` and outbound `network` targets; use empty arrays when none. Set `tty=true` for an interactive CLI, REPL or full-screen terminal. This retains a PTY across tool calls and returns a process_id, incremental output, last_seq, and a current terminal screen. `yield_time_ms` (default 1000, maximum 30000) only controls this call's initial output wait: it never terminates the process. `timeout_ms`, when supplied, is the terminal's overall lifetime limit. Continue with shell.write; read without input with shell.write(chars=\"\") or shell.logs; use shell.resize for dimensions, shell.signal for interrupt/terminate/kill, and shell.stop for cleanup. Never assume a quiet prompt means completion. tty is incompatible with monitor. Without tty, normal foreground behavior is unchanged. `run_in_background=true` or `monitor` starts a non-interactive managed command; completion is notified by system_notification, so do not poll merely to wait for those jobs."
     )]
     async fn invoke_run(
         &self,
@@ -110,10 +108,8 @@ impl ShellPlugin {
     }
 
     #[tool(
-        tags(query, discovery),
+        tags(query, discovery, shell, read_only),
         summary = "List active background processes.",
-        read_only,
-        shell,
         concurrency_safe
     )]
     async fn invoke_list(&self, context: &ToolInvokeContext<'_>) -> SdkResult<ToolInvokeOutput> {
@@ -126,10 +122,8 @@ impl ShellPlugin {
     }
 
     #[tool(
-        tags(query),
+        tags(query, shell, read_only),
         summary = "Read background process logs.",
-        read_only,
-        shell,
         concurrency_safe
     )]
     async fn invoke_logs(
@@ -150,12 +144,7 @@ impl ShellPlugin {
         )
     }
 
-    #[tool(
-        tags(mutate, execute),
-        summary = "Stop one background process.",
-        mutating,
-        shell
-    )]
+    #[tool(tags(mutate, execute, shell), summary = "Stop one background process.")]
     async fn invoke_stop(
         &self,
         context: &ToolInvokeContext<'_>,
@@ -172,11 +161,9 @@ impl ShellPlugin {
     }
 
     #[tool(
-        tags(mutate, execute),
+        tags(mutate, execute, shell),
         summary = "Write to an interactive terminal and read its response.",
-        help = "Continue a process started with shell.run(tty=true). chars is exact terminal input: never trim or automatically append a newline. Send \\r for Enter, \\u0003 for Ctrl-C, \\u0004 for Ctrl-D, \\t for Tab, or terminal escape sequences for arrow/function keys. Use chars=\"\" to read without sending input. Omit since_seq to read previously unread output; use an explicit last_seq to replay/page output. wait_ms defaults to 250 and is capped at 30000; a wait timeout does not kill the CLI. Input is an execution operation: declare every affected reads/writes path (relative to the Agena workspace) and network target, including effects of commands entered inside a shell/REPL. Requires the same owning session and workspace as the launch. A partial-write error requests terminal termination; do not resend the full input blindly. Process exit, not absence of output, indicates completion.",
-        mutating,
-        shell
+        help = "Continue a process started with shell.run(tty=true). chars is exact terminal input: never trim or automatically append a newline. Send \\r for Enter, \\u0003 for Ctrl-C, \\u0004 for Ctrl-D, \\t for Tab, or terminal escape sequences for arrow/function keys. Use chars=\"\" to read without sending input. Omit since_seq to read previously unread output; use an explicit last_seq to replay/page output. wait_ms defaults to 250 and is capped at 30000; a wait timeout does not kill the CLI. Input is an execution operation: declare every affected reads/writes path (relative to the Agena workspace) and network target, including effects of commands entered inside a shell/REPL. Requires the same owning session and workspace as the launch. A partial-write error requests terminal termination; do not resend the full input blindly. Process exit, not absence of output, indicates completion."
     )]
     async fn invoke_write(
         &self,
@@ -191,12 +178,7 @@ impl ShellPlugin {
         )
     }
 
-    #[tool(
-        tags(mutate),
-        summary = "Resize an interactive terminal.",
-        mutating,
-        shell
-    )]
+    #[tool(tags(mutate, shell), summary = "Resize an interactive terminal.")]
     async fn invoke_resize(
         &self,
         context: &ToolInvokeContext<'_>,
@@ -215,11 +197,9 @@ impl ShellPlugin {
     }
 
     #[tool(
-        tags(mutate, execute),
+        tags(mutate, execute, shell),
         summary = "Interrupt or terminate an interactive terminal.",
-        help = "interrupt targets the current Unix foreground process group without closing the shell (ConPTY uses terminal Ctrl-C). terminate requests graceful session cleanup and then kills remaining jobs; kill skips the grace period. This is distinct from typing a control byte into a raw-mode program. The same owning session/workspace is required. shell.stop is equivalent to terminate.",
-        mutating,
-        shell
+        help = "interrupt targets the current Unix foreground process group without closing the shell (ConPTY uses terminal Ctrl-C). terminate requests graceful session cleanup and then kills remaining jobs; kill skips the grace period. This is distinct from typing a control byte into a raw-mode program. The same owning session/workspace is required. shell.stop is equivalent to terminate."
     )]
     async fn invoke_signal(
         &self,

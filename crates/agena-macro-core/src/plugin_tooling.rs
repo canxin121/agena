@@ -159,12 +159,6 @@ pub fn expand_plugin_tool_definition(
     } else {
         quote! { ::agena_plugin_sdk::ToolStreamingMode::default() }
     };
-    let mutating_flag = spec.mutating;
-    let read_only_flag = spec.read_only;
-    let shell_flag = spec.shell;
-    let interactive_flag = spec.interactive;
-    let task_flag = spec.task;
-
     Ok(quote! {{
         let input_schema = #input_schema_expr;
         ::agena_plugin_sdk::ToolDefinition {
@@ -187,13 +181,6 @@ pub fn expand_plugin_tool_definition(
                 concurrency_safe: #concurrency_safe,
                 streaming: #streaming_expr,
                 result_policy: ::agena_plugin_sdk::ToolResultPolicy::default(),
-            },
-            behavior: ::agena_plugin_sdk::manifest::ToolBehavior {
-                shell: #shell_flag,
-                interactive: #interactive_flag,
-                read_only: #read_only_flag,
-                task: #task_flag,
-                mutating: #mutating_flag,
             },
             tags: #tags_expr,
         }

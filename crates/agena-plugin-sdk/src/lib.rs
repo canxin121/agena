@@ -17,7 +17,7 @@
 //!
 //! #[agena_plugin(namespace = "demo", name = "hello", version = "0.1.0", export = cdylib)]
 //! impl MyPlugin {
-//!     #[tool(name = "hello", summary = "Say hello", read_only)]
+//!     #[tool(name = "hello", summary = "Say hello", tags(read_only))]
 //!     async fn hello(&self) -> Result<String> {
 //!         Ok("hello".into())
 //!     }
@@ -86,9 +86,9 @@ pub use manifest::{
     PluginSkillDefinition, PluginSurfaceContributions, PluginTerminalColor,
     PluginTerminalContributions, PluginTerminalThemeColors, PluginTerminalThemePalette,
     SettingsConstraints, SettingsContract, SettingsNode, SettingsNodeKind, SettingsOption,
-    SettingsVariant, ToolBehavior, ToolContract, ToolDefinition, ToolDocs, ToolInput,
-    ToolModelSurface, ToolResultPolicy, ToolResultRenderKind, ToolRuntimePolicy, ToolStreamingMode,
-    ToolTag, TransportKind, normalize_tool_tag_name,
+    SettingsVariant, ToolContract, ToolDefinition, ToolDocs, ToolInput, ToolModelSurface,
+    ToolResultPolicy, ToolResultRenderKind, ToolRuntimePolicy, ToolStreamingMode, ToolTag,
+    TransportKind, normalize_tool_tag_name,
 };
 pub use plugin::{InitContext, InitOutcome, Plugin, PluginSettings, ToolStreamSink};
 pub use schemars::JsonSchema;

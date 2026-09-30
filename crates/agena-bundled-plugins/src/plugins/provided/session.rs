@@ -148,9 +148,8 @@ impl SessionPlugin {
     }
 
     #[tool(
-        tags(query, discovery),
+        tags(query, discovery, read_only),
         summary = "Inspect the current session metadata.",
-        read_only,
         concurrency_safe
     )]
     async fn get(&self) -> SdkResult<ToolInvokeOutput> {
@@ -158,9 +157,8 @@ impl SessionPlugin {
     }
 
     #[tool(
-        tags(query, discovery),
+        tags(query, discovery, read_only),
         summary = "Inspect the current runtime environment: working directory, git state, shell, OS, and architecture.",
-        read_only,
         concurrency_safe
     )]
     async fn environment(&self, context: &ToolInvokeContext<'_>) -> SdkResult<ToolInvokeOutput> {
@@ -289,9 +287,8 @@ impl SessionPlugin {
     }
 
     #[tool(
-        tags(query, discovery),
+        tags(query, discovery, read_only),
         summary = "Inspect the current session model identity, runtime modes, and model token limits.",
-        read_only,
         concurrency_safe
     )]
     async fn model(&self, context: &ToolInvokeContext<'_>) -> SdkResult<ToolInvokeOutput> {
@@ -340,9 +337,8 @@ impl SessionPlugin {
     }
 
     #[tool(
-        tags(query, discovery),
+        tags(query, discovery, read_only),
         summary = "Inspect current and projected token use, effective limits, and remaining session budget.",
-        read_only,
         concurrency_safe
     )]
     async fn tokens(&self, context: &ToolInvokeContext<'_>) -> SdkResult<ToolInvokeOutput> {
@@ -401,7 +397,7 @@ impl SessionPlugin {
         ))
     }
 
-    #[tool(tags(mutate), summary = "Rename the current session.", mutating)]
+    #[tool(tags(mutate), summary = "Rename the current session.")]
     async fn rename(&self, input: &SessionRenameToolInput) -> SdkResult<ToolInvokeOutput> {
         self.inner.invoke_rename_session(input).await
     }

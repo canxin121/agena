@@ -17,9 +17,9 @@ impl EchoPlugin {
     #[tool(
         name = "echo",
         summary = "Echo text over stdio transport.",
-        read_only,
         stream = echo_stream,
-        concurrency_safe
+        concurrency_safe,
+        tags(read_only)
     )]
     async fn echo(&self, #[arg(trim, non_empty)] text: String) -> String {
         format!("stdio-echo: {text}")

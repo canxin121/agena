@@ -47,11 +47,9 @@ struct CodeSyntaxTreeInput {
 )]
 impl CodePlugin {
     #[tool(
-        tags(query, filesystem, discovery),
+        tags(query, filesystem, discovery, read_only),
         summary = "Search code structurally with ast-grep.",
         help = "Supported languages: bash, c, cpp, csharp, css, dart, elixir, go, haskell, hcl, html, java, javascript, json, lua, markdown, nix, php, python, ruby, rust, solidity, swift, tsx, typescript, yaml. Use patterns like `if $COND { $BODY }`, `def $NAME($ARGS): $$$`, or `function $NAME($ARGS) { $$$ }`. When `language` is omitted for a file path, Agena infers it from the extension. Directory searches require `language` explicitly.",
-        read_only,
-        discovery,
         concurrency_safe
     )]
     async fn dispatch_search_ast(
@@ -64,11 +62,9 @@ impl CodePlugin {
     }
 
     #[tool(
-        tags(query, filesystem),
+        tags(query, filesystem, discovery, read_only),
         summary = "Inspect a parsed syntax tree.",
         help = "Use `syntax_tree` to inspect named syntax nodes for a supported file. When `language` is omitted, Agena infers it from the file extension.",
-        read_only,
-        discovery,
         concurrency_safe
     )]
     async fn dispatch_syntax_tree(

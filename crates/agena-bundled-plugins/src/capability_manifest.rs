@@ -233,50 +233,33 @@ fn plugin_capability(
         .map(|definition| {
             let registered =
                 RegisteredTool::new(key.clone(), definition).expect("bundled tool definition");
-            // Effects are derived from the tool's declared behavior and its
-            // tags. Both are self-description: they describe what a tool does
-            // for audit and UI purposes, not what the host will authorize.
-            let behavior = registered.definition.behavior;
-            let declared = registered
-                .definition
-                .tags
-                .iter()
-                .map(ToString::to_string)
-                .collect::<Vec<_>>();
-            let mut effects = Vec::new();
-            if behavior.read_only {
-                effects.push("read_only".to_string());
-            }
-            if declared.iter().any(|tag| tag == "mutating") {
-                effects.push("mutating".to_string());
-            }
-            if declared.iter().any(|tag| tag == "filesystem_read") {
-                effects.push("filesystem_read".to_string());
-            }
-            if declared.iter().any(|tag| tag == "filesystem_write") {
-                effects.push("filesystem_write".to_string());
-            }
-            if declared.iter().any(|tag| tag == "network") {
-                effects.push("network".to_string());
-            }
-            if declared.iter().any(|tag| tag == "internet") {
-                effects.push("internet".to_string());
-            }
-            if behavior.shell {
-                effects.push("shell".to_string());
-            }
-            if behavior.interactive {
-                effects.push("interactive".to_string());
-            }
-            for metadata in ["snapshot", "scheduler", "subtask"] {
-                if declared.iter().any(|tag| tag == metadata) {
-                    effects.push(metadata.to_string());
-                }
-            }
             let tags = registered
                 .effective_tags()
                 .into_iter()
                 .map(|tag| tag.to_string())
+                .collect::<Vec<_>>();
+            // Effects are a reading of the tool's declared tags. They are
+            // self-description: they describe what a tool does for audit and
+            // UI purposes, not what the host will authorize.
+            let effects = tags
+                .iter()
+                .filter(|tag| {
+                    matches!(
+                        tag.as_str(),
+                        "read_only"
+                            | "mutate"
+                            | "filesystem_read"
+                            | "filesystem_write"
+                            | "network"
+                            | "internet"
+                            | "shell"
+                            | "interactive"
+                            | "snapshot"
+                            | "scheduler"
+                            | "subtask"
+                    )
+                })
+                .cloned()
                 .collect::<Vec<_>>();
             let gateway = key.to_string() == "agena.tools"
                 && matches!(

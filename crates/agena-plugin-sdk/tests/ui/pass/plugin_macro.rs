@@ -48,7 +48,7 @@ struct UiPlugin;
     summary = "UI macro test plugin."
 )]
 impl UiPlugin {
-    #[tool(summary = "Resolve a hover position.", read_only, concurrency_safe)]
+    #[tool(summary = "Resolve a hover position.", concurrency_safe, tags(read_only))]
     async fn hover(&self, input: &HoverInput) -> Result<Vec<HoverOutput>> {
         Ok(vec![HoverOutput {
             file: input.file.clone(),
@@ -57,17 +57,17 @@ impl UiPlugin {
         }])
     }
 
-    #[tool(summary = "Echo text.", read_only, concurrency_safe)]
+    #[tool(summary = "Echo text.", concurrency_safe, tags(read_only))]
     fn echo(&self, #[arg(trim, non_empty)] text: String) -> EchoOutput {
         EchoOutput { text }
     }
 
-    #[tool(summary = "Search.", read_only)]
+    #[tool(summary = "Search.", tags(read_only))]
     fn search(&self, _input: SearchInput) -> Vec<String> {
         Vec::new()
     }
 
-    #[tool(summary = "Echo text with context.", read_only, stream = context_echo_stream)]
+    #[tool(summary = "Echo text with context.", stream = context_echo_stream, tags(read_only))]
     fn context_echo(
         &self,
         context: &ToolInvokeContext<'_>,

@@ -1444,7 +1444,6 @@ mod tests {
                     call_id: 2,
                     workspace_root: "/workspace".to_string(),
                     tags: Vec::new(),
-                    behavior: Default::default(),
                     input: serde_json::json!({}),
                     title_override: None,
                     metadata: Default::default(),

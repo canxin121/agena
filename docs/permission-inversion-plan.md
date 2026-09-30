@@ -21,7 +21,10 @@
 1. 删除 `ToolPermissionContract` 及四个 Spec 类型。`PathKind` 保留（权限查询还用）。
 2. 删除 `permission_paths` / `permission_networks` hook 及转换 trait。
 3. 删除 `#[tool(path(...), network(...))]`、`permission(...)`、`#[input(path=,network=)]` 抽取。
-4. `mutating` / `read_only` / `shell` / `interactive` / `task` 五个 bare flag 保留。
+4. ~~`mutating` / `read_only` / `shell` / `interactive` / `task` 五个 bare flag 保留。~~
+   **后续修订**：五个 bare flag 已并入 tag（见下）。`#[tool(...)]` 现在只有自述面：
+   `tags(...)`。bare 拼写（`shell`、`read_only`、`mutating`、`interactive`、`task`）
+   仍可写，但只是 `tags(...)` 的缩写，与 tag 落在同一个列表里。
 5. 新增 `check_path_permission` / `check_network_permission` + `require_*` 便捷函数。
 6. 不加任何兼容层。
 7. 权威自述走 tag（`ToolTag::Shell` / `ToolTag::Task`）。
@@ -45,8 +48,8 @@
 - `agena-domain::CapabilitySourceKind::ExecutionAccess` 删除；工具能力集（
   `capability_denied_tool_names`）仍通过 `AgentProfile` 拒绝。
 - 保留 `permission_ceiling`（用户明确要求「只保留 ceiling」）：它仍是子会话的非升级边界。
-- 插件侧「只读」现在只由 `read_only` flag 与 tag 自述表达（模型 profile 过滤、
-  能力清单 effects、MCP 匿名只读都在读这两者）。
+- 插件侧「只读」现在只由 `read_only` tag 与其它 tag 共同自述表达（模型 profile 过滤、
+  能力清单 effects、MCP 匿名只读都在读这些 tag）。
 
 ## 反转后的效果边界（文档结论）
 

@@ -36,8 +36,8 @@ impl EchoPlugin {
     #[tool(
         name = "echo",
         summary = "Echo text back to the caller.",
-        read_only,
-        concurrency_safe
+        concurrency_safe,
+        tags(read_only)
     )]
     async fn echo(&self, #[arg(trim, non_empty)] text: String) -> Result<ToolInvokeOutput> {
         let rendered = if self.uppercase() {

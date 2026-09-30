@@ -7,7 +7,7 @@ pub use agena_domain::{
     NetworkPermissionConfig, PathAccessModes, PathPermissionConfig, PermissionConfig,
     ToolPermissionConfig, ToolPermissionRules,
 };
-use agena_plugin_host::sdk::ToolBehavior;
+use agena_plugin_host::sdk::ToolTag;
 use indexmap::IndexMap;
 
 use crate::command_class::CommandClass;
@@ -199,7 +199,7 @@ fn command_class_keyword(value: &str) -> Option<CommandClass> {
 
 /// Recognize the read-only tool class keyword. It is written under the
 /// wildcard tool name, `tools.rules."*"`, because the class is a property of
-/// the tool's declared behavior rather than of its name.
+/// the tool's declared tags rather than of its name.
 fn tool_class_keyword(value: &str) -> Option<()> {
     match normalized_keyword(value).as_str() {
         "read-only" | "read_only" | "readonly" => Some(()),
@@ -327,16 +327,16 @@ impl ExecutionPrincipal {
         &self,
         tool_name: &str,
         command: Option<&str>,
-        behavior: ToolBehavior,
+        tags: &[ToolTag],
     ) -> PermissionDecision {
-        self.authorize_tool_names(&[tool_name], command, behavior)
+        self.authorize_tool_names(&[tool_name], command, tags)
     }
 
     pub fn authorize_tool_names(
         &self,
         tool_names: &[&str],
         command: Option<&str>,
-        behavior: ToolBehavior,
+        tags: &[ToolTag],
     ) -> PermissionDecision {
         if self.blocked {
             return PermissionDecision::Deny {
@@ -345,18 +345,18 @@ impl ExecutionPrincipal {
         }
         let decision = self
             .tool_policy
-            .check_tool_with_names(tool_names, command, behavior);
+            .check_tool_with_names(tool_names, command, tags);
         match self.tool_ceiling_policy.as_ref() {
             Some(ceiling) => restrictive_decision(
                 decision,
-                ceiling.check_tool_with_names(tool_names, command, behavior),
+                ceiling.check_tool_with_names(tool_names, command, tags),
             ),
             None => decision,
         }
     }
 
     pub fn authorize_tool_name(&self, tool_name: &str) -> PermissionDecision {
-        self.authorize_tool(tool_name, None, ToolBehavior::default())
+        self.authorize_tool(tool_name, None, &[])
     }
 
     pub fn authorize_network_connect(&self, target: &NetworkTarget) -> PermissionDecision {
@@ -428,14 +428,7 @@ mod permission_ceiling_tests {
 
         for tool in ["agena.web.search", "agena.web.fetch"] {
             assert_eq!(
-                principal.authorize_tool(
-                    tool,
-                    None,
-                    ToolBehavior {
-                        read_only: true,
-                        ..ToolBehavior::default()
-                    },
-                ),
+                principal.authorize_tool(tool, None, [ToolTag::ReadOnly].as_slice(),),
                 PermissionDecision::Allow,
             );
         }
@@ -486,14 +479,7 @@ mod permission_ceiling_tests {
         );
         assert!(
             matches!(
-                principal.authorize_tool(
-                    "agena.fs.read",
-                    None,
-                    ToolBehavior {
-                        read_only: true,
-                        ..ToolBehavior::default()
-                    },
-                ),
+                principal.authorize_tool("agena.fs.read", None, [ToolTag::ReadOnly].as_slice(),),
                 PermissionDecision::Allow
             ),
             "ordinary execution tools default to allow; their effects are already governed by path/network/shell policies"

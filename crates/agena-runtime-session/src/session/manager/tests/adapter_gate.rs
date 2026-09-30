@@ -15,8 +15,8 @@ impl CloudFixture {
     #[tool(
         name = "cloud_web_search",
         summary = "Synthetic cloud search",
-        read_only,
-        concurrency_safe
+        concurrency_safe,
+        tags(read_only)
     )]
     async fn search(&self) -> String {
         self.calls.fetch_add(1, Ordering::SeqCst);
@@ -25,8 +25,8 @@ impl CloudFixture {
     #[tool(
         name = "cloud_code_execution",
         summary = "Synthetic cloud compute",
-        read_only,
-        concurrency_safe
+        concurrency_safe,
+        tags(read_only)
     )]
     async fn compute(&self) -> String {
         self.calls.fetch_add(1, Ordering::SeqCst);
@@ -46,8 +46,8 @@ impl OpenAiCloudFixture {
     #[tool(
         name = "cloud_web_search",
         summary = "Synthetic OpenAI search",
-        read_only,
-        concurrency_safe
+        concurrency_safe,
+        tags(read_only)
     )]
     async fn search(&self) -> String {
         self.calls.fetch_add(1, Ordering::SeqCst);
@@ -56,8 +56,8 @@ impl OpenAiCloudFixture {
     #[tool(
         name = "cloud_shell",
         summary = "Synthetic OpenAI hosted shell",
-        read_only,
-        concurrency_safe
+        concurrency_safe,
+        tags(read_only)
     )]
     async fn shell(&self) -> String {
         self.calls.fetch_add(1, Ordering::SeqCst);

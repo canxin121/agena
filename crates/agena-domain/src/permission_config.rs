@@ -55,7 +55,7 @@ pub const COMMAND_CLASS_ROUTINE: &str = "routine";
 pub const COMMAND_CLASS_DANGEROUS: &str = "dangerous";
 /// The keyword for the read-only tool class. It is written under the wildcard
 /// tool name, `tools.rules."*"`, because the class is derived from a tool's
-/// declared behavior rather than from its name.
+/// declared read_only tag rather than from its name.
 pub const TOOL_CLASS_READ_ONLY: &str = "read-only";
 
 fn allow_rw() -> PathAccessModes {

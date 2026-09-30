@@ -161,11 +161,9 @@ impl TasksPlugin {
     }
 
     #[tool(
-        tags(subtask, execute),
+        tags(subtask, execute, task),
         summary = "Delegate a bounded task to a subagent session. Set `run_in_background` to run it in the background and be notified when it settles. Attach Skill names in `skills` so the child session applies them as task guidance.",
         help = "Reach for this tool when the work matches an available Skill or subagent type, when you have independent work to run in parallel, or when answering would mean reading across several files — delegate it and you keep the conclusion, not the file dumps. For a single-fact lookup where you already know the file, symbol, or value, search directly; once you have delegated a search, do not also run it yourself — wait for the result. Do small tasks yourself instead of delegating; do not fan out a single task into many subtasks; verify inline instead of delegating when you can; do not redo work you already delegated. Never delegate understanding: brief the subagent with concrete file paths, line numbers, and what to change, then check its result. Set `skills` to Skill names or aliases (for example a read-only review skill for a review task, or an explore skill for an exploration task); the child session receives the resolved Skill instructions and should follow them. Unknown Skill names are rejected before the subtask starts. Use `agena.skills.list` to discover available Skills. By default the subtask runs inline and this call returns its final result before returning. With `run_in_background: true` the subtask runs in the background: the tool returns immediately with a task id and the result is delivered as a `system_notification` when it settles — do not poll tasks.get/tasks.output waiting for it.",
-        task,
-        subtask,
         concurrency_safe
     )]
     async fn run(
@@ -245,10 +243,8 @@ impl TasksPlugin {
     }
 
     #[tool(
-        tags(subtask, query, discovery),
+        tags(subtask, query, discovery, read_only, task),
         summary = "List delegated background tasks.",
-        read_only,
-        task,
         concurrency_safe
     )]
     async fn list(
@@ -280,10 +276,8 @@ impl TasksPlugin {
     }
 
     #[tool(
-        tags(subtask, query),
+        tags(subtask, query, read_only, task),
         summary = "Get delegated task metadata and terminal result.",
-        read_only,
-        task,
         concurrency_safe
     )]
     async fn get(
@@ -303,10 +297,8 @@ impl TasksPlugin {
     }
 
     #[tool(
-        tags(subtask, query),
+        tags(subtask, query, read_only, task),
         summary = "Read incremental delegated-task transcript output after a cursor.",
-        read_only,
-        task,
         concurrency_safe
     )]
     async fn output(
@@ -369,10 +361,8 @@ impl TasksPlugin {
     }
 
     #[tool(
-        tags(subtask, mutate),
+        tags(subtask, mutate, task),
         summary = "Cancel a running delegated task and its child execution.",
-        task,
-        subtask,
         concurrency_safe
     )]
     async fn cancel(
@@ -431,10 +421,8 @@ impl TasksPlugin {
     }
 
     #[tool(
-        tags(subtask, mutate),
+        tags(subtask, mutate, task),
         summary = "Send additional guidance to a running delegated task.",
-        task,
-        subtask,
         concurrency_safe
     )]
     async fn message(
@@ -468,10 +456,8 @@ impl TasksPlugin {
     }
 
     #[tool(
-        tags(subtask, mutate),
+        tags(subtask, mutate, task),
         summary = "Resume a terminal delegated task with a follow-up prompt.",
-        task,
-        subtask,
         concurrency_safe
     )]
     async fn followup(

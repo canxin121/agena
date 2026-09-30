@@ -116,10 +116,6 @@ impl ToolExecutor {
             .as_ref()
             .map(|definition| invocation_effective_tags(definition, invocation))
             .unwrap_or_default();
-        let behavior = definition
-            .as_ref()
-            .map(|definition| definition.definition.behavior)
-            .unwrap_or_default();
         let hooked = self
             .plugins
             .dispatch_tool_before(
@@ -129,7 +125,6 @@ impl ToolExecutor {
                     call_id,
                     workspace_root: self.workspace_root.to_string_lossy().to_string(),
                     tags: effective_tags,
-                    behavior,
                     input: input_value,
                     title_override: None,
                     metadata: Default::default(),
@@ -179,14 +174,14 @@ impl ToolExecutor {
         }
         let (tool_name, decision) = self.authorize_invocation(invocation)?;
         let command = shell_command_from_invocation(invocation);
-        let behavior = self
+        let tags = self
             .invocation_definition(invocation)
-            .map(|definition| definition.definition.behavior)
+            .map(|definition| definition.effective_tags())
             .unwrap_or_default();
         let action = crate::permission::tool_action(
             tool_name.as_str(),
             command.as_deref(),
-            behavior,
+            &tags,
             Some(&self.principal.tool_policy),
         );
         let mut checks = vec![ToolPermissionCheck { action, decision }];

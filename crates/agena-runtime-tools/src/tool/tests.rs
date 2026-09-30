@@ -131,11 +131,7 @@ fn scoped_dynamic_tool_definition(name: &str) -> agena_plugin_host::sdk::ToolDef
             ..Default::default()
         },
         runtime: Default::default(),
-        behavior: agena_plugin_host::sdk::ToolBehavior {
-            read_only: true,
-            ..Default::default()
-        },
-        tags: Vec::new(),
+        tags: vec![agena_plugin_host::sdk::ToolTag::ReadOnly],
     }
 }
 
@@ -376,12 +372,12 @@ async fn empty_plugin_title_uses_the_initial_action_before_appending_result() {
     summary = "Definition-only shell adapter regression fixture."
 )]
 impl ExecutorBackedShellAdapter {
-    #[tool(name = "run", summary = "Run a shell command.", mutating, shell)]
+    #[tool(name = "run", summary = "Run a shell command.", tags(shell, mutate))]
     async fn run(&self, _input: &crate::part::ShellCommandInput) -> String {
         "plugin adapter must not execute".to_owned()
     }
 
-    #[tool(name = "write", summary = "Write to a terminal.", mutating, shell)]
+    #[tool(name = "write", summary = "Write to a terminal.", tags(shell, mutate))]
     async fn write(&self, _input: &crate::part::ShellWriteInput) -> String {
         "plugin adapter must not execute".to_owned()
     }
@@ -394,12 +390,16 @@ impl ExecutorBackedShellAdapter {
     summary = "Definition-only filesystem adapter regression fixture."
 )]
 impl ExecutorBackedFsAdapter {
-    #[tool(name = "read", summary = "Read a file.", read_only)]
+    #[tool(name = "read", summary = "Read a file.", tags(read_only))]
     async fn read(&self, _input: &crate::part::ReadToolInput) -> String {
         "plugin adapter must not execute".to_owned()
     }
 
-    #[tool(name = "grep", summary = "Search file contents with regex.", read_only)]
+    #[tool(
+        name = "grep",
+        summary = "Search file contents with regex.",
+        tags(read_only)
+    )]
     async fn grep(&self, _input: &crate::part::GrepToolInput) -> String {
         "plugin adapter must not execute".to_owned()
     }

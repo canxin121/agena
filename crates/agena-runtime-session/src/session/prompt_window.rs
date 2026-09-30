@@ -1430,11 +1430,7 @@ mod tool_result_render_tests {
                     ..Default::default()
                 },
                 runtime: Default::default(),
-                behavior: agena_plugin_host::sdk::ToolBehavior {
-                    read_only: true,
-                    ..Default::default()
-                },
-                tags: Vec::new(),
+                tags: vec![agena_plugin_host::sdk::ToolTag::ReadOnly],
             }];
             manifest
         }

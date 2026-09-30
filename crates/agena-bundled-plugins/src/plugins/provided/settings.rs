@@ -1133,18 +1133,18 @@ mod tests {
             ToolPermissionPolicy::new(PermissionMode::Auto),
         )
         .expect("valid settings policy");
-        let behavior = agena_plugin_host::sdk::ToolBehavior::default();
+        let tags: &[agena_plugin_host::sdk::ToolTag] = &[];
 
         assert!(matches!(
-            policy.check_tool("agena.settings.inspect", None, behavior),
+            policy.check_tool("agena.settings.inspect", None, tags),
             PermissionDecision::Allow
         ));
         assert!(matches!(
-            policy.check_tool("agena.settings.patch", None, behavior),
+            policy.check_tool("agena.settings.patch", None, tags),
             PermissionDecision::Deny { .. }
         ));
         assert!(matches!(
-            policy.check_tool("agena.settings.set", None, behavior),
+            policy.check_tool("agena.settings.set", None, tags),
             PermissionDecision::Allow
         ));
     }

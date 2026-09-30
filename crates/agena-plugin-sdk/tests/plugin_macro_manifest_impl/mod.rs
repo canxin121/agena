@@ -30,7 +30,6 @@ impl ManifestPlugin {
 
     #[tool(
         summary = "Render text.",
-        read_only,
         stream = render_stream,
         operation(
             "/manifest-render",
@@ -39,7 +38,8 @@ impl ManifestPlugin {
             aliases("render-manifest"),
             usage = "/manifest-render {\"text\":\"hello\"}",
         ),
-        concurrency_safe
+        concurrency_safe,
+        tags(read_only)
     )]
     fn render(&self, input: &ManifestInput) -> Result<ManifestOutput> {
         Ok(ManifestOutput {
@@ -57,32 +57,36 @@ impl ManifestPlugin {
     /// Render docs summary.
     ///
     /// Render docs help.
-    #[tool(read_only, operation("/doc-render"))]
+    #[tool(operation("/doc-render"), tags(read_only))]
     fn doc_render(&self) -> String {
         "doc".to_string()
     }
 
-    #[tool(summary = "Dynamic output.", read_only)]
+    #[tool(summary = "Dynamic output.", tags(read_only))]
     fn dynamic(&self) -> ToolInvokeOutput {
         ToolInvokeOutput::text("dynamic")
     }
 
-    #[tool(summary = "Explicit output.", output(ManifestOutput), read_only)]
+    #[tool(summary = "Explicit output.", output(ManifestOutput), tags(read_only))]
     fn explicit(&self) -> ManifestOutput {
         ManifestOutput {
             rendered: "explicit".to_string(),
         }
     }
 
-    #[tool(summary = "Semantic permissions.", mutating, operation("/semantic"))]
+    #[tool(
+        summary = "Semantic permissions.",
+        operation("/semantic"),
+        tags(mutate)
+    )]
     fn semantic(&self, input: &SemanticInput) -> String {
         format!("{} -> {}", input.path, input.endpoint)
     }
 
     #[tool(
         summary = "Inline semantic permissions.",
-        read_only,
-        operation("/inline-semantic")
+        operation("/inline-semantic"),
+        tags(read_only)
     )]
     fn inline_semantic(
         &self,
@@ -92,20 +96,28 @@ impl ManifestPlugin {
         format!("{path} @ {host}")
     }
 
-    #[tool(summary = "Inline auto usage.", read_only, operation("/inline-auto"))]
+    #[tool(
+        summary = "Inline auto usage.",
+        operation("/inline-auto"),
+        tags(read_only)
+    )]
     fn inline_auto(&self, path: String, count: usize) -> String {
         format!("{path}:{count}")
     }
 
-    #[tool(summary = "Inline count usage.", read_only, operation("/inline-count"))]
+    #[tool(
+        summary = "Inline count usage.",
+        operation("/inline-count"),
+        tags(read_only)
+    )]
     fn inline_count(&self, #[arg(example = 3)] count: usize) -> String {
         count.to_string()
     }
 
     #[tool(
         summary = "Inline rename support.",
-        read_only,
-        operation("/inline-rename")
+        operation("/inline-rename"),
+        tags(read_only)
     )]
     fn inline_rename(
         &self,
@@ -116,8 +128,8 @@ impl ManifestPlugin {
 
     #[tool(
         summary = "Inline default support.",
-        read_only,
-        operation("/inline-default")
+        operation("/inline-default"),
+        tags(read_only)
     )]
     fn inline_default(&self, #[arg(default = 3)] count: usize) -> String {
         count.to_string()
@@ -125,8 +137,8 @@ impl ManifestPlugin {
 
     #[tool(
         summary = "Inline nested ToolInput support.",
-        read_only,
-        operation("/inline-nested")
+        operation("/inline-nested"),
+        tags(read_only)
     )]
     fn inline_nested(
         &self,
@@ -138,8 +150,8 @@ impl ManifestPlugin {
 
     #[tool(
         summary = "Inline flatten ToolInput support.",
-        read_only,
-        operation("/inline-flatten")
+        operation("/inline-flatten"),
+        tags(read_only)
     )]
     fn inline_flatten(
         &self,
@@ -149,12 +161,16 @@ impl ManifestPlugin {
         format!("{}:{query_text}", payload.file_path)
     }
 
-    #[tool(summary = "Plain string input.", read_only, operation("/plain-string"))]
+    #[tool(
+        summary = "Plain string input.",
+        operation("/plain-string"),
+        tags(read_only)
+    )]
     fn plain_string(&self, text: String) -> String {
         text
     }
 
-    #[tool(summary = "Dynamic permission DSL.", read_only)]
+    #[tool(summary = "Dynamic permission DSL.", tags(read_only))]
     async fn dynamic_permission(&self, input: &DynamicPermissionInput) -> String {
         format!("{} @ {}", input.path, input.host)
     }
@@ -252,39 +268,55 @@ impl ManifestPlugin {
         format!("{}:{query_text}", payload.file_path)
     }
 
-    #[tool(summary = "Path-level choices.", read_only, operation("/path-choice"))]
+    #[tool(
+        summary = "Path-level choices.",
+        operation("/path-choice"),
+        tags(read_only)
+    )]
     fn path_choice(&self, input: &PathChoiceInput) -> String {
         input.mode.clone()
     }
 
     #[tool(
         summary = "Field-level choices.",
-        read_only,
-        operation("/field-choice")
+        operation("/field-choice"),
+        tags(read_only)
     )]
     fn field_choice(&self, input: &FieldChoiceInput) -> String {
         input.tool_name.clone()
     }
 
-    #[tool(summary = "Path-level format.", read_only, operation("/path-format"))]
+    #[tool(
+        summary = "Path-level format.",
+        operation("/path-format"),
+        tags(read_only)
+    )]
     fn path_format(&self, input: &PathFormatInput) -> String {
         input.endpoint.clone()
     }
 
-    #[tool(summary = "Path-level pattern.", read_only, operation("/path-pattern"))]
+    #[tool(
+        summary = "Path-level pattern.",
+        operation("/path-pattern"),
+        tags(read_only)
+    )]
     fn path_pattern(&self, input: &PathPatternInput) -> String {
         input.slug.clone()
     }
 
-    #[tool(summary = "Path-level numeric.", read_only, operation("/path-number"))]
+    #[tool(
+        summary = "Path-level numeric.",
+        operation("/path-number"),
+        tags(read_only)
+    )]
     fn path_number(&self, input: &PathNumericInput) -> String {
         input.count.to_string()
     }
 
     #[tool(
         summary = "Path-level strict numeric bounds.",
-        read_only,
-        operation("/path-exclusive-number")
+        operation("/path-exclusive-number"),
+        tags(read_only)
     )]
     fn path_exclusive_number(&self, input: &PathExclusiveNumericInput) -> String {
         input.count.to_string()
@@ -292,8 +324,8 @@ impl ManifestPlugin {
 
     #[tool(
         summary = "Path-level object bounds.",
-        read_only,
-        operation("/path-object")
+        operation("/path-object"),
+        tags(read_only)
     )]
     fn path_object(&self, input: &PathObjectInput) -> String {
         input.labels.len().to_string()
@@ -301,8 +333,8 @@ impl ManifestPlugin {
 
     #[tool(
         summary = "Path-level item constraints.",
-        read_only,
-        operation("/path-item-pattern")
+        operation("/path-item-pattern"),
+        tags(read_only)
     )]
     fn path_item_pattern(&self, input: &PathItemPatternInput) -> String {
         input.tags.join(",")
@@ -310,8 +342,8 @@ impl ManifestPlugin {
 
     #[tool(
         summary = "Path-level item choice constraints.",
-        read_only,
-        operation("/path-item-choice")
+        operation("/path-item-choice"),
+        tags(read_only)
     )]
     fn path_item_choice(&self, input: &PathItemChoiceInput) -> String {
         input.tools.join(",")
@@ -319,8 +351,8 @@ impl ManifestPlugin {
 
     #[tool(
         summary = "Path-level item format constraints.",
-        read_only,
-        operation("/path-item-format")
+        operation("/path-item-format"),
+        tags(read_only)
     )]
     fn path_item_format(&self, input: &PathItemFormatInput) -> String {
         input.ids.join(",")
@@ -328,8 +360,8 @@ impl ManifestPlugin {
 
     #[tool(
         summary = "Path-level item numeric bounds.",
-        read_only,
-        operation("/path-item-number")
+        operation("/path-item-number"),
+        tags(read_only)
     )]
     fn path_item_number(&self, input: &PathItemNumericInput) -> String {
         input.counts.len().to_string()
@@ -337,8 +369,8 @@ impl ManifestPlugin {
 
     #[tool(
         summary = "Path-level item strict numeric bounds.",
-        read_only,
-        operation("/path-item-exclusive-number")
+        operation("/path-item-exclusive-number"),
+        tags(read_only)
     )]
     fn path_item_exclusive_number(&self, input: &PathItemExclusiveNumericInput) -> String {
         input.counts.len().to_string()
@@ -346,8 +378,8 @@ impl ManifestPlugin {
 
     #[tool(
         summary = "Path-level item object bounds.",
-        read_only,
-        operation("/path-item-object")
+        operation("/path-item-object"),
+        tags(read_only)
     )]
     fn path_item_object(&self, input: &PathItemObjectInput) -> String {
         input.entries.len().to_string()
@@ -355,8 +387,8 @@ impl ManifestPlugin {
 
     #[tool(
         summary = "Path-level item normalization.",
-        read_only,
-        operation("/path-item-normalize")
+        operation("/path-item-normalize"),
+        tags(read_only)
     )]
     fn path_item_normalize(&self, input: &PathItemNormalizeInput) -> String {
         input.tags.join(",")
@@ -364,8 +396,8 @@ impl ManifestPlugin {
 
     #[tool(
         summary = "Path-level optional item non-empty.",
-        read_only,
-        operation("/path-item-optional-non-empty")
+        operation("/path-item-optional-non-empty"),
+        tags(read_only)
     )]
     fn path_item_optional_non_empty(&self, input: &PathOptionalItemNonEmptyInput) -> String {
         input.tags.clone().unwrap_or_default().join(",")
@@ -373,8 +405,8 @@ impl ManifestPlugin {
 
     #[tool(
         summary = "Path-level auto item string constraints.",
-        read_only,
-        operation("/path-auto-item-string")
+        operation("/path-auto-item-string"),
+        tags(read_only)
     )]
     fn path_auto_item_string(&self, input: &PathAutoItemStringInput) -> String {
         input.tags.join(",")
@@ -382,8 +414,8 @@ impl ManifestPlugin {
 
     #[tool(
         summary = "Path-level auto item numeric constraints.",
-        read_only,
-        operation("/path-auto-item-number")
+        operation("/path-auto-item-number"),
+        tags(read_only)
     )]
     fn path_auto_item_number(&self, input: &PathAutoItemNumericInput) -> String {
         input.counts.len().to_string()
@@ -391,8 +423,8 @@ impl ManifestPlugin {
 
     #[tool(
         summary = "Path-level auto item choice constraints.",
-        read_only,
-        operation("/path-auto-item-choice")
+        operation("/path-auto-item-choice"),
+        tags(read_only)
     )]
     fn path_auto_item_choice(&self, input: &PathAutoItemChoiceInput) -> String {
         input.tools.join(",")
@@ -400,8 +432,8 @@ impl ManifestPlugin {
 
     #[tool(
         summary = "Path-level field relation metadata.",
-        read_only,
-        operation("/path-relation")
+        operation("/path-relation"),
+        tags(read_only)
     )]
     fn path_relation(&self, input: &PathRelationInput) -> String {
         input.path.clone().unwrap_or_default()
@@ -409,8 +441,8 @@ impl ManifestPlugin {
 
     #[tool(
         summary = "Path-level field group metadata.",
-        read_only,
-        operation("/path-group")
+        operation("/path-group"),
+        tags(read_only)
     )]
     fn path_group(&self, input: &PathGroupInput) -> String {
         input
@@ -422,8 +454,8 @@ impl ManifestPlugin {
 
     #[tool(
         summary = "Renamed format metadata.",
-        read_only,
-        operation("/renamed-format")
+        operation("/renamed-format"),
+        tags(read_only)
     )]
     fn renamed_format(&self, input: &RenamedFormatInput) -> String {
         input.endpoint_value.clone()
@@ -431,8 +463,8 @@ impl ManifestPlugin {
 
     #[tool(
         summary = "Renamed field constraint metadata.",
-        read_only,
-        operation("/renamed-pattern")
+        operation("/renamed-pattern"),
+        tags(read_only)
     )]
     fn renamed_pattern(&self, input: &RenamedPatternInput) -> String {
         input.slug_value.clone()
@@ -440,8 +472,8 @@ impl ManifestPlugin {
 
     #[tool(
         summary = "Renamed numeric constraint metadata.",
-        read_only,
-        operation("/renamed-number")
+        operation("/renamed-number"),
+        tags(read_only)
     )]
     fn renamed_number(&self, input: &RenamedNumericInput) -> String {
         input.count_value.to_string()
@@ -449,8 +481,8 @@ impl ManifestPlugin {
 
     #[tool(
         summary = "Renamed strict numeric metadata.",
-        read_only,
-        operation("/renamed-exclusive-number")
+        operation("/renamed-exclusive-number"),
+        tags(read_only)
     )]
     fn renamed_exclusive_number(&self, input: &RenamedExclusiveNumericInput) -> String {
         input.count_value.to_string()
@@ -458,8 +490,8 @@ impl ManifestPlugin {
 
     #[tool(
         summary = "Renamed object property bounds metadata.",
-        read_only,
-        operation("/renamed-object")
+        operation("/renamed-object"),
+        tags(read_only)
     )]
     fn renamed_object(&self, input: &RenamedObjectInput) -> String {
         input.metadata_value.len().to_string()
@@ -467,8 +499,8 @@ impl ManifestPlugin {
 
     #[tool(
         summary = "Renamed item format metadata.",
-        read_only,
-        operation("/renamed-item-format")
+        operation("/renamed-item-format"),
+        tags(read_only)
     )]
     fn renamed_item_format(&self, input: &RenamedItemFormatInput) -> String {
         input.id_values.join(",")
@@ -476,8 +508,8 @@ impl ManifestPlugin {
 
     #[tool(
         summary = "Renamed item constraint metadata.",
-        read_only,
-        operation("/renamed-item-pattern")
+        operation("/renamed-item-pattern"),
+        tags(read_only)
     )]
     fn renamed_item_pattern(&self, input: &RenamedItemPatternInput) -> String {
         input.tag_values.join(",")
@@ -485,8 +517,8 @@ impl ManifestPlugin {
 
     #[tool(
         summary = "Renamed item choice metadata.",
-        read_only,
-        operation("/renamed-item-choice")
+        operation("/renamed-item-choice"),
+        tags(read_only)
     )]
     fn renamed_item_choice(&self, input: &RenamedItemChoiceInput) -> String {
         input.tool_values.join(",")
@@ -494,8 +526,8 @@ impl ManifestPlugin {
 
     #[tool(
         summary = "Renamed item numeric bounds metadata.",
-        read_only,
-        operation("/renamed-item-number")
+        operation("/renamed-item-number"),
+        tags(read_only)
     )]
     fn renamed_item_number(&self, input: &RenamedItemNumericInput) -> String {
         input.count_values.len().to_string()
@@ -503,8 +535,8 @@ impl ManifestPlugin {
 
     #[tool(
         summary = "Renamed item strict numeric bounds metadata.",
-        read_only,
-        operation("/renamed-item-exclusive-number")
+        operation("/renamed-item-exclusive-number"),
+        tags(read_only)
     )]
     fn renamed_item_exclusive_number(&self, input: &RenamedItemExclusiveNumericInput) -> String {
         input.count_values.len().to_string()
@@ -512,8 +544,8 @@ impl ManifestPlugin {
 
     #[tool(
         summary = "Renamed item object bounds metadata.",
-        read_only,
-        operation("/renamed-item-object")
+        operation("/renamed-item-object"),
+        tags(read_only)
     )]
     fn renamed_item_object(&self, input: &RenamedItemObjectInput) -> String {
         input.entry_values.len().to_string()
@@ -521,8 +553,8 @@ impl ManifestPlugin {
 
     #[tool(
         summary = "Renamed item normalization metadata.",
-        read_only,
-        operation("/renamed-item-normalize")
+        operation("/renamed-item-normalize"),
+        tags(read_only)
     )]
     fn renamed_item_normalize(&self, input: &RenamedItemNormalizeInput) -> String {
         input.tag_values.join(",")
@@ -530,8 +562,8 @@ impl ManifestPlugin {
 
     #[tool(
         summary = "Renamed optional item non-empty metadata.",
-        read_only,
-        operation("/renamed-item-optional-non-empty")
+        operation("/renamed-item-optional-non-empty"),
+        tags(read_only)
     )]
     fn renamed_item_optional_non_empty(&self, input: &RenamedOptionalItemNonEmptyInput) -> String {
         input.tag_values.clone().unwrap_or_default().join(",")
@@ -539,8 +571,8 @@ impl ManifestPlugin {
 
     #[tool(
         summary = "Renamed auto item string metadata.",
-        read_only,
-        operation("/renamed-auto-item-string")
+        operation("/renamed-auto-item-string"),
+        tags(read_only)
     )]
     fn renamed_auto_item_string(&self, input: &RenamedAutoItemStringInput) -> String {
         input.tag_values.join(",")
@@ -548,8 +580,8 @@ impl ManifestPlugin {
 
     #[tool(
         summary = "Renamed auto item numeric metadata.",
-        read_only,
-        operation("/renamed-auto-item-number")
+        operation("/renamed-auto-item-number"),
+        tags(read_only)
     )]
     fn renamed_auto_item_number(&self, input: &RenamedAutoItemNumericInput) -> String {
         input.count_values.len().to_string()
@@ -557,8 +589,8 @@ impl ManifestPlugin {
 
     #[tool(
         summary = "Renamed auto item choice metadata.",
-        read_only,
-        operation("/renamed-auto-item-choice")
+        operation("/renamed-auto-item-choice"),
+        tags(read_only)
     )]
     fn renamed_auto_item_choice(&self, input: &RenamedAutoItemChoiceInput) -> String {
         input.tool_values.join(",")
@@ -566,8 +598,8 @@ impl ManifestPlugin {
 
     #[tool(
         summary = "Variant-local enum normalization.",
-        read_only,
-        operation("/variant-normalize")
+        operation("/variant-normalize"),
+        tags(read_only)
     )]
     fn variant_normalize(&self, input: &VariantNormalizeInput) -> String {
         match input {
@@ -596,8 +628,8 @@ impl ManifestPlugin {
 
     #[tool(
         summary = "Variant renamed field enum input.",
-        read_only,
-        operation("/variant-renamed-fields")
+        operation("/variant-renamed-fields"),
+        tags(read_only)
     )]
     fn variant_renamed_fields(&self, input: &VariantRenamedFieldInput) -> String {
         match input {
@@ -626,8 +658,8 @@ impl ManifestPlugin {
 
     #[tool(
         summary = "Variant field arg enum input.",
-        read_only,
-        operation("/variant-field-args")
+        operation("/variant-field-args"),
+        tags(read_only)
     )]
     fn variant_field_args(&self, input: &VariantFieldArgInput) -> String {
         match input {
@@ -652,8 +684,8 @@ impl ManifestPlugin {
 
     #[tool(
         summary = "Variant inference enum input.",
-        read_only,
-        operation("/variant-inference")
+        operation("/variant-inference"),
+        tags(read_only)
     )]
     fn variant_inference(&self, input: &VariantInferenceInput) -> String {
         match input {
@@ -683,8 +715,8 @@ impl ManifestPlugin {
 
     #[tool(
         summary = "Variant declarative enum permissions.",
-        read_only,
-        operation("/variant-semantic")
+        operation("/variant-semantic"),
+        tags(read_only)
     )]
     fn variant_semantic(&self, input: &VariantSemanticInput) -> String {
         match input {
@@ -695,8 +727,8 @@ impl ManifestPlugin {
 
     #[tool(
         summary = "Enum flatten semantic permissions.",
-        read_only,
-        operation("/variant-flatten-semantic")
+        operation("/variant-flatten-semantic"),
+        tags(read_only)
     )]
     fn variant_flatten_semantic(&self, input: &FlattenVariantSemanticInput) -> String {
         match input {
@@ -709,10 +741,10 @@ impl ManifestPlugin {
 
     #[tool(
         summary = "Inline item value relations.",
-        read_only,
         forbid_substrings("tags", "..", "~"),
         distinct_trimmed("tags"),
-        operation("/inline-item-value-relations")
+        operation("/inline-item-value-relations"),
+        tags(read_only)
     )]
     fn inline_item_value_relations(&self, #[arg] tags: Vec<String>) -> String {
         tags.join(",")
@@ -786,8 +818,8 @@ impl ManifestPlugin {
 
     #[tool(
         summary = "Renamed group metadata.",
-        read_only,
-        operation("/renamed-group")
+        operation("/renamed-group"),
+        tags(read_only)
     )]
     fn renamed_group(&self, input: &RenamedGroupInput) -> String {
         input
@@ -815,8 +847,8 @@ impl ManifestPlugin {
 
     #[tool(
         summary = "Renamed relation metadata.",
-        read_only,
-        operation("/renamed-relation")
+        operation("/renamed-relation"),
+        tags(read_only)
     )]
     fn renamed_relation(&self, input: &RenamedRelationInput) -> String {
         input.mode_value.clone().unwrap_or_default()

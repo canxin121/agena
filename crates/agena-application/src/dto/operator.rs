@@ -13,7 +13,7 @@ pub struct OperatorToolResource {
     pub input_schema: serde_json::Value,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_schema: Option<serde_json::Value>,
-    /// Whether this tool is marked as interactive by its declared behavior or
+    /// Whether this tool is marked as interactive by its declared tags or
     /// discovery metadata. Consumers that cannot service interaction
     /// should hide it.
     #[serde(default)]

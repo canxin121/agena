@@ -12,8 +12,8 @@ struct BadStreamPlugin;
 impl BadStreamPlugin {
     #[tool(
         summary = "Echo text.",
-        read_only,
-        stream = echo_stream
+        stream = echo_stream,
+        tags(read_only)
     )]
     fn echo(&self, text: String) -> String {
         text

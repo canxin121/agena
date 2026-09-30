@@ -48,11 +48,9 @@ pub(crate) struct MonitorStopInput {
 )]
 impl MonitorPlugin {
     #[tool(
-        tags(execute),
+        tags(execute, shell, mutate),
         summary = "Start a continuous background monitor.",
-        help = "Start a continuous background monitor. Pass exactly one of `command` (a long-running shell command, e.g. `tail -f`) or `ws` (a WebSocket endpoint; text frames become events). The monitor starts immediately and returns a `monitor_id`. You will be notified with a `system_notification` on each event — keep working, do not poll or sleep. Terminate it with `monitor.stop`, or it ends when the session does.",
-        mutating,
-        shell
+        help = "Start a continuous background monitor. Pass exactly one of `command` (a long-running shell command, e.g. `tail -f`) or `ws` (a WebSocket endpoint; text frames become events). The monitor starts immediately and returns a `monitor_id`. You will be notified with a `system_notification` on each event — keep working, do not poll or sleep. Terminate it with `monitor.stop`, or it ends when the session does."
     )]
     async fn invoke_start(
         &self,
@@ -73,12 +71,7 @@ impl MonitorPlugin {
         )
     }
 
-    #[tool(
-        tags(mutate, execute),
-        summary = "Stop one background monitor.",
-        mutating,
-        shell
-    )]
+    #[tool(tags(mutate, execute, shell), summary = "Stop one background monitor.")]
     async fn invoke_stop(
         &self,
         context: &ToolInvokeContext<'_>,

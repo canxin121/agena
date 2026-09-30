@@ -144,10 +144,9 @@ pub(crate) fn new_plugin() -> FsPlugin {
 impl FsPlugin {
     #[tool(
         name = "output_read",
-        tags(query),
+        tags(query, read_only),
         summary = "Read a byte range of captured tool output owned by this session.",
         help = "Use output_id from a tool result. Offsets are UTF-8 byte offsets; next_offset continues the capture. Capture can expire, be evicted, or already be truncated.",
-        read_only,
         concurrency_safe
     )]
     async fn output_read(
@@ -185,10 +184,9 @@ impl FsPlugin {
     }
     #[tool(
         name = "output_search",
-        tags(query),
+        tags(query, read_only),
         summary = "Find literal text within captured tool output owned by this session.",
         help = "Search before reading long logs. Results return byte offsets accepted by output_read. This searches captured bytes only, not content already dropped upstream.",
-        read_only,
         concurrency_safe
     )]
     async fn output_search(
@@ -232,10 +230,9 @@ impl FsPlugin {
     }
 
     #[tool(
-        tags(query, filesystem),
+        tags(query, filesystem, read_only),
         summary = "Read workspace files.",
         help = "Use `read` for text previews and directory listings. Binary files return local references, not model-visible bytes. Use a provider cloud_image_understanding/cloud_document_understanding tool or explicitly attach media to the composer to send its contents.",
-        read_only,
         examples(r#"{"file_path":"Cargo.toml"}"#),
         concurrency_safe
     )]
@@ -248,11 +245,9 @@ impl FsPlugin {
     }
 
     #[tool(
-        tags(query, filesystem, discovery),
+        tags(query, filesystem, discovery, read_only),
         summary = "Find paths with glob patterns.",
         help = "Use `glob` for focused path discovery before reading or editing files. Results are paginated (default 200, maximum 1000) and ripgrep-compatible hidden/ignore rules are applied unless `include_ignored` is true or the base path explicitly names an ignored directory.",
-        read_only,
-        discovery,
         examples(r#"{"pattern":"**/*.rs","path":"crates"}"#),
         concurrency_safe
     )]
@@ -265,11 +260,9 @@ impl FsPlugin {
     }
 
     #[tool(
-        tags(query, filesystem, discovery),
+        tags(query, filesystem, discovery, read_only),
         summary = "Search file contents with regex.",
         help = "Use `grep` for ripgrep-compatible, streaming regex text search. `path` may be a directory or a single file and defaults to the workspace root. Hidden/ignored files, binary files, oversized files, and runaway scans are bounded by default; narrow `path` or `include` when a search is truncated.",
-        read_only,
-        discovery,
         examples(r#"{"pattern":"agena_plugin","path":"crates"}"#),
         concurrency_safe
     )]
@@ -281,7 +274,7 @@ impl FsPlugin {
         invoke_internal(context, "grep", args).await
     }
 
-    #[tool(tags(mutate, filesystem), summary = "Apply a text patch to workspace files.", help = "Use `apply_patch` for explicit text patch operations against workspace files. The `patch` argument is a plain-text patch that MUST start with the exact marker line `*** Begin Patch` and end with the exact marker line `*** End Patch`. Inside, use only these directives: `*** Update File: <path>` followed by `@@`-separated hunks (context lines start with a space, removed lines with `-`, added lines with `+`), `*** Add File: <path>` with every content line prefixed by `+`, or `*** Delete File: <path>`. A patch that does not start with `*** Begin Patch` is rejected. Use paths relative to the workspace root.", mutating, examples(r#"{"patch":"*** Begin Patch\n*** Update File: README.md\n@@\n-old line\n+new line\n*** End Patch"}"#))]
+    #[tool(tags(mutate, filesystem), summary = "Apply a text patch to workspace files.", help = "Use `apply_patch` for explicit text patch operations against workspace files. The `patch` argument is a plain-text patch that MUST start with the exact marker line `*** Begin Patch` and end with the exact marker line `*** End Patch`. Inside, use only these directives: `*** Update File: <path>` followed by `@@`-separated hunks (context lines start with a space, removed lines with `-`, added lines with `+`), `*** Add File: <path>` with every content line prefixed by `+`, or `*** Delete File: <path>`. A patch that does not start with `*** Begin Patch` is rejected. Use paths relative to the workspace root.", examples(r#"{"patch":"*** Begin Patch\n*** Update File: README.md\n@@\n-old line\n+new line\n*** End Patch"}"#))]
     async fn invoke_apply_patch(
         &self,
         context: &ToolInvokeContext<'_>,
@@ -293,8 +286,7 @@ impl FsPlugin {
     #[tool(
         tags(mutate, filesystem),
         summary = "Create a UTF-8 text file or replace one at an expected revision.",
-        help = "Creating a new file needs no hash. Replacing an existing file requires expected_sha256 from fs.stat, preventing stale or parallel overwrites.",
-        mutating
+        help = "Creating a new file needs no hash. Replacing an existing file requires expected_sha256 from fs.stat, preventing stale or parallel overwrites."
     )]
     async fn invoke_write(
         &self,
@@ -393,8 +385,7 @@ impl FsPlugin {
 
     #[tool(
         tags(mutate, filesystem),
-        summary = "Replace exact UTF-8 text with occurrence and revision checks.",
-        mutating
+        summary = "Replace exact UTF-8 text with occurrence and revision checks."
     )]
     async fn invoke_replace(
         &self,
@@ -495,9 +486,8 @@ impl FsPlugin {
     }
 
     #[tool(
-        tags(query, filesystem),
+        tags(query, filesystem, read_only),
         summary = "Read multiple UTF-8 files within one bounded byte budget.",
-        read_only,
         concurrency_safe
     )]
     async fn invoke_read_many(
@@ -573,9 +563,8 @@ impl FsPlugin {
     }
 
     #[tool(
-        tags(query, filesystem),
+        tags(query, filesystem, read_only),
         summary = "Inspect file metadata and an optional SHA-256 revision.",
-        read_only,
         concurrency_safe
     )]
     async fn invoke_stat(

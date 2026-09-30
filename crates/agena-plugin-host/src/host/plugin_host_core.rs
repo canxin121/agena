@@ -845,9 +845,9 @@ impl PluginHost {
     pub(super) fn tool_invoke_timeout(&self, registered_tool: &RegisteredTool) -> Duration {
         let base = self.timeouts.tool_invoke_or(Duration::from_secs(300));
         // Interactive and subtask tools need long-lived budgets; these are
-        // declared on the tool's behavior flags, not static capabilities.
-        let behavior = &registered_tool.definition.behavior;
-        if behavior.interactive || behavior.task {
+        // declared on the tool's tags, not static capabilities.
+        let tags = registered_tool.effective_tags();
+        if crate::sdk::ToolTag::is_interactive(&tags) || crate::sdk::ToolTag::is_task(&tags) {
             return base.max(Duration::from_secs(60 * 60 * 24));
         }
         base
@@ -2535,7 +2535,6 @@ mod tests {
             model: Default::default(),
             docs: Default::default(),
             runtime: Default::default(),
-            behavior: Default::default(),
             tags: Vec::new(),
         }
     }

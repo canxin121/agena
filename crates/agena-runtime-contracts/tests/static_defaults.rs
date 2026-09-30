@@ -17,7 +17,7 @@ use agena_domain::{
     AccessKind, PathAccessModes, PermissionConfig, PermissionDecision, PermissionMode,
     ToolPermissionRules,
 };
-use agena_plugin_host::sdk::ToolBehavior;
+use agena_plugin_host::sdk::ToolTag;
 use agena_runtime_contracts::authorization::{
     apply_to_permission_policy, apply_to_tool_permission_policy,
 };
@@ -59,10 +59,10 @@ fn path_policy(config: &PermissionConfig) -> PermissionPolicy {
 fn check(
     policy: &ToolPermissionPolicy,
     name: &str,
-    behavior: ToolBehavior,
+    tags: &[ToolTag],
     command: Option<&str>,
 ) -> PermissionDecision {
-    policy.check_tool(name, command, behavior)
+    policy.check_tool(name, command, tags)
 }
 
 fn path_decision(
@@ -78,25 +78,16 @@ fn path_decision(
     )
 }
 
-fn read_only_behavior() -> ToolBehavior {
-    ToolBehavior {
-        read_only: true,
-        ..ToolBehavior::default()
-    }
+fn read_only_tags() -> Vec<ToolTag> {
+    vec![ToolTag::ReadOnly]
 }
 
-fn interactive_behavior() -> ToolBehavior {
-    ToolBehavior {
-        interactive: true,
-        ..ToolBehavior::default()
-    }
+fn interactive_tags() -> Vec<ToolTag> {
+    vec![ToolTag::Interactive]
 }
 
-fn shell_behavior() -> ToolBehavior {
-    ToolBehavior {
-        shell: true,
-        ..ToolBehavior::default()
-    }
+fn shell_tags() -> Vec<ToolTag> {
+    vec![ToolTag::Shell]
 }
 
 fn temp_file(name: &str) -> String {
@@ -165,7 +156,7 @@ fn a_read_only_tool_is_allowed_by_the_default() {
     // policy applies itself, so it never reaches the approval model.
     let policy = tool_policy(&shipped(|_| {}));
     assert_eq!(
-        check(&policy, "mcp.read_file", read_only_behavior(), None),
+        check(&policy, "mcp.read_file", read_only_tags().as_slice(), None),
         PermissionDecision::Allow
     );
 }
@@ -175,7 +166,7 @@ fn the_read_only_class_set_to_auto_reaches_the_model() {
     let policy = tool_policy(&class_entries(|config| {
         set_read_only_class(config, Some(PermissionMode::Auto));
     }));
-    let decision = check(&policy, "mcp.read_file", read_only_behavior(), None);
+    let decision = check(&policy, "mcp.read_file", read_only_tags().as_slice(), None);
     assert!(
         matches!(decision, PermissionDecision::Auto { .. }),
         "a read-only tool with no class entry must reach the model, got {decision:?}"
@@ -190,7 +181,7 @@ fn omitting_an_entry_restores_its_built_in_value() {
     // these values.
     let policy = tool_policy(&shipped(|config| set_read_only_class(config, None)));
     assert_eq!(
-        check(&policy, "mcp.read_file", read_only_behavior(), None),
+        check(&policy, "mcp.read_file", read_only_tags().as_slice(), None),
         PermissionDecision::Allow
     );
     let absent_sections = shipped(|config| {
@@ -201,7 +192,7 @@ fn omitting_an_entry_restores_its_built_in_value() {
         check(
             &tool_policy(&absent_sections),
             "mcp.read_file",
-            read_only_behavior(),
+            read_only_tags().as_slice(),
             None
         ),
         PermissionDecision::Allow,
@@ -219,13 +210,18 @@ fn the_interaction_tool_is_allowed_so_its_own_ask_flow_runs() {
         check(
             &policy,
             "agena.interaction.ask",
-            interactive_behavior(),
+            interactive_tags().as_slice(),
             None
         ),
         PermissionDecision::Allow
     );
     assert_eq!(
-        check(&policy, "interaction.ask", interactive_behavior(), None),
+        check(
+            &policy,
+            "interaction.ask",
+            interactive_tags().as_slice(),
+            None
+        ),
         PermissionDecision::Allow,
         "the bare alias is the same tool"
     );
@@ -242,7 +238,7 @@ fn omitting_the_interaction_entry_reaches_the_model() {
     let decision = check(
         &policy,
         "agena.interaction.ask",
-        interactive_behavior(),
+        interactive_tags().as_slice(),
         None,
     );
     assert!(
@@ -269,7 +265,7 @@ fn a_configured_tool_rule_wins_over_the_interaction_default() {
         check(
             &policy,
             "agena.interaction.ask",
-            interactive_behavior(),
+            interactive_tags().as_slice(),
             None
         ),
         PermissionDecision::Deny { .. }
@@ -283,7 +279,7 @@ fn routine_commands_are_allowed_and_dangerous_ones_denied_by_default() {
         check(
             &policy,
             "agena.shell.run",
-            shell_behavior(),
+            shell_tags().as_slice(),
             Some("git status")
         ),
         PermissionDecision::Allow
@@ -292,7 +288,7 @@ fn routine_commands_are_allowed_and_dangerous_ones_denied_by_default() {
         check(
             &policy,
             "agena.shell.run",
-            shell_behavior(),
+            shell_tags().as_slice(),
             Some("rm -rf /")
         ),
         PermissionDecision::Deny { .. }
@@ -311,7 +307,7 @@ fn a_dangerous_command_class_set_to_auto_reaches_the_model() {
     let decision = check(
         &policy,
         "agena.shell.run",
-        shell_behavior(),
+        shell_tags().as_slice(),
         Some("rm -rf /"),
     );
     assert!(
@@ -326,7 +322,7 @@ fn an_ambiguous_command_reaches_the_model() {
     let decision = check(
         &policy,
         "agena.shell.run",
-        shell_behavior(),
+        shell_tags().as_slice(),
         Some("git push origin main"),
     );
     assert!(
@@ -353,7 +349,7 @@ fn a_configured_tool_rule_wins_over_a_command_class_entry() {
             check(
                 &policy,
                 "agena.shell.run",
-                shell_behavior(),
+                shell_tags().as_slice(),
                 Some("git status")
             ),
             PermissionDecision::Ask { .. }
@@ -384,13 +380,18 @@ fn a_command_pattern_outranks_the_command_class() {
         check(
             &policy,
             "agena.shell.run",
-            shell_behavior(),
+            shell_tags().as_slice(),
             Some("git status --short")
         ),
         PermissionDecision::Deny { .. }
     ));
     assert_eq!(
-        check(&policy, "agena.shell.run", shell_behavior(), Some("ls")),
+        check(
+            &policy,
+            "agena.shell.run",
+            shell_tags().as_slice(),
+            Some("ls")
+        ),
         PermissionDecision::Allow,
         "the class entry still covers the other routine commands"
     );

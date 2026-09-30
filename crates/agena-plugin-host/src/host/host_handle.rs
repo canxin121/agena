@@ -1951,7 +1951,6 @@ mod effect_ownership_tests {
                 ..Default::default()
             },
             runtime: Default::default(),
-            behavior: Default::default(),
             tags: Vec::new(),
         }
     }

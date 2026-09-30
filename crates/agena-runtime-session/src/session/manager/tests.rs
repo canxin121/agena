@@ -2044,9 +2044,8 @@ impl ToolSearchFixture {
     #[tool(
         name = "search",
         summary = "Search live tools.",
-        read_only,
-        discovery,
-        concurrency_safe
+        concurrency_safe,
+        tags(discovery, read_only)
     )]
     async fn search(
         &self,
@@ -2061,9 +2060,8 @@ impl ToolSearchFixture {
     #[tool(
         name = "help",
         summary = "Inspect one live tool contract.",
-        read_only,
-        discovery,
-        concurrency_safe
+        concurrency_safe,
+        tags(discovery, read_only)
     )]
     async fn help(
         &self,
@@ -2091,7 +2089,7 @@ struct FilesystemFixture;
     summary = "Filesystem catalog regression fixture."
 )]
 impl FilesystemFixture {
-    #[tool(name = "read", summary = "Read workspace files.", read_only)]
+    #[tool(name = "read", summary = "Read workspace files.", tags(read_only))]
     async fn read(&self) -> String {
         "fixture".to_owned()
     }

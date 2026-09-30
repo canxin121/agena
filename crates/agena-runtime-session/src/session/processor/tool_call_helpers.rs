@@ -293,7 +293,6 @@ mod tests {
                     model: Default::default(),
                     docs: Default::default(),
                     runtime: Default::default(),
-                    behavior: Default::default(),
                     tags: Vec::new(),
                 },
             )

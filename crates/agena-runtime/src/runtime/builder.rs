@@ -1256,17 +1256,9 @@ impl agena_runtime::RuntimeToolExecutionService for AgenaRuntime {
             .into_iter()
             .zip(names)
             .map(|(tool, name)| {
-                let behavior = tool.definition.behavior;
                 let tags = tool.effective_tags();
-                let interactive = behavior.interactive
-                    || tags
-                        .iter()
-                        .any(|tag| matches!(tag, agena_plugin_host::sdk::ToolTag::Interactive));
-                let read_only = behavior.read_only
-                    && !behavior.shell
-                    && !behavior.mutating
-                    && !interactive
-                    && !behavior.task;
+                let interactive = agena_plugin_host::sdk::ToolTag::is_interactive(&tags);
+                let read_only = agena_plugin_host::sdk::ToolTag::is_read_only(&tags);
                 let open_world = tags.iter().any(|tag| {
                     matches!(
                         tag,
@@ -1285,17 +1277,16 @@ impl agena_runtime::RuntimeToolExecutionService for AgenaRuntime {
                     output_schema,
                     interactive,
                     read_only,
-                    destructive: behavior.shell
-                        || behavior.mutating
-                        || tags.iter().any(|tag| {
-                            matches!(
-                                tag,
-                                agena_plugin_host::sdk::ToolTag::Mutate
-                                    | agena_plugin_host::sdk::ToolTag::Execute
-                            )
-                        }),
+                    destructive: tags.iter().any(|tag| {
+                        matches!(
+                            tag,
+                            agena_plugin_host::sdk::ToolTag::Shell
+                                | agena_plugin_host::sdk::ToolTag::Mutate
+                                | agena_plugin_host::sdk::ToolTag::Execute
+                        )
+                    }),
                     open_world,
-                    task: behavior.task,
+                    task: agena_plugin_host::sdk::ToolTag::is_task(&tags),
                     plugin_id: tool.plugin_full_name(),
                 }
             })
@@ -2043,9 +2034,8 @@ impl agena_runtime::RuntimeStatusService for AgenaRuntime {
                 .collect::<Vec<_>>();
             let skill_key_for = |entry: &agena_plugin_host::registry::RegisteredTool| {
                 entry
-                    .definition
-                    .tags
-                    .iter()
+                    .effective_tags()
+                    .into_iter()
                     .find_map(|tag| match tag {
                         agena_plugin_host::sdk::ToolTag::Custom(value) => {
                             value.strip_prefix("skill:").map(str::to_string)
@@ -2056,7 +2046,7 @@ impl agena_runtime::RuntimeStatusService for AgenaRuntime {
             };
             let has_custom_tag = |entry: &agena_plugin_host::registry::RegisteredTool,
                                   expected: &str| {
-                entry.definition.tags.iter().any(|tag| match tag {
+                entry.effective_tags().iter().any(|tag| match tag {
                     agena_plugin_host::sdk::ToolTag::Custom(value) => value == expected,
                     _ => false,
                 })

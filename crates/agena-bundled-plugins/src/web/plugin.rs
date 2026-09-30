@@ -1715,10 +1715,16 @@ impl WebPlugin {
             .await
     }
 
-    #[tool(summary = "Fetch one web page and inspect its actual content.", help = "Use this tool after search when you need evidence from the actual page rather than search snippets. If you already know what facts you need, set `prompt` so Agena prioritizes the most relevant excerpts from the page in the returned text output.", read_only, examples(
+    #[tool(
+        summary = "Fetch one web page and inspect its actual content.",
+        help = "Use this tool after search when you need evidence from the actual page rather than search snippets. If you already know what facts you need, set `prompt` so Agena prioritizes the most relevant excerpts from the page in the returned text output.",
+        examples(
             r#"{"url":"https://openai.com"}"#,
             r#"{"url":"https://example.com/docs","prompt":"extract the release date and breaking changes"}"#
-        ), concurrency_safe)]
+        ),
+        concurrency_safe,
+        tags(read_only)
+    )]
     async fn invoke_fetch(&self, input: &CrawlFetchInput) -> SdkResult<ToolInvokeOutput> {
         let url = prepare_fetch_url(input.url.as_str()).map_err(crawl_error_to_plugin)?;
         let config = self.config()?;
@@ -1744,8 +1750,7 @@ impl WebPlugin {
 
     #[tool(
         summary = "Crawl a site and cache indexed pages locally.",
-        mutating,
-        discovery
+        tags(discovery, mutate)
     )]
     async fn invoke_crawl(&self, input: &CrawlRunInput) -> SdkResult<ToolInvokeOutput> {
         let start_url =
@@ -1797,10 +1802,16 @@ impl WebPlugin {
         ))
     }
 
-    #[tool(summary = "Find candidate public-web pages to fetch.", help = "Use this tool to discover candidate pages, not to answer from result snippets alone. After searching, fetch 1-3 relevant result URLs before answering when the user needs facts, summaries, comparisons, or latest information. Use allowed_domains and blocked_domains to steer source quality.", read_only, discovery, examples(
+    #[tool(
+        summary = "Find candidate public-web pages to fetch.",
+        help = "Use this tool to discover candidate pages, not to answer from result snippets alone. After searching, fetch 1-3 relevant result URLs before answering when the user needs facts, summaries, comparisons, or latest information. Use allowed_domains and blocked_domains to steer source quality.",
+        examples(
             r#"{"query":"Agena plugin architecture","max_results":5}"#,
             r#"{"query":"Rust schemars derive examples","allowed_domains":["docs.rs","github.com"]}"#
-        ), concurrency_safe)]
+        ),
+        concurrency_safe,
+        tags(discovery, read_only)
+    )]
     async fn invoke_search(&self, input: &CrawlWebSearchInput) -> SdkResult<ToolInvokeOutput> {
         let query = input.query.as_str();
         let config = self.config()?;
@@ -1866,10 +1877,9 @@ impl WebPlugin {
     }
 
     #[tool(
-        tags(network, interactive, mutate),
+        tags(network, interactive, mutate, read_only),
         name = "browser_open",
-        summary = "Open a page in a managed interactive browser session.",
-        read_only
+        summary = "Open a page in a managed interactive browser session."
     )]
     async fn browser_open(
         &self,
@@ -2024,10 +2034,9 @@ impl WebPlugin {
     }
 
     #[tool(
-        tags(network, interactive, query, discovery),
+        tags(network, interactive, query, discovery, read_only),
         name = "browser_list",
         summary = "List open page targets in the managed interactive browser.",
-        read_only,
         concurrency_safe
     )]
     async fn browser_list(
@@ -2119,8 +2128,7 @@ impl WebPlugin {
     #[tool(
         tags(network, interactive, mutate),
         name = "browser_close",
-        summary = "Close one page target in the managed interactive browser.",
-        mutating
+        summary = "Close one page target in the managed interactive browser."
     )]
     async fn browser_close(
         &self,
@@ -2157,8 +2165,7 @@ impl WebPlugin {
         tags(network, interactive, mutate),
         name = "browser_shutdown",
         summary = "Close browser pages owned by the current Agena session without affecting other callers.",
-        help = "Caller-scoped shutdown closes owned pages only. The shared Chrome process and other sessions are not stopped. Global browser shutdown is reserved for trusted host lifecycle control.",
-        mutating
+        help = "Caller-scoped shutdown closes owned pages only. The shared Chrome process and other sessions are not stopped. Global browser shutdown is reserved for trusted host lifecycle control."
     )]
     async fn browser_shutdown(
         &self,
@@ -2235,10 +2242,9 @@ impl WebPlugin {
     }
 
     #[tool(
-        tags(network, interactive, query),
+        tags(network, interactive, query, read_only),
         name = "browser_snapshot",
         summary = "Inspect visible text and interactive elements in a browser session.",
-        read_only,
         concurrency_safe
     )]
     async fn browser_snapshot(
@@ -2268,8 +2274,7 @@ impl WebPlugin {
     #[tool(
         tags(network, interactive, mutate),
         name = "browser_click",
-        summary = "Click a browser element selected by CSS or the latest snapshot ref.",
-        mutating
+        summary = "Click a browser element selected by CSS or the latest snapshot ref."
     )]
     async fn browser_click(
         &self,
@@ -2302,8 +2307,7 @@ impl WebPlugin {
     #[tool(
         tags(network, interactive, mutate),
         name = "browser_type",
-        summary = "Fill a browser input selected by CSS or the latest snapshot ref, optionally pressing Enter.",
-        mutating
+        summary = "Fill a browser input selected by CSS or the latest snapshot ref, optionally pressing Enter."
     )]
     async fn browser_type(
         &self,
@@ -2333,10 +2337,9 @@ impl WebPlugin {
     }
 
     #[tool(
-        tags(network, interactive, query),
+        tags(network, interactive, query, read_only),
         name = "browser_wait",
         summary = "Wait for page readiness, a CSS selector, or visible text.",
-        read_only,
         concurrency_safe
     )]
     async fn browser_wait(
@@ -2371,8 +2374,7 @@ impl WebPlugin {
     #[tool(
         tags(network, interactive, mutate, filesystem),
         name = "browser_screenshot",
-        summary = "Capture a browser screenshot and return it as an image attachment.",
-        mutating
+        summary = "Capture a browser screenshot and return it as an image attachment."
     )]
     async fn browser_screenshot(
         &self,
@@ -2451,8 +2453,7 @@ impl WebPlugin {
     #[tool(
         tags(network, interactive, mutate, filesystem),
         name = "browser_download",
-        summary = "Download one HTTP(S) URL through a managed browser session and return a local artifact.",
-        mutating
+        summary = "Download one HTTP(S) URL through a managed browser session and return a local artifact."
     )]
     async fn browser_download(
         &self,

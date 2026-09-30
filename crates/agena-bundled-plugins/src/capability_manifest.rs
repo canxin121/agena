@@ -7,6 +7,24 @@ use agena_plugin_host::sdk::{Plugin, PluginKey, PluginManifest};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
+/// The tag spellings that read as an effect in the capability listing.
+///
+/// This is a filter over the tool's declared tags, not a second declaration
+/// surface: every entry here is spelled the way `ToolTag` spells it, so a tag
+/// either appears as an effect in the inventory or is purely discovery
+/// metadata. It is the same vocabulary the tool's declared behavior used to
+/// project, minus the spellings no tag ever used.
+const EFFECT_TAGS: &[&str] = &[
+    "read_only",
+    "mutate",
+    "network",
+    "shell",
+    "interactive",
+    "snapshot",
+    "scheduler",
+    "subtask",
+];
+
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 /// Counts of bundled plugin capabilities.
 pub struct CapabilityCounts {
@@ -243,22 +261,7 @@ fn plugin_capability(
             // UI purposes, not what the host will authorize.
             let effects = tags
                 .iter()
-                .filter(|tag| {
-                    matches!(
-                        tag.as_str(),
-                        "read_only"
-                            | "mutate"
-                            | "filesystem_read"
-                            | "filesystem_write"
-                            | "network"
-                            | "internet"
-                            | "shell"
-                            | "interactive"
-                            | "snapshot"
-                            | "scheduler"
-                            | "subtask"
-                    )
-                })
+                .filter(|tag| EFFECT_TAGS.contains(&tag.as_str()))
                 .cloned()
                 .collect::<Vec<_>>();
             let gateway = key.to_string() == "agena.tools"
